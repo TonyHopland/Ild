@@ -34,35 +34,66 @@ export function QueuedPrWrites({
   detail: WorkItemDetail;
 }) {
   const [dropping, setDropping] = useState<string | null>(null);
+  const [dropError, setDropError] = useState<string | null>(null);
   const queued = detail.currentRun?.prQueuedWrites ?? [];
-  if (queued.length === 0) return null;
+  // The refusal outlives the list it came from: the usual reason a drop is
+  // refused is that the round reached the PR node and sent everything, which
+  // empties the queue. Returning early on that would swallow the one message
+  // saying the comment is already public.
+  if (queued.length === 0 && !dropError) return null;
 
   const runId = workItem.currentLoopRunId;
-  // Every button, not just the clicked one: two drops in flight would each be
-  // computed from the list before the other, and the second to land would put
-  // back the item the first removed — which then goes out on the pull request.
   const busy = dropping !== null;
   const drop = async (writeId: string) => {
     if (!runId || busy) return;
     setDropping(writeId);
+    setDropError(null);
     try {
       await loopRunService.dropQueuedPrWrite(runId, writeId);
-      // The queue lives on the current run, not the runs list.
-      await detail.refreshCurrentRun();
+    } catch (error) {
+      setDropError(
+        (error as { message?: string })?.message ??
+          "Could not drop this. It may already have gone out on the pull request.",
+      );
     } finally {
       setDropping(null);
+    }
+    // On either outcome, and the queue lives on the current run rather than the
+    // runs list. A refusal is itself evidence this panel is stale, so it is the
+    // case that most needs the re-read: without it the panel goes on offering to
+    // stop comments that are already on the pull request.
+    try {
+      await detail.refreshCurrentRun();
+    } catch {
+      setDropError((prev) => prev ?? "Could not re-read the run; this list may be out of date.");
     }
   };
 
   return (
     <div className="wiv2-pr-queue">
-      <div className="wiv2-pr-queue-title">
-        Waiting to go out on the pull request ({queued.length})
-      </div>
-      <div className="wiv2-pr-queue-hint">
-        Sent when the PR node next runs. Drop anything you do not want said — the thread stays open
-        and the finding comes back on the next review.
-      </div>
+      {queued.length > 0 && (
+        <>
+          <div className="wiv2-pr-queue-title">
+            Waiting to go out on the pull request ({queued.length})
+          </div>
+          <div className="wiv2-pr-queue-hint">
+            Sent when the PR node next runs. Drop anything you do not want said — the thread stays
+            open and the finding comes back on the next review.
+          </div>
+        </>
+      )}
+      {dropError && (
+        <div className="wiv2-pr-queue-error" role="alert">
+          {dropError}
+          <button
+            type="button"
+            className="wiv2-pr-queue-dismiss"
+            onClick={() => setDropError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       {queued.map((write) => (
         <div key={write.id} className="wiv2-pr-queue-item">
           <div className="wiv2-pr-queue-where">

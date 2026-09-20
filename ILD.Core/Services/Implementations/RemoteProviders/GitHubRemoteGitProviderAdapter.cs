@@ -340,8 +340,8 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
         return new WebhookPayload(
             merged ? "pull_request.merged" : "pull_request.rejected",
             repoId,
-            ReadString(pr, "number"),
-            ReadString(pr, "html_url") ?? ReadString(pr, "url"),
+            ReadValueText(pr, "number"),
+            ReadValueText(pr, "html_url") ?? ReadValueText(pr, "url"),
             null,
             merged ? "merged" : "closed");
     }
@@ -356,9 +356,9 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
         return new WebhookPayload(
             "pull_request.comment",
             repoId,
-            ReadString(issue, "number"),
-            ReadString(issue, "html_url"),
-            ReadString(comment, "body"),
+            ReadValueText(issue, "number"),
+            ReadValueText(issue, "html_url"),
+            ReadValueText(comment, "body"),
             null);
     }
 
@@ -368,37 +368,44 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
             || !root.TryGetProperty("review", out var review))
             return null;
 
-        var state = ReadString(review, "state");
+        var state = ReadValueText(review, "state");
         if (string.Equals(state, "changes_requested", StringComparison.OrdinalIgnoreCase))
         {
             return new WebhookPayload(
                 "pull_request.rejected",
                 repoId,
-                ReadString(pr, "number"),
-                ReadString(pr, "html_url") ?? ReadString(pr, "url"),
-                ReadString(review, "body"),
+                ReadValueText(pr, "number"),
+                ReadValueText(pr, "html_url") ?? ReadValueText(pr, "url"),
+                ReadValueText(review, "body"),
                 "changes_requested");
         }
 
-        var comment = ReadString(review, "body");
+        var comment = ReadValueText(review, "body");
         if (string.IsNullOrWhiteSpace(comment))
             return null;
 
         return new WebhookPayload(
             "pull_request.review",
             repoId,
-            ReadString(pr, "number"),
-            ReadString(pr, "html_url") ?? ReadString(pr, "url"),
+            ReadValueText(pr, "number"),
+            ReadValueText(pr, "html_url") ?? ReadValueText(pr, "url"),
             comment,
             null);
     }
 
     private static string GetRepositoryId(JsonElement root)
         => root.TryGetProperty("repository", out var repository)
-            ? ReadString(repository, "id") ?? ReadString(repository, "full_name") ?? ReadString(repository, "name") ?? "unknown"
+            ? ReadValueText(repository, "id") ?? ReadValueText(repository, "full_name") ?? ReadValueText(repository, "name") ?? "unknown"
             : "unknown";
 
-    private static string? ReadString(JsonElement element, string propertyName)
+    /// <summary>
+    /// A property's text whatever its JSON type, which is what a webhook payload
+    /// needs: <c>number</c> and <c>id</c> arrive unquoted and would otherwise
+    /// read as absent. Deliberately not the base class's <c>ReadString</c>,
+    /// which answers null for anything but a string — sharing a name with it
+    /// while disagreeing about numbers is how a caller picks the wrong one.
+    /// </summary>
+    private static string? ReadValueText(JsonElement element, string propertyName)
     {
         if (!element.TryGetProperty(propertyName, out var value))
             return null;

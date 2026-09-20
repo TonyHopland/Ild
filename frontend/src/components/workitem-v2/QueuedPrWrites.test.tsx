@@ -84,10 +84,58 @@ describe("what the round is about to say on the pull request", () => {
     await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
 
+  test("a refused drop says so, and re-reads the run rather than leaving the list as it was", async () => {
+    // The usual reason is that the round reached the PR node and sent the lot.
+    // Staying silent would leave this panel offering to stop comments that are
+    // already public — and offering it in a way that looks like it worked.
+    vi.spyOn(loopRunService, "dropQueuedPrWrite").mockRejectedValue({
+      message: "No queued write with id w1.",
+    });
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    render(<QueuedPrWrites workItem={workItem()} detail={detail([queued()], refresh)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Drop" }));
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("No queued write"));
+    expect(refresh).toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Drop" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  test("the refusal outlives the list it came from", async () => {
+    // The re-read that follows a refusal is exactly what empties the queue, so
+    // returning early on an empty one would swallow the message that says the
+    // comment has already gone out.
+    vi.spyOn(loopRunService, "dropQueuedPrWrite").mockRejectedValue({ message: "Already sent." });
+    const view = render(<QueuedPrWrites workItem={workItem()} detail={detail([queued()])} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Drop" }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Already sent."));
+
+    view.rerender(<QueuedPrWrites workItem={workItem()} detail={detail([])} />);
+
+    expect(screen.getByRole("alert").textContent).toContain("Already sent.");
+    expect(screen.queryByText(/Waiting to go out/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(view.container.firstChild).toBeNull();
+  });
+
+  test("a drop the server took but a re-read that failed still warns the list is stale", async () => {
+    vi.spyOn(loopRunService, "dropQueuedPrWrite").mockResolvedValue(undefined);
+    const refresh = vi.fn().mockRejectedValue(new Error("network"));
+    render(<QueuedPrWrites workItem={workItem()} detail={detail([queued()], refresh)} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Drop" }));
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("out of date"));
+  });
+
   test("a drop in flight disables every other drop, not just its own", async () => {
-    // Two drops computed from the same list would each write it back without
-    // the other's removal, and the second to land would put back a comment a
-    // human had stopped.
+    // Not what makes concurrent drops safe — same-tick clicks all see the list
+    // from before any of them, and the store's compare-and-set is what stops the
+    // loser reinstating a comment a human stopped. This is so that a second drop
+    // a person starts while watching the first cannot be one of them.
     let release: (() => void) | undefined;
     vi.spyOn(loopRunService, "dropQueuedPrWrite").mockReturnValue(
       new Promise<void>((resolve) => {
