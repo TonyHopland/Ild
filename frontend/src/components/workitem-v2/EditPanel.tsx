@@ -9,6 +9,7 @@ import {
 import { workItemService } from "../../services/auth";
 import { parseTags } from "../../utils/workItemJson";
 import TagAutocomplete from "../TagAutocomplete";
+import AttachmentPicker from "./AttachmentPicker";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
 interface EditPanelProps {
@@ -67,8 +68,12 @@ export default function EditPanel({
   const [baseBranchOverride, setBaseBranchOverride] = useState(baseBaseBranchOverride);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // The item a first press already created. A retry after a failed upload saves
+  // onto it rather than creating a second work item.
+  const [createdId, setCreatedId] = useState<string | null>(null);
 
   const overridesProvider = aiProviderOverride !== AiProviderOverrideMode.None;
+  const attachments = detail.editAttachments;
 
   // Advice on the branch name, debounced while typing. Deliberately never gates
   // the submit button: a warning means the name is taken *right now*, and the
@@ -109,7 +114,8 @@ export default function EditPanel({
     aiProviderOverride !== baseAiProviderOverride ||
     aiProviderOverrideId !== baseAiProviderOverrideId ||
     branchNameOverride !== baseBranchNameOverride ||
-    baseBranchOverride !== baseBaseBranchOverride;
+    baseBranchOverride !== baseBaseBranchOverride ||
+    attachments.staged.length > 0;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -146,25 +152,59 @@ export default function EditPanel({
     };
 
     try {
-      let saved: WorkItem;
-      if (workItem) {
-        saved = await workItemService.update(workItem.id, data as Partial<WorkItem>);
-        if (workItem.status !== status) {
-          try {
-            await workItemService.transition(workItem.id, status);
-            saved = await workItemService.getById(workItem.id);
-          } catch (err) {
-            console.error("Failed to transition status:", err);
-            setSubmitError(
-              `Status transition failed: ${err instanceof Error ? err.message : "Unknown error"}`,
-            );
+      // The whole save is one act, request and uploads together: the dialog
+      // stays closed to dismissal for all of it, not just the uploading part.
+      await detail.whileBusy(async () => {
+        let saved: WorkItem;
+        if (workItem) {
+          saved = await workItemService.update(workItem.id, data as Partial<WorkItem>);
+          if (workItem.status !== status) {
+            try {
+              await workItemService.transition(workItem.id, status);
+              saved = await workItemService.getById(workItem.id);
+            } catch (err) {
+              console.error("Failed to transition status:", err);
+              setSubmitError(
+                `Status transition failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+              );
+            }
           }
+        } else if (createdId) {
+          // The create call ignores the status field — only /transition moves an
+          // item — so this second save carries the form's values and nothing else.
+          saved = await workItemService.update(createdId, data as Partial<WorkItem>);
+        } else {
+          saved = await workItemService.create(data as Partial<WorkItem>);
+          setCreatedId(saved.id);
         }
-      } else {
-        saved = await workItemService.create(data as Partial<WorkItem>);
-      }
-      onSave(saved);
-      onDone();
+        onSave(saved);
+
+        // What this save carries is whatever the staging list holds by the time
+        // the save returns, never what it held when the button was pressed: the
+        // human can drop a file while the request is in flight, and a form that
+        // closed on the older answer would discard it without a word. The reread
+        // is inside the drain for the same reason — a file staged while it runs
+        // is still this save's to send.
+        while (attachments.hasPending()) {
+          const outcome = await attachments.uploadAll(saved.id);
+          // The dialog moved to another work item under this save: what is staged
+          // now belongs to that one, and this form is gone.
+          if (outcome.abandoned) return;
+          if (!outcome.ok) {
+            // The item is saved and some files are on it; the form stays open
+            // with the stragglers still staged, so pressing Save again sends only
+            // those. What already landed is published too — the overview and the
+            // board would otherwise hold the copy from before the batch.
+            onSave(await workItemService.getById(saved.id).catch(() => saved));
+            setSubmitError(outcome.errors.join(" "));
+            return;
+          }
+          // The parent gets the copy that carries the uploads. A reread that fails
+          // makes the save no less done, so it keeps the one it already has.
+          onSave(await workItemService.getById(saved.id).catch(() => saved));
+        }
+        onDone();
+      });
     } catch (error) {
       console.error("Failed to save work item:", error);
       setSubmitError(
@@ -176,7 +216,7 @@ export default function EditPanel({
   };
 
   return (
-    <form onSubmit={handleSubmit} className="wiv2-edit-form">
+    <form onSubmit={handleSubmit} onPaste={attachments.handlePaste} className="wiv2-edit-form">
       <div className="form-group">
         <label htmlFor="wiv2-title">Title</label>
         <input
@@ -196,6 +236,7 @@ export default function EditPanel({
           rows={10}
         />
       </div>
+      <AttachmentPicker staging={attachments} inputId="wiv2-attachments" />
       <div className="form-row">
         <div className="form-group">
           <label htmlFor="wiv2-repository">Repository</label>

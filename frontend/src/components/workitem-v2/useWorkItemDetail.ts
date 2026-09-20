@@ -17,6 +17,8 @@ import {
   aiProviderService,
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
+import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
+import { attachedNote } from "../../utils/attachments";
 
 /**
  * Shared data + actions for the V2 work item dialog. Loads the runs, repositories,
@@ -48,6 +50,37 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeMessage, setMergeMessage] = useState<string | null>(null);
+  const [respondError, setRespondError] = useState<string | null>(null);
+  const [respondLoading, setRespondLoading] = useState(false);
+  // The answer buttons render disabled while one is in flight, but only once
+  // this render has happened. The guard is a ref because "each staged file is
+  // uploaded once" must not depend on how soon React gets to re-render.
+  const responding = useRef(false);
+
+  // Everything the dialog does that writes — creating, saving an edit,
+  // answering the run, and the uploads inside them — runs through whileBusy, so
+  // the dialog has one thing to ask about whether it is in the middle of
+  // something. Asking the individual acts instead means every new act has to be
+  // remembered in every place that cares, and the close guard was already three
+  // flags behind.
+  const [actsInFlight, setActsInFlight] = useState(0);
+  const whileBusy = useCallback(async <T>(act: () => Promise<T>): Promise<T> => {
+    setActsInFlight((count) => count + 1);
+    try {
+      return await act();
+    } finally {
+      setActsInFlight((count) => count - 1);
+    }
+  }, []);
+  const busy = actsInFlight > 0;
+
+  // One staging list per act, not per work item. Saving the form and answering
+  // the run both attach to the same item, but they are separate pieces of work
+  // that start, fail and are abandoned independently — sharing a list makes one
+  // of them able to discard what the other is still holding.
+  const attachmentLimits = useAttachmentLimits();
+  const attachments = useAttachmentStaging(workItem?.id, attachmentLimits);
+  const editAttachments = useAttachmentStaging(workItem?.id, attachmentLimits);
 
   const reloadRepositories = useCallback(async () => {
     try {
@@ -131,6 +164,14 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   useEffect(() => {
     setFeedbackInput("");
   }, [workItem?.id, workItem?.status]);
+
+  // An answer is composed after its uploads, which the human keeps typing
+  // through, so what they end up with is read here rather than from the render
+  // the button was pressed in.
+  const feedbackInputRef = useRef(feedbackInput);
+  useEffect(() => {
+    feedbackInputRef.current = feedbackInput;
+  }, [feedbackInput]);
 
   useEffect(() => {
     // When parked at a PR node, prefill the feedback textarea with any
@@ -345,12 +386,20 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     }
   }, [workItem?.id]);
 
-  const refetchWorkItem = useCallback(() => {
-    if (!workItem) return;
-    void workItemService
+  // Reports whether the dialog is now showing the item as the server has it, so
+  // a caller that has just changed it can tell "refreshed" from "still showing
+  // what it showed before". A read that fails leaves the last-known copy in
+  // place, as it always has; callers that only want the refresh ignore the
+  // answer.
+  const refetchWorkItem = useCallback((): Promise<boolean> => {
+    if (!workItem) return Promise.resolve(false);
+    return workItemService
       .getById(workItem.id)
-      .then((updated) => onSave(updated))
-      .catch(() => {});
+      .then((updated) => {
+        onSave(updated);
+        return true;
+      })
+      .catch(() => false);
   }, [workItem?.id, onSave]);
 
   // Live stream + state sync for running work items.
@@ -441,7 +490,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     };
 
     const refetchSoon = () => {
-      refetchWorkItem();
+      void refetchWorkItem();
       // Delayed refetch to catch conversation data that may not be persisted yet
       delayedTimers.push(setTimeout(refetchWorkItem, 500));
     };
@@ -458,7 +507,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
     const onEventLogged = (message: TypedSignalRMessage<"EventLogged">) => {
       if (message.payload.runId !== runId) return;
-      refetchWorkItem();
+      void refetchWorkItem();
     };
 
     // A halt parks the run mid-AI-node; refetch so the work item flips to
@@ -565,22 +614,106 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [workItem?.id, onSave],
   );
 
+  // Answering a parked run uploads the staged files first: the note names them,
+  // so an answer submitted before they landed would tell the agent about
+  // attachments the item does not carry. Neither a failed upload nor a refused
+  // submission touches the staged list, so a retry re-sends only what did not
+  // land — which is also why this does not go through runAction, where a failure
+  // would reach no further than the console.
+  const submitAnswer = async (submit: (id: string, input: string) => Promise<unknown>) => {
+    if (!workItem || responding.current) return;
+    responding.current = true;
+    setRespondLoading(true);
+    setRespondError(null);
+    // Set when the answer is in but the dialog could not be brought up to date:
+    // the controls stay held rather than offering to answer again a question the
+    // run has already been given an answer to.
+    let answeredButUnrefreshed = false;
+    try {
+      await whileBusy(async () => {
+        // The staging list answers both questions here, never the render the
+        // press came from: it says what is left to send — a file dropped while an
+        // upload was in flight is part of this answer too — and, once nothing is
+        // pending, what the note must name. An attempt that landed every file and
+        // failed only at the submit has nothing left to upload, and its retry
+        // still has to name what is already on the item.
+        let outcome = await attachments.uploadAll(workItem.id);
+        while (outcome.ok && attachments.hasPending()) {
+          outcome = await attachments.uploadAll(workItem.id);
+        }
+        // The dialog moved to another work item while the files were going up, so
+        // there is no longer an answer to this one being composed here.
+        if (outcome.abandoned) return;
+        if (!outcome.ok) {
+          // Some of them did land. The retry keeps the stragglers staged, and
+          // the overview beside it has to show what is already on the item
+          // rather than the copy from before the batch.
+          await refetchWorkItem();
+          setRespondError(outcome.errors.join(" "));
+          return;
+        }
+        // The note must name what the item holds now. This dialog's own copy of it
+        // cannot answer that: it predates these uploads, and it predates any file
+        // removed from the overview since an earlier attempt stored it. Reading
+        // the item back settles both. A read that fails leaves the names as the
+        // uploads left them — a refreshed note is not worth failing an answer for.
+        let storedNames = outcome.storedNames;
+        if (storedNames.length > 0) {
+          const held = await workItemService
+            .getById(workItem.id)
+            .then((fresh) => {
+              // This read is also the freshest copy anyone has of the item, so
+              // the dialog shows what the uploads put there whatever the answer
+              // does next.
+              onSave(fresh);
+              return fresh.attachments;
+            })
+            .catch(() => undefined);
+          storedNames = attachments.namesStoredOn(held);
+        }
+        try {
+          // The typed text comes from the ref for the same reason: the uploads
+          // above can take seconds, and the human types on through them.
+          await submit(workItem.id, attachedNote(feedbackInputRef.current, storedNames));
+        } catch (error) {
+          setRespondError(
+            (error as { message?: string })?.message ?? "Failed to submit the answer.",
+          );
+          return;
+        }
+        // Only the files this answer named are done with; one staged while the
+        // answer was being submitted is not on the item and stays for the next.
+        attachments.clearUploaded();
+        // The answer is in, and the run has moved on: the controls stay held
+        // until the dialog is showing that, so a second press cannot answer a
+        // question that has already been answered. If the item cannot be read
+        // back, this view is still showing the run as waiting, and the only
+        // honest thing it can do is say so and stay held.
+        if (!(await refetchWorkItem())) {
+          answeredButUnrefreshed = true;
+          setRespondError(
+            "Your answer was accepted, but this view could not be refreshed — reload the page to see where the run is now.",
+          );
+        }
+      });
+    } finally {
+      if (!answeredButUnrefreshed) {
+        responding.current = false;
+        setRespondLoading(false);
+      }
+    }
+  };
+
   const handleApprove = () =>
-    runAction(
-      (id) => workItemService.humanFeedbackInput(id, feedbackInput || ""),
-      "submit feedback",
-    );
+    submitAnswer((id, input) => workItemService.humanFeedbackInput(id, input));
 
   // Pass any typed feedback through to the OnFailure successor as {{PreviousNode.Output}}.
   const handleReject = () =>
-    runAction(
-      (id) => workItemService.humanFeedbackReject(id, feedbackInput || undefined),
-      "reject",
-    );
+    submitAnswer((id, input) => workItemService.humanFeedbackReject(id, input || undefined));
 
   // Route the parked node to one of its named custom edges (a Human/PR button).
   const handleEdge = (name: string) =>
-    runAction((id) => workItemService.humanFeedbackEdge(id, name, feedbackInput || ""), "respond");
+    submitAnswer((id, input) => workItemService.humanFeedbackEdge(id, name, input));
 
   // Merge the linked PR on the remote (and optionally delete the branch), then
   // continue the loop along OnSuccess. A merge failure leaves the item parked,
@@ -633,7 +766,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleReclaimRun = useCallback(
     async (runId: string) => {
       await loopRunService.cleanup(runId);
-      refetchWorkItem();
+      void refetchWorkItem();
       refreshRuns();
     },
     [refetchWorkItem, refreshRuns],
@@ -700,6 +833,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleApprove,
     handleReject,
     handleEdge,
+    respondError,
+    respondLoading,
+    busy,
+    whileBusy,
+    attachments,
+    editAttachments,
+    refetchWorkItem,
     mergeLoading,
     mergeError,
     mergeMessage,

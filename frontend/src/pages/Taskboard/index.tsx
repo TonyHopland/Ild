@@ -416,7 +416,13 @@ export default function Taskboard() {
           link matches the open item; a new item opens the same dialog with no
           work item, which renders its creation form. */}
       {editingItem && (
+        // Keyed by the item, so opening another one builds a new dialog rather
+        // than swapping the item under the old one. Everything the dialog holds
+        // — staged files, a request still in flight, the errors it would report
+        // — belongs to the item it was opened for, and this is what ends it with
+        // that item rather than leaving it to be carried into the next.
         <WorkItemModalV2
+          key={editingItem.id}
           workItem={editingItem}
           onClose={() => void navigate("/taskboard")}
           onSave={handleSave}
@@ -425,6 +431,7 @@ export default function Taskboard() {
       )}
       {createModalOpen && (
         <WorkItemModalV2
+          key="new-work-item"
           workItem={null}
           onClose={() => setCreateModalOpen(false)}
           onSave={handleSave}

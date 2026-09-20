@@ -4,11 +4,10 @@ const API_BASE: string = (import.meta.env?.VITE_API_BASE as string | undefined) 
 
 export const AUTH_UNAUTHORIZED_EVENT = "auth:unauthorized";
 
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+async function send(endpoint: string, options: RequestInit = {}): Promise<Response> {
   const token = localStorage.getItem("auth_token");
 
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
 
@@ -40,12 +39,28 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     throw error;
   }
 
+  return response;
+}
+
+async function readJson<T>(response: Response): Promise<T> {
   const text = await response.text();
   if (!text) {
     return undefined as T;
   }
 
   return JSON.parse(text) as T;
+}
+
+async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const response = await send(endpoint, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers as Record<string, string>),
+    },
+  });
+
+  return readJson<T>(response);
 }
 
 export const api = {
@@ -66,4 +81,11 @@ export const api = {
       body: JSON.stringify(body),
     }),
   delete: <T>(endpoint: string) => request<T>(endpoint, { method: "DELETE" }),
+  /**
+   * Multipart POST. The request deliberately carries no Content-Type of its own:
+   * only the browser can write the multipart boundary the body is framed with.
+   */
+  postForm: <T>(endpoint: string, form: FormData) =>
+    send(endpoint, { method: "POST", body: form }).then(readJson<T>),
+  getBlob: (endpoint: string) => send(endpoint, { method: "GET" }).then((r) => r.blob()),
 };
