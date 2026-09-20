@@ -667,6 +667,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     runs,
     currentRun,
     refreshRuns,
+    refreshCurrentRun,
     dependencies,
     allWorkItems,
     repositories,

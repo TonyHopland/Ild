@@ -43,7 +43,8 @@ export function QueuedPrWrites({
     setDropping(writeId);
     try {
       await loopRunService.dropQueuedPrWrite(runId, writeId);
-      detail.refreshRuns();
+      // The queue lives on the current run, not the runs list.
+      await detail.refreshCurrentRun();
     } finally {
       setDropping(null);
     }
