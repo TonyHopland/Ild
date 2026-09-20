@@ -234,6 +234,23 @@ public class PrQueuedWriteDrainTests
     }
 
     [Fact]
+    public async Task A_round_that_both_comments_and_answers_threads_does_both()
+    {
+        // The usual shape: the node has a pr_reply template AND the round
+        // queued answers. Draining only on the template-less path would leave
+        // every ordinary loop's answers stuck in the queue for ever.
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles."), Resolve("w2", "PRRT_t1") });
+
+        var outcomes = await f.RunNodeAsync(commentTemplate: "Answered every point.");
+
+        Assert.NotNull(f.PostedComment);
+        Assert.Contains("Answered every point.", f.PostedComment!, StringComparison.Ordinal);
+        Assert.Equal(2, f.Written.Count);
+        Assert.Null(f.Run.PrCommentQueue);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+    }
+
+    [Fact]
     public async Task A_run_with_nothing_queued_writes_nothing_and_touches_no_queue()
     {
         var f = new Fixture(Array.Empty<PrQueuedWrite>());
