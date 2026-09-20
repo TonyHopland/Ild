@@ -38,8 +38,12 @@ export function QueuedPrWrites({
   if (queued.length === 0) return null;
 
   const runId = workItem.currentLoopRunId;
+  // Every button, not just the clicked one: two drops in flight would each be
+  // computed from the list before the other, and the second to land would put
+  // back the item the first removed — which then goes out on the pull request.
+  const busy = dropping !== null;
   const drop = async (writeId: string) => {
-    if (!runId) return;
+    if (!runId || busy) return;
     setDropping(writeId);
     try {
       await loopRunService.dropQueuedPrWrite(runId, writeId);
@@ -69,7 +73,7 @@ export function QueuedPrWrites({
           <button
             type="button"
             className="wiv2-pr-queue-drop"
-            disabled={dropping === write.id}
+            disabled={busy}
             onClick={() => void drop(write.id)}
           >
             {dropping === write.id ? "Dropping…" : "Drop"}

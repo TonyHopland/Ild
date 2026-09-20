@@ -13,8 +13,10 @@ namespace ILD.Core.Services.Remote;
 ///
 /// <c>callerRunId</c> is the run the call came from (the <c>X-ILD-Run-Id</c>
 /// header), which is not always the work item's own: a chat agent borrows these
-/// same tools. It decides whether a read consumes what it returned, and names
-/// the run in the marker a reply carries.
+/// same tools. It decides whether a READ consumes what it returned. Reply and
+/// resolve take it only because this surface is fixed by its callers: they
+/// queue rather than write, and the marker a reply carries is stamped at drain
+/// time from the run the PR node is executing.
 /// </summary>
 public interface IPrReviewService
 {
@@ -31,7 +33,6 @@ public interface IPrReviewService
 /// </summary>
 public interface IPrWriteQueue
 {
-    Task<IReadOnlyList<PrQueuedWrite>> QueuedAsync(Guid runId);
     Task<bool> DropQueuedAsync(Guid runId, string writeId);
 }
 
@@ -164,56 +165,74 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     }
 
     /// <summary>
-    /// Everything a run has said it intends to write, oldest first — what the
-    /// work item's PR view shows a person while the round is still running.
-    /// </summary>
-    public async Task<IReadOnlyList<PrQueuedWrite>> QueuedAsync(Guid runId)
-        => PrCommentQueueJson.TryParse((await _runs.GetByIdAsync(runId))?.PrCommentQueue);
-
-    /// <summary>
     /// Drop one intent before it goes out. Nothing is lost by dropping: the
     /// thread stays open and the finding stays undelivered, so a later review
     /// raises it again rather than it vanishing.
     /// </summary>
-    public async Task<bool> DropQueuedAsync(Guid runId, string writeId)
-    {
-        var run = await _runs.GetByIdAsync(runId);
-        if (run is null) return false;
-
-        var queued = PrCommentQueueJson.TryParse(run.PrCommentQueue);
-        var kept = queued.Where(q => !string.Equals(q.Id, writeId, StringComparison.Ordinal)).ToList();
-        if (kept.Count == queued.Count) return false;
-
-        await WriteQueueAsync(run, kept);
-        return true;
-    }
+    public Task<bool> DropQueuedAsync(Guid runId, string writeId)
+        => MutateQueueAsync(runId, queued =>
+        {
+            var kept = queued.Where(q => !string.Equals(q.Id, writeId, StringComparison.Ordinal)).ToList();
+            return kept.Count == queued.Count ? null : kept;
+        });
 
     private static string NewIntentId() => Guid.NewGuid().ToString("N")[..12];
 
+    /// <summary>Attempts before a contended queue gives up; each one re-reads the row it lost to.</summary>
+    private const int QueueWriteAttempts = 5;
+
     /// <summary>
-    /// Append an intent to the run's queue. The run row is re-read immediately
-    /// before the write so two tools queuing in the same moment are unlikely to
-    /// lose one; a lost intent is not silent damage — the finding it answered
-    /// stays undelivered and comes back on the next review.
+    /// Read the queue, apply <paramref name="change"/>, and write it back only
+    /// if nothing else moved it meanwhile — retrying on the row it lost to.
+    /// Plain read-modify-write loses one of two simultaneous edits, and for a
+    /// DROP that is not a lost edit but a public comment a human had stopped
+    /// going out anyway. <paramref name="change"/> returns null for "nothing to
+    /// do", which is the answer when the item has already gone.
+    /// </summary>
+    private async Task<bool> MutateQueueAsync(
+        Guid runId, Func<IReadOnlyList<PrQueuedWrite>, List<PrQueuedWrite>?> change)
+    {
+        for (var attempt = 0; attempt < QueueWriteAttempts; attempt++)
+        {
+            var current = await _runs.GetPrCommentQueueAsync(runId);
+            var changed = change(PrCommentQueueJson.TryParse(current));
+            if (changed is null)
+                return false;
+
+            var json = changed.Count == 0 ? null : PrCommentQueueJson.Serialize(changed);
+            if (await _runs.TrySetPrCommentQueueAsync(runId, current, json))
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Append an intent to the run's queue, under the same compare-and-set as a
+    /// drop so a burst of tool calls cannot lose one.
     /// </summary>
     private async Task<RemotePrWriteResult> QueueAsync(LoopRun run, PrQueuedWrite intent, string message)
     {
-        var fresh = await _runs.GetByIdAsync(run.Id) ?? run;
-        var queued = PrCommentQueueJson.TryParse(fresh.PrCommentQueue).ToList();
-        if (queued.Count >= PrQueuedWrite.MaxQueued)
+        var full = false;
+        var written = await MutateQueueAsync(run.Id, queued =>
+        {
+            if (queued.Count >= PrQueuedWrite.MaxQueued)
+            {
+                full = true;
+                return null;
+            }
+            full = false;
+            return queued.Append(intent).ToList();
+        });
+
+        if (full)
             return new RemotePrWriteResult(false, null,
-                $"This run already has {queued.Count} pull-request writes waiting for the PR node; nothing more is queued until they go out.");
+                $"This run already has {PrQueuedWrite.MaxQueued} pull-request writes waiting for the PR node; nothing more is queued until they go out.");
+        if (!written)
+            return new RemotePrWriteResult(false, null,
+                "The queue is being changed from somewhere else; nothing was queued. Try again.");
 
-        queued.Add(intent);
-        await WriteQueueAsync(run, queued);
         return new RemotePrWriteResult(true, intent.Id, message);
-    }
-
-    private async Task WriteQueueAsync(LoopRun run, IReadOnlyList<PrQueuedWrite> queued)
-    {
-        var json = queued.Count == 0 ? null : PrCommentQueueJson.Serialize(queued);
-        run.PrCommentQueue = json;
-        await _runs.SetPrCommentQueueAsync(run.Id, json);
     }
 
     private sealed record Target(LoopRun Run, string RepoUrl, string PrNumber);
@@ -238,18 +257,4 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             || (item.CommentId is not null
                 && postedIds.Contains(PrCommentLedger.KeyFor(item.Kind, item.CommentId), StringComparer.Ordinal));
 
-    /// <summary>
-    /// Record a comment ILD just wrote, so the heartbeat never hands it back as
-    /// something to answer. A run with no ledger yet is seeded from what is
-    /// already on the pull request first: leaving it empty would claim the run
-    /// had seen nothing, and the next tick would deliver the PR's whole history.
-    /// </summary>
-    private async Task RecordPostedAsync(LoopRun run, RemotePrReviewLedger fetched, string key)
-    {
-        var state = PrCommentLedgerJson.TryParse(run.PrCommentLedger)
-            ?? PrCommentDelivery.Decide(fetched, fetched.HeadSha, null).Ledger;
-        var json = PrCommentLedgerJson.Serialize(state.WithPosted(key));
-        run.PrCommentLedger = json;
-        await _runs.SetPrCommentLedgerAsync(run.Id, json);
-    }
 }

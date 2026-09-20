@@ -218,7 +218,34 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         if (!resp.IsSuccessStatusCode)
             return new RemotePrWriteResult(false, null, $"The comment was refused (HTTP {(int)resp.StatusCode}).");
 
-        return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
+        // The response is the thread. Its bare id is not what the ledger keys a
+        // comment on — that is <thread>-<comment> — so recording it would quietly
+        // retire the recorded-id half of the self-trigger guard, leaving only the
+        // marker. Qualify it the way the ledger does, or hand back nothing.
+        return new RemotePrWriteResult(true, await ReadCreatedThreadCommentIdAsync(resp), null);
+    }
+
+    /// <summary>
+    /// The <c>&lt;thread&gt;-&lt;comment&gt;</c> id of the comment a just-created
+    /// thread holds — the same shape
+    /// <see cref="GetPullRequestReviewLedgerAsync"/> reports.
+    /// </summary>
+    private static async Task<string?> ReadCreatedThreadCommentIdAsync(HttpResponseMessage resp)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            var threadId = ReadScalar(doc.RootElement, "id");
+            if (threadId is null
+                || !doc.RootElement.TryGetProperty("comments", out var comments)
+                || comments.ValueKind != JsonValueKind.Array
+                || comments.GetArrayLength() == 0)
+                return null;
+
+            var commentId = ReadScalar(comments[0], "id");
+            return commentId is null ? null : $"{threadId}-{commentId}";
+        }
+        catch (JsonException) { return null; }
     }
 
     public override bool SupportsThreadResolution => true;

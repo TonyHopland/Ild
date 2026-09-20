@@ -71,6 +71,17 @@ public class PrReviewServiceTests
             Runs.Setup(s => s.SetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
                 .Callback<Guid, string?>((_, json) => { RecordedQueue = json; Run.PrCommentQueue = json; })
                 .Returns(Task.CompletedTask);
+            // The queue is mutated by compare-and-set: the service reads the
+            // column, then writes only if it still holds what it read.
+            Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).ReturnsAsync(() => Run.PrCommentQueue);
+            Runs.Setup(s => s.TrySetPrCommentQueueAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
+                .ReturnsAsync((Guid _, string? expected, string? json) =>
+                {
+                    if (!string.Equals(expected, Run.PrCommentQueue, StringComparison.Ordinal)) return false;
+                    RecordedQueue = json;
+                    Run.PrCommentQueue = json;
+                    return true;
+                });
             if (ledger is not null)
                 Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(ledger);
         }

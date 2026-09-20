@@ -192,7 +192,22 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
         if (!resp.IsSuccessStatusCode)
             return new RemotePrWriteResult(false, null, $"The reply was refused by {ProviderType} (HTTP {(int)resp.StatusCode}).");
 
-        return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
+        // The response is the REVIEW that was created, and its id lives in a
+        // different sequence from the comment ids this adapter's ledger keys on
+        // — recording it would eventually mark a real review comment as ILD's
+        // own and swallow it. Read the one comment the review carries instead,
+        // and hand back nothing rather than a wrong-space id if that read fails.
+        var reviewId = await PrCommentHelper.ReadCreatedIdAsync(resp);
+        return new RemotePrWriteResult(true, reviewId is null ? null : await ReadOnlyCommentIdAsync(http, repo, prNumber, reviewId), null);
+    }
+
+    /// <summary>The id of the single comment a just-created one-comment review holds.</summary>
+    private static async Task<string?> ReadOnlyCommentIdAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string reviewId)
+    {
+        var comments = await GetArrayAsync(
+            http, $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/reviews/{Uri.EscapeDataString(reviewId)}/comments");
+        return comments.Count == 1 ? ReadId(comments[0]) : null;
     }
 
     public override async Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName)

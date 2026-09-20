@@ -162,6 +162,23 @@ public interface ILoopRunStore
     Task SetPrCommentQueueAsync(Guid runId, string? json);
 
     /// <summary>
+    /// The queue as the row holds it right now, bypassing the change tracker —
+    /// what a compare-and-set has to start from.
+    /// </summary>
+    Task<string?> GetPrCommentQueueAsync(Guid runId);
+
+    /// <summary>
+    /// Replace the queue only if it still holds <paramref name="expected"/>,
+    /// reporting whether it did. Two people dropping different queued writes at
+    /// the same moment otherwise read the same list, and the second write puts
+    /// back the item the first removed — which then goes out on the pull request
+    /// after a human had stopped it. Unconditional
+    /// <see cref="SetPrCommentQueueAsync"/> stays for the PR node, which is the
+    /// authority once it has posted.
+    /// </summary>
+    Task<bool> TrySetPrCommentQueueAsync(Guid runId, string? expected, string? json);
+
+    /// <summary>
     /// Refresh a tracked <see cref="LoopRun"/> instance with the row's current
     /// column values, discarding unsaved in-memory changes. Used by the engine
     /// before persisting so a stale instance held across a long node execution

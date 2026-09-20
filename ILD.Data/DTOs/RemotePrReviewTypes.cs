@@ -118,18 +118,6 @@ public static class PrCommentMarker
 }
 
 /// <summary>
-/// What one run has already been handed, or written itself, on its pull request's
-/// review. This is what stands between a review landing and an unattended round
-/// starting: <see cref="PostedIds"/> are the comments ILD posted (the marker's
-/// second, un-editable half), <see cref="DeliveredIds"/> the items a run has been
-/// given, and <see cref="DeliveredHashes"/> the same findings recognised by
-/// content, so a second review restating them under fresh ids starts nothing.
-/// Ids are namespaced by kind because inline and pull-request-level comments live
-/// in two id spaces that can collide.
-/// Hashes are scoped to <see cref="Head"/> and dropped when it moves — the same
-/// finding restated against new code is a new finding; ids live for the run.
-/// </summary>
-/// <summary>
 /// Something a round intends to write on the pull request, recorded rather than
 /// done. Agents never post: they queue, and the PR node drains the queue at the
 /// end of the round, where it posts its own comment. That is what puts a human
@@ -180,6 +168,19 @@ public static class PrCommentQueueJson
     }
 }
 
+/// <summary>
+/// What one run has already been handed, or written itself, on its pull request's
+/// review. This is what stands between a review landing and an unattended round
+/// starting: <see cref="PostedIds"/> are the comments ILD posted (the marker's
+/// second, un-editable half), <see cref="DeliveredIds"/> the items a run has been
+/// given, and <see cref="DeliveredHashes"/> the same findings recognised by
+/// content, so a second review restating them under fresh ids starts nothing.
+/// Ids are namespaced by kind because inline and pull-request-level comments live
+/// in two id spaces that can collide, and each provider's adapter must hand back
+/// an id from the space its own ledger keys on or none at all.
+/// Hashes are scoped to <see cref="Head"/> and dropped when it moves — the same
+/// finding restated against new code is a new finding; ids live for the run.
+/// </summary>
 /// <param name="WatchedFrom">
 /// Set only when this ledger was opened by a <em>write</em> — the PR node
 /// recording the comment it just posted — rather than by a watch. Such a ledger
