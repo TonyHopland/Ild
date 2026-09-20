@@ -47,13 +47,18 @@ public class PrQueuedWriteDrainTests
 
         public Fixture(IReadOnlyList<PrQueuedWrite> queued)
         {
+            Row = queued.Count == 0 ? null : PrCommentQueueJson.Serialize(queued);
             Run = new LoopRun
             {
                 Id = Guid.NewGuid(),
                 WorkItemId = "WI-1",
                 PrUrl = PrUrl,
                 CurrentNodeId = Guid.NewGuid(),
-                PrCommentQueue = queued.Count == 0 ? null : PrCommentQueueJson.Serialize(queued),
+                // Deliberately NOT the queue: the engine loaded this instance
+                // before the round queued anything, so a node that trusts it
+                // sends the wrong list — or, with no comment template, never
+                // enters the branch that sends at all.
+                PrCommentQueue = null,
             };
 
             Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
@@ -69,10 +74,38 @@ public class PrQueuedWriteDrainTests
             Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
                 .Callback<Guid, string?>((_, json) => RecordedLedger = json)
                 .Returns(Task.CompletedTask);
-            Runs.Setup(s => s.SetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
-                .Callback<Guid, string?>((_, json) => { QueueWrites.Add(json); Run.PrCommentQueue = json; })
-                .Returns(Task.CompletedTask);
+
+            // The row, not the instance the engine carries. The node reads and
+            // claims the queue through these, so anything queued or dropped
+            // after Run was loaded is visible to it — which is the whole point
+            // of the claim.
+            Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).ReturnsAsync(() =>
+            {
+                Reads++;
+                var read = Row;
+                // The row is allowed to move out from under this read, which is
+                // what a human dropping something mid-round does. The claim's
+                // compare-and-set then fails against `read` and it tries again.
+                AfterRead?.Invoke();
+                return read;
+            });
+            Runs.Setup(s => s.TrySetPrCommentQueueAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
+                .ReturnsAsync((Guid _, string? expected, string? json) =>
+                {
+                    if (!string.Equals(expected, Row, StringComparison.Ordinal)) return false;
+                    QueueWrites.Add(json);
+                    Row = json;
+                    return true;
+                });
         }
+
+        /// <summary>The persisted column, which only the store members above touch.</summary>
+        public string? Row { get; set; }
+
+        public int Reads { get; private set; }
+
+        /// <summary>Runs after each read of the queue and before the claim that follows it.</summary>
+        public Action? AfterRead { get; set; }
 
         public async Task<List<NodeOutcome>> RunNodeAsync(string? commentTemplate = null)
         {
@@ -197,7 +230,7 @@ public class PrQueuedWriteDrainTests
         await f.RunNodeAsync();
 
         Assert.Contains(null, f.QueueWrites);
-        Assert.Null(f.Run.PrCommentQueue);
+        Assert.Null(f.Row);
     }
 
     [Fact]
@@ -229,7 +262,7 @@ public class PrQueuedWriteDrainTests
 
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
         Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
-        Assert.Null(f.Run.PrCommentQueue);
+        Assert.Null(f.Row);
         Assert.Null(f.RecordedLedger);
     }
 
@@ -246,7 +279,56 @@ public class PrQueuedWriteDrainTests
         Assert.NotNull(f.PostedComment);
         Assert.Contains("Answered every point.", f.PostedComment!, StringComparison.Ordinal);
         Assert.Equal(2, f.Written.Count);
+        Assert.Null(f.Row);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+    }
+
+    [Fact]
+    public async Task A_drop_that_lands_while_the_node_is_running_still_stops_the_comment()
+    {
+        // The human's window runs until the round reaches this node, so a drop
+        // landing while it executes has to be honoured. Reading the queue off
+        // the instance the engine has carried since the iteration began would
+        // post the answer anyway, after a person had explicitly stopped it.
+        var f = new Fixture(new[]
+        {
+            Reply("w1", "4049159495", "This one was stopped."),
+            Reply("w2", "4051372317", "And this one stands."),
+        });
+        f.AfterRead = () =>
+        {
+            // The drop lands after the claim has read the queue but before it
+            // clears it — the narrowest version of the window, and the one a
+            // read-then-write drain gets wrong. Only that first read is
+            // overtaken; the retry finds a settled row. A comment template is
+            // set so this read is the claim's own and not the branch's gate.
+            if (f.Reads != 1) return;
+            f.Row = PrCommentQueueJson.Serialize(new[] { Reply("w2", "4051372317", "And this one stands.") });
+        };
+
+        await f.RunNodeAsync(commentTemplate: "Answered every point.");
+
+        Assert.DoesNotContain(f.Written, w => w.Target == "4049159495");
+        var written = Assert.Single(f.Written);
+        Assert.Equal("4051372317", written.Target);
+        Assert.True(f.Reads >= 2, "the claim kept what it first read instead of re-reading");
+        Assert.Null(f.Row);
+    }
+
+    [Fact]
+    public async Task A_reply_queued_during_the_round_goes_out_though_the_node_has_no_comment_to_post()
+    {
+        // The instance says nothing is waiting, because the agent queued after
+        // it was loaded. A node with no comment template decides whether to run
+        // this branch at all on that answer, so trusting it strands every reply
+        // an ordinary round produces.
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
         Assert.Null(f.Run.PrCommentQueue);
+
+        var outcomes = await f.RunNodeAsync(commentTemplate: null);
+
+        Assert.Single(f.Written);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
     }
 

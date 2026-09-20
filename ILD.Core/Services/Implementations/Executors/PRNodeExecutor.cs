@@ -151,7 +151,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                     await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber);
             }
         }
-        else if (!string.IsNullOrEmpty(cfg.PrCommentTemplate) || HasQueuedWrites(ctx.Run))
+        else if (!string.IsNullOrEmpty(cfg.PrCommentTemplate) || await HasQueuedWritesAsync(ctx, sp))
         {
             // PR already exists for this run — render the comment template and
             // post it on the existing PR. Each re-visit of this node posts a
@@ -224,8 +224,58 @@ public sealed class PRNodeExecutor : INodeExecutor
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
     }
 
-    private static bool HasQueuedWrites(LoopRun run)
-        => PrCommentQueueJson.TryParse(run.PrCommentQueue).Count > 0;
+    /// <summary>Attempts before a contended claim gives up; each re-reads the row it lost to.</summary>
+    private const int QueueClaimAttempts = 5;
+
+    /// <summary>
+    /// Whether anything is waiting to go out, read from the row rather than from
+    /// the instance the engine has been carrying since the iteration began. An
+    /// agent queues its answers DURING the round — after that instance was
+    /// loaded — so the in-memory copy says "nothing waiting" for exactly the
+    /// replies this node exists to send, and a node with no comment template
+    /// would skip the branch that sends them.
+    /// </summary>
+    private static async Task<bool> HasQueuedWritesAsync(NodeExecutionContext ctx, IServiceProvider sp)
+    {
+        // With no store there is no row, and so no queue: the intents an agent
+        // records live nowhere else.
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
+            return false;
+        return PrCommentQueueJson.TryParse(await runs.GetPrCommentQueueAsync(ctx.Run.Id)).Count > 0;
+    }
+
+    /// <summary>
+    /// Claims the whole queue in one step — reads the column and clears it only
+    /// if it still holds what was read, retrying when it does not — and hands
+    /// back what it took.
+    ///
+    /// Claiming BEFORE anything goes out is what makes dropping a real stop. The
+    /// instance the engine carries was loaded when the iteration began, which on
+    /// a round that did any work at all is long before this; posting from it
+    /// would send a list that no longer describes what the human wants said, and
+    /// clearing the column afterwards would throw away an intent queued in
+    /// between. A drop that lands before the claim changes what is claimed; one
+    /// that lands after is late by definition, and the panel now says so.
+    /// </summary>
+    private static async Task<IReadOnlyList<PrQueuedWrite>> ClaimQueuedWritesAsync(
+        ILoopRunStore runs, LoopRun run)
+    {
+        for (var attempt = 0; attempt < QueueClaimAttempts; attempt++)
+        {
+            var current = await runs.GetPrCommentQueueAsync(run.Id);
+            var queued = PrCommentQueueJson.TryParse(current);
+            if (queued.Count == 0)
+                return queued;
+
+            if (await runs.TrySetPrCommentQueueAsync(run.Id, current, null))
+            {
+                run.PrCommentQueue = null;
+                return queued;
+            }
+        }
+
+        return Array.Empty<PrQueuedWrite>();
+    }
 
     /// <summary>
     /// Write what the round said it intended to write. This is the only place a
@@ -238,13 +288,16 @@ public sealed class PRNodeExecutor : INodeExecutor
     /// A refused write does not fail the node. Nothing is lost by it: the thread
     /// stays open and the finding stays undelivered, so the next review raises
     /// it again — whereas failing here would park the run on something no human
-    /// asked for. The queue is cleared either way, so a provider that keeps
+    /// asked for. The claim happens either way, so a provider that keeps
     /// refusing cannot make the node retry for ever.
     /// </summary>
     private static async Task DrainQueuedWritesAsync(
         NodeExecutionContext ctx, IServiceProvider sp, IRemoteProvider remote, string cloneUrl, string prNumber)
     {
-        var queued = PrCommentQueueJson.TryParse(ctx.Run.PrCommentQueue);
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
+            return;
+
+        var queued = await ClaimQueuedWritesAsync(runs, ctx.Run);
         if (queued.Count == 0)
             return;
 
@@ -272,12 +325,6 @@ public sealed class PRNodeExecutor : INodeExecutor
                 log?.LogWarning(ex, "Queued PR {Kind} on {Target} could not be written", write.Kind, write.TargetId);
             }
         }
-
-        if (sp.GetService<ILoopRunStore>() is not { } runs)
-            return;
-
-        ctx.Run.PrCommentQueue = null;
-        await runs.SetPrCommentQueueAsync(ctx.Run.Id, null);
 
         if (posted.Count == 0)
             return;

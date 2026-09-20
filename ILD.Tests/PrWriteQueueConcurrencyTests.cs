@@ -128,6 +128,35 @@ public class PrWriteQueueConcurrencyTests
     }
 
     [Fact]
+    public async Task A_full_row_write_from_a_stale_instance_cannot_revert_the_queue()
+    {
+        // The heartbeat loads the run, fetches the pull request snapshot, reads
+        // the whole review ledger off the forge and only then writes the row
+        // back whole. An agent queues its answers inside that window and a
+        // person drops them there, so the copy the heartbeat is holding is from
+        // before either — writing it back would revert a reply the agent was
+        // told had been accepted, or reinstate one a human had stopped.
+        using var db = new TestDb();
+        var run = await SeedAsync(db, Write("w1", "101"));
+        var heartbeat = new LoopRunStore(db.Fresh());
+        var carried = await heartbeat.GetByIdAsync(run.Id);
+        Assert.NotNull(carried);
+        Assert.Equal(PrCommentQueueJson.Serialize(new[] { Write("w1", "101") }), carried!.PrCommentQueue);
+
+        // Meanwhile, on its own scope: a human drops the one queued write.
+        Assert.True(await ServiceOn(db).DropQueuedAsync(run.Id, "w1"));
+
+        // …and only now does the heartbeat's pass persist what it was holding.
+        carried.PrSnapshot = "{\"state\":\"open\"}";
+        await heartbeat.UpdateRunAsync(carried);
+
+        Assert.Null(await new LoopRunStore(db.Fresh()).GetPrCommentQueueAsync(run.Id));
+        // The rest of the row is still written, or the heartbeat would stop working.
+        var after = await new LoopRunStore(db.Fresh()).GetByIdAsync(run.Id);
+        Assert.Equal("{\"state\":\"open\"}", after!.PrSnapshot);
+    }
+
+    [Fact]
     public async Task A_compare_and_set_against_a_stale_value_refuses()
     {
         using var db = new TestDb();

@@ -287,6 +287,17 @@ public class LoopRunStore : ILoopRunStore
         if (entry.State == EntityState.Detached)
             _db.LoopRuns.Attach(run);
         _db.Entry(run).State = EntityState.Modified;
+        // The one column a full-row write must not carry. Every caller here is
+        // holding an instance it loaded before doing its own work — the
+        // heartbeat loads the run, then fetches the snapshot and reads the whole
+        // review ledger off the forge — and throughout that window an agent can
+        // queue a reply and a person can drop one, each through a
+        // compare-and-set on this column alone. Writing the stale copy back
+        // would revert a reply the agent was told had been accepted, or
+        // reinstate one a human had stopped, which then goes out on the pull
+        // request: precisely what the compare-and-set exists to prevent. Every
+        // legitimate change to the queue goes through TrySetPrCommentQueueAsync.
+        _db.Entry(run).Property(r => r.PrCommentQueue).IsModified = false;
         await _db.SaveChangesAsync();
     }
 
@@ -304,11 +315,6 @@ public class LoopRunStore : ILoopRunStore
         => await _db.LoopRuns
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentLedger, json));
-
-    public async Task SetPrCommentQueueAsync(Guid runId, string? json)
-        => await _db.LoopRuns
-            .Where(r => r.Id == runId)
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentQueue, json));
 
     public async Task<string?> GetPrCommentQueueAsync(Guid runId)
         // No tracking: a caller re-reading inside one scope must see the row as

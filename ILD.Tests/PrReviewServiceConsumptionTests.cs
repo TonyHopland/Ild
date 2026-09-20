@@ -50,9 +50,6 @@ public class PrReviewServiceConsumptionTests
             };
             Runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(Run);
             Runs.Setup(s => s.GetByIdAsync(Run.Id)).ReturnsAsync(() => Run);
-            Runs.Setup(s => s.SetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
-                .Callback<Guid, string?>((_, json) => { RecordedQueue = json; Run.PrCommentQueue = json; })
-                .Returns(Task.CompletedTask);
             // The queue is mutated by compare-and-set: the service reads the
             // column, then writes only if it still holds what it read.
             Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).ReturnsAsync(() => Run.PrCommentQueue);

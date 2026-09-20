@@ -155,13 +155,6 @@ public interface ILoopRunStore
     Task SetPrCommentLedgerAsync(Guid runId, string? json);
 
     /// <summary>
-    /// Persist what the run intends to write on its pull request, touching only
-    /// that column — the same discipline the ledger needs, and for the same
-    /// reason: every other writer on this path writes the whole row.
-    /// </summary>
-    Task SetPrCommentQueueAsync(Guid runId, string? json);
-
-    /// <summary>
     /// The queue as the row holds it right now, bypassing the change tracker —
     /// what a compare-and-set has to start from.
     /// </summary>
@@ -169,12 +162,13 @@ public interface ILoopRunStore
 
     /// <summary>
     /// Replace the queue only if it still holds <paramref name="expected"/>,
-    /// reporting whether it did. Two people dropping different queued writes at
-    /// the same moment otherwise read the same list, and the second write puts
-    /// back the item the first removed — which then goes out on the pull request
-    /// after a human had stopped it. Unconditional
-    /// <see cref="SetPrCommentQueueAsync"/> stays for the PR node, which is the
-    /// authority once it has posted.
+    /// reporting whether it did. This is the ONLY way this column changes: an
+    /// agent queues, a person drops and the PR node claims the lot before it
+    /// posts, all against a row the others are moving. An unconditional write
+    /// anywhere on that path puts back the item another writer just removed —
+    /// which then goes out on the pull request after a human had stopped it —
+    /// so no such write exists, and <see cref="UpdateRunAsync"/> is careful to
+    /// leave this one column alone.
     /// </summary>
     Task<bool> TrySetPrCommentQueueAsync(Guid runId, string? expected, string? json);
 
