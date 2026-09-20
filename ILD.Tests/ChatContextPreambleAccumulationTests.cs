@@ -718,7 +718,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
     {
         public Task MessageAppendedAsync(Guid chatSessionId, ChatMessageView message) => Task.CompletedTask;
         public Task TurnProgressAsync(Guid chatSessionId, string delta) => Task.CompletedTask;
-        public Task TurnCompletedAsync(Guid chatSessionId, bool interrupted) => Task.CompletedTask;
+        public Task TurnStartedAsync(Guid chatSessionId, Guid turnId) => Task.CompletedTask;
+        public Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted) => Task.CompletedTask;
         public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document) => Task.CompletedTask;
     }
 

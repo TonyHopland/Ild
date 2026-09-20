@@ -19,7 +19,10 @@ public sealed class ChatTurnRunnerGateTests
         chat.Setup(c => c.ExecuteTurnAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         var services = new ServiceCollection().AddScoped(_ => chat.Object).BuildServiceProvider();
-        return new ChatTurnRunner(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<ChatTurnRunner>.Instance);
+        // The runner announces each turn's start and end itself; what it announces
+        // is ChatTurnLifecycleTests' subject, so here it goes nowhere.
+        return ActivatorUtilities.CreateInstance<ChatTurnRunner>(
+            services, Mock.Of<IChatNotifier>(), NullLogger<ChatTurnRunner>.Instance);
     }
 
     [Fact]

@@ -56,6 +56,7 @@ public sealed class ChatServiceTests : IDisposable
     {
         public List<AppendedMessage> Appended { get; } = new();
         public List<string> Progress { get; } = new();
+        public List<Guid> Started { get; } = new();
         public List<bool> Completed { get; } = new();
 
         public Task MessageAppendedAsync(Guid chatSessionId, ChatMessageView message)
@@ -70,7 +71,13 @@ public sealed class ChatServiceTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public Task TurnCompletedAsync(Guid chatSessionId, bool interrupted)
+        public Task TurnStartedAsync(Guid chatSessionId, Guid turnId)
+        {
+            Started.Add(turnId);
+            return Task.CompletedTask;
+        }
+
+        public Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted)
         {
             Completed.Add(interrupted);
             return Task.CompletedTask;
@@ -249,8 +256,12 @@ public sealed class ChatServiceTests : IDisposable
 
         Assert.Contains("hello ", _notifier.Progress);
         Assert.Equal(2, _notifier.Appended.Count);
-        Assert.Single(_notifier.Completed);
-        Assert.False(_notifier.Completed[0]);
+        // A turn's start and end belong to whoever started it — only the runner can
+        // name the turn, and only it sees a turn that ends without the service
+        // saying anything. A second completion from here would clear the bubble's
+        // indicator for whichever turn is running by then.
+        Assert.Empty(_notifier.Started);
+        Assert.Empty(_notifier.Completed);
     }
 
     [Fact]
@@ -292,7 +303,8 @@ public sealed class ChatServiceTests : IDisposable
             .Single();
         Assert.True(assistant.Interrupted);
         Assert.Equal("partial answer", assistant.Content);
-        Assert.True(_notifier.Completed[0], "turn-completed should report interrupted");
+        // That the cancelled turn also REPORTS itself interrupted is the runner's
+        // job now: ChatTurnLifecycleTests covers it, under the turn's own id.
     }
 
     [Fact]
