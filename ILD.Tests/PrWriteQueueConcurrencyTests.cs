@@ -4,6 +4,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
 using Moq;
 
 namespace ILD.Tests;
@@ -56,20 +57,46 @@ public class PrWriteQueueConcurrencyTests
     private static PrReviewService ServiceOn(TestDb db)
         => new(new LoopRunStore(db.Fresh()), new Mock<IRemoteProvider>().Object);
 
+    /// <summary>
+    /// The same service, on the same real store, with <paramref name="between"/>
+    /// run once after its first read of the queue and before it writes. Letting
+    /// the two drops race on the thread pool instead would only sometimes
+    /// interleave, and a test that only sometimes fails does not hold a defect
+    /// out; this pins the one ordering the defect lives in.
+    /// </summary>
+    private static PrReviewService ServiceReadingBefore(TestDb db, Guid runId, Func<Task> between)
+    {
+        var real = new LoopRunStore(db.Fresh());
+        var pending = between;
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetPrCommentQueueAsync(runId)).Returns(async () =>
+        {
+            var read = await real.GetPrCommentQueueAsync(runId);
+            var once = Interlocked.Exchange(ref pending, null);
+            if (once is not null)
+                await once();
+            return read;
+        });
+        store.Setup(s => s.TrySetPrCommentQueueAsync(runId, It.IsAny<string?>(), It.IsAny<string?>()))
+            .Returns((Guid id, string? expected, string? json) => real.TrySetPrCommentQueueAsync(id, expected, json));
+        return new PrReviewService(store.Object, new Mock<IRemoteProvider>().Object);
+    }
+
     [Fact]
     public async Task Two_drops_at_once_both_take_effect()
     {
         using var db = new TestDb();
         var run = await SeedAsync(db, Write("w1", "101"), Write("w2", "102"), Write("w3", "103"));
 
-        // Two people, two scopes, started before either has written.
-        var first = ServiceOn(db);
+        // Two people, two scopes. The second drop runs to completion inside the
+        // first one's gap between reading the queue and writing it back, so the
+        // first is holding a list that no longer exists by the time it writes.
         var second = ServiceOn(db);
-        var results = await Task.WhenAll(
-            first.DropQueuedAsync(run.Id, "w1"),
-            second.DropQueuedAsync(run.Id, "w2"));
+        var first = ServiceReadingBefore(db, run.Id, async () =>
+            Assert.True(await second.DropQueuedAsync(run.Id, "w2")));
 
-        Assert.Equal(new[] { true, true }, results);
+        Assert.True(await first.DropQueuedAsync(run.Id, "w1"));
+
         var left = PrCommentQueueJson.TryParse(await new LoopRunStore(db.Fresh()).GetPrCommentQueueAsync(run.Id));
         var remaining = Assert.Single(left);
         Assert.Equal("w3", remaining.Id);
