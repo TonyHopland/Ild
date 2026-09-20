@@ -34,7 +34,15 @@ public record ChatMessageAppendedPayload(Guid ChatSessionId, ChatMessageView Mes
 
 public record ChatTurnProgressPayload(Guid ChatSessionId, string Delta);
 
-public record ChatTurnCompletedPayload(Guid ChatSessionId, bool Interrupted);
+/// <summary>
+/// <paramref name="TurnId"/> identifies one run of the agent for that chat. A
+/// message interrupts rather than queues, so a chat can hand one turn over to the
+/// next: the id is what lets the bubble tell its own turn's completion from that
+/// of the turn it just replaced.
+/// </summary>
+public record ChatTurnStartedPayload(Guid ChatSessionId, Guid TurnId);
+
+public record ChatTurnCompletedPayload(Guid ChatSessionId, Guid TurnId, bool Interrupted);
 
 public record ChatLoopUpdatePayload(Guid ChatSessionId, string Document);
 

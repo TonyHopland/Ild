@@ -37,7 +37,13 @@ public class ChatController : ControllerBase
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
         var session = await _chat.GetByIdAsync(userId, id, ct);
-        return session is null ? NotFound() : Ok(session);
+        if (session is null) return NotFound();
+
+        // Turn liveness lives in the runner, not in the stored session, and a bubble
+        // that has just loaded or just reconnected has no other way to learn this
+        // chat is mid-turn. Read after the ownership check, so an answer about a
+        // turn is only ever given about a chat the caller owns.
+        return Ok(session with { ActiveTurnId = _runner.ActiveTurnId(id) });
     }
 
     [HttpPost]

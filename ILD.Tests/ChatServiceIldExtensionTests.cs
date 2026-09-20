@@ -124,7 +124,10 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
         var svc = NewService(adapter.Object);
         var chatId = await StartChatAsync(svc);
         var services = new ServiceCollection().AddScoped<IChatService>(_ => svc).BuildServiceProvider();
-        var runner = new ChatTurnRunner(services.GetRequiredService<IServiceScopeFactory>(), NullLogger<ChatTurnRunner>.Instance);
+        var runner = new ChatTurnRunner(
+            services.GetRequiredService<IServiceScopeFactory>(),
+            Mock.Of<IChatNotifier>(),
+            NullLogger<ChatTurnRunner>.Instance);
 
         var deleting = new TaskCompletionSource();
         var release = new TaskCompletionSource();

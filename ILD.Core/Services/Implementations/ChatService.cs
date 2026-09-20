@@ -470,8 +470,10 @@ public sealed class ChatService : IChatService
         // not an error, so honor it with CancellationToken.None.
         await _db.SaveChangesAsync(CancellationToken.None);
 
+        // The turn's own end is announced by whoever started it, not here: only the
+        // runner can name the turn, and only it sees a turn that ends without this
+        // method running at all (a chat deleted while its turn was streaming).
         await _notifier.MessageAppendedAsync(session.Id, ToView(assistant));
-        await _notifier.TurnCompletedAsync(session.Id, interrupted);
     }
 
     private async Task<ChatMessage> AppendMessageAsync(

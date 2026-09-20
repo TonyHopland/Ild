@@ -27,8 +27,11 @@ public class SignalRChatNotifier : IChatNotifier
     public Task TurnProgressAsync(Guid chatSessionId, string delta)
         => SendAsync(chatSessionId, "ChatTurnProgress", new ChatTurnProgressPayload(chatSessionId, delta));
 
-    public Task TurnCompletedAsync(Guid chatSessionId, bool interrupted)
-        => SendAsync(chatSessionId, "ChatTurnCompleted", new ChatTurnCompletedPayload(chatSessionId, interrupted));
+    public Task TurnStartedAsync(Guid chatSessionId, Guid turnId)
+        => SendAsync(chatSessionId, "ChatTurnStarted", new ChatTurnStartedPayload(chatSessionId, turnId));
+
+    public Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted)
+        => SendAsync(chatSessionId, "ChatTurnCompleted", new ChatTurnCompletedPayload(chatSessionId, turnId, interrupted));
 
     public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document)
         => SendAsync(chatSessionId, "ChatLoopUpdate", new ChatLoopUpdatePayload(chatSessionId, document));

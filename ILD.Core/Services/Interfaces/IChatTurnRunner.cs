@@ -24,6 +24,13 @@ public interface IChatTurnRunner
     Task InterruptAsync(Guid chatSessionId);
 
     /// <summary>
+    /// The turn currently in flight for the session, or null when it has none.
+    /// The runner is the only thing that knows: a client that has just loaded or
+    /// just reconnected has no other way to learn the chat is mid-turn.
+    /// </summary>
+    Guid? ActiveTurnId(Guid chatSessionId);
+
+    /// <summary>
     /// Cancel any in-flight turn for the session, then run <paramref name="delete"/>
     /// while still holding the session's turn gate, so a message submitted in the
     /// meantime cannot start a turn until the session is gone. That turn then finds

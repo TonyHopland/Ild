@@ -10,19 +10,30 @@ namespace ILD.Core.Services.Implementations;
 /// primitive (cancel in-flight + resume same session with the new message). Each
 /// turn runs in its own DI scope so the scoped <see cref="IChatService"/> /
 /// <c>DbContext</c> are not shared across the background turn boundary.
+///
+/// <para>It is also the source of truth for whether a chat has a turn in flight,
+/// and the only thing that can name that turn: it sees turns that end without the
+/// service saying anything at all (a chat deleted under a running turn). So every
+/// turn it starts announces itself once and reports itself finished once under the
+/// same id, however it ends.</para>
 /// </summary>
 public sealed class ChatTurnRunner : IChatTurnRunner
 {
     private readonly IServiceScopeFactory _scopes;
+    private readonly IChatNotifier _notifier;
     private readonly ILogger<ChatTurnRunner> _log;
 
     private sealed class ActiveTurn(CancellationTokenSource cts)
     {
+        // What the client recognises this turn by, so a completion from a turn that
+        // has already been replaced can be told from its successor's.
+        public Guid Id { get; } = Guid.NewGuid();
+
         public CancellationTokenSource Cts { get; } = cts;
 
         // Assigned right after the turn is put in the map, under the session's gate,
-        // so the only reader — CancelActiveAsync, also under that gate — never sees
-        // the gap between the two.
+        // so the only readers — SubmitAsync and CancelActiveAsync, also under that
+        // gate — never see the gap between the two.
         public Task Task { get; set; } = Task.CompletedTask;
     }
 
@@ -41,9 +52,10 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         public bool Dropped;
     }
 
-    public ChatTurnRunner(IServiceScopeFactory scopes, ILogger<ChatTurnRunner> log)
+    public ChatTurnRunner(IServiceScopeFactory scopes, IChatNotifier notifier, ILogger<ChatTurnRunner> log)
     {
         _scopes = scopes;
+        _notifier = notifier;
         _log = log;
     }
 
@@ -52,10 +64,31 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         var gate = await EnterAsync(chatSessionId).ConfigureAwait(false);
         try
         {
-            await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
-
             var turn = new ActiveTurn(new CancellationTokenSource());
-            _active[chatSessionId] = turn;
+
+            // Claim the outgoing turn and register the replacement in one step, so
+            // the chat never reads as idle between them — the hand-over is exactly
+            // where the bubble used to lose its stop button. Removing first and
+            // re-inserting would leave the key absent, however briefly, and an
+            // absent key is what "this chat is idle" means.
+            //
+            // Retire runs outside this gate and both removes the entry AND disposes
+            // its CancellationTokenSource, so a plain overwrite could cancel one it
+            // has just disposed. A successful TryUpdate means we displaced exactly
+            // `prev` and now own its cancellation and disposal; a failed one means
+            // Retire got there first and has already done both.
+            var claimed = _active.TryGetValue(chatSessionId, out var prev)
+                && _active.TryUpdate(chatSessionId, turn, prev);
+            if (!claimed) _active[chatSessionId] = turn;
+
+            // Announced before the outgoing turn is cancelled: its completion then
+            // lands on a client that already knows a newer turn is running, so it
+            // cannot be mistaken for this chat falling idle.
+            await _notifier.TurnStartedAsync(chatSessionId, turn.Id).ConfigureAwait(false);
+
+            if (prev is not null)
+                await DrainAsync(chatSessionId, prev, cancel: claimed).ConfigureAwait(false);
+
             turn.Task = Task.Run(async () =>
             {
                 try
@@ -64,7 +97,12 @@ public sealed class ChatTurnRunner : IChatTurnRunner
                 }
                 finally
                 {
+                    // Read before retiring: whoever takes the turn out of the map
+                    // disposes its CancellationTokenSource, and a disposed one can
+                    // no longer be asked whether it was cancelled.
+                    var interrupted = turn.Cts.IsCancellationRequested;
                     Retire(chatSessionId, turn);
+                    await _notifier.TurnCompletedAsync(chatSessionId, turn.Id, interrupted).ConfigureAwait(false);
                 }
             });
         }
@@ -100,6 +138,9 @@ public sealed class ChatTurnRunner : IChatTurnRunner
             Leave(chatSessionId, gate);
         }
     }
+
+    public Guid? ActiveTurnId(Guid chatSessionId)
+        => _active.TryGetValue(chatSessionId, out var turn) ? turn.Id : null;
 
     /// <summary>The gates currently held; for the test that they do not pile up.</summary>
     internal int GateCount => _gates.Count;
@@ -148,10 +189,20 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     private async Task CancelActiveAsync(Guid chatSessionId)
     {
         if (!_active.TryRemove(chatSessionId, out var prev)) return;
+        await DrainAsync(chatSessionId, prev, cancel: true).ConfigureAwait(false);
+    }
+
+    // Cancel a displaced turn and wait for it to finalize, so its interrupted reply
+    // is persisted and announced before anything else touches the same transcript.
+    // <paramref name="cancel"/> is false only when the turn retired itself first: it
+    // disposed its own CancellationTokenSource on the way out, and a disposed one
+    // can neither be cancelled nor disposed again.
+    private async Task DrainAsync(Guid chatSessionId, ActiveTurn turn, bool cancel)
+    {
         try
         {
-            prev.Cts.Cancel();
-            await prev.Task.ConfigureAwait(false);
+            if (cancel) turn.Cts.Cancel();
+            await turn.Task.ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -159,7 +210,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
         finally
         {
-            prev.Cts.Dispose();
+            if (cancel) turn.Cts.Dispose();
         }
     }
 

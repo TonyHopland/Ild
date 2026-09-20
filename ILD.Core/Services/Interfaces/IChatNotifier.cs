@@ -14,8 +14,19 @@ public interface IChatNotifier
     /// <summary>A streamed delta of the in-flight assistant reply.</summary>
     Task TurnProgressAsync(Guid chatSessionId, string delta);
 
-    /// <summary>The current turn finished (or was interrupted), so the live bubble can settle.</summary>
-    Task TurnCompletedAsync(Guid chatSessionId, bool interrupted);
+    /// <summary>
+    /// A turn started for the session. Announced by whoever starts it, before any
+    /// turn it replaces is cancelled, so the bubble never sees a busy chat go quiet
+    /// during a hand-over.
+    /// </summary>
+    Task TurnStartedAsync(Guid chatSessionId, Guid turnId);
+
+    /// <summary>
+    /// The turn named by <paramref name="turnId"/> finished (or was interrupted),
+    /// so the live bubble can settle — but only if that is still the turn it is
+    /// watching, which is why the id travels with it.
+    /// </summary>
+    Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted);
 
     /// <summary>
     /// Push a full <c>ild-loop-template/v1</c> document to the open Loop Editor so
