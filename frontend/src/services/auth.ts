@@ -613,8 +613,10 @@ export const chatService = {
 
   /**
    * Cancel the chat's in-flight turn. The partial reply is still persisted and
-   * announced over the hub, so the caller waits for `ChatTurnCompleted` rather
-   * than clearing its own busy state. A no-op when the turn already finished.
+   * announced over the hub, so the caller waits for that turn's
+   * `ChatTurnCompleted` rather than settling its own view. A no-op when the turn
+   * already finished — which is why a caller that cares re-reads the chat once
+   * the request comes back rather than assuming the turn is over.
    */
   interrupt: async (sessionId: string): Promise<void> => {
     await api.post<void>(`/chat/${sessionId}/interrupt`, {});

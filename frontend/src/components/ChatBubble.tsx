@@ -10,6 +10,7 @@ import type {
   ChatSessionSummary,
   ChatMessageAppendedPayload,
   ChatTurnProgressPayload,
+  ChatTurnStartedPayload,
   ChatTurnCompletedPayload,
 } from "../types";
 import {
@@ -35,6 +36,11 @@ import "./ChatBubble.css";
 // the panel when tapped.
 const DRAG_THRESHOLD_PX = 4;
 
+// Stands in for the turn a message has just started, between posting it and the
+// server naming that turn. A message interrupts rather than queues, so whatever
+// turn id we were holding is already stale — and the chat is busy either way.
+const PENDING_TURN = "pending";
+
 // The v1 tool catalog (read/write/execute/ild). `ild` is the only default-on
 // entry; the backend re-normalizes the selection against the provider type.
 const TOOL_OPTIONS: { key: string; label: string; defaultOn: boolean }[] = [
@@ -55,10 +61,20 @@ export default function ChatBubble() {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState("");
-  const [busy, setBusy] = useState(false);
+  // The turn the server has in flight for the open chat, or null when it is idle:
+  // the one thing the working indicator and the stop button are drawn from. The
+  // server owns this — inferring it from message events is what lost the stop
+  // button the moment one turn handed over to the next.
+  const [turn, setTurn] = useState<string | null>(null);
+  const turnRef = useRef<string | null>(null);
+  // Bumped by every turn change, so an in-flight state read can tell that what it
+  // was asked about has since moved on. Monotonic on purpose: a turn value that
+  // left and came back is still a later epoch.
+  const epochRef = useRef(0);
   // Set while a stop request is in flight, so a second click cannot fire another.
   const [stopping, setStopping] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const busy = turn !== null;
 
   // Retained chat history (ADR-0013): the user's past chats, shown under Start
   // chat. `confirmDeleteAll` gates the wipe-all action behind a confirmation.
@@ -215,26 +231,6 @@ export default function ChatBubble() {
     };
   }, [refreshHistory]);
 
-  // Join the active chat's group whenever we are connected, and leave it on
-  // resume/back so streamed turns only ever reach the chat currently open.
-  useEffect(() => {
-    if (connectionState !== "connected" || !session?.id) return;
-    const id = session.id;
-    // The server refuses a chat the caller does not own, so the invocation can
-    // reject: log it rather than leaving an unhandled rejection. Nothing to show
-    // the user — a chat that is not ours has no turns to stream here.
-    void invoke("SubscribeToChat", id)?.catch((err) => console.error(err));
-    return () => {
-      void invoke("UnsubscribeFromChat", id)?.catch((err) => console.error(err));
-    };
-  }, [connectionState, session?.id, invoke]);
-
-  // Publish the session id so other components (the LoopEditor) can join the same
-  // chat group — including a session created or restarted after they mount.
-  useEffect(() => {
-    setCurrentChatSessionId(session?.id ?? null);
-  }, [session?.id]);
-
   const upsertMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) =>
       prev.some((m) => m.id === message.id)
@@ -243,34 +239,116 @@ export default function ChatBubble() {
     );
   }, []);
 
+  // The only writer of the turn value, so the ref the once-registered hub
+  // handlers read never drifts from the state the view renders.
+  const applyTurn = useCallback((next: string | null) => {
+    turnRef.current = next;
+    epochRef.current += 1;
+    setTurn(next);
+  }, []);
+
+  // Re-read the chat whenever the client may be holding a belief the server has
+  // already contradicted: on every join of its live stream, after a stop the
+  // server accepted, and after a send that failed. Nothing else can tell a bubble
+  // that has just loaded, or just come back from an outage, that a turn is still
+  // running — or that the one it was watching is long over.
+  const refreshActiveState = useCallback(
+    async (id: string) => {
+      const epoch = epochRef.current;
+      const view = await chatService.getById(id);
+      // Discard an answer about a chat we have left, or one taken before a turn
+      // we have since learned about: a snapshot may never overrule a newer fact.
+      if (sessionIdRef.current !== id || epochRef.current !== epoch) return;
+
+      // Merged, never replaced. The snapshot predates whatever arrived over the
+      // hub while it was in flight, so it may add what we missed but must not
+      // drop what we know — the new turn's own user message, say.
+      for (const message of view.messages) upsertMessage(message);
+
+      const active = view.activeTurnId ?? null;
+      // A streamed partial belongs to the turn that produced it, and only that
+      // turn's own finalized reply replaces it. If the server no longer names
+      // that turn, the text on screen is from a turn that has ended.
+      if (active !== turnRef.current) setStreaming("");
+      applyTurn(active);
+    },
+    [upsertMessage, applyTurn],
+  );
+
+  // Join the active chat's group whenever we are connected, and leave it on
+  // resume/back so streamed turns only ever reach the chat currently open.
+  useEffect(() => {
+    if (connectionState !== "connected" || !session?.id) return;
+    const id = session.id;
+    void (async () => {
+      try {
+        // The server refuses a chat the caller does not own, so the invocation
+        // can reject: log it rather than leaving an unhandled rejection. Nothing
+        // to show the user — a chat that is not ours has no turns to stream here,
+        // and nothing to re-read either.
+        await invoke("SubscribeToChat", id);
+      } catch (err) {
+        console.error(err);
+        return;
+      }
+      try {
+        // Only once the join has taken effect: a turn that ended in the gap
+        // between reading and joining would be missed for good.
+        await refreshActiveState(id);
+      } catch (err) {
+        // The view keeps what it had; the next join asks again.
+        console.error(err);
+      }
+    })();
+    return () => {
+      void invoke("UnsubscribeFromChat", id)?.catch((err) => console.error(err));
+    };
+  }, [connectionState, session?.id, invoke, refreshActiveState]);
+
+  // Publish the session id so other components (the LoopEditor) can join the same
+  // chat group — including a session created or restarted after they mount.
+  useEffect(() => {
+    setCurrentChatSessionId(session?.id ?? null);
+  }, [session?.id]);
+
   useEffect(() => {
     const onAppended = (msg: { payload: ChatMessageAppendedPayload }) => {
       if (msg.payload.chatSessionId !== sessionIdRef.current) return;
       upsertMessage(msg.payload.message);
-      if (msg.payload.message.role === "assistant") {
-        setStreaming("");
-        setBusy(false);
-      }
+      // A finalized reply replaces the text it streamed, but says nothing about
+      // whether the chat is still working: the turn it finalizes may be one that
+      // a newer message already interrupted.
+      if (msg.payload.message.role === "assistant") setStreaming("");
     };
     const onProgress = (msg: { payload: ChatTurnProgressPayload }) => {
       if (msg.payload.chatSessionId !== sessionIdRef.current) return;
       setStreaming((prev) => prev + msg.payload.delta);
     };
+    const onStarted = (msg: { payload: ChatTurnStartedPayload }) => {
+      if (msg.payload.chatSessionId !== sessionIdRef.current) return;
+      applyTurn(msg.payload.turnId);
+    };
     const onCompleted = (msg: { payload: ChatTurnCompletedPayload }) => {
       if (msg.payload.chatSessionId !== sessionIdRef.current) return;
+      // Only the turn we believe is running can end the turn: hub sends carry no
+      // ordering guarantee between turns, so a replaced turn's completion can
+      // arrive after its successor has already announced itself.
+      if (msg.payload.turnId !== turnRef.current) return;
       setStreaming("");
-      setBusy(false);
+      applyTurn(null);
     };
 
     on("ChatMessageAppended", onAppended);
     on("ChatTurnProgress", onProgress);
+    on("ChatTurnStarted", onStarted);
     on("ChatTurnCompleted", onCompleted);
     return () => {
       off("ChatMessageAppended", onAppended);
       off("ChatTurnProgress", onProgress);
+      off("ChatTurnStarted", onStarted);
       off("ChatTurnCompleted", onCompleted);
     };
-  }, [on, off, upsertMessage]);
+  }, [on, off, upsertMessage, applyTurn]);
 
   // Keep the transcript scrolled to the newest content. `scrollTo` is absent in
   // jsdom, so guard the call rather than assume it exists.
@@ -335,6 +413,7 @@ export default function ChatBubble() {
       const created = await chatService.start(providerId, Array.from(tools));
       setSession(created);
       setMessages(created.messages);
+      applyTurn(created.activeTurnId ?? null);
       sessionIdRef.current = created.id;
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not start chat.");
@@ -346,7 +425,9 @@ export default function ChatBubble() {
     const content = input.trim();
     if (!content || !session) return;
     setInput("");
-    setBusy(true);
+    // The message interrupts whatever was running, so the chat is busy from here
+    // whichever turn the server ends up naming.
+    applyTurn(PENDING_TURN);
     try {
       // The open Loop Editor's live, possibly-unsaved document travels with each
       // message so the agent can read and edit the loop the user is looking at
@@ -360,27 +441,44 @@ export default function ChatBubble() {
         openLoopDocument,
       );
     } catch (e) {
-      setBusy(false);
       setError((e as { message?: string })?.message ?? "Could not send message.");
+      // The message may still have reached the runner, and a turn it did not
+      // reach may be running regardless — so ask the server rather than declaring
+      // the chat idle and taking away the only control that can stop it.
+      try {
+        await refreshActiveState(session.id);
+      } catch {
+        // Nothing left to ask. Clear only what this send put up, so a turn we
+        // have learned about in the meantime is left alone.
+        if (turnRef.current === PENDING_TURN) applyTurn(null);
+      }
     }
   };
 
-  // Cancel the in-flight turn. `busy` is deliberately left alone: the server
-  // persists the partial reply and announces it over the hub, so the normal
-  // ChatMessageAppended/ChatTurnCompleted handlers end the turn just as they do
-  // for one that finished on its own. The turn can also finish between render and
-  // click, which makes the call a no-op (or a 404 on a chat already gone) —
-  // nothing to report, so it is swallowed.
+  // Cancel the in-flight turn. The turn value is deliberately left alone: the
+  // server persists the partial reply and announces it over the hub, so the turn
+  // ends through the same ChatTurnCompleted the client waits for when one
+  // finishes on its own. The turn can also finish between render and click, which
+  // makes the call a no-op (or a 404 on a chat already gone) — nothing to report,
+  // so it is swallowed.
   const stop = async () => {
     if (!session || stopping) return;
+    const id = session.id;
     setStopping(true);
+    let accepted = false;
     try {
-      await chatService.interrupt(session.id);
+      await chatService.interrupt(id);
+      accepted = true;
     } catch {
       /* nothing left to cancel */
     } finally {
       setStopping(false);
     }
+
+    // Only a stop the server accepted tells us anything: by then it may have
+    // ended the turn without its completion ever reaching us. A rejected one
+    // changes nothing, and must leave the button live for another attempt.
+    if (accepted) await refreshActiveState(id).catch((err) => console.error(err));
   };
 
   // Drop the in-conversation view and return to the chat list. The chat is
@@ -390,12 +488,12 @@ export default function ChatBubble() {
     setSession(null);
     setMessages([]);
     setStreaming("");
-    setBusy(false);
+    applyTurn(null);
     setError(null);
     setConfirmDeleteAll(false);
     sessionIdRef.current = null;
     void refreshHistory().catch(() => {});
-  }, [refreshHistory]);
+  }, [refreshHistory, applyTurn]);
 
   // Resume a past chat: load its transcript and continue the same agent session.
   const resumeChat = async (id: string) => {
@@ -405,7 +503,9 @@ export default function ChatBubble() {
       setSession(resumed);
       setMessages(resumed.messages);
       setStreaming("");
-      setBusy(false);
+      // A chat opened mid-turn shows it running straight away, stop button and
+      // all — the transcript is not the only thing being resumed.
+      applyTurn(resumed.activeTurnId ?? null);
       sessionIdRef.current = resumed.id;
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not open chat.");

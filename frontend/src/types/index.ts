@@ -768,6 +768,8 @@ export interface ChatSession {
   tools: string[];
   createdAt: string;
   messages: ChatMessage[];
+  /** The turn the server has in flight for this chat, or null when it is idle. */
+  activeTurnId: string | null;
 }
 
 /**
@@ -790,8 +792,19 @@ export interface ChatTurnProgressPayload {
   delta: string;
 }
 
+/**
+ * A turn started for the chat. `turnId` identifies one run of the agent: a
+ * message interrupts rather than queues, so it is what tells a turn's own
+ * completion from that of the turn it replaced.
+ */
+export interface ChatTurnStartedPayload {
+  chatSessionId: string;
+  turnId: string;
+}
+
 export interface ChatTurnCompletedPayload {
   chatSessionId: string;
+  turnId: string;
   interrupted: boolean;
 }
 
