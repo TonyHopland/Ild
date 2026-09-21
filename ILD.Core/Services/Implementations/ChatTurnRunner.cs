@@ -97,6 +97,26 @@ public sealed class ChatTurnRunner : IChatTurnRunner
             // install below.
             var attaching = Swap(chatSessionId, state => state with { Attached = turn });
 
+            // Announced while the turn is still only attached: no reader can be
+            // handed its id before the client has been told it started, and the
+            // outgoing turn is not cancelled yet, so that turn's completion lands on
+            // a client which already knows a newer turn is running and cannot read it
+            // as this chat falling idle. If announcing fails the send fails, so the
+            // attachment goes back out again — otherwise the chat would read as busy
+            // for a turn that is never going to run, which is this bug over again.
+            try
+            {
+                await _notifier.TurnStartedAsync(chatSessionId, turn.Id).ConfigureAwait(false);
+            }
+            catch
+            {
+                Swap(chatSessionId, state => state.Attached == turn ? state with { Attached = null } : state);
+                // Never installed and never run, so this thread is the only one that
+                // has ever held it and the only one that can dispose it.
+                turn.Cts.Dispose();
+                throw;
+            }
+
             // Installed as the live turn by one swap, which drops the attachment in
             // the same step: the chat holds this turn either way, and never neither.
             // That swap also moves whatever was live out of `Live`, and moving a turn
@@ -109,11 +129,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
             // retired itself in between and owns its own disposal: wait for it below,
             // but neither cancel nor dispose it.
             var retiring = displaced is null ? attaching.Previous.Live : null;
-
-            // Announced before the outgoing turn is cancelled: its completion then
-            // lands on a client that already knows a newer turn is running, so it
-            // cannot be mistaken for this chat falling idle.
-            await _notifier.TurnStartedAsync(chatSessionId, turn.Id).ConfigureAwait(false);
+            if (retiring is not null) Interlocked.Increment(ref _turnsLeftToRetire);
 
             if (displaced is not null)
                 await DrainAsync(chatSessionId, displaced, cancel: true).ConfigureAwait(false);
@@ -183,6 +199,15 @@ public sealed class ChatTurnRunner : IChatTurnRunner
 
     /// <summary>The turns still tracked; for the test that finished ones do not pile up.</summary>
     internal int ActiveTurnCount => _turns.Count;
+
+    /// <summary>
+    /// How many sends found the turn they were replacing already retired by the time
+    /// they installed their own, and so waited for it without cancelling or disposing
+    /// it. Counted so the test for that hand-over cannot pass without reaching it.
+    /// </summary>
+    internal int TurnsLeftToRetireCount => _turnsLeftToRetire;
+
+    private int _turnsLeftToRetire;
 
     // A finished turn has nothing left to cancel, so it drops itself rather than
     // waiting for a next submit that may never come. It lets go of whichever slot

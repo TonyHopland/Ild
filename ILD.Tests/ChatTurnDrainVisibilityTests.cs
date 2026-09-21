@@ -11,10 +11,11 @@ namespace ILD.Tests;
 /// A stopped turn is not over the moment it is cancelled: it still has to notice,
 /// persist its partial reply and report itself finished. The chat is busy for all
 /// of that, and a read that says otherwise takes the stop button off a turn that is
-/// still running. These tests hold the runner to that, and to the rule the drain
-/// window sits on — the turn is taken out of the live map exactly once, and
-/// whoever took it out is the only one that cancels or disposes it, so nothing can
-/// cancel a source another thread has already disposed.
+/// still running. These tests hold the runner to that, and to the rule the window
+/// sits on: a chat's turn state is one value changed only by compare-and-swap, so a
+/// reader never catches it mid-change, and moving a turn out of the running slot is
+/// a claim exactly one thread can win — the one that then cancels and disposes it,
+/// so no thread can cancel a source another has already disposed.
 /// </summary>
 public sealed class ChatTurnDrainVisibilityTests
 {
@@ -68,7 +69,8 @@ public sealed class ChatTurnDrainVisibilityTests
 
     private static Harness NewRunner(
         Func<Guid, string, CancellationToken, Task> run,
-        Action<Guid, Guid>? onCompleting = null)
+        Action<Guid, Guid>? onCompleting = null,
+        Func<Guid, Guid, Task>? onStarting = null)
     {
         var started = new ConcurrentQueue<Guid>();
         var completed = new ConcurrentQueue<(Guid, bool)>();
@@ -80,7 +82,14 @@ public sealed class ChatTurnDrainVisibilityTests
 
         var notifier = new Mock<IChatNotifier>();
         notifier.Setup(n => n.TurnStartedAsync(It.IsAny<Guid>(), It.IsAny<Guid>()))
-            .Returns((Guid _, Guid turnId) => { started.Enqueue(turnId); return Task.CompletedTask; });
+            .Returns(async (Guid chatSessionId, Guid turnId) =>
+            {
+                started.Enqueue(turnId);
+                // The runner announces a start while the turn is only attached and
+                // before it installs it, so a test that holds this open holds the
+                // chat in exactly that state.
+                if (onStarting is not null) await onStarting(chatSessionId, turnId);
+            });
         notifier.Setup(n => n.TurnCompletedAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<bool>()))
             .Returns((Guid chatSessionId, Guid turnId, bool interrupted) =>
             {
@@ -293,12 +302,12 @@ public sealed class ChatTurnDrainVisibilityTests
     [Fact]
     public async Task A_chat_never_reads_as_idle_as_its_turn_moves_from_running_to_finalizing()
     {
-        // The hand-off between the live map and the draining one, read from another
-        // thread throughout. The turn has to be in one of the two at every instant,
-        // so a reader watching from before the stop until finalization has begun
-        // must never be told the chat is idle. The reader is stopped at that point
-        // on purpose: once the turn finishes it drops itself, and reading idle then
-        // is the correct answer rather than the gap under test.
+        // The hand-off from running to finishing, read from another thread throughout.
+        // It is one swap of one value, so a reader watching from before the stop
+        // until finalization has begun must never be told the chat is idle. The
+        // reader is stopped at that point on purpose: once the turn finishes it lets
+        // go of the state, and reading idle then is the right answer rather than the
+        // gap under test.
         const int rounds = 200;
         var turns = new ConcurrentDictionary<string, BlockingTurn>();
         var h = NewRunner((_, message, ct) => turns.GetOrAdd(message, _ => new BlockingTurn()).RunAsync(ct));
@@ -415,6 +424,221 @@ public sealed class ChatTurnDrainVisibilityTests
         }
 
         Assert.Equal(rounds, h.Started.Count);
+        Assert.Empty(h.Log.Entries);
+    }
+
+    [Fact]
+    public async Task A_send_landing_as_the_turn_it_replaces_finishes_keeps_the_chat_busy()
+    {
+        // The other half of the hand-over: a send arriving just as the turn it is
+        // replacing ends on its own. Sometimes it displaces a live turn, sometimes it
+        // finds one that let go between attaching and installing — and that second
+        // branch must wait for the turn without cancelling or disposing a source its
+        // owner has already disposed. A reader watches throughout, holding the same
+        // two rules. Which branch each round takes is left to the race here; the test
+        // below scripts the rarer one so it is covered on every run.
+        const int rounds = 4000;
+        var finishedExecuting = new ConcurrentDictionary<Guid, bool>();
+        var announced = new ConcurrentQueue<Guid>();
+        var jitter = new Random(20260922);
+
+        var h = NewRunner(
+            async (turnId, _, ct) =>
+            {
+                int micros;
+                lock (jitter) micros = jitter.Next(0, 30);
+                if (micros > 0)
+                {
+                    try { await Task.Delay(TimeSpan.FromMicroseconds(micros), ct); }
+                    catch (OperationCanceledException) { }
+                }
+                finishedExecuting[turnId] = true;
+            },
+            onCompleting: (_, turnId) => announced.Enqueue(turnId));
+
+        for (var i = 0; i < rounds; i++)
+        {
+            var chatId = Guid.NewGuid();
+            announced.Clear();
+            string? violation = null;
+            var reading = true;
+            var reader = Task.Run(() =>
+            {
+                Guid? seen = null;
+                while (Volatile.Read(ref reading))
+                {
+                    var alreadyAnnounced = announced.TryPeek(out var done) ? done : (Guid?)null;
+                    var now = h.Runner.ActiveTurnId(chatId);
+                    if (now is null)
+                    {
+                        if (seen is Guid last && !finishedExecuting.ContainsKey(last))
+                            violation ??= $"read idle while turn {last} was still running";
+                    }
+                    else
+                    {
+                        if (now == alreadyAnnounced)
+                            violation ??= $"read turn {now} after its completion was announced";
+                        seen = now;
+                    }
+                }
+            });
+
+            // The second send races the first turn's own retirement.
+            await h.Runner.SubmitAsync(chatId, $"first {i}").WaitAsync(Patience);
+            await h.Runner.SubmitAsync(chatId, $"second {i}").WaitAsync(Patience);
+            await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+            Volatile.Write(ref reading, false);
+            await reader.WaitAsync(Patience);
+
+            Assert.True(violation is null, $"round {i}: {violation}");
+            Assert.Null(h.Runner.ActiveTurnId(chatId));
+        }
+
+        // Two turns a round, each announced once and reported finished once.
+        await WaitUntilAsync(
+            () => h.Completed.Count == rounds * 2, "every turn should report itself finished");
+        Assert.Equal(rounds * 2, h.Started.Count);
+        Assert.Equal(h.Started.OrderBy(id => id), h.Completed.Select(c => c.TurnId).OrderBy(id => id));
+        Assert.Empty(h.Log.Entries);
+    }
+
+    [Fact]
+    public async Task A_send_that_installs_over_a_turn_which_has_just_retired_waits_for_it_uncancelled()
+    {
+        // The same hand-over as above, but scripted rather than raced, so it is
+        // reached on every run: the first turn is let go, and finishes and retires
+        // itself, while the second send sits in its own start announcement — after
+        // attaching, before installing. The send then installs over a chat whose live
+        // turn has gone, and must wait for it without cancelling or disposing a source
+        // its owner has already disposed.
+        var chatId = Guid.NewGuid();
+        var firstRunning = new TaskCompletionSource();
+        var firstMayFinish = new TaskCompletionSource();
+        var firstRetired = new TaskCompletionSource();
+        var second = new BlockingTurn();
+        var firstTurnId = Guid.Empty;
+        var starts = 0;
+
+        var h = NewRunner(
+            async (_, message, ct) =>
+            {
+                if (message != "first")
+                {
+                    await second.RunAsync(ct);
+                    return;
+                }
+
+                firstRunning.TrySetResult();
+                // Ends of its own accord: nothing cancels this turn.
+                await firstMayFinish.Task;
+            },
+            onCompleting: (_, turnId) =>
+            {
+                // Announced after the turn has retired, so this is the point from
+                // which the second send is certain to find no live turn to displace.
+                if (turnId == firstTurnId) firstRetired.TrySetResult();
+            },
+            onStarting: async (_, turnId) =>
+            {
+                if (Interlocked.Increment(ref starts) != 2) return;
+                Assert.NotEqual(firstTurnId, turnId);
+                firstMayFinish.TrySetResult();
+                await firstRetired.Task.WaitAsync(Patience);
+            });
+
+        await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience);
+        await firstRunning.Task.WaitAsync(Patience);
+        firstTurnId = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
+
+        string? violation = null;
+        var reading = true;
+        var reader = Task.Run(() =>
+        {
+            while (Volatile.Read(ref reading))
+            {
+                var alreadyAnnounced = h.Completed.TryPeek(out var done) ? done.TurnId : (Guid?)null;
+                var now = h.Runner.ActiveTurnId(chatId);
+                if (now is null)
+                    violation ??= "read idle while a turn was in hand throughout";
+                else if (now == alreadyAnnounced)
+                    violation ??= $"read turn {now} after its completion was announced";
+            }
+        });
+
+        await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience);
+        await second.Running.Task.WaitAsync(Patience);
+        Volatile.Write(ref reading, false);
+        await reader.WaitAsync(Patience);
+        Assert.True(violation is null, violation);
+
+        // Exactly the branch this test exists for, so it cannot quietly stop covering
+        // it: one send waited for a turn it did not own.
+        Assert.Equal(1, h.Runner.TurnsLeftToRetireCount);
+
+        // And it neither cancelled nor disposed that turn's source: either would have
+        // thrown ObjectDisposedException inside the drain, which is swallowed but
+        // logged, so an empty log is what says it did not happen.
+        Assert.Empty(h.Log.Entries);
+
+        var secondTurnId = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
+        Assert.NotEqual(firstTurnId, secondTurnId);
+        Assert.Equal(new[] { firstTurnId, secondTurnId }, h.Started);
+        Assert.Equal(new[] { firstTurnId }, h.Completed.Select(c => c.TurnId));
+
+        // The turn that ended on its own reported itself finished, not interrupted.
+        Assert.Equal(new[] { false }, h.Completed.Select(c => c.Interrupted));
+
+        second.Release.TrySetResult();
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+        Assert.Equal(new[] { firstTurnId, secondTurnId }, h.Completed.Select(c => c.TurnId));
+        Assert.Empty(h.Log.Entries);
+    }
+
+    [Fact]
+    public async Task A_send_whose_start_cannot_be_announced_leaves_the_chat_as_it_found_it()
+    {
+        // A send holds the chat as busy from before it announces itself, so if that
+        // announcement fails the send has to let go again: a chat left reading busy
+        // for a turn that is never going to run is this bug over again, and nothing
+        // else would ever clear it.
+        var chatId = Guid.NewGuid();
+        var turn = new BlockingTurn();
+        var failStart = true;
+
+        var h = NewRunner(
+            (_, _, ct) => turn.RunAsync(ct),
+            onStarting: (_, _) => failStart
+                ? Task.FromException(new InvalidOperationException("no one to tell"))
+                : Task.CompletedTask);
+
+        // Into an idle chat: it stays idle, with nothing left behind to clear.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.Runner.SubmitAsync(chatId, "one"));
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+        Assert.Equal(0, h.Runner.ActiveTurnCount);
+        Assert.False(turn.Running.Task.IsCompleted);
+
+        failStart = false;
+        await h.Runner.SubmitAsync(chatId, "two").WaitAsync(Patience);
+        await turn.Running.Task.WaitAsync(Patience);
+        var live = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
+
+        // Into a busy chat: the turn it would have replaced is neither cancelled nor
+        // displaced, so the chat still reads as busy with that turn.
+        failStart = true;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.Runner.SubmitAsync(chatId, "three"));
+        Assert.Equal(live, h.Runner.ActiveTurnId(chatId));
+        Assert.False(turn.Finalizing.Task.IsCompleted);
+
+        turn.Release.TrySetResult();
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+        Assert.Equal(0, h.Runner.ActiveTurnCount);
+        Assert.Equal(0, h.Runner.GateCount);
+
+        // One turn ever ran, and it is the one that was announced.
+        Assert.Equal(new[] { live }, h.Completed.Select(c => c.TurnId));
+        Assert.Contains(live, h.Started);
         Assert.Empty(h.Log.Entries);
     }
 
