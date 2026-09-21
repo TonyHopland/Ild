@@ -32,9 +32,11 @@ public sealed class ChatTurnRunner : IChatTurnRunner
 
         public CancellationTokenSource Cts { get; } = cts;
 
-        // Assigned right after the turn is put in the map, under the session's gate,
-        // so the only readers — SubmitAsync and CancelActiveAsync, also under that
-        // gate — never see the gap between the two.
+        // Assigned right after the turn is installed in the chat's turn state, under
+        // the session's gate, so the only readers — the drains in SubmitAsync and
+        // CancelActiveAsync, also under that gate — never see the gap between the
+        // two. The turn itself can finish and retire before this is assigned, which
+        // is harmless for the same reason: nothing can be waiting on it yet.
         public Task Task { get; set; } = Task.CompletedTask;
     }
 
