@@ -262,7 +262,7 @@ Both emit messages of shape `{ type: string; payload: T; timestamp: string }`. A
 
 The frontend hook `useSignalR.on<E>(eventType, handler)` resolves the payload type from the map; unknown event names fall through to `unknown` so the call site is forced to narrow before use.
 
-Delivery is best-effort. The client reconnects automatically (`withAutomaticReconnect()`), but SignalR does not replay what it missed while disconnected, and the run, chat, log and network notifiers log a failed broadcast rather than throwing. An event is therefore a hint, and clients recover from a snapshot read ([ADR-0021](docs/adr/0021-client-state-scoped-to-its-entity.md)).
+Delivery is best-effort. The client reconnects automatically (`withAutomaticReconnect()`), but SignalR does not replay what it missed while disconnected, and the run, chat, log and network notifiers catch a failed broadcast rather than throwing (the log notifier drops it without logging). An event is therefore a hint, and clients recover from a snapshot read ([ADR-0021](docs/adr/0021-client-state-scoped-to-its-entity.md)).
 
 ### Frontend route loading
 
