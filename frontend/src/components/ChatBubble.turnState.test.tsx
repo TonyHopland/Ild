@@ -363,6 +363,56 @@ describe("ChatBubble turn state", () => {
     expect((stop as HTMLButtonElement).disabled).toBe(false);
   });
 
+  test("a stop coming back late does not re-enable the button over a newer stop", async () => {
+    // Letting go of the claim on leaving the chat makes two stops in one chat
+    // reachable, and then the chat id alone no longer says which stop is which: the
+    // first one to come back would release the claim of the one still in flight and
+    // re-enable its button, ready to fire another interrupt. Each stop is numbered,
+    // so only its own claim is the one it releases.
+    openList(summary("s1", "First chat"));
+    chatService.getById.mockResolvedValue(chatSession({ name: "First chat", activeTurnId: "t1" }));
+
+    let finishFirstStop!: () => void;
+    chatService.interrupt.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finishFirstStop = resolve;
+      }),
+    );
+
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+    fireEvent.click(await screen.findByLabelText("Stop"));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true),
+    );
+
+    // Away and back, which drops the claim of the stop still in flight, and the
+    // button is live again — that much is intended.
+    fireEvent.click(screen.getByText("← Back"));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+    expect((await screen.findByLabelText("Stop")).hasAttribute("disabled")).toBe(false);
+
+    // The second stop, which the server has not answered either.
+    chatService.interrupt.mockReturnValue(new Promise<void>(() => {}));
+    fireEvent.click(screen.getByLabelText("Stop"));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true),
+    );
+
+    // Now the first one finally answers. The chat it names is this one, but the stop
+    // it claimed is not the one holding the button.
+    await act(async () => {
+      finishFirstStop();
+    });
+    await act(async () => {});
+
+    const stopButton = screen.getByLabelText("Stop") as HTMLButtonElement;
+    expect(stopButton.disabled).toBe(true);
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
   test("a replacement turn keeps its text when the displaced turn finalizes first", async () => {
     // The order the server produces: the replacement is announced, the turn it
     // interrupts finalizes, and only then does the replacement stream. Even with

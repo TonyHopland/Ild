@@ -88,12 +88,18 @@ export default function ChatBubble() {
   // own state as usual.
   const sendRef = useRef(0);
   const pendingSendRef = useRef<{ chatSessionId: string; send: number } | null>(null);
-  // The chat whose stop request is in flight, or null when none is. Held by chat
-  // rather than as a bare flag because the bubble is one component for every chat:
-  // a stop pressed in one of them must not disable the button in another the user
-  // opens while it is still going.
-  const [stoppingChatId, setStoppingChatId] = useState<string | null>(null);
-  const stopping = stoppingChatId !== null && stoppingChatId === session?.id;
+  // The stop request in flight and the chat it was sent to, or null when there is
+  // none. Held by chat rather than as a bare flag because the bubble is one
+  // component for every chat: a stop pressed in one of them must not disable the
+  // button in another the user opens while it is still going. Numbered like the
+  // send above, and for the same reason — the chat id alone does not say which stop
+  // this is, so a stop coming back late would release a newer stop's claim and
+  // re-enable the button underneath it, with that one still in flight.
+  const stopRef = useRef(0);
+  const [stoppingChat, setStoppingChat] = useState<{ chatSessionId: string; stop: number } | null>(
+    null,
+  );
+  const stopping = stoppingChat !== null && stoppingChat.chatSessionId === session?.id;
 
   // Both claims above are held only while a request of this view's is still out,
   // and each is released by the request that made it — but a request that never
@@ -106,7 +112,7 @@ export default function ChatBubble() {
   // the panel does not unmount it or leave the chat.
   const releaseRequestClaims = useCallback(() => {
     pendingSendRef.current = null;
-    setStoppingChatId(null);
+    setStoppingChat(null);
   }, []);
   const [loaded, setLoaded] = useState(false);
   const busy = turn !== null;
@@ -588,7 +594,8 @@ export default function ChatBubble() {
   const stop = async () => {
     if (!session || stopping) return;
     const id = session.id;
-    setStoppingChatId(id);
+    const myStop = ++stopRef.current;
+    setStoppingChat({ chatSessionId: id, stop: myStop });
     let accepted = false;
     try {
       await chatService.interrupt(id);
@@ -596,9 +603,10 @@ export default function ChatBubble() {
     } catch {
       /* nothing left to cancel */
     } finally {
-      // Released by the stop that claimed it, so a later stop in another chat keeps
-      // its own claim.
-      setStoppingChatId((current) => (current === id ? null : current));
+      // Released only by the stop that claimed it, so a stop that comes back late —
+      // after the user left the chat and pressed stop again in it — leaves the claim
+      // of the one still in flight alone, rather than re-enabling its button.
+      setStoppingChat((current) => (current?.stop === myStop ? null : current));
     }
 
     // Only a stop the server accepted tells us anything: by then it may have
