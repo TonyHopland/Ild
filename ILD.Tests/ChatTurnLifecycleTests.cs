@@ -33,13 +33,13 @@ public sealed class ChatTurnLifecycleTests
         private readonly List<ChatMessageView> _appended = new();
         private readonly List<(int Count, TaskCompletionSource Tcs)> _waiters = new();
 
-        public Task MessageAppendedAsync(Guid chatSessionId, ChatMessageView message)
+        public Task MessageAppendedAsync(Guid chatSessionId, Guid turnId, ChatMessageView message)
         {
             lock (_gate) _appended.Add(message);
             return Task.CompletedTask;
         }
 
-        public Task TurnProgressAsync(Guid chatSessionId, string delta) => Task.CompletedTask;
+        public Task TurnProgressAsync(Guid chatSessionId, Guid turnId, string delta) => Task.CompletedTask;
 
         public Task TurnStartedAsync(Guid chatSessionId, Guid turnId)
         {
@@ -93,10 +93,10 @@ public sealed class ChatTurnLifecycleTests
 
         public ScriptedChatService(Func<Guid, string, CancellationToken, Task> run) => _run = run;
 
-        public Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct)
+        public Task ExecuteTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, CancellationToken ct)
             => _run(chatSessionId, userMessage, ct);
 
-        public Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
+        public Task ExecuteTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
             => _run(chatSessionId, userMessage, ct);
 
         public Task<IReadOnlyList<ChatSessionSummaryView>> ListForUserAsync(string userId, CancellationToken ct = default)

@@ -784,11 +784,15 @@ export interface ChatSessionSummary {
 
 export interface ChatMessageAppendedPayload {
   chatSessionId: string;
+  /** The turn that produced it: a replaced turn still finalizes its own reply. */
+  turnId: string;
   message: ChatMessage;
 }
 
 export interface ChatTurnProgressPayload {
   chatSessionId: string;
+  /** The turn writing this delta. */
+  turnId: string;
   delta: string;
 }
 

@@ -115,10 +115,10 @@ public sealed class ChatService : IChatService
         return ToView(session, Array.Empty<ChatMessage>());
     }
 
-    public Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct)
-        => ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId: null, openLoopDocument: null, ct);
+    public Task ExecuteTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, CancellationToken ct)
+        => ExecuteTurnAsync(chatSessionId, turnId, userMessage, openWorkItemId: null, openLoopDocument: null, ct);
 
-    public async Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
+    public async Task ExecuteTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
     {
         var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == chatSessionId, ct);
         if (session is null) return;
@@ -143,12 +143,12 @@ public sealed class ChatService : IChatService
         // stays in the agent's history for the rest of that session. That is why the
         // static half is delivered once per session and not per turn (#27).
         var userEntry = await AppendMessageAsync(chatSessionId, "user", userMessage, interrupted: false, nextSeq, ct);
-        await _notifier.MessageAppendedAsync(chatSessionId, ToView(userEntry));
+        await _notifier.MessageAppendedAsync(chatSessionId, turnId, ToView(userEntry));
 
         var provider = await _providers.GetAiProviderByIdAsync(session.AiProviderId);
         if (provider is null)
         {
-            await FinalizeAssistantAsync(session, nextSeq + 1,
+            await FinalizeAssistantAsync(session, turnId, nextSeq + 1,
                 $"[chat-error] AI provider {session.AiProviderId} is no longer configured.", interrupted: false, newSessionId: null, ct);
             return;
         }
@@ -160,7 +160,7 @@ public sealed class ChatService : IChatService
         }
         catch (Exception ex)
         {
-            await FinalizeAssistantAsync(session, nextSeq + 1,
+            await FinalizeAssistantAsync(session, turnId, nextSeq + 1,
                 $"[chat-error] no adapter for provider type '{provider.Type}': {ex.Message}", interrupted: false, newSessionId: null, ct);
             return;
         }
@@ -214,7 +214,7 @@ public sealed class ChatService : IChatService
             ProgressCallback: async chunk =>
             {
                 streamed.Append(chunk);
-                await _notifier.TurnProgressAsync(chatSessionId, chunk);
+                await _notifier.TurnProgressAsync(chatSessionId, turnId, chunk);
             },
             AdapterConfig: null,
             ToolAllowlist: tools,
@@ -267,7 +267,7 @@ public sealed class ChatService : IChatService
             session.DeliveredBriefings = SessionBriefings.Record(
                 session.DeliveredBriefings, SessionBriefings.LoopAuthoring, boundThisTurn);
 
-        await FinalizeAssistantAsync(session, nextSeq + 1, content, interrupted, newSessionId, ct);
+        await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct);
     }
 
     /// <summary>
@@ -449,7 +449,7 @@ public sealed class ChatService : IChatService
     }
 
     private async Task FinalizeAssistantAsync(
-        ChatSession session, int sequence, string content, bool interrupted, string? newSessionId, CancellationToken ct)
+        ChatSession session, Guid turnId, int sequence, string content, bool interrupted, string? newSessionId, CancellationToken ct)
     {
         var assistant = new ChatMessage
         {
@@ -473,7 +473,7 @@ public sealed class ChatService : IChatService
         // The turn's own end is announced by whoever started it, not here: only the
         // runner can name the turn, and only it sees a turn that ends without this
         // method running at all (a chat deleted while its turn was streaming).
-        await _notifier.MessageAppendedAsync(session.Id, ToView(assistant));
+        await _notifier.MessageAppendedAsync(session.Id, turnId, ToView(assistant));
     }
 
     private async Task<ChatMessage> AppendMessageAsync(

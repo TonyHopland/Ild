@@ -43,8 +43,11 @@ public interface IChatService
     /// Run one turn: append the user message, invoke the bound adapter session
     /// streaming progress over the chat notifier, then persist the assistant reply
     /// (flagged interrupted when <paramref name="ct"/> cancels mid-stream).
+    /// <paramref name="turnId"/> names this run of the agent: it travels with every
+    /// message and delta the turn produces, so a client can tell them from those of
+    /// a turn that has since replaced it.
     /// </summary>
-    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, CancellationToken ct);
+    Task ExecuteTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, CancellationToken ct);
 
     /// <summary>
     /// Run one turn with the ambient per-turn Chat Context (ADR-0011):
@@ -58,7 +61,7 @@ public interface IChatService
     /// model context — the agent pulls the JSON on demand via <c>get_current_loop</c>.
     /// A null/empty work item and document run a context-free turn.
     /// </summary>
-    Task ExecuteTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct);
+    Task ExecuteTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct);
 
     /// <summary>
     /// Hard-delete one of the user's chats — the session row, its adapter snapshots

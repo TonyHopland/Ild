@@ -168,7 +168,7 @@ describe("ChatBubble turn state", () => {
     // so the turn it claimed to replace is still running and still streaming —
     // the reply on screen belongs to it and must not be wiped on its behalf.
     await openResumed(chatSession({ activeTurnId: "t1" }));
-    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "half an answer" });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an answer" });
     expect(screen.getByText("half an answer")).toBeTruthy();
 
     chatService.sendMessage.mockRejectedValue(new Error("Network error."));
@@ -204,7 +204,7 @@ describe("ChatBubble turn state", () => {
     // streamed buffer, and it is exactly what an outage drops. Deltas append, so
     // a buffer carried over would grow the new turn's reply on top of the old.
     await openResumed(chatSession({ activeTurnId: "t1" }));
-    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "half an answer" });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an answer" });
     expect(screen.getByText("half an answer")).toBeTruthy();
 
     emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
@@ -212,22 +212,25 @@ describe("ChatBubble turn state", () => {
     // Nothing has been streamed for this turn yet, so it is not responding yet.
     expect(screen.getByRole("status").textContent).toContain("Thinking");
 
-    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "a fresh reply" });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t2", delta: "a fresh reply" });
     expect(screen.getByText("a fresh reply")).toBeTruthy();
     expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("a fresh reply");
   });
 
   test("the interrupted reply arriving late is transcript, not the new turn's text", async () => {
     await openResumed(chatSession({ activeTurnId: "t1" }));
-    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "half an answer" });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an answer" });
     emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
-    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "a fresh reply" });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t2", delta: "a fresh reply" });
     expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("a fresh reply");
 
-    // The turn's own finalized reply turns up after its replacement had started:
-    // it belongs in the transcript, flagged interrupted, and nowhere else.
+    // The interrupted turn's own finalized reply turns up after its replacement
+    // had started. It belongs in the transcript, flagged interrupted — and it
+    // belongs nowhere near what the live turn is writing: only that turn's own
+    // reply may replace its streamed text.
     emit("ChatMessageAppended", {
       chatSessionId: "s1",
+      turnId: "t1",
       message: {
         ...msg({ id: "m1", content: "half an answer", sequence: 1 }),
         interrupted: true,
@@ -235,10 +238,20 @@ describe("ChatBubble turn state", () => {
     });
     expect(screen.getAllByText("half an answer")).toHaveLength(1);
     expect(screen.getByText("interrupted")).toBeTruthy();
+    expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("a fresh reply");
 
-    // And what the new turn streams from here is its own.
-    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "carrying on" });
-    expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("carrying on");
+    // The live turn carries on from where it was, and its own finalized reply is
+    // what finally replaces the text.
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t2", delta: " carrying on" });
+    expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe(
+      "a fresh reply carrying on",
+    );
+    emit("ChatMessageAppended", {
+      chatSessionId: "s1",
+      turnId: "t2",
+      message: msg({ id: "m2", content: "a fresh reply carrying on", sequence: 2 }),
+    });
+    expect(document.querySelector(".chat-msg-streaming")).toBeNull();
   });
 
   test("a turn announced while a failed send unwinds survives it", async () => {

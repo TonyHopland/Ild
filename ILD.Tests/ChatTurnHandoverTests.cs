@@ -27,8 +27,8 @@ public sealed class ChatTurnHandoverTests
     {
         var chat = new Mock<IChatService>();
         chat.Setup(c => c.ExecuteTurnAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Returns((Guid _, string message, string? _, string? _, CancellationToken ct) => run(message, ct));
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Returns((Guid _, Guid _, string message, string? _, string? _, CancellationToken ct) => run(message, ct));
 
         var notifier = new Mock<IChatNotifier>();
         notifier.Setup(n => n.TurnStartedAsync(It.IsAny<Guid>(), It.IsAny<Guid>()))
@@ -170,8 +170,8 @@ public sealed class ChatTurnHandoverTests
         CancellationToken turnToken = default;
         var chat = new Mock<IChatService>();
         chat.Setup(c => c.ExecuteTurnAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Returns((Guid _, string _, string? _, string? _, CancellationToken ct) =>
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Returns((Guid _, Guid _, string _, string? _, string? _, CancellationToken ct) =>
             {
                 turnToken = ct;
                 persistedInterrupted = ct.IsCancellationRequested;
@@ -216,6 +216,58 @@ public sealed class ChatTurnHandoverTests
         Assert.True(turnToken.IsCancellationRequested, "the stop should have landed while the turn was ending");
         var (_, interrupted) = Assert.Single(completed);
         Assert.False(interrupted, "the turn was announced interrupted though its reply was persisted as complete");
+    }
+
+    [Fact]
+    public async Task A_send_never_leaves_the_chat_idle_while_it_replaces_a_running_turn()
+    {
+        // A reader hammering the chat from another thread while a send replaces the
+        // turn that is running: it must never be told the chat is idle. The send
+        // attaches its turn before it so much as looks at the live map, so whatever
+        // the turn being replaced does — including retiring itself between that
+        // lookup and the install — one of the two always holds the chat. (That last
+        // interleaving is a few instructions wide and cannot be forced from here;
+        // what closes it is the ordering, not this loop.)
+        const int rounds = 300;
+        var started = new ConcurrentQueue<Guid>();
+        var completed = new ConcurrentQueue<(Guid TurnId, bool Interrupted)>();
+        var running = new SemaphoreSlim(0);
+        var runner = NewRunner(
+            async (_, ct) =>
+            {
+                running.Release();
+                try { await Task.Delay(Timeout.Infinite, ct); } catch (OperationCanceledException) { }
+            },
+            started,
+            completed);
+
+        for (var i = 0; i < rounds; i++)
+        {
+            var chatId = Guid.NewGuid();
+            await runner.SubmitAsync(chatId, $"first {i}").WaitAsync(Patience);
+            await running.WaitAsync(Patience);
+
+            var reading = true;
+            var sawIdle = false;
+            var reader = Task.Run(() =>
+            {
+                while (Volatile.Read(ref reading))
+                    if (runner.ActiveTurnId(chatId) is null) Volatile.Write(ref sawIdle, true);
+            });
+
+            // Races the first turn's own retirement, whichever gets there first.
+            await runner.SubmitAsync(chatId, $"second {i}").WaitAsync(Patience);
+            Volatile.Write(ref reading, false);
+            await reader.WaitAsync(Patience);
+
+            Assert.False(
+                Volatile.Read(ref sawIdle),
+                $"round {i}: the chat read as idle while a send was replacing a turn");
+            await runner.InterruptAsync(chatId).WaitAsync(Patience);
+        }
+
+        await WaitUntilAsync(
+            () => completed.Count == rounds * 2, "every turn should report itself finished");
     }
 
     // Polls a background step that nothing can be awaited on, with a deadline far

@@ -416,7 +416,7 @@ describe("ChatBubble", () => {
 
     // Once tokens stream in, the indicator must remain visible (the message is
     // still in progress) and switch to "Responding".
-    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "half an ans" });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an ans" });
     expect(await screen.findByText("half an ans")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("Responding");
 
@@ -424,6 +424,7 @@ describe("ChatBubble", () => {
     // turn: only the server saying so does.
     emit("ChatMessageAppended", {
       chatSessionId: "s1",
+      turnId: "t1",
       message: msg({ id: "a1", role: "assistant", content: "half an answer", sequence: 1 }),
     });
     expect(await screen.findByText("half an answer")).toBeTruthy();
@@ -440,6 +441,8 @@ describe("ChatBubble", () => {
     chatService.sendMessage.mockResolvedValue(undefined);
     chatService.interrupt.mockResolvedValue(undefined);
     await openResumed(chatSession());
+    // What the server reports once the send below has started its turn.
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
 
     // Idle: nothing to stop.
     expect(screen.queryByLabelText("Stop")).toBeNull();
@@ -473,6 +476,7 @@ describe("ChatBubble", () => {
   test("a message that interrupts a running turn keeps the stop button and indicator", async () => {
     chatService.sendMessage.mockResolvedValue(undefined);
     await openResumed(chatSession());
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
 
     const input = await screen.findByLabelText("Chat message");
     fireEvent.change(input, { target: { value: "one" } });
@@ -480,7 +484,9 @@ describe("ChatBubble", () => {
     emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
     expect(await screen.findByLabelText("Stop")).toBeTruthy();
 
-    // A message interrupts the running turn rather than queueing behind it.
+    // A message interrupts the running turn rather than queueing behind it. The
+    // server has handed over to its replacement by the time it answers the send.
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t2" }));
     fireEvent.change(input, { target: { value: "two" } });
     fireEvent.click(screen.getByText("Send"));
     await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalledTimes(2));
@@ -490,6 +496,8 @@ describe("ChatBubble", () => {
     // event may take the stop button or the indicator away.
     emit("ChatMessageAppended", {
       chatSessionId: "s1",
+      // Finalized by the turn the second message interrupted, not by its replacement.
+      turnId: "t1",
       message: msg({
         id: "a1",
         role: "assistant",
@@ -589,7 +597,7 @@ describe("ChatBubble", () => {
     const view = await openResumed(chatSession());
 
     emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "half an ans" });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an ans" });
     expect(await screen.findByText("half an ans")).toBeTruthy();
     expect(screen.getByLabelText("Stop")).toBeTruthy();
 
@@ -655,6 +663,7 @@ describe("ChatBubble", () => {
     chatService.sendMessage.mockResolvedValue(undefined);
     chatService.interrupt.mockResolvedValue(undefined);
     await openResumed(chatSession());
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
 
     const input = await screen.findByLabelText("Chat message");
     fireEvent.change(input, { target: { value: "one" } });
@@ -673,7 +682,9 @@ describe("ChatBubble", () => {
     fireEvent.click(stop);
     await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
 
-    // Meanwhile the user sends again, and that turn starts.
+    // Meanwhile the user sends again, and that turn starts. Its own read answers
+    // truthfully; the one the stop is still waiting on is the stale one.
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t2" }));
     fireEvent.change(input, { target: { value: "two" } });
     fireEvent.click(screen.getByText("Send"));
     emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
@@ -692,6 +703,7 @@ describe("ChatBubble", () => {
   test("events for another chat session never touch the open one", async () => {
     chatService.sendMessage.mockResolvedValue(undefined);
     await openResumed(chatSession({ id: "s1" }));
+    chatService.getById.mockResolvedValue(chatSession({ id: "s1", activeTurnId: "t1" }));
 
     // Idle: another chat's turn starting must not light this one up.
     emit("ChatTurnStarted", { chatSessionId: "s2", turnId: "x1" });
@@ -706,9 +718,10 @@ describe("ChatBubble", () => {
 
     // Busy: another chat's traffic must not end this turn or enter its transcript
     // — not even when it happens to carry the same turn id.
-    emit("ChatTurnProgress", { chatSessionId: "s2", delta: "not mine" });
+    emit("ChatTurnProgress", { chatSessionId: "s2", turnId: "x1", delta: "not mine" });
     emit("ChatMessageAppended", {
       chatSessionId: "s2",
+      turnId: "x1",
       message: msg({ id: "z1", role: "assistant", content: "someone else's reply", sequence: 9 }),
     });
     emit("ChatTurnCompleted", { chatSessionId: "s2", turnId: "t1", interrupted: false });
@@ -724,6 +737,7 @@ describe("ChatBubble", () => {
     // The turn completed between render and click, so the chat no longer has one.
     chatService.interrupt.mockRejectedValue(new Error("Chat not found."));
     await openResumed(chatSession());
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
 
     const input = await screen.findByLabelText("Chat message");
     fireEvent.change(input, { target: { value: "long task" } });
@@ -748,6 +762,7 @@ describe("ChatBubble", () => {
       }),
     );
     await openResumed(chatSession());
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
 
     const input = await screen.findByLabelText("Chat message");
     fireEvent.change(input, { target: { value: "long task" } });
@@ -767,12 +782,15 @@ describe("ChatBubble", () => {
   });
 
   test("streams a turn and flags an interrupted partial reply", async () => {
-    await openResumed(chatSession());
+    // Resumed while t1 is streaming, which is how a client comes to be shown one.
+    await openResumed(chatSession({ activeTurnId: "t1" }));
     await screen.findByLabelText("Chat message");
 
     // Live streaming delta appears, then a finalized interrupted reply replaces it.
     act(() => {
-      handlers.ChatTurnProgress?.({ payload: { chatSessionId: "s1", delta: "partial" } });
+      handlers.ChatTurnProgress?.({
+        payload: { chatSessionId: "s1", turnId: "t1", delta: "partial" },
+      });
     });
     expect(await screen.findByText("partial")).toBeTruthy();
 
@@ -780,6 +798,7 @@ describe("ChatBubble", () => {
       handlers.ChatMessageAppended?.({
         payload: {
           chatSessionId: "s1",
+          turnId: "t1",
           message: msg({
             id: "a1",
             role: "assistant",

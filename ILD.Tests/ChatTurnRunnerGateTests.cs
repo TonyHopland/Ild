@@ -16,7 +16,7 @@ public sealed class ChatTurnRunnerGateTests
     private static ChatTurnRunner NewRunner()
     {
         var chat = new Mock<IChatService>();
-        chat.Setup(c => c.ExecuteTurnAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        chat.Setup(c => c.ExecuteTurnAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         var services = new ServiceCollection().AddScoped(_ => chat.Object).BuildServiceProvider();
         // The runner announces each turn's start and end itself; what it announces

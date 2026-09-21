@@ -8,11 +8,16 @@ namespace ILD.Core.Services.Interfaces;
 /// </summary>
 public interface IChatNotifier
 {
-    /// <summary>A finalized transcript message (user or assistant) was appended.</summary>
-    Task MessageAppendedAsync(Guid chatSessionId, ChatMessageView message);
+    /// <summary>
+    /// A finalized transcript message (user or assistant) was appended by the turn
+    /// named by <paramref name="turnId"/>. Every message belongs to a turn, and a
+    /// turn that has since been replaced still finalizes its own: the id is what
+    /// keeps that late reply from disturbing what the live turn is streaming.
+    /// </summary>
+    Task MessageAppendedAsync(Guid chatSessionId, Guid turnId, ChatMessageView message);
 
-    /// <summary>A streamed delta of the in-flight assistant reply.</summary>
-    Task TurnProgressAsync(Guid chatSessionId, string delta);
+    /// <summary>A streamed delta of the reply the turn named by <paramref name="turnId"/> is writing.</summary>
+    Task TurnProgressAsync(Guid chatSessionId, Guid turnId, string delta);
 
     /// <summary>
     /// A turn started for the session. Announced by whoever starts it, before any

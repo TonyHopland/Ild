@@ -75,8 +75,8 @@ public sealed class ChatTurnDrainVisibilityTests
 
         var chat = new Mock<IChatService>();
         chat.Setup(c => c.ExecuteTurnAsync(
-                It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Returns((Guid _, string message, string? _, string? _, CancellationToken ct) => run(message, ct));
+                It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Returns((Guid _, Guid _, string message, string? _, string? _, CancellationToken ct) => run(message, ct));
 
         var notifier = new Mock<IChatNotifier>();
         notifier.Setup(n => n.TurnStartedAsync(It.IsAny<Guid>(), It.IsAny<Guid>()))

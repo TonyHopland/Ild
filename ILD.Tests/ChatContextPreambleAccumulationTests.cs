@@ -91,7 +91,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
         for (var i = 1; i <= turns; i++)
-            await svc.ExecuteTurnAsync(started.Id, $"turn {i}", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+            await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), $"turn {i}", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
 
         Assert.Equal(turns, cli.InvocationCount);
 
@@ -182,7 +182,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         Assert.Equal(turns, messages.Length);
 
         foreach (var message in messages)
-            await svc.ExecuteTurnAsync(started.Id, message, openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+            await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), message, openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
 
         var prompts = Enumerable.Range(1, turns).Select(cli.PromptFor).ToArray();
         var humanChars = messages.Sum(m => m.Length);
@@ -257,8 +257,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "help me wire up a deploy loop", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "now add a PR node", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "help me wire up a deploy loop", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "now add a PR node", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
 
         // The session really is one session — otherwise "do not re-send" would
         // be trivially satisfied by having started over.
@@ -297,10 +297,10 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "one", "wi-11", OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "two", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", OpenLoopDocument, CancellationToken.None);
         // The human opens a different item mid-conversation.
-        await svc.ExecuteTurnAsync(started.Id, "three", "wi-22", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "three", "wi-22", OpenLoopDocument, CancellationToken.None);
 
         Assert.Contains("wi-11", adapter.Prompts[0]);
         Assert.Contains("wi-11", adapter.Prompts[1]);
@@ -323,8 +323,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" });
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
-        await svc.ExecuteTurnAsync(started.Id, "one", "wi-99", OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "two", "wi-99", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-99", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-99", OpenLoopDocument, CancellationToken.None);
 
         foreach (var (prompt, ctx) in adapter.Prompts.Zip(adapter.Contexts))
         {
@@ -347,10 +347,10 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "one", "wi-11", openLoopDocument: null, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "two", "wi-11", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", openLoopDocument: null, CancellationToken.None);
         // Turn 3: the human opens the Loop Editor.
-        await svc.ExecuteTurnAsync(started.Id, "three", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "three", "wi-11", OpenLoopDocument, CancellationToken.None);
 
         Assert.DoesNotContain(GuideMarker, adapter.Prompts[0]);
         Assert.DoesNotContain(GuideMarker, adapter.Prompts[1]);
@@ -371,8 +371,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "one", "wi-11", OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "two", "wi-11", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", openLoopDocument: null, CancellationToken.None);
 
         Assert.Contains("Loop Editor", adapter.Prompts[0]);
         Assert.DoesNotContain("Loop Editor", adapter.Prompts[1]);
@@ -396,9 +396,9 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "one", "wi-11", OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "two", "wi-11", openLoopDocument: null, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "three", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "three", "wi-11", OpenLoopDocument, CancellationToken.None);
 
         Assert.Contains(GuideMarker, adapter.Prompts[0]);
         Assert.DoesNotContain(GuideMarker, adapter.Prompts[2]);
@@ -428,15 +428,15 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "one", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "two", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
 
         // From here the CLI hands back a different session id — the old transcript,
         // guide and all, is not what the following turns resume.
         adapter.NextSessionId = "sess-rebound";
-        await svc.ExecuteTurnAsync(started.Id, "three", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "four", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "five", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "three", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "four", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "five", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
 
         Assert.Contains(GuideMarker, adapter.Prompts[0]);
         Assert.DoesNotContain(GuideMarker, adapter.Prompts[1]);
@@ -470,13 +470,13 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
 
         // Turn 1 binds a session, with no editor open — so nothing is briefed yet
         // and the session id is already there to be wrongly recorded against.
-        await svc.ExecuteTurnAsync(started.Id, "one", "wi-11", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", openLoopDocument: null, CancellationToken.None);
         Assert.Equal("sess-1", _db.Context.ChatSessions.Single().CurrentSessionId);
 
         // Turn 2 opens the editor, so it carries the guide — and the CLI fails to
         // launch, so the agent never sees it.
         adapter.FailNextTurnBeforeLaunch = true;
-        await svc.ExecuteTurnAsync(started.Id, "two", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", OpenLoopDocument, CancellationToken.None);
 
         var session = _db.Context.ChatSessions.Single();
         Assert.Contains(GuideMarker, adapter.Prompts[1]);
@@ -487,14 +487,14 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         Assert.Equal("sess-1", session.CurrentSessionId);
 
         // So turn 3 briefs the session for real.
-        await svc.ExecuteTurnAsync(started.Id, "three", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "three", "wi-11", OpenLoopDocument, CancellationToken.None);
         Assert.Contains(GuideMarker, adapter.Prompts[2]);
         Assert.Contains(GuideTailMarker, adapter.Prompts[2]);
         Assert.True(SessionBriefings.IsDelivered(
             _db.Context.ChatSessions.Single().DeliveredBriefings, SessionBriefings.LoopAuthoring, "sess-1"));
 
         // ...once.
-        await svc.ExecuteTurnAsync(started.Id, "four", "wi-11", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "four", "wi-11", OpenLoopDocument, CancellationToken.None);
         Assert.DoesNotContain(GuideMarker, adapter.Prompts[3]);
     }
 
@@ -568,8 +568,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
 
         // Everything the Chat Context can carry at once: an open work item, its
         // active-run worktree and grant, and an open Loop Editor.
-        await svc.ExecuteTurnAsync(started.Id, "one", "wi-99", OpenLoopDocument, CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "two", "wi-99", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-99", OpenLoopDocument, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-99", OpenLoopDocument, CancellationToken.None);
 
         const string message = "two";
         var steadyState = adapter.Prompts[1].Length - message.Length - 2; // minus "\n\n"
@@ -716,8 +716,8 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
 
     private sealed class NullChatNotifier : IChatNotifier
     {
-        public Task MessageAppendedAsync(Guid chatSessionId, ChatMessageView message) => Task.CompletedTask;
-        public Task TurnProgressAsync(Guid chatSessionId, string delta) => Task.CompletedTask;
+        public Task MessageAppendedAsync(Guid chatSessionId, Guid turnId, ChatMessageView message) => Task.CompletedTask;
+        public Task TurnProgressAsync(Guid chatSessionId, Guid turnId, string delta) => Task.CompletedTask;
         public Task TurnStartedAsync(Guid chatSessionId, Guid turnId) => Task.CompletedTask;
         public Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted) => Task.CompletedTask;
         public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document) => Task.CompletedTask;

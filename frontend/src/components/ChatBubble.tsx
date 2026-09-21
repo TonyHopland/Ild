@@ -248,6 +248,15 @@ export default function ChatBubble() {
     );
   }, []);
 
+  // Whether an event belongs to the turn whose text is on screen. While a send is
+  // still waiting to be told which turn it started, the placeholder matches
+  // anything: the only turn producing events for this chat then is the one that
+  // send began, and dropping its deltas would lose the reply it is streaming.
+  const isCurrentTurn = useCallback(
+    (turnId: string) => turnRef.current === PENDING_TURN || turnRef.current === turnId,
+    [],
+  );
+
   // The only writer of the turn value, so the ref the once-registered hub
   // handlers read never drifts from the state the view renders.
   const setTurnValue = useCallback((next: string | null) => {
@@ -349,13 +358,20 @@ export default function ChatBubble() {
     const onAppended = (msg: { payload: ChatMessageAppendedPayload }) => {
       if (msg.payload.chatSessionId !== sessionIdRef.current) return;
       upsertMessage(msg.payload.message);
-      // A finalized reply replaces the text it streamed, but says nothing about
-      // whether the chat is still working: the turn it finalizes may be one that
-      // a newer message already interrupted.
-      if (msg.payload.message.role === "assistant") setStreaming("");
+      // The transcript takes every finalized message, whichever turn wrote it —
+      // an interrupted reply belongs in it as much as a complete one. Only the
+      // streamed text is the live turn's own, so only its turn may replace it:
+      // a reply finalized by a turn that has since been replaced says nothing
+      // about what the current one is writing.
+      if (msg.payload.message.role === "assistant" && isCurrentTurn(msg.payload.turnId)) {
+        setStreaming("");
+      }
     };
     const onProgress = (msg: { payload: ChatTurnProgressPayload }) => {
       if (msg.payload.chatSessionId !== sessionIdRef.current) return;
+      // Deltas append, so one from a turn that is no longer current would grow
+      // the live turn's reply on top of a dead one's.
+      if (!isCurrentTurn(msg.payload.turnId)) return;
       setStreaming((prev) => prev + msg.payload.delta);
     };
     const onStarted = (msg: { payload: ChatTurnStartedPayload }) => {
@@ -390,7 +406,7 @@ export default function ChatBubble() {
       off("ChatTurnStarted", onStarted);
       off("ChatTurnCompleted", onCompleted);
     };
-  }, [on, off, upsertMessage, applyTurn]);
+  }, [on, off, upsertMessage, applyTurn, isCurrentTurn]);
 
   // Keep the transcript scrolled to the newest content. `scrollTo` is absent in
   // jsdom, so guard the call rather than assume it exists.
@@ -487,6 +503,13 @@ export default function ChatBubble() {
         openWorkItemIdRef.current,
         openLoopDocument,
       );
+      // The request returns only once the runner has registered the turn, so read
+      // it back rather than waiting to be told: broadcasts are dropped on failure
+      // by design, and a start this client never hears would leave the placeholder
+      // standing, matching no completion — a stop button on a chat that is idle.
+      // The read carries the same guards as any other, so it cannot undo a turn
+      // learned since it was issued.
+      await refreshActiveState(session.id).catch((err) => console.error(err));
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not send message.");
       // Put back the turn this send claimed to replace before anything reads the

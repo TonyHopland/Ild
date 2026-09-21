@@ -39,13 +39,14 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     }
 
     private readonly ConcurrentDictionary<Guid, ActiveTurn> _active = new();
-    // A turn that has been cancelled but has not finished finalizing yet. It is out
-    // of `_active` — the removal there is what makes cancelling it exclusive — but
-    // the chat is still busy until it has persisted its partial reply and reported
-    // itself finished, and a read that said otherwise would take the stop button
-    // off a turn that is still running. Reporting only: nothing here ever cancels
-    // or disposes anything, so the ownership rules around `_active` are untouched.
-    private readonly ConcurrentDictionary<Guid, ActiveTurn> _draining = new();
+    // A turn attached to a chat while it is not the live one: on its way in, between
+    // a send claiming the chat and the install below, or on its way out, while a
+    // stop waits for it to persist its partial reply and report itself finished. A
+    // chat with work in flight is in one of the two maps at every instant, which is
+    // what a reader needs and what an absent key would break. Reporting only:
+    // nothing here ever cancels or disposes anything, so the ownership rules that
+    // hang off `_active` are untouched.
+    private readonly ConcurrentDictionary<Guid, ActiveTurn> _transition = new();
     // One gate per session serializes the cancel-previous-then-start-new sequence
     // so two near-simultaneous submits can't both think they are first. A gate is
     // held only for that sequence, so it is dropped again as soon as no one is in
@@ -74,28 +75,52 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         {
             var turn = new ActiveTurn(new CancellationTokenSource());
 
-            // Claim the outgoing turn and register the replacement in one step, so
-            // the chat never reads as idle between them — the hand-over is exactly
-            // where the bubble used to lose its stop button. Removing first and
-            // re-inserting would leave the key absent, however briefly, and an
-            // absent key is what "this chat is idle" means.
-            //
-            // Retire runs outside this gate and both removes the entry AND disposes
-            // its CancellationTokenSource, so a plain overwrite could cancel one it
-            // has just disposed. A successful TryUpdate means we displaced exactly
-            // `prev` and now own its cancellation and disposal; a failed one means
-            // Retire got there first and has already done both.
-            var claimed = _active.TryGetValue(chatSessionId, out var prev)
-                && _active.TryUpdate(chatSessionId, turn, prev);
-            if (!claimed) _active[chatSessionId] = turn;
+            // Attached before anything else is read or written, so from here the
+            // chat has a turn at every instant. The turn it is replacing may retire
+            // itself at any moment — Retire runs outside this gate — and without
+            // this the chat would read as idle between that retirement and the
+            // install below.
+            _transition[chatSessionId] = turn;
+
+            // Install as the live turn without ever taking the key out: either it
+            // replaces what is there, which is what makes this thread the owner of
+            // that turn's cancellation and disposal, or there is nothing to replace
+            // and it is added. Retire disposes only the turn it manages to remove
+            // itself, so ownership is never shared and Cancel never runs against a
+            // source someone else has disposed.
+            ActiveTurn? displaced = null;
+            ActiveTurn? retiring = null;
+            while (true)
+            {
+                if (_active.TryGetValue(chatSessionId, out var prev))
+                {
+                    if (_active.TryUpdate(chatSessionId, turn, prev))
+                    {
+                        displaced = prev;
+                        break;
+                    }
+
+                    // It went out from under us, so Retire owns it: still wait for
+                    // it below, but neither cancel nor dispose it.
+                    retiring = prev;
+                    continue;
+                }
+
+                if (_active.TryAdd(chatSessionId, turn)) break;
+            }
+
+            // The live map holds it now, so the attachment has done its job.
+            _transition.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, turn));
 
             // Announced before the outgoing turn is cancelled: its completion then
             // lands on a client that already knows a newer turn is running, so it
             // cannot be mistaken for this chat falling idle.
             await _notifier.TurnStartedAsync(chatSessionId, turn.Id).ConfigureAwait(false);
 
-            if (prev is not null)
-                await DrainAsync(chatSessionId, prev, cancel: claimed).ConfigureAwait(false);
+            if (displaced is not null)
+                await DrainAsync(chatSessionId, displaced, cancel: true).ConfigureAwait(false);
+            else if (retiring is not null)
+                await DrainAsync(chatSessionId, retiring, cancel: false).ConfigureAwait(false);
 
             turn.Task = Task.Run(async () =>
             {
@@ -106,7 +131,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
                 var interrupted = false;
                 try
                 {
-                    interrupted = await RunTurnAsync(chatSessionId, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
+                    interrupted = await RunTurnAsync(chatSessionId, turn.Id, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -151,10 +176,10 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     public Guid? ActiveTurnId(Guid chatSessionId)
     {
         if (_active.TryGetValue(chatSessionId, out var turn)) return turn.Id;
-        // Cancelled but not finished is still this chat's turn: it has yet to
-        // persist its interrupted reply and report itself done, and the bubble
-        // must keep showing it as running until it has.
-        return _draining.TryGetValue(chatSessionId, out var draining) ? draining.Id : null;
+        // A turn on its way in or on its way out is still this chat's turn: one has
+        // yet to be installed, the other has yet to persist its interrupted reply
+        // and report itself done. Either way the bubble must keep showing work.
+        return _transition.TryGetValue(chatSessionId, out var attached) ? attached.Id : null;
     }
 
     /// <summary>The gates currently held; for the test that they do not pile up.</summary>
@@ -171,14 +196,14 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     // Called before the turn announces that it has finished, and it drops the turn
     // from both maps, because after that announcement no other will come: a reader
     // still handed this turn would hold a stop button that nothing can clear.
-    // Dropping the draining entry owns nothing — that map never cancels or
-    // disposes — so it is unconditional, and its canceller clears it again anyway.
+    // Dropping the attachment owns nothing — that map never cancels or disposes —
+    // so it is unconditional, and its canceller clears it again anyway.
     private void Retire(Guid chatSessionId, ActiveTurn turn)
     {
         if (_active.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, turn)))
             turn.Cts.Dispose();
 
-        _draining.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, turn));
+        _transition.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, turn));
     }
 
     private async Task<Gate> EnterAsync(Guid chatSessionId)
@@ -218,19 +243,19 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     {
         if (!_active.TryGetValue(chatSessionId, out var prev)) return;
 
-        // Published as draining before it is claimed, never after: the turn has to
+        // Attached before it is claimed, never after: the turn has to
         // be in one of the two maps at every instant, and claiming first would
         // leave the chat reading as idle in between — the same remove-then-insert
         // gap this whole change exists to close.
-        _draining[chatSessionId] = prev;
+        _transition[chatSessionId] = prev;
 
         // The claim, by identity so it can only ever take the turn just published.
         // Failing it means the turn retired itself first: it owns its own disposal
-        // and has nothing left to cancel, and the draining entry goes back out
+        // and has nothing left to cancel, and the attachment goes back out
         // because there is no drain to keep it visible for.
         if (!_active.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev)))
         {
-            _draining.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev));
+            _transition.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev));
             return;
         }
 
@@ -243,7 +268,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
             // A backstop. The turn drops itself from here before announcing that it
             // has finished, which is what keeps a reader from being handed the id of
             // a turn whose completion has already been sent.
-            _draining.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev));
+            _transition.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev));
         }
     }
 
@@ -273,7 +298,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     // the only thing that has run: the reply's own interrupted flag is taken from
     // this same token by the service that persists it, so reading it any later can
     // contradict what the transcript already says.
-    private async Task<bool> RunTurnAsync(Guid chatSessionId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
+    private async Task<bool> RunTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
     {
         // The caller retires this turn when it ends, whether it finished or threw,
         // so nothing is left behind for a chat that is never used again.
@@ -281,7 +306,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         {
             using var scope = _scopes.CreateScope();
             var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
-            await chat.ExecuteTurnAsync(chatSessionId, userMessage, openWorkItemId, openLoopDocument, ct).ConfigureAwait(false);
+            await chat.ExecuteTurnAsync(chatSessionId, turnId, userMessage, openWorkItemId, openLoopDocument, ct).ConfigureAwait(false);
             return ct.IsCancellationRequested;
         }
         catch (Exception ex)

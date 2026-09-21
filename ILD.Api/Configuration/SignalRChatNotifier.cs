@@ -21,11 +21,11 @@ public class SignalRChatNotifier : IChatNotifier
         _log = log;
     }
 
-    public Task MessageAppendedAsync(Guid chatSessionId, ChatMessageView message)
-        => SendAsync(chatSessionId, "ChatMessageAppended", new ChatMessageAppendedPayload(chatSessionId, message));
+    public Task MessageAppendedAsync(Guid chatSessionId, Guid turnId, ChatMessageView message)
+        => SendAsync(chatSessionId, "ChatMessageAppended", new ChatMessageAppendedPayload(chatSessionId, turnId, message));
 
-    public Task TurnProgressAsync(Guid chatSessionId, string delta)
-        => SendAsync(chatSessionId, "ChatTurnProgress", new ChatTurnProgressPayload(chatSessionId, delta));
+    public Task TurnProgressAsync(Guid chatSessionId, Guid turnId, string delta)
+        => SendAsync(chatSessionId, "ChatTurnProgress", new ChatTurnProgressPayload(chatSessionId, turnId, delta));
 
     public Task TurnStartedAsync(Guid chatSessionId, Guid turnId)
         => SendAsync(chatSessionId, "ChatTurnStarted", new ChatTurnStartedPayload(chatSessionId, turnId));
