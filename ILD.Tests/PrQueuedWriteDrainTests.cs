@@ -39,6 +39,8 @@ public class PrQueuedWriteDrainTests
     {
         public Mock<IRemoteProvider> Remote { get; } = new();
         public Mock<ILoopRunStore> Runs { get; } = new();
+        public Mock<IRunNotifier> Notifier { get; } = new();
+        public List<Guid> QueueChanges { get; } = new();
         public LoopRun Run { get; }
         public List<(string Kind, string Target, string? Body)> Written { get; } = new();
         public string? RecordedLedger { get; private set; }
@@ -70,6 +72,10 @@ public class PrQueuedWriteDrainTests
             Remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "42", It.IsAny<string>()))
                 .Callback<string, string, string>((_, _, body) => PostedComment = body)
                 .ReturnsAsync(new RemotePrWriteResult(true, "5000000001", null));
+
+            Notifier.Setup(n => n.PrQueueChangedAsync(It.IsAny<Guid>()))
+                .Callback<Guid>(QueueChanges.Add)
+                .Returns(Task.CompletedTask);
 
             Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
                 .Callback<Guid, string?>((_, json) => RecordedLedger = json)
@@ -126,6 +132,7 @@ public class PrQueuedWriteDrainTests
             services.AddSingleton(Remote.Object);
             services.AddSingleton(Mock.Of<IRepositoryManager>());
             services.AddSingleton(Runs.Object);
+            services.AddSingleton(Notifier.Object);
 
             var node = new LoopNode
             {
@@ -330,6 +337,28 @@ public class PrQueuedWriteDrainTests
         Assert.Single(f.Written);
         Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+    }
+
+    [Fact]
+    public async Task Claiming_the_queue_says_it_changed_so_the_panel_stops_offering_to_stop_it()
+    {
+        // Once the claim lands the answers are on their way out. A panel still
+        // showing them offers a Drop that cannot work.
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+
+        await f.RunNodeAsync();
+
+        Assert.Equal(f.Run.Id, Assert.Single(f.QueueChanges));
+    }
+
+    [Fact]
+    public async Task A_round_with_nothing_queued_announces_no_queue_change()
+    {
+        var f = new Fixture(Array.Empty<PrQueuedWrite>());
+
+        await f.RunNodeAsync(commentTemplate: "Answered every point.");
+
+        Assert.Empty(f.QueueChanges);
     }
 
     [Fact]

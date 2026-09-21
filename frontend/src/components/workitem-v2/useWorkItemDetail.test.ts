@@ -277,3 +277,80 @@ describe("useWorkItemDetail run cleanup", () => {
     expect(getById).not.toHaveBeenCalled();
   });
 });
+
+describe("the queued pull-request writes a round intends to send", () => {
+  test("a queue change reaches a run that is still running, not only a parked one", async () => {
+    // An agent queues its answers mid-round, while the item is Running. That is
+    // the whole window in which a person can read them and drop one, so a
+    // subscription that waits for the PR park opens too late to matter.
+    stubServices();
+    const { emit, invoke } = mockSignalR(null);
+    const getById = vi
+      .spyOn(loopRunService, "getById")
+      .mockResolvedValue({ id: "run-1", prQueuedWrites: [] } as never);
+
+    const wi = makeWorkItem({ status: WorkItemStatus.Running, humanFeedbackReason: null });
+    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(invoke).toHaveBeenCalledWith("SubscribeToRun", "run-1");
+    const before = getById.mock.calls.length;
+
+    getById.mockResolvedValue({
+      id: "run-1",
+      prQueuedWrites: [{ id: "w1", kind: "reply", targetId: "11", body: "Answered." }],
+    } as never);
+    await act(async () => {
+      emit("PrQueueChanged", { runId: "run-1" });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getById.mock.calls.length).toBeGreaterThan(before);
+    expect(result.current.currentRun?.prQueuedWrites).toHaveLength(1);
+  });
+
+  test("a queue change for another run is ignored", async () => {
+    stubServices();
+    const { emit } = mockSignalR(null);
+    const getById = vi
+      .spyOn(loopRunService, "getById")
+      .mockResolvedValue({ id: "run-1", prQueuedWrites: [] } as never);
+
+    const wi = makeWorkItem();
+    renderHook(() => useWorkItemDetail(wi, vi.fn()));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const before = getById.mock.calls.length;
+
+    await act(async () => {
+      emit("PrQueueChanged", { runId: "run-9" });
+      await Promise.resolve();
+    });
+
+    expect(getById.mock.calls.length).toBe(before);
+  });
+
+  test("a re-read that fails is reported to the caller, not swallowed", async () => {
+    // The queued-writes panel tells a person whether their drop took. If this
+    // resolves on failure it cannot tell "nothing changed" from "the read
+    // failed", and its stale-data warning is unreachable.
+    stubServices();
+    mockSignalR(null);
+    vi.spyOn(loopRunService, "getById").mockRejectedValue(new Error("network"));
+
+    const wi = makeWorkItem();
+    const { result } = renderHook(() => useWorkItemDetail(wi, vi.fn()));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await expect(result.current.refreshCurrentRun()).rejects.toThrow("network");
+  });
+});

@@ -751,6 +751,10 @@ export interface PrSnapshotChangedPayload {
   runId: string;
 }
 
+export interface PrQueueChangedPayload {
+  runId: string;
+}
+
 export interface PreviewStateChangedPayload {
   workItemId: string;
 }

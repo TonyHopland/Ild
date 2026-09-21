@@ -64,11 +64,20 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 {
     private readonly ILoopRunStore _runs;
     private readonly IRemoteProvider _remote;
+    private readonly IRunNotifier? _notifier;
 
-    public PrReviewService(ILoopRunStore runs, IRemoteProvider remote)
+    /// <summary>
+    /// <paramref name="notifier"/> is optional only so a test can build the
+    /// service with the two collaborators it is really about; DI always supplies
+    /// it. Without it a queued answer sits in the database unseen until
+    /// something else happens to refresh the run, which is most of the window a
+    /// person has to drop it.
+    /// </summary>
+    public PrReviewService(ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null)
     {
         _runs = runs;
         _remote = remote;
+        _notifier = notifier;
     }
 
     private const string NoPullRequest =
@@ -201,7 +210,15 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 
             var json = changed.Count == 0 ? null : PrCommentQueueJson.Serialize(changed);
             if (await _runs.TrySetPrCommentQueueAsync(runId, current, json))
+            {
+                // Every change to the queue goes through here, so this is the one
+                // place that has to tell the UI. The round is mid-flight when an
+                // agent queues, and nothing else refreshes the run until it parks
+                // — by which time the PR node has already sent it.
+                if (_notifier is not null)
+                    await _notifier.PrQueueChangedAsync(runId);
                 return true;
+            }
         }
 
         return false;

@@ -301,6 +301,12 @@ public sealed class PRNodeExecutor : INodeExecutor
         if (queued.Count == 0)
             return;
 
+        // The claim emptied the queue, so the panel is now offering to stop
+        // answers that are on their way out. Same signal the service sends when
+        // an agent queues or a person drops: the column changed, re-read it.
+        if (sp.GetService<IRunNotifier>() is { } notifier)
+            await notifier.PrQueueChangedAsync(ctx.Run.Id);
+
         var log = sp.GetService<ILogger<PRNodeExecutor>>();
         var posted = new List<string>();
 
