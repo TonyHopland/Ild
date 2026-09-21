@@ -123,7 +123,7 @@ interface Case {
   name: string;
   /** The turn the chat is running when it is opened, if any. */
   resumeWith?: string | null;
-  steps: (Step & { then?: Expected })[];
+  steps: (Step & { shows?: Expected })[];
   /** What the view must show once every step has been played. */
   ends: "working" | "idle";
 }
@@ -204,7 +204,7 @@ const CASES: Case[] = [
     steps: [
       { sendPending: "t1" },
       // The idle snapshot lands here and must change nothing.
-      { reconnect: true, then: "working" },
+      { reconnect: true, shows: "working" },
       { settleSend: "accepted" },
       { start: "t1" },
     ],
@@ -214,7 +214,7 @@ const CASES: Case[] = [
     name: "a send refused after that reconnect leaves the chat idle",
     steps: [
       { sendPending: "t1" },
-      { reconnect: true, then: "working" },
+      { reconnect: true, shows: "working" },
       { settleSend: "rejected" },
     ],
     ends: "idle",
@@ -400,7 +400,7 @@ describe("ChatBubble turn state machine", () => {
       // Whatever the step was, the two controls still agree with each other — and
       // where the case pins a state for this point, they show it.
       const state = shown();
-      if (step.then) expect(state, where).toBe(step.then);
+      if (step.shows) expect(state, where).toBe(step.shows);
     }
 
     await waitFor(() => expect(shown()).toBe(ends));

@@ -80,12 +80,14 @@ export default function ChatBubble() {
   // silence the answer of one that did.
   const readRef = useRef(0);
   const appliedReadRef = useRef(0);
-  // The send currently in flight, or 0 when there is none. Until it comes back the
-  // server may not have registered its turn yet, so every other snapshot is
-  // answering about a chat it cannot know is busy: only the send's own read, taken
-  // once the request has returned, may settle what it put up.
+  // The send currently in flight and the chat it was sent to, or null when there is
+  // none. Until it comes back the server may not have registered its turn yet, so
+  // for that chat every other snapshot is answering about a chat it cannot know is
+  // busy: only the send's own read, taken once the request has returned, may settle
+  // what it put up. It says nothing about any other chat, which goes on reading its
+  // own state as usual.
   const sendRef = useRef(0);
-  const pendingSendRef = useRef(0);
+  const pendingSendRef = useRef<{ chatSessionId: string; send: number } | null>(null);
   // Set while a stop request is in flight, so a second click cannot fire another.
   const [stopping, setStopping] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -299,11 +301,13 @@ export default function ChatBubble() {
       // Discard an answer about a chat we have left, or one taken before a turn
       // we have since learned about: a snapshot may never overrule a newer fact.
       if (sessionIdRef.current !== id || epochRef.current !== epoch) return;
-      // A send is in flight and this is not its read. The request has not come
-      // back, so the server may not have registered its turn when this snapshot
-      // was taken, and an idle answer would take the controls off a chat that is
-      // about to be — or already is — working. Its own read settles it instead.
-      if (pendingSendRef.current !== forSend) return;
+      // This chat has a send in flight and this is not its read. The request has
+      // not come back, so the server may not have registered its turn when this
+      // snapshot was taken, and an idle answer would take the controls off a chat
+      // that is about to be — or already is — working. Its own read settles it
+      // instead. A send waiting in another chat holds nothing back here.
+      const pendingSend = pendingSendRef.current;
+      if (pendingSend?.chatSessionId === id && pendingSend.send !== forSend) return;
       appliedReadRef.current = read;
 
       // Merged in one pass, never replaced. The snapshot predates whatever
@@ -507,7 +511,7 @@ export default function ChatBubble() {
     // read the chat before the server has registered this turn, and an idle answer
     // would take the controls away while the message is still on its way.
     const mySend = ++sendRef.current;
-    pendingSendRef.current = mySend;
+    pendingSendRef.current = { chatSessionId: session.id, send: mySend };
     try {
       // The open Loop Editor's live, possibly-unsaved document travels with each
       // message so the agent can read and edit the loop the user is looking at
@@ -548,7 +552,7 @@ export default function ChatBubble() {
     } finally {
       // Released only by the send that claimed it, so a later send that has already
       // taken over keeps its own claim.
-      if (pendingSendRef.current === mySend) pendingSendRef.current = 0;
+      if (pendingSendRef.current?.send === mySend) pendingSendRef.current = null;
     }
   };
 

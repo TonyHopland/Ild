@@ -173,6 +173,46 @@ describe("ChatBubble turn state", () => {
     expect(screen.queryByLabelText("Stop")).toBeNull();
   });
 
+  test("a send waiting in one chat holds nothing back in another", async () => {
+    // The pending state belongs to the chat it was sent to. Another chat reads its
+    // own state as usual — otherwise opening one while a send hangs in the other
+    // leaves it showing whatever it happened to be showing, right or wrong.
+    chatService.interrupt.mockResolvedValue(undefined);
+    const view = openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+    chatService.getById.mockImplementation((id: string) =>
+      Promise.resolve(
+        id === "s1"
+          ? chatSession({ id: "s1", name: "First chat" })
+          : chatSession({ id: "s2", name: "Other chat", activeTurnId: "t9" }),
+      ),
+    );
+
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+
+    // A send to the first chat that never comes back.
+    chatService.sendMessage.mockReturnValue(new Promise<void>(() => {}));
+    await sendMessageText("are you there?");
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+
+    // Leave it hanging and open the other chat, whose turn is running.
+    fireEvent.click(screen.getByText("← Back"));
+    fireEvent.click(await screen.findByText("Other chat"));
+    await screen.findByLabelText("Chat message");
+    await waitFor(() => expect(screen.getByLabelText("Stop")).toBeTruthy());
+
+    // That turn ends while we are watching it, and the rejoin must be able to say
+    // so — the other chat's pending send has no bearing on this one.
+    chatService.getById.mockResolvedValue(chatSession({ id: "s2", name: "Other chat" }));
+    setConnectionState(view, "reconnecting");
+    setConnectionState(view, "connected");
+    await act(async () => {});
+
+    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   test("a send rejected after an idle snapshot settles the chat as idle", async () => {
     // The same race, the other outcome: the send never reached the server, so
     // once it comes back there is nothing running and the controls go.
