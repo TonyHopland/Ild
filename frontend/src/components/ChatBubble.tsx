@@ -67,13 +67,19 @@ export default function ChatBubble() {
   // button the moment one turn handed over to the next.
   const [turn, setTurn] = useState<string | null>(null);
   const turnRef = useRef<string | null>(null);
-  // Bumped by every turn change, so an in-flight state read can tell that what it
-  // was asked about has since moved on. Monotonic on purpose: a turn value that
-  // left and came back is still a later epoch.
+  // Bumped by every turn change a read must not overrule — a hub event, a send,
+  // leaving or opening a chat — so a snapshot taken before one of those can tell
+  // that what it was asked about has moved on. Monotonic on purpose: a turn value
+  // that left and came back is still a later epoch. A read applying its own
+  // answer deliberately does not move it; reads are ordered against each other
+  // below, and moving the epoch here would let one read silence a newer one.
   const epochRef = useRef(0);
-  // Bumped by every state read, so reads that overlap each other are ordered too:
-  // the epoch orders a read against turn changes, not against another read.
+  // Numbers each state read as it goes out, and records the newest one whose
+  // answer has been applied. Reads are ordered by what has landed rather than by
+  // what has been started, so a read that fails or never comes back cannot
+  // silence the answer of one that did.
   const readRef = useRef(0);
+  const appliedReadRef = useRef(0);
   // Set while a stop request is in flight, so a second click cannot fire another.
   const [stopping, setStopping] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -244,11 +250,20 @@ export default function ChatBubble() {
 
   // The only writer of the turn value, so the ref the once-registered hub
   // handlers read never drifts from the state the view renders.
-  const applyTurn = useCallback((next: string | null) => {
+  const setTurnValue = useCallback((next: string | null) => {
     turnRef.current = next;
-    epochRef.current += 1;
     setTurn(next);
   }, []);
+
+  // Every turn change except a state read applying its own answer: those are the
+  // changes a snapshot already in flight must not be allowed to undo.
+  const applyTurn = useCallback(
+    (next: string | null) => {
+      epochRef.current += 1;
+      setTurnValue(next);
+    },
+    [setTurnValue],
+  );
 
   // Re-read the chat whenever the client may be holding a belief the server has
   // already contradicted: on every join of its live stream, after a stop the
@@ -260,16 +275,16 @@ export default function ChatBubble() {
       const epoch = epochRef.current;
       const read = ++readRef.current;
       const view = await chatService.getById(id);
-      // Only the newest read may speak. A join and a stop's own reconciliation
-      // can be in flight together, and whichever answered first would otherwise
-      // apply and move the epoch, silencing the other — including when the one
-      // silenced is the newer, truer answer, which is how a stopped chat kept
-      // its stop button. An older read left unapplied costs nothing: everything
-      // it could say, the read that overtook it says more recently.
-      if (read !== readRef.current) return;
+      // A newer read has already answered, so ours is stale by construction: a
+      // join and a stop's own reconciliation can be in flight together, and
+      // without this the first to answer would win however old it was, leaving a
+      // stopped chat holding its stop button. Judged on answers rather than on
+      // requests, so a read that fails or never returns takes nothing with it.
+      if (read <= appliedReadRef.current) return;
       // Discard an answer about a chat we have left, or one taken before a turn
       // we have since learned about: a snapshot may never overrule a newer fact.
       if (sessionIdRef.current !== id || epochRef.current !== epoch) return;
+      appliedReadRef.current = read;
 
       // Merged in one pass, never replaced. The snapshot predates whatever
       // arrived over the hub while it was in flight, so it may add what we
@@ -289,9 +304,9 @@ export default function ChatBubble() {
       // turn's own finalized reply replaces it. If the server no longer names
       // that turn, the text on screen is from a turn that has ended.
       if (active !== turnRef.current) setStreaming("");
-      applyTurn(active);
+      setTurnValue(active);
     },
-    [applyTurn],
+    [setTurnValue],
   );
 
   // Join the active chat's group whenever we are connected, and leave it on
@@ -459,6 +474,7 @@ export default function ChatBubble() {
     const displaced = turnRef.current;
     applyTurn(PENDING_TURN);
     const pendingEpoch = epochRef.current;
+    const pendingRead = appliedReadRef.current;
     try {
       // The open Loop Editor's live, possibly-unsaved document travels with each
       // message so the agent can read and edit the loop the user is looking at
@@ -475,9 +491,12 @@ export default function ChatBubble() {
       setError((e as { message?: string })?.message ?? "Could not send message.");
       // Put back the turn this send claimed to replace before anything reads the
       // turn value again: the send may never have reached the runner, and that
-      // turn is then still running. Skipped once something else has moved the
-      // turn on — a start announced while this send was unwinding.
-      if (epochRef.current === pendingEpoch) applyTurn(displaced);
+      // turn is then still running. Skipped once anything else has moved the turn
+      // on — a start announced while this send was unwinding, or a state read
+      // that has landed since, both of which know better than this does.
+      if (epochRef.current === pendingEpoch && appliedReadRef.current === pendingRead) {
+        applyTurn(displaced);
+      }
       // The message may still have reached the runner, and a turn it did not
       // reach may be running regardless — so ask the server rather than trusting
       // either guess. On failure the view keeps the turn it had before the send.

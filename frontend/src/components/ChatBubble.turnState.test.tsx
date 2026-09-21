@@ -367,6 +367,81 @@ describe("ChatBubble turn state", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  test("a read that never answers takes nothing with it", async () => {
+    // Overlapping reads are ordered by what they answer, not by what they ask:
+    // a later read that fails must not silence an earlier one that succeeded,
+    // or a stopped chat keeps a stop button for a turn that has ended.
+    chatService.interrupt.mockResolvedValue(undefined);
+    const view = await openResumed(chatSession({ activeTurnId: "t1" }));
+
+    // The stop's own read goes out first and will answer: the turn is over.
+    let answerStopRead!: (session: ChatSession) => void;
+    chatService.getById.mockReturnValueOnce(
+      new Promise<ChatSession>((resolve) => {
+        answerStopRead = resolve;
+      }),
+    );
+    fireEvent.click(screen.getByLabelText("Stop"));
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+
+    // A rejoin's read goes out after it, and fails.
+    let failJoinRead!: (err: Error) => void;
+    chatService.getById.mockReturnValueOnce(
+      new Promise<ChatSession>((_, reject) => {
+        failJoinRead = reject;
+      }),
+    );
+    setConnectionState(view, "reconnecting");
+    setConnectionState(view, "connected");
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
+
+    await act(async () => {
+      failJoinRead(new Error("Network error."));
+    });
+    await act(async () => {
+      answerStopRead(chatSession({ activeTurnId: null }));
+    });
+
+    expect(screen.queryByLabelText("Stop")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  test("a failed send's own read still lands when a later read fails", async () => {
+    // The mirror image: the answer that survives says the chat is busy, and
+    // losing it would take the stop button off a turn that is still running.
+    const view = await openResumed(chatSession({ activeTurnId: null }));
+    chatService.sendMessage.mockRejectedValue(new Error("Network error."));
+
+    let answerSendRead!: (session: ChatSession) => void;
+    chatService.getById.mockReturnValueOnce(
+      new Promise<ChatSession>((resolve) => {
+        answerSendRead = resolve;
+      }),
+    );
+    await sendMessageText("did this arrive?");
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+
+    let failJoinRead!: (err: Error) => void;
+    chatService.getById.mockReturnValueOnce(
+      new Promise<ChatSession>((_, reject) => {
+        failJoinRead = reject;
+      }),
+    );
+    setConnectionState(view, "reconnecting");
+    setConnectionState(view, "connected");
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
+
+    await act(async () => {
+      failJoinRead(new Error("Network error."));
+    });
+    await act(async () => {
+      answerSendRead(chatSession({ activeTurnId: "t2" }));
+    });
+
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
   test("a state read answered after the user left never lands on the chat they moved to", async () => {
     chatService.interrupt.mockResolvedValue(undefined);
     chatService.sendMessage.mockResolvedValue(undefined);
