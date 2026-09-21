@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
+import type { ChatHubEvents } from "../test-support";
 
 // One table over the whole turn lifecycle. Every case is a sequence of the things
 // that can happen to a chat — a send, the server announcing a turn, streamed text,
@@ -271,7 +272,7 @@ const CASES: Case[] = [
   },
 ];
 
-function emit(event: string, payload: Record<string, unknown>) {
+function emit<E extends keyof ChatHubEvents>(event: E, payload: ChatHubEvents[E]) {
   act(() => {
     handlers[event]?.({ payload });
   });

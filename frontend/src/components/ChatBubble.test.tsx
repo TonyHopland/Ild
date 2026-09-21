@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary } from "../types";
+import type { ChatHubEvents } from "../test-support";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
@@ -111,7 +112,7 @@ function chatSession(partial: Partial<ChatSession> = {}): ChatSession {
 }
 
 /** Deliver one hub event exactly as the bubble's own handler receives it. */
-function emit(event: string, payload: Record<string, unknown>) {
+function emit<E extends keyof ChatHubEvents>(event: E, payload: ChatHubEvents[E]) {
   act(() => {
     handlers[event]?.({ payload });
   });
@@ -787,31 +788,31 @@ describe("ChatBubble", () => {
     await screen.findByLabelText("Chat message");
 
     // Live streaming delta appears, then a finalized interrupted reply replaces it.
-    act(() => {
-      handlers.ChatTurnProgress?.({
-        payload: { chatSessionId: "s1", turnId: "t1", delta: "partial" },
-      });
-    });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "partial" });
     expect(await screen.findByText("partial")).toBeTruthy();
 
-    act(() => {
-      handlers.ChatMessageAppended?.({
-        payload: {
-          chatSessionId: "s1",
-          turnId: "t1",
-          message: msg({
-            id: "a1",
-            role: "assistant",
-            content: "partial",
-            interrupted: true,
-            sequence: 1,
-          }),
-        },
-      });
-      handlers.ChatTurnCompleted?.({ payload: { chatSessionId: "s1", interrupted: true } });
+    emit("ChatMessageAppended", {
+      chatSessionId: "s1",
+      turnId: "t1",
+      message: msg({
+        id: "a1",
+        role: "assistant",
+        content: "partial",
+        interrupted: true,
+        sequence: 1,
+      }),
     });
 
     await waitFor(() => expect(screen.getByText("interrupted")).toBeTruthy());
+
+    // The turn that was interrupted then reports itself finished, under the id the
+    // client is watching, so this is the completion that ends the turn: the stop
+    // button and the working indicator go with it.
+    expect(screen.queryByLabelText("Stop")).toBeTruthy();
+    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t1", interrupted: true });
+    expect(screen.queryByLabelText("Stop")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByText("interrupted")).toBeTruthy();
   });
 });
 

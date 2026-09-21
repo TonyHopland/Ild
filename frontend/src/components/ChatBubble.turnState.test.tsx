@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
+import type { ChatHubEvents } from "../test-support";
 
 // The turn the bubble believes is running outlives every request it makes: a
 // send, a stop and a state read all resolve long after the click that started
@@ -75,7 +76,7 @@ function summary(id: string, name: string): ChatSessionSummary {
   return { id, name, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-02T00:00:00Z" };
 }
 
-function emit(event: string, payload: Record<string, unknown>) {
+function emit<E extends keyof ChatHubEvents>(event: E, payload: ChatHubEvents[E]) {
   act(() => {
     handlers[event]?.({ payload });
   });
@@ -505,9 +506,12 @@ describe("ChatBubble turn state", () => {
     await screen.findByLabelText("Chat message");
 
     // Learned over the hub while the read was in flight, so the snapshot cannot
-    // know about it.
+    // know about it. It carries a turn id like every append does, even though this
+    // chat is idle and the id matches nothing the client is watching: the message
+    // is transcript either way, and that is what this test is about.
     emit("ChatMessageAppended", {
       chatSessionId: "s1",
+      turnId: "t6",
       message: msg({ id: "live", content: "arrived meanwhile", sequence: 60 }),
     });
 
