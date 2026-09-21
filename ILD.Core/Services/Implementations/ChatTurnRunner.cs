@@ -167,10 +167,18 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     // waiting for a next submit that may never come. Removed by identity, so a
     // newer turn for the same chat is never the one that goes, and whoever takes
     // the entry out is the one that disposes its CancellationTokenSource.
+    //
+    // Called before the turn announces that it has finished, and it drops the turn
+    // from both maps, because after that announcement no other will come: a reader
+    // still handed this turn would hold a stop button that nothing can clear.
+    // Dropping the draining entry owns nothing — that map never cancels or
+    // disposes — so it is unconditional, and its canceller clears it again anyway.
     private void Retire(Guid chatSessionId, ActiveTurn turn)
     {
         if (_active.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, turn)))
             turn.Cts.Dispose();
+
+        _draining.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, turn));
     }
 
     private async Task<Gate> EnterAsync(Guid chatSessionId)
@@ -204,22 +212,37 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     // Taking the turn out of `_active` is the claim: whoever succeeds owns its
     // cancellation and disposal, and the turn's own Retire — the only other remover
     // — can then no longer take it out, so it no longer disposes it either. That is
-    // what keeps Cancel from ever running against a disposed source, so the removal
-    // stays exactly where it is. The turn is republished as draining for readers
-    // only, until it has reported itself finished.
+    // what keeps Cancel from ever running against a disposed source, so the claim
+    // stays exactly where it is.
     private async Task CancelActiveAsync(Guid chatSessionId)
     {
-        if (!_active.TryRemove(chatSessionId, out var prev)) return;
+        if (!_active.TryGetValue(chatSessionId, out var prev)) return;
+
+        // Published as draining before it is claimed, never after: the turn has to
+        // be in one of the two maps at every instant, and claiming first would
+        // leave the chat reading as idle in between — the same remove-then-insert
+        // gap this whole change exists to close.
         _draining[chatSessionId] = prev;
+
+        // The claim, by identity so it can only ever take the turn just published.
+        // Failing it means the turn retired itself first: it owns its own disposal
+        // and has nothing left to cancel, and the draining entry goes back out
+        // because there is no drain to keep it visible for.
+        if (!_active.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev)))
+        {
+            _draining.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev));
+            return;
+        }
+
         try
         {
             await DrainAsync(chatSessionId, prev, cancel: true).ConfigureAwait(false);
         }
         finally
         {
-            // By identity, and only once the drain has returned — which is after the
-            // turn announced its own completion, so the chat goes quiet to a reader
-            // at the same moment the client hears the turn end.
+            // A backstop. The turn drops itself from here before announcing that it
+            // has finished, which is what keeps a reader from being handed the id of
+            // a turn whose completion has already been sent.
             _draining.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev));
         }
     }
