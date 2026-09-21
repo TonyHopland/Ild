@@ -48,13 +48,30 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     /// the turn to persist its reply and report itself finished. Either counts as
     /// the chat being busy, and because both live in one value a reader sees the
     /// state before a change or the state after it, never a moment in between.
+    ///
+    /// <para>The two ways a turn can be attached never overlap, which is what makes
+    /// <see cref="Current"/> unambiguous: a stop takes its turn out of
+    /// <paramref name="Live"/> in the same swap that attaches it, so a turn on its
+    /// way out is only ever attached to a chat with no live turn. Both held at once
+    /// therefore always means a replacement on its way in over the turn it
+    /// replaces.</para>
     /// </summary>
     private sealed record ChatTurn(ActiveTurn? Live, ActiveTurn? Attached)
     {
         public static readonly ChatTurn None = new(null, null);
 
-        /// <summary>The turn this chat has, whichever way round it is held.</summary>
-        public ActiveTurn? Current => Live ?? Attached;
+        /// <summary>
+        /// The turn a reader is told this chat has. When it holds two — a send has
+        /// attached its replacement over a turn still running — the answer is the
+        /// replacement, because that is the turn every event from here on will be
+        /// about: its start has been announced or is going out, and the one it
+        /// replaces has only its completion left to send. Answering with the
+        /// outgoing turn would let a read taken during the hand-over put a client
+        /// back on a turn that is ending, and that client would then take the old
+        /// turn's completion as this chat falling idle — the stop button and the
+        /// working indicator going away under a turn that is still running.
+        /// </summary>
+        public ActiveTurn? Current => Attached ?? Live;
 
         public bool IsEmpty => Live is null && Attached is null;
     }
@@ -201,10 +218,13 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
-    // One read of one value. A turn on its way in or on its way out is still this
-    // chat's turn — one has yet to be installed, the other has yet to persist its
-    // interrupted reply and report itself done — and both are held together, so no
-    // reader can slip between them and find a busy chat idle.
+    // One read of one value, and the only way this answer is exposed — the GET a
+    // bubble uses on load, on resume and on reconnect all come through here. A turn
+    // on its way in or on its way out is still this chat's turn — one has yet to be
+    // installed, the other has yet to persist its interrupted reply and report
+    // itself done — and both are held together, so no reader can slip between them
+    // and find a busy chat idle. Which one the answer is when the chat holds both is
+    // ChatTurn.Current's business.
     public Guid? ActiveTurnId(Guid chatSessionId)
         => _turns.TryGetValue(chatSessionId, out var state) ? state.Current?.Id : null;
 

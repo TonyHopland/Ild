@@ -233,6 +233,42 @@ const CASES: Case[] = [
     ],
     ends: "working",
   },
+  {
+    name: "a read taken after a hand-over is announced reports the replacement",
+    // Another client's send replaces t1, so this one has no pending send to discard
+    // the read by; and the read is taken after the start of t2 arrived, so it is not
+    // a snapshot from before a turn we have since learned about either. Both guards
+    // that usually protect this client are out, and what the server answers is what
+    // it applies — the replacement, because that is the turn the events from here on
+    // are about. See ChatTurn.Current.
+    resumeWith: "t1",
+    steps: [
+      { start: "t2", shows: "working" },
+      { holdRead: true },
+      { reconnect: true },
+      { answerHeldRead: "t2", shows: "working" },
+      // t1's completion is still to come, and cannot be taken for the chat ending.
+      { complete: "t1", shows: "working" },
+    ],
+    ends: "working",
+  },
+  {
+    name: "the same read answering with the turn being replaced is what would break it",
+    // Why that rule is the server's to keep rather than something this client can
+    // recover from: the same sequence, with the read answering the outgoing turn,
+    // puts the client back on a turn that is ending, and t1's completion then takes
+    // the controls away under t2, which is still running. Nothing arrives to put
+    // them back — the start of t2 has already been and gone.
+    resumeWith: "t1",
+    steps: [
+      { start: "t2", shows: "working" },
+      { holdRead: true },
+      { reconnect: true },
+      { answerHeldRead: "t1", shows: "working" },
+      { complete: "t1", shows: "idle" },
+    ],
+    ends: "idle",
+  },
 ];
 
 function emit(event: string, payload: Record<string, unknown>) {

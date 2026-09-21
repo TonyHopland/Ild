@@ -596,6 +596,71 @@ public sealed class ChatTurnDrainVisibilityTests
     }
 
     [Fact]
+    public async Task A_read_during_a_hand_over_is_told_the_replacement_and_the_old_completion_leaves_it_alone()
+    {
+        // While a send is replacing a running turn the chat holds both, and what a
+        // read is told then decides whether the client survives the hand-over: told
+        // the outgoing turn, it goes back to a turn that is ending, and takes that
+        // turn's completion — which is still to come — as the chat falling idle. So
+        // the answer has to be the replacement, from the moment it is attached.
+        var chatId = Guid.NewGuid();
+        var first = new BlockingTurn();
+        var second = new BlockingTurn();
+        var firstTurnId = Guid.Empty;
+        var starts = 0;
+        Guid? readMidHandOver = null;
+        Guid? announcedWhenRead = null;
+        ChatTurnRunner? runner = null;
+        ConcurrentQueue<(Guid TurnId, bool Interrupted)>? completed = null;
+
+        var h = NewRunner(
+            (_, message, ct) => (message == "first" ? first : second).RunAsync(ct),
+            onStarting: (_, _) =>
+            {
+                // The second send is attached but not installed: exactly the instant
+                // this test is about. The first turn is still running — nothing has
+                // cancelled it yet — so a reader could be told either turn.
+                if (Interlocked.Increment(ref starts) == 2)
+                {
+                    readMidHandOver = runner!.ActiveTurnId(chatId);
+                    announcedWhenRead = completed!.TryPeek(out var done) ? done.TurnId : null;
+                }
+
+                return Task.CompletedTask;
+            });
+        runner = h.Runner;
+        completed = h.Completed;
+
+        await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience);
+        await first.Running.Task.WaitAsync(Patience);
+        firstTurnId = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
+
+        // The outgoing turn stays in finalization for a moment after it is cancelled,
+        // as a real one does while it persists its interrupted reply.
+        first.Release.TrySetResult();
+        await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience);
+        await second.Running.Task.WaitAsync(Patience);
+        var secondTurnId = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
+
+        Assert.NotEqual(firstTurnId, secondTurnId);
+        Assert.Null(announcedWhenRead);
+        Assert.Equal(secondTurnId, readMidHandOver);
+
+        // The old turn's completion has been and gone by now — the send waits for it —
+        // and the chat still has the replacement, so that completion cannot be read as
+        // this chat going idle.
+        Assert.Equal(new[] { firstTurnId }, h.Completed.Select(c => c.TurnId));
+        Assert.Equal(new[] { true }, h.Completed.Select(c => c.Interrupted));
+        Assert.Equal(secondTurnId, h.Runner.ActiveTurnId(chatId));
+        Assert.Equal(new[] { firstTurnId, secondTurnId }, h.Started);
+
+        second.Release.TrySetResult();
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+        Assert.Empty(h.Log.Entries);
+    }
+
+    [Fact]
     public async Task A_send_whose_start_cannot_be_announced_leaves_the_chat_as_it_found_it()
     {
         // A send holds the chat as busy from before it announces itself, so if that
