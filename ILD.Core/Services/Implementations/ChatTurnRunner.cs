@@ -15,7 +15,8 @@ namespace ILD.Core.Services.Implementations;
 /// and the only thing that can name that turn: it sees turns that end without the
 /// service saying anything at all (a chat deleted under a running turn). So every
 /// turn it starts announces itself once and reports itself finished once under the
-/// same id, however it ends.</para>
+/// same id, however it ends, and it reads as having that turn in flight until it
+/// does — a cancelled turn still has its interrupted reply to persist.</para>
 /// </summary>
 public sealed class ChatTurnRunner : IChatTurnRunner
 {
@@ -38,6 +39,13 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     }
 
     private readonly ConcurrentDictionary<Guid, ActiveTurn> _active = new();
+    // A turn that has been cancelled but has not finished finalizing yet. It is out
+    // of `_active` — the removal there is what makes cancelling it exclusive — but
+    // the chat is still busy until it has persisted its partial reply and reported
+    // itself finished, and a read that said otherwise would take the stop button
+    // off a turn that is still running. Reporting only: nothing here ever cancels
+    // or disposes anything, so the ownership rules around `_active` are untouched.
+    private readonly ConcurrentDictionary<Guid, ActiveTurn> _draining = new();
     // One gate per session serializes the cancel-previous-then-start-new sequence
     // so two near-simultaneous submits can't both think they are first. A gate is
     // held only for that sequence, so it is dropped again as soon as no one is in
@@ -141,7 +149,13 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     }
 
     public Guid? ActiveTurnId(Guid chatSessionId)
-        => _active.TryGetValue(chatSessionId, out var turn) ? turn.Id : null;
+    {
+        if (_active.TryGetValue(chatSessionId, out var turn)) return turn.Id;
+        // Cancelled but not finished is still this chat's turn: it has yet to
+        // persist its interrupted reply and report itself done, and the bubble
+        // must keep showing it as running until it has.
+        return _draining.TryGetValue(chatSessionId, out var draining) ? draining.Id : null;
+    }
 
     /// <summary>The gates currently held; for the test that they do not pile up.</summary>
     internal int GateCount => _gates.Count;
@@ -187,10 +201,27 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
+    // Taking the turn out of `_active` is the claim: whoever succeeds owns its
+    // cancellation and disposal, and the turn's own Retire — the only other remover
+    // — can then no longer take it out, so it no longer disposes it either. That is
+    // what keeps Cancel from ever running against a disposed source, so the removal
+    // stays exactly where it is. The turn is republished as draining for readers
+    // only, until it has reported itself finished.
     private async Task CancelActiveAsync(Guid chatSessionId)
     {
         if (!_active.TryRemove(chatSessionId, out var prev)) return;
-        await DrainAsync(chatSessionId, prev, cancel: true).ConfigureAwait(false);
+        _draining[chatSessionId] = prev;
+        try
+        {
+            await DrainAsync(chatSessionId, prev, cancel: true).ConfigureAwait(false);
+        }
+        finally
+        {
+            // By identity, and only once the drain has returned — which is after the
+            // turn announced its own completion, so the chat goes quiet to a reader
+            // at the same moment the client hears the turn end.
+            _draining.TryRemove(new KeyValuePair<Guid, ActiveTurn>(chatSessionId, prev));
+        }
     }
 
     // Cancel a displaced turn and wait for it to finalize, so its interrupted reply
