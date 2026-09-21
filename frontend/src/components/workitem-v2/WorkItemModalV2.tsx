@@ -72,25 +72,38 @@ export default function WorkItemModalV2({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
 
+  // Leaving the edit view without saving discards the files staged in it — and
+  // only those: the answer has its own list, which a cancelled edit has no
+  // business emptying.
+  const clearStaged = detail.editAttachments.clear;
   const exitEdit = useCallback(() => {
     setEditMode(false);
     setEditDirty(false);
-  }, []);
+    clearStaged();
+  }, [clearStaged]);
 
-  // Closing must not silently discard an in-progress edit, the create form, or
-  // typed feedback. The create form (null workItem) is always an open form, so
-  // its dirty flag counts the same as an edit's.
+  // Closing must not silently discard an in-progress edit, the create form,
+  // typed feedback, or a file staged for either. The create form (null workItem)
+  // is always an open form, so its dirty flag counts the same as an edit's.
   const isCreate = workItem === null;
   const hasUnsavedChanges =
-    ((editMode || isCreate) && editDirty) || detail.feedbackInput.trim().length > 0;
+    ((editMode || isCreate) && editDirty) ||
+    detail.feedbackInput.trim().length > 0 ||
+    detail.attachments.staged.length > 0 ||
+    detail.editAttachments.staged.length > 0;
 
   const requestClose = useCallback(() => {
+    // A write already on its way cannot be called back, so closing over it
+    // would land files the human is in the middle of discarding — the save that
+    // is still running would upload them. Closing waits for whatever the dialog
+    // is doing, not for the uploading part of it alone.
+    if (detail.busy) return;
     if (hasUnsavedChanges) {
       setShowCloseConfirm(true);
     } else {
       onClose();
     }
-  }, [hasUnsavedChanges, onClose]);
+  }, [detail.busy, hasUnsavedChanges, onClose]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -468,6 +481,10 @@ export default function WorkItemModalV2({
                   type="button"
                   className="btn btn-sm btn-edit"
                   onClick={() => setEditMode(true)}
+                  // The edit form saves onto the same staging list an answer is
+                  // uploading from, and leaving it discards that list; neither
+                  // belongs on top of a batch still going up.
+                  disabled={detail.busy}
                 >
                   Edit
                 </button>

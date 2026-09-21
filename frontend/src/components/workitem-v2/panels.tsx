@@ -14,6 +14,8 @@ import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/wo
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
+import AttachmentPicker from "./AttachmentPicker";
+import AttachmentList from "./AttachmentList";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
 /**
@@ -143,7 +145,7 @@ export function FeedbackBanner({
   }
 
   return (
-    <div className="wiv2-feedback">
+    <div className="wiv2-feedback" onPaste={isInput ? detail.attachments.handlePaste : undefined}>
       <div className="wiv2-feedback-title">
         {isPr ? "PR Feedback" : "Human Feedback"}
         {isPr && workItem.prUrl && (
@@ -180,13 +182,22 @@ export function FeedbackBanner({
         }
         rows={isPr ? 5 : 3}
       />
+      {/* Attaching belongs to answering a run that asked for input; a PR park's
+          actions include a real merge on the remote. */}
+      {isInput && (
+        <AttachmentPicker staging={detail.attachments} inputId="wiv2-feedback-attachments" />
+      )}
       <FeedbackActions
         actions={workItem.humanFeedbackActions}
         onApprove={detail.handleApprove}
         onReject={detail.handleReject}
         onEdge={detail.handleEdge}
         onMerge={isPr ? detail.handleMerge : undefined}
+        busy={detail.respondLoading}
       />
+      {detail.respondError && (
+        <div className="preview-message preview-error">{detail.respondError}</div>
+      )}
       {isPr && detail.mergeError && (
         <div className="preview-message preview-error">{detail.mergeError}</div>
       )}
@@ -964,6 +975,19 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
             Link PR
           </button>
         )}
+      </div>
+      <div className="wiv2-meta-row wiv2-meta-col">
+        <span className="detail-label">Attachments</span>
+        <AttachmentList
+          workItem={workItem}
+          onRemoved={(attachmentId) => {
+            // Either list may be holding it: the answer's and the edit form's
+            // are two views of the same files on the same item.
+            detail.attachments.forgetUploaded(attachmentId);
+            detail.editAttachments.forgetUploaded(attachmentId);
+            void detail.refetchWorkItem();
+          }}
+        />
       </div>
       <div className="wiv2-meta-row wiv2-meta-col">
         <span className="detail-label">Dependencies</span>
