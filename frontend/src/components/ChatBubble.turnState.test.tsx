@@ -183,6 +183,48 @@ describe("ChatBubble turn state", () => {
     expect(screen.getByRole("status")).toBeTruthy();
   });
 
+  test("a replacement turn starts with no text from the turn it replaced", async () => {
+    // The interrupted turn's finalized reply is the usual thing that clears the
+    // streamed buffer, and it is exactly what an outage drops. Deltas append, so
+    // a buffer carried over would grow the new turn's reply on top of the old.
+    await openResumed(chatSession({ activeTurnId: "t1" }));
+    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "half an answer" });
+    expect(screen.getByText("half an answer")).toBeTruthy();
+
+    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
+    expect(document.querySelector(".chat-panel")?.textContent).not.toContain("half an answer");
+    // Nothing has been streamed for this turn yet, so it is not responding yet.
+    expect(screen.getByRole("status").textContent).toContain("Thinking");
+
+    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "a fresh reply" });
+    expect(screen.getByText("a fresh reply")).toBeTruthy();
+    expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("a fresh reply");
+  });
+
+  test("the interrupted reply arriving late is transcript, not the new turn's text", async () => {
+    await openResumed(chatSession({ activeTurnId: "t1" }));
+    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "half an answer" });
+    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
+    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "a fresh reply" });
+    expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("a fresh reply");
+
+    // The turn's own finalized reply turns up after its replacement had started:
+    // it belongs in the transcript, flagged interrupted, and nowhere else.
+    emit("ChatMessageAppended", {
+      chatSessionId: "s1",
+      message: {
+        ...msg({ id: "m1", content: "half an answer", sequence: 1 }),
+        interrupted: true,
+      },
+    });
+    expect(screen.getAllByText("half an answer")).toHaveLength(1);
+    expect(screen.getByText("interrupted")).toBeTruthy();
+
+    // And what the new turn streams from here is its own.
+    emit("ChatTurnProgress", { chatSessionId: "s1", delta: "carrying on" });
+    expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("carrying on");
+  });
+
   test("a turn announced while a failed send unwinds survives it", async () => {
     await openResumed(chatSession());
 

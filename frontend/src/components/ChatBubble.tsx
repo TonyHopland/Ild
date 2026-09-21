@@ -334,6 +334,14 @@ export default function ChatBubble() {
     };
     const onStarted = (msg: { payload: ChatTurnStartedPayload }) => {
       if (msg.payload.chatSessionId !== sessionIdRef.current) return;
+      // The streamed buffer holds whatever arrived while the turn being replaced
+      // was the current one, and deltas append: carrying it over would grow the
+      // new turn's reply on top of the old one's. Its own finalized message
+      // usually clears it, but that message can be missed in an outage, and a
+      // snapshot afterwards sees a partial that matches the running turn and
+      // keeps it. Dropped only when the turn really changes, so a start that
+      // merely confirms the turn we are already on leaves its text alone.
+      if (msg.payload.turnId !== turnRef.current) setStreaming("");
       applyTurn(msg.payload.turnId);
     };
     const onCompleted = (msg: { payload: ChatTurnCompletedPayload }) => {
