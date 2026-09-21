@@ -71,6 +71,9 @@ export default function ChatBubble() {
   // was asked about has since moved on. Monotonic on purpose: a turn value that
   // left and came back is still a later epoch.
   const epochRef = useRef(0);
+  // Bumped by every state read, so reads that overlap each other are ordered too:
+  // the epoch orders a read against turn changes, not against another read.
+  const readRef = useRef(0);
   // Set while a stop request is in flight, so a second click cannot fire another.
   const [stopping, setStopping] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -255,7 +258,15 @@ export default function ChatBubble() {
   const refreshActiveState = useCallback(
     async (id: string) => {
       const epoch = epochRef.current;
+      const read = ++readRef.current;
       const view = await chatService.getById(id);
+      // Only the newest read may speak. A join and a stop's own reconciliation
+      // can be in flight together, and whichever answered first would otherwise
+      // apply and move the epoch, silencing the other — including when the one
+      // silenced is the newer, truer answer, which is how a stopped chat kept
+      // its stop button. An older read left unapplied costs nothing: everything
+      // it could say, the read that overtook it says more recently.
+      if (read !== readRef.current) return;
       // Discard an answer about a chat we have left, or one taken before a turn
       // we have since learned about: a snapshot may never overrule a newer fact.
       if (sessionIdRef.current !== id || epochRef.current !== epoch) return;
