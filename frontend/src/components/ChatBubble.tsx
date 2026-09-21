@@ -94,6 +94,20 @@ export default function ChatBubble() {
   // opens while it is still going.
   const [stoppingChatId, setStoppingChatId] = useState<string | null>(null);
   const stopping = stoppingChatId !== null && stoppingChatId === session?.id;
+
+  // Both claims above are held only while a request of this view's is still out,
+  // and each is released by the request that made it — but a request that never
+  // comes back never releases anything, and a claim belongs to the view that made
+  // it rather than to the chat or to the process. So leaving a chat drops them.
+  // Otherwise the next visit to that chat would discard the very read that settles
+  // its controls, leaving a stop button and a working indicator that nothing can
+  // clear, and would keep that button disabled for a stop nobody is waiting for.
+  // Nothing needs releasing on unmount: these die with the component, and closing
+  // the panel does not unmount it or leave the chat.
+  const releaseRequestClaims = useCallback(() => {
+    pendingSendRef.current = null;
+    setStoppingChatId(null);
+  }, []);
   const [loaded, setLoaded] = useState(false);
   const busy = turn !== null;
 
@@ -492,6 +506,7 @@ export default function ChatBubble() {
       setMessages(created.messages);
       applyTurn(created.activeTurnId ?? null);
       sessionIdRef.current = created.id;
+      releaseRequestClaims();
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not start chat.");
     }
@@ -603,8 +618,9 @@ export default function ChatBubble() {
     setError(null);
     setConfirmDeleteAll(false);
     sessionIdRef.current = null;
+    releaseRequestClaims();
     void refreshHistory().catch(() => {});
-  }, [refreshHistory, applyTurn]);
+  }, [refreshHistory, applyTurn, releaseRequestClaims]);
 
   // Resume a past chat: load its transcript and continue the same agent session.
   const resumeChat = async (id: string) => {
@@ -618,6 +634,9 @@ export default function ChatBubble() {
       // all — the transcript is not the only thing being resumed.
       applyTurn(resumed.activeTurnId ?? null);
       sessionIdRef.current = resumed.id;
+      // Opened fresh, so it starts with no claim of its own — the same rule from
+      // the other end, for a chat entered by any path that did not go via the list.
+      releaseRequestClaims();
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not open chat.");
     }

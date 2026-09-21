@@ -303,6 +303,66 @@ describe("ChatBubble turn state", () => {
     expect((stop as HTMLButtonElement).disabled).toBe(false);
   });
 
+  test("a send that never comes back holds nothing back once the user has left the chat", async () => {
+    // A claim belongs to the view that made it. This send's request never answers,
+    // so it never releases its own claim, and leaving the chat is what drops it —
+    // otherwise every read taken on the next visit would be discarded as "a send of
+    // this chat's is still out", including the one that clears the controls after
+    // the turn ends. That is a stop button and a working indicator over an idle
+    // chat with nothing left to take them down.
+    const view = openList(summary("s1", "First chat"));
+    chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+
+    chatService.sendMessage.mockReturnValue(new Promise<void>(() => {}));
+    await sendMessageText("are you there?");
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+
+    // Away, and back to the same chat — which the server says is mid-turn.
+    fireEvent.click(screen.getByText("← Back"));
+    chatService.getById.mockResolvedValue(chatSession({ name: "First chat", activeTurnId: "t7" }));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+    expect(await screen.findByLabelText("Stop")).toBeTruthy();
+
+    // The turn ends while the connection is down, so the completion never arrives
+    // and the rejoin's read is the only thing that can say so. It has to be heard.
+    chatService.getById.mockResolvedValue(chatSession({ name: "First chat", activeTurnId: null }));
+    setConnectionState(view, "reconnecting");
+    setConnectionState(view, "connected");
+    await act(async () => {});
+
+    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  test("a stop that never comes back leaves that chat's button usable on the next visit", async () => {
+    // The same rule for the other claim: the button is disabled while a stop is in
+    // flight, and a stop that never answers would otherwise leave it disabled for
+    // good — the ability to stop the chat lost again, which is the bug this work
+    // item is about.
+    openList(summary("s1", "First chat"));
+    chatService.getById.mockResolvedValue(chatSession({ name: "First chat", activeTurnId: "t1" }));
+    chatService.interrupt.mockReturnValue(new Promise<void>(() => {}));
+
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+    fireEvent.click(await screen.findByLabelText("Stop"));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true),
+    );
+
+    fireEvent.click(screen.getByText("← Back"));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+
+    const stop = await screen.findByLabelText("Stop");
+    expect((stop as HTMLButtonElement).disabled).toBe(false);
+  });
+
   test("a replacement turn keeps its text when the displaced turn finalizes first", async () => {
     // The order the server produces: the replacement is announced, the turn it
     // interrupts finalizes, and only then does the replacement stream. Even with
