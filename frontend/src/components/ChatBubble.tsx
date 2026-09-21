@@ -88,8 +88,12 @@ export default function ChatBubble() {
   // own state as usual.
   const sendRef = useRef(0);
   const pendingSendRef = useRef<{ chatSessionId: string; send: number } | null>(null);
-  // Set while a stop request is in flight, so a second click cannot fire another.
-  const [stopping, setStopping] = useState(false);
+  // The chat whose stop request is in flight, or null when none is. Held by chat
+  // rather than as a bare flag because the bubble is one component for every chat:
+  // a stop pressed in one of them must not disable the button in another the user
+  // opens while it is still going.
+  const [stoppingChatId, setStoppingChatId] = useState<string | null>(null);
+  const stopping = stoppingChatId !== null && stoppingChatId === session?.id;
   const [loaded, setLoaded] = useState(false);
   const busy = turn !== null;
 
@@ -532,7 +536,11 @@ export default function ChatBubble() {
       // learned since it was issued.
       await refreshActiveState(session.id, mySend).catch((err) => console.error(err));
     } catch (e) {
-      setError((e as { message?: string })?.message ?? "Could not send message.");
+      // Only where it happened: this send belongs to a chat the user may have left
+      // by now, and its failure is not news in whatever chat is open instead.
+      if (sessionIdRef.current === session.id) {
+        setError((e as { message?: string })?.message ?? "Could not send message.");
+      }
       // Put back the turn this send claimed to replace before anything reads the
       // turn value again: the send may never have reached the runner, and that
       // turn is then still running. Skipped once anything else has moved the turn
@@ -565,7 +573,7 @@ export default function ChatBubble() {
   const stop = async () => {
     if (!session || stopping) return;
     const id = session.id;
-    setStopping(true);
+    setStoppingChatId(id);
     let accepted = false;
     try {
       await chatService.interrupt(id);
@@ -573,7 +581,9 @@ export default function ChatBubble() {
     } catch {
       /* nothing left to cancel */
     } finally {
-      setStopping(false);
+      // Released by the stop that claimed it, so a later stop in another chat keeps
+      // its own claim.
+      setStoppingChatId((current) => (current === id ? null : current));
     }
 
     // Only a stop the server accepted tells us anything: by then it may have

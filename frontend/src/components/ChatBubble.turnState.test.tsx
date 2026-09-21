@@ -243,6 +243,89 @@ describe("ChatBubble turn state", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
+  test("a send that fails after the user opened another chat reports nothing there", async () => {
+    // The bubble is one component for every chat, so a request that outlives the
+    // chat it belongs to must write nothing into whatever chat is open instead.
+    openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+    chatService.getById.mockImplementation((id: string) =>
+      Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
+    );
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+
+    let failSend!: (err: Error) => void;
+    chatService.sendMessage.mockReturnValue(
+      new Promise<void>((_, reject) => {
+        failSend = reject;
+      }),
+    );
+    await sendMessageText("are you there?");
+
+    // Leave for the other chat, and only then does the first send give up.
+    fireEvent.click(screen.getByText("← Back"));
+    fireEvent.click(await screen.findByText("Other chat"));
+    await screen.findByLabelText("Chat message");
+    await act(async () => {
+      failSend(new Error("Network error."));
+    });
+
+    expect(screen.queryByText("Network error.")).toBeNull();
+  });
+
+  test("a stop still running in one chat leaves another chat's stop button usable", async () => {
+    // The same rule for the flag that disables the button while a stop is in
+    // flight: it belongs to the chat it was pressed in.
+    openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+    chatService.getById.mockImplementation((id: string) =>
+      Promise.resolve(
+        chatSession({ id, name: id === "s1" ? "First chat" : "Other chat", activeTurnId: "t1" }),
+      ),
+    );
+    chatService.interrupt.mockReturnValue(new Promise<void>(() => {}));
+
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    fireEvent.click(await screen.findByText("First chat"));
+    await screen.findByLabelText("Chat message");
+    fireEvent.click(await screen.findByLabelText("Stop"));
+    await waitFor(() =>
+      expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true),
+    );
+
+    // That stop never comes back. The other chat is running its own turn, and its
+    // button has to work.
+    fireEvent.click(screen.getByText("← Back"));
+    fireEvent.click(await screen.findByText("Other chat"));
+    await screen.findByLabelText("Chat message");
+
+    const stop = await screen.findByLabelText("Stop");
+    expect((stop as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  test("a replacement turn keeps its text when the displaced turn finalizes first", async () => {
+    // The order the server produces: the replacement is announced, the turn it
+    // interrupts finalizes, and only then does the replacement stream. Even with
+    // the start announcement dropped — the client is left holding a placeholder —
+    // the late reply belongs to the transcript and the new turn's text stands.
+    await openResumed(chatSession({ activeTurnId: "t1" }));
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an answer" });
+
+    chatService.sendMessage.mockResolvedValue(undefined);
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t2" }));
+    await sendMessageText("stop that");
+
+    emit("ChatMessageAppended", {
+      chatSessionId: "s1",
+      turnId: "t1",
+      message: { ...msg({ id: "m1", content: "half an answer", sequence: 1 }), interrupted: true },
+    });
+    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t2", delta: "a fresh reply" });
+
+    expect(screen.getByText("interrupted")).toBeTruthy();
+    expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("a fresh reply");
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+  });
+
   test("a send that fails asks the server rather than declaring the chat idle", async () => {
     await openResumed(chatSession());
     chatService.sendMessage.mockRejectedValue(new Error("Network error."));
