@@ -87,6 +87,8 @@ let serverTurn: string | null = null;
 let nextRead: "answers" | "hangs" = "answers";
 /** The resolver of a read being held open, once one has been taken. */
 let heldRead: ((session: ChatSession) => void) | null = null;
+/** The send request left hanging, and what it will report when it settles. */
+let heldSend: { accept: () => void; reject: (err: Error) => void; turn: string } | null = null;
 
 type Step =
   /** The user sends a message. The server accepts it and reports `turn` from then on. */
@@ -105,16 +107,23 @@ type Step =
   | { interrupt: true }
   /** The connection drops and comes back, so the bubble rejoins and re-reads. */
   | { reconnect: true }
+  /** A send whose request hangs, so the chat is pending while other things happen. */
+  | { sendPending: string }
+  /** That send finally comes back, accepted by the server or refused. */
+  | { settleSend: "accepted" | "rejected" }
   /** The next state read hangs, to be answered later and out of order. */
   | { holdRead: true }
   /** The held read finally answers, with what the server thought at the time. */
   | { answerHeldRead: string | null };
 
+/** Any step may pin what the view must show the moment it has been played. */
+type Expected = "working" | "idle";
+
 interface Case {
   name: string;
   /** The turn the chat is running when it is opened, if any. */
   resumeWith?: string | null;
-  steps: Step[];
+  steps: (Step & { then?: Expected })[];
   /** What the view must show once every step has been played. */
   ends: "working" | "idle";
 }
@@ -189,6 +198,28 @@ const CASES: Case[] = [
     ends: "working",
   },
   {
+    name: "a reconnect while a send is in flight cannot take the controls away",
+    // The rejoin reads the chat before the server has registered the turn, so it
+    // answers idle — truthfully, and already out of date.
+    steps: [
+      { sendPending: "t1" },
+      // The idle snapshot lands here and must change nothing.
+      { reconnect: true, then: "working" },
+      { settleSend: "accepted" },
+      { start: "t1" },
+    ],
+    ends: "working",
+  },
+  {
+    name: "a send refused after that reconnect leaves the chat idle",
+    steps: [
+      { sendPending: "t1" },
+      { reconnect: true, then: "working" },
+      { settleSend: "rejected" },
+    ],
+    ends: "idle",
+  },
+  {
     name: "a read answered out of order never overrules the newer turn",
     steps: [
       { send: "t1" },
@@ -226,6 +257,7 @@ afterEach(() => {
   serverTurn = null;
   nextRead = "answers";
   heldRead = null;
+  heldSend = null;
   localStorage.clear();
 });
 
@@ -263,6 +295,36 @@ describe("ChatBubble turn state machine", () => {
 
     for (const [i, step] of steps.entries()) {
       const where = `${i + 1}. ${JSON.stringify(step)}`;
+
+      if ("sendPending" in step) {
+        // The request hangs: the message is on its way and the server has not
+        // registered its turn yet, which is the window everything else lands in.
+        chatService.sendMessage.mockReturnValue(
+          new Promise<void>((resolve, reject) => {
+            heldSend = { accept: resolve, reject, turn: step.sendPending };
+          }),
+        );
+        const input = screen.getByLabelText("Chat message");
+        fireEvent.change(input, { target: { value: `message ` } });
+        await act(async () => {
+          fireEvent.click(screen.getByText("Send"));
+        });
+        expect(shown(), where).toBe("working");
+        continue;
+      }
+
+      if ("settleSend" in step) {
+        const held = heldSend!;
+        heldSend = null;
+        if (step.settleSend === "accepted") serverTurn = held.turn;
+        await act(async () => {
+          if (step.settleSend === "accepted") held.accept();
+          else held.reject(new Error("Network error."));
+        });
+        await act(async () => {});
+        chatService.sendMessage.mockResolvedValue(undefined);
+        continue;
+      }
 
       if ("send" in step) {
         // The request returns only once the runner has the turn registered, so
@@ -335,8 +397,10 @@ describe("ChatBubble turn state machine", () => {
       }
 
       await act(async () => {});
-      // Whatever the step was, the two controls still agree with each other.
-      shown();
+      // Whatever the step was, the two controls still agree with each other — and
+      // where the case pins a state for this point, they show it.
+      const state = shown();
+      if (step.then) expect(state, where).toBe(step.then);
     }
 
     await waitFor(() => expect(shown()).toBe(ends));

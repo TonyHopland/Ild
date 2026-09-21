@@ -135,6 +135,74 @@ afterEach(() => {
 });
 
 describe("ChatBubble turn state", () => {
+  test("a snapshot taken while a send is in flight cannot take the controls away", async () => {
+    // A rejoin reads the chat between the send going out and the server
+    // registering its turn, so it answers idle — truthfully, and already out of
+    // date. Only the send's own read, taken once the request has come back, knows
+    // whether the turn was accepted.
+    const view = await openResumed(chatSession());
+
+    let acceptSend!: () => void;
+    chatService.sendMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        acceptSend = resolve;
+      }),
+    );
+    await sendMessageText("are you there?");
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+
+    // The rejoin lands first, with the chat still idle as far as the server knows.
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: null }));
+    setConnectionState(view, "reconnecting");
+    setConnectionState(view, "connected");
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+    await act(async () => {});
+
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    expect(screen.getByRole("status")).toBeTruthy();
+
+    // Then the send is accepted, and its own read names the turn it started.
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t4" }));
+    await act(async () => {
+      acceptSend();
+    });
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
+
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+    emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t4", interrupted: false });
+    expect(screen.queryByLabelText("Stop")).toBeNull();
+  });
+
+  test("a send rejected after an idle snapshot settles the chat as idle", async () => {
+    // The same race, the other outcome: the send never reached the server, so
+    // once it comes back there is nothing running and the controls go.
+    const view = await openResumed(chatSession());
+
+    let rejectSend!: (err: Error) => void;
+    chatService.sendMessage.mockReturnValue(
+      new Promise<void>((_, reject) => {
+        rejectSend = reject;
+      }),
+    );
+    await sendMessageText("are you there?");
+
+    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: null }));
+    setConnectionState(view, "reconnecting");
+    setConnectionState(view, "connected");
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+    await act(async () => {});
+    expect(screen.getByLabelText("Stop")).toBeTruthy();
+
+    await act(async () => {
+      rejectSend(new Error("Network error."));
+    });
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
+
+    expect(await screen.findByText("Network error.")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   test("a send that fails asks the server rather than declaring the chat idle", async () => {
     await openResumed(chatSession());
     chatService.sendMessage.mockRejectedValue(new Error("Network error."));

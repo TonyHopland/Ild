@@ -80,6 +80,12 @@ export default function ChatBubble() {
   // silence the answer of one that did.
   const readRef = useRef(0);
   const appliedReadRef = useRef(0);
+  // The send currently in flight, or 0 when there is none. Until it comes back the
+  // server may not have registered its turn yet, so every other snapshot is
+  // answering about a chat it cannot know is busy: only the send's own read, taken
+  // once the request has returned, may settle what it put up.
+  const sendRef = useRef(0);
+  const pendingSendRef = useRef(0);
   // Set while a stop request is in flight, so a second click cannot fire another.
   const [stopping, setStopping] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -280,7 +286,7 @@ export default function ChatBubble() {
   // that has just loaded, or just come back from an outage, that a turn is still
   // running — or that the one it was watching is long over.
   const refreshActiveState = useCallback(
-    async (id: string) => {
+    async (id: string, forSend = 0) => {
       const epoch = epochRef.current;
       const read = ++readRef.current;
       const view = await chatService.getById(id);
@@ -293,6 +299,11 @@ export default function ChatBubble() {
       // Discard an answer about a chat we have left, or one taken before a turn
       // we have since learned about: a snapshot may never overrule a newer fact.
       if (sessionIdRef.current !== id || epochRef.current !== epoch) return;
+      // A send is in flight and this is not its read. The request has not come
+      // back, so the server may not have registered its turn when this snapshot
+      // was taken, and an idle answer would take the controls off a chat that is
+      // about to be — or already is — working. Its own read settles it instead.
+      if (pendingSendRef.current !== forSend) return;
       appliedReadRef.current = read;
 
       // Merged in one pass, never replaced. The snapshot predates whatever
@@ -491,6 +502,12 @@ export default function ChatBubble() {
     applyTurn(PENDING_TURN);
     const pendingEpoch = epochRef.current;
     const pendingRead = appliedReadRef.current;
+    // Claims the pending state for this send. Until it comes back, no other
+    // snapshot may settle or clear what it just put up: a join or a reconnect can
+    // read the chat before the server has registered this turn, and an idle answer
+    // would take the controls away while the message is still on its way.
+    const mySend = ++sendRef.current;
+    pendingSendRef.current = mySend;
     try {
       // The open Loop Editor's live, possibly-unsaved document travels with each
       // message so the agent can read and edit the loop the user is looking at
@@ -509,7 +526,7 @@ export default function ChatBubble() {
       // standing, matching no completion — a stop button on a chat that is idle.
       // The read carries the same guards as any other, so it cannot undo a turn
       // learned since it was issued.
-      await refreshActiveState(session.id).catch((err) => console.error(err));
+      await refreshActiveState(session.id, mySend).catch((err) => console.error(err));
     } catch (e) {
       setError((e as { message?: string })?.message ?? "Could not send message.");
       // Put back the turn this send claimed to replace before anything reads the
@@ -524,10 +541,14 @@ export default function ChatBubble() {
       // reach may be running regardless — so ask the server rather than trusting
       // either guess. On failure the view keeps the turn it had before the send.
       try {
-        await refreshActiveState(session.id);
+        await refreshActiveState(session.id, mySend);
       } catch (err) {
         console.error(err);
       }
+    } finally {
+      // Released only by the send that claimed it, so a later send that has already
+      // taken over keeps its own claim.
+      if (pendingSendRef.current === mySend) pendingSendRef.current = 0;
     }
   };
 
