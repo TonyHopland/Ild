@@ -99,13 +99,25 @@ public sealed class ChatTurnRunner : IChatTurnRunner
             // install below.
             var attaching = Swap(chatSessionId, state => state with { Attached = turn });
 
-            // Announced while the turn is still only attached: no reader can be
-            // handed its id before the client has been told it started, and the
-            // outgoing turn is not cancelled yet, so that turn's completion lands on
-            // a client which already knows a newer turn is running and cannot read it
-            // as this chat falling idle. If announcing fails the send fails, so the
-            // attachment goes back out again — otherwise the chat would read as busy
-            // for a turn that is never going to run, which is this bug over again.
+            // Announced before the outgoing turn is cancelled, so that turn's
+            // completion lands on a client which already knows a newer turn is
+            // running and cannot read it as this chat falling idle.
+            //
+            // A read arriving now is handed this turn's id already — it has been
+            // attached since the line above, as it has to be — so the announcement
+            // can be on its way out while the id is being read. That is harmless:
+            // the event carries the same id, so a client that has it early applies
+            // the same value twice rather than two different ones.
+            //
+            // Announcing here rather than after the install is what gives the
+            // hand-over below a window wide enough to be scripted in a test; see
+            // TurnsLeftToRetireCount.
+            //
+            // If announcing throws, the send fails, so the attachment goes back out
+            // again: nothing else would ever clear it, and the chat would read as
+            // busy from then on for a turn that is never going to run. Only a
+            // notifier that throws gets here — SignalRChatNotifier swallows its own
+            // failures — so this is a backstop, not a live path.
             try
             {
                 await _notifier.TurnStartedAsync(chatSessionId, turn.Id).ConfigureAwait(false);
