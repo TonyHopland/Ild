@@ -28,9 +28,9 @@ public class PrPollHandoverTests
     private const string NewFinding = "this allocation is wrong";
     private const string DroppedFinding = "and this name is misleading";
 
-    private static RemotePrSnapshot Snapshot()
+    private static RemotePrSnapshot Snapshot(bool approved = false)
         => new("t", "b", "open", false, null, null, RemotePrCiStatus.None,
-            Array.Empty<RemotePrCheck>(), false, false,
+            Array.Empty<RemotePrCheck>(), approved, false,
             Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow);
 
     private static RemotePrReviewItem Inline(string id, string body)
@@ -66,7 +66,8 @@ public class PrPollHandoverTests
 
         public bool WritesLand { get; set; } = true;
 
-        public Harness(RemotePrReviewLedger fetched, string? carried, string? row)
+        public Harness(RemotePrReviewLedger fetched, string? carried, string? row,
+            bool approved = false, params string[] wiredEdges)
         {
             var loopNodeId = Guid.NewGuid();
             Run = new LoopRun
@@ -92,17 +93,15 @@ public class PrPollHandoverTests
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-                .ReturnsAsync(new[]
-                {
-                    new LoopNodeEdge
+                .ReturnsAsync((wiredEdges.Length == 0 ? new[] { PrNodeEdges.OnComment } : wiredEdges)
+                    .Select(name => new LoopNodeEdge
                     {
                         Id = Guid.NewGuid(),
                         SourceNodeId = loopNodeId,
                         TargetNodeId = Guid.NewGuid(),
                         EdgeType = EdgeType.Custom,
-                        Name = PrNodeEdges.OnComment,
-                    },
-                });
+                        Name = name,
+                    }).ToArray());
             Runs.Setup(s => s.GetPrCommentLedgerAsync(Run.Id)).ReturnsAsync(() => Row);
             Runs.Setup(s => s.TrySetPrCommentLedgerAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
                 .ReturnsAsync((Guid _, string? expected, string? json) =>
@@ -112,7 +111,7 @@ public class PrPollHandoverTests
                     return true;
                 });
 
-            Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Snapshot());
+            Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Snapshot(approved));
             Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(fetched);
             Engine.Setup(e => e.SignalNodeResultAsync(Run.Id, RunNode.Id, It.IsAny<NodeSignal>()))
                 .Callback<Guid, Guid, NodeSignal>((_, _, signal) => Fired = signal)
@@ -151,6 +150,41 @@ public class PrPollHandoverTests
         // reason that names findings it will not be given.
         var incoming = Inline("10", NewFinding);
         var h = new Harness(Fetched(incoming), carried: Holding(), row: Holding(incoming));
+
+        await h.PollAsync();
+
+        Assert.Null(h.Fired);
+    }
+
+    [Fact]
+    public async Task An_approval_that_arrived_with_a_batch_that_vanished_still_fires()
+    {
+        // Both went true on this tick and on_comment outranks on_approved, so
+        // the approval loses the contest. When the batch then turns out to be
+        // gone, firing nothing strands the approval for good: the baseline was
+        // saved at the top of the pass, so it is already counted as seen, and
+        // only a re-park clears that. The run would sit parked on a pull
+        // request that has been approved and never hear about it.
+        var incoming = Inline("10", NewFinding);
+        var h = new Harness(
+            Fetched(incoming), carried: Holding(), row: Holding(incoming),
+            approved: true, PrNodeEdges.OnComment, PrNodeEdges.OnApproved);
+
+        await h.PollAsync();
+
+        Assert.NotNull(h.Fired);
+        Assert.Equal(PrNodeEdges.OnApproved, h.Fired!.EdgeName);
+    }
+
+    [Fact]
+    public async Task A_batch_that_vanished_with_nothing_else_waiting_still_fires_nothing()
+    {
+        // The other half: dropping on_comment out of the running must not
+        // promote something that was never a candidate.
+        var incoming = Inline("10", NewFinding);
+        var h = new Harness(
+            Fetched(incoming), carried: Holding(), row: Holding(incoming),
+            approved: true, PrNodeEdges.OnComment);
 
         await h.PollAsync();
 

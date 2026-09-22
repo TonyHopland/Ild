@@ -160,6 +160,22 @@ public class PrRoundVoiceTests
     }
 
     [Fact]
+    public async Task A_close_whose_resolve_could_not_be_queued_is_not_recorded_as_closed()
+    {
+        // The record has to describe what happened. Written before the queue,
+        // a refusal — the queue full, or moved under us — would leave an event
+        // saying the thread was closed when nothing was ever queued to close it.
+        var h = new Harness();
+        h.Runs.Setup(s => s.TrySetPrCommentQueueAsync(h.Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(false);
+
+        var refused = await h.Build().CloseAsync("wi-1", "11", resolve: true, h.Run.Id);
+
+        Assert.False(refused.Ok);
+        Assert.Empty(h.Logged);
+    }
+
+    [Fact]
     public async Task Closing_something_this_pull_request_does_not_hold_is_refused()
     {
         var h = new Harness();

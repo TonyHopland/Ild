@@ -123,14 +123,10 @@ public sealed class PrStatusPollService : IPrStatusPollService
         if (review is { Seeding: false } && review.Decision.Items.Count > 0)
             candidates.Add(PrNodeEdges.OnComment);
 
-        var edge = PrNodeEdges.HighestPriority(candidates);
-        if (edge is null)
-            return;
-
         // Only the round that is actually being handed the items consumes them:
         // a higher-priority state winning this tick leaves them outstanding.
         string? detail = null;
-        if (edge == PrNodeEdges.OnComment)
+        if (PrNodeEdges.HighestPriority(candidates) == PrNodeEdges.OnComment)
         {
             // Describe what the WRITE handed over, not what this pass decided
             // before the forge fetch. The write re-decides against the ledger as
@@ -143,12 +139,26 @@ public sealed class PrStatusPollService : IPrStatusPollService
             // an effective batch to ask about.
             var handed = await RecordHandoverAsync(run, review!) ?? review!.Decision.Items;
             if (handed.Count == 0)
+            {
                 // The batch was gone by the time the write ran — another writer
-                // took it inside the window. Resuming now would start a round on
-                // a reason naming findings it will never be handed.
-                return;
-            detail = PrCommentDelivery.Describe(handed);
+                // took it inside the window. Firing on_comment now would start a
+                // round on a reason naming findings it will never be handed, so
+                // it drops out of the running; but returning outright would
+                // strand whatever else went true this tick. The baseline was
+                // saved above, so an approval or a green CI that lost the
+                // priority contest to a batch which then vanished is already
+                // counted as seen, and nothing clears that until a re-park.
+                candidates.Remove(PrNodeEdges.OnComment);
+            }
+            else
+            {
+                detail = PrCommentDelivery.Describe(handed);
+            }
         }
+
+        var edge = PrNodeEdges.HighestPriority(candidates);
+        if (edge is null)
+            return;
 
         // Carry why: the signal's output becomes the resumed node's output, so a
         // node wired to on_ci_failed reads the failing checks out of

@@ -10,7 +10,6 @@
       "label": "Pull Request",
       "config": {
         "prDescriptionTemplate": "{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n----------------------------------------\n\nCode review verdict:\n\n{{PreviousNode.Output}}",
-        "prCommentTemplate": "Updated after feedback. Re-reviewed and approved:\n\n{{PreviousNode.Output}}",
         "__pos": {
           "x": 564.5,
           "y": 256.5
@@ -34,7 +33,7 @@
       "type": "Prompt",
       "label": "Address PR feedback",
       "config": {
-        "prompt": "The pull request was not merged — a human reviewer responded or requested changes:\n\n{{PreviousNode.Output}}\n\nAddress the feedback completely. If it conflicts with something you did earlier, the human feedback wins. Then re-run the build and the full test suite and make everything pass. Reply with an updated summary of the change and how you addressed the feedback.",
+        "prompt": "The pull request was not merged — a human reviewer responded or requested changes:\n\n{{PreviousNode.Output}}\n\nRead the whole review with get_pr_review first; the rendered review on the forge leaves findings out. Answer each one where it was raised with reply_to_pr_review_comment, or close_pr_review_item for anything you read and are deliberately not answering. Both only QUEUE what you say — the PR node sends it when the loop returns there, so a human can drop any of it first. If you have something general to say that belongs on no single thread, say it once with comment_on_pr; nothing else comments on the pull request now, so a round that calls none of these leaves it silent.\n\nAddress the feedback completely. If it conflicts with something you did earlier, the human feedback wins. Then re-run the build and the full test suite and make everything pass. Reply with an updated summary of the change and how you addressed the feedback.",
         "__pos": {
           "x": 190.5,
           "y": 123.5

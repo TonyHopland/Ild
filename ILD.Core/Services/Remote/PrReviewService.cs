@@ -274,20 +274,33 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             return new RemotePrWriteResult(false, null,
                 $"No comment with id '{commentId}' on this work item's pull request. The review ledger lists the ids that can be closed.");
 
+        // The thread first, so the record can only ever describe what happened.
+        // Written before it, a queue that then refused — full, or moved under us
+        // — would leave an event saying the thread was closed when nothing was
+        // ever queued to close it.
+        if (resolve && item.ThreadId is not null)
+        {
+            if (!await _remote.SupportsThreadResolutionAsync(target.RepoUrl))
+            {
+                await RecordClosedAsync(target.Run, item, commentId);
+                return new RemotePrWriteResult(true, null,
+                    "Closed, but the thread was left open: resolving review threads is not supported for this repository's provider.");
+            }
+
+            var queued = await QueueAsync(
+                target.Run,
+                new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, item.ThreadId, null, item.Path, item.Line, DateTime.UtcNow,
+                    PrCommentLedger.Fingerprint(item.Path, item.Line, item.Body)),
+                "Closed: the round read this and chose not to answer it, and the thread is closed when the PR node next runs.");
+            if (!queued.Ok)
+                return queued;
+
+            await RecordClosedAsync(target.Run, item, commentId);
+            return queued;
+        }
+
         await RecordClosedAsync(target.Run, item, commentId);
-
-        if (!resolve || item.ThreadId is null)
-            return new RemotePrWriteResult(true, null, "Closed: the round read this and chose not to answer it.");
-
-        if (!await _remote.SupportsThreadResolutionAsync(target.RepoUrl))
-            return new RemotePrWriteResult(true, null,
-                "Closed, but the thread was left open: resolving review threads is not supported for this repository's provider.");
-
-        return await QueueAsync(
-            target.Run,
-            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, item.ThreadId, null, item.Path, item.Line, DateTime.UtcNow,
-                PrCommentLedger.Fingerprint(item.Path, item.Line, item.Body)),
-            "Closed: the round read this and chose not to answer it, and the thread is closed when the PR node next runs.");
+        return new RemotePrWriteResult(true, null, "Closed: the round read this and chose not to answer it.");
     }
 
     /// <summary>

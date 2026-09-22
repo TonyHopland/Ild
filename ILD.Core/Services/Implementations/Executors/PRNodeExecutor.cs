@@ -265,20 +265,6 @@ public sealed class PRNodeExecutor : INodeExecutor
     }
 
     /// <summary>
-    /// Write what the round said it intended to write. This is the only place a
-    /// reply or a resolution reaches the pull request: the agent tools record
-    /// them, a human can drop any of them up to this moment, and whatever is
-    /// still queued goes out here — where the node's own comment goes out, and
-    /// stamped the same way, so an answer never fires <c>on_comment</c> back at
-    /// the loop.
-    ///
-    /// A refused write does not fail the node. Nothing is lost by it: the thread
-    /// stays open and the finding stays undelivered, so the next review raises
-    /// it again — whereas failing here would park the run on something no human
-    /// asked for. The claim happens either way, so a provider that keeps
-    /// refusing cannot make the node retry for ever.
-    /// </summary>
-    /// <summary>
     /// What a claimed intent is called in the record: the handle it was aimed
     /// at, where that is in the diff, and enough of what it said to recognise.
     /// The id comes first and always — it is the only part a person can act on
@@ -326,6 +312,21 @@ public sealed class PRNodeExecutor : INodeExecutor
         }
     }
 
+    /// <summary>
+    /// Write what the round said it intended to write. This is the ONLY place
+    /// anything reaches the pull request: the agent tools record intents, a
+    /// human can drop any of them up to this moment, and whatever is still
+    /// queued goes out here — every piece of it stamped, so nothing the round
+    /// writes fires <c>on_comment</c> back at the loop. That includes the
+    /// round's own general comment, which it queues like any other write; the
+    /// node has no comment of its own to post.
+    ///
+    /// A refused write does not fail the node. Nothing is lost by it: the thread
+    /// stays open and the finding stays undelivered, so the next review raises
+    /// it again — whereas failing here would park the run on something no human
+    /// asked for. The claim happens either way, so a provider that keeps
+    /// refusing cannot make the node retry for ever.
+    /// </summary>
     private static async Task DrainQueuedWritesAsync(
         NodeExecutionContext ctx, IServiceProvider sp, IRemoteProvider remote, string cloneUrl, string prNumber)
     {
