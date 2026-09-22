@@ -66,6 +66,15 @@ public class PrStatusPollServiceReviewFailureTests
             };
 
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
+            // Compare-and-set, as every writer of this column now is.
+            Runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => Run.PrCommentLedger);
+            Runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
+                .ReturnsAsync((Guid _, string? expected, string? json) =>
+                {
+                    if (!string.Equals(expected, Run.PrCommentLedger, StringComparison.Ordinal)) return false;
+                    Run.PrCommentLedger = json;
+                    return true;
+                });
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(runNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>())).ReturnsAsync(new[]
             {
@@ -94,7 +103,7 @@ public class PrStatusPollServiceReviewFailureTests
 
         await h.PollAsync();
 
-        h.Runs.Verify(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
+        h.Runs.Verify(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
         Assert.Null(h.Run.PrCommentLedger);
     }
@@ -123,7 +132,7 @@ public class PrStatusPollServiceReviewFailureTests
 
         recovered.Engine.Verify(
             e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
-        recovered.Runs.Verify(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Once);
+        recovered.Runs.Verify(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
     [Fact]

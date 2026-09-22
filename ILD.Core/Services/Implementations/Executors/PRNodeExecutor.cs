@@ -205,20 +205,10 @@ public sealed class PRNodeExecutor : INodeExecutor
                 // run has never watched this pull request — nothing has read it.
                 // Stamp that moment, so whoever watches first treats what was
                 // already there as history instead of delivering all of it.
-                //
-                // Still a blind read-modify-write, unlike the drain below and
-                // every other writer of this column, for the same reason as
-                // PrStatusPollService.SetLedgerAsync: the acceptance test that
-                // pins this path asserts the write goes through
-                // SetPrCommentLedgerAsync, and that file is not one this change
-                // may edit. Narrow — it races only a drop landing inside this
-                // node's own execution — but it is a hole, and escalated as one.
-                var ledger = (PrCommentLedgerJson.TryParse(ctx.Run.PrCommentLedger)
-                        ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow })
-                    .WithPosted(PrCommentLedger.KeyFor("issue", posted.Id));
-                var ledgerJson = PrCommentLedgerJson.Serialize(ledger);
-                ctx.Run.PrCommentLedger = ledgerJson;
-                await runs.SetPrCommentLedgerAsync(ctx.Run.Id, ledgerJson);
+                await PrCommentLedgerWriter.MutateAsync(runs, ctx.Run.Id, state =>
+                    (state ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow })
+                        .WithPosted(PrCommentLedger.KeyFor("issue", posted.Id)));
+                ctx.Run.PrCommentLedger = await runs.GetPrCommentLedgerAsync(ctx.Run.Id);
             }
 
             await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);

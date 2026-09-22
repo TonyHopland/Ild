@@ -47,9 +47,16 @@ public class PrCommentLedgerFirstWatchTests
 
         string? recorded = null;
         var runs = new Mock<ILoopRunStore>();
-        runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
-            .Callback<Guid, string?>((_, json) => recorded = json)
-            .Returns(Task.CompletedTask);
+        // Compare-and-set, as every writer of this column now is.
+        runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => run.PrCommentLedger);
+        runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((Guid _, string? expected, string? json) =>
+            {
+                if (!string.Equals(expected, run.PrCommentLedger, StringComparison.Ordinal)) return false;
+                run.PrCommentLedger = json;
+                recorded = json;
+                return true;
+            });
 
         var remote = new Mock<IRemoteProvider>();
         remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "42", It.IsAny<string>()))

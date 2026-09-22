@@ -90,9 +90,18 @@ public class PrStatusPollServiceOnCommentTests
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
                 .ReturnsAsync(wiredEdges.Select(name => CustomEdge(loopNodeId, name)).ToArray());
-            Runs.Setup(s => s.SetPrCommentLedgerAsync(Run.Id, It.IsAny<string?>()))
-                .Callback<Guid, string?>((_, json) => LedgerWrites.Add(json))
-                .Returns(Task.CompletedTask);
+            // The ledger is mutated by compare-and-set: every writer reads the
+            // column and writes only if it still holds what it read, so the
+            // heartbeat cannot revert what landed during its forge fetch.
+            Runs.Setup(s => s.GetPrCommentLedgerAsync(Run.Id)).ReturnsAsync(() => Run.PrCommentLedger);
+            Runs.Setup(s => s.TrySetPrCommentLedgerAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
+                .ReturnsAsync((Guid _, string? expected, string? json) =>
+                {
+                    if (!string.Equals(expected, Run.PrCommentLedger, StringComparison.Ordinal)) return false;
+                    Run.PrCommentLedger = json;
+                    LedgerWrites.Add(json);
+                    return true;
+                });
             Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(snapshot);
             if (ledger is not null)
                 Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(ledger);
@@ -191,8 +200,9 @@ public class PrStatusPollServiceOnCommentTests
         await service.PollOnceAsync();
         Assert.NotNull(h.Fired);
 
-        // What the first tick recorded is what the second starts from.
-        h.Run.PrCommentLedger = h.LedgerWrites.Last();
+        // What the first tick recorded is what the second starts from: the
+        // compare-and-set already left it on the run, as the row would.
+        Assert.Equal(h.LedgerWrites.Last(), h.Run.PrCommentLedger);
         h.Engine.Invocations.Clear();
 
         await service.PollOnceAsync();
@@ -225,7 +235,7 @@ public class PrStatusPollServiceOnCommentTests
         await h.Build().PollOnceAsync();
 
         h.Remote.Verify(r => r.GetPullRequestReviewLedgerAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
-        h.Runs.Verify(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
+        h.Runs.Verify(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
         h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(h.Run.Id), Times.Once);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
@@ -246,7 +256,7 @@ public class PrStatusPollServiceOnCommentTests
 
         Assert.NotNull(h.Fired);
         Assert.Equal(PrNodeEdges.OnCiFailed, h.Fired!.EdgeName);
-        h.Runs.Verify(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
+        h.Runs.Verify(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Fact]

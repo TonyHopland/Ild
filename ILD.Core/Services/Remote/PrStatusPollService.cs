@@ -158,23 +158,23 @@ public sealed class PrStatusPollService : IPrStatusPollService
     }
 
     /// <summary>
-    /// Record what this tick handed over.
+    /// Record what this tick handed over, against the ledger as it stands now
+    /// rather than the copy this pass loaded before it went to the forge.
     ///
-    /// NOT a compare-and-set, unlike every other writer of this column, and
-    /// that is a known hole rather than an oversight: the decision here is made
-    /// from the ledger this pass loaded BEFORE a forge fetch that costs seconds,
-    /// so a drop landing in that window is reverted by this write and the
-    /// finding it put back stays suppressed. Closing it means re-deciding
-    /// against a fresh read under PrCommentLedgerWriter — a two-line change —
-    /// but the acceptance test that pins this path asserts the write goes
-    /// through SetPrCommentLedgerAsync, and that file is not one this change is
-    /// allowed to edit. Escalated rather than worked around.
+    /// That fetch costs seconds, and a person dropping a queued answer inside
+    /// it puts a finding back. Writing the pre-computed ledger would revert
+    /// that and leave the finding suppressed, so the decision is re-made
+    /// against whatever the row says now — safe because it is a pure function
+    /// of (what the forge said, the ledger).
     /// </summary>
     private async Task SetLedgerAsync(LoopRun run, ReviewPass review)
     {
-        var json = PrCommentLedgerJson.Serialize(review.Decision.Ledger);
-        run.PrCommentLedger = json;
-        await _runs.SetPrCommentLedgerAsync(run.Id, json);
+        await PrCommentLedgerWriter.MutateAsync(_runs, run.Id, state =>
+            PrCommentDelivery.Decide(review.Fetched, review.Fetched.HeadSha, state).Ledger);
+
+        // The instance the engine still holds is kept in step so anything
+        // reading it later this tick agrees with the row, which is the authority.
+        run.PrCommentLedger = await _runs.GetPrCommentLedgerAsync(run.Id);
     }
 
     private async Task<LoopRunNode?> ResolveRunNodeAsync(LoopRun run)
