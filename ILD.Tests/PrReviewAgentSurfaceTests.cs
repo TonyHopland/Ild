@@ -6,14 +6,39 @@ namespace ILD.Tests;
 
 /// <summary>
 /// What an agent may do to a pull request's review: read it, answer a thread,
-/// close that thread. Approving, merging, closing the PR and dismissing a review
-/// are decisions this surface must not be able to take, so the whole surface —
-/// MCP tool names and agent routes — is checked rather than the three additions
-/// on their own.
+/// resolve that thread, say something general about the round, and close an item
+/// it read and chose not to answer. Approving, merging, closing the PULL REQUEST
+/// and dismissing a review are decisions this surface must not be able to take,
+/// so the whole surface — MCP tool names and agent routes — is pinned exactly
+/// rather than the additions being checked on their own.
+///
+/// "Close" is the one verb that now means two things, which is why it is not
+/// simply banned: an agent may close a review ITEM, and must not be able to
+/// close the pull request. Every occurrence of it is therefore named.
 /// </summary>
 public class PrReviewAgentSurfaceTests
 {
-    private static readonly string[] ForbiddenVerbs = { "approve", "merge", "dismiss", "close" };
+    /// <summary>Actions this surface must not offer under any name.</summary>
+    private static readonly string[] ForbiddenVerbs = { "approve", "merge", "dismiss" };
+
+    /// <summary>The whole PR-review tool surface. Exactly these, no more.</summary>
+    private static readonly string[] ExpectedTools =
+    {
+        "get_pr_review",
+        "reply_to_pr_review_comment",
+        "resolve_pr_review_thread",
+        "comment_on_pr",
+        "close_pr_review_item",
+    };
+
+    private static readonly (string Method, string Template)[] ExpectedRoutes =
+    {
+        ("GET", "workitems/{id}/pr-review"),
+        ("POST", "workitems/{id}/pr-review/reply"),
+        ("POST", "workitems/{id}/pr-review/resolve"),
+        ("POST", "workitems/{id}/pr-review/comment"),
+        ("POST", "workitems/{id}/pr-review/close"),
+    };
 
     private static IReadOnlyList<(string Method, string Template)> AgentRoutes()
         => typeof(AgentController)
@@ -22,18 +47,24 @@ public class PrReviewAgentSurfaceTests
                 .Select(a => (Method: a.HttpMethods.First(), Template: a.Template ?? string.Empty)))
             .ToArray();
 
-    [Fact]
-    public void The_mcp_server_offers_a_way_to_read_a_review_reply_to_it_and_resolve_a_thread()
-    {
-        var names = McpServerToolReflection.Names();
+    private static IReadOnlyList<string> PrReviewTools()
+        => typeof(ILD.McpServer.Tools.PrReviewTools)
+            .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .SelectMany(m => m.CustomAttributes)
+            .Where(a => a.AttributeType.Name == "McpServerToolAttribute")
+            .Select(a => (string)a.NamedArguments.Single(n => n.MemberName == "Name").TypedValue.Value!)
+            .ToArray();
 
-        Assert.Contains("get_pr_review", names);
-        Assert.Contains(names, n => n.Contains("reply", StringComparison.Ordinal) && n.Contains("pr", StringComparison.Ordinal));
-        Assert.Contains(names, n => n.Contains("resolve", StringComparison.Ordinal) && n.Contains("pr", StringComparison.Ordinal));
+    [Fact]
+    public void The_mcp_server_offers_exactly_these_five_things_to_do_with_a_review()
+    {
+        Assert.Equal(ExpectedTools.OrderBy(n => n, StringComparer.Ordinal), PrReviewTools().OrderBy(n => n, StringComparer.Ordinal));
+        // …and each of them is really registered on the server, not just on the class.
+        Assert.All(ExpectedTools, name => Assert.Contains(name, McpServerToolReflection.Names()));
     }
 
     [Fact]
-    public void No_mcp_tool_can_approve_merge_close_or_dismiss()
+    public void No_mcp_tool_can_approve_merge_or_dismiss()
     {
         var names = McpServerToolReflection.Names();
 
@@ -42,24 +73,46 @@ public class PrReviewAgentSurfaceTests
     }
 
     [Fact]
-    public void The_agent_api_exposes_exactly_read_reply_and_resolve_for_a_review()
+    public void The_only_thing_an_agent_can_close_is_one_item_of_a_review()
+    {
+        // Not the pull request. The verb is allowed exactly once, on exactly the
+        // tool that takes a comment id — a tool named for closing anything else
+        // fails here rather than being read as this one.
+        var closing = McpServerToolReflection.Names()
+            .Where(n => n.Contains("clos", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        Assert.Equal(new[] { "close_pr_review_item" }, closing);
+    }
+
+    [Fact]
+    public void The_agent_api_exposes_exactly_these_five_routes_for_a_review()
     {
         var routes = AgentRoutes();
 
-        Assert.Contains(("GET", "workitems/{id}/pr-review"), routes);
-        Assert.Contains(("POST", "workitems/{id}/pr-review/reply"), routes);
-        Assert.Contains(("POST", "workitems/{id}/pr-review/resolve"), routes);
+        foreach (var expected in ExpectedRoutes)
+            Assert.Contains(expected, routes);
 
         var reviewRoutes = routes.Where(r => r.Template.Contains("pr-review", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(3, reviewRoutes.Length);
+        Assert.Equal(ExpectedRoutes.Length, reviewRoutes.Length);
         foreach (var verb in ForbiddenVerbs)
             Assert.DoesNotContain(reviewRoutes, r => r.Template.Contains(verb, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void No_agent_route_at_all_approves_merges_closes_or_dismisses()
+    public void No_agent_route_at_all_approves_merges_or_dismisses()
     {
         foreach (var verb in ForbiddenVerbs)
             Assert.DoesNotContain(AgentRoutes(), r => r.Template.Contains(verb, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void The_only_route_that_closes_anything_closes_one_review_item()
+    {
+        var closing = AgentRoutes()
+            .Where(r => r.Template.Contains("clos", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+        Assert.Equal(new[] { ("POST", "workitems/{id}/pr-review/close") }, closing);
     }
 }

@@ -218,8 +218,12 @@ public class TemplateFieldRenderSiteTests
     }
 
     [Fact]
-    public async Task PR_node_renders_the_comment_template_before_posting_it()
+    public async Task PR_node_posts_nothing_of_its_own_on_a_pull_request_that_already_exists()
     {
+        // prCommentTemplate used to be rendered and posted here on every
+        // re-visit. It is dead config now — a saved template that still sets it
+        // keeps loading, and the field does nothing — because only the round
+        // knows whether it has anything general to say, and it says so itself.
         var wi = Wi(Guid.NewGuid());
         var (services, remote, repo) = PrServices(wi);
         remote.Setup(r => r.CreatePullRequestCommentAsync(repo.CloneUrl, "42", It.IsAny<string>()))
@@ -236,9 +240,8 @@ public class TemplateFieldRenderSiteTests
             },
             services.BuildServiceProvider());
 
-        remote.Verify(r => r.CreatePullRequestCommentAsync(repo.CloneUrl, "42",
-            It.Is<string>(posted => posted.StartsWith($"Update on {Title}", StringComparison.Ordinal)
-                && PrCommentMarker.IsStamped(posted))), Times.Once);
+        remote.Verify(r => r.CreatePullRequestCommentAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
     // ---- 7-8. Condition node: output and case subject ----------------------

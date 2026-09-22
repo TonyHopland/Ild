@@ -24,21 +24,15 @@ public interface IPrReviewService
     Task<RemotePrReviewLedger> ReadAsync(string workItemId, string? sinceCommit, Guid? callerRunId);
     Task<RemotePrWriteResult> ReplyAsync(string workItemId, string commentId, string body, Guid? callerRunId);
     Task<RemotePrWriteResult> ResolveAsync(string workItemId, string threadId, Guid? callerRunId);
-}
 
-/// <summary>
-/// What the ROUND says about itself, as opposed to what it says about something
-/// a reviewer raised.
-///
-/// Separate from <see cref="IPrReviewService"/> because the two answer different
-/// questions and only one of them is a reply: everything there is addressed to a
-/// specific finding, on the thread that finding lives on. These two are the
-/// round's own account — the general comment the PR node used to write for it,
-/// and the record that an item was read and deliberately left alone.
-/// </summary>
-public interface IPrRoundReport
-{
+    /// <summary>
+    /// The round's own account of itself, rather than an answer to something a
+    /// reviewer raised. The PR node used to write this for it and could only
+    /// guess when a round had anything to add; the round knows.
+    /// </summary>
     Task<RemotePrWriteResult> CommentAsync(string workItemId, string body, Guid? callerRunId);
+
+    /// <summary>An item the round read and deliberately left alone.</summary>
     Task<RemotePrWriteResult> CloseAsync(string workItemId, string commentId, bool resolve, Guid? callerRunId);
 }
 
@@ -77,7 +71,7 @@ public interface IPrWriteQueue
 /// here, at queue time, so an id this pull request does not hold is refused
 /// while the agent is still listening rather than silently failing later.
 /// </summary>
-public sealed class PrReviewService : IPrReviewService, IPrRoundReport, IPrWriteQueue
+public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 {
     private readonly ILoopRunStore _runs;
     private readonly IRemoteProvider _remote;

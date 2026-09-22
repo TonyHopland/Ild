@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A loop now answers the review comments on its pull request by itself, and you can read each answer and drop any of it before it is sent.**
 
+- **A round only comments on its pull request when it has something to say, instead of posting a notice every time it passes the PR node.**
+
 ### Changed
 
 - **The form for adding a forward now labels each box, so it is clear which is the name, which is the destination, and which port a client connects to on `127.0.0.1`.**

@@ -647,7 +647,7 @@ public class AgentController : ControllerBase
     [HttpPost("workitems/{id}/pr-review/comment")]
     public async Task<IActionResult> CommentOnPr(
         string id,
-        [FromServices] IPrRoundReport round,
+        [FromServices] IPrReviewService reviews,
         [FromBody] AgentPrCommentRequest request)
     {
         if (string.IsNullOrWhiteSpace(request?.Body))
@@ -657,7 +657,7 @@ public class AgentController : ControllerBase
         if (workItem == null)
             return NotFound();
 
-        var result = await round.CommentAsync(id, request.Body, CallerRunId());
+        var result = await reviews.CommentAsync(id, request.Body, CallerRunId());
         return Ok(new { ok = result.Ok, message = result.Message });
     }
 
@@ -671,7 +671,7 @@ public class AgentController : ControllerBase
     [HttpPost("workitems/{id}/pr-review/close")]
     public async Task<IActionResult> ClosePrReviewItem(
         string id,
-        [FromServices] IPrRoundReport round,
+        [FromServices] IPrReviewService reviews,
         [FromBody] AgentPrReviewCloseRequest request)
     {
         if (string.IsNullOrWhiteSpace(request?.CommentId))
@@ -681,7 +681,7 @@ public class AgentController : ControllerBase
         if (workItem == null)
             return NotFound();
 
-        var result = await round.CloseAsync(id, request.CommentId, request.Resolve, CallerRunId());
+        var result = await reviews.CloseAsync(id, request.CommentId, request.Resolve, CallerRunId());
         return Ok(new { ok = result.Ok, commentId = request.CommentId, message = result.Message });
     }
 

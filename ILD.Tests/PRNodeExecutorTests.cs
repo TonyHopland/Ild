@@ -13,7 +13,7 @@ namespace ILD.Tests;
 public class PRNodeExecutorTests
 {
     [Fact]
-    public async Task When_PR_exists_and_PrCommentTemplate_is_set_posts_rendered_comment()
+    public async Task When_PR_exists_and_PrCommentTemplate_is_set_nothing_is_posted()
     {
         var repoId = Guid.NewGuid();
         var workItem = new WorkItemView
@@ -55,6 +55,8 @@ public class PRNodeExecutorTests
         services.AddSingleton(Mock.Of<IRepositoryManager>());
         var sp = services.BuildServiceProvider();
 
+        // Dead config: still loads, still saves, posts nothing. The round
+        // decides what its pull request is told, through comment_on_pr.
         var node = new LoopNode
         {
             Id = Guid.NewGuid(),
@@ -73,12 +75,8 @@ public class PRNodeExecutorTests
         await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
             outcomes.Add(o);
 
-        // The rendered template is what gets posted, with ILD's own marker after
-        // it so the comment does not fire the comment edge back at the loop.
         remote.Verify(r => r.CreatePullRequestCommentAsync(
-            "https://example.com/owner/repo.git", "42",
-            It.Is<string>(posted => posted.StartsWith("Update on Title", StringComparison.Ordinal)
-                && PrCommentMarker.IsStamped(posted))), Times.Once);
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrCreated);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
@@ -429,7 +427,7 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
-    public async Task When_PR_exists_and_comment_post_fails_node_fails()
+    public async Task When_PR_exists_and_the_round_queued_nothing_the_node_just_parks()
     {
         var repoId = Guid.NewGuid();
         var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
@@ -451,6 +449,9 @@ public class PRNodeExecutorTests
         services.AddSingleton(Mock.Of<IRepositoryManager>());
         var sp = services.BuildServiceProvider();
 
+        // A forge that would refuse a comment is beside the point now: with
+        // nothing queued the node never reaches it, so there is nothing to fail
+        // on and the round parks as it always meant to.
         var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = """{"prCommentTemplate":"hi"}""" };
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", PrUrl = "https://example.com/o/r/pull/9" };
 
@@ -459,9 +460,10 @@ public class PRNodeExecutorTests
         await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
             outcomes.Add(o);
 
-        var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
-        Assert.Contains("PR comment failed", fail.Reason);
-        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.WaitingAction);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
+        remote.Verify(r => r.CreatePullRequestCommentAsync(
+            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
     [Theory]

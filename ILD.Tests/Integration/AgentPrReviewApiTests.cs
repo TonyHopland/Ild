@@ -66,6 +66,25 @@ public class AgentPrReviewApiTests
             CallerRunId = callerRunId;
             return Task.FromResult(new RemotePrWriteResult(false, null, "Resolving review threads is not supported by this provider."));
         }
+
+        public Task<RemotePrWriteResult> CommentAsync(string workItemId, string body, Guid? callerRunId)
+        {
+            WorkItemId = workItemId;
+            Body = body;
+            CallerRunId = callerRunId;
+            return Task.FromResult(new RemotePrWriteResult(true, null, "Queued."));
+        }
+
+        public bool Resolved { get; private set; }
+
+        public Task<RemotePrWriteResult> CloseAsync(string workItemId, string commentId, bool resolve, Guid? callerRunId)
+        {
+            WorkItemId = workItemId;
+            CommentId = commentId;
+            Resolved = resolve;
+            CallerRunId = callerRunId;
+            return Task.FromResult(new RemotePrWriteResult(true, null, "Closed."));
+        }
     }
 
     private static ApiFactory FactoryWith(StubPrReviewService stub)
@@ -222,11 +241,79 @@ public class AgentPrReviewApiTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var workItemId = await SeedWorkItemAsync(factory, client);
 
-        foreach (var verb in new[] { "approve", "merge", "dismiss", "close" })
+        // "close" is deliberately absent: an agent may close one ITEM of a
+        // review, which is a different act from closing the pull request, and
+        // the route it goes through is asserted below rather than banned here.
+        foreach (var verb in new[] { "approve", "merge", "dismiss", "abandon" })
         {
             var response = await client.PostAsJsonAsync(
                 $"/api/v1/agent/workitems/{workItemId}/pr-review/{verb}", new { threadId = "PRRT_thread_1" });
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         }
+    }
+
+    [Fact]
+    public async Task Saying_something_general_about_the_round_goes_through_this_surface_too()
+    {
+        // The PR node no longer writes the round's own account, so this is the
+        // only way anything general reaches the pull request.
+        var stub = new StubPrReviewService();
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/comment",
+            new { body = "Rebased onto main and re-ran the gate." });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("Rebased onto main and re-ran the gate.", stub.Body);
+    }
+
+    [Fact]
+    public async Task A_comment_with_nothing_to_say_is_refused_before_it_reaches_the_service()
+    {
+        var stub = new StubPrReviewService();
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/comment", new { body = "" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(stub.Body);
+    }
+
+    [Fact]
+    public async Task Closing_an_item_carries_the_id_and_whether_to_resolve_its_thread()
+    {
+        var stub = new StubPrReviewService();
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/close",
+            new { commentId = "4049159495", resolve = true });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("4049159495", stub.CommentId);
+        Assert.True(stub.Resolved);
+    }
+
+    [Fact]
+    public async Task Closing_nothing_in_particular_is_refused()
+    {
+        var stub = new StubPrReviewService();
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/close", new { resolve = true });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Null(stub.CommentId);
     }
 }

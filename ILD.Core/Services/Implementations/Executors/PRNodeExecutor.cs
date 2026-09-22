@@ -132,7 +132,9 @@ public sealed class PRNodeExecutor : INodeExecutor
             string? err = null;
             // Before the call, so the window it opens cannot start after a
             // comment that was posted while the pull request was being created.
-            var openedAt = DateTime.UtcNow;
+            // Back-dated by the skew allowance: this stamp is ILD's clock and
+            // what it is compared against is the forge's.
+            var openedAt = DateTime.UtcNow - PrCommentLedger.ClockSkewAllowance;
             try { var r = await remote.CreatePullRequestAsync(repo.CloneUrl, branch, target, wi.Title, body); prResult = r; }
             catch (Exception ex) { err = ex.Message; }
             if (err is not null || prResult is null || !string.IsNullOrEmpty(prResult.Error))
@@ -276,6 +278,54 @@ public sealed class PRNodeExecutor : INodeExecutor
     /// asked for. The claim happens either way, so a provider that keeps
     /// refusing cannot make the node retry for ever.
     /// </summary>
+    /// <summary>
+    /// What a claimed intent is called in the record: the handle it was aimed
+    /// at, where that is in the diff, and enough of what it said to recognise.
+    /// The id comes first and always — it is the only part a person can act on
+    /// afterwards, and a general comment has no place in the diff at all.
+    /// </summary>
+    private static string Describe(PrQueuedWrite write)
+    {
+        var target = string.IsNullOrEmpty(write.TargetId) ? "the pull request" : write.TargetId;
+        var where = write.Path is null ? string.Empty : $" ({write.Path}:{write.Line?.ToString() ?? "?"})";
+        var said = string.IsNullOrWhiteSpace(write.Body)
+            ? string.Empty
+            : ": " + (write.Body!.Length <= ClaimRecordBodyLength ? write.Body : write.Body[..ClaimRecordBodyLength] + "…");
+        return $"{write.Kind} on {target}{where}{said}";
+    }
+
+    /// <summary>Enough of an answer to recognise it in the event log, and no more.</summary>
+    private const int ClaimRecordBodyLength = 200;
+
+    /// <summary>
+    /// Write down what the claim took. Best-effort, and deliberately so: a store
+    /// that will not take the record must not stop the answers going out, which
+    /// is the thing the round actually owes the pull request.
+    /// </summary>
+    private static async Task RecordClaimAsync(
+        NodeExecutionContext ctx, IServiceProvider sp, IReadOnlyList<PrQueuedWrite> queued)
+    {
+        if (sp.GetService<IEventLogStore>() is not { } events)
+            return;
+
+        try
+        {
+            await events.AppendAsync(new EventLog
+            {
+                Id = Guid.NewGuid(),
+                LoopRunId = ctx.Run.Id,
+                EventType = EventType.PrQueuedWritesClaimed,
+                Data = string.Join("\n", queued.Select(Describe)),
+                Timestamp = DateTime.UtcNow,
+            });
+        }
+        catch (Exception ex)
+        {
+            sp.GetService<ILogger<PRNodeExecutor>>()?.LogWarning(
+                ex, "Could not record the PR write claim for run {RunId}", ctx.Run.Id);
+        }
+    }
+
     private static async Task DrainQueuedWritesAsync(
         NodeExecutionContext ctx, IServiceProvider sp, IRemoteProvider remote, string cloneUrl, string prNumber)
     {
@@ -285,6 +335,12 @@ public sealed class PRNodeExecutor : INodeExecutor
         var queued = await ClaimQueuedWritesAsync(runs, ctx.Run);
         if (queued.Count == 0)
             return;
+
+        // Say what was taken, before a line of it goes out. The claim cannot be
+        // undone, so this is the only thing standing between "the process died
+        // here" and answers that are simply gone — the queue is empty, the round
+        // reads as finished, and nothing else records that they ever existed.
+        await RecordClaimAsync(ctx, sp, queued);
 
         // The claim emptied the queue, so the panel is now offering to stop
         // answers that are on their way out. Same signal the service sends when

@@ -13,11 +13,17 @@ using Moq;
 namespace ILD.Tests;
 
 /// <summary>
-/// The PR node posts a comment at the end of every round. Unmarked, that comment
-/// is indistinguishable from a reviewer's and starts the next round — round,
-/// comment, round, comment, each one a full verification gate with no human in
-/// the way. This drives the node's own comment path and then feeds what it wrote
-/// back through the heartbeat.
+/// A round that has something general to say queues a comment, and the PR node
+/// sends it. Unmarked, that comment is indistinguishable from a reviewer's and
+/// starts the next round — round, comment, round, comment, each one a full
+/// verification gate with no human in the way. This drives the path the comment
+/// really goes out on and then feeds what it wrote back through the heartbeat.
+///
+/// The node no longer writes a comment of its own from `prCommentTemplate`: it
+/// could only guess whether a round had anything left to say, and the guess was
+/// wrong in one direction or the other every time. So the round says it, through
+/// `comment_on_pr` — and everything that made the node's comment safe has to
+/// hold for the round's, which is what these pin.
 /// </summary>
 public class PRNodeExecutorPrCommentTests
 {
@@ -33,6 +39,9 @@ public class PRNodeExecutorPrCommentTests
         public string? PostedBody { get; private set; }
         public string? RecordedLedger { get; private set; }
 
+        /// <summary>The persisted queue column, which only the store doubles touch.</summary>
+        public string? Row { get; set; }
+
         public Fixture(RemotePrWriteResult result, bool withRunStore = true)
         {
             Run = new LoopRun
@@ -42,6 +51,20 @@ public class PRNodeExecutorPrCommentTests
                 PrUrl = PrUrl,
                 CurrentNodeId = Guid.NewGuid(),
             };
+            // What the round queued: one general comment, tied to no item.
+            Row = PrCommentQueueJson.Serialize(new[]
+            {
+                new PrQueuedWrite("w1", PrQueuedWrite.Comment, string.Empty,
+                    "Answered every point in the review.", null, null, DateTime.UtcNow),
+            });
+            Runs.Setup(s => s.GetPrCommentQueueAsync(It.IsAny<Guid>())).ReturnsAsync(() => Row);
+            Runs.Setup(s => s.TrySetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
+                .ReturnsAsync((Guid _, string? expected, string? json) =>
+                {
+                    if (!string.Equals(expected, Row, StringComparison.Ordinal)) return false;
+                    Row = json;
+                    return true;
+                });
             Remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "42", It.IsAny<string>()))
                 .Callback<string, string, string>((_, _, body) => PostedBody = body)
                 .ReturnsAsync(result);
@@ -61,7 +84,7 @@ public class PRNodeExecutorPrCommentTests
 
         private bool WithRunStore { get; }
 
-        public async Task<List<NodeOutcome>> RunNodeAsync(string template = "Answered every point in the review.")
+        public async Task<List<NodeOutcome>> RunNodeAsync()
         {
             var repoId = Guid.NewGuid();
             var workItems = new Mock<IWorkItemManager>();
@@ -81,11 +104,14 @@ public class PRNodeExecutorPrCommentTests
             services.AddSingleton(Mock.Of<IRepositoryManager>());
             if (WithRunStore) services.AddSingleton(Runs.Object);
 
+            // Deliberately no prCommentTemplate: the node ignores it now, and a
+            // test that still set one could not tell an ignored field from a
+            // working one.
             var node = new LoopNode
             {
                 Id = Run.CurrentNodeId!.Value,
                 NodeType = NodeType.PR,
-                Config = "{\"prCommentTemplate\":" + JsonSerializer.Serialize(template) + "}",
+                Config = "{}",
             };
 
             var outcomes = new List<NodeOutcome>();
@@ -215,25 +241,48 @@ public class PRNodeExecutorPrCommentTests
     }
 
     [Fact]
-    public async Task A_refused_comment_still_fails_the_node()
+    public async Task A_refused_comment_does_not_fail_the_round_that_wrote_it()
     {
+        // The comment is one of the round's queued writes now, and a refused
+        // write never fails the node: failing would park the run on something no
+        // human asked for, and the refusal is already recorded and logged.
         var f = new Fixture(new RemotePrWriteResult(false, null, "403 from the forge"));
 
         var outcomes = await f.RunNodeAsync();
 
-        Assert.Contains(outcomes, o => o is NodeOutcome.Fail);
-        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.WaitingAction);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
+        // …and it is not left queued to be retried for ever against a forge that
+        // keeps saying no.
+        Assert.Null(f.Row);
     }
 
     [Fact]
-    public async Task The_node_still_posts_and_parks_where_no_run_store_is_available()
+    public async Task With_no_run_store_there_is_no_queue_to_send_and_the_node_still_parks()
     {
+        // The intents live nowhere but that row, so without it there is nothing
+        // to post — and the node must park rather than fail for want of a store.
         var f = new Fixture(new RemotePrWriteResult(true, "4053396920", null), withRunStore: false);
 
         var outcomes = await f.RunNodeAsync();
 
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
         Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
-        Assert.True(PrCommentMarker.IsStamped(f.PostedBody));
+        Assert.Null(f.PostedBody);
+    }
+
+    [Fact]
+    public async Task A_round_with_nothing_queued_says_nothing_at_all()
+    {
+        // The change this whole design turns on: a round that answered on the
+        // threads, or changed code and had nothing to add, leaves the pull
+        // request quiet. There is no template comment behind it any more.
+        var f = new Fixture(new RemotePrWriteResult(true, "4053396920", null)) { Row = null };
+
+        var outcomes = await f.RunNodeAsync();
+
+        Assert.Null(f.PostedBody);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
     }
 }

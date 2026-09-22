@@ -103,8 +103,15 @@ public class PrWatchedFromCreationTests
         Assert.NotNull(ledger);
         Assert.NotNull(ledger!.WatchedFrom);
         // Stamped before the create call, so nothing posted while the pull
-        // request was being opened can fall outside the window.
-        Assert.InRange(ledger.WatchedFrom!.Value, before.AddSeconds(-5), DateTime.UtcNow);
+        // request was being opened can fall outside the window — and back-dated
+        // by the skew allowance on top, because this stamp is ILD's clock and
+        // what it is compared against is the forge's. Nothing can be
+        // over-delivered into the widened span: no comment predates the pull
+        // request it is on.
+        Assert.InRange(
+            ledger.WatchedFrom!.Value,
+            before - PrCommentLedger.ClockSkewAllowance - TimeSpan.FromSeconds(5),
+            DateTime.UtcNow - PrCommentLedger.ClockSkewAllowance);
     }
 
     [Fact]

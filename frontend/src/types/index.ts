@@ -485,7 +485,12 @@ export interface LoopRun {
  */
 export interface PrQueuedWrite {
   id: string;
-  kind: "reply" | "resolve";
+  /**
+   * "comment" is a pull-request comment of its own: either an answer to
+   * something with no thread (a top-level comment, a review body), which carries
+   * the id it answers, or the round's own general comment, which has no target.
+   */
+  kind: "reply" | "resolve" | "comment";
   targetId: string;
   body?: string | null;
   path?: string | null;

@@ -214,6 +214,19 @@ public record PrCommentLedger(
     /// <summary>Kept per list, newest first, so a long-lived run cannot grow this column without bound.</summary>
     public const int MaxRemembered = 500;
 
+    /// <summary>
+    /// How far before the moment it was opened a watch window reaches back.
+    ///
+    /// <see cref="WatchedFrom"/> is stamped from ILD's clock and compared
+    /// against timestamps the FORGE wrote with its own, so a forge running
+    /// behind can place a comment before a window that opened after it — and a
+    /// comment swallowed there is silent and never comes back. The allowance
+    /// costs nothing in the other direction: the window opens when the pull
+    /// request is created, and no comment on it can predate that, so there is
+    /// nothing in the widened span to over-deliver.
+    /// </summary>
+    public static readonly TimeSpan ClockSkewAllowance = TimeSpan.FromMinutes(5);
+
     public static PrCommentLedger Empty { get; } = new(
         null, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
 

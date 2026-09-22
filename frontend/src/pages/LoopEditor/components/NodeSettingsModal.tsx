@@ -551,13 +551,21 @@ export function NodeSettingsModal({
                 />
               </div>
               <div className="config-field">
-                <label htmlFor="pr-comment-template">PR Comment Template</label>
+                <label htmlFor="pr-comment-template">PR Comment Template (no longer posted)</label>
                 <PromptEditor
                   id="pr-comment-template"
                   rows={4}
                   value={prCommentTemplate}
                   onChange={onPrCommentTemplateChange}
                 />
+                <small className="config-help-text">
+                  The node no longer posts this. It used to go out on every re-visit, which meant a
+                  round that had already answered on the threads announced itself a second time
+                  carrying nothing. The round decides now: an agent calls{" "}
+                  <strong>comment_on_pr</strong> when it has something general to say, and a round
+                  with nothing to add leaves the pull request quiet. Existing templates keep this
+                  field; it simply does nothing.
+                </small>
               </div>
               <small className="config-help-text">
                 The PR heartbeat fires these reserved edges on PR state changes (in priority order):

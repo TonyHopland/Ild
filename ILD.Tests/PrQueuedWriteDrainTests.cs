@@ -43,6 +43,8 @@ public class PrQueuedWriteDrainTests
         public Mock<IRemoteProvider> Remote { get; } = new();
         public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRunNotifier> Notifier { get; } = new();
+        public Mock<IEventLogStore> Events { get; } = new();
+        public List<EventLog> Logged { get; } = new();
         public List<Guid> QueueChanges { get; } = new();
         public LoopRun Run { get; }
         public List<(string Kind, string Target, string? Body)> Written { get; } = new();
@@ -78,6 +80,10 @@ public class PrQueuedWriteDrainTests
             Remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "42", It.IsAny<string>()))
                 .Callback<string, string, string>((_, _, body) => { PostedComment = body; PostedComments.Add(body); })
                 .ReturnsAsync(new RemotePrWriteResult(true, "5000000001", null));
+
+            Events.Setup(s => s.AppendAsync(It.IsAny<EventLog>()))
+                .Callback<EventLog>(Logged.Add)
+                .ReturnsAsync(1);
 
             Notifier.Setup(n => n.PrQueueChangedAsync(It.IsAny<Guid>()))
                 .Callback<Guid>(QueueChanges.Add)
@@ -131,7 +137,7 @@ public class PrQueuedWriteDrainTests
         /// <summary>Runs after each read of the queue and before the claim that follows it.</summary>
         public Action? AfterRead { get; set; }
 
-        public async Task<List<NodeOutcome>> RunNodeAsync(string? commentTemplate = null)
+        public async Task<List<NodeOutcome>> RunNodeAsync()
         {
             var repoId = Guid.NewGuid();
             var workItems = new Mock<IWorkItemManager>();
@@ -151,14 +157,13 @@ public class PrQueuedWriteDrainTests
             services.AddSingleton(Mock.Of<IRepositoryManager>());
             services.AddSingleton(Runs.Object);
             services.AddSingleton(Notifier.Object);
+            services.AddSingleton(Events.Object);
 
             var node = new LoopNode
             {
                 Id = Run.CurrentNodeId!.Value,
                 NodeType = NodeType.PR,
-                Config = commentTemplate is null
-                    ? "{}"
-                    : "{\"prCommentTemplate\":" + JsonSerializer.Serialize(commentTemplate) + "}",
+                Config = "{}",
             };
 
             var outcomes = new List<NodeOutcome>();
@@ -265,7 +270,7 @@ public class PrQueuedWriteDrainTests
         // those answers must still go out.
         var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
 
-        var outcomes = await f.RunNodeAsync(commentTemplate: null);
+        var outcomes = await f.RunNodeAsync();
 
         Assert.Single(f.Written);
         Assert.Null(f.PostedComment);
@@ -314,7 +319,7 @@ public class PrQueuedWriteDrainTests
             f.Row = PrCommentQueueJson.Serialize(new[] { Reply("w2", "4051372317", "And this one stands.") });
         };
 
-        await f.RunNodeAsync(commentTemplate: "Answered every point.");
+        await f.RunNodeAsync();
 
         Assert.DoesNotContain(f.Written, w => w.Target == "4049159495");
         var written = Assert.Single(f.Written);
@@ -333,7 +338,7 @@ public class PrQueuedWriteDrainTests
         var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
         Assert.Null(f.Run.PrCommentQueue);
 
-        var outcomes = await f.RunNodeAsync(commentTemplate: null);
+        var outcomes = await f.RunNodeAsync();
 
         Assert.Single(f.Written);
         Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
@@ -357,7 +362,7 @@ public class PrQueuedWriteDrainTests
     {
         var f = new Fixture(Array.Empty<PrQueuedWrite>());
 
-        await f.RunNodeAsync(commentTemplate: "Answered every point.");
+        await f.RunNodeAsync();
 
         Assert.Empty(f.QueueChanges);
     }
@@ -467,14 +472,60 @@ public class PrQueuedWriteDrainTests
     }
 
     [Fact]
+    public async Task The_claim_says_what_it_took_before_a_line_of_it_goes_out()
+    {
+        // The claim cannot be undone: it empties the column before any provider
+        // call, so a crash between the two loses those answers while the round
+        // reads as finished. This record is the only thing standing between
+        // that and answers nobody can see ever existed.
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles."), Resolve("w2", "PRRT_t1") });
+
+        await f.RunNodeAsync();
+
+        var logged = Assert.Single(f.Logged);
+        Assert.Equal(EventType.PrQueuedWritesClaimed, logged.EventType);
+        Assert.Equal(f.Run.Id, logged.LoopRunId);
+        Assert.Contains("That compiles.", logged.Data!, StringComparison.Ordinal);
+        Assert.Contains("PRRT_t1", logged.Data!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task What_the_forge_then_refuses_is_still_in_that_record()
+    {
+        // The case the record exists for, short of a crash: the answer is gone
+        // from the queue, nothing reached the pull request, and this is where a
+        // person finds out what the round had meant to say.
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        f.Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrWriteResult(false, null, "403 from the forge"));
+
+        await f.RunNodeAsync();
+
+        Assert.Contains("That compiles.", Assert.Single(f.Logged).Data!, StringComparison.Ordinal);
+        Assert.Null(f.Row);
+    }
+
+    [Fact]
+    public async Task A_round_with_nothing_queued_records_no_claim_either()
+    {
+        var f = new Fixture(Array.Empty<PrQueuedWrite>());
+
+        await f.RunNodeAsync();
+
+        Assert.Empty(f.Logged);
+    }
+
+    [Fact]
     public async Task A_run_with_nothing_queued_writes_nothing_and_touches_no_queue()
     {
         var f = new Fixture(Array.Empty<PrQueuedWrite>());
 
-        await f.RunNodeAsync(commentTemplate: "Answered every point.");
+        await f.RunNodeAsync();
 
         Assert.Empty(f.Written);
         Assert.Empty(f.QueueWrites);
-        Assert.NotNull(f.PostedComment);
+        // …and says nothing general either: there is no comment left that the
+        // node writes on the round's behalf.
+        Assert.Null(f.PostedComment);
     }
 }

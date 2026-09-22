@@ -99,7 +99,7 @@ export function QueuedPrWrites({
       {queued.map((write) => (
         <div key={write.id} className="wiv2-pr-queue-item">
           <div className="wiv2-pr-queue-where">
-            {write.kind === "resolve" ? "Resolve thread" : "Reply"}
+            {writeLabel(write)}
             {write.path ? ` · ${write.path}${write.line ? `:${write.line}` : ""}` : ""}
           </div>
           {write.body && <div className="wiv2-pr-queue-body">{write.body}</div>}
@@ -115,6 +115,18 @@ export function QueuedPrWrites({
       ))}
     </div>
   );
+}
+
+/**
+ * What a queued write is called in the panel. A general comment answers nothing
+ * and has no target, so calling it a reply — as this did while the only comments
+ * were answers to something — misreads the one write a person is most likely to
+ * want to stop.
+ */
+function writeLabel(write: { kind: string; targetId?: string | null }): string {
+  if (write.kind === "resolve") return "Resolve thread";
+  if (write.kind === "comment" && !write.targetId) return "Comment on the pull request";
+  return "Reply";
 }
 
 /** Prominent feedback banner shown in the Action tab while the item waits on a human. */

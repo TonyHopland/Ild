@@ -140,12 +140,14 @@ public class PrCommentLedgerDurabilityTests
         services.AddSingleton(db.LoopRuns);
         var sp = services.BuildServiceProvider();
 
-        var node = new LoopNode
+        // The round queued its general comment; the node's own template posting
+        // is gone, so this is what goes out and what gets recorded.
+        await db.LoopRuns.TrySetPrCommentQueueAsync(run.Id, null, PrCommentQueueJson.Serialize(new[]
         {
-            Id = seeded.PrNodeId,
-            NodeType = NodeType.PR,
-            Config = """{"prCommentTemplate":"Answered every point."}""",
-        };
+            new PrQueuedWrite("w1", PrQueuedWrite.Comment, string.Empty, "Answered every point.", null, null, DateTime.UtcNow),
+        }));
+
+        var node = new LoopNode { Id = seeded.PrNodeId, NodeType = NodeType.PR, Config = "{}" };
 
         await foreach (var _ in new PRNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
         {

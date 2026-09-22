@@ -159,4 +159,47 @@ describe("what the round is about to say on the pull request", () => {
     );
     release?.();
   });
+
+  test("names a general comment for what it is, not as a reply", () => {
+    // It answers nothing and has no target. Called a reply — as it was while
+    // every comment was an answer to something — the one write a person is most
+    // likely to want to stop is the one the panel describes wrongly.
+    render(
+      <QueuedPrWrites
+        workItem={workItem()}
+        detail={detail([
+          queued({
+            kind: "comment",
+            targetId: "",
+            body: "Rebased onto main and re-ran the gate.",
+            path: null,
+            line: null,
+          }),
+        ])}
+      />,
+    );
+
+    expect(screen.getByText(/Comment on the pull request/)).toBeTruthy();
+    expect(screen.queryByText(/^Reply/)).toBeNull();
+    expect(screen.getByText("Rebased onto main and re-ran the gate.")).toBeTruthy();
+  });
+
+  test("drops a queued general comment like any other write", async () => {
+    const drop = vi.spyOn(loopRunService, "dropQueuedPrWrite").mockResolvedValue(undefined);
+    const refresh = vi.fn().mockResolvedValue(undefined);
+    render(
+      <QueuedPrWrites
+        workItem={workItem()}
+        detail={detail(
+          [queued({ id: "wc", kind: "comment", targetId: "", path: null, line: null })],
+          refresh,
+        )}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Drop" }));
+
+    await waitFor(() => expect(drop).toHaveBeenCalledWith("run-1", "wc"));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
 });

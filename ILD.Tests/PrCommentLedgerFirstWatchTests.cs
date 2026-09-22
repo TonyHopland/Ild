@@ -47,6 +47,22 @@ public class PrCommentLedgerFirstWatchTests
 
         string? recorded = null;
         var runs = new Mock<ILoopRunStore>();
+        // What the round queued: the general comment it decided to write. The
+        // node has no comment of its own to post any more, so this is the only
+        // way anything reaches the pull request from here.
+        string? queue = PrCommentQueueJson.Serialize(new[]
+        {
+            new PrQueuedWrite("w1", PrQueuedWrite.Comment, string.Empty, "Answered every point.", null, null, DateTime.UtcNow),
+        });
+        runs.Setup(s => s.GetPrCommentQueueAsync(It.IsAny<Guid>())).ReturnsAsync(() => queue);
+        runs.Setup(s => s.TrySetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((Guid _, string? expected, string? json) =>
+            {
+                if (!string.Equals(expected, queue, StringComparison.Ordinal)) return false;
+                queue = json;
+                return true;
+            });
+
         // Compare-and-set, as every writer of this column now is.
         runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => run.PrCommentLedger);
         runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
@@ -80,12 +96,7 @@ public class PrCommentLedgerFirstWatchTests
         services.AddSingleton(Mock.Of<IRepositoryManager>());
         services.AddSingleton(runs.Object);
 
-        var node = new LoopNode
-        {
-            Id = run.CurrentNodeId!.Value,
-            NodeType = NodeType.PR,
-            Config = "{\"prCommentTemplate\":" + JsonSerializer.Serialize("Answered every point.") + "}",
-        };
+        var node = new LoopNode { Id = run.CurrentNodeId!.Value, NodeType = NodeType.PR, Config = "{}" };
 
         await foreach (var _ in new PRNodeExecutor()
             .ExecuteAsync(new NodeExecutionContext(run, node, services.BuildServiceProvider(), CancellationToken.None)))
