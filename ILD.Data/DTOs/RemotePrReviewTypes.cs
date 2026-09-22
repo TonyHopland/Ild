@@ -126,6 +126,11 @@ public static class PrCommentMarker
 /// be dropped. <see cref="Path"/> and <see cref="Line"/> are carried only so the
 /// person reading the queue can see where an answer would land without opening
 /// the transcript.
+///
+/// <see cref="SourceHash"/> is the content fingerprint of the finding this
+/// answers, kept so that dropping the answer — or a forge refusing it — can put
+/// that finding back within reach. Null on a queue written before this existed,
+/// and on an intent with no single finding behind it.
 /// </summary>
 public record PrQueuedWrite(
     string Id,
@@ -134,7 +139,8 @@ public record PrQueuedWrite(
     string? Body,
     string? Path,
     int? Line,
-    DateTime QueuedAt
+    DateTime QueuedAt,
+    string? SourceHash = null
 )
 {
     public const string Reply = "reply";
@@ -209,6 +215,26 @@ public record PrCommentLedger(
 
     public PrCommentLedger WithPosted(string key)
         => this with { PostedIds = Remember(PostedIds, key) };
+
+    /// <summary>
+    /// Put a finding back within reach: forget that this CONTENT was delivered,
+    /// while still remembering the comment that carried it.
+    ///
+    /// Only the fingerprint, deliberately. Forgetting the id too would let the
+    /// same comment fire again on the very next tick, and a forge that keeps
+    /// refusing — or a person who keeps dropping — would get an answer, a
+    /// refusal and another firing every minute for ever. Forgetting only the
+    /// content is what the promise actually needs: the comment already handed
+    /// over stays handed over, and a LATER review restating the same finding
+    /// under a fresh id is no longer mistaken for something already answered.
+    /// </summary>
+    public PrCommentLedger ForgetDeliveredContent(string? hash)
+        => string.IsNullOrEmpty(hash)
+            ? this
+            : this with
+            {
+                DeliveredHashes = DeliveredHashes.Where(h => !string.Equals(h, hash, StringComparison.Ordinal)).ToList(),
+            };
 
     /// <summary>The list with <paramref name="added"/> in front, duplicates dropped and the oldest beyond the cap forgotten.</summary>
     public static IReadOnlyList<string> Remember(IReadOnlyList<string> existing, params string[] added)

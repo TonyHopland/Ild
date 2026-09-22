@@ -310,6 +310,12 @@ public sealed class PRNodeExecutor : INodeExecutor
         var log = sp.GetService<ILogger<PRNodeExecutor>>();
         var posted = new List<string>();
 
+        // Findings whose answer never arrived. The poll path marked each one
+        // delivered when it handed it over, so leaving them marked would mean a
+        // refused answer quietly retires the finding: the thread stays open on
+        // the pull request and nothing ever raises it again.
+        var unanswered = new List<string>();
+
         foreach (var write in queued)
         {
             try
@@ -321,24 +327,34 @@ public sealed class PRNodeExecutor : INodeExecutor
                         PrCommentMarker.Stamp(write.Body ?? string.Empty, ctx.Run.Id));
 
                 if (!result.Ok)
+                {
                     log?.LogWarning("Queued PR {Kind} on {Target} was refused: {Message}",
                         write.Kind, write.TargetId, result.Message);
+                    if (write.SourceHash is { } refusedHash)
+                        unanswered.Add(refusedHash);
+                }
                 else if (write.Kind == PrQueuedWrite.Reply && result.Id is not null)
+                {
                     posted.Add(PrCommentLedger.KeyFor("review", result.Id));
+                }
             }
             catch (Exception ex)
             {
                 log?.LogWarning(ex, "Queued PR {Kind} on {Target} could not be written", write.Kind, write.TargetId);
+                if (write.SourceHash is { } thrownHash)
+                    unanswered.Add(thrownHash);
             }
         }
 
-        if (posted.Count == 0)
+        if (posted.Count == 0 && unanswered.Count == 0)
             return;
 
         var ledger = PrCommentLedgerJson.TryParse(ctx.Run.PrCommentLedger)
             ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow };
         foreach (var key in posted)
             ledger = ledger.WithPosted(key);
+        foreach (var hash in unanswered)
+            ledger = ledger.ForgetDeliveredContent(hash);
         var json = PrCommentLedgerJson.Serialize(ledger);
         ctx.Run.PrCommentLedger = json;
         await runs.SetPrCommentLedgerAsync(ctx.Run.Id, json);

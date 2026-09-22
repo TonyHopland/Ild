@@ -142,7 +142,8 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
                 $"Comment '{commentId}' is not an inline review comment ({comment.Kind}), so it has no thread to reply on. Answer an item whose kind is 'review'.");
 
         return await QueueAsync(target.Run,
-            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Reply, commentId, body, comment.Path, comment.Line, DateTime.UtcNow),
+            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Reply, commentId, body, comment.Path, comment.Line, DateTime.UtcNow,
+                PrCommentLedger.Fingerprint(comment.Path, comment.Line, comment.Body)),
             "Queued: this answer goes out when the PR node next runs, and can be dropped before then.");
     }
 
@@ -169,7 +170,8 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
                 "Resolving review threads is not supported for this repository's provider. Reply to the thread instead.");
 
         return await QueueAsync(target.Run,
-            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, threadId, null, thread.Path, thread.Line, DateTime.UtcNow),
+            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, threadId, null, thread.Path, thread.Line, DateTime.UtcNow,
+                PrCommentLedger.Fingerprint(thread.Path, thread.Line, thread.Body)),
             "Queued: this thread is closed when the PR node next runs, and can be dropped before then.");
     }
 
@@ -178,12 +180,59 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// thread stays open and the finding stays undelivered, so a later review
     /// raises it again rather than it vanishing.
     /// </summary>
-    public Task<bool> DropQueuedAsync(Guid runId, string writeId)
-        => MutateQueueAsync(runId, queued =>
+    public async Task<bool> DropQueuedAsync(Guid runId, string writeId)
+    {
+        string? dropped = null;
+        var changed = await MutateQueueAsync(runId, queued =>
         {
             var kept = queued.Where(q => !string.Equals(q.Id, writeId, StringComparison.Ordinal)).ToList();
-            return kept.Count == queued.Count ? null : kept;
+            if (kept.Count == queued.Count)
+                return null;
+            dropped = queued.First(q => string.Equals(q.Id, writeId, StringComparison.Ordinal)).SourceHash;
+            return kept;
         });
+
+        // The poll path marked the finding delivered when it handed it over, so
+        // without this a dropped answer leaves it suppressed and "dropping loses
+        // nothing" is false: a later review restating it would be swallowed.
+        if (changed)
+            await PutFindingBackAsync(runId, dropped);
+        return changed;
+    }
+
+    /// <summary>
+    /// Attempts before a contended ledger re-arm gives up. The cost of losing is
+    /// one finding that stays suppressed until the head moves — the behaviour
+    /// before this existed — so it retries rather than failing the caller.
+    /// </summary>
+    private const int LedgerWriteAttempts = 5;
+
+    /// <summary>
+    /// Put the finding an intent answered back within reach, because that answer
+    /// is not going to arrive. Compare-and-set against the heartbeat, which
+    /// writes this same column at the end of every tick and would otherwise
+    /// silently undo this.
+    /// </summary>
+    private async Task PutFindingBackAsync(Guid runId, string? sourceHash)
+    {
+        if (string.IsNullOrEmpty(sourceHash))
+            return;
+
+        for (var attempt = 0; attempt < LedgerWriteAttempts; attempt++)
+        {
+            var current = await _runs.GetPrCommentLedgerAsync(runId);
+            var ledger = PrCommentLedgerJson.TryParse(current);
+            if (ledger is null)
+                return;
+
+            var rearmed = ledger.ForgetDeliveredContent(sourceHash);
+            if (ReferenceEquals(rearmed, ledger) || rearmed.DeliveredHashes.Count == ledger.DeliveredHashes.Count)
+                return;
+
+            if (await _runs.TrySetPrCommentLedgerAsync(runId, current, PrCommentLedgerJson.Serialize(rearmed)))
+                return;
+        }
+    }
 
     private static string NewIntentId() => Guid.NewGuid().ToString("N")[..12];
 

@@ -362,6 +362,58 @@ public class PrQueuedWriteDrainTests
     }
 
     [Fact]
+    public async Task A_refused_answer_puts_its_finding_back_within_reach()
+    {
+        // The heartbeat marked the finding delivered when it handed it over. If
+        // the forge refuses the answer, leaving it marked retires the finding:
+        // the thread stays open and no later review ever raises it again.
+        const string body = "this allocation is wrong";
+        var hash = PrCommentLedger.Fingerprint("src/A.cs", 10, body);
+        var f = new Fixture(new[]
+        {
+            Reply("w1", "4049159495", "That compiles.") with { SourceHash = hash },
+        });
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with
+        {
+            Head = Head,
+            DeliveredIds = new[] { PrCommentLedger.KeyFor("review", "4049159495") },
+            DeliveredHashes = new[] { hash },
+            WatchedFrom = new DateTime(2026, 9, 20, 0, 0, 0, DateTimeKind.Utc),
+        });
+        f.Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrWriteResult(false, null, "403 from the forge"));
+
+        await f.RunNodeAsync();
+
+        var after = PrCommentLedgerJson.TryParse(f.RecordedLedger);
+        Assert.NotNull(after);
+        Assert.DoesNotContain(hash, after!.DeliveredHashes);
+        // …but the comment already handed over is still remembered, or the same
+        // one fires again next tick and the refusal repeats for ever.
+        Assert.Contains(PrCommentLedger.KeyFor("review", "4049159495"), after.DeliveredIds);
+    }
+
+    [Fact]
+    public async Task An_answer_that_went_out_leaves_its_finding_answered()
+    {
+        var hash = PrCommentLedger.Fingerprint("src/A.cs", 10, "this allocation is wrong");
+        var f = new Fixture(new[]
+        {
+            Reply("w1", "4049159495", "That compiles.") with { SourceHash = hash },
+        });
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with
+        {
+            Head = Head,
+            DeliveredHashes = new[] { hash },
+            WatchedFrom = new DateTime(2026, 9, 20, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        await f.RunNodeAsync();
+
+        Assert.Contains(hash, PrCommentLedgerJson.TryParse(f.RecordedLedger)!.DeliveredHashes);
+    }
+
+    [Fact]
     public async Task A_run_with_nothing_queued_writes_nothing_and_touches_no_queue()
     {
         var f = new Fixture(Array.Empty<PrQueuedWrite>());

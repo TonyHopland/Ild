@@ -165,4 +165,42 @@ public class PrQueuedWriteIdSpaceTests
         // same way, so the guard actually matches.
         Assert.Equal(PrCommentLedger.KeyFor(item.Kind, item.CommentId!), PrCommentLedger.KeyFor("issue", posted.Id!));
     }
+
+    [Fact]
+    public async Task An_azure_threads_read_that_fails_is_unreadable_not_an_empty_pull_request()
+    {
+        // An empty thread list is a real answer — a pull request nobody has
+        // commented on. A refused one must not look like it: on a first watch
+        // that would record the whole existing review as history already seen.
+        const string repo = "https://dev.azure.com/org/project/_git/repo";
+        using var db = new TestDb();
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pullrequests/7?", StringComparison.Ordinal),
+                () => "{\"lastMergeSourceCommit\":{\"commitId\":\"" + Head + "\"}}");
+        // The threads URL is mapped nowhere, so the handler answers 404.
+
+        var service = CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/org");
+        var ledger = await service.GetPullRequestReviewLedgerAsync(repo, "7");
+
+        Assert.NotNull(ledger.Message);
+        Assert.Contains("comment threads", ledger.Message!, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(ledger.Items);
+    }
+
+    [Fact]
+    public async Task An_azure_pull_request_with_no_threads_really_is_empty()
+    {
+        const string repo = "https://dev.azure.com/org/project/_git/repo";
+        using var db = new TestDb();
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pullrequests/7/threads?", StringComparison.Ordinal), () => "{\"value\":[]}")
+            .Map(u => u.Contains("/pullrequests/7?", StringComparison.Ordinal),
+                () => "{\"lastMergeSourceCommit\":{\"commitId\":\"" + Head + "\"}}");
+
+        var service = CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/org");
+        var ledger = await service.GetPullRequestReviewLedgerAsync(repo, "7");
+
+        Assert.Null(ledger.Message);
+        Assert.Empty(ledger.Items);
+    }
 }

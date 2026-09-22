@@ -230,6 +230,35 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     /// thread holds — the same shape
     /// <see cref="GetPullRequestReviewLedgerAsync"/> reports.
     /// </summary>
+    /// <summary>
+    /// Every comment thread on the pull request, or null if the whole list could
+    /// not be read. Azure DevOps serves this endpoint unpaged — there is no
+    /// continuation token and no <c>$top</c>/<c>$skip</c> on PR threads, so the
+    /// one response is the complete list and there is no tail to follow. What
+    /// there is to get wrong is the failure: a refused or unparsable response
+    /// must make the ledger unreadable, not an empty one.
+    /// </summary>
+    private static async Task<IReadOnlyList<JsonElement>?> ReadThreadsAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        try
+        {
+            using var resp = await http.GetAsync(Versioned($"{PrApi(repo, prNumber)}/threads"));
+            if (!resp.IsSuccessStatusCode)
+                return null;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty(CollectionProperty, out var value)
+                || value.ValueKind != JsonValueKind.Array)
+                return null;
+            return value.EnumerateArray().Select(e => e.Clone()).ToList();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static async Task<string?> ReadCreatedThreadCommentIdAsync(HttpResponseMessage resp)
     {
         try
@@ -280,8 +309,18 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
                 $"Could not read pull request {prNumber} from Azure DevOps.");
         var headSha = ReadString(Child(pr, "lastMergeSourceCommit"), "commitId");
 
+        // Not GetArrayAsync: its contract is to answer an empty list for any
+        // failure, and an empty list here is indistinguishable from "this pull
+        // request has no comments". A transient error would then look like a
+        // valid, empty ledger — and on a run's first watch that silently records
+        // the entire existing review as history it has already seen.
+        var threads = await ReadThreadsAsync(http, repo, prNumber);
+        if (threads is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the comment threads on pull request {prNumber} from Azure DevOps.");
+
         var items = new List<RemotePrReviewItem>();
-        foreach (var thread in await GetArrayAsync(http, Versioned($"{PrApi(repo, prNumber)}/threads"), CollectionProperty))
+        foreach (var thread in threads)
         {
             var threadId = ReadScalar(thread, "id");
             if (threadId is null) continue;

@@ -316,6 +316,25 @@ public class LoopRunStore : ILoopRunStore
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentLedger, json));
 
+    public async Task<string?> GetPrCommentLedgerAsync(Guid runId)
+        => await _db.LoopRuns
+            .AsNoTracking()
+            .Where(r => r.Id == runId)
+            .Select(r => r.PrCommentLedger)
+            .FirstOrDefaultAsync();
+
+    public async Task<bool> TrySetPrCommentLedgerAsync(Guid runId, string? expected, string? json)
+    {
+        var rows = expected is null
+            ? await _db.LoopRuns
+                .Where(r => r.Id == runId && r.PrCommentLedger == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentLedger, json))
+            : await _db.LoopRuns
+                .Where(r => r.Id == runId && r.PrCommentLedger == expected)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentLedger, json));
+        return rows > 0;
+    }
+
     public async Task<string?> GetPrCommentQueueAsync(Guid runId)
         // No tracking: a caller re-reading inside one scope must see the row as
         // it is now, not the copy the change tracker already handed it.

@@ -158,6 +158,17 @@ public interface ILoopRunStore
     /// The queue as the row holds it right now, bypassing the change tracker —
     /// what a compare-and-set has to start from.
     /// </summary>
+    /// <summary>The ledger as the row holds it now, for a read-modify-write that must not lose a concurrent write.</summary>
+    Task<string?> GetPrCommentLedgerAsync(Guid runId);
+
+    /// <summary>
+    /// Replace the ledger only if it still holds <paramref name="expected"/>.
+    /// Used where a finding is put back within reach — a dropped or refused
+    /// answer — because that read-modify-write races the heartbeat.s own ledger
+    /// write, and losing it silently leaves the finding suppressed.
+    /// </summary>
+    Task<bool> TrySetPrCommentLedgerAsync(Guid runId, string? expected, string? json);
+
     Task<string?> GetPrCommentQueueAsync(Guid runId);
 
     /// <summary>
