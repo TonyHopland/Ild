@@ -30,11 +30,26 @@ public record PrSnapshotChangedPayload(Guid RunId);
 
 public record SchedulerStateChangedPayload(bool IsPaused, int MaxConcurrent);
 
-public record ChatMessageAppendedPayload(Guid ChatSessionId, ChatMessageView Message);
+/// <summary>
+/// <paramref name="TurnId"/> is the turn that produced the message, so a reply
+/// finalized by a turn that has already been replaced can be told from the
+/// current one: it still belongs in the transcript, but it is not the live
+/// turn's reply and must not disturb what that turn is streaming.
+/// </summary>
+public record ChatMessageAppendedPayload(Guid ChatSessionId, Guid TurnId, ChatMessageView Message);
 
-public record ChatTurnProgressPayload(Guid ChatSessionId, string Delta);
+/// <summary>A streamed delta, tagged with the turn that produced it.</summary>
+public record ChatTurnProgressPayload(Guid ChatSessionId, Guid TurnId, string Delta);
 
-public record ChatTurnCompletedPayload(Guid ChatSessionId, bool Interrupted);
+/// <summary>
+/// <paramref name="TurnId"/> identifies one run of the agent for that chat. A
+/// message interrupts rather than queues, so a chat can hand one turn over to the
+/// next: the id is what lets the bubble tell its own turn's completion from that
+/// of the turn it just replaced.
+/// </summary>
+public record ChatTurnStartedPayload(Guid ChatSessionId, Guid TurnId);
+
+public record ChatTurnCompletedPayload(Guid ChatSessionId, Guid TurnId, bool Interrupted);
 
 public record ChatLoopUpdatePayload(Guid ChatSessionId, string Document);
 

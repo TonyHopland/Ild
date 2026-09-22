@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The form for adding a forward now labels each box, so it is clear which is the name, which is the destination, and which port a client connects to on `127.0.0.1`.**
 
+### Fixed
+
+- **A chat that is working always offers a stop button — including right after you interrupt it with another message, and when you reopen a chat that is still replying.**
+
 ## [0.12.0] - 2026-09-06
 
 ### Added

@@ -1,3 +1,4 @@
+using ILD.Data.DTOs;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -37,7 +38,13 @@ public class ChatController : ControllerBase
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
         var session = await _chat.GetByIdAsync(userId, id, ct);
-        return session is null ? NotFound() : Ok(session);
+        if (session is null) return NotFound();
+
+        // Turn liveness lives in the runner, not in the stored session, and a bubble
+        // that has just loaded or just reconnected has no other way to learn this
+        // chat is mid-turn. Read after the ownership check, so an answer about a
+        // turn is only ever given about a chat the caller owns.
+        return Ok(session with { ActiveTurnId = _runner.ActiveTurnId(id) });
     }
 
     [HttpPost]
@@ -70,8 +77,12 @@ public class ChatController : ControllerBase
         if (!await _chat.ExistsForUserAsync(userId, id, ct))
             return NotFound(new { error = "Chat not found." });
 
-        await _runner.SubmitAsync(id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
-        return Accepted();
+        // The turn id goes back with the acceptance, so the client that sent the
+        // message knows which turn is in flight without waiting to be told over the
+        // hub. Read after the ownership check above, like every other answer about a
+        // turn here.
+        var turnId = await _runner.SubmitAsync(id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
+        return Accepted(new ChatSendAcceptedView(turnId));
     }
 
     [HttpPost("{id:guid}/interrupt")]

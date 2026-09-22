@@ -17,11 +17,23 @@ public interface IChatTurnRunner
     /// the ambient per-turn Chat Context (ADR-0011): the work item the user has open
     /// and the live loop document of the open Loop Editor, or null when neither is
     /// open.
+    ///
+    /// <para>Returns the id of the turn it started, so the caller that sent the
+    /// message knows which turn is now in flight without waiting to be told: the
+    /// start broadcast can be dropped, and until the id is known a client can only
+    /// hold a placeholder that matches any turn.</para>
     /// </summary>
-    Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null);
+    Task<Guid> SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null);
 
     /// <summary>Cancel any in-flight turn for the session and await its finalization.</summary>
     Task InterruptAsync(Guid chatSessionId);
+
+    /// <summary>
+    /// The turn currently in flight for the session, or null when it has none.
+    /// The runner is the only thing that knows: a client that has just loaded or
+    /// just reconnected has no other way to learn the chat is mid-turn.
+    /// </summary>
+    Guid? ActiveTurnId(Guid chatSessionId);
 
     /// <summary>
     /// Cancel any in-flight turn for the session, then run <paramref name="delete"/>

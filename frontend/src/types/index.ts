@@ -768,6 +768,17 @@ export interface ChatSession {
   tools: string[];
   createdAt: string;
   messages: ChatMessage[];
+  /** The turn the server has in flight for this chat, or null when it is idle. */
+  activeTurnId: string | null;
+}
+
+/**
+ * The answer to an accepted message: the turn it started. Mirrors
+ * ILD.Data.DTOs.ChatSendAcceptedView. Knowing it here is what keeps a sender from
+ * holding a placeholder that matches another turn's events.
+ */
+export interface ChatSendAccepted {
+  turnId: string;
 }
 
 /**
@@ -782,16 +793,31 @@ export interface ChatSessionSummary {
 
 export interface ChatMessageAppendedPayload {
   chatSessionId: string;
+  /** The turn that produced it: a replaced turn still finalizes its own reply. */
+  turnId: string;
   message: ChatMessage;
 }
 
 export interface ChatTurnProgressPayload {
   chatSessionId: string;
+  /** The turn writing this delta. */
+  turnId: string;
   delta: string;
+}
+
+/**
+ * A turn started for the chat. `turnId` identifies one run of the agent: a
+ * message interrupts rather than queues, so it is what tells a turn's own
+ * completion from that of the turn it replaced.
+ */
+export interface ChatTurnStartedPayload {
+  chatSessionId: string;
+  turnId: string;
 }
 
 export interface ChatTurnCompletedPayload {
   chatSessionId: string;
+  turnId: string;
   interrupted: boolean;
 }
 

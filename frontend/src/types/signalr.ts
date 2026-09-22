@@ -24,6 +24,7 @@ import type {
   SchedulerStateChangedPayload,
   ChatMessageAppendedPayload,
   ChatTurnProgressPayload,
+  ChatTurnStartedPayload,
   ChatTurnCompletedPayload,
   ChatLoopUpdatePayload,
   NetworkPolicyChangedPayload,
@@ -49,6 +50,7 @@ export interface SignalREventPayloads {
   SchedulerStateChanged: SchedulerStateChangedPayload;
   ChatMessageAppended: ChatMessageAppendedPayload;
   ChatTurnProgress: ChatTurnProgressPayload;
+  ChatTurnStarted: ChatTurnStartedPayload;
   ChatTurnCompleted: ChatTurnCompletedPayload;
   ChatLoopUpdate: ChatLoopUpdatePayload;
   NetworkPolicyChanged: NetworkPolicyChangedPayload;
