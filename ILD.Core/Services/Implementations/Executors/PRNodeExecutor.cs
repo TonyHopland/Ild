@@ -194,6 +194,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             // that only resolved threads, still has to say what it did.
             if (string.IsNullOrEmpty(cfg.PrCommentTemplate) || await EverythingAnsweredAsync(ctx, sp))
             {
+                await EndRoundAsync(ctx, sp);
                 await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
                 yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
                 yield break;
@@ -236,6 +237,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                         .WithPosted(PrCommentLedger.KeyFor("issue", posted.Id)));
             }
 
+            await EndRoundAsync(ctx, sp);
             await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
         }
 
@@ -246,22 +248,38 @@ public sealed class PRNodeExecutor : INodeExecutor
     }
 
     /// <summary>
-    /// Whether every finding handed to this round now has an answer waiting to
-    /// go out. Read from the row: the ledger records what was delivered, and
-    /// queuing a reply strikes it off, so an empty list means nothing is left
-    /// unanswered. With no store there is no ledger, and nothing is claimed to
-    /// be answered.
+    /// Whether this round was handed findings and has answered every one of
+    /// them on its thread. Read from the row: delivery records what it handed
+    /// over, and queuing a reply strikes that one off.
+    ///
+    /// Both halves are needed. Nothing waiting is not enough on its own — a
+    /// round nobody said anything to has an empty list too, and skipping there
+    /// would let one reply queued by a chat agent swallow the only statement an
+    /// <c>on_ci_failed</c> round ever makes. With no store there is no ledger,
+    /// and nothing is claimed to be answered.
     /// </summary>
     private static async Task<bool> EverythingAnsweredAsync(NodeExecutionContext ctx, IServiceProvider sp)
     {
         if (sp.GetService<ILoopRunStore>() is not { } runs)
             return false;
         var ledger = PrCommentLedgerJson.TryParse(await runs.GetPrCommentLedgerAsync(ctx.Run.Id));
-        if (ledger is null || ledger.Outstanding.Count > 0)
-            return false;
-        // …and it only counts as answered if there is something to send.
-        return PrCommentQueueJson.TryParse(await runs.GetPrCommentQueueAsync(ctx.Run.Id))
-            .Any(w => w.Kind != PrQueuedWrite.Resolve);
+        return ledger is not null && ledger.HandedThisRound.Count > 0 && ledger.Outstanding.Count == 0;
+    }
+
+    /// <summary>
+    /// Close the round's account, before the queue goes out so that a refused
+    /// write puts its finding onto the NEXT round's list rather than onto one
+    /// already spent.
+    ///
+    /// Without this the lists outlive their round: the first finding a round
+    /// fixes in code without replying on its thread stays waiting for ever, and
+    /// every later round posts the general comment this mechanism exists to
+    /// suppress — however completely that round answered its own items.
+    /// </summary>
+    private static async Task EndRoundAsync(NodeExecutionContext ctx, IServiceProvider sp)
+    {
+        if (sp.GetService<ILoopRunStore>() is { } runs)
+            await PrCommentLedgerWriter.MutateAsync(runs, ctx.Run.Id, state => state?.RoundOver());
     }
 
     /// <summary>Attempts before a contended claim gives up; each re-reads the row it lost to.</summary>

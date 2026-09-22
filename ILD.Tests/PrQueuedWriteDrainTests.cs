@@ -50,6 +50,9 @@ public class PrQueuedWriteDrainTests
         public List<string?> QueueWrites { get; } = new();
         public string? PostedComment { get; private set; }
 
+        /// <summary>Every general comment posted, in order — a run can visit this node more than once.</summary>
+        public List<string> PostedComments { get; } = new();
+
         public Fixture(IReadOnlyList<PrQueuedWrite> queued)
         {
             Row = queued.Count == 0 ? null : PrCommentQueueJson.Serialize(queued);
@@ -73,7 +76,7 @@ public class PrQueuedWriteDrainTests
                 .Callback<string, string, string>((_, _, target) => Written.Add((PrQueuedWrite.Resolve, target, null)))
                 .ReturnsAsync(new RemotePrWriteResult(true, "t1", null));
             Remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "42", It.IsAny<string>()))
-                .Callback<string, string, string>((_, _, body) => PostedComment = body)
+                .Callback<string, string, string>((_, _, body) => { PostedComment = body; PostedComments.Add(body); })
                 .ReturnsAsync(new RemotePrWriteResult(true, "5000000001", null));
 
             Notifier.Setup(n => n.PrQueueChangedAsync(It.IsAny<Guid>()))
@@ -300,7 +303,12 @@ public class PrQueuedWriteDrainTests
         // The round was handed two findings and has answered both: nothing is
         // left waiting, which is what makes the general comment redundant.
         f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
-            PrCommentLedger.Empty with { Head = Head, Unanswered = Array.Empty<string>() });
+            PrCommentLedger.Empty with
+            {
+                Head = Head,
+                Handed = new[] { "one-finding", "and-another" },
+                Unanswered = Array.Empty<string>(),
+            });
 
         var outcomes = await f.RunNodeAsync(commentTemplate: "Answered every point.");
 
@@ -321,6 +329,7 @@ public class PrQueuedWriteDrainTests
             PrCommentLedger.Empty with
             {
                 Head = Head,
+                Handed = new[] { "the-one-answered-on-its-thread", "a-finding-nobody-answered" },
                 Unanswered = new[] { "a-finding-nobody-answered" },
             });
 
@@ -334,15 +343,92 @@ public class PrQueuedWriteDrainTests
     public async Task A_round_that_only_resolved_threads_still_says_what_it_did()
     {
         // A resolve closes a thread and says nothing to anyone reading the pull
-        // request, so it is not an answer and cannot stand in for one.
+        // request, so it is not an answer and cannot stand in for one: the
+        // finding it closed is still on the waiting list.
         var f = new Fixture(new[] { Resolve("w1", "PRRT_t1") });
         f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
-            PrCommentLedger.Empty with { Head = Head, Unanswered = Array.Empty<string>() });
+            PrCommentLedger.Empty with
+            {
+                Head = Head,
+                Handed = new[] { "the-finding-whose-thread-was-closed" },
+                Unanswered = new[] { "the-finding-whose-thread-was-closed" },
+            });
 
         await f.RunNodeAsync(commentTemplate: "Answered every point.");
 
         Assert.NotNull(f.PostedComment);
         Assert.Single(f.Written);
+    }
+
+    [Fact]
+    public async Task What_one_round_left_unanswered_does_not_follow_the_next_one()
+    {
+        // Round one fixes its finding in code and says so in the general
+        // comment — nothing was answered on a thread. Round two answers its own
+        // finding where it was raised, so it has nothing general left to say.
+        // Carried forward, round one's entry would make every later round post
+        // the redundant comment this whole mechanism exists to suppress.
+        const string fixedInCode = "what round one fixed without replying";
+        const string answeredOnItsThread = "what round two answered on the thread";
+        var f = new Fixture(Array.Empty<PrQueuedWrite>());
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
+            PrCommentLedger.Empty with
+            {
+                Head = Head,
+                Handed = new[] { fixedInCode },
+                Unanswered = new[] { fixedInCode },
+            });
+
+        await f.RunNodeAsync(commentTemplate: "Addressed the latest comments.");
+        Assert.Single(f.PostedComments);
+
+        // Round two, on the ledger round one left behind.
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
+            PrCommentLedgerJson.TryParse(f.Run.PrCommentLedger)!
+                .HandedOver(new[] { answeredOnItsThread })
+                .Answered(answeredOnItsThread));
+        f.Row = PrCommentQueueJson.Serialize(new[] { Reply("w2", "4049159495", "Rebutted.") });
+
+        await f.RunNodeAsync(commentTemplate: "Addressed the latest comments.");
+
+        Assert.Single(f.PostedComments);
+    }
+
+    [Fact]
+    public async Task A_round_nobody_said_anything_to_still_posts_its_comment()
+    {
+        // An on_ci_failed round with one reply a chat agent queued during it.
+        // Nothing was handed to this round, so it has said nothing on any
+        // thread, and the general comment is the only account it gives.
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
+            PrCommentLedger.Empty with { Head = Head, Unanswered = Array.Empty<string>() });
+
+        await f.RunNodeAsync(commentTemplate: "Fixed the build.");
+
+        Assert.NotNull(f.PostedComment);
+    }
+
+    [Fact]
+    public async Task The_node_closes_the_rounds_account_on_its_way_out()
+    {
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
+            PrCommentLedger.Empty with
+            {
+                Head = Head,
+                Handed = new[] { "a-finding" },
+                Unanswered = new[] { "a-finding" },
+            });
+
+        await f.RunNodeAsync(commentTemplate: "Addressed the latest comments.");
+
+        var after = PrCommentLedgerJson.TryParse(f.Run.PrCommentLedger);
+        Assert.NotNull(after);
+        Assert.Empty(after!.HandedThisRound);
+        Assert.Empty(after.Outstanding);
+        // Everything else the ledger knows survives the round it ends.
+        Assert.Equal(Head, after.Head);
     }
 
     [Fact]
