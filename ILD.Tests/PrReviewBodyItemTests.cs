@@ -121,6 +121,58 @@ public class PrReviewBodyItemTests
     }
 
     [Fact]
+    public void A_body_too_long_for_the_signal_is_shortened_like_every_other_item()
+    {
+        // A Copilot overview runs to thousands of characters and the signal
+        // carrying the batch is capped at 8192: one unshortened body would
+        // crowd out the inline findings it is the verdict on.
+        var overview = new string('x', 5000);
+
+        var item = Assert.Single(PrReviewBodies.Include(Ledger(new[] { Review("r1", overview) })).Items);
+
+        Assert.True(item.Body.Length < overview.Length, "the body went out at full length");
+        Assert.True(item.Body.Length <= 1001, $"a body of {item.Body.Length} characters still crowds the batch");
+        Assert.EndsWith("…", item.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_body_that_fits_is_delivered_word_for_word()
+    {
+        var verdict = new string('y', 1000);
+
+        var item = Assert.Single(PrReviewBodies.Include(Ledger(new[] { Review("r1", verdict) })).Items);
+
+        Assert.Equal(verdict, item.Body);
+    }
+
+    [Fact]
+    public void The_batch_says_where_a_body_was_said_and_how_to_answer_it()
+    {
+        // A body has no comment id and no thread, so without the review id
+        // the agent is told the verdict and given no way to reply to it.
+        var fetched = PrReviewBodies.Include(Ledger(new[] { Review("r1", "Some improvements to be made") }));
+
+        var text = PrCommentDelivery.Describe(fetched.Items);
+
+        Assert.Contains("review id: r1", text, StringComparison.Ordinal);
+        Assert.Contains("### review body", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_comment_on_the_pull_request_itself_says_so_and_answers_by_its_comment_id()
+    {
+        // The other item with no file. `:?` as a heading would read as a
+        // finding about a line nobody can find.
+        var toplevel = new RemotePrReviewItem("issue", "127", null, null, null, null,
+            "Rename the project", "tony", Head, DateTime.UtcNow, false, false);
+
+        var text = PrCommentDelivery.Describe(new[] { toplevel });
+
+        Assert.Contains("### PR-level comment", text, StringComparison.Ordinal);
+        Assert.Contains("comment id: 127", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("review id:", text, StringComparison.Ordinal);
+    }
+    [Fact]
     public void A_ledger_that_could_not_be_read_is_left_alone()
     {
         var unavailable = RemotePrReviewLedger.Unavailable("The provider request failed.");

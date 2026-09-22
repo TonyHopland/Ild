@@ -128,6 +128,48 @@ public class PrTopLevelReplyTests
     }
 
     [Fact]
+    public async Task An_id_that_is_both_a_comment_and_a_review_answers_the_comment()
+    {
+        // Forgejo numbers reviews and comments from separate counters, so a
+        // review id can equal a real comment id. Answering the body instead
+        // would post a top-level comment and leave the inline thread open.
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(), WorkItemId = "wi-1", PrUrl = PrUrl, Status = LoopRunStatus.Running,
+        };
+        var runs = new Mock<ILoopRunStore>();
+        runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        runs.Setup(s => s.GetPrCommentQueueAsync(run.Id)).ReturnsAsync(() => run.PrCommentQueue);
+        runs.Setup(s => s.TrySetPrCommentQueueAsync(run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((Guid _, string? expected, string? json) =>
+            {
+                if (!string.Equals(expected, run.PrCommentQueue, StringComparison.Ordinal)) return false;
+                run.PrCommentQueue = json;
+                return true;
+            });
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(
+            new RemotePrReviewLedger(
+                Array.Empty<RemotePrReviewSummary>(),
+                new[]
+                {
+                    // The body is listed first, as it always is.
+                    new RemotePrReviewItem("body", null, null, "42", null, null,
+                        "Some improvements to be made", "tony", Head, DateTime.UtcNow, false, false),
+                    new RemotePrReviewItem("review", "42", "PRRT_42", "r9", "README.md", 3,
+                        "I dont like this, remove it", "tony", Head, DateTime.UtcNow, false, false),
+                },
+                Head, null));
+
+        var queued = await new PrReviewService(runs.Object, remote.Object)
+            .ReplyAsync("wi-1", "42", "Removed.", run.Id);
+
+        Assert.True(queued.Ok);
+        var write = Assert.Single(PrCommentQueueJson.TryParse(run.PrCommentQueue));
+        Assert.Equal(PrQueuedWrite.Reply, write.Kind);
+        Assert.Equal("Removed.", write.Body);
+    }
+    [Fact]
     public async Task A_suppressed_finding_is_refused_and_says_where_to_answer_instead()
     {
         // The forge never gave it an id, so there is neither a thread nor a

@@ -134,6 +134,32 @@ public class PrFindingPutBackTests
     }
 
     [Fact]
+    public async Task Answering_a_finding_strikes_it_off_the_waiting_list()
+    {
+        // What the general comment is gated on: with nothing left waiting, the
+        // round has already said everything it has to say, on the threads.
+        var h = new Harness();
+        h.AfterDelivery();
+        Assert.Single(PrCommentLedgerJson.TryParse(h.Run.PrCommentLedger)!.Outstanding);
+
+        Assert.True((await h.Build().ReplyAsync("wi-1", "11", "Answered.", h.Run.Id)).Ok);
+
+        Assert.Empty(PrCommentLedgerJson.TryParse(h.Run.PrCommentLedger)!.Outstanding);
+    }
+
+    [Fact]
+    public async Task Resolving_a_thread_leaves_the_finding_waiting_for_an_answer()
+    {
+        // Closing a thread says nothing to anyone reading the pull request, so
+        // it cannot stand in for an answer: the round still owes a report.
+        var h = new Harness();
+        h.AfterDelivery();
+
+        Assert.True((await h.Build().ResolveAsync("wi-1", "PRRT_11", h.Run.Id)).Ok);
+
+        Assert.Single(PrCommentLedgerJson.TryParse(h.Run.PrCommentLedger)!.Outstanding);
+    }
+    [Fact]
     public async Task A_drop_that_matches_nothing_leaves_the_ledger_alone()
     {
         var h = new Harness();
