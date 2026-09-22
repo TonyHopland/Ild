@@ -103,10 +103,11 @@ public sealed class PrStatusPollService : IPrStatusPollService
             : null;
 
         // Persist snapshot + new baseline and push the GUI update regardless of
-        // whether any edge fires. This write carries the whole row, but no
-        // longer the ledger or the queue: UpdateRunAsync leaves both columns
-        // alone, because this instance was loaded before the forge fetch above
-        // and writing its copy back would revert anything recorded meanwhile.
+        // whether any edge fires. This write carries the whole row, but never the
+        // ledger or the queue: the model ignores both on any update, because this
+        // instance was loaded before the forge fetch above and stays tracked for
+        // the whole pass — so writing its copy back, here or on any later save in
+        // this scope, would revert whatever was recorded meanwhile.
         run.PrSnapshot = PrSnapshotJson.Serialize(snapshot);
         run.PrPolledEdgeStates = string.Join(",", newStates);
         run.UpdatedAt = DateTime.UtcNow;
@@ -171,10 +172,6 @@ public sealed class PrStatusPollService : IPrStatusPollService
     {
         await PrCommentLedgerWriter.MutateAsync(_runs, run.Id, state =>
             PrCommentDelivery.Decide(review.Fetched, review.Fetched.HeadSha, state).Ledger);
-
-        // The instance the engine still holds is kept in step so anything
-        // reading it later this tick agrees with the row, which is the authority.
-        run.PrCommentLedger = await _runs.GetPrCommentLedgerAsync(run.Id);
     }
 
     private async Task<LoopRunNode?> ResolveRunNodeAsync(LoopRun run)

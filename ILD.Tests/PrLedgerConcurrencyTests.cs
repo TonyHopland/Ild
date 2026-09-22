@@ -39,7 +39,7 @@ public class PrLedgerConcurrencyTests
             items, Head, null);
 
     /// <summary>A run parked at its PR node with the finding already handed over.</summary>
-    private static async Task<LoopRun> SeedAsync(TestDb db)
+    private static async Task<LoopRun> SeedAsync(TestDb db, string workItemId = "wi-1")
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
         var version = new LoopTemplateVersion
@@ -59,7 +59,7 @@ public class PrLedgerConcurrencyTests
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
-            WorkItemId = "wi-1",
+            WorkItemId = workItemId,
             LoopTemplateVersionId = version.Id,
             Status = LoopRunStatus.WaitingHuman,
             HumanFeedbackReason = HumanFeedbackReasons.PrAwaitingMerge,
@@ -138,5 +138,74 @@ public class PrLedgerConcurrencyTests
         // …without losing what the other writer had recorded.
         var after = PrCommentLedgerJson.TryParse(await new LoopRunStore(db.Fresh()).GetPrCommentLedgerAsync(run.Id));
         Assert.Contains("review:5000", after!.PostedIds);
+    }
+[Fact]
+    public async Task A_drop_during_the_second_runs_fetch_survives_saving_the_second_run()
+    {
+        // One heartbeat pass polls EVERY waiting run in ONE scope, and the runs
+        // it loads stay tracked for all of it. So run A's instance is still
+        // attached while run B is being polled, and saving B writes A's columns
+        // too — seconds later, with no check. That is the path around the
+        // compare-and-set that excluding the column on a single UpdateRunAsync
+        // call never covered.
+        using var db = new TestDb();
+        var runA = await SeedAsync(db, "wi-a");
+        var runB = await SeedAsync(db, "wi-b");
+
+        // The pass loads both, as GetPrAwaitingMergeRunsAsync does: one store,
+        // one scope, both tracked.
+        var heartbeat = new LoopRunStore(db.Fresh());
+        var waiting = await heartbeat.GetPrAwaitingMergeRunsAsync();
+        Assert.Equal(2, waiting.Count);
+        var carriedA = waiting.Single(r => r.Id == runA.Id);
+        var carriedB = waiting.Single(r => r.Id == runB.Id);
+
+        // A is polled first and records what it handed over.
+        var service = ServiceOn(db);
+        var queued = await service.ReplyAsync("wi-a", "11", "Answered.", runA.Id);
+        Assert.True(queued.Ok);
+        Assert.False(await WouldRaiseAgainAsync(db, runA.Id));
+
+        // While B is still at the forge, the person drops A's answer.
+        Assert.True(await service.DropQueuedAsync(runA.Id, queued.Id!));
+
+        // B's fetch returns and the pass saves B — carrying A along with it.
+        carriedB.PrSnapshot = "{\"state\":\"open\"}";
+        await heartbeat.UpdateRunAsync(carriedB);
+
+        Assert.True(
+            await WouldRaiseAgainAsync(db, runA.Id),
+            "saving run B wrote run A's stale ledger back, so A's drop was reverted");
+        Assert.NotNull(carriedA);
+    }
+
+    [Fact]
+    public async Task A_reply_queued_after_the_node_took_the_queue_is_not_wiped_by_the_next_save()
+    {
+        // The same path, on the other column. The PR node claims the queue and
+        // its instance now says "empty"; an agent queues another answer straight
+        // after, and the engine's next save of that run would write the empty
+        // copy back — losing a reply the agent was told had been accepted.
+        using var db = new TestDb();
+        var run = await SeedAsync(db, "wi-a");
+        var service = ServiceOn(db);
+
+        var engine = new LoopRunStore(db.Fresh());
+        var carried = await engine.GetByIdAsync(run.Id);
+        Assert.NotNull(carried);
+
+        // The node claimed an (empty) queue, so the instance holds null.
+        carried!.PrCommentQueue = null;
+
+        var queued = await service.ReplyAsync("wi-a", "11", "Answered.", run.Id);
+        Assert.True(queued.Ok);
+
+        // …and the engine parks the run, writing the whole row.
+        carried.Status = LoopRunStatus.WaitingHuman;
+        await engine.UpdateRunAsync(carried);
+
+        var left = PrCommentQueueJson.TryParse(
+            await new LoopRunStore(db.Fresh()).GetPrCommentQueueAsync(run.Id));
+        Assert.Single(left);
     }
 }

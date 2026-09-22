@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ILD.Data.Enums;
 using ILD.Data.Security;
@@ -44,6 +45,37 @@ public class AppDbContext : DbContext
         ConfigureConstraints(modelBuilder);
         ConfigureEnumConversions(modelBuilder);
         ConfigureSecretProtection(modelBuilder);
+        ConfigureTargetedOnlyColumns(modelBuilder);
+    }
+
+    /// <summary>
+    /// The two pull-request columns that a tracked entity may never carry into
+    /// an UPDATE: what a round intends to write on its pull request, and what it
+    /// has been handed of the review.
+    ///
+    /// Both are contended. An agent queues an answer, a person drops one, the PR
+    /// node claims the lot, the heartbeat records a delivery — all against a row
+    /// the others are moving, so each change is a compare-and-set through the
+    /// targeted writers. Those run as <c>ExecuteUpdate</c> and bypass the change
+    /// tracker, which is what makes them safe.
+    ///
+    /// Anything else is not. A run loaded at the top of a heartbeat pass is
+    /// tracked for the life of that scope, and the pass polls EVERY waiting run
+    /// in one scope: saving run B then writes back whatever run A's instance
+    /// happens to hold, seconds later, with no check — undoing a drop that
+    /// landed in between. Excluding the column on one <c>UpdateRunAsync</c> call
+    /// only covers the run passed to it, so the rule belongs here, once, where
+    /// no call site can route around it. Insert still carries them; only updates
+    /// are ignored.
+    /// </summary>
+    private void ConfigureTargetedOnlyColumns(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<LoopRun>()
+            .Property(r => r.PrCommentQueue)
+            .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
+        modelBuilder.Entity<LoopRun>()
+            .Property(r => r.PrCommentLedger)
+            .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
     }
 
     /// <summary>

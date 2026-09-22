@@ -208,7 +208,6 @@ public sealed class PRNodeExecutor : INodeExecutor
                 await PrCommentLedgerWriter.MutateAsync(runs, ctx.Run.Id, state =>
                     (state ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow })
                         .WithPosted(PrCommentLedger.KeyFor("issue", posted.Id)));
-                ctx.Run.PrCommentLedger = await runs.GetPrCommentLedgerAsync(ctx.Run.Id);
             }
 
             await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
@@ -264,10 +263,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                 return queued;
 
             if (await runs.TrySetPrCommentQueueAsync(run.Id, current, null))
-            {
-                run.PrCommentQueue = null;
                 return queued;
-            }
         }
 
         return Array.Empty<PrQueuedWrite>();
@@ -357,6 +353,5 @@ public sealed class PRNodeExecutor : INodeExecutor
                 ledger = ledger.ForgetDeliveredContent(hash);
             return ledger;
         });
-        ctx.Run.PrCommentLedger = await runs.GetPrCommentLedgerAsync(ctx.Run.Id);
     }
 }
