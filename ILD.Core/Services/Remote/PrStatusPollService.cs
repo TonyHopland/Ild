@@ -117,7 +117,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // A run with no ledger yet records what is already on the pull request
         // and fires nothing this tick, whichever edge wins below.
         if (review is { Seeding: true })
-            await SetLedgerAsync(run, review);
+            await RecordHandoverAsync(run, review);
 
         var candidates = newlyTrue.Where(connected.Contains).ToHashSet(StringComparer.Ordinal);
         if (review is { Seeding: false } && review.Decision.Items.Count > 0)
@@ -129,13 +129,30 @@ public sealed class PrStatusPollService : IPrStatusPollService
 
         // Only the round that is actually being handed the items consumes them:
         // a higher-priority state winning this tick leaves them outstanding.
+        string? detail = null;
         if (edge == PrNodeEdges.OnComment)
-            await SetLedgerAsync(run, review!);
+        {
+            // Describe what the WRITE handed over, not what this pass decided
+            // before the forge fetch. The write re-decides against the ledger as
+            // it stands, so the two disagree whenever the row moved inside that
+            // window — a drop putting a finding back, another writer taking one.
+            // Announcing the older batch records items as delivered that the
+            // agent was never told about, and on this head they never fire again.
+            // A write that never landed recorded nothing, so it consumed
+            // nothing, and this tick behaves exactly as it did before there was
+            // an effective batch to ask about.
+            var handed = await RecordHandoverAsync(run, review!) ?? review!.Decision.Items;
+            if (handed.Count == 0)
+                // The batch was gone by the time the write ran — another writer
+                // took it inside the window. Resuming now would start a round on
+                // a reason naming findings it will never be handed.
+                return;
+            detail = PrCommentDelivery.Describe(handed);
+        }
 
         // Carry why: the signal's output becomes the resumed node's output, so a
         // node wired to on_ci_failed reads the failing checks out of
         // {{PreviousNode.Output}} instead of guessing at red CI.
-        var detail = edge == PrNodeEdges.OnComment ? PrCommentDelivery.Describe(review!.Decision.Items) : null;
         await _engine.SignalNodeResultAsync(run.Id, runNode.Id,
             NodeSignal.Custom(edge, PrNodeEdges.Describe(edge, snapshot, detail, run.WorkItemId)));
     }
@@ -159,7 +176,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
     }
 
     /// <summary>
-    /// Record what this tick handed over, against the ledger as it stands now
+    /// Record what this tick hands over, against the ledger as it stands now
     /// rather than the copy this pass loaded before it went to the forge.
     ///
     /// That fetch costs seconds, and a person dropping a queued answer inside
@@ -167,11 +184,22 @@ public sealed class PrStatusPollService : IPrStatusPollService
     /// that and leave the finding suppressed, so the decision is re-made
     /// against whatever the row says now — safe because it is a pure function
     /// of (what the forge said, the ledger).
+    ///
+    /// Which is exactly why the caller needs what came back: the re-decision is
+    /// the one that happened, so it is the only honest answer to "what was this
+    /// round handed". Reports the items the winning write recorded, or null when
+    /// no write landed at all.
     /// </summary>
-    private async Task SetLedgerAsync(LoopRun run, ReviewPass review)
+    private async Task<IReadOnlyList<RemotePrReviewItem>?> RecordHandoverAsync(LoopRun run, ReviewPass review)
     {
-        await PrCommentLedgerWriter.MutateAsync(_runs, run.Id, state =>
-            PrCommentDelivery.Decide(review.Fetched, review.Fetched.HeadSha, state).Ledger);
+        IReadOnlyList<RemotePrReviewItem> handed = Array.Empty<RemotePrReviewItem>();
+        var recorded = await PrCommentLedgerWriter.MutateAsync(_runs, run.Id, state =>
+        {
+            var decision = PrCommentDelivery.Decide(review.Fetched, review.Fetched.HeadSha, state);
+            handed = decision.Items;
+            return decision.Ledger;
+        });
+        return recorded ? handed : null;
     }
 
     private async Task<LoopRunNode?> ResolveRunNodeAsync(LoopRun run)

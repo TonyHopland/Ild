@@ -100,6 +100,16 @@ public class RemotePrReviewLedgerPagingTests
             + "\"nodes\":[{\"id\":\"" + threadId + "\",\"isResolved\":false,\"comments\":{\"nodes\":["
             + string.Join(",", commentIds.Select(id => "{\"fullDatabaseId\":\"" + id + "\"}")) + "]}}]}}}}}";
 
+    /// <summary>
+    /// What GitHub answers for a pull request that simply has no review threads:
+    /// the path is there and its <c>nodes</c> are empty. Deliberately not
+    /// <c>{"data":null}</c> — that is what an ERROR looks like, and a fake that
+    /// used it would be asserting that a broken read passes for a quiet one.
+    /// </summary>
+    private static string NoThreads()
+        => "{\"data\":{\"repository\":{\"pullRequest\":{\"reviewThreads\":{"
+            + "\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"nodes\":[]}}}}}";
+
     private static HttpResponseMessage Json(string body)
         => new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
@@ -151,8 +161,131 @@ public class RemotePrReviewLedgerPagingTests
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
                 u => PageOf(u) == 1 ? Page(FullPageOfIssueComments(), hasNext: true) : secondPage(u))
-            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), NoThreads)
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+    /// <summary>A ledger read where only the thread query behaves differently.</summary>
+    private static RoutingHandler WithThreads(Func<string> graphql) =>
+        new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => Comments("4049159495"))
+            .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), graphql)
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+    private static async Task<RemotePrReviewLedger> ThreadReadAsync(TestDb db, RoutingHandler handler)
+        => await CreateService(db, handler, "GitHub", "https://github.com")
+            .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
+
+    [Fact]
+    public async Task A_thread_query_the_forge_refuses_is_a_message_rather_than_a_ledger_without_threads()
+    {
+        // Half a thread list is not a shorter answer, it is a wrong one: every
+        // comment whose thread went missing comes back keyed by the root of its
+        // reply chain and reported unresolved, so a resolve is aimed at the
+        // wrong handle and a settled thread reads as open — under a ledger that
+        // says it succeeded.
+        using var db = new TestDb();
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
+            .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => Comments("4049159495"))
+            .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
+            .MapUrl(u => u.EndsWith("/graphql", StringComparison.Ordinal),
+                _ => new HttpResponseMessage(HttpStatusCode.Unauthorized))
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
+
+        var ledger = await ThreadReadAsync(db, handler);
+
+        Assert.Empty(ledger.Items);
+        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_thread_query_that_answers_with_no_thread_data_is_unreadable_too()
+    {
+        // What a GraphQL error looks like on the wire: HTTP 200, data null.
+        // A pull request with no threads answers with the path and no nodes,
+        // so a missing path is a failure however healthy the status line is.
+        using var db = new TestDb();
+
+        var ledger = await ThreadReadAsync(db, WithThreads(() => "{\"data\":null,\"errors\":[{\"message\":\"Bad credentials\"}]}"));
+
+        Assert.Empty(ledger.Items);
+        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_thread_query_that_answers_with_nonsense_is_unreadable_rather_than_fatal()
+    {
+        using var db = new TestDb();
+
+        var ledger = await ThreadReadAsync(db, WithThreads(() => "not json at all"));
+
+        Assert.Empty(ledger.Items);
+        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_thread_walk_with_more_to_come_and_no_cursor_to_ask_with_is_unreadable()
+    {
+        // There is no way to finish the list from here, so what was read is a
+        // prefix of the threads and nothing says so.
+        using var db = new TestDb();
+
+        var ledger = await ThreadReadAsync(db, WithThreads(
+            () => ThreadPage("PRRT_one", hasNext: true, cursor: null, "4049159495")));
+
+        Assert.Empty(ledger.Items);
+        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_thread_walk_still_offered_more_at_its_ceiling_is_unreadable()
+    {
+        // Twenty pages in and GitHub is still saying there is another. The
+        // ceiling is there to stop an unbounded walk, not to make a partial
+        // answer look complete.
+        using var db = new TestDb();
+        var page = 0;
+
+        var ledger = await ThreadReadAsync(db, WithThreads(
+            () => ThreadPage("PRRT_" + page++, hasNext: true, cursor: "c" + page, "4049159495")));
+
+        Assert.Empty(ledger.Items);
+        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(page >= 20, $"the walk stopped after {page} pages instead of running to its ceiling");
+    }
+
+    [Fact]
+    public async Task A_pull_request_with_no_threads_at_all_is_still_a_perfectly_good_ledger()
+    {
+        // The other side of the same rule: empty is an answer, and a provider
+        // with nothing to report must not look like one that failed.
+        using var db = new TestDb();
+
+        var ledger = await ThreadReadAsync(db, WithThreads(NoThreads));
+
+        Assert.Null(ledger.Message);
+        var item = Assert.Single(ledger.Items, i => i.CommentId == "4049159495");
+        Assert.False(item.Resolved);
+    }
+
+    [Fact]
+    public async Task A_list_still_offering_a_next_page_at_the_ceiling_is_unreadable_rather_than_short()
+    {
+        // Past 2,000 entries the walk stops. Returning what it has would be
+        // this feature's founding bug with a bigger number on it: the tail a
+        // forge serves last is the NEWEST comments, so the ledger would look
+        // valid and never deliver the review that was just posted.
+        using var db = new TestDb();
+        var handler = PagedIssueComments(_ => Page(FullPageOfIssueComments(), hasNext: true));
+
+        var ledger = await ThreadReadAsync(db, handler);
+
+        Assert.Empty(ledger.Items);
+        Assert.Contains("comments", ledger.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(20, handler.Urls.Count(u => u.Contains("/issues/7/comments", StringComparison.Ordinal)));
+    }
 
     [Fact]
     public async Task The_newest_comments_on_a_busy_pull_request_are_not_left_on_page_two()
@@ -209,7 +342,7 @@ public class RemotePrReviewLedgerPagingTests
                 2 => Page(CappedPage(51, 50), hasNext: true),
                 _ => Page(CappedPage(101, 7), hasNext: false),
             })
-            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), NoThreads)
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
         var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
@@ -307,7 +440,7 @@ public class RemotePrReviewLedgerPagingTests
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .MapUrl(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
                 u => PageOf(u) == 1 ? Json(FullPageOfIssueComments()) : Json("[]"))
-            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), NoThreads)
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
         var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
@@ -332,7 +465,7 @@ public class RemotePrReviewLedgerPagingTests
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
                 () => "[{\"id\":4053396920,\"user\":{\"login\":\"ild\"},\"created_at\":\"2026-09-18T19:00:00Z\","
                     + "\"body\":" + System.Text.Json.JsonSerializer.Serialize(longAnswer) + "}]")
-            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), NoThreads)
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
         var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
@@ -358,7 +491,7 @@ public class RemotePrReviewLedgerPagingTests
             .Map(u => u.Contains("/pulls/7/comments", StringComparison.Ordinal), () => "[]")
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal),
                 () => "[{\"id\":1,\"user\":{\"login\":\"tony\"},\"created_at\":\"2026-09-18T19:00:00Z\",\"body\":\"ping\"}]")
-            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), NoThreads)
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
         await CreateService(db, handler, "GitHub", "https://github.com")
@@ -390,10 +523,14 @@ public class RemotePrReviewLedgerPagingTests
     }
 
     [Fact]
-    public async Task A_thread_page_the_forge_refuses_leaves_the_comments_it_already_has()
+    public async Task A_forge_with_no_thread_endpoint_at_all_is_read_as_unavailable()
     {
-        // Half a thread map is still better than no ledger: the comments are
-        // what the round acts on, and a missing thread id only costs the reply.
+        // This used to keep the comments and drop the threads, on the reasoning
+        // that half a thread map beats no ledger. It does not: the half that is
+        // missing is silent. Every comment whose thread was on it comes back
+        // keyed by its reply chain and reported unresolved, so the round resolves
+        // the wrong handle and reads a settled thread as open — and the ledger
+        // says it succeeded, so nothing anywhere knows to distrust it.
         using var db = new TestDb();
         var handler = new RoutingHandler()
             .Map(u => u.Contains("/pulls/7/reviews", StringComparison.Ordinal), () => "[]")
@@ -404,9 +541,8 @@ public class RemotePrReviewLedgerPagingTests
         var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
             .GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7");
 
-        var item = Assert.Single(ledger.Items);
-        Assert.Equal("1", item.CommentId);
-        Assert.False(item.Resolved);
+        Assert.Empty(ledger.Items);
+        Assert.Contains("threads", ledger.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -427,7 +563,7 @@ public class RemotePrReviewLedgerPagingTests
                 + "{\"id\":3,\"in_reply_to_id\":2,\"path\":\"src/A.cs\",\"line\":10,\"original_commit_id\":\"" + Head + "\","
                 + "\"user\":{\"login\":\"alice\"},\"created_at\":\"2026-09-18T18:10:00Z\",\"body\":\"reply to the reply\"}]")
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () => "[]")
-            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), NoThreads)
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
         var ledger = await CreateService(db, handler, "GitHub", "https://github.com")
@@ -448,7 +584,7 @@ public class RemotePrReviewLedgerPagingTests
             .Map(u => u.Contains("/issues/7/comments", StringComparison.Ordinal), () =>
                 "[{\"id\":500,\"user\":{\"login\":\"ild\"},\"created_at\":\"2026-09-18T19:00:00Z\",\"body\":" + stamped + "},"
                 + "{\"id\":501,\"user\":{\"login\":\"ild\"},\"created_at\":\"2026-09-18T19:01:00Z\",\"body\":\"and a person's\"}]")
-            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), () => "{\"data\":null}")
+            .Map(u => u.EndsWith("/graphql", StringComparison.Ordinal), NoThreads)
             .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () => "{\"head\":{\"sha\":\"" + Head + "\"}}");
 
         var ledger = await CreateService(db, handler, "GitHub", "https://github.com")

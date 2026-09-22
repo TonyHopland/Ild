@@ -149,7 +149,7 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
     /// delivered, so it costs the reply route on one very long thread, not the
     /// item.
     /// </summary>
-    protected override async Task<IReadOnlyList<RemotePrReviewThread>> GetReviewThreadsAsync(
+    protected override async Task<IReadOnlyList<RemotePrReviewThread>?> GetReviewThreadsAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         if (!int.TryParse(prNumber, out var number))
@@ -168,13 +168,23 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
                     query = ReviewThreadsQuery,
                     variables = new { owner = repo.Owner, repo = repo.Repo, number, cursor },
                 });
+            // Every exit below returns null rather than the pages read so far.
+            // A half-read thread list is not a shorter answer, it is a WRONG
+            // one: the comments whose threads were on the missing pages come
+            // back with a fallback thread id and `resolved: false`, so a
+            // resolve is aimed at the wrong handle and an already-settled
+            // thread reads as open — all under a ledger reporting success.
             if (!resp.IsSuccessStatusCode)
-                break;
+                return null;
 
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            JsonDocument parsed;
+            try { parsed = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()); }
+            catch (JsonException) { return null; }
+            using var doc = parsed;
+
             if (!TryGetPath(doc.RootElement, out var reviewThreads,
                     "data", "repository", "pullRequest", "reviewThreads"))
-                break;
+                return null;
 
             if (reviewThreads.TryGetProperty("nodes", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
             {
@@ -191,18 +201,21 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
                 }
             }
 
-            if (!TryGetPath(reviewThreads, out var pageInfo, "pageInfo")
-                || !pageInfo.TryGetProperty("hasNextPage", out var hasNext)
-                || hasNext.ValueKind != JsonValueKind.True)
-                break;
+            if (!TryGetPath(reviewThreads, out var pageInfo, "pageInfo"))
+                return null;
+            if (!pageInfo.TryGetProperty("hasNextPage", out var hasNext) || hasNext.ValueKind != JsonValueKind.True)
+                return threads;
+            // More to come and no cursor to ask for it with: there is no way to
+            // finish the list, so it is unreadable rather than short.
             cursor = pageInfo.TryGetProperty("endCursor", out var end) && end.ValueKind == JsonValueKind.String
                 ? end.GetString()
                 : null;
             if (cursor is null)
-                break;
+                return null;
         }
 
-        return threads;
+        // The ceiling, with GitHub still offering another page.
+        return null;
     }
 
     /// <summary>

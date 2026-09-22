@@ -314,6 +314,16 @@ public sealed class PRNodeExecutor : INodeExecutor
     /// clearing the column afterwards would throw away an intent queued in
     /// between. A drop that lands before the claim changes what is claimed; one
     /// that lands after is late by definition, and the panel now says so.
+    ///
+    /// The claim is therefore irreversible, and that is the trade, not an
+    /// oversight (D25). A crash between here and the writes loses those intents
+    /// while their findings stay marked delivered: the round's answers are gone
+    /// and the round looks finished. Holding them in an in-flight state instead
+    /// would trade that for a DOUBLE-POSTED answer — a crash after the forge
+    /// accepted a reply but before the entry cleared reposts it on restart — and
+    /// a comment on a public pull request cannot be un-posted, while a lost
+    /// intent is recoverable both by a human reading the queue and by the next
+    /// review raising the finding again.
     /// </summary>
     private static async Task<IReadOnlyList<PrQueuedWrite>> ClaimQueuedWritesAsync(
         ILoopRunStore runs, LoopRun run)

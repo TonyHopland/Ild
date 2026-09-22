@@ -630,6 +630,10 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 $"Could not read the review comments on pull request #{prNumber} from {ProviderType}.");
 
         var threads = await GetReviewThreadsAsync(http, repo, prNumber);
+        if (threads is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the review threads on pull request #{prNumber} from {ProviderType}.");
+
         var threadByComment = new Dictionary<string, RemotePrReviewThread>(StringComparer.Ordinal);
         foreach (var thread in threads)
             foreach (var commentId in thread.CommentIds)
@@ -736,20 +740,26 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
 
             all.AddRange(batch);
             if (batch.Count == 0)
-                break;
+                return all;
 
             var link = resp.Headers.TryGetValues("Link", out var values) ? string.Join(",", values) : null;
             if (link is not null)
             {
-                if (!HasNextPage(link)) break;
+                if (!HasNextPage(link)) return all;
             }
             else if (batch.Count < ListPageSize)
             {
-                break;
+                return all;
             }
         }
 
-        return all;
+        // Falling out of the loop means the forge was still offering a next page
+        // at the ceiling. Returning what we have would be the founding bug with
+        // a bigger number on it: the tail a forge serves last is the NEWEST
+        // comments, so a pull request past 2,000 entries would report a valid
+        // ledger that can never deliver its most recent review. "Could not read"
+        // is the honest answer, and it changes no delivery state.
+        return null;
     }
 
     /// <summary>Whether a <c>Link</c> header offers a next page (RFC 5988, as both forge families send it).</summary>
@@ -760,11 +770,13 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// <summary>
     /// The provider's own review threads, when it has a thread concept to report
     /// (GitHub, over GraphQL). Empty by default, which leaves every comment keyed
-    /// by the root of its reply chain and no thread reported as resolved.
+    /// by the root of its reply chain and no thread reported as resolved — that
+    /// is a provider with nothing to say, and it is not the same answer as null,
+    /// which means the provider HAS threads and they could not be read.
     /// </summary>
-    protected virtual Task<IReadOnlyList<RemotePrReviewThread>> GetReviewThreadsAsync(
+    protected virtual Task<IReadOnlyList<RemotePrReviewThread>?> GetReviewThreadsAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber)
-        => Task.FromResult<IReadOnlyList<RemotePrReviewThread>>(Array.Empty<RemotePrReviewThread>());
+        => Task.FromResult<IReadOnlyList<RemotePrReviewThread>?>(Array.Empty<RemotePrReviewThread>());
 
     /// <summary>Each inline comment's root comment, walking <c>in_reply_to_id</c> back up the chain.</summary>
     private static Dictionary<string, string> ReplyRoots(IReadOnlyList<JsonElement> comments)
