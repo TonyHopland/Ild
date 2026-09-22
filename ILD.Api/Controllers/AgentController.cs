@@ -637,6 +637,54 @@ public class AgentController : ControllerBase
         return Ok(new { ok = result.Ok, threadId = request.ThreadId, message = result.Message });
     }
 
+    /// <summary>
+    /// Say something general on the pull request, tied to no item. This is the
+    /// round's own account of itself, and it exists because the PR node no
+    /// longer writes one: only the round knows whether it has anything to add
+    /// beyond the answers it gave on the threads, so a round with nothing to add
+    /// leaves the pull request quiet.
+    /// </summary>
+    [HttpPost("workitems/{id}/pr-review/comment")]
+    public async Task<IActionResult> CommentOnPr(
+        string id,
+        [FromServices] IPrRoundReport round,
+        [FromBody] AgentPrCommentRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request?.Body))
+            return BadRequest(new { error = "body is required." });
+
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var result = await round.CommentAsync(id, request.Body, CallerRunId());
+        return Ok(new { ok = result.Ok, message = result.Message });
+    }
+
+    /// <summary>
+    /// Record that this round read an item and chose not to answer it, closing
+    /// its thread as well when <c>resolve</c> is set and the forge can. Closing
+    /// suppresses nothing that was not already suppressed: the item was recorded
+    /// as delivered when it was handed over, and that record is per-head, so a
+    /// reviewer restating the point against new code still fires.
+    /// </summary>
+    [HttpPost("workitems/{id}/pr-review/close")]
+    public async Task<IActionResult> ClosePrReviewItem(
+        string id,
+        [FromServices] IPrRoundReport round,
+        [FromBody] AgentPrReviewCloseRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request?.CommentId))
+            return BadRequest(new { error = "commentId is required." });
+
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var result = await round.CloseAsync(id, request.CommentId, request.Resolve, CallerRunId());
+        return Ok(new { ok = result.Ok, commentId = request.CommentId, message = result.Message });
+    }
+
     [HttpGet("repositories")]
     public async Task<IActionResult> ListRepositories([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {

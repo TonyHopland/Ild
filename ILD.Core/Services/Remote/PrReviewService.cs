@@ -27,6 +27,22 @@ public interface IPrReviewService
 }
 
 /// <summary>
+/// What the ROUND says about itself, as opposed to what it says about something
+/// a reviewer raised.
+///
+/// Separate from <see cref="IPrReviewService"/> because the two answer different
+/// questions and only one of them is a reply: everything there is addressed to a
+/// specific finding, on the thread that finding lives on. These two are the
+/// round's own account — the general comment the PR node used to write for it,
+/// and the record that an item was read and deliberately left alone.
+/// </summary>
+public interface IPrRoundReport
+{
+    Task<RemotePrWriteResult> CommentAsync(string workItemId, string body, Guid? callerRunId);
+    Task<RemotePrWriteResult> CloseAsync(string workItemId, string commentId, bool resolve, Guid? callerRunId);
+}
+
+/// <summary>
 /// The operator's half of the same queue: what a round intends to write on its
 /// pull request, and the power to drop any of it before the PR node sends it.
 /// Deliberately not on <see cref="IPrReviewService"/> — that is the surface an
@@ -61,24 +77,29 @@ public interface IPrWriteQueue
 /// here, at queue time, so an id this pull request does not hold is refused
 /// while the agent is still listening rather than silently failing later.
 /// </summary>
-public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
+public sealed class PrReviewService : IPrReviewService, IPrRoundReport, IPrWriteQueue
 {
     private readonly ILoopRunStore _runs;
     private readonly IRemoteProvider _remote;
     private readonly IRunNotifier? _notifier;
+    private readonly IEventLogStore? _events;
 
     /// <summary>
-    /// <paramref name="notifier"/> is optional only so a test can build the
-    /// service with the two collaborators it is really about; DI always supplies
-    /// it. Without it a queued answer sits in the database unseen until
-    /// something else happens to refresh the run, which is most of the window a
-    /// person has to drop it.
+    /// <paramref name="notifier"/> and <paramref name="events"/> are optional
+    /// only so a test can build the service with the two collaborators it is
+    /// really about; DI always supplies both. Without the notifier a queued
+    /// answer sits in the database unseen until something else happens to
+    /// refresh the run, which is most of the window a person has to drop it;
+    /// without the event store a closed item leaves no trace, which costs the
+    /// record and not the decision.
     /// </summary>
-    public PrReviewService(ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null)
+    public PrReviewService(
+        ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null, IEventLogStore? events = null)
     {
         _runs = runs;
         _remote = remote;
         _notifier = notifier;
+        _events = events;
     }
 
     private const string NoPullRequest =
@@ -131,15 +152,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         if (!string.IsNullOrEmpty(fetched.Message))
             return new RemotePrWriteResult(false, null, fetched.Message);
 
-        // A review body is answered by its review id; everything else by its
-        // comment id. A comment id wins outright when both match: the two come
-        // from separate counters on Forgejo, so a review id can equal a real
-        // comment id, and taking whichever was listed first would answer an
-        // inline finding with a new top-level comment instead of on its thread.
-        var comment =
-            fetched.Items.FirstOrDefault(i => string.Equals(i.CommentId, commentId, StringComparison.Ordinal))
-            ?? fetched.Items.FirstOrDefault(i =>
-                i.Kind == PrReviewBodies.Kind && string.Equals(i.ReviewId, commentId, StringComparison.Ordinal));
+        var comment = Find(fetched, commentId);
         if (comment is null)
             return new RemotePrWriteResult(false, null,
                 $"No comment with id '{commentId}' on this work item's pull request. The review ledger lists the comment ids that can be answered.");
@@ -160,16 +173,8 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             : new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, commentId, InReplyTo(comment, body), comment.Path, comment.Line, DateTime.UtcNow,
                 PrCommentLedger.Fingerprint(comment.Path, comment.Line, comment.Body));
 
-        var queued = await QueueAsync(target.Run, write,
+        return await QueueAsync(target.Run, write,
             "Queued: this answer goes out when the PR node next runs, and can be dropped before then.");
-
-        // Only a reply or a comment answers anything. A resolve closes a thread
-        // and says nothing to the person reading the pull request, so it leaves
-        // the finding waiting and the round still has something general to say.
-        if (queued.Ok)
-            await PrCommentLedgerWriter.MutateAsync(_runs, target.Run.Id, state => state?.Answered(write.SourceHash));
-
-        return queued;
     }
 
     public async Task<RemotePrWriteResult> ResolveAsync(string workItemId, string threadId, Guid? callerRunId)
@@ -198,6 +203,128 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, threadId, null, thread.Path, thread.Line, DateTime.UtcNow,
                 PrCommentLedger.Fingerprint(thread.Path, thread.Line, thread.Body)),
             "Queued: this thread is closed when the PR node next runs, and can be dropped before then.");
+    }
+
+    /// <summary>
+    /// The item an agent means by an id. A review body is named by its review
+    /// id; everything else by its comment id, and a comment id wins outright
+    /// when both match — the two come from separate counters on Forgejo, so a
+    /// review id can equal a real comment id, and taking whichever was listed
+    /// first would answer an inline finding with a new top-level comment
+    /// instead of on its thread.
+    ///
+    /// One place, because every id an agent hands in goes through the same
+    /// question: a reply that resolved an id differently from a close would let
+    /// a round answer one item and dismiss another with the same number.
+    /// </summary>
+    private static RemotePrReviewItem? Find(RemotePrReviewLedger fetched, string id)
+        => fetched.Items.FirstOrDefault(i => string.Equals(i.CommentId, id, StringComparison.Ordinal))
+            ?? fetched.Items.FirstOrDefault(i =>
+                i.Kind == PrReviewBodies.Kind && string.Equals(i.ReviewId, id, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Queue a comment on the pull request itself, tied to no item.
+    ///
+    /// This is what the PR node's own <c>prCommentTemplate</c> used to do on
+    /// every re-visit, moved to where the judgement lives. The node could only
+    /// guess whether a round had anything general left to say — and every rule
+    /// for that guess was wrong in one direction or the other, because the
+    /// answer depends on what the round decided, which only the round knows.
+    /// A round with nothing general to add now says nothing, and the pull
+    /// request carries what reviewers asked about rather than a notice per
+    /// round.
+    /// </summary>
+    public async Task<RemotePrWriteResult> CommentAsync(string workItemId, string body, Guid? callerRunId)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return new RemotePrWriteResult(false, null, "A pull-request comment needs something to say.");
+
+        var target = await ResolveAsync(workItemId);
+        if (target is null)
+            return new RemotePrWriteResult(false, null, NoPullRequest);
+
+        // No target and no source finding: it answers the round, not an item, so
+        // dropping it puts nothing back.
+        return await QueueAsync(
+            target.Run,
+            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, string.Empty, body, null, null, DateTime.UtcNow),
+            "Queued: this comment goes out when the PR node next runs, and can be dropped before then.");
+    }
+
+    /// <summary>
+    /// Record that the round read an item and chose not to answer it, and —
+    /// where the forge can and the item has a thread — close that thread.
+    ///
+    /// The case it exists for: a round handed two review bodies, one worth
+    /// answering and one already dealt with in an earlier round. Without a way
+    /// to say "considered, nothing to add", the only honest options were a reply
+    /// saying nothing or silence indistinguishable from never having read it.
+    ///
+    /// Closing suppresses nothing. The item was already recorded as delivered
+    /// when it was handed over, and that record is per-head: a reviewer
+    /// restating the same point against new code still fires, which is exactly
+    /// when a judgement made against old code stops being safe.
+    /// </summary>
+    public async Task<RemotePrWriteResult> CloseAsync(string workItemId, string commentId, bool resolve, Guid? callerRunId)
+    {
+        var target = await ResolveAsync(workItemId);
+        if (target is null)
+            return new RemotePrWriteResult(false, null, NoPullRequest);
+
+        var fetched = await _remote.GetPullRequestReviewLedgerAsync(target.RepoUrl, target.PrNumber);
+        if (!string.IsNullOrEmpty(fetched.Message))
+            return new RemotePrWriteResult(false, null, fetched.Message);
+
+        var item = Find(fetched, commentId);
+        if (item is null)
+            return new RemotePrWriteResult(false, null,
+                $"No comment with id '{commentId}' on this work item's pull request. The review ledger lists the ids that can be closed.");
+
+        await RecordClosedAsync(target.Run, item, commentId);
+
+        if (!resolve || item.ThreadId is null)
+            return new RemotePrWriteResult(true, null, "Closed: the round read this and chose not to answer it.");
+
+        if (!await _remote.SupportsThreadResolutionAsync(target.RepoUrl))
+            return new RemotePrWriteResult(true, null,
+                "Closed, but the thread was left open: resolving review threads is not supported for this repository's provider.");
+
+        return await QueueAsync(
+            target.Run,
+            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, item.ThreadId, null, item.Path, item.Line, DateTime.UtcNow,
+                PrCommentLedger.Fingerprint(item.Path, item.Line, item.Body)),
+            "Closed: the round read this and chose not to answer it, and the thread is closed when the PR node next runs.");
+    }
+
+    /// <summary>
+    /// The only durable trace of a judgement that writes nothing. Best-effort:
+    /// a store that will not take it costs the record, not the decision.
+    /// </summary>
+    private async Task RecordClosedAsync(LoopRun run, RemotePrReviewItem item, string commentId)
+    {
+        if (_events is null)
+            return;
+
+        var where = item.Path is null ? "the pull request" : $"{item.Path}:{item.Line?.ToString() ?? "?"}";
+        try
+        {
+            await _events.AppendAsync(new EventLog
+            {
+                Id = Guid.NewGuid(),
+                LoopRunId = run.Id,
+                EventType = EventType.PrReviewItemClosed,
+                Data = $"Closed {commentId} on {where} without answering: {Shorten(item.Body)}",
+                Timestamp = DateTime.UtcNow,
+            });
+        }
+        catch { }
+    }
+
+    /// <summary>Enough of a finding to recognise it in the event log, and no more.</summary>
+    private static string Shorten(string body)
+    {
+        var trimmed = body.Trim();
+        return trimmed.Length <= 200 ? trimmed : trimmed[..200] + "…";
     }
 
     /// <summary>
@@ -236,9 +363,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         if (string.IsNullOrEmpty(sourceHash))
             return;
 
-        await PrCommentLedgerWriter.MutateAsync(_runs, runId, state => state
-            ?.ForgetDeliveredContent(sourceHash)
-            .WithUnanswered(state.Outstanding.Append(sourceHash!)));
+        await PrCommentLedgerWriter.MutateAsync(_runs, runId, state => state?.ForgetDeliveredContent(sourceHash));
     }
 
     /// <summary>Lines of the answered text quoted back before the answer.</summary>

@@ -54,4 +54,23 @@ public sealed class PrReviewTools
         => _ild.PostJsonAsync(
             $"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/pr-review/resolve",
             new { threadId });
+
+    [McpServerTool(Name = "comment_on_pr")]
+    [Description("Say something general on the pull request, about the round rather than about one comment. Use it when the round has something a reviewer reading the pull request needs and no single thread is the place for it — what you changed and why, a decision you took, a question you are waiting on. Do NOT use it to answer a reviewer: an answer belongs on the thread the point was raised on (reply_to_pr_review_comment), or the thread stays open and the objection comes back on every later review. There is no automatic comment any more: if you do not call this, the round says nothing general, and that is the right outcome for a round whose answers are all on threads. Nothing is posted when you call this — the comment is QUEUED against the run and the PR node sends it at the end of the round, where a human can read it and drop it first. Returns {ok, message}.")]
+    public Task<string> CommentOnPr(
+        [Description("Work item GUID.")] string workItemId,
+        [Description("What to say about this round. ILD stamps it, so it never comes back at the loop as a new comment.")] string body)
+        => _ild.PostJsonAsync(
+            $"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/pr-review/comment",
+            new { body });
+
+    [McpServerTool(Name = "close_pr_review_item")]
+    [Description("Record that you read a review item and are deliberately not answering it — it was already dealt with in an earlier round, it does not apply, or the code it points at is gone. Use it instead of replying with something that says nothing: a reply that adds nothing is noise on the pull request, and silence alone cannot be told apart from never having read it. Set resolve=true to close its thread as well, where the item has one and the forge supports it (GitHub and Azure DevOps do; Forgejo says so and leaves the thread open). Closing suppresses nothing that was not already suppressed: the item stops being re-delivered on this head because it was handed to you, and a reviewer restating the same point against new code still reaches you. Pass items[].commentId, or items[].reviewId for a body item. Returns {ok, commentId, message}.")]
+    public Task<string> ClosePrReviewItem(
+        [Description("Work item GUID.")] string workItemId,
+        [Description("What you are closing, from get_pr_review: items[].commentId, or items[].reviewId for a body item.")] string commentId,
+        [Description("Also close its thread on the forge, where it has one and the provider can.")] bool resolve = false)
+        => _ild.PostJsonAsync(
+            $"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/pr-review/close",
+            new { commentId, resolve });
 }

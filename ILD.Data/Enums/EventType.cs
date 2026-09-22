@@ -18,5 +18,12 @@ public enum EventType
     CleanupCompleted = 13,
     PrMerged = 14,
     PrMergeFailed = 15,
-    BranchDeleteFailed = 16
+    BranchDeleteFailed = 16,
+
+    /// <summary>
+    /// A round read a review item, decided it needed no answer, and said so.
+    /// The only durable trace of a judgement that produces no writing — without
+    /// it, "considered and dismissed" is indistinguishable from "never read".
+    /// </summary>
+    PrReviewItemClosed = 17
 }

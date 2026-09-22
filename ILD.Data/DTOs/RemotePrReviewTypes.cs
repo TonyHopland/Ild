@@ -208,9 +208,7 @@ public record PrCommentLedger(
     IReadOnlyList<string> PostedIds,
     IReadOnlyList<string> DeliveredIds,
     IReadOnlyList<string> DeliveredHashes,
-    DateTime? WatchedFrom = null,
-    IReadOnlyList<string>? Unanswered = null,
-    IReadOnlyList<string>? Handed = null
+    DateTime? WatchedFrom = null
 )
 {
     /// <summary>Kept per list, newest first, so a long-lived run cannot grow this column without bound.</summary>
@@ -218,54 +216,6 @@ public record PrCommentLedger(
 
     public static PrCommentLedger Empty { get; } = new(
         null, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
-
-    /// <summary>
-    /// Fingerprints handed to the round that nothing has answered yet. What the
-    /// PR node asks before posting its general comment: a round that answered
-    /// every one of them has said its piece on the threads, and the general
-    /// comment on top is a second notification carrying nothing. A round that
-    /// answered some — or only resolved threads, which says nothing to anyone —
-    /// still has something to report.
-    /// </summary>
-    public IReadOnlyList<string> Outstanding => Unanswered ?? Array.Empty<string>();
-
-    /// <summary>
-    /// Everything this round was handed, answered or not. The other half of the
-    /// same question, and not derivable from <see cref="Outstanding"/>: a round
-    /// that was handed three findings and answered all three leaves that list
-    /// empty, and so does a round nobody said anything to. The first has already
-    /// spoken on the threads; the second would lose its only statement.
-    /// </summary>
-    public IReadOnlyList<string> HandedThisRound => Handed ?? Array.Empty<string>();
-
-    public PrCommentLedger WithUnanswered(IEnumerable<string> hashes)
-        => this with { Unanswered = hashes.Distinct(StringComparer.Ordinal).Take(MaxRemembered).ToList() };
-
-    /// <summary>These findings were handed to the round, and none of them is answered yet.</summary>
-    public PrCommentLedger HandedOver(IEnumerable<string> hashes)
-    {
-        var added = hashes.ToArray();
-        return WithUnanswered(Outstanding.Concat(added)) with
-        {
-            Handed = HandedThisRound.Concat(added).Distinct(StringComparer.Ordinal).Take(MaxRemembered).ToList(),
-        };
-    }
-
-    /// <summary>An answer was queued for this finding, so it is no longer waiting.</summary>
-    public PrCommentLedger Answered(string? hash)
-        => string.IsNullOrEmpty(hash)
-            ? this
-            : WithUnanswered(Outstanding.Where(h => !string.Equals(h, hash, StringComparison.Ordinal)));
-
-    /// <summary>
-    /// Close the round's account: both lists ask about the round that just
-    /// ended, not about the run. Carried forward, the first finding a round
-    /// fixes in code without replying on its thread makes every later round
-    /// look like it still owes a report — which is the second notification this
-    /// whole mechanism exists to stop — and a stale "nothing waiting" lets a
-    /// round that was handed nothing swallow the one comment it had to post.
-    /// </summary>
-    public PrCommentLedger RoundOver() => this with { Unanswered = null, Handed = null };
 
     /// <summary>The ledger key for one item, namespaced by the id space it came from.</summary>
     public static string KeyFor(string kind, string commentId) => $"{kind}:{commentId}";
@@ -334,16 +284,14 @@ public static class PrCommentLedgerJson
         IReadOnlyList<string>? PostedIds,
         IReadOnlyList<string>? DeliveredIds,
         IReadOnlyList<string>? DeliveredHashes,
-        DateTime? WatchedFrom,
-        IReadOnlyList<string>? Unanswered,
-        IReadOnlyList<string>? Handed);
+        DateTime? WatchedFrom);
 
     private const int CurrentVersion = 1;
 
     public static string Serialize(PrCommentLedger ledger)
         => JsonSerializer.Serialize(
             new Wire(CurrentVersion, ledger.Head, ledger.PostedIds, ledger.DeliveredIds, ledger.DeliveredHashes,
-                ledger.WatchedFrom, ledger.Unanswered, ledger.Handed),
+                ledger.WatchedFrom),
             Options);
 
     public static PrCommentLedger? TryParse(string? json)
@@ -360,9 +308,7 @@ public static class PrCommentLedgerJson
                 wire.PostedIds ?? Array.Empty<string>(),
                 wire.DeliveredIds ?? Array.Empty<string>(),
                 wire.DeliveredHashes ?? Array.Empty<string>(),
-                wire.WatchedFrom,
-                wire.Unanswered,
-                wire.Handed);
+                wire.WatchedFrom);
         }
         catch (JsonException) { return null; }
     }

@@ -94,13 +94,7 @@ public static class PrCommentDelivery
             recorded.Add(item);
         }
 
-        // What this tick actually hands over is what the round is expected to
-        // answer. The PR node reads it back to decide whether it has anything
-        // general left to say.
-        var ledger = Record(state, head, recorded) with { WatchedFrom = null };
-        return new PrCommentDecision(
-            deliver,
-            ledger.HandedOver(deliver.Select(i => PrCommentLedger.Fingerprint(i.Path, i.Line, i.Body))));
+        return new PrCommentDecision(deliver, Record(state, head, recorded) with { WatchedFrom = null });
     }
 
     /// <summary>

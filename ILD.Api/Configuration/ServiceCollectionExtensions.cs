@@ -180,6 +180,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPrCiLogService, PrCiLogService>();
         services.AddScoped<PrReviewService>();
         services.AddScoped<IPrReviewService>(sp => sp.GetRequiredService<PrReviewService>());
+        services.AddScoped<IPrRoundReport>(sp => sp.GetRequiredService<PrReviewService>());
         services.AddScoped<IPrWriteQueue>(sp => sp.GetRequiredService<PrReviewService>());
         services.AddSingleton<PrStatusPoller>();
         services.AddSingleton<IPrStatusPoller>(sp => sp.GetRequiredService<PrStatusPoller>());

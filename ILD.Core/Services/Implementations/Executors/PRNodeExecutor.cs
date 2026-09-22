@@ -170,74 +170,29 @@ public sealed class PRNodeExecutor : INodeExecutor
                     await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber);
             }
         }
-        else if (!string.IsNullOrEmpty(cfg.PrCommentTemplate) || await HasQueuedWritesAsync(ctx, sp))
+        else if (await HasQueuedWritesAsync(ctx, sp))
         {
-            // PR already exists for this run — render the comment template and
-            // post it on the existing PR. Each re-visit of this node posts a
-            // fresh comment. This is also where the round's queued replies and
-            // resolutions go out: agents record what they intend to write and
-            // nothing reaches the pull request until here, so a human has the
-            // whole round to see it and drop any of it.
+            // PR already exists for this run, and the round has things to say on
+            // it. This is where they go out: agents record what they intend to
+            // write and nothing reaches the pull request until here, so a human
+            // has the whole round to see it and drop any of it.
+            //
+            // The node no longer posts a comment of its own. It used to render
+            // prCommentTemplate on every re-visit, which meant a round that had
+            // already answered on the threads announced itself a second time
+            // carrying nothing — and no amount of tuning the rule for when to
+            // skip it could work, because only the round knows whether it has
+            // anything general left to say. So the round decides: it queues a
+            // comment when it does, and the pull request stays quiet when it
+            // does not.
             var remote = sp.GetRequiredService<IRemoteProvider>();
             var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
             if (string.IsNullOrEmpty(prNumber))
             {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to post comment");
-                yield break;
-            }
-            // A round that answered EVERY finding it was handed has said its
-            // piece where each objection was raised, and the template comment on
-            // top is a second notification carrying nothing — "Addressed the
-            // latest comments." under a set of replies that already are the
-            // addressing. Anything still waiting and the general comment stays:
-            // a round that fixed four things in code and rebutted one, or one
-            // that only resolved threads, still has to say what it did.
-            if (string.IsNullOrEmpty(cfg.PrCommentTemplate) || await EverythingAnsweredAsync(ctx, sp))
-            {
-                await EndRoundAsync(ctx, sp);
-                await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
-                yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
-                yield break;
-            }
-            string commentBody = cfg.PrCommentTemplate;
-            if (rendering is not null)
-            {
-                try { commentBody = await rendering.RenderAsync(cfg.PrCommentTemplate, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
-                catch { }
-            }
-            // Stamp it: unmarked, this comment is indistinguishable from a
-            // reviewer's and fires on_comment on the next heartbeat — round,
-            // comment, round, comment, each one a full verification gate.
-            RemotePrWriteResult? posted = null;
-            string? commentErr = null;
-            try
-            {
-                posted = await remote.CreatePullRequestCommentAsync(
-                    repo.CloneUrl, prNumber, PrCommentMarker.Stamp(commentBody, ctx.Run.Id));
-            }
-            catch (Exception ex) { commentErr = ex.Message; }
-            if (posted is not { Ok: true })
-            {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure,
-                    $"PR comment failed: {commentErr ?? posted?.Message ?? "remote returned false"}");
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to send the round's answers");
                 yield break;
             }
 
-            // The marker's second half, which no one can edit away. Optional
-            // store: an id the provider did not name costs the ledger an entry,
-            // not the round.
-            if (posted.Id is not null && sp.GetService<ILoopRunStore>() is { } runs)
-            {
-                // Opening a ledger here rather than merging into one means the
-                // run has never watched this pull request — nothing has read it.
-                // Stamp that moment, so whoever watches first treats what was
-                // already there as history instead of delivering all of it.
-                await PrCommentLedgerWriter.MutateAsync(runs, ctx.Run.Id, state =>
-                    (state ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow })
-                        .WithPosted(PrCommentLedger.KeyFor("issue", posted.Id)));
-            }
-
-            await EndRoundAsync(ctx, sp);
             await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
         }
 
@@ -245,41 +200,6 @@ public sealed class PRNodeExecutor : INodeExecutor
         // node's content — mirrors the Human node, which parks on its rendered
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
-    }
-
-    /// <summary>
-    /// Whether this round was handed findings and has answered every one of
-    /// them on its thread. Read from the row: delivery records what it handed
-    /// over, and queuing a reply strikes that one off.
-    ///
-    /// Both halves are needed. Nothing waiting is not enough on its own — a
-    /// round nobody said anything to has an empty list too, and skipping there
-    /// would let one reply queued by a chat agent swallow the only statement an
-    /// <c>on_ci_failed</c> round ever makes. With no store there is no ledger,
-    /// and nothing is claimed to be answered.
-    /// </summary>
-    private static async Task<bool> EverythingAnsweredAsync(NodeExecutionContext ctx, IServiceProvider sp)
-    {
-        if (sp.GetService<ILoopRunStore>() is not { } runs)
-            return false;
-        var ledger = PrCommentLedgerJson.TryParse(await runs.GetPrCommentLedgerAsync(ctx.Run.Id));
-        return ledger is not null && ledger.HandedThisRound.Count > 0 && ledger.Outstanding.Count == 0;
-    }
-
-    /// <summary>
-    /// Close the round's account, before the queue goes out so that a refused
-    /// write puts its finding onto the NEXT round's list rather than onto one
-    /// already spent.
-    ///
-    /// Without this the lists outlive their round: the first finding a round
-    /// fixes in code without replying on its thread stays waiting for ever, and
-    /// every later round posts the general comment this mechanism exists to
-    /// suppress — however completely that round answered its own items.
-    /// </summary>
-    private static async Task EndRoundAsync(NodeExecutionContext ctx, IServiceProvider sp)
-    {
-        if (sp.GetService<ILoopRunStore>() is { } runs)
-            await PrCommentLedgerWriter.MutateAsync(runs, ctx.Run.Id, state => state?.RoundOver());
     }
 
     /// <summary>Attempts before a contended claim gives up; each re-reads the row it lost to.</summary>
@@ -290,8 +210,8 @@ public sealed class PRNodeExecutor : INodeExecutor
     /// the instance the engine has been carrying since the iteration began. An
     /// agent queues its answers DURING the round — after that instance was
     /// loaded — so the in-memory copy says "nothing waiting" for exactly the
-    /// replies this node exists to send, and a node with no comment template
-    /// would skip the branch that sends them.
+    /// replies this node exists to send, and the node would skip the branch
+    /// that sends them entirely.
     /// </summary>
     private static async Task<bool> HasQueuedWritesAsync(NodeExecutionContext ctx, IServiceProvider sp)
     {
@@ -429,8 +349,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             foreach (var key in posted)
                 ledger = ledger.WithPosted(key);
             foreach (var hash in unanswered)
-                ledger = ledger.ForgetDeliveredContent(hash)
-                    .WithUnanswered(ledger.Outstanding.Append(hash));
+                ledger = ledger.ForgetDeliveredContent(hash);
             return ledger;
         });
     }

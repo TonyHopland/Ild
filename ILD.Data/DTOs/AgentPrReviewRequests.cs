@@ -28,3 +28,27 @@ public class AgentPrReviewResolveRequest
     [StringLength(256)]
     public string ThreadId { get; set; } = string.Empty;
 }
+
+/// <summary>
+/// What the round has to say about itself, tied to no item. The PR node no
+/// longer posts a comment of its own, so this is the only general comment on a
+/// pull request, and a round with nothing to add sends none.
+/// </summary>
+public class AgentPrCommentRequest
+{
+    /// <summary>The comment. ILD stamps it before posting, so it never fires the comment edge back at the loop.</summary>
+    [StringLength(65536)]
+    public string Body { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// An item the round read and chose not to answer. <see cref="Resolve"/> also
+/// closes its thread where the item has one and the forge can.
+/// </summary>
+public class AgentPrReviewCloseRequest
+{
+    [StringLength(64)]
+    public string CommentId { get; set; } = string.Empty;
+
+    public bool Resolve { get; set; }
+}
