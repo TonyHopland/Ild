@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
@@ -137,7 +138,7 @@ public class RemoteProviderService : IRemoteProvider
         var resolved = await ResolveAsync(repoUrl);
         if (resolved == null)
             return RemotePrReviewLedger.Unavailable("No remote provider is configured for this repository.");
-        try { return await resolved.Adapter.GetPullRequestReviewLedgerAsync(_http, resolved, prNumber); }
+        try { return PrReviewBodies.Include(await resolved.Adapter.GetPullRequestReviewLedgerAsync(_http, resolved, prNumber)); }
         catch (Exception ex)
         {
             // As with the CI log: the agent-facing message says only what the

@@ -570,6 +570,9 @@ public class AgentController : ControllerBase
             {
                 id = r.Id,
                 state = r.State,
+                // The review own prose. Also delivered as a "body" item, but an
+                // agent reading the ledger directly must be able to see it here.
+                body = r.Body,
                 headSha = r.HeadSha,
                 submittedAt = r.SubmittedAt,
                 author = r.Author,

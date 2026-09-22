@@ -286,19 +286,36 @@ public class PrQueuedWriteDrainTests
     }
 
     [Fact]
-    public async Task A_round_that_both_comments_and_answers_threads_does_both()
+    public async Task A_round_that_answered_on_the_threads_says_nothing_general_as_well()
     {
-        // The usual shape: the node has a pr_reply template AND the round
-        // queued answers. Draining only on the template-less path would leave
-        // every ordinary loop's answers stuck in the queue for ever.
+        // The node has a pr_reply template AND the round queued answers. The
+        // answers still go out — that is the whole point of draining on this
+        // path too — but the template comment does not: "Addressed the latest
+        // comments." posted under a set of replies that already are the
+        // addressing is a second notification carrying nothing.
         var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles."), Resolve("w2", "PRRT_t1") });
+
+        var outcomes = await f.RunNodeAsync(commentTemplate: "Answered every point.");
+
+        Assert.Equal(2, f.Written.Count);
+        Assert.Null(f.PostedComment);
+        Assert.Null(f.Row);
+        Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+    }
+
+    [Fact]
+    public async Task A_round_with_nothing_to_answer_still_posts_its_comment()
+    {
+        // The other half: with no answers queued, the template comment is the
+        // only thing the round has to say, so it must still go out.
+        var f = new Fixture(Array.Empty<PrQueuedWrite>());
 
         var outcomes = await f.RunNodeAsync(commentTemplate: "Answered every point.");
 
         Assert.NotNull(f.PostedComment);
         Assert.Contains("Answered every point.", f.PostedComment!, StringComparison.Ordinal);
-        Assert.Equal(2, f.Written.Count);
-        Assert.Null(f.Row);
+        Assert.Empty(f.Written);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
     }
 

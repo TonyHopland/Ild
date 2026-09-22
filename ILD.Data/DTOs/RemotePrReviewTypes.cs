@@ -146,6 +146,13 @@ public record PrQueuedWrite(
     public const string Reply = "reply";
     public const string Resolve = "resolve";
 
+    /// <summary>
+    /// A new pull-request comment answering something with no thread of its own
+    /// — a top-level comment, or a review body. Quoting what it answers is the
+    /// only thread a forge offers there.
+    /// </summary>
+    public const string Comment = "comment";
+
     /// <summary>Cap on one run's queue, so a looping agent cannot grow the column without bound.</summary>
     public const int MaxQueued = 100;
 }

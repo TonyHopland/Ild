@@ -21,6 +21,20 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
     protected override string BuildApiBase(Uri providerUri)
         => providerUri.ToString().TrimEnd('/') + "/api/v1";
 
+    /// <summary>
+    /// Forgejo answers "I do not have this" with a zero or an empty string
+    /// rather than by leaving the field out, so a plain <c>??</c> fallback never
+    /// fires. Seen on 9.0.3: every inline comment carries
+    /// <c>original_position: 0</c> and <c>original_commit_id: ""</c>, which
+    /// recorded every one of them at line 0 on commit "". A reply then went out
+    /// with <c>new_position: 0</c>, which Forgejo cannot place — it rendered the
+    /// answer once per hunk line on the files page — and the empty commit broke
+    /// both fresh-vs-re-delivered detection and the one-round-per-head throttle.
+    /// </summary>
+    private static int? Present(int? value) => value is > 0 ? value : null;
+
+    private static string? Present(string? value) => string.IsNullOrEmpty(value) ? null : value;
+
     // Forgejo/Gitea reports a changes-requested review as "REQUEST_CHANGES";
     // map it onto GitHub's "CHANGES_REQUESTED" so the snapshot logic is uniform.
     protected override string NormalizeReviewState(string? state)
@@ -128,10 +142,10 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
                     reviewId,
                     reviewId,
                     ReadString(comment, "path"),
-                    ReadInt(comment, "original_position") ?? ReadInt(comment, "position"),
+                    Present(ReadInt(comment, "original_position")) ?? Present(ReadInt(comment, "position")),
                     Truncate(body, MaxReviewItemLength) ?? string.Empty,
                     ReadUserLogin(comment),
-                    ReadString(comment, "original_commit_id") ?? ReadString(comment, "commit_id"),
+                    Present(ReadString(comment, "original_commit_id")) ?? Present(ReadString(comment, "commit_id")),
                     ReadDate(comment, "created_at") ?? DateTime.MinValue,
                     Resolved: comment.TryGetProperty("resolver", out var resolver)
                         && resolver.ValueKind == JsonValueKind.Object

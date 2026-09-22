@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations.Executors;
+using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -130,20 +131,32 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         if (!string.IsNullOrEmpty(fetched.Message))
             return new RemotePrWriteResult(false, null, fetched.Message);
 
-        // Only an inline review comment has a thread to answer on. A
-        // pull-request-level comment or a suppressed finding would be refused by
-        // the forge anyway; saying which it is here is the useful answer.
-        var comment = fetched.Items.FirstOrDefault(i => string.Equals(i.CommentId, commentId, StringComparison.Ordinal));
+        // A review body is answered by its review id; everything else by its
+        // comment id. Both are what the ledger reports as the thing to answer.
+        var comment = fetched.Items.FirstOrDefault(i =>
+            string.Equals(i.CommentId, commentId, StringComparison.Ordinal)
+            || (i.Kind == PrReviewBodies.Kind && string.Equals(i.ReviewId, commentId, StringComparison.Ordinal)));
         if (comment is null)
             return new RemotePrWriteResult(false, null,
                 $"No comment with id '{commentId}' on this work item's pull request. The review ledger lists the comment ids that can be answered.");
-        if (comment.Kind != "review")
-            return new RemotePrWriteResult(false, null,
-                $"Comment '{commentId}' is not an inline review comment ({comment.Kind}), so it has no thread to reply on. Answer an item whose kind is 'review'.");
 
-        return await QueueAsync(target.Run,
-            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Reply, commentId, body, comment.Path, comment.Line, DateTime.UtcNow,
-                PrCommentLedger.Fingerprint(comment.Path, comment.Line, comment.Body)),
+        // A suppressed finding is the one thing with nowhere to go: the forge
+        // never gave it an id, so there is neither a thread to reply on nor a
+        // comment to quote. Answer the review body that carries it instead.
+        if (comment.Kind == "suppressed")
+            return new RemotePrWriteResult(false, null,
+                $"Item '{commentId}' is a finding the review body carries without a comment of its own, so there is nothing to reply to. Answer the review body instead — its id is the review's.");
+
+        // An inline comment has a thread. A top-level comment and a review body
+        // do not, and most of what a person says is said in those, so the answer
+        // there is a new pull-request comment that quotes what it answers.
+        var write = comment.Kind == "review"
+            ? new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Reply, commentId, body, comment.Path, comment.Line, DateTime.UtcNow,
+                PrCommentLedger.Fingerprint(comment.Path, comment.Line, comment.Body))
+            : new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, commentId, InReplyTo(comment, body), comment.Path, comment.Line, DateTime.UtcNow,
+                PrCommentLedger.Fingerprint(comment.Path, comment.Line, comment.Body));
+
+        return await QueueAsync(target.Run, write,
             "Queued: this answer goes out when the PR node next runs, and can be dropped before then.");
     }
 
@@ -212,6 +225,31 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             return;
 
         await PrCommentLedgerWriter.MutateAsync(_runs, runId, state => state?.ForgetDeliveredContent(sourceHash));
+    }
+
+    /// <summary>Lines of the answered text quoted back before the answer.</summary>
+    private const int QuotedLines = 8;
+
+    /// <summary>
+    /// The body of an answer to something with no thread. A forge threads only
+    /// inline comments, so on a top-level comment or a review body the reply
+    /// would otherwise arrive at the bottom of the conversation attached to
+    /// nothing. Quoting is what a person does there, and it keeps the answer
+    /// readable without following an anchor.
+    /// </summary>
+    private static string InReplyTo(RemotePrReviewItem item, string answer)
+    {
+        var what = item.Kind == PrReviewBodies.Kind
+            ? $"the review{(item.ReviewId is null ? "" : $" ({item.ReviewId})")}"
+            : $"the comment{(item.CommentId is null ? "" : $" ({item.CommentId})")}";
+        var who = string.IsNullOrWhiteSpace(item.Author) ? string.Empty : $" from {item.Author}";
+
+        var lines = item.Body.Replace("\r\n", "\n").Split('\n');
+        var quoted = string.Join("\n", lines.Take(QuotedLines).Select(line => $"> {line}"));
+        if (lines.Length > QuotedLines)
+            quoted += "\n> …";
+
+        return $"In reply to {what}{who}:\n\n{quoted}\n\n{answer}";
     }
 
     private static string NewIntentId() => Guid.NewGuid().ToString("N")[..12];

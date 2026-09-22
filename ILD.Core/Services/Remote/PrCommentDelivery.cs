@@ -158,6 +158,11 @@ public static class PrCommentDelivery
     {
         if (item.CommentId is not null)
             return PrCommentLedger.KeyFor(item.Kind, item.CommentId);
+        // A review's own prose has no comment id and no place in a file; the
+        // review it is the body of identifies it, and that id outlives a head
+        // change the way a comment's does.
+        if (item.ReviewId is not null && item.Path is null)
+            return PrCommentLedger.KeyFor(item.Kind, item.ReviewId);
         return item.ReviewId is not null && item.Path is not null
             ? PrCommentLedger.KeyFor(item.Kind, $"{item.ReviewId}:{item.Path}:{item.Line}")
             : null;

@@ -174,11 +174,7 @@ export function FeedbackBanner({
         value={detail.feedbackInput}
         onChange={(e) => detail.setFeedbackInput(e.target.value)}
         placeholder={
-          isPr
-            ? detail.prCommentsLoading
-              ? "Loading PR comments..."
-              : "Optional feedback for the next node..."
-            : "Optional input or context..."
+          isPr ? "Optional feedback for the next node..." : "Optional input or context..."
         }
         rows={isPr ? 5 : 3}
       />

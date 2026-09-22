@@ -130,6 +130,9 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
             RemotePrResult? prResult = null;
             string? err = null;
+            // Before the call, so the window it opens cannot start after a
+            // comment that was posted while the pull request was being created.
+            var openedAt = DateTime.UtcNow;
             try { var r = await remote.CreatePullRequestAsync(repo.CloneUrl, branch, target, wi.Title, body); prResult = r; }
             catch (Exception ex) { err = ex.Message; }
             if (err is not null || prResult is null || !string.IsNullOrEmpty(prResult.Error))
@@ -139,6 +142,22 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
             prUrl = prResult.HtmlUrl ?? prResult.Url ?? string.Empty;
             yield return new NodeOutcome.PrCreated(prUrl);
+
+            // Start watching from the moment this pull request existed.
+            //
+            // Without this the ledger stays null until the node posts something,
+            // and the first heartbeat then treats EVERYTHING already on the pull
+            // request as history it has seen — so anything said between creating
+            // the pull request and that first poll is never handed over. Normally
+            // that is up to one heartbeat interval; if polls fail it is unbounded.
+            // A run that predates this still arrives with no ledger and still
+            // seeds from what is there, which is right: it did not open that
+            // pull request and has no claim to have been watching it.
+            if (sp.GetService<ILoopRunStore>() is { } opening)
+            {
+                await PrCommentLedgerWriter.MutateAsync(opening, ctx.Run.Id, state =>
+                    state ?? PrCommentLedger.Empty with { WatchedFrom = openedAt });
+            }
 
             // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
             // the provider to merge the PR once its checks pass. Best-effort — a
@@ -166,8 +185,16 @@ public sealed class PRNodeExecutor : INodeExecutor
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to post comment");
                 yield break;
             }
-            if (string.IsNullOrEmpty(cfg.PrCommentTemplate))
+            // Re-read rather than reuse the branch condition: an agent can queue
+            // between the two, and this decides whether anything general is said.
+            var answeredOnThreads = await HasQueuedWritesAsync(ctx, sp);
+            if (string.IsNullOrEmpty(cfg.PrCommentTemplate) || answeredOnThreads)
             {
+                // A round that answered on the threads has said everything it has
+                // to say, where the objection was raised. The template comment on
+                // top of that is a second notification carrying no information —
+                // "Addressed the latest comments." under a set of replies that
+                // already are the addressing.
                 await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
                 yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
                 yield break;
@@ -312,11 +339,14 @@ public sealed class PRNodeExecutor : INodeExecutor
         {
             try
             {
-                var result = write.Kind == PrQueuedWrite.Resolve
-                    ? await remote.ResolveReviewThreadAsync(cloneUrl, prNumber, write.TargetId)
-                    : await remote.ReplyToReviewThreadAsync(
-                        cloneUrl, prNumber, write.TargetId,
-                        PrCommentMarker.Stamp(write.Body ?? string.Empty, ctx.Run.Id));
+                var stamped = PrCommentMarker.Stamp(write.Body ?? string.Empty, ctx.Run.Id);
+                var result = write.Kind switch
+                {
+                    PrQueuedWrite.Resolve => await remote.ResolveReviewThreadAsync(cloneUrl, prNumber, write.TargetId),
+                    // Nothing to reply on, so it goes out as a comment of its own.
+                    PrQueuedWrite.Comment => await remote.CreatePullRequestCommentAsync(cloneUrl, prNumber, stamped),
+                    _ => await remote.ReplyToReviewThreadAsync(cloneUrl, prNumber, write.TargetId, stamped),
+                };
 
                 if (!result.Ok)
                 {
@@ -325,9 +355,12 @@ public sealed class PRNodeExecutor : INodeExecutor
                     if (write.SourceHash is { } refusedHash)
                         unanswered.Add(refusedHash);
                 }
-                else if (write.Kind == PrQueuedWrite.Reply && result.Id is not null)
+                else if (result.Id is not null && write.Kind != PrQueuedWrite.Resolve)
                 {
-                    posted.Add(PrCommentLedger.KeyFor("review", result.Id));
+                    // Keyed by the space it landed in: a thread reply is a review
+                    // comment, a standalone answer is a pull-request comment.
+                    posted.Add(PrCommentLedger.KeyFor(
+                        write.Kind == PrQueuedWrite.Comment ? "issue" : "review", result.Id));
                 }
             }
             catch (Exception ex)

@@ -36,7 +36,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [feedbackInput, setFeedbackInput] = useState("");
-  const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -175,40 +174,12 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     feedbackInputRef.current = feedbackInput;
   }, [feedbackInput]);
 
-  useEffect(() => {
-    // When parked at a PR node, prefill the feedback textarea with any
-    // unread PR comments so the human can edit them before approving or
-    // rejecting. Best-effort: failures leave the textarea empty.
-    if (
-      !workItem ||
-      workItem.status !== WorkItemStatus.HumanFeedback ||
-      workItem.humanFeedbackReason !== "PR Awaiting Merge"
-    ) {
-      return;
-    }
-    let cancelled = false;
-    setPrCommentsLoading(true);
-    void (async () => {
-      try {
-        const comments = await workItemService.getPrComments(workItem.id);
-        if (cancelled) return;
-        if (Array.isArray(comments) && comments.length > 0) {
-          const text = comments
-            .map((c) => `${c.author}: ${c.body}`.trim())
-            .filter(Boolean)
-            .join("\n\n");
-          setFeedbackInput((prev) => (prev.length === 0 ? text : prev));
-        }
-      } catch {
-        // Ignore — empty textarea is fine.
-      } finally {
-        if (!cancelled) setPrCommentsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workItem?.id, workItem?.status, workItem?.humanFeedbackReason]);
+  // No PR-comment prefill here any more. It pasted every comment on the pull
+  // request into the feedback box on a park — including ones already handed to
+  // the loop through on_comment, and ILD's own replies with their hidden marker
+  // showing — and Approve/Reject then sent the lot back as feedback, so handled
+  // comments were re-delivered and the loop answered itself through the GUI.
+  // Comments reach the loop through the edge now.
 
   const refreshPreview = useCallback(async () => {
     if (!workItem?.id || !workItem.worktreePath) {
@@ -825,7 +796,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     aiProviders,
     feedbackInput,
     setFeedbackInput,
-    prCommentsLoading,
     progressText,
     shouldStream,
     preview,
