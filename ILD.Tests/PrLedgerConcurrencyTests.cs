@@ -160,23 +160,33 @@ public class PrLedgerConcurrencyTests
         var carriedA = waiting.Single(r => r.Id == runA.Id);
         var carriedB = waiting.Single(r => r.Id == runB.Id);
 
-        // A is polled first and records what it handed over.
+        // A is polled first and records what it handed over — and, as the code
+        // used to, copies the fresh value onto the instance it is holding. That
+        // assignment is all it takes: A is now dirty and still tracked.
+        var other = new LoopRunStore(db.Fresh());
+        var atLoad = await other.GetPrCommentLedgerAsync(runA.Id);
+        var recorded = PrCommentLedgerJson.Serialize(
+            PrCommentLedgerJson.TryParse(atLoad)! with { PostedIds = new[] { "review:7000" } });
+        Assert.True(await other.TrySetPrCommentLedgerAsync(runA.Id, atLoad, recorded));
+        carriedA.PrCommentLedger = recorded;
+
+        // While B is still at the forge, the person drops A's answer, which puts
+        // the finding back — a third value, which only the row knows.
         var service = ServiceOn(db);
         var queued = await service.ReplyAsync("wi-a", "11", "Answered.", runA.Id);
         Assert.True(queued.Ok);
         Assert.False(await WouldRaiseAgainAsync(db, runA.Id));
-
-        // While B is still at the forge, the person drops A's answer.
         Assert.True(await service.DropQueuedAsync(runA.Id, queued.Id!));
+        Assert.True(await WouldRaiseAgainAsync(db, runA.Id));
 
-        // B's fetch returns and the pass saves B — carrying A along with it.
+        // B's fetch returns and the pass saves B. SaveChanges flushes every
+        // tracked change in the scope, so A's stale copy goes out with it.
         carriedB.PrSnapshot = "{\"state\":\"open\"}";
         await heartbeat.UpdateRunAsync(carriedB);
 
         Assert.True(
             await WouldRaiseAgainAsync(db, runA.Id),
             "saving run B wrote run A's stale ledger back, so A's drop was reverted");
-        Assert.NotNull(carriedA);
     }
 
     [Fact]
