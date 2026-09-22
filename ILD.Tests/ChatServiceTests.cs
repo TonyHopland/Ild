@@ -242,7 +242,8 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi there", CancellationToken.None);
+        var turnId = Guid.NewGuid();
+        await svc.ExecuteTurnAsync(started.Id, turnId, "hi there", CancellationToken.None);
 
         // The synthesized context routes through the chat session, not a run.
         Assert.Equal(started.Id, adapter.LastContext!.ChatSessionId);
@@ -270,6 +271,16 @@ public sealed class ChatServiceTests : IDisposable
         // indicator for whichever turn is running by then.
         Assert.Empty(_notifier.Started);
         Assert.Empty(_notifier.Completed);
+
+        // Every event the service publishes says which turn produced it, under the id
+        // the runner gave it: the user message, each streamed delta and the finalized
+        // reply. The client tells a live turn's traffic from a replaced one's by
+        // exactly this id, so an event that cannot name its turn is one the client
+        // cannot place.
+        Assert.NotEmpty(_notifier.ProgressTurnIds);
+        Assert.Equal(2, _notifier.AppendedTurnIds.Count);
+        Assert.All(_notifier.AppendedTurnIds, id => Assert.Equal(turnId, id));
+        Assert.All(_notifier.ProgressTurnIds, id => Assert.Equal(turnId, id));
     }
 
     [Fact]
