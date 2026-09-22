@@ -11,6 +11,7 @@ import {
   RemoteProviderTypeOption,
   AiProvider,
   ChatSession,
+  ChatSendAccepted,
   ChatSessionSummary,
   LoopTemplateVersion,
   EventLogPage,
@@ -598,17 +599,25 @@ export const chatService = {
     return api.post<ChatSession>("/chat", { aiProviderId, tools });
   },
 
+  /**
+   * Send a message, which interrupts whatever turn is running rather than queueing.
+   * Resolves with the id of the turn the server started, so the caller knows which
+   * turn is in flight without waiting for the start broadcast. Null only if the
+   * answer carried no id — nothing the API does, but a body a proxy stripped should
+   * leave the send working, settled by the read that follows it.
+   */
   sendMessage: async (
     sessionId: string,
     content: string,
     openWorkItemId?: string | null,
     openLoopDocument?: string | null,
-  ): Promise<void> => {
-    await api.post<void>(`/chat/${sessionId}/messages`, {
+  ): Promise<string | null> => {
+    const accepted = await api.post<ChatSendAccepted | null>(`/chat/${sessionId}/messages`, {
       content,
       openWorkItemId: openWorkItemId ?? null,
       openLoopDocument: openLoopDocument ?? null,
     });
+    return accepted?.turnId ?? null;
   },
 
   /**

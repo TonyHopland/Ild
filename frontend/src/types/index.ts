@@ -773,6 +773,15 @@ export interface ChatSession {
 }
 
 /**
+ * The answer to an accepted message: the turn it started. Mirrors
+ * ILD.Data.DTOs.ChatSendAcceptedView. Knowing it here is what keeps a sender from
+ * holding a placeholder that matches another turn's events.
+ */
+export interface ChatSendAccepted {
+  turnId: string;
+}
+
+/**
  * A lightweight history-list row. Mirrors ILD.Data.DTOs.ChatSessionSummaryView.
  */
 export interface ChatSessionSummary {

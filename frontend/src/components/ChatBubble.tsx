@@ -61,6 +61,9 @@ export default function ChatBubble() {
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState("");
+  // Which turn wrote what is in the streamed buffer, so a delta from another turn
+  // replaces it instead of appending to it.
+  const streamingTurnRef = useRef<string | null>(null);
   // The turn the server has in flight for the open chat, or null when it is idle:
   // the one thing the working indicator and the stop button are drawn from. The
   // server owns this — inferring it from message events is what lost the stop
@@ -292,21 +295,18 @@ export default function ChatBubble() {
 
   // Whether an event belongs to the turn whose text is on screen.
   //
-  // While a send is waiting to be told which turn it started, the placeholder
-  // matches anything, and that is deliberate rather than approximate. Until the
-  // server has processed the send, the turn being displaced is still running and
-  // still the turn on screen: its deltas are the text the user is reading, and
-  // rejecting them would tear a hole in it — including when the send never
-  // arrives, where that turn simply carries on. What it streamed in that window is
-  // dropped wholesale the moment the replacement announces itself, because a start
-  // for a different turn clears the buffer; so its text is never grown on top of.
+  // The placeholder matches anything, and lives only from the click until the send
+  // request answers with the turn it started. That is deliberate rather than
+  // approximate: within that window the server has not registered the message yet,
+  // so the turn being displaced is still running and still the turn on screen — its
+  // deltas are the text the user is reading, and rejecting them would tear a hole
+  // in it, including on a send that never arrives, where that turn simply carries
+  // on. What it streamed in the window is dropped wholesale when the turn value
+  // moves on, because a start or an answer naming a different turn clears the
+  // buffer, so its text is never grown on top of.
   //
-  // The replacement's own deltas cannot reach here before its start does: the
-  // runner announces the start before it so much as cancels the turn it replaces
-  // (ChatTurnRunner.SubmitAsync), and a hub delivers a chat's events to a client in
-  // the order they were sent. An event from the displaced turn therefore arrives
-  // either while it is still the turn on screen, or after the replacement's start
-  // has moved the value on and this predicate rejects it.
+  // Once the send has answered there is no placeholder to abuse: from then on this
+  // chat's turn is known by id, whether or not the start broadcast ever arrived.
   const isCurrentTurn = useCallback(
     (turnId: string) => turnRef.current === PENDING_TURN || turnRef.current === turnId,
     [],
@@ -327,6 +327,32 @@ export default function ChatBubble() {
       setTurnValue(next);
     },
     [setTurnValue],
+  );
+
+  // The streamed text belongs to the turn that wrote it. A delta from a different
+  // turn starts the buffer over rather than adding to it, so two turns' replies can
+  // never run together on screen — not while the placeholder is up, and not if a
+  // start broadcast goes missing. Deltas append only within one turn.
+  const streamDelta = useCallback((turnId: string, delta: string) => {
+    const carryOn = streamingTurnRef.current === turnId;
+    streamingTurnRef.current = turnId;
+    setStreaming((prev) => (carryOn ? prev + delta : delta));
+  }, []);
+
+  /** Nothing should be streaming at all: a turn ended, or the view left the chat. */
+  const clearStream = useCallback(() => {
+    streamingTurnRef.current = null;
+    setStreaming("");
+  }, []);
+
+  // Drops a partial written by any turn other than this one, and keeps one written
+  // by this turn: learning the name of the turn already streaming must not throw
+  // away the text it has streamed so far.
+  const clearStreamUnlessFrom = useCallback(
+    (turnId: string | null) => {
+      if (streamingTurnRef.current !== null && streamingTurnRef.current !== turnId) clearStream();
+    },
+    [clearStream],
   );
 
   // Re-read the chat whenever the client may be holding a belief the server has
@@ -374,7 +400,7 @@ export default function ChatBubble() {
       // A streamed partial belongs to the turn that produced it, and only that
       // turn's own finalized reply replaces it. If the server no longer names
       // that turn, the text on screen is from a turn that has ended.
-      if (active !== turnRef.current) setStreaming("");
+      clearStreamUnlessFrom(active);
       setTurnValue(active);
     },
     [setTurnValue],
@@ -420,13 +446,16 @@ export default function ChatBubble() {
     const onAppended = (msg: { payload: ChatMessageAppendedPayload }) => {
       if (msg.payload.chatSessionId !== sessionIdRef.current) return;
       upsertMessage(msg.payload.message);
-      // The transcript takes every finalized message, whichever turn wrote it —
-      // an interrupted reply belongs in it as much as a complete one. Only the
-      // streamed text is the live turn's own, so only its turn may replace it:
-      // a reply finalized by a turn that has since been replaced says nothing
-      // about what the current one is writing.
-      if (msg.payload.message.role === "assistant" && isCurrentTurn(msg.payload.turnId)) {
-        setStreaming("");
+      // The transcript takes every finalized message, whichever turn wrote it — an
+      // interrupted reply belongs in it as much as a complete one. The streamed
+      // partial it replaces is its own, and only its own: a reply finalized by the
+      // turn that was displaced says nothing about what the turn now streaming has
+      // written, so it must not wipe it.
+      if (
+        msg.payload.message.role === "assistant" &&
+        streamingTurnRef.current === msg.payload.turnId
+      ) {
+        clearStream();
       }
     };
     const onProgress = (msg: { payload: ChatTurnProgressPayload }) => {
@@ -434,7 +463,7 @@ export default function ChatBubble() {
       // Deltas append, so one from a turn that is no longer current would grow
       // the live turn's reply on top of a dead one's.
       if (!isCurrentTurn(msg.payload.turnId)) return;
-      setStreaming((prev) => prev + msg.payload.delta);
+      streamDelta(msg.payload.turnId, msg.payload.delta);
     };
     const onStarted = (msg: { payload: ChatTurnStartedPayload }) => {
       if (msg.payload.chatSessionId !== sessionIdRef.current) return;
@@ -445,7 +474,7 @@ export default function ChatBubble() {
       // snapshot afterwards sees a partial that matches the running turn and
       // keeps it. Dropped only when the turn really changes, so a start that
       // merely confirms the turn we are already on leaves its text alone.
-      if (msg.payload.turnId !== turnRef.current) setStreaming("");
+      clearStreamUnlessFrom(msg.payload.turnId);
       applyTurn(msg.payload.turnId);
     };
     const onCompleted = (msg: { payload: ChatTurnCompletedPayload }) => {
@@ -454,7 +483,7 @@ export default function ChatBubble() {
       // ordering guarantee between turns, so a replaced turn's completion can
       // arrive after its successor has already announced itself.
       if (msg.payload.turnId !== turnRef.current) return;
-      setStreaming("");
+      clearStream();
       applyTurn(null);
     };
 
@@ -554,6 +583,7 @@ export default function ChatBubble() {
     // a send that never reaches the server displaces nothing, and only the turn
     // value from before it can say so.
     const displaced = turnRef.current;
+    const visit = visitRef.current;
     applyTurn(PENDING_TURN);
     const pendingEpoch = epochRef.current;
     const pendingRead = appliedReadRef.current;
@@ -569,18 +599,42 @@ export default function ChatBubble() {
       // (ADR-0011). Serialized to the same JSON the editor's import/export use.
       const openLoop = getOpenLoopDocument();
       const openLoopDocument = openLoop ? JSON.stringify(openLoop) : null;
-      await chatService.sendMessage(
+      const startedTurn = await chatService.sendMessage(
         session.id,
         content,
         openWorkItemIdRef.current,
         openLoopDocument,
       );
-      // The request returns only once the runner has registered the turn, so read
-      // it back rather than waiting to be told: broadcasts are dropped on failure
-      // by design, and a start this client never hears would leave the placeholder
-      // standing, matching no completion — a stop button on a chat that is idle.
-      // The read carries the same guards as any other, so it cannot undo a turn
-      // learned since it was issued.
+      // The answer names the turn it started, which retires the placeholder as soon
+      // as the request comes back: from here the view knows its turn by id, so the
+      // events of the turn this one displaced — still finalizing its own reply — are
+      // told apart from this turn's own, which a placeholder matching anything
+      // cannot do.
+      //
+      // Applied only if nothing has moved the turn on since: a start or a completion
+      // arriving while the request was in flight knows better than this does, and
+      // the epoch is what says one has. The name may also be missing, which the API
+      // does not do — then the read below settles it, exactly as it used to.
+      // Any falsy answer counts as no answer — a turn id is a non-empty string, and
+      // an absent one must fall through to the read below rather than be applied as
+      // the turn.
+      if (
+        startedTurn &&
+        sessionIdRef.current === session.id &&
+        visitRef.current === visit &&
+        sendRef.current === mySend &&
+        epochRef.current === pendingEpoch
+      ) {
+        // Anything the displaced turn streamed into the buffer goes now that this
+        // turn is named, so its tail is never read as the start of this turn's reply.
+        clearStreamUnlessFrom(startedTurn);
+        applyTurn(startedTurn);
+      }
+      // Read back as well, because the answer says which turn started, not what has
+      // become of it: broadcasts are dropped on failure by design, so a turn that
+      // has since ended without this client hearing would leave a stop button on an
+      // idle chat. The read carries the same guards as any other, so it cannot undo
+      // a turn learned since it was issued.
       await refreshActiveState(session.id, mySend).catch((err) => console.error(err));
     } catch (e) {
       // Only where it happened: this send belongs to a chat the user may have left
@@ -648,7 +702,7 @@ export default function ChatBubble() {
     visitRef.current += 1;
     setSession(null);
     setMessages([]);
-    setStreaming("");
+    clearStream();
     applyTurn(null);
     setError(null);
     setConfirmDeleteAll(false);
@@ -668,7 +722,7 @@ export default function ChatBubble() {
       if (visitRef.current !== visit) return;
       setSession(resumed);
       setMessages(resumed.messages);
-      setStreaming("");
+      clearStream();
       // A chat opened mid-turn shows it running straight away, stop button and
       // all — the transcript is not the only thing being resumed.
       applyTurn(resumed.activeTurnId ?? null);

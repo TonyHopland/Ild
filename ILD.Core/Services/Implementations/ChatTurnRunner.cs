@@ -102,7 +102,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         _log = log;
     }
 
-    public async Task SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null)
+    public async Task<Guid> SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null)
     {
         var gate = await EnterAsync(chatSessionId).ConfigureAwait(false);
         try
@@ -184,6 +184,13 @@ public sealed class ChatTurnRunner : IChatTurnRunner
                     await _notifier.TurnCompletedAsync(chatSessionId, turn.Id, interrupted).ConfigureAwait(false);
                 }
             });
+
+            // Told to the caller that sent the message, so it knows which turn is
+            // now in flight without waiting for the start broadcast — which can be
+            // dropped, and until the id is known a client can only hold a
+            // placeholder that matches any turn's events, including those of the
+            // turn this one displaced.
+            return turn.Id;
         }
         finally
         {

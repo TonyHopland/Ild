@@ -1,3 +1,4 @@
+using ILD.Data.DTOs;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -76,8 +77,12 @@ public class ChatController : ControllerBase
         if (!await _chat.ExistsForUserAsync(userId, id, ct))
             return NotFound(new { error = "Chat not found." });
 
-        await _runner.SubmitAsync(id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
-        return Accepted();
+        // The turn id goes back with the acceptance, so the client that sent the
+        // message knows which turn is in flight without waiting to be told over the
+        // hub. Read after the ownership check above, like every other answer about a
+        // turn here.
+        var turnId = await _runner.SubmitAsync(id, request.Content, request.OpenWorkItemId, request.OpenLoopDocument);
+        return Accepted(new ChatSendAcceptedView(turnId));
     }
 
     [HttpPost("{id:guid}/interrupt")]

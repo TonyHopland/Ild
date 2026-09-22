@@ -809,6 +809,163 @@ describe("ChatBubble turn state", () => {
     expect(screen.queryByText("belongs to the first chat")).toBeNull();
   });
 
+  // Sending a message answers with the turn it started, so the view knows its turn
+  // without waiting to be told over the hub. These cover what that answer may and
+  // may not do — including the case it exists for, where the start broadcast never
+  // arrives at all.
+  describe("a send's own answer", () => {
+    /** A send whose request is held open, to be answered with `turnId` or refused. */
+    function heldSendAnswering(turnId: string) {
+      let answer!: (id: string) => void;
+      chatService.sendMessage.mockReturnValue(
+        new Promise<string>((resolve) => {
+          answer = resolve;
+        }),
+      );
+      return () => answer(turnId);
+    }
+
+    test("the answer names the turn even when the start broadcast never arrives", async () => {
+      // The reason for it. With no start for the replacement, the view used to hold a
+      // placeholder that matched anything, so the displaced turn — still finalizing —
+      // could stream into the replacement's reply and then clear it. Nothing here
+      // emits ChatTurnStarted at all, and the reconciling read fails too, so the
+      // send's own answer is the only thing that can name the turn.
+      await openResumed(chatSession({ activeTurnId: "t1" }));
+      emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an answer" });
+      expect(screen.getByText("half an answer")).toBeTruthy();
+
+      const answerSend = heldSendAnswering("t2");
+      chatService.getById.mockRejectedValue(new Error("Network error."));
+      await sendMessageText("stop that");
+
+      // Still the displaced turn's text on screen, and still its turn producing it.
+      emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: " continuing" });
+      expect(screen.getByText("half an answer continuing")).toBeTruthy();
+
+      await act(async () => {
+        answerSend();
+      });
+
+      // The replacement is named, so what the displaced turn streamed is gone and
+      // nothing more of it is taken.
+      expect(document.querySelector(".chat-msg-streaming")).toBeNull();
+      emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "STALE" });
+      expect(document.querySelector(".chat-panel")?.textContent).not.toContain("STALE");
+
+      // The replacement's own text is taken, before any start for it has arrived.
+      emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t2", delta: "a fresh reply" });
+      expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("a fresh reply");
+
+      // And the displaced turn's finalized reply is transcript only: it must not
+      // clear the reply now streaming.
+      emit("ChatMessageAppended", {
+        chatSessionId: "s1",
+        turnId: "t1",
+        message: {
+          ...msg({ id: "m1", content: "half an answer", sequence: 1 }),
+          interrupted: true,
+        },
+      });
+      expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("a fresh reply");
+      expect(screen.getByLabelText("Stop")).toBeTruthy();
+
+      // The turn it named is the one that ends the chat.
+      emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t2", interrupted: false });
+      expect(screen.queryByLabelText("Stop")).toBeNull();
+    });
+
+    test("an answer for a turn already announced changes nothing", async () => {
+      await openResumed(chatSession({ activeTurnId: null }));
+      const answerSend = heldSendAnswering("t2");
+      chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t2" }));
+      await sendMessageText("go");
+
+      emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
+      emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t2", delta: "already writing" });
+      await act(async () => {
+        answerSend();
+      });
+
+      // The same turn by another route: its streamed text has to survive.
+      expect(document.querySelector(".chat-msg-streaming")?.textContent).toBe("already writing");
+      expect(screen.getByLabelText("Stop")).toBeTruthy();
+    });
+
+    test("an answer for a turn that has already ended does not revive it", async () => {
+      await openResumed(chatSession({ activeTurnId: null }));
+      const answerSend = heldSendAnswering("t2");
+      await sendMessageText("go");
+
+      // The whole turn happens while the request is still in flight.
+      emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t2" });
+      emit("ChatTurnCompleted", { chatSessionId: "s1", turnId: "t2", interrupted: false });
+      expect(screen.queryByLabelText("Stop")).toBeNull();
+
+      chatService.getById.mockResolvedValue(chatSession({ activeTurnId: null }));
+      await act(async () => {
+        answerSend();
+      });
+      await act(async () => {});
+
+      // A stop button for a turn that is over is the bug this work item is about.
+      expect(screen.queryByLabelText("Stop")).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    test("an answer never lands on a chat the user switched to", async () => {
+      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      chatService.getById.mockImplementation((id: string) =>
+        Promise.resolve(
+          id === "s1"
+            ? chatSession({ id: "s1", name: "First chat" })
+            : chatSession({ id: "s2", name: "Other chat" }),
+        ),
+      );
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      fireEvent.click(await screen.findByText("First chat"));
+      await screen.findByLabelText("Chat message");
+
+      const answerSend = heldSendAnswering("t2");
+      await sendMessageText("go");
+
+      fireEvent.click(screen.getByText("← Back"));
+      fireEvent.click(await screen.findByText("Other chat"));
+      await screen.findByLabelText("Chat message");
+
+      await act(async () => {
+        answerSend();
+      });
+      await act(async () => {});
+
+      expect(screen.queryByLabelText("Stop")).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    test("an answer never lands on a later visit to the same chat", async () => {
+      openList(summary("s1", "First chat"));
+      chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      fireEvent.click(await screen.findByText("First chat"));
+      await screen.findByLabelText("Chat message");
+
+      const answerSend = heldSendAnswering("t2");
+      await sendMessageText("go");
+
+      fireEvent.click(screen.getByText("← Back"));
+      fireEvent.click(await screen.findByText("First chat"));
+      await screen.findByLabelText("Chat message");
+
+      await act(async () => {
+        answerSend();
+      });
+      await act(async () => {});
+
+      expect(screen.queryByLabelText("Stop")).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+  });
+
   // Leaving a chat and opening it again is a second visit to the same chat id, so
   // the chat id alone cannot tell a request of the first visit's from the second's.
   // What separates them is the epoch, which moves on leaving a chat and again on

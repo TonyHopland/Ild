@@ -109,6 +109,39 @@ public class ChatControllerTests
         [new ChatMessageView(Guid.NewGuid(), "user", "hi", false, 0, DateTime.UtcNow)]);
 
     [Fact]
+    public async Task SendMessage_answers_with_the_turn_it_started()
+    {
+        var id = Guid.NewGuid();
+        var turnId = Guid.NewGuid();
+        _chat.Setup(c => c.ExistsForUserAsync("tony", id, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _runner.Setup(r => r.SubmitAsync(id, "hi", null, null)).ReturnsAsync(turnId);
+
+        var result = await CreateController()
+            .SendMessage(id, new ChatMessageRequest { Content = "hi" }, CancellationToken.None);
+
+        // The sender learns its turn from the answer, so it never has to guess which
+        // of two turns an event belongs to while waiting to be told.
+        var accepted = Assert.IsType<AcceptedResult>(result);
+        Assert.Equal(turnId, Assert.IsType<ChatSendAcceptedView>(accepted.Value).TurnId);
+    }
+
+    [Fact]
+    public async Task SendMessage_to_a_chat_the_caller_does_not_own_is_NotFound_and_starts_nothing()
+    {
+        var id = Guid.NewGuid();
+        _chat.Setup(c => c.ExistsForUserAsync("tony", id, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+
+        var result = await CreateController()
+            .SendMessage(id, new ChatMessageRequest { Content = "hi" }, CancellationToken.None);
+
+        // Naming a turn is still an answer about a chat, so ownership is settled first.
+        Assert.IsType<NotFoundObjectResult>(result);
+        _runner.Verify(
+            r => r.SubmitAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task Get_names_the_turn_in_flight_for_a_chat_the_caller_owns()
     {
         var id = Guid.NewGuid();

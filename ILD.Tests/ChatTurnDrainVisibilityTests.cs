@@ -661,6 +661,40 @@ public sealed class ChatTurnDrainVisibilityTests
     }
 
     [Fact]
+    public async Task A_send_answers_with_the_turn_it_started_even_when_it_replaces_one()
+    {
+        // The sender is told which turn it started, so it does not have to wait for
+        // the announcement to know — that broadcast can be dropped, and a sender that
+        // cannot name its turn cannot tell its events from the displaced turn's.
+        var chatId = Guid.NewGuid();
+        var first = new BlockingTurn();
+        var second = new BlockingTurn();
+        var h = NewRunner((_, message, ct) => (message == "first" ? first : second).RunAsync(ct));
+
+        var firstTurn = await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience);
+        await first.Running.Task.WaitAsync(Patience);
+        Assert.Equal(firstTurn, h.Runner.ActiveTurnId(chatId));
+        Assert.Equal(new[] { firstTurn }, h.Started);
+
+        // The interrupting send answers with the replacement, not with the turn it
+        // displaced, and that is the turn the chat then has.
+        first.Release.TrySetResult();
+        var secondTurn = await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience);
+        await second.Running.Task.WaitAsync(Patience);
+
+        Assert.NotEqual(firstTurn, secondTurn);
+        Assert.Equal(secondTurn, h.Runner.ActiveTurnId(chatId));
+        Assert.Equal(new[] { firstTurn, secondTurn }, h.Started);
+        Assert.Equal(new[] { firstTurn }, h.Completed.Select(c => c.TurnId));
+
+        second.Release.TrySetResult();
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+        Assert.Null(h.Runner.ActiveTurnId(chatId));
+        Assert.Equal(new[] { firstTurn, secondTurn }, h.Completed.Select(c => c.TurnId));
+        Assert.Empty(h.Log.Entries);
+    }
+
+    [Fact]
     public async Task A_send_whose_start_cannot_be_announced_leaves_the_chat_as_it_found_it()
     {
         // A send holds the chat as busy from before it announces itself, so if that
