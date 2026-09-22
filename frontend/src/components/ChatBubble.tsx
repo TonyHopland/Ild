@@ -114,6 +114,16 @@ export default function ChatBubble() {
     pendingSendRef.current = null;
     setStoppingChat(null);
   }, []);
+
+  // Which visit to a chat view this is. A chat is opened by an awaited read, and
+  // the list stays on screen while that read is in flight, so two opens can race:
+  // click one chat, then another before the first answers. Without this the slower
+  // answer installs its chat over the one the user is now looking at — transcript,
+  // turn and all — and the stop button on that view would interrupt a turn in a
+  // chat they never opened. Counted rather than compared by id, because the second
+  // open may be the same chat as the first; bumped by leaving as well, so an open
+  // the user walked away from cannot install itself either.
+  const visitRef = useRef(0);
   const [loaded, setLoaded] = useState(false);
   const busy = turn !== null;
 
@@ -505,15 +515,18 @@ export default function ChatBubble() {
       setError("Pick an AI provider first.");
       return;
     }
+    const visit = ++visitRef.current;
     setError(null);
     try {
       const created = await chatService.start(providerId, Array.from(tools));
+      if (visitRef.current !== visit) return;
       setSession(created);
       setMessages(created.messages);
       applyTurn(created.activeTurnId ?? null);
       sessionIdRef.current = created.id;
       releaseRequestClaims();
     } catch (e) {
+      if (visitRef.current !== visit) return;
       setError((e as { message?: string })?.message ?? "Could not start chat.");
     }
   };
@@ -619,6 +632,7 @@ export default function ChatBubble() {
   // retained and resumable — Back never deletes (ADR-0013). Refresh history so the
   // chat re-sorts to the top with its freshly-derived name.
   const backToList = useCallback(() => {
+    visitRef.current += 1;
     setSession(null);
     setMessages([]);
     setStreaming("");
@@ -632,9 +646,13 @@ export default function ChatBubble() {
 
   // Resume a past chat: load its transcript and continue the same agent session.
   const resumeChat = async (id: string) => {
+    const visit = ++visitRef.current;
     setError(null);
     try {
       const resumed = await chatService.getById(id);
+      // Another chat has been opened since, or the user has gone back to the list:
+      // this answer is about a visit that is over and installs nothing.
+      if (visitRef.current !== visit) return;
       setSession(resumed);
       setMessages(resumed.messages);
       setStreaming("");
@@ -646,6 +664,7 @@ export default function ChatBubble() {
       // the other end, for a chat entered by any path that did not go via the list.
       releaseRequestClaims();
     } catch (e) {
+      if (visitRef.current !== visit) return;
       setError((e as { message?: string })?.message ?? "Could not open chat.");
     }
   };

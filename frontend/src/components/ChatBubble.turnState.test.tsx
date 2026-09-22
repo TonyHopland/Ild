@@ -808,4 +808,221 @@ describe("ChatBubble turn state", () => {
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByText("belongs to the first chat")).toBeNull();
   });
+
+  // Leaving a chat and opening it again is a second visit to the same chat id, so
+  // the chat id alone cannot tell a request of the first visit's from the second's.
+  // What separates them is the epoch, which moves on leaving a chat and again on
+  // opening one, and the number each send and stop carries. These three cover the
+  // case the chat-id checks above cannot: a result from the first visit arriving
+  // during the second.
+  describe("a result from an earlier visit to the same chat", () => {
+    /** Opens "First chat" from the list, with whatever the server says about it. */
+    async function openFirstChat() {
+      fireEvent.click(await screen.findByText("First chat"));
+      await screen.findByLabelText("Chat message");
+    }
+
+    test("a state read from the earlier visit never lands on the later one", async () => {
+      const view = openList(summary("s1", "First chat"));
+      chatService.getById.mockResolvedValue(
+        chatSession({ name: "First chat", activeTurnId: "t1" }),
+      );
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openFirstChat();
+
+      // A rejoin read taken in the first visit, left unanswered.
+      let answerFirstVisitRead!: (session: ChatSession) => void;
+      chatService.getById.mockReturnValueOnce(
+        new Promise<ChatSession>((resolve) => {
+          answerFirstVisitRead = resolve;
+        }),
+      );
+      setConnectionState(view, "reconnecting");
+      setConnectionState(view, "connected");
+      await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+
+      // Away and back into the same chat, which is running a different turn now.
+      fireEvent.click(screen.getByText("← Back"));
+      chatService.getById.mockResolvedValue(
+        chatSession({ name: "First chat", activeTurnId: "t2" }),
+      );
+      await openFirstChat();
+      expect(await screen.findByLabelText("Stop")).toBeTruthy();
+
+      // The first visit's read answers at last, saying the chat was idle. It is
+      // answering about a visit that is over, so it may not take the controls off
+      // the turn this visit is watching.
+      await act(async () => {
+        answerFirstVisitRead(chatSession({ name: "First chat", activeTurnId: null }));
+      });
+
+      expect(screen.getByLabelText("Stop")).toBeTruthy();
+      expect(screen.getByRole("status")).toBeTruthy();
+    });
+
+    test("a send failing in the earlier visit does not disturb the later one", async () => {
+      openList(summary("s1", "First chat"));
+      chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openFirstChat();
+
+      let failSend!: (err: Error) => void;
+      chatService.sendMessage.mockReturnValue(
+        new Promise<void>((_, reject) => {
+          failSend = reject;
+        }),
+      );
+      await sendMessageText("did this arrive?");
+      expect(screen.getByLabelText("Stop")).toBeTruthy();
+
+      // Away and back, and this visit has a turn of its own running.
+      fireEvent.click(screen.getByText("← Back"));
+      chatService.getById.mockResolvedValue(
+        chatSession({ name: "First chat", activeTurnId: "t5" }),
+      );
+      await openFirstChat();
+      expect(await screen.findByLabelText("Stop")).toBeTruthy();
+
+      // The earlier visit's send fails now, while this visit's turn is still
+      // running: the turn that send had put up must not be restored over it, and
+      // the reconciliation read it makes can only report what the server says now.
+      await act(async () => {
+        failSend(new Error("Network error."));
+      });
+      await act(async () => {});
+
+      expect(screen.getByLabelText("Stop")).toBeTruthy();
+      expect(screen.getByRole("status")).toBeTruthy();
+      // Documented, not defended: the error message does belong to this chat, and
+      // it does surface on the next visit to it. Left as it is by decision.
+      expect(screen.getByText("Network error.")).toBeTruthy();
+    });
+
+    test("a chat the user stopped opening never installs itself over the one they did", async () => {
+      // Opening a chat is an awaited read, and the list stays on screen while it is
+      // in flight, so two opens can be racing: click one chat, then another. The
+      // slower answer belongs to a visit that never happened, and installing it
+      // would put the user in a chat they did not open — with a stop button that
+      // interrupts that chat's turn rather than anything they were looking at.
+      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      let answerFirstOpen!: (session: ChatSession) => void;
+      chatService.getById.mockImplementation((id: string) =>
+        id === "s1"
+          ? new Promise<ChatSession>((resolve) => {
+              answerFirstOpen = resolve;
+            })
+          : Promise.resolve(
+              chatSession({
+                id: "s2",
+                name: "Other chat",
+                messages: [msg({ id: "b2", content: "the chat they opened", sequence: 0 })],
+              }),
+            ),
+      );
+
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      fireEvent.click(await screen.findByText("First chat"));
+      // Still on the list, because that read has not answered.
+      fireEvent.click(await screen.findByText("Other chat"));
+      await screen.findByLabelText("Chat message");
+      expect(screen.getByText("the chat they opened")).toBeTruthy();
+
+      await act(async () => {
+        answerFirstOpen(
+          chatSession({
+            id: "s1",
+            name: "First chat",
+            activeTurnId: "t1",
+            messages: [msg({ id: "b1", content: "the chat they left behind", sequence: 0 })],
+          }),
+        );
+      });
+
+      expect(screen.getByText("the chat they opened")).toBeTruthy();
+      expect(screen.queryByText("the chat they left behind")).toBeNull();
+      // And no controls from that chat's running turn on a view that is idle.
+      expect(screen.queryByLabelText("Stop")).toBeNull();
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    test("a read from the earlier visit cannot settle a send this visit is waiting on", async () => {
+      // The sharper half of the same hazard: the stale read carries the *send
+      // number* of the visit that made it, and that number is what lets a read
+      // through the pending-send claim. It must not open this visit's claim.
+      openList(summary("s1", "First chat"));
+      chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openFirstChat();
+
+      let failFirstVisitSend!: (err: Error) => void;
+      chatService.sendMessage.mockReturnValue(
+        new Promise<void>((_, reject) => {
+          failFirstVisitSend = reject;
+        }),
+      );
+      await sendMessageText("first visit");
+
+      fireEvent.click(screen.getByText("← Back"));
+      await openFirstChat();
+
+      // This visit posts its own message, and that request has not come back — so
+      // the server may not have registered its turn yet, and only this send's own
+      // read may settle what it put up.
+      chatService.sendMessage.mockReturnValue(new Promise<void>(() => {}));
+      await sendMessageText("this visit");
+      expect(screen.getByLabelText("Stop")).toBeTruthy();
+
+      // The earlier visit's send now fails and reads the chat, which the server
+      // still calls idle because this visit's message has not landed.
+      chatService.getById.mockResolvedValue(
+        chatSession({ name: "First chat", activeTurnId: null }),
+      );
+      await act(async () => {
+        failFirstVisitSend(new Error("Network error."));
+      });
+      await act(async () => {});
+
+      expect(screen.getByLabelText("Stop")).toBeTruthy();
+      expect(screen.getByRole("status")).toBeTruthy();
+    });
+
+    test("a stop settling from the earlier visit does not disturb the later one", async () => {
+      openList(summary("s1", "First chat"));
+      chatService.getById.mockResolvedValue(
+        chatSession({ name: "First chat", activeTurnId: "t1" }),
+      );
+      let finishFirstVisitStop!: () => void;
+      chatService.interrupt.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishFirstVisitStop = resolve;
+        }),
+      );
+
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openFirstChat();
+      fireEvent.click(await screen.findByLabelText("Stop"));
+      await waitFor(() =>
+        expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true),
+      );
+
+      // Away and back, then a stop of this visit's own, still in flight.
+      fireEvent.click(screen.getByText("← Back"));
+      await openFirstChat();
+      chatService.interrupt.mockReturnValue(new Promise<void>(() => {}));
+      fireEvent.click(await screen.findByLabelText("Stop"));
+      await waitFor(() =>
+        expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true),
+      );
+
+      // The earlier visit's stop settles. Its claim is gone with its visit, and the
+      // one holding the button belongs to a different stop.
+      await act(async () => {
+        finishFirstVisitStop();
+      });
+      await act(async () => {});
+
+      expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByRole("status")).toBeTruthy();
+    });
+  });
 });
