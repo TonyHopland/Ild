@@ -124,7 +124,13 @@ public static class PrCommentDelivery
         return text.ToString();
     }
 
-    private static PrCommentLedger Record(PrCommentLedger state, string? head, IReadOnlyList<RemotePrReviewItem> delivered)
+    /// <summary>
+    /// Fold a set of handed-over items into a ledger. Public because a writer
+    /// that lost a compare-and-set has to re-apply the SAME handover to whatever
+    /// the ledger says now, rather than writing back a value computed from the
+    /// copy it started with.
+    /// </summary>
+    public static PrCommentLedger Record(PrCommentLedger state, string? head, IReadOnlyList<RemotePrReviewItem> delivered)
     {
         var sameHead = string.Equals(state.Head, head, StringComparison.Ordinal);
         return state with

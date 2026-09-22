@@ -298,6 +298,13 @@ public class LoopRunStore : ILoopRunStore
         // request: precisely what the compare-and-set exists to prevent. Every
         // legitimate change to the queue goes through TrySetPrCommentQueueAsync.
         _db.Entry(run).Property(r => r.PrCommentQueue).IsModified = false;
+        // The ledger is the same story and the same window. The heartbeat
+        // decides what a run has been handed from a copy loaded before a forge
+        // fetch that takes seconds, then writes the whole row at the end of its
+        // tick; anything recorded in between — a drop putting a finding back, a
+        // read consuming what it returned — was reverted by that write. Every
+        // legitimate change goes through TrySetPrCommentLedgerAsync.
+        _db.Entry(run).Property(r => r.PrCommentLedger).IsModified = false;
         await _db.SaveChangesAsync();
     }
 

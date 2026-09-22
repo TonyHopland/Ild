@@ -103,9 +103,10 @@ public sealed class PrStatusPollService : IPrStatusPollService
             : null;
 
         // Persist snapshot + new baseline and push the GUI update regardless of
-        // whether any edge fires. This write carries the whole row, so it goes
-        // out BEFORE any ledger write — after one, it would revert the delivery
-        // just recorded and the same items would fire again every tick.
+        // whether any edge fires. This write carries the whole row, but no
+        // longer the ledger or the queue: UpdateRunAsync leaves both columns
+        // alone, because this instance was loaded before the forge fetch above
+        // and writing its copy back would revert anything recorded meanwhile.
         run.PrSnapshot = PrSnapshotJson.Serialize(snapshot);
         run.PrPolledEdgeStates = string.Join(",", newStates);
         run.UpdatedAt = DateTime.UtcNow;
@@ -115,7 +116,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // A run with no ledger yet records what is already on the pull request
         // and fires nothing this tick, whichever edge wins below.
         if (review is { Seeding: true })
-            await SetLedgerAsync(run, review.Decision.Ledger);
+            await SetLedgerAsync(run, review);
 
         var candidates = newlyTrue.Where(connected.Contains).ToHashSet(StringComparer.Ordinal);
         if (review is { Seeding: false } && review.Decision.Items.Count > 0)
@@ -128,7 +129,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // Only the round that is actually being handed the items consumes them:
         // a higher-priority state winning this tick leaves them outstanding.
         if (edge == PrNodeEdges.OnComment)
-            await SetLedgerAsync(run, review!.Decision.Ledger);
+            await SetLedgerAsync(run, review!);
 
         // Carry why: the signal's output becomes the resumed node's output, so a
         // node wired to on_ci_failed reads the failing checks out of
@@ -139,7 +140,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
     }
 
     /// <summary>Whether this tick is the run's first look at the pull request, and what it found.</summary>
-    private sealed record ReviewPass(PrCommentDecision Decision, bool Seeding);
+    private sealed record ReviewPass(RemotePrReviewLedger Fetched, PrCommentDecision Decision, bool Seeding);
 
     private async Task<ReviewPass?> ReadReviewAsync(LoopRun run, string repoUrl, string prNumber)
     {
@@ -153,17 +154,25 @@ public sealed class PrStatusPollService : IPrStatusPollService
         }
 
         var state = PrCommentLedgerJson.TryParse(run.PrCommentLedger);
-        return new ReviewPass(PrCommentDelivery.Decide(fetched, fetched.HeadSha, state), state is null);
+        return new ReviewPass(fetched, PrCommentDelivery.Decide(fetched, fetched.HeadSha, state), state is null);
     }
 
     /// <summary>
-    /// Persist the ledger through the targeted writer, and keep the instance in
-    /// step: the engine's park write one step later carries the whole row from
-    /// whatever instance it holds, and would otherwise revert this.
+    /// Record what this tick handed over.
+    ///
+    /// NOT a compare-and-set, unlike every other writer of this column, and
+    /// that is a known hole rather than an oversight: the decision here is made
+    /// from the ledger this pass loaded BEFORE a forge fetch that costs seconds,
+    /// so a drop landing in that window is reverted by this write and the
+    /// finding it put back stays suppressed. Closing it means re-deciding
+    /// against a fresh read under PrCommentLedgerWriter — a two-line change —
+    /// but the acceptance test that pins this path asserts the write goes
+    /// through SetPrCommentLedgerAsync, and that file is not one this change is
+    /// allowed to edit. Escalated rather than worked around.
     /// </summary>
-    private async Task SetLedgerAsync(LoopRun run, PrCommentLedger ledger)
+    private async Task SetLedgerAsync(LoopRun run, ReviewPass review)
     {
-        var json = PrCommentLedgerJson.Serialize(ledger);
+        var json = PrCommentLedgerJson.Serialize(review.Decision.Ledger);
         run.PrCommentLedger = json;
         await _runs.SetPrCommentLedgerAsync(run.Id, json);
     }

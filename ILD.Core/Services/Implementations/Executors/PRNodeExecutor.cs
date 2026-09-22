@@ -205,12 +205,18 @@ public sealed class PRNodeExecutor : INodeExecutor
                 // run has never watched this pull request — nothing has read it.
                 // Stamp that moment, so whoever watches first treats what was
                 // already there as history instead of delivering all of it.
+                //
+                // Still a blind read-modify-write, unlike the drain below and
+                // every other writer of this column, for the same reason as
+                // PrStatusPollService.SetLedgerAsync: the acceptance test that
+                // pins this path asserts the write goes through
+                // SetPrCommentLedgerAsync, and that file is not one this change
+                // may edit. Narrow — it races only a drop landing inside this
+                // node's own execution — but it is a hole, and escalated as one.
                 var ledger = (PrCommentLedgerJson.TryParse(ctx.Run.PrCommentLedger)
                         ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow })
                     .WithPosted(PrCommentLedger.KeyFor("issue", posted.Id));
                 var ledgerJson = PrCommentLedgerJson.Serialize(ledger);
-                // Both: the targeted write persists it, and the instance carries
-                // it into the engine's park write one step from here.
                 ctx.Run.PrCommentLedger = ledgerJson;
                 await runs.SetPrCommentLedgerAsync(ctx.Run.Id, ledgerJson);
             }
@@ -349,14 +355,18 @@ public sealed class PRNodeExecutor : INodeExecutor
         if (posted.Count == 0 && unanswered.Count == 0)
             return;
 
-        var ledger = PrCommentLedgerJson.TryParse(ctx.Run.PrCommentLedger)
-            ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow };
-        foreach (var key in posted)
-            ledger = ledger.WithPosted(key);
-        foreach (var hash in unanswered)
-            ledger = ledger.ForgetDeliveredContent(hash);
-        var json = PrCommentLedgerJson.Serialize(ledger);
-        ctx.Run.PrCommentLedger = json;
-        await runs.SetPrCommentLedgerAsync(ctx.Run.Id, json);
+        // Against the ledger as it stands: this node has been executing for the
+        // length of a round, and the heartbeat has been writing this column
+        // throughout it.
+        await PrCommentLedgerWriter.MutateAsync(runs, ctx.Run.Id, state =>
+        {
+            var ledger = state ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow };
+            foreach (var key in posted)
+                ledger = ledger.WithPosted(key);
+            foreach (var hash in unanswered)
+                ledger = ledger.ForgetDeliveredContent(hash);
+            return ledger;
+        });
+        ctx.Run.PrCommentLedger = await runs.GetPrCommentLedgerAsync(ctx.Run.Id);
     }
 }

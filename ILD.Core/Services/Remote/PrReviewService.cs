@@ -110,11 +110,11 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         // review say?" silently cancel the firing those items were about to cause.
         if (callerRunId == target.Run.Id && !IsParkedAtPrNode(target.Run))
         {
-            var decision = PrCommentDelivery.Decide(
-                fetched with { Items = returned },
-                fetched.HeadSha,
-                PrCommentLedgerJson.TryParse(target.Run.PrCommentLedger));
-            await _runs.SetPrCommentLedgerAsync(target.Run.Id, PrCommentLedgerJson.Serialize(decision.Ledger));
+            // Against the ledger as it stands, not the copy loaded before the
+            // forge fetch above: the heartbeat writes this same column, and so
+            // does a drop putting a finding back.
+            await PrCommentLedgerWriter.MutateAsync(_runs, target.Run.Id, state =>
+                PrCommentDelivery.Decide(fetched with { Items = returned }, fetched.HeadSha, state).Ledger);
         }
 
         return fetched with { Items = returned };
@@ -201,13 +201,6 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     }
 
     /// <summary>
-    /// Attempts before a contended ledger re-arm gives up. The cost of losing is
-    /// one finding that stays suppressed until the head moves — the behaviour
-    /// before this existed — so it retries rather than failing the caller.
-    /// </summary>
-    private const int LedgerWriteAttempts = 5;
-
-    /// <summary>
     /// Put the finding an intent answered back within reach, because that answer
     /// is not going to arrive. Compare-and-set against the heartbeat, which
     /// writes this same column at the end of every tick and would otherwise
@@ -218,20 +211,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         if (string.IsNullOrEmpty(sourceHash))
             return;
 
-        for (var attempt = 0; attempt < LedgerWriteAttempts; attempt++)
-        {
-            var current = await _runs.GetPrCommentLedgerAsync(runId);
-            var ledger = PrCommentLedgerJson.TryParse(current);
-            if (ledger is null)
-                return;
-
-            var rearmed = ledger.ForgetDeliveredContent(sourceHash);
-            if (ReferenceEquals(rearmed, ledger) || rearmed.DeliveredHashes.Count == ledger.DeliveredHashes.Count)
-                return;
-
-            if (await _runs.TrySetPrCommentLedgerAsync(runId, current, PrCommentLedgerJson.Serialize(rearmed)))
-                return;
-        }
+        await PrCommentLedgerWriter.MutateAsync(_runs, runId, state => state?.ForgetDeliveredContent(sourceHash));
     }
 
     private static string NewIntentId() => Guid.NewGuid().ToString("N")[..12];

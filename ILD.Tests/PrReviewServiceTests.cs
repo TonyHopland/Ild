@@ -66,6 +66,19 @@ public class PrReviewServiceTests
             Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
                 .Callback<Guid, string?>((_, json) => { RecordedLedger = json; LedgerWrites++; })
                 .Returns(Task.CompletedTask);
+
+            // The ledger is mutated by compare-and-set too: every writer of it
+            // reads the column and writes only if it still holds what it read.
+            Runs.Setup(s => s.GetPrCommentLedgerAsync(It.IsAny<Guid>())).ReturnsAsync(() => Run.PrCommentLedger);
+            Runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
+                .ReturnsAsync((Guid _, string? expected, string? json) =>
+                {
+                    if (!string.Equals(expected, Run.PrCommentLedger, StringComparison.Ordinal)) return false;
+                    Run.PrCommentLedger = json;
+                    RecordedLedger = json;
+                    LedgerWrites++;
+                    return true;
+                });
             // The queue is mutated by compare-and-set: the service reads the
             // column, then writes only if it still holds what it read.
             Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).ReturnsAsync(() => Run.PrCommentQueue);

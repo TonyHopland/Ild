@@ -226,11 +226,6 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     }
 
     /// <summary>
-    /// The <c>&lt;thread&gt;-&lt;comment&gt;</c> id of the comment a just-created
-    /// thread holds — the same shape
-    /// <see cref="GetPullRequestReviewLedgerAsync"/> reports.
-    /// </summary>
-    /// <summary>
     /// Every comment thread on the pull request, or null if the whole list could
     /// not be read. Azure DevOps serves this endpoint unpaged — there is no
     /// continuation token and no <c>$top</c>/<c>$skip</c> on PR threads, so the
@@ -259,6 +254,11 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         }
     }
 
+    /// <summary>
+    /// The <c>&lt;thread&gt;-&lt;comment&gt;</c> id of the comment a just-created
+    /// thread holds — the same shape
+    /// <see cref="GetPullRequestReviewLedgerAsync"/> reports.
+    /// </summary>
     private static async Task<string?> ReadCreatedThreadCommentIdAsync(HttpResponseMessage resp)
     {
         try

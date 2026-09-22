@@ -145,30 +145,36 @@ public interface ILoopRunStore
     Task ClearSteeringNoteAsync(Guid runId);
 
     /// <summary>
-    /// Persist what the run has been handed of its PR's review, touching only
-    /// that column. Every other writer on the PR path writes the whole row —
-    /// the heartbeat's snapshot write on each tick, the engine's park write one
-    /// step after the PR node posts — so a single-column write is what keeps a
-    /// just-recorded delivery from being reverted to whatever instance those
-    /// writers happen to hold.
+    /// Overwrite what the run has been handed of its PR's review, touching only
+    /// that column and without checking what was there. Every real writer goes
+    /// through <see cref="TrySetPrCommentLedgerAsync"/> instead; this remains
+    /// for setting the column outright, where there is nothing to lose a race to.
     /// </summary>
     Task SetPrCommentLedgerAsync(Guid runId, string? json);
+
+    /// <summary>
+    /// The ledger as the row holds it now, bypassing the change tracker — what a
+    /// compare-and-set has to start from.
+    /// </summary>
+    Task<string?> GetPrCommentLedgerAsync(Guid runId);
+
+    /// <summary>
+    /// Replace the ledger only if it still holds <paramref name="expected"/>.
+    /// Four writers share this column and every one of them is a
+    /// read-modify-write: the heartbeat's delivery and seed, a read consuming
+    /// what it returned, the PR node recording what it posted, and a dropped or
+    /// refused answer putting its finding back. The heartbeat decides from a
+    /// copy loaded before a forge fetch that takes seconds, so a blind write at
+    /// the end of its tick reverts anything recorded in between — a drop landing
+    /// there was silently undone and the finding stayed suppressed.
+    /// <see cref="UpdateRunAsync"/> leaves the column out for the same reason.
+    /// </summary>
+    Task<bool> TrySetPrCommentLedgerAsync(Guid runId, string? expected, string? json);
 
     /// <summary>
     /// The queue as the row holds it right now, bypassing the change tracker —
     /// what a compare-and-set has to start from.
     /// </summary>
-    /// <summary>The ledger as the row holds it now, for a read-modify-write that must not lose a concurrent write.</summary>
-    Task<string?> GetPrCommentLedgerAsync(Guid runId);
-
-    /// <summary>
-    /// Replace the ledger only if it still holds <paramref name="expected"/>.
-    /// Used where a finding is put back within reach — a dropped or refused
-    /// answer — because that read-modify-write races the heartbeat.s own ledger
-    /// write, and losing it silently leaves the finding suppressed.
-    /// </summary>
-    Task<bool> TrySetPrCommentLedgerAsync(Guid runId, string? expected, string? json);
-
     Task<string?> GetPrCommentQueueAsync(Guid runId);
 
     /// <summary>
