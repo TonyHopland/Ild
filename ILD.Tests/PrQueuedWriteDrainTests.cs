@@ -550,6 +550,62 @@ public class PrQueuedWriteDrainTests
     }
 
     [Fact]
+    public async Task A_refused_answer_is_still_waiting_once_the_round_that_sent_it_is_over()
+    {
+        // Ordering, which is the whole reason the round closes its account
+        // BEFORE the queue goes out. Closed after, the clear would wipe the
+        // very finding the refusal had just put back — and the next round,
+        // having answered every item of its own, would skip its general
+        // comment too, so a point the forge refused is answered nowhere.
+        const string body = "this allocation is wrong";
+        var hash = PrCommentLedger.Fingerprint("src/A.cs", 10, body);
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") with { SourceHash = hash } });
+        // The round as the node finds it: handed one finding, its answer queued.
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with
+        {
+            Head = Head,
+            Handed = new[] { hash },
+            Unanswered = Array.Empty<string>(),
+            DeliveredHashes = new[] { hash },
+        });
+        f.Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrWriteResult(false, null, "403 from the forge"));
+
+        await f.RunNodeAsync(commentTemplate: "Answered every point.");
+
+        // This round said nothing general, on the strength of an answer that
+        // never arrived — so the finding has to outlive it.
+        Assert.Null(f.PostedComment);
+        Assert.Contains(hash, PrCommentLedgerJson.TryParse(f.Run.PrCommentLedger)!.Outstanding);
+    }
+
+    [Fact]
+    public async Task A_refused_answer_outlives_the_round_that_did_post_its_comment_too()
+    {
+        // The same ordering on the other branch, where the node posts first.
+        const string unanswered = "a finding nobody answered";
+        var hash = PrCommentLedger.Fingerprint("src/A.cs", 10, "this allocation is wrong");
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") with { SourceHash = hash } });
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(PrCommentLedger.Empty with
+        {
+            Head = Head,
+            Handed = new[] { hash, unanswered },
+            Unanswered = new[] { unanswered },
+            DeliveredHashes = new[] { hash },
+        });
+        f.Remote.Setup(r => r.ReplyToReviewThreadAsync(CloneUrl, "42", It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrWriteResult(false, null, "403 from the forge"));
+
+        await f.RunNodeAsync(commentTemplate: "Addressed the latest comments.");
+
+        Assert.NotNull(f.PostedComment);
+        var after = PrCommentLedgerJson.TryParse(f.Run.PrCommentLedger)!.Outstanding;
+        Assert.Contains(hash, after);
+        // …while what this round DID report is off the list with the round.
+        Assert.DoesNotContain(unanswered, after);
+    }
+
+    [Fact]
     public async Task An_answer_that_went_out_leaves_its_finding_answered()
     {
         var hash = PrCommentLedger.Fingerprint("src/A.cs", 10, "this allocation is wrong");
