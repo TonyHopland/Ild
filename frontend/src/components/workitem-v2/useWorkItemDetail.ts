@@ -174,13 +174,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     feedbackInputRef.current = feedbackInput;
   }, [feedbackInput]);
 
-  // No PR-comment prefill here any more. It pasted every comment on the pull
-  // request into the feedback box on a park — including ones already handed to
-  // the loop through on_comment, and ILD's own replies with their hidden marker
-  // showing — and Approve/Reject then sent the lot back as feedback, so handled
-  // comments were re-delivered and the loop answered itself through the GUI.
-  // Comments reach the loop through the edge now.
-
   const refreshPreview = useCallback(async () => {
     if (!workItem?.id || !workItem.worktreePath) {
       setPreview(null);

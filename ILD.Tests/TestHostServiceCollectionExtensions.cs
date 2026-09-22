@@ -125,8 +125,6 @@ internal static class TestHostServiceCollectionExtensions
         public Task<bool> EnablePullRequestAutoMergeAsync(string repoUrl, string prNumber)
             => throw Unexpected(nameof(IRemoteProvider));
 
-        public Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(string repoUrl, string prNumber)
-            => throw Unexpected(nameof(IRemoteProvider));
 
         public Task RegisterWebhookAsync(string repoUrl, string callbackUrl)
             => throw Unexpected(nameof(IRemoteProvider));

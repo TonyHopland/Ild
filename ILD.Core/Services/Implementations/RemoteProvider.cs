@@ -59,14 +59,6 @@ public class RemoteProviderService : IRemoteProvider
         catch { return false; }
     }
 
-    public async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(string repoUrl, string prNumber)
-    {
-        var resolved = await ResolveAsync(repoUrl);
-        if (resolved == null) return Array.Empty<RemotePrComment>();
-        try { return await resolved.Adapter.GetPullRequestCommentsAsync(_http, resolved, prNumber); }
-        catch { return Array.Empty<RemotePrComment>(); }
-    }
-
     public async Task RegisterWebhookAsync(string repoUrl, string callbackUrl)
     {
         var resolved = await ResolveAsync(repoUrl);

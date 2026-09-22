@@ -138,9 +138,11 @@ public class PrFindingPutBackTests
     {
         var h = new Harness();
         h.AfterDelivery();
-        var before = h.Run.PrCommentLedger;
         var service = h.Build();
         Assert.True((await service.ReplyAsync("wi-1", "11", "Answered.", h.Run.Id)).Ok);
+        // After the reply: queuing one strikes the finding off the waiting list,
+        // so that is the state a drop of something else must leave alone.
+        var before = h.Run.PrCommentLedger;
 
         Assert.False(await service.DropQueuedAsync(h.Run.Id, "no-such-write"));
 

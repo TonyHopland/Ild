@@ -594,13 +594,6 @@ export interface RemoteProviderTypeOption {
   type: string;
 }
 
-export interface PrComment {
-  id: string;
-  body: string;
-  author: string;
-  createdAt: string;
-}
-
 export interface AiProvider {
   id: string;
   name: string;

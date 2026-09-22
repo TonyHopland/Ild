@@ -94,7 +94,14 @@ public static class PrCommentDelivery
             recorded.Add(item);
         }
 
-        return new PrCommentDecision(deliver, Record(state, head, recorded) with { WatchedFrom = null });
+        // What this tick actually hands over is what the round is expected to
+        // answer. The PR node reads it back to decide whether it has anything
+        // general left to say.
+        var ledger = Record(state, head, recorded) with { WatchedFrom = null };
+        return new PrCommentDecision(
+            deliver,
+            ledger.WithUnanswered(ledger.Outstanding.Concat(
+                deliver.Select(i => PrCommentLedger.Fingerprint(i.Path, i.Line, i.Body)))));
     }
 
     /// <summary>
@@ -110,11 +117,16 @@ public static class PrCommentDelivery
         {
             if (text.Length > 0) text.Append("\n\n");
             text.Append("### ")
-                .Append(item.Path is null ? "PR-level comment" : $"{item.Path}:{item.Line?.ToString() ?? "?"}")
+                .Append(Where(item))
                 .Append(" — ")
                 .Append(string.IsNullOrWhiteSpace(item.Author) ? "unknown" : item.Author);
             if (item.CommentId is not null) text.Append("\ncomment id: ").Append(item.CommentId);
             if (item.ThreadId is not null) text.Append("\nthread id: ").Append(item.ThreadId);
+            // A review body has neither a comment id nor a thread, and the
+            // reply tool takes the review id for it — without this the batch
+            // says what the reviewer thinks and gives no way to answer it.
+            if (item.CommentId is null && item.ReviewId is not null)
+                text.Append("\nreview id: ").Append(item.ReviewId);
             if (item.Kind == "suppressed") text.Append("\n(suppressed by the review body — it has no thread to answer on)");
             if (item.Commit is not null) text.Append("\nreviewed at commit: ").Append(item.Commit);
             if (item.Resolved) text.Append("\nthread resolved: yes");
@@ -154,6 +166,12 @@ public static class PrCommentDelivery
     /// fingerprints are dropped on every head change, the loop's own push would
     /// re-deliver the same old review's findings every single round.
     /// </summary>
+    /// <summary>Where an item was said, as its heading in the batch.</summary>
+    private static string Where(RemotePrReviewItem item)
+        => item.Path is not null
+            ? $"{item.Path}:{item.Line?.ToString() ?? "?"}"
+            : item.Kind == "body" ? "review body" : "PR-level comment";
+
     private static string? KeyOf(RemotePrReviewItem item)
     {
         if (item.CommentId is not null)

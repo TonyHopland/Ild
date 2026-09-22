@@ -32,6 +32,9 @@ public class PrQueuedWriteDrainTests
     private static PrQueuedWrite Reply(string id, string commentId, string body)
         => new(id, PrQueuedWrite.Reply, commentId, body, "src/A.cs", 10, DateTime.UtcNow);
 
+    private static PrQueuedWrite Comment(string id, string targetId, string body)
+        => new(id, PrQueuedWrite.Comment, targetId, body, null, null, DateTime.UtcNow);
+
     private static PrQueuedWrite Resolve(string id, string threadId)
         => new(id, PrQueuedWrite.Resolve, threadId, null, "src/A.cs", 10, DateTime.UtcNow);
 
@@ -294,6 +297,10 @@ public class PrQueuedWriteDrainTests
         // comments." posted under a set of replies that already are the
         // addressing is a second notification carrying nothing.
         var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles."), Resolve("w2", "PRRT_t1") });
+        // The round was handed two findings and has answered both: nothing is
+        // left waiting, which is what makes the general comment redundant.
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
+            PrCommentLedger.Empty with { Head = Head, Unanswered = Array.Empty<string>() });
 
         var outcomes = await f.RunNodeAsync(commentTemplate: "Answered every point.");
 
@@ -302,6 +309,40 @@ public class PrQueuedWriteDrainTests
         Assert.Null(f.Row);
         Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+    }
+
+    [Fact]
+    public async Task A_round_that_answered_only_some_of_them_still_says_what_it_did()
+    {
+        // Four fixed in code and one rebutted on its thread: the general comment
+        // is the only place the four are reported, so it has to go out.
+        var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
+            PrCommentLedger.Empty with
+            {
+                Head = Head,
+                Unanswered = new[] { "a-finding-nobody-answered" },
+            });
+
+        await f.RunNodeAsync(commentTemplate: "Answered every point.");
+
+        Assert.NotNull(f.PostedComment);
+        Assert.Single(f.Written);
+    }
+
+    [Fact]
+    public async Task A_round_that_only_resolved_threads_still_says_what_it_did()
+    {
+        // A resolve closes a thread and says nothing to anyone reading the pull
+        // request, so it is not an answer and cannot stand in for one.
+        var f = new Fixture(new[] { Resolve("w1", "PRRT_t1") });
+        f.Run.PrCommentLedger = PrCommentLedgerJson.Serialize(
+            PrCommentLedger.Empty with { Head = Head, Unanswered = Array.Empty<string>() });
+
+        await f.RunNodeAsync(commentTemplate: "Answered every point.");
+
+        Assert.NotNull(f.PostedComment);
+        Assert.Single(f.Written);
     }
 
     [Fact]
@@ -440,6 +481,58 @@ public class PrQueuedWriteDrainTests
         await f.RunNodeAsync();
 
         Assert.Contains(hash, PrCommentLedgerJson.TryParse(f.RecordedLedger)!.DeliveredHashes);
+    }
+
+    [Fact]
+    public async Task An_answer_to_something_with_no_thread_goes_out_as_its_own_comment()
+    {
+        // A top-level comment and a review body have no thread on any forge, so
+        // the answer is a pull-request comment of its own — stamped like every
+        // other thing ILD posts, or the next heartbeat hands it back to the loop.
+        var f = new Fixture(new[] { Comment("w1", "127", "In reply to the comment (127):\n\n> Rename it\n\nRenamed.") });
+
+        await f.RunNodeAsync();
+
+        Assert.NotNull(f.PostedComment);
+        Assert.Contains("> Rename it", f.PostedComment!, StringComparison.Ordinal);
+        Assert.True(PrCommentMarker.IsStamped(f.PostedComment), "the answer carries no marker");
+        Assert.Empty(f.Written);
+        Assert.Null(f.Row);
+    }
+
+    [Fact]
+    public async Task The_id_a_standalone_answer_gets_is_recorded_in_the_space_the_ledger_keys_on()
+    {
+        // It lands as a pull-request comment, which the ledger keys `issue:` —
+        // recording it as `review:` would eventually mark a real review comment
+        // as ILD's own and swallow it.
+        var f = new Fixture(new[] { Comment("w1", "127", "Renamed.") });
+
+        await f.RunNodeAsync();
+
+        var ledger = PrCommentLedgerJson.TryParse(f.RecordedLedger);
+        Assert.NotNull(ledger);
+        Assert.Contains(PrCommentLedger.KeyFor("issue", "5000000001"), ledger!.PostedIds);
+    }
+
+    [Fact]
+    public async Task What_a_standalone_answer_posted_never_fires_the_comment_edge_back_at_it()
+    {
+        var f = new Fixture(new[] { Comment("w1", "127", "Renamed.") });
+
+        await f.RunNodeAsync();
+
+        var ourOwn = new RemotePrReviewLedger(
+            Array.Empty<RemotePrReviewSummary>(),
+            new[]
+            {
+                new RemotePrReviewItem("issue", "5000000001", null, null, null, null,
+                    f.PostedComment!, "ild-service-account", Head, DateTime.UtcNow, false, false),
+            },
+            Head, null);
+
+        Assert.Empty(PrCommentDelivery.Decide(
+            ourOwn, Head, PrCommentLedgerJson.TryParse(f.RecordedLedger)).Items);
     }
 
     [Fact]

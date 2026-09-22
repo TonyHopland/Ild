@@ -74,7 +74,6 @@ function mockServices() {
   vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
-  vi.spyOn(authServices.workItemService, "getPrComments").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(makeParkedWorkItem());
   vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
     entries: [],

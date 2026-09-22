@@ -192,15 +192,6 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         return resp.IsSuccessStatusCode;
     }
 
-    public override async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
-    {
-        ApplyHeaders(http, repo.Provider);
-        return (await ReadThreadCommentsAsync(http, repo, prNumber))
-            .Select(c => new RemotePrComment(c.Id, c.Body, c.Author, c.At))
-            .ToList();
-    }
-
     public override async Task<RemotePrWriteResult> CreatePullRequestCommentAsync(
         HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
     {

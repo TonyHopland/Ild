@@ -15,7 +15,6 @@ public interface IRemoteProvider
     /// or the repository/provider does not support auto-merge.
     /// </summary>
     Task<bool> EnablePullRequestAutoMergeAsync(string repoUrl, string prNumber);
-    Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(string repoUrl, string prNumber);
     Task RegisterWebhookAsync(string repoUrl, string callbackUrl);
     Task UnregisterWebhookAsync(string repoUrl, string callbackUrl);
     Task<RemotePrStatus> GetPullRequestStatusAsync(string repoUrl, string prNumber);

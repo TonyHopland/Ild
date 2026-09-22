@@ -22,6 +22,14 @@ public static class PrReviewBodies
     public const string Kind = "body";
 
     /// <summary>
+    /// The same budget every other item gets (RemoteGitProviderAdapterBase.
+    /// MaxReviewItemLength). A Copilot overview runs to thousands of characters
+    /// and the signal carrying a batch is capped at 8192, so one unshortened
+    /// body would crowd the rest of the review out of it.
+    /// </summary>
+    private const int MaxBodyLength = 1000;
+
+    /// <summary>
     /// The ledger with one extra item per review that has something to say.
     ///
     /// A review the reviewer could not finish contributes nothing, exactly as
@@ -47,7 +55,7 @@ public static class PrReviewBodies
                 ReviewId: r.Id,
                 Path: null,
                 Line: null,
-                r.Body!,
+                Shorten(r.Body!),
                 r.Author,
                 r.HeadSha,
                 r.SubmittedAt,
@@ -60,5 +68,11 @@ public static class PrReviewBodies
 
         // Bodies first: a review's verdict reads before the lines it is about.
         return ledger with { Items = bodies.Concat(ledger.Items).ToList() };
+    }
+
+    private static string Shorten(string body)
+    {
+        var trimmed = body.Trim();
+        return trimmed.Length <= MaxBodyLength ? trimmed : trimmed[..MaxBodyLength] + "…";
     }
 }

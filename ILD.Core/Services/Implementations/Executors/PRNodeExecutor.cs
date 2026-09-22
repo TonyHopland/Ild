@@ -185,16 +185,15 @@ public sealed class PRNodeExecutor : INodeExecutor
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to post comment");
                 yield break;
             }
-            // Re-read rather than reuse the branch condition: an agent can queue
-            // between the two, and this decides whether anything general is said.
-            var answeredOnThreads = await HasQueuedWritesAsync(ctx, sp);
-            if (string.IsNullOrEmpty(cfg.PrCommentTemplate) || answeredOnThreads)
+            // A round that answered EVERY finding it was handed has said its
+            // piece where each objection was raised, and the template comment on
+            // top is a second notification carrying nothing — "Addressed the
+            // latest comments." under a set of replies that already are the
+            // addressing. Anything still waiting and the general comment stays:
+            // a round that fixed four things in code and rebutted one, or one
+            // that only resolved threads, still has to say what it did.
+            if (string.IsNullOrEmpty(cfg.PrCommentTemplate) || await EverythingAnsweredAsync(ctx, sp))
             {
-                // A round that answered on the threads has said everything it has
-                // to say, where the objection was raised. The template comment on
-                // top of that is a second notification carrying no information —
-                // "Addressed the latest comments." under a set of replies that
-                // already are the addressing.
                 await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
                 yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
                 yield break;
@@ -244,6 +243,25 @@ public sealed class PRNodeExecutor : INodeExecutor
         // node's content — mirrors the Human node, which parks on its rendered
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
+    }
+
+    /// <summary>
+    /// Whether every finding handed to this round now has an answer waiting to
+    /// go out. Read from the row: the ledger records what was delivered, and
+    /// queuing a reply strikes it off, so an empty list means nothing is left
+    /// unanswered. With no store there is no ledger, and nothing is claimed to
+    /// be answered.
+    /// </summary>
+    private static async Task<bool> EverythingAnsweredAsync(NodeExecutionContext ctx, IServiceProvider sp)
+    {
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
+            return false;
+        var ledger = PrCommentLedgerJson.TryParse(await runs.GetPrCommentLedgerAsync(ctx.Run.Id));
+        if (ledger is null || ledger.Outstanding.Count > 0)
+            return false;
+        // …and it only counts as answered if there is something to send.
+        return PrCommentQueueJson.TryParse(await runs.GetPrCommentQueueAsync(ctx.Run.Id))
+            .Any(w => w.Kind != PrQueuedWrite.Resolve);
     }
 
     /// <summary>Attempts before a contended claim gives up; each re-reads the row it lost to.</summary>
@@ -383,7 +401,8 @@ public sealed class PRNodeExecutor : INodeExecutor
             foreach (var key in posted)
                 ledger = ledger.WithPosted(key);
             foreach (var hash in unanswered)
-                ledger = ledger.ForgetDeliveredContent(hash);
+                ledger = ledger.ForgetDeliveredContent(hash)
+                    .WithUnanswered(ledger.Outstanding.Append(hash));
             return ledger;
         });
     }

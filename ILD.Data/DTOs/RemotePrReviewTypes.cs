@@ -208,7 +208,8 @@ public record PrCommentLedger(
     IReadOnlyList<string> PostedIds,
     IReadOnlyList<string> DeliveredIds,
     IReadOnlyList<string> DeliveredHashes,
-    DateTime? WatchedFrom = null
+    DateTime? WatchedFrom = null,
+    IReadOnlyList<string>? Unanswered = null
 )
 {
     /// <summary>Kept per list, newest first, so a long-lived run cannot grow this column without bound.</summary>
@@ -216,6 +217,25 @@ public record PrCommentLedger(
 
     public static PrCommentLedger Empty { get; } = new(
         null, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
+
+    /// <summary>
+    /// Fingerprints handed to the round that nothing has answered yet. What the
+    /// PR node asks before posting its general comment: a round that answered
+    /// every one of them has said its piece on the threads, and the general
+    /// comment on top is a second notification carrying nothing. A round that
+    /// answered some — or only resolved threads, which says nothing to anyone —
+    /// still has something to report.
+    /// </summary>
+    public IReadOnlyList<string> Outstanding => Unanswered ?? Array.Empty<string>();
+
+    public PrCommentLedger WithUnanswered(IEnumerable<string> hashes)
+        => this with { Unanswered = hashes.Distinct(StringComparer.Ordinal).Take(MaxRemembered).ToList() };
+
+    /// <summary>An answer was queued for this finding, so it is no longer waiting.</summary>
+    public PrCommentLedger Answered(string? hash)
+        => string.IsNullOrEmpty(hash)
+            ? this
+            : WithUnanswered(Outstanding.Where(h => !string.Equals(h, hash, StringComparison.Ordinal)));
 
     /// <summary>The ledger key for one item, namespaced by the id space it came from.</summary>
     public static string KeyFor(string kind, string commentId) => $"{kind}:{commentId}";
@@ -284,14 +304,15 @@ public static class PrCommentLedgerJson
         IReadOnlyList<string>? PostedIds,
         IReadOnlyList<string>? DeliveredIds,
         IReadOnlyList<string>? DeliveredHashes,
-        DateTime? WatchedFrom);
+        DateTime? WatchedFrom,
+        IReadOnlyList<string>? Unanswered);
 
     private const int CurrentVersion = 1;
 
     public static string Serialize(PrCommentLedger ledger)
         => JsonSerializer.Serialize(
             new Wire(CurrentVersion, ledger.Head, ledger.PostedIds, ledger.DeliveredIds, ledger.DeliveredHashes,
-                ledger.WatchedFrom),
+                ledger.WatchedFrom, ledger.Unanswered),
             Options);
 
     public static PrCommentLedger? TryParse(string? json)
@@ -308,7 +329,8 @@ public static class PrCommentLedgerJson
                 wire.PostedIds ?? Array.Empty<string>(),
                 wire.DeliveredIds ?? Array.Empty<string>(),
                 wire.DeliveredHashes ?? Array.Empty<string>(),
-                wire.WatchedFrom);
+                wire.WatchedFrom,
+                wire.Unanswered);
         }
         catch (JsonException) { return null; }
     }

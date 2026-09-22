@@ -759,35 +759,6 @@ public class WorkItemsController : ControllerBase
         return Ok(new { branchDeleted = result.BranchDeleted, warning = result.BranchWarning });
     }
 
-    [HttpGet("{id}/pr-comments")]
-    public async Task<IActionResult> GetPrComments(string id)
-    {
-        var wi = await _workItemManager.GetWorkItemAsync(id);
-        if (wi == null) return NotFound();
-        if (string.IsNullOrEmpty(wi.PrUrl)) return Ok(Array.Empty<RemotePrComment>());
-        if (_remoteProvider == null) return Ok(Array.Empty<RemotePrComment>());
-
-        var prNumber = ExtractPrNumber(wi.PrUrl);
-        if (prNumber == null) return Ok(Array.Empty<RemotePrComment>());
-
-        var repoUrl = wi.PrUrl[..wi.PrUrl.IndexOf("/pulls/", StringComparison.Ordinal)];
-
-        try
-        {
-            var comments = await _remoteProvider.GetPullRequestCommentsAsync(repoUrl, prNumber);
-            return Ok(comments);
-        }
-        catch (Exception ex)
-        {
-            // Surface the outage rather than masquerading as "no comments" — an
-            // empty 200 here is indistinguishable from a PR that genuinely has
-            // none, which is the degraded-silently behavior GetAll deliberately
-            // rejects (it returns 503 too).
-            _logger.LogWarning(ex, "Failed to fetch PR comments for work item {WorkItemId}", id);
-            return StatusCode(503, new { error = "Failed to fetch PR comments from remote provider", detail = ex.Message });
-        }
-    }
-
     private static string? ExtractPrNumber(string prUrl)
     {
         var marker = "/pulls/";

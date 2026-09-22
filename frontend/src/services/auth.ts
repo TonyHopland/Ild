@@ -20,7 +20,6 @@ import {
   ManagedAgentStatus,
   LoopNode,
   LoopNodeEdge,
-  PrComment,
   PullBranchResult,
   BranchNameCheck,
   LoopRunSessionPreview,
@@ -222,10 +221,6 @@ export const workItemService = {
       `/workitems/${id}/pr/merge`,
       { deleteBranch },
     );
-  },
-
-  getPrComments: async (id: string): Promise<PrComment[]> => {
-    return api.get<PrComment[]>(`/workitems/${id}/pr-comments`);
   },
 
   pushBranch: async (id: string): Promise<{ branch: string }> => {

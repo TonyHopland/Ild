@@ -80,16 +80,6 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             null);
     }
 
-    public virtual async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
-    {
-        ApplyHeaders(http, repo.Provider);
-        using var resp = await http.GetAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/issues/{prNumber}/comments");
-        if (!resp.IsSuccessStatusCode)
-            return Array.Empty<RemotePrComment>();
-
-        return await ReadCommentsAsync(resp);
-    }
-
     public virtual async Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);
@@ -866,22 +856,6 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     public abstract Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);
     public abstract Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName);
     public abstract WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers);
-
-    protected static async Task<IEnumerable<RemotePrComment>> ReadCommentsAsync(HttpResponseMessage resp)
-    {
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        var list = new List<RemotePrComment>();
-        foreach (var el in doc.RootElement.EnumerateArray())
-        {
-            list.Add(new RemotePrComment(
-                el.GetProperty("id").GetRawText(),
-                el.GetProperty("body").GetString() ?? string.Empty,
-                el.GetProperty("user").GetProperty("login").GetString() ?? string.Empty,
-                el.GetProperty("created_at").GetDateTime()));
-        }
-
-        return list;
-    }
 
     protected static string? GetHeader(IReadOnlyDictionary<string, string> headers, string name)
         => headers.TryGetValue(name, out var value) ? value : null;

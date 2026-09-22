@@ -132,10 +132,14 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             return new RemotePrWriteResult(false, null, fetched.Message);
 
         // A review body is answered by its review id; everything else by its
-        // comment id. Both are what the ledger reports as the thing to answer.
-        var comment = fetched.Items.FirstOrDefault(i =>
-            string.Equals(i.CommentId, commentId, StringComparison.Ordinal)
-            || (i.Kind == PrReviewBodies.Kind && string.Equals(i.ReviewId, commentId, StringComparison.Ordinal)));
+        // comment id. A comment id wins outright when both match: the two come
+        // from separate counters on Forgejo, so a review id can equal a real
+        // comment id, and taking whichever was listed first would answer an
+        // inline finding with a new top-level comment instead of on its thread.
+        var comment =
+            fetched.Items.FirstOrDefault(i => string.Equals(i.CommentId, commentId, StringComparison.Ordinal))
+            ?? fetched.Items.FirstOrDefault(i =>
+                i.Kind == PrReviewBodies.Kind && string.Equals(i.ReviewId, commentId, StringComparison.Ordinal));
         if (comment is null)
             return new RemotePrWriteResult(false, null,
                 $"No comment with id '{commentId}' on this work item's pull request. The review ledger lists the comment ids that can be answered.");
@@ -156,8 +160,16 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             : new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, commentId, InReplyTo(comment, body), comment.Path, comment.Line, DateTime.UtcNow,
                 PrCommentLedger.Fingerprint(comment.Path, comment.Line, comment.Body));
 
-        return await QueueAsync(target.Run, write,
+        var queued = await QueueAsync(target.Run, write,
             "Queued: this answer goes out when the PR node next runs, and can be dropped before then.");
+
+        // Only a reply or a comment answers anything. A resolve closes a thread
+        // and says nothing to the person reading the pull request, so it leaves
+        // the finding waiting and the round still has something general to say.
+        if (queued.Ok)
+            await PrCommentLedgerWriter.MutateAsync(_runs, target.Run.Id, state => state?.Answered(write.SourceHash));
+
+        return queued;
     }
 
     public async Task<RemotePrWriteResult> ResolveAsync(string workItemId, string threadId, Guid? callerRunId)
@@ -224,7 +236,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         if (string.IsNullOrEmpty(sourceHash))
             return;
 
-        await PrCommentLedgerWriter.MutateAsync(_runs, runId, state => state?.ForgetDeliveredContent(sourceHash));
+        await PrCommentLedgerWriter.MutateAsync(_runs, runId, state => state
+            ?.ForgetDeliveredContent(sourceHash)
+            .WithUnanswered(state.Outstanding.Append(sourceHash!)));
     }
 
     /// <summary>Lines of the answered text quoted back before the answer.</summary>
