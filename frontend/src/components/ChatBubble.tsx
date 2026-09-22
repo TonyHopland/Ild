@@ -290,10 +290,23 @@ export default function ChatBubble() {
     );
   }, []);
 
-  // Whether an event belongs to the turn whose text is on screen. While a send is
-  // still waiting to be told which turn it started, the placeholder matches
-  // anything: the only turn producing events for this chat then is the one that
-  // send began, and dropping its deltas would lose the reply it is streaming.
+  // Whether an event belongs to the turn whose text is on screen.
+  //
+  // While a send is waiting to be told which turn it started, the placeholder
+  // matches anything, and that is deliberate rather than approximate. Until the
+  // server has processed the send, the turn being displaced is still running and
+  // still the turn on screen: its deltas are the text the user is reading, and
+  // rejecting them would tear a hole in it — including when the send never
+  // arrives, where that turn simply carries on. What it streamed in that window is
+  // dropped wholesale the moment the replacement announces itself, because a start
+  // for a different turn clears the buffer; so its text is never grown on top of.
+  //
+  // The replacement's own deltas cannot reach here before its start does: the
+  // runner announces the start before it so much as cancels the turn it replaces
+  // (ChatTurnRunner.SubmitAsync), and a hub delivers a chat's events to a client in
+  // the order they were sent. An event from the displaced turn therefore arrives
+  // either while it is still the turn on screen, or after the replacement's start
+  // has moved the value on and this predicate rejects it.
   const isCurrentTurn = useCallback(
     (turnId: string) => turnRef.current === PENDING_TURN || turnRef.current === turnId,
     [],
