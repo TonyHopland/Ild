@@ -23,5 +23,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0018](./0018-global-ai-traversal-cap.md)                  | Runaway-graph safety net counts AI steps between human interactions                   |
 | [0019](./0019-agent-egress-through-in-container-proxy.md)  | Agent egress is funnelled through an in-container proxy keyed on the agent uid        |
 | [0020](./0020-raw-tcp-egress-through-declared-forwards.md) | Raw-TCP egress is served by a declared, judged relay, not a hole in the firewall      |
+| [0021](./0021-client-state-scoped-to-its-entity.md)        | Client state is scoped per entity; every in-flight request and event carries identity |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

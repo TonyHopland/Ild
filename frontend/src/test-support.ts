@@ -1,6 +1,12 @@
 // Shared helpers for tests. Not a test file itself, so it is outside the
 // `src/**/*.test.{ts,tsx}` include and never collected as a suite.
 import { act, fireEvent } from "@testing-library/react";
+import type {
+  ChatMessageAppendedPayload,
+  ChatTurnCompletedPayload,
+  ChatTurnProgressPayload,
+  ChatTurnStartedPayload,
+} from "./types";
 
 /** Presses before the loop gives up and reports the caller's own assertion. */
 const MaxPresses = 40;
@@ -55,4 +61,20 @@ export async function pressEscapeUntil(settled: () => void): Promise<void> {
   // never closes fails with the caller's own assertion rather than a timeout.
   fireEvent.keyDown(document, { key: "Escape" });
   settled();
+}
+
+/**
+ * The chat hub events a bubble test simulates, each mapped to the payload the
+ * server really sends (`SignalRPayloads.cs`). A test's `emit` helper is typed
+ * against this, so an event built without its turn id is a compile error rather
+ * than a handler call that quietly does nothing: every one of these carries a
+ * turn id, and the bubble matches on it to tell a replaced turn's traffic from
+ * its successor's — an untagged event is silently ignored, which is exactly how
+ * a test can go on passing while exercising none of what it names.
+ */
+export interface ChatHubEvents {
+  ChatTurnStarted: ChatTurnStartedPayload;
+  ChatTurnProgress: ChatTurnProgressPayload;
+  ChatMessageAppended: ChatMessageAppendedPayload;
+  ChatTurnCompleted: ChatTurnCompletedPayload;
 }

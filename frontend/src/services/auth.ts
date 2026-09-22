@@ -11,6 +11,7 @@ import {
   RemoteProviderTypeOption,
   AiProvider,
   ChatSession,
+  ChatSendAccepted,
   ChatSessionSummary,
   LoopTemplateVersion,
   EventLogPage,
@@ -607,23 +608,33 @@ export const chatService = {
     return api.post<ChatSession>("/chat", { aiProviderId, tools });
   },
 
+  /**
+   * Send a message, which interrupts whatever turn is running rather than queueing.
+   * Resolves with the id of the turn the server started, so the caller knows which
+   * turn is in flight without waiting for the start broadcast. Null only if the
+   * answer carried no id — nothing the API does, but a body a proxy stripped should
+   * leave the send working, settled by the read that follows it.
+   */
   sendMessage: async (
     sessionId: string,
     content: string,
     openWorkItemId?: string | null,
     openLoopDocument?: string | null,
-  ): Promise<void> => {
-    await api.post<void>(`/chat/${sessionId}/messages`, {
+  ): Promise<string | null> => {
+    const accepted = await api.post<ChatSendAccepted | null>(`/chat/${sessionId}/messages`, {
       content,
       openWorkItemId: openWorkItemId ?? null,
       openLoopDocument: openLoopDocument ?? null,
     });
+    return accepted?.turnId ?? null;
   },
 
   /**
    * Cancel the chat's in-flight turn. The partial reply is still persisted and
-   * announced over the hub, so the caller waits for `ChatTurnCompleted` rather
-   * than clearing its own busy state. A no-op when the turn already finished.
+   * announced over the hub, so the caller waits for that turn's
+   * `ChatTurnCompleted` rather than settling its own view. A no-op when the turn
+   * already finished — which is why a caller that cares re-reads the chat once
+   * the request comes back rather than assuming the turn is over.
    */
   interrupt: async (sessionId: string): Promise<void> => {
     await api.post<void>(`/chat/${sessionId}/interrupt`, {});

@@ -56,21 +56,36 @@ public sealed class ChatServiceTests : IDisposable
     {
         public List<AppendedMessage> Appended { get; } = new();
         public List<string> Progress { get; } = new();
+        public List<Guid> Started { get; } = new();
         public List<bool> Completed { get; } = new();
 
-        public Task MessageAppendedAsync(Guid chatSessionId, ChatMessageView message)
+        // The turn that produced each message is recorded alongside it, so a test can
+        // tell one turn's messages from another's.
+        public List<Guid> AppendedTurnIds { get; } = new();
+
+        public Task MessageAppendedAsync(Guid chatSessionId, Guid turnId, ChatMessageView message)
         {
+            AppendedTurnIds.Add(turnId);
             Appended.Add(new AppendedMessage(chatSessionId, message));
             return Task.CompletedTask;
         }
 
-        public Task TurnProgressAsync(Guid chatSessionId, string delta)
+        public List<Guid> ProgressTurnIds { get; } = new();
+
+        public Task TurnProgressAsync(Guid chatSessionId, Guid turnId, string delta)
         {
+            ProgressTurnIds.Add(turnId);
             Progress.Add(delta);
             return Task.CompletedTask;
         }
 
-        public Task TurnCompletedAsync(Guid chatSessionId, bool interrupted)
+        public Task TurnStartedAsync(Guid chatSessionId, Guid turnId)
+        {
+            Started.Add(turnId);
+            return Task.CompletedTask;
+        }
+
+        public Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted)
         {
             Completed.Add(interrupted);
             return Task.CompletedTask;
@@ -178,7 +193,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
 
         var view = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
-        await svc.ExecuteTurnAsync(view.Id, "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(view.Id, Guid.NewGuid(), "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
 
         Assert.Equal(new[] { "ild" }, view.Tools);
         Assert.Equal(new[] { "ild" }, adapter.LastContext!.ToolAllowlist);
@@ -192,7 +207,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
 
         var view = await svc.StartAsync("alice", provider.Id, Array.Empty<string>());
-        await svc.ExecuteTurnAsync(view.Id, "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(view.Id, Guid.NewGuid(), "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
 
         Assert.Empty(view.Tools);
         Assert.Equal(string.Empty, _db.Context.ChatSessions.Single().ToolAllowlistCsv);
@@ -227,7 +242,8 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "hi there", CancellationToken.None);
+        var turnId = Guid.NewGuid();
+        await svc.ExecuteTurnAsync(started.Id, turnId, "hi there", CancellationToken.None);
 
         // The synthesized context routes through the chat session, not a run.
         Assert.Equal(started.Id, adapter.LastContext!.ChatSessionId);
@@ -249,8 +265,22 @@ public sealed class ChatServiceTests : IDisposable
 
         Assert.Contains("hello ", _notifier.Progress);
         Assert.Equal(2, _notifier.Appended.Count);
-        Assert.Single(_notifier.Completed);
-        Assert.False(_notifier.Completed[0]);
+        // A turn's start and end belong to whoever started it — only the runner can
+        // name the turn, and only it sees a turn that ends without the service
+        // saying anything. A second completion from here would clear the bubble's
+        // indicator for whichever turn is running by then.
+        Assert.Empty(_notifier.Started);
+        Assert.Empty(_notifier.Completed);
+
+        // Every event the service publishes says which turn produced it, under the id
+        // the runner gave it: the user message, each streamed delta and the finalized
+        // reply. The client tells a live turn's traffic from a replaced one's by
+        // exactly this id, so an event that cannot name its turn is one the client
+        // cannot place.
+        Assert.NotEmpty(_notifier.ProgressTurnIds);
+        Assert.Equal(2, _notifier.AppendedTurnIds.Count);
+        Assert.All(_notifier.AppendedTurnIds, id => Assert.Equal(turnId, id));
+        Assert.All(_notifier.ProgressTurnIds, id => Assert.Equal(turnId, id));
     }
 
     [Fact]
@@ -262,8 +292,8 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "first", CancellationToken.None);
-        await svc.ExecuteTurnAsync(started.Id, "second", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "first", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "second", CancellationToken.None);
 
         // The second turn must resume the session id captured by the first.
         Assert.Equal("sess-1", adapter.LastContext!.SessionId);
@@ -285,14 +315,15 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "go", cts.Token);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "go", cts.Token);
 
         var assistant = _db.Context.ChatMessages
             .Where(m => m.ChatSessionId == started.Id && m.Role == "assistant")
             .Single();
         Assert.True(assistant.Interrupted);
         Assert.Equal("partial answer", assistant.Content);
-        Assert.True(_notifier.Completed[0], "turn-completed should report interrupted");
+        // That the cancelled turn also REPORTS itself interrupted is the runner's
+        // job now: ChatTurnLifecycleTests covers it, under the turn's own id.
     }
 
     [Fact]
@@ -303,7 +334,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
 
-        await svc.ExecuteTurnAsync(started.Id, "plain message", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "plain message", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
 
         Assert.Equal("plain message", adapter.LastContext!.Prompt);
         Assert.Null(adapter.LastContext.AdditionalAllowedDirectories);
@@ -318,7 +349,7 @@ public sealed class ChatServiceTests : IDisposable
         // No filesystem grant and no active run: id-only context, scratch alone.
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "what is open?", "wi-42", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "what is open?", "wi-42", openLoopDocument: null, CancellationToken.None);
 
         var prompt = adapter.LastContext!.Prompt;
         Assert.Contains("[Chat Context]", prompt);
@@ -343,7 +374,7 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" });
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
-        await svc.ExecuteTurnAsync(started.Id, "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
 
         Assert.NotNull(adapter.LastContext!.AdditionalAllowedDirectories);
         Assert.Contains(worktreePath, adapter.LastContext.AdditionalAllowedDirectories!);
@@ -361,7 +392,7 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
-        await svc.ExecuteTurnAsync(started.Id, "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
 
         Assert.Null(adapter.LastContext!.AdditionalAllowedDirectories);
         Assert.DoesNotContain(worktreePath, adapter.LastContext.Prompt);
@@ -378,7 +409,7 @@ public sealed class ChatServiceTests : IDisposable
         // so the chat must not expose it (ADR-0011 active-run-only).
         await SeedActiveRunAsync("wi-7", LoopRunStatus.Completed);
 
-        await svc.ExecuteTurnAsync(started.Id, "look", "wi-7", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "look", "wi-7", openLoopDocument: null, CancellationToken.None);
 
         Assert.Null(adapter.LastContext!.AdditionalAllowedDirectories);
     }
@@ -392,7 +423,7 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
         const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"My Loop\",\"nodes\":[]}";
-        await svc.ExecuteTurnAsync(started.Id, "tidy this loop", openWorkItemId: null, document, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "tidy this loop", openWorkItemId: null, document, CancellationToken.None);
 
         // The flag enters the model context, the heavy JSON does not (it is pulled
         // on demand via get_current_loop).
@@ -417,7 +448,7 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
         const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"L\",\"nodes\":[]}";
-        await svc.ExecuteTurnAsync(started.Id, "help me wire this up", openWorkItemId: null, document, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "help me wire this up", openWorkItemId: null, document, CancellationToken.None);
 
         // The Chat Context teaches the agent the loop model so it can author a valid
         // document: node types, edges, variables, and sessions.
@@ -445,7 +476,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "what is open?", "wi-42", openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "what is open?", "wi-42", openLoopDocument: null, CancellationToken.None);
 
         // No loop editor open ⇒ the loop primer is not paid for.
         Assert.DoesNotContain("Loop authoring guide", adapter.LastContext!.Prompt);
@@ -467,7 +498,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
-        await svc.ExecuteTurnAsync(started.Id, "hi", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi", CancellationToken.None);
 
         // A chat turn has no run, but adapters read the run context for the
         // agent's cwd and its session key — it carries the session, not a
@@ -487,7 +518,7 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
         const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"L\",\"nodes\":[]}";
-        await svc.ExecuteTurnAsync(started.Id, "how do loop variables work?", openWorkItemId: null, document, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "how do loop variables work?", openWorkItemId: null, document, CancellationToken.None);
 
         var sent = cli.CapturedPrompt;
         // What the service composed is exactly what the agent process received.
@@ -515,7 +546,7 @@ public sealed class ChatServiceTests : IDisposable
         // question rewritten before the agent ever saw it. The angle-bracket
         // form is the shape the report named; both must arrive untouched.
         const string message = "Why do {{WorkItem.Title}}, {{Var.handoff}} and <Foo.Bar> vanish from my prompt?";
-        await svc.ExecuteTurnAsync(started.Id, message, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), message, CancellationToken.None);
 
         Assert.Equal(message, cli.CapturedPrompt);
         Assert.Equal(adapter.LastContext!.Prompt, cli.CapturedPrompt);
@@ -534,7 +565,7 @@ public sealed class ChatServiceTests : IDisposable
         File.WriteAllText(Path.Combine(scratchPath, "notes.txt"), "INLINED-FILE-BODY");
 
         const string message = "What does {{WorkTree.File:notes.txt}} mean?";
-        await svc.ExecuteTurnAsync(started.Id, message, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), message, CancellationToken.None);
 
         // Chat has no file-inlining side channel: the agent already runs with
         // scratch as its cwd and reads files with its own tools.
@@ -553,16 +584,16 @@ public sealed class ChatServiceTests : IDisposable
         const string first = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"v1\",\"nodes\":[]}";
         const string second = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"v2\",\"nodes\":[]}";
 
-        await svc.ExecuteTurnAsync(started.Id, "first", openWorkItemId: null, first, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "first", openWorkItemId: null, first, CancellationToken.None);
         Assert.Equal(first, _loopScratchpad.Get(started.Id));
 
         // A later message with a new document overwrites the prior snapshot…
-        await svc.ExecuteTurnAsync(started.Id, "second", openWorkItemId: null, second, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "second", openWorkItemId: null, second, CancellationToken.None);
         Assert.Equal(second, _loopScratchpad.Get(started.Id));
 
         // …and a message sent with the editor closed clears it so the agent sees no
         // loop, and the preamble no longer mentions the Loop Editor.
-        await svc.ExecuteTurnAsync(started.Id, "third", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "third", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
         Assert.Null(_loopScratchpad.Get(started.Id));
         Assert.DoesNotContain("Loop Editor", adapter.LastContext!.Prompt);
     }
@@ -575,11 +606,11 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
         Assert.Null(started.Name);
 
-        await svc.ExecuteTurnAsync(started.Id, "Help me wire up a deploy loop", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "Help me wire up a deploy loop", CancellationToken.None);
         Assert.Equal("Help me wire up a deploy loop", _db.Context.ChatSessions.Single().Name);
 
         // The name is fixed by the first turn — a later message must not rename it.
-        await svc.ExecuteTurnAsync(started.Id, "now add a PR node", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "now add a PR node", CancellationToken.None);
         Assert.Equal("Help me wire up a deploy loop", _db.Context.ChatSessions.Single().Name);
     }
 
@@ -591,7 +622,7 @@ public sealed class ChatServiceTests : IDisposable
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
 
         var longMessage = new string('a', 200);
-        await svc.ExecuteTurnAsync(started.Id, longMessage, CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), longMessage, CancellationToken.None);
 
         var name = _db.Context.ChatSessions.Single().Name!;
         Assert.True(name.Length <= 61, "name should be truncated to a sensible length");
@@ -605,12 +636,12 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
 
         var older = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
-        await svc.ExecuteTurnAsync(older.Id, "first chat", CancellationToken.None);
+        await svc.ExecuteTurnAsync(older.Id, Guid.NewGuid(), "first chat", CancellationToken.None);
         var newer = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
-        await svc.ExecuteTurnAsync(newer.Id, "second chat", CancellationToken.None);
+        await svc.ExecuteTurnAsync(newer.Id, Guid.NewGuid(), "second chat", CancellationToken.None);
         // A different user's chat must never leak into alice's history.
         var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" });
-        await svc.ExecuteTurnAsync(bobs.Id, "bob chat", CancellationToken.None);
+        await svc.ExecuteTurnAsync(bobs.Id, Guid.NewGuid(), "bob chat", CancellationToken.None);
 
         // Force the newer chat to have the most recent activity timestamp.
         await _db.Context.Database.ExecuteSqlInterpolatedAsync(
@@ -632,7 +663,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
-        await svc.ExecuteTurnAsync(started.Id, "hi there", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi there", CancellationToken.None);
 
         var owner = await svc.GetByIdAsync("alice", started.Id);
         Assert.NotNull(owner);
@@ -661,7 +692,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("x"))));
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
-        await svc.ExecuteTurnAsync(started.Id, "hi", CancellationToken.None);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi", CancellationToken.None);
 
         // Bind a snapshot to the chat session so we can prove the cascade.
         var snapshots = new AdapterSessionSnapshotStore(_db.Context);
