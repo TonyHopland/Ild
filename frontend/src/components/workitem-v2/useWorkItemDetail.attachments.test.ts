@@ -85,22 +85,22 @@ function renderDetail(workItem: WorkItem) {
   });
 }
 
-const stagedNames = (detail: { attachments: { staged: { file: File }[] } }) =>
-  detail.attachments.staged.map((s) => s.file.name);
+const stagedNames = (detail: { editAttachments: { staged: { file: File }[] } }) =>
+  detail.editAttachments.staged.map((s) => s.file.name);
 
 describe("staging files on a work item", () => {
   test("stages picked files and drops one again on request", async () => {
     stubServices();
     const { result } = renderDetail(makeWorkItem());
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
     await act(async () => {
-      result.current.attachments.add([fileOfSize("a.png", 10), fileOfSize("b.pdf", 20)]);
+      result.current.editAttachments.add([fileOfSize("a.png", 10), fileOfSize("b.pdf", 20)]);
     });
     expect(stagedNames(result.current)).toEqual(["a.png", "b.pdf"]);
 
     await act(async () => {
-      result.current.attachments.remove(result.current.attachments.staged[0].key);
+      result.current.editAttachments.remove(result.current.editAttachments.staged[0].key);
     });
     expect(stagedNames(result.current)).toEqual(["b.pdf"]);
   });
@@ -109,17 +109,20 @@ describe("staging files on a work item", () => {
     stubServices({ maxBytesPerFile: 1000 });
     const upload = vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue([]);
     const { result } = renderDetail(makeWorkItem());
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
     await act(async () => {
-      result.current.attachments.add([fileOfSize("big.bin", 1200), fileOfSize("small.txt", 10)]);
+      result.current.editAttachments.add([
+        fileOfSize("big.bin", 1200),
+        fileOfSize("small.txt", 10),
+      ]);
     });
 
     expect(stagedNames(result.current)).toEqual(["small.txt"]);
-    expect(result.current.attachments.stagingError).toContain("big.bin");
+    expect(result.current.editAttachments.stagingError).toContain("big.bin");
 
     await act(async () => {
-      await result.current.attachments.uploadAll("wi-1");
+      await result.current.editAttachments.uploadAll("wi-1");
     });
     expect(upload).toHaveBeenCalledTimes(1);
     expect(upload.mock.calls[0][1].name).toBe("small.txt");
@@ -134,12 +137,12 @@ describe("staging files on a work item", () => {
     await waitFor(() => expect(settingsService.getAttachmentLimits).toHaveBeenCalled());
 
     await act(async () => {
-      result.current.attachments.add([fileOfSize("huge.bin", 500 * 1024 * 1024)]);
+      result.current.editAttachments.add([fileOfSize("huge.bin", 500 * 1024 * 1024)]);
     });
 
     expect(stagedNames(result.current)).toEqual(["huge.bin"]);
-    expect(result.current.attachments.stagingError).toBeFalsy();
-    expect(result.current.attachments.limits).toBeNull();
+    expect(result.current.editAttachments.stagingError).toBeFalsy();
+    expect(result.current.editAttachments.limits).toBeNull();
   });
 });
 
@@ -154,9 +157,9 @@ describe("uploading a staged batch", () => {
           : Promise.resolve([]),
       );
     const { result } = renderDetail(makeWorkItem());
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
-      result.current.attachments.add([
+      result.current.editAttachments.add([
         fileOfSize("a.png", 10),
         fileOfSize("b.pdf", 10),
         fileOfSize("c.txt", 10),
@@ -165,12 +168,12 @@ describe("uploading a staged batch", () => {
 
     let outcome: { ok: boolean; storedNames: string[] } | undefined;
     await act(async () => {
-      outcome = await result.current.attachments.uploadAll("wi-1");
+      outcome = await result.current.editAttachments.uploadAll("wi-1");
     });
 
     expect(upload.mock.calls.map((c) => (c[1] as File).name)).toEqual(["a.png", "b.pdf", "c.txt"]);
     expect(outcome).toMatchObject({ ok: false, storedNames: ["a.png", "c.txt"] });
-    expect(result.current.attachments.staged.map((s) => s.status)).toEqual([
+    expect(result.current.editAttachments.staged.map((s) => s.status)).toEqual([
       "uploaded",
       "pending",
       "uploaded",
@@ -190,20 +193,20 @@ describe("uploading a staged batch", () => {
         return Promise.resolve([]);
       });
     const { result } = renderDetail(makeWorkItem());
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
-      result.current.attachments.add([fileOfSize("a.png", 10), fileOfSize("b.pdf", 10)]);
+      result.current.editAttachments.add([fileOfSize("a.png", 10), fileOfSize("b.pdf", 10)]);
     });
 
     let first: { ok: boolean; storedNames: string[] } | undefined;
     await act(async () => {
-      first = await result.current.attachments.uploadAll("wi-1");
+      first = await result.current.editAttachments.uploadAll("wi-1");
     });
     expect(first).toMatchObject({ ok: false, storedNames: ["a.png"] });
 
     let second: { ok: boolean; storedNames: string[] } | undefined;
     await act(async () => {
-      second = await result.current.attachments.uploadAll("wi-1");
+      second = await result.current.editAttachments.uploadAll("wi-1");
     });
 
     // a.png landed the first time round, so the retry carries b.pdf alone —
@@ -218,19 +221,19 @@ describe("staged files belong to one work item", () => {
   test("switching to another work item clears the staged files and the staging error", async () => {
     stubServices({ maxBytesPerFile: 1000 });
     const { result, rerender } = renderDetail(makeWorkItem({ id: "wi-1" }));
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
-      result.current.attachments.add([fileOfSize("a.png", 10), fileOfSize("big.bin", 1200)]);
+      result.current.editAttachments.add([fileOfSize("a.png", 10), fileOfSize("big.bin", 1200)]);
     });
     expect(stagedNames(result.current)).toEqual(["a.png"]);
-    expect(result.current.attachments.stagingError).toBeTruthy();
+    expect(result.current.editAttachments.stagingError).toBeTruthy();
 
     await act(async () => {
       rerender({ wi: makeWorkItem({ id: "wi-2" }) });
     });
 
-    expect(result.current.attachments.staged).toEqual([]);
-    expect(result.current.attachments.stagingError).toBeFalsy();
+    expect(result.current.editAttachments.staged).toEqual([]);
+    expect(result.current.editAttachments.stagingError).toBeFalsy();
   });
 
   test("staged files survive a status change on the same item", async () => {
@@ -238,9 +241,9 @@ describe("staged files belong to one work item", () => {
     // change must not wipe the files staged to answer with.
     stubServices();
     const { result, rerender } = renderDetail(makeWorkItem({ id: "wi-1" }));
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
-      result.current.attachments.add([fileOfSize("a.png", 10)]);
+      result.current.editAttachments.add([fileOfSize("a.png", 10)]);
     });
 
     await act(async () => {
@@ -259,15 +262,15 @@ describe("staged files belong to one work item", () => {
   test("clear() empties the staged list", async () => {
     stubServices();
     const { result } = renderDetail(makeWorkItem());
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
-      result.current.attachments.add([fileOfSize("a.png", 10)]);
+      result.current.editAttachments.add([fileOfSize("a.png", 10)]);
     });
 
     await act(async () => {
-      result.current.attachments.clear();
+      result.current.editAttachments.clear();
     });
 
-    expect(result.current.attachments.staged).toEqual([]);
+    expect(result.current.editAttachments.staged).toEqual([]);
   });
 });

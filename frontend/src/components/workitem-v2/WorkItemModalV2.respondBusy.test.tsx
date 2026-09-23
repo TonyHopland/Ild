@@ -109,19 +109,6 @@ async function renderDialog(props: Partial<React.ComponentProps<typeof WorkItemM
 
 const feedback = () => document.querySelector(".wiv2-feedback") as HTMLElement;
 
-async function stage(...files: File[]) {
-  await act(async () => {
-    fireEvent.change(feedback().querySelector('input[type="file"]') as HTMLInputElement, {
-      target: { files },
-    });
-    await Promise.resolve();
-  });
-}
-
-async function waitForLimits() {
-  await waitFor(() => expect(feedback().textContent).toContain("25 MB"));
-}
-
 async function type(text: string) {
   await act(async () => {
     fireEvent.change(feedback().querySelector("textarea") as HTMLTextAreaElement, {
@@ -131,103 +118,13 @@ async function type(text: string) {
   });
 }
 
-describe("the note an answer carries", () => {
-  test("a retry after a refused answer still names the files already stored", async () => {
-    mockServices();
-    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
-    const answer = vi
-      .spyOn(authServices.workItemService, "humanFeedbackInput")
-      .mockRejectedValueOnce({ status: 400, message: "Input is too long." })
-      .mockResolvedValue(undefined);
-    await renderDialog();
-    await waitForLimits();
-    await stage(new File(["x"], "a.png", { type: "image/png" }));
-    await type("Looks good");
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(feedback().textContent).toContain("Input is too long."));
-
-    // The file landed on the first attempt, so the retry has nothing to send —
-    // but the note still has to tell the agent the file is there.
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-      await Promise.resolve();
-    });
-
-    await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
-    expect(answer.mock.calls[1][1]).toBe("Looks good\n\nAttached files: a.png");
-    expect(upload).toHaveBeenCalledTimes(1);
+/** Lets the dialog's first reads land, so the answer buttons are wired up. */
+async function settle() {
+  await waitFor(() => expect(authServices.settingsService.getAttachmentLimits).toHaveBeenCalled());
+  await act(async () => {
+    await Promise.resolve();
   });
-
-  test("carries what the human had typed by the time the uploads finished", async () => {
-    mockServices();
-    const upload = deferred<never[]>();
-    vi.spyOn(authServices.workItemService, "uploadAttachment").mockReturnValue(upload.promise);
-    const answer = vi
-      .spyOn(authServices.workItemService, "humanFeedbackInput")
-      .mockResolvedValue(undefined);
-    await renderDialog();
-    await waitForLimits();
-    await stage(new File(["x"], "a.png", { type: "image/png" }));
-    await type("half");
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-      await Promise.resolve();
-    });
-
-    // The upload is slow and the human finishes the sentence while it runs.
-    await type("half a sentence, now finished");
-    await act(async () => {
-      upload.resolve([]);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer.mock.calls[0][1]).toBe("half a sentence, now finished\n\nAttached files: a.png");
-  });
-});
-
-describe("a batch that stored some of its files and failed on one", () => {
-  test("shows the item as it now stands before reporting the failure", async () => {
-    mockServices();
-    const stored = { id: "att-1", fileName: "a.png", contentType: "image/png", sizeBytes: 1 };
-    vi.spyOn(authServices.workItemService, "uploadAttachment").mockImplementation(
-      (_id: string, file: File) =>
-        file.name === "b.pdf"
-          ? Promise.reject({ status: 503, message: "WorkItemServer unreachable" })
-          : Promise.resolve([stored]),
-    );
-    const onSave = vi.fn();
-    const reread = vi
-      .spyOn(authServices.workItemService, "getById")
-      .mockResolvedValue({ ...makeParkedWorkItem(), attachments: [stored] });
-    await renderDialog({ onSave });
-    await waitForLimits();
-    await stage(
-      new File(["a"], "a.png", { type: "image/png" }),
-      new File(["b"], "b.pdf", { type: "application/pdf" }),
-    );
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-      await Promise.resolve();
-    });
-
-    await waitFor(() => expect(feedback().textContent).toContain("WorkItemServer unreachable"));
-    // a.png is on the item, so the copy everything else reads has to carry it —
-    // the overview beside the error would otherwise show the item as it was.
-    await waitFor(() => expect(reread).toHaveBeenCalled());
-    const calls = onSave.mock.calls;
-    const published = calls[calls.length - 1]?.[0] as WorkItem | undefined;
-    expect(published?.attachments?.map((a) => a.fileName)).toEqual(["a.png"]);
-    // The straggler stays staged for the retry.
-    expect(feedback().textContent).toContain("b.pdf");
-  });
-});
+}
 
 describe("an answer that has been submitted", () => {
   test("holds its controls until the dialog is showing what the run did next", async () => {
@@ -240,7 +137,7 @@ describe("an answer that has been submitted", () => {
     const refreshed = deferred<WorkItem>();
     vi.spyOn(authServices.workItemService, "getById").mockReturnValue(refreshed.promise);
     await renderDialog();
-    await waitForLimits();
+    await settle();
 
     const approve = screen.getByRole("button", { name: "Approve" });
     await act(async () => {
@@ -281,7 +178,7 @@ describe("an answer whose refresh never arrives", () => {
       message: "WorkItemServer unreachable",
     });
     await renderDialog();
-    await waitForLimits();
+    await settle();
 
     const approve = screen.getByRole("button", { name: "Approve" });
     await act(async () => {
@@ -302,20 +199,15 @@ describe("an answer whose refresh never arrives", () => {
     expect((approve as HTMLButtonElement).disabled).toBe(true);
   });
 });
-
 describe("answering while an answer is already in flight", () => {
-  test("the answer buttons are held until the upload and the answer are done", async () => {
+  test("the answer buttons are held until the answer is done, and a second press sends nothing", async () => {
     mockServices();
-    const upload = deferred<never[]>();
-    const uploading = vi
-      .spyOn(authServices.workItemService, "uploadAttachment")
-      .mockReturnValue(upload.promise);
+    const submitted = deferred<void>();
     const answer = vi
       .spyOn(authServices.workItemService, "humanFeedbackInput")
-      .mockResolvedValue(undefined);
+      .mockReturnValue(submitted.promise);
     await renderDialog();
-    await waitForLimits();
-    await stage(new File(["x"], "shot.png", { type: "image/png" }));
+    await settle();
 
     const approve = screen.getByRole("button", { name: "Approve" });
     await act(async () => {
@@ -323,7 +215,6 @@ describe("answering while an answer is already in flight", () => {
       await Promise.resolve();
     });
 
-    // The upload is still going: pressing again must not send a second copy.
     await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(true));
     expect((screen.getByRole("button", { name: "Reject" }) as HTMLButtonElement).disabled).toBe(
       true,
@@ -332,72 +223,15 @@ describe("answering while an answer is already in flight", () => {
       fireEvent.click(approve);
       await Promise.resolve();
     });
-    expect(uploading).toHaveBeenCalledTimes(1);
-    expect(answer).not.toHaveBeenCalled();
+    expect(answer).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      upload.resolve([]);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(uploading).toHaveBeenCalledTimes(1);
-    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
-  });
-});
-
-describe("editing while an answer is uploading", () => {
-  test("is not offered until the batch is done", async () => {
-    mockServices();
-    const upload = deferred<never[]>();
-    vi.spyOn(authServices.workItemService, "uploadAttachment").mockReturnValue(upload.promise);
-    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
-    await renderDialog();
-    await waitForLimits();
-    await stage(new File(["x"], "shot.png", { type: "image/png" }));
-
-    const edit = screen.getByRole("button", { name: "Edit" });
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-      await Promise.resolve();
-    });
-
-    // The edit form saves from the same staging list, and leaving it empties
-    // that list — neither belongs on top of a batch still going up.
-    await waitFor(() => expect((edit as HTMLButtonElement).disabled).toBe(true));
-
-    await act(async () => {
-      upload.resolve([]);
-      await Promise.resolve();
-    });
-    await waitFor(() => expect((edit as HTMLButtonElement).disabled).toBe(false));
-  });
-});
-
-describe("staging a file while the answer is being submitted", () => {
-  test("keeps it staged instead of clearing it away with the answer", async () => {
-    mockServices();
-    const submitted = deferred<void>();
-    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockReturnValue(submitted.promise);
-    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
-    await renderDialog();
-    await waitForLimits();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
-      await Promise.resolve();
-    });
-
-    // The answer is on its way with nothing attached; the file dropped now
-    // belongs to whatever the human does next, not to the answer just sent.
-    await stage(new File(["x"], "late.png", { type: "image/png" }));
     await act(async () => {
       submitted.resolve();
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(feedback().textContent).toContain("late.png"));
-    expect(upload).not.toHaveBeenCalled();
+    await waitFor(() => expect((approve as HTMLButtonElement).disabled).toBe(false));
+    expect(answer).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -409,14 +243,17 @@ describe("closing while the dialog is in the middle of something", () => {
     const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
     const onClose = vi.fn();
     await renderDialog({ onClose });
-    await waitForLimits();
+    await settle();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Edit" }));
       await Promise.resolve();
     });
+    await waitFor(() =>
+      expect((document.querySelector("form") as HTMLFormElement).textContent).toContain("25 MB"),
+    );
     await act(async () => {
-      fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+      fireEvent.change(document.querySelector('form input[type="file"]') as HTMLInputElement, {
         target: { files: [new File(["x"], "shot.png", { type: "image/png" })] },
       });
       await Promise.resolve();
@@ -445,28 +282,25 @@ describe("closing while the dialog is in the middle of something", () => {
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
   });
 
-  test("nor the answer's submit, after its uploads are done", async () => {
+  test("nor the answer's submit while it is in flight", async () => {
     mockServices();
-    vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
     const submitted = deferred<void>();
     const answer = vi
       .spyOn(authServices.workItemService, "humanFeedbackInput")
       .mockReturnValue(submitted.promise);
     const onClose = vi.fn();
     await renderDialog({ onClose });
-    await waitForLimits();
-    await stage(new File(["x"], "shot.png", { type: "image/png" }));
+    await settle();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Approve" }));
       await Promise.resolve();
     });
 
-    // Waiting for the submit to be out puts the dialog past its uploads: the
-    // only thing still running is the answer itself.
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
     await act(async () => {
       fireEvent.keyDown(document, { key: "Escape" });
+      for (const close of screen.getAllByRole("button", { name: "Close" })) fireEvent.click(close);
       await Promise.resolve();
     });
     expect(onClose).not.toHaveBeenCalled();
@@ -485,67 +319,48 @@ describe("closing while the dialog is in the middle of something", () => {
   });
 });
 
-describe("closing while an upload is on its way", () => {
-  test("waits for the batch instead of discarding over it", async () => {
+describe("an answer the server refuses", () => {
+  test("shows the server's message and releases the buttons for a retry", async () => {
     mockServices();
-    const upload = deferred<never[]>();
-    vi.spyOn(authServices.workItemService, "uploadAttachment").mockReturnValue(upload.promise);
-    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
-    const onClose = vi.fn();
-    await renderDialog({ onClose });
-    await waitForLimits();
-    await stage(new File(["x"], "shot.png", { type: "image/png" }));
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockRejectedValueOnce({ status: 400, message: "Input must be 8192 characters or fewer." })
+      .mockResolvedValue(undefined);
+    await renderDialog();
+    await settle();
+    await type("Looks good");
+
+    const approve = screen.getByRole("button", { name: "Approve" });
+    await act(async () => {
+      fireEvent.click(approve);
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(feedback().textContent).toContain("Input must be 8192 characters or fewer."),
+    );
+    expect((approve as HTMLButtonElement).disabled).toBe(false);
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      fireEvent.click(approve);
       await Promise.resolve();
     });
 
-    // The file is in the air: it cannot be called back, so the dialog neither
-    // closes nor offers to throw it away.
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Escape" });
-      await Promise.resolve();
-    });
-    expect(onClose).not.toHaveBeenCalled();
-    expect(screen.queryByText(/Discard unsaved changes/)).toBeNull();
-
-    await act(async () => {
-      upload.resolve([]);
-      await Promise.resolve();
-    });
-
-    // Once the batch is done the dialog answers Escape again.
-    await waitFor(() => expect(feedback()).toBeTruthy());
-    await act(async () => {
-      fireEvent.keyDown(document, { key: "Escape" });
-      await Promise.resolve();
-    });
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
+    expect(answer.mock.calls[1]).toEqual(["wi-1", "Looks good"]);
   });
 });
 
 describe("an answer waiting to be retried", () => {
   test("survives an edit opened and cancelled beside it", async () => {
     mockServices();
-    const upload = vi
-      .spyOn(authServices.workItemService, "uploadAttachment")
-      .mockResolvedValue([
-        { id: "att-1", fileName: "a.txt", contentType: "text/plain", sizeBytes: 1 },
-      ]);
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);
     const answer = vi
       .spyOn(authServices.workItemService, "humanFeedbackInput")
       .mockRejectedValueOnce({ status: 400, message: "Input must be 8192 characters or fewer." })
       .mockResolvedValue(undefined);
     await renderDialog();
-    await waitForLimits();
-    await stage(new File(["x"], "a.txt", { type: "text/plain" }));
-    await act(async () => {
-      fireEvent.change(feedback().querySelector("textarea") as HTMLTextAreaElement, {
-        target: { value: "Looks good" },
-      });
-      await Promise.resolve();
-    });
+    await settle();
+    await type("Looks good");
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -555,9 +370,6 @@ describe("an answer waiting to be retried", () => {
       expect(feedback().textContent).toContain("Input must be 8192 characters or fewer."),
     );
 
-    // The file is on the item and the answer is waiting to be retried. Opening
-    // an edit and cancelling it discards what was staged in the edit — nothing
-    // else.
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Edit" }));
       await Promise.resolve();
@@ -567,27 +379,27 @@ describe("an answer waiting to be retried", () => {
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(feedback().textContent).toContain("a.txt"));
+    await waitFor(() => expect(feedback()).toBeTruthy());
+    expect((feedback().querySelector("textarea") as HTMLTextAreaElement).value).toBe("Looks good");
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Approve" }));
       await Promise.resolve();
     });
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
-    expect(answer.mock.calls[1][1]).toBe("Looks good\n\nAttached files: a.txt");
-    expect(upload).toHaveBeenCalledTimes(1);
+    expect(answer.mock.calls[1]).toEqual(["wi-1", "Looks good"]);
+    expect(upload).not.toHaveBeenCalled();
   });
 });
 
-describe("closing with a file staged in the feedback pane", () => {
+describe("closing with feedback typed in the pane", () => {
   test("Escape asks before discarding it", async () => {
     mockServices();
     const onClose = vi.fn();
     await renderDialog({ onClose });
-    await waitForLimits();
-    await stage(new File(["x"], "shot.png", { type: "image/png" }));
+    await settle();
+    await type("Half an answer");
 
-    // A staged screenshot is unsaved work exactly as typed feedback is.
     await pressEscapeUntil(() => {
       expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
     });

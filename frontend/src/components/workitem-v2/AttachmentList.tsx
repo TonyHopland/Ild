@@ -7,8 +7,7 @@ interface AttachmentListProps {
   workItem: WorkItem;
   /**
    * A file has left the work item: the list needs rereading so the removal shows
-   * without a page reload, and anything else holding this attachment — the
-   * staging rows, the note an answer is about to carry — has to let go of it.
+   * without a page reload, and the edit form's staging rows have to let go of it.
    */
   onRemoved: (attachmentId: string) => void;
 }

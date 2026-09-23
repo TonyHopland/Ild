@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AttachmentLimits, WorkItemAttachment } from "../../types";
+import { AttachmentLimits } from "../../types";
 import { settingsService, workItemService } from "../../services/auth";
 import { oversizeMessage, stagedFileName } from "../../utils/attachments";
 
@@ -50,23 +50,12 @@ export interface AttachmentStaging {
    * it was clicked would otherwise decide on a list that has moved on.
    */
   hasPending: () => boolean;
-  /** Drops what an upload has landed, leaving anything staged since untouched. */
-  clearUploaded: () => void;
   /**
    * Drops the entry that became this attachment, for when it is removed from the
    * work item: the staging rows and the item's own list are two views of the
    * same files and must not disagree while the dialog is open.
    */
   forgetUploaded: (attachmentId: string) => void;
-  /**
-   * The names an answer should tell the agent about: every file this list has
-   * stored, minus any the work item no longer holds. Matching is by the id the
-   * upload returned rather than by name, because two files can share a name and
-   * the stored one is not always the browser's. A read that could not say what
-   * the item holds, or an upload that answered without metadata, leaves the
-   * file named — it did land, and guessing it away would under-report.
-   */
-  namesStoredOn: (held: WorkItemAttachment[] | null | undefined) => string[];
   handlePaste: (event: React.ClipboardEvent) => void;
   uploadAll: (workItemId: string) => Promise<UploadOutcome>;
 }
@@ -85,10 +74,8 @@ const namesOf = (entries: StagedAttachment[]) =>
     .map((entry) => entry.storedName ?? entry.file.name);
 
 /**
- * What this instance may accept, read once for the dialog and shared by the
- * staging lists in it: they weigh files against the same instance's maximum, and
- * one read answers for all of them. A failed read leaves the limits unknown and
- * the server the only enforcer.
+ * What this instance may accept, read once for the dialog. A failed read leaves
+ * the limits unknown and the server the only enforcer.
  */
 export function useAttachmentLimits(): AttachmentLimits | null {
   const [limits, setLimits] = useState<AttachmentLimits | null>(null);
@@ -113,11 +100,10 @@ export function useAttachmentLimits(): AttachmentLimits | null {
 }
 
 /**
- * The files a human has picked, dropped or pasted but not yet uploaded, for one
- * act — saving the form, or answering the run. They belong to the work item they
- * were staged on, and each is marked done on its own successful upload, so a
- * save that fails partway can be retried without landing a second copy of what
- * already arrived.
+ * The files a human has picked, dropped or pasted but not yet uploaded, for the
+ * form to save. They belong to the work item they were staged on, and each is
+ * marked done on its own successful upload, so a save that fails partway can be
+ * retried without landing a second copy of what already arrived.
  */
 export function useAttachmentStaging(
   workItemId: string | undefined,
@@ -220,29 +206,15 @@ export function useAttachmentStaging(
     [],
   );
 
-  const clearUploaded = useCallback(
-    () => applyStaged((prev) => prev.filter((entry) => entry.status !== "uploaded")),
-    [applyStaged],
-  );
-
   const forgetUploaded = useCallback(
     (attachmentId: string) =>
       applyStaged((prev) => prev.filter((entry) => entry.attachmentId !== attachmentId)),
     [applyStaged],
   );
 
-  const namesStoredOn = useCallback((held: WorkItemAttachment[] | null | undefined) => {
-    const onItem = held ? new Set(held.map((attachment) => attachment.id)) : null;
-    return namesOf(
-      stagedRef.current.filter(
-        (entry) => !onItem || !entry.attachmentId || onItem.has(entry.attachmentId),
-      ),
-    );
-  }, []);
-
-  // Wired to the form and the feedback pane, not to the picker: the textareas a
-  // screenshot is pasted into are siblings of it, so a handler inside the picker
-  // would never see the event. A paste carrying no file is left alone.
+  // Wired to the form, not to the picker: the textareas a screenshot is pasted
+  // into are siblings of it, so a handler inside the picker would never see the
+  // event. A paste carrying no file is left alone.
   const handlePaste = useCallback(
     (event: React.ClipboardEvent) => {
       const files = Array.from(event.clipboardData?.files ?? []);
@@ -318,11 +290,10 @@ export function useAttachmentStaging(
 
   // One batch at a time walks the staging list: two walks would each pick up the
   // same pending file and store it twice. A caller whose work the running batch
-  // is already doing — the edit form saving while an answer uploads the same
-  // list for the same item — joins it and takes its outcome. A caller asking for
-  // anything else waits for it and then walks itself, because the batch that is
-  // running belongs to an item this caller is not saving, and its outcome says
-  // nothing about these files.
+  // is already doing — a second save of the same list for the same item — joins
+  // it and takes its outcome. A caller asking for anything else waits for it and
+  // then walks itself, because the batch that is running belongs to an item this
+  // caller is not saving, and its outcome says nothing about these files.
   const inFlight = useRef<{
     outcome: Promise<UploadOutcome>;
     targetWorkItemId: string;
@@ -364,9 +335,7 @@ export function useAttachmentStaging(
     remove,
     clear,
     hasPending,
-    clearUploaded,
     forgetUploaded,
-    namesStoredOn,
     handlePaste,
     uploadAll,
   };

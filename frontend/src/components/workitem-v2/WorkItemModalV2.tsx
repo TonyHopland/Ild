@@ -72,9 +72,7 @@ export default function WorkItemModalV2({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
 
-  // Leaving the edit view without saving discards the files staged in it — and
-  // only those: the answer has its own list, which a cancelled edit has no
-  // business emptying.
+  // Leaving the edit view without saving discards the files staged in it.
   const clearStaged = detail.editAttachments.clear;
   const exitEdit = useCallback(() => {
     setEditMode(false);
@@ -83,13 +81,13 @@ export default function WorkItemModalV2({
   }, [clearStaged]);
 
   // Closing must not silently discard an in-progress edit, the create form,
-  // typed feedback, or a file staged for either. The create form (null workItem)
-  // is always an open form, so its dirty flag counts the same as an edit's.
+  // typed feedback, or a file staged in the form. The create form (null
+  // workItem) is always an open form, so its dirty flag counts the same as an
+  // edit's.
   const isCreate = workItem === null;
   const hasUnsavedChanges =
     ((editMode || isCreate) && editDirty) ||
     detail.feedbackInput.trim().length > 0 ||
-    detail.attachments.staged.length > 0 ||
     detail.editAttachments.staged.length > 0;
 
   const requestClose = useCallback(() => {
@@ -481,9 +479,8 @@ export default function WorkItemModalV2({
                   type="button"
                   className="btn btn-sm btn-edit"
                   onClick={() => setEditMode(true)}
-                  // The edit form saves onto the same staging list an answer is
-                  // uploading from, and leaving it discards that list; neither
-                  // belongs on top of a batch still going up.
+                  // Leaving an edit discards its staged files; an edit started
+                  // on top of another write could discard them mid-upload.
                   disabled={detail.busy}
                 >
                   Edit

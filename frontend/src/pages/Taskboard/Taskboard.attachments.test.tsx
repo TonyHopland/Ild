@@ -214,7 +214,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
     ]);
   });
 
-  test("an answer still being composed cannot reach the item opened next", async () => {
+  test("a refused answer to one item is not carried into the item opened next", async () => {
     const parked = makeItem("wi-a", "Item A", {
       status: WorkItemStatus.HumanFeedback,
       humanFeedbackReason: "Human Input Needed",
@@ -232,27 +232,19 @@ describe("a dialog belongs to the work item it was opened for", () => {
     ];
     mockServices(items);
     vi.spyOn(authServices.loopRunService, "getById").mockRejectedValue({ status: 404 });
-    vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([
-      { id: "att-1", fileName: "a.txt", contentType: "text/plain", sizeBytes: 1 },
-    ]);
-    // The answer is refused, so the dialog that sent it has something to report
-    // — which must be reported by that dialog, not by whatever is open later.
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment");
     const answer = vi
       .spyOn(authServices.workItemService, "humanFeedbackInput")
       .mockRejectedValue({ status: 400, message: "Input must be 8192 characters or fewer." });
-    // The read that reconciles the note against the item, held open.
-    const reconcile = deferred<WorkItem>();
-    vi.spyOn(authServices.workItemService, "getById").mockReturnValue(reconcile.promise);
+    // A read of the item, held open until item B is up.
+    const read = deferred<WorkItem>();
+    vi.spyOn(authServices.workItemService, "getById").mockReturnValue(read.promise);
 
     renderBoard("wi-a");
     await dialogSettled("Item A");
     const feedback = await waitForNode(() => dialog().querySelector<HTMLElement>(".wiv2-feedback"));
-    await waitFor(() => expect(feedback.textContent).toContain("25 MB"));
 
     await act(async () => {
-      fireEvent.change(feedback.querySelector('input[type="file"]') as HTMLInputElement, {
-        target: { files: [new File(["x"], "a.txt", { type: "text/plain" })] },
-      });
       fireEvent.change(feedback.querySelector("textarea") as HTMLTextAreaElement, {
         target: { value: "Looks good" },
       });
@@ -260,21 +252,21 @@ describe("a dialog belongs to the work item it was opened for", () => {
     });
     await click(within(feedback).getByRole("button", { name: "Approve" }));
 
-    // The human opens another item while the note is still being reconciled.
     await openCard("Item B");
     await act(async () => {
-      reconcile.resolve(parked);
+      read.resolve(parked);
       await Promise.resolve();
     });
 
     // Item A's answer was sent for item A and refused there. Item B's dialog is
-    // its own: it carries no staged file, says nothing about the other item's
-    // refusal, and was never answered in its place.
+    // its own: it holds none of A's text, says nothing about A's refusal, and
+    // was never answered in A's place.
     await waitFor(() => expect(openTitle()).toBe("Item B"));
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer.mock.calls[0][0]).toBe("wi-a");
-    expect(dialog().querySelectorAll(".wiv2-attach-row")).toHaveLength(0);
+    expect(answer).toHaveBeenCalledWith("wi-a", "Looks good");
+    expect(dialog().querySelector<HTMLTextAreaElement>(".wiv2-feedback textarea")?.value).toBe("");
     expect(dialog().textContent).not.toContain("Looks good");
     expect(dialog().textContent).not.toContain("Input must be 8192 characters or fewer.");
+    expect(upload).not.toHaveBeenCalled();
   });
 });
