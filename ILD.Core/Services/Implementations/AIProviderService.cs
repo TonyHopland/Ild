@@ -171,9 +171,6 @@ public class AIProviderService : IAIProviderService
 
     private static async Task<ToolExecutionResult> RunShellAsync(string command, string cwd)
     {
-        // The command is model-authored, so it runs with exactly the agent's
-        // privileges: the agent uid, no orchestrator secrets or topology, no
-        // capabilities (ADR-0014, ADR-0016).
         using var proc = Process.Start(IsolateShell(
             ShellStartInfo(command, cwd),
             AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
@@ -199,6 +196,15 @@ public class AIProviderService : IAIProviderService
         return psi;
     }
 
+    /// <summary>
+    /// The command is model-authored, so it runs with exactly the agent's
+    /// privileges (ADR-0014, ADR-0016). The orchestrator's secrets and topology
+    /// are stripped in every mode, since the command has no legitimate use for
+    /// them. Under uid isolation it also crosses to the agent uid with no
+    /// capabilities. In single-uid mode it stays a plain shell as the
+    /// orchestrator uid, which can still read the orchestrator's
+    /// <c>/proc/&lt;pid&gt;/environ</c>, so only uid isolation closes that fully.
+    /// </summary>
     internal static ProcessStartInfo IsolateShell(
         ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy)
         => AgentIsolation.Route(AgentIsolation.StripOrchestratorEnvironment(psi), agentUser, agentGroup, agentHome, egressProxy);

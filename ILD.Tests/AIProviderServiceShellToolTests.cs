@@ -96,6 +96,27 @@ public class AIProviderServiceShellToolTests : IDisposable
     }
 
     [Fact]
+    public void Single_uid_mode_still_strips_orchestrator_secrets_and_topology()
+    {
+        var secret = AgentIsolation.SecretEnvironmentKeys.First();
+        var topology = AgentIsolation.OrchestratorTopologyEnvKeys.First();
+        var psi = AIProviderService.ShellStartInfo("echo hi", _tmp);
+        psi.Environment[secret] = "orchestrator-only";
+        psi.Environment[topology] = "orchestrator-only";
+        psi.Environment["PATH"] = "/usr/bin:/bin";
+        psi.Environment["HOME"] = "/home/ild";
+
+        var spawned = AIProviderService.IsolateShell(psi, null, null, null, null);
+
+        Assert.False(spawned.Environment.ContainsKey(secret));
+        Assert.False(spawned.Environment.ContainsKey(topology));
+        Assert.Equal("/bin/sh", spawned.FileName);
+        Assert.Equal(new[] { "-c", "echo hi" }, spawned.ArgumentList);
+        Assert.Equal("/usr/bin:/bin", spawned.Environment["PATH"]);
+        Assert.Equal("/home/ild", spawned.Environment["HOME"]);
+    }
+
+    [Fact]
     public async Task Shell_exec_returns_stdout_and_success()
     {
         var result = await Service().ExecuteToolAsync("shell.exec", "echo hi", _tmp);
