@@ -97,6 +97,6 @@ public class PrReviewDocumentationTests
     [Fact]
     public void The_changelog_says_what_is_different_now()
     {
-        AssertMentionsOneOf(RepositoryFiles.ChangelogSection("0.13.0"), "the 0.13.0 changelog section", "review", "comment");
+        AssertMentionsOneOf(RepositoryFiles.LatestReleaseChangelog(), "the latest release's changelog section", "review", "comment");
     }
 }
