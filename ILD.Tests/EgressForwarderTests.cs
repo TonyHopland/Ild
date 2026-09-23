@@ -109,7 +109,13 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         _policy.Invalidate();
     }
 
-    /// <summary>Declare a forward to the echo upstream and bring the listeners in line with it.</summary>
+    /// <summary>
+    /// Declare a forward to the echo upstream and bring the listeners in line with it.
+    /// The reconcile runs here instead of being prompted by a policy change, because
+    /// that would also wake the forwarder's own reconcile: a second thread on this
+    /// test's one SQLite connection, which fails whichever read overlaps it — the
+    /// policy load of the connection dialled next among them.
+    /// </summary>
     private async Task<NetworkForwardEntry> DeclareAsync(string name = "echo", string host = "localhost", int? localPort = null)
     {
         var forward = new NetworkForwardEntry
@@ -120,7 +126,6 @@ public sealed class EgressForwarderTests : IAsyncLifetime
             LocalPort = localPort ?? FreePort(),
         };
         await _db.NetworkForwards.AddForwardAsync(forward);
-        _policy.Invalidate();
         await _forwarder!.ReconcileAsync(default);
         Assert.Contains(forward.LocalPort, _forwarder.ListeningPorts);
         return forward;
@@ -232,7 +237,6 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         var forward = await DeclareAsync();
 
         Assert.True(await _db.NetworkForwards.DeleteForwardAsync(forward.Id));
-        _policy.Invalidate();
         await _forwarder!.ReconcileAsync(default);
         Assert.DoesNotContain(forward.LocalPort, _forwarder.ListeningPorts);
 
@@ -323,7 +327,6 @@ public sealed class EgressForwarderTests : IAsyncLifetime
             Assert.Equal("round trip", await EchoAsync(client, "round trip"));
 
         Assert.True(await _db.NetworkForwards.DeleteForwardAsync(first.Id));
-        _policy.Invalidate();
         await _forwarder!.ReconcileAsync(default);
         Assert.DoesNotContain(localPort, _forwarder.ListeningPorts);
 
