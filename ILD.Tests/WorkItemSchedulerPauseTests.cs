@@ -60,10 +60,9 @@ public class WorkItemSchedulerPauseTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await scheduler.StartAsync(cts.Token);
 
-        var winner = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(3), cts.Token));
-        await scheduler.StopAsync(CancellationToken.None);
+        try { await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally { await scheduler.StopAsync(CancellationToken.None); }
 
-        Assert.True(winner == tcs.Task, "Paused scheduler never invoked the poll cycle");
         Assert.All(claimReadyValues, v => Assert.False(v));
     }
 
@@ -111,10 +110,9 @@ public class WorkItemSchedulerPauseTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await scheduler.StartAsync(cts.Token);
-        var winner = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(3), cts.Token));
-        await scheduler.StopAsync(CancellationToken.None);
+        try { await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
+        finally { await scheduler.StopAsync(CancellationToken.None); }
 
-        Assert.True(winner == tcs.Task, "Scheduler never invoked the poll cycle");
         Assert.Contains(log.Messages, m =>
             m.Level == LogLevel.Information &&
             m.Text.Contains("wi-1", StringComparison.Ordinal) &&

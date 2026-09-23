@@ -310,7 +310,8 @@ public class LoopEngineStartRunTests
     /// <summary>Waits for the engine's background run loop to park.</summary>
     private static async Task DrainAsync(ILoopEngine engine)
     {
-        for (var i = 0; i < 200 && (await engine.GetActiveRunIdsAsync()).Any(); i++)
-            await Task.Delay(10);
+        foreach (var runId in await engine.GetActiveRunIdsAsync())
+            await LoopEngineHarness.WaitUntilIdleAsync((LoopEngine)engine, runId);
+        Assert.Empty(await engine.GetActiveRunIdsAsync());
     }
 }

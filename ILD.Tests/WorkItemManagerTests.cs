@@ -159,15 +159,24 @@ public class WorkItemManagerTests
         Assert.Equal(RemoteWorkItemStatus.Backlog, wi!.Status);
     }
 
+    private sealed class TestClock : TimeProvider
+    {
+        public DateTime Now;
+        public TestClock(DateTime now) => Now = now;
+        public override DateTimeOffset GetUtcNow() => new(Now, TimeSpan.Zero);
+    }
+
     [Fact]
     public async Task UpdateAsync_persists_title_and_description_and_touches_UpdatedAt()
     {
-        var (mgr, db, repoId, _, _) = Setup();
+        var clock = new TestClock(new DateTime(2026, 9, 1, 12, 0, 0, DateTimeKind.Utc));
+        using var server = new FakeWorkItemServerHarness(clock);
+        var (mgr, db, repoId, _, _) = Setup(server);
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("orig", "origdesc", repoId);
         var before = (await mgr.GetWorkItemAsync(id))!.UpdatedAt;
-        await Task.Delay(5);
+        clock.Now = clock.Now.AddMinutes(1);
 
         var ok = await mgr.UpdateAsync(id, "new title", "new desc");
         Assert.True(ok);

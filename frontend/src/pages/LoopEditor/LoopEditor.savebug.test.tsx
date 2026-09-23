@@ -225,7 +225,20 @@ describe("Loop Editor save existing template (regression)", () => {
     fireEvent.click(screen.getByText("Save"));
     fireEvent.click(await screen.findByText("Save changes"));
 
-    await waitFor(() => {}, { timeout: 5000 });
+    await waitFor(
+      () => {
+        const putCall = fetchCalls.find((c) => c.method === "PUT");
+        expect(putCall).toBeTruthy();
+      },
+      { timeout: 5000 },
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.getByText("Saved!")).toBeTruthy();
+      },
+      { timeout: 5000 },
+    );
   }, 15000);
 
   test("saving a template with cyclic edges does not hang the BFS", async () => {

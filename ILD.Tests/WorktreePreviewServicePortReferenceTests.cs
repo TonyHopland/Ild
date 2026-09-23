@@ -252,7 +252,7 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
                     "name": "first",
                     "port": "first",
                     "suggestedPort": {{firstPort}},
-                    "command": "PORT=${PORT} node -e \"require('fs').writeFileSync(process.env.PID_FILE, String(process.pid)); require('http').createServer((q,r)=>{r.end('ok')}).listen(process.env.PORT)\"",
+                    "command": "PORT=${PORT} exec node -e \"require('fs').writeFileSync(process.env.PID_FILE, String(process.pid)); require('http').createServer((q,r)=>{r.end('ok')}).listen(process.env.PORT)\"",
                     "healthUrl": "http://127.0.0.1:${PORT}/",
                     "env": { "PID_FILE": "${WORKTREE}/first.pid" }
                   },
@@ -298,17 +298,28 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(_worktree));
 
-        // 'second' is rejected while its step is being resolved, so the throw comes back
-        // before 'first' has even finished booting — checking the port straight away would
-        // find it free simply because nothing had bound it yet. Wait for the pid 'first'
-        // records on startup, then a beat longer for it to reach its listen(). A start that
-        // reaped it before it got that far records nothing, waits out the bound, and still
-        // meets the assertion below, which is the outcome this is really about.
-        await WaitForPidFileAsync();
-        await Task.Delay(500);
+        // 'second' is rejected while its step is being resolved, so the throw can come back
+        // before 'first' has bound its port — a free port alone would not show it was
+        // stopped. 'first' execs node, so the process the failed start stops and waits for
+        // is the server itself: once the throw is back, nothing may still carry its env.
+        var pidFile = Path.Combine(Path.GetFileName(_worktree), "first.pid");
+        Assert.DoesNotContain(ProcessEnvironments(), env => env.Contains(pidFile));
         Assert.True(IsPortFree(firstPort),
             $"'first' is still listening on {firstPort} after StartAsync failed — the failed "
             + "start orphaned it, so no stop path can ever reach it.");
+    }
+
+    /// <summary>The environment of every process this user can read, NUL-separated.</summary>
+    private static IEnumerable<string> ProcessEnvironments()
+    {
+        foreach (var dir in Directory.EnumerateDirectories("/proc"))
+        {
+            if (!int.TryParse(Path.GetFileName(dir), out _)) continue;
+            string env;
+            try { env = File.ReadAllText(Path.Combine(dir, "environ")); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            yield return env;
+        }
     }
 
     private static int DepPort(ILD.Data.DTOs.WorktreePreviewResponse response)
@@ -319,27 +330,14 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
     }
 
     /// <summary>
-    /// The consumer writes the file on boot and the caller only reads it after the start
-    /// has seen the service healthy, so it is there — but the write and the first
-    /// successful health response are two separate statements in the same one-liner, so
-    /// allow a moment for the file to land rather than racing it.
+    /// The consumer writes the file before it starts listening, and the caller only reads
+    /// it after the start has seen the service healthy, so it is there.
     /// </summary>
     private async Task<string> ReadObservedDepUrlAsync()
     {
-        for (var attempt = 0; attempt < 50; attempt++)
-        {
-            if (File.Exists(ObservedDepUrlPath))
-            {
-                var text = await File.ReadAllTextAsync(ObservedDepUrlPath);
-                if (!string.IsNullOrWhiteSpace(text))
-                    return text.Trim();
-            }
-
-            await Task.Delay(100);
-        }
-
-        throw new Xunit.Sdk.XunitException(
+        Assert.True(File.Exists(ObservedDepUrlPath),
             $"The consumer service never recorded the DEP_URL it was launched with at {ObservedDepUrlPath}.");
+        return (await File.ReadAllTextAsync(ObservedDepUrlPath)).Trim();
     }
 
     private static TcpListener Listen(int port)
@@ -368,26 +366,6 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
         {
             return false;
         }
-    }
-
-    /// <summary>
-    /// Waits (briefly) for the <c>first</c> service to record its pid — which is both how
-    /// the test knows it got far enough to be worth checking on, and the only handle the
-    /// harness would have for reaping it if the teardown ever regressed (see
-    /// <see cref="KillOrphanedService"/>). Returns false if it never records one, which is
-    /// not by itself a failure.
-    /// </summary>
-    private async Task<bool> WaitForPidFileAsync()
-    {
-        var pidFile = Path.Combine(_worktree, "first.pid");
-        for (var attempt = 0; attempt < 50; attempt++)
-        {
-            if (File.Exists(pidFile) && !string.IsNullOrWhiteSpace(await File.ReadAllTextAsync(pidFile)))
-                return true;
-            await Task.Delay(100);
-        }
-
-        return false;
     }
 
     private static int FindFreePort()

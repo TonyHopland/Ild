@@ -449,9 +449,7 @@ public sealed class NetworkLogRecorderTests : IDisposable
         recorder.Record("api.anthropic.com", 443, NetworkDecision.Allowed, providerId);
         recorder.Record("evil.example", 80, NetworkDecision.Blocked, null);
 
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (notifier.Appended.Count < 2 && DateTime.UtcNow < deadline)
-            await Task.Delay(20);
+        await notifier.TwoAppended.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await recorder.StopAsync(CancellationToken.None);
 
         var log = await _db.Network.GetLogAsync(10);
@@ -466,8 +464,19 @@ public sealed class NetworkLogRecorderTests : IDisposable
     private sealed class RecordingNotifier : INetworkNotifier
     {
         public List<NetworkLogEntry> Appended { get; } = new();
+        public TaskCompletionSource TwoAppended { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task PolicyChangedAsync() => Task.CompletedTask;
-        public Task LogEntryAppendedAsync(NetworkLogEntry entry) { lock (Appended) Appended.Add(entry); return Task.CompletedTask; }
+
+        public Task LogEntryAppendedAsync(NetworkLogEntry entry)
+        {
+            lock (Appended)
+            {
+                Appended.Add(entry);
+                if (Appended.Count >= 2) TwoAppended.TrySetResult();
+            }
+            return Task.CompletedTask;
+        }
+
         public Task LogClearedAsync() => Task.CompletedTask;
     }
 }

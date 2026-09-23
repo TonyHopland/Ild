@@ -127,39 +127,41 @@ async function pasteFile(target: Element, file: File) {
 }
 
 describe("the Action tab's feedback pane carries no attachment control", () => {
-  test("a run waiting for human input shows the prompt, textarea and buttons, but no attachments", async () => {
-    const item = makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,OnFailure" });
+  const NO_ATTACHMENT_CASES: Array<{
+    name: string;
+    item: Partial<WorkItem>;
+    textarea: boolean;
+    buttons: string[];
+  }> = [
+    {
+      name: "a run waiting for human input shows the prompt, textarea and buttons, but no attachments",
+      item: { humanFeedbackActions: "OnSuccess,Needs work,OnFailure" },
+      textarea: true,
+      buttons: ["Approve", "Reject", "Needs work"],
+    },
+    {
+      name: "a PR awaiting merge has no attachment control either",
+      item: { humanFeedbackReason: "PR Awaiting Merge", prUrl: "https://example.test/pr/1" },
+      textarea: true,
+      buttons: [],
+    },
+    {
+      name: "any other feedback reason has no attachment control",
+      item: { humanFeedbackReason: "Loop Failed" },
+      textarea: false,
+      buttons: [],
+    },
+  ];
+
+  test.each(NO_ATTACHMENT_CASES)("$name", async ({ item: overrides, textarea, buttons }) => {
+    const item = makeParkedWorkItem(overrides);
     const { limits } = mockServices(item);
     await renderDialog(item);
     await settle(limits);
 
     expectNoAttachmentControl();
-    expect(feedbackTextarea()).not.toBeNull();
-    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Reject" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Needs work" })).toBeTruthy();
-  });
-
-  test("a PR awaiting merge has no attachment control either", async () => {
-    const item = makeParkedWorkItem({
-      humanFeedbackReason: "PR Awaiting Merge",
-      prUrl: "https://example.test/pr/1",
-    });
-    const { limits } = mockServices(item);
-    await renderDialog(item);
-    await settle(limits);
-
-    expectNoAttachmentControl();
-    expect(feedbackTextarea()).not.toBeNull();
-  });
-
-  test("any other feedback reason has no attachment control", async () => {
-    const item = makeParkedWorkItem({ humanFeedbackReason: "Loop Failed" });
-    const { limits } = mockServices(item);
-    await renderDialog(item);
-    await settle(limits);
-
-    expectNoAttachmentControl();
+    if (textarea) expect(feedbackTextarea()).not.toBeNull();
+    for (const name of buttons) expect(screen.getByRole("button", { name })).toBeTruthy();
   });
 });
 
@@ -205,103 +207,77 @@ describe("pasting a file into the Action tab's feedback pane", () => {
 });
 
 describe("answering from the Action tab submits exactly what was typed", () => {
-  test("approving sends the typed text and uploads nothing", async () => {
-    const item = makeParkedWorkItem();
+  const ANSWER_CASES: Array<{
+    name: string;
+    actions: string | null;
+    service: "humanFeedbackInput" | "humanFeedbackReject" | "humanFeedbackEdge";
+    typed: string | null;
+    button: string;
+    sent: unknown[];
+  }> = [
+    {
+      name: "approving sends the typed text and uploads nothing",
+      actions: null,
+      service: "humanFeedbackInput",
+      typed: "Looks good",
+      button: "Approve",
+      sent: ["wi-1", "Looks good"],
+    },
+    {
+      name: "approving with nothing typed sends empty text and uploads nothing",
+      actions: null,
+      service: "humanFeedbackInput",
+      typed: null,
+      button: "Approve",
+      sent: ["wi-1", ""],
+    },
+    {
+      name: "rejecting sends the typed text and uploads nothing",
+      actions: null,
+      service: "humanFeedbackReject",
+      typed: "Not yet",
+      button: "Reject",
+      sent: ["wi-1", "Not yet"],
+    },
+    {
+      name: "rejecting with nothing typed sends no reason and uploads nothing",
+      actions: null,
+      service: "humanFeedbackReject",
+      typed: null,
+      button: "Reject",
+      sent: ["wi-1", undefined],
+    },
+    {
+      name: "taking a named edge sends the typed text and uploads nothing",
+      actions: "OnSuccess,Needs work,OnFailure",
+      service: "humanFeedbackEdge",
+      typed: "Have a look",
+      button: "Needs work",
+      sent: ["wi-1", "Needs work", "Have a look"],
+    },
+    {
+      name: "taking a named edge with nothing typed sends empty text and uploads nothing",
+      actions: "OnSuccess,Needs work,OnFailure",
+      service: "humanFeedbackEdge",
+      typed: null,
+      button: "Needs work",
+      sent: ["wi-1", "Needs work", ""],
+    },
+  ];
+
+  test.each(ANSWER_CASES)("$name", async ({ actions, service, typed, button, sent }) => {
+    const item = makeParkedWorkItem({ humanFeedbackActions: actions });
     const { limits, upload } = mockServices(item);
-    const answer = vi
-      .spyOn(authServices.workItemService, "humanFeedbackInput")
-      .mockResolvedValue(undefined);
+    const answer = vi.spyOn(authServices.workItemService, service).mockResolvedValue(undefined);
     await renderDialog(item);
     await settle(limits);
 
-    await type("Looks good");
-    await click(screen.getByRole("button", { name: "Approve" }));
+    if (typed !== null) await type(typed);
+    await click(screen.getByRole("button", { name: button }));
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "Looks good");
-    expect(String(answer.mock.calls[0][1])).not.toContain("Attached files");
-    expect(upload).not.toHaveBeenCalled();
-  });
-
-  test("approving with nothing typed sends empty text and uploads nothing", async () => {
-    const item = makeParkedWorkItem();
-    const { limits, upload } = mockServices(item);
-    const answer = vi
-      .spyOn(authServices.workItemService, "humanFeedbackInput")
-      .mockResolvedValue(undefined);
-    await renderDialog(item);
-    await settle(limits);
-
-    await click(screen.getByRole("button", { name: "Approve" }));
-
-    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "");
-    expect(upload).not.toHaveBeenCalled();
-  });
-
-  test("rejecting sends the typed text and uploads nothing", async () => {
-    const item = makeParkedWorkItem();
-    const { limits, upload } = mockServices(item);
-    const reject = vi
-      .spyOn(authServices.workItemService, "humanFeedbackReject")
-      .mockResolvedValue(undefined);
-    await renderDialog(item);
-    await settle(limits);
-
-    await type("Not yet");
-    await click(screen.getByRole("button", { name: "Reject" }));
-
-    await waitFor(() => expect(reject).toHaveBeenCalledTimes(1));
-    expect(reject).toHaveBeenCalledWith("wi-1", "Not yet");
-    expect(upload).not.toHaveBeenCalled();
-  });
-
-  test("rejecting with nothing typed sends no reason and uploads nothing", async () => {
-    const item = makeParkedWorkItem();
-    const { limits, upload } = mockServices(item);
-    const reject = vi
-      .spyOn(authServices.workItemService, "humanFeedbackReject")
-      .mockResolvedValue(undefined);
-    await renderDialog(item);
-    await settle(limits);
-
-    await click(screen.getByRole("button", { name: "Reject" }));
-
-    await waitFor(() => expect(reject).toHaveBeenCalledTimes(1));
-    expect(reject).toHaveBeenCalledWith("wi-1", undefined);
-    expect(upload).not.toHaveBeenCalled();
-  });
-
-  test("taking a named edge sends the typed text and uploads nothing", async () => {
-    const item = makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,OnFailure" });
-    const { limits, upload } = mockServices(item);
-    const edge = vi
-      .spyOn(authServices.workItemService, "humanFeedbackEdge")
-      .mockResolvedValue(undefined);
-    await renderDialog(item);
-    await settle(limits);
-
-    await type("Have a look");
-    await click(screen.getByRole("button", { name: "Needs work" }));
-
-    await waitFor(() => expect(edge).toHaveBeenCalledTimes(1));
-    expect(edge).toHaveBeenCalledWith("wi-1", "Needs work", "Have a look");
-    expect(upload).not.toHaveBeenCalled();
-  });
-
-  test("taking a named edge with nothing typed sends empty text and uploads nothing", async () => {
-    const item = makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,OnFailure" });
-    const { limits, upload } = mockServices(item);
-    const edge = vi
-      .spyOn(authServices.workItemService, "humanFeedbackEdge")
-      .mockResolvedValue(undefined);
-    await renderDialog(item);
-    await settle(limits);
-
-    await click(screen.getByRole("button", { name: "Needs work" }));
-
-    await waitFor(() => expect(edge).toHaveBeenCalledTimes(1));
-    expect(edge).toHaveBeenCalledWith("wi-1", "Needs work", "");
+    expect(answer).toHaveBeenCalledWith(...sent);
+    expect(JSON.stringify(answer.mock.calls[0])).not.toContain("Attached files");
     expect(upload).not.toHaveBeenCalled();
   });
 });

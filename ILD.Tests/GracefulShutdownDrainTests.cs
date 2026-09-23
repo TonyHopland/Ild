@@ -247,10 +247,9 @@ public class GracefulShutdownDrainTests
             stopping);
 
         await scheduler.StartAsync(CancellationToken.None);
-        var winner = await Task.WhenAny(polled.Task, Task.Delay(TimeSpan.FromSeconds(5)));
-        await scheduler.StopAsync(CancellationToken.None);
+        try { await polled.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally { await scheduler.StopAsync(CancellationToken.None); }
 
-        Assert.True(winner == polled.Task, "Scheduler never invoked the poll cycle");
         Assert.NotEmpty(claimReadyValues);
         Assert.All(claimReadyValues, v => Assert.False(v));
     }

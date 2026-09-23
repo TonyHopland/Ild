@@ -27,7 +27,7 @@ public class EngineSignalValidationTests
             new NodeSignal(ExternalActionResultType.Success, Output: "user-text"));
 
         // The signal should be rejected: run stays WaitingHuman.
-        await Task.Delay(200);
+        await h.WaitUntilIdleAsync();
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
     }
@@ -64,7 +64,7 @@ public class EngineSignalValidationTests
         await h.Engine.SignalNodeResultAsync(h.RunId, succeededNode.Id,
             new NodeSignal(ExternalActionResultType.Success, Output: "user-text"));
 
-        await Task.Delay(200);
+        await h.WaitUntilIdleAsync();
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
     }
