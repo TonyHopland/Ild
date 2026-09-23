@@ -163,11 +163,28 @@ public class AIProviderService : IAIProviderService
     private static string? SafePath(string root, string relative)
     {
         var full = Path.GetFullPath(Path.Combine(root, relative));
-        var rootFull = Path.GetFullPath(root);
-        return full.StartsWith(rootFull, StringComparison.Ordinal) ? full : null;
+        var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        return full == rootFull || full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            ? full
+            : null;
     }
 
     private static async Task<ToolExecutionResult> RunShellAsync(string command, string cwd)
+    {
+        // The command is model-authored, so it runs with exactly the agent's
+        // privileges: the agent uid, no orchestrator secrets or topology, no
+        // capabilities (ADR-0014, ADR-0016).
+        using var proc = Process.Start(IsolateShell(
+            ShellStartInfo(command, cwd),
+            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
+            AgentIsolation.EgressProxyUrl(aiProviderId: null)))!;
+        var stdout = await proc.StandardOutput.ReadToEndAsync();
+        var stderr = await proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+        return new ToolExecutionResult(proc.ExitCode == 0, stdout, proc.ExitCode == 0 ? null : stderr, proc.ExitCode);
+    }
+
+    internal static ProcessStartInfo ShellStartInfo(string command, string cwd)
     {
         var psi = new ProcessStartInfo("/bin/sh")
         {
@@ -179,17 +196,12 @@ public class AIProviderService : IAIProviderService
         };
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add(command);
-        // Runs a model-authored command as the orchestrator, so it must not
-        // inherit the orchestrator's ambient capabilities — same reasoning as the
-        // preview spawn sites (ADR-0014). Effective CAP_SETUID in a hijacked
-        // orchestrator-side command is the difference between "runs as ild" and
-        // "runs as container root".
-        using var proc = Process.Start(AgentIsolation.DropInheritedCapabilities(psi))!;
-        var stdout = await proc.StandardOutput.ReadToEndAsync();
-        var stderr = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-        return new ToolExecutionResult(proc.ExitCode == 0, stdout, proc.ExitCode == 0 ? null : stderr, proc.ExitCode);
+        return psi;
     }
+
+    internal static ProcessStartInfo IsolateShell(
+        ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy)
+        => AgentIsolation.Route(AgentIsolation.StripOrchestratorEnvironment(psi), agentUser, agentGroup, agentHome, egressProxy);
 
     private async Task<ToolExecutionResult> CreateWorkItemAsync(string arguments)
     {
