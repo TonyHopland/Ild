@@ -290,11 +290,10 @@ export function useAttachmentStaging(
 
   // One batch at a time walks the staging list: two walks would each pick up the
   // same pending file and store it twice. A caller whose work the running batch
-  // is already doing — the edit form saving while an answer uploads the same
-  // list for the same item — joins it and takes its outcome. A caller asking for
-  // anything else waits for it and then walks itself, because the batch that is
-  // running belongs to an item this caller is not saving, and its outcome says
-  // nothing about these files.
+  // is already doing — a second save of the same list for the same item — joins
+  // it and takes its outcome. A caller asking for anything else waits for it and
+  // then walks itself, because the batch that is running belongs to an item this
+  // caller is not saving, and its outcome says nothing about these files.
   const inFlight = useRef<{
     outcome: Promise<UploadOutcome>;
     targetWorkItemId: string;

@@ -55,8 +55,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // once" must not depend on how soon React gets to re-render.
   const responding = useRef(false);
 
-  // Everything the dialog does that writes — creating, saving an edit,
-  // answering the run, and the uploads inside them — runs through whileBusy, so
+  // Everything the dialog does that writes — creating or saving an edit and the
+  // uploads inside it, and answering the run — runs through whileBusy, so
   // the dialog has one thing to ask about whether it is in the middle of
   // something. Asking the individual acts instead means every new act has to be
   // remembered in every place that cares, and the close guard was already three
