@@ -148,20 +148,4 @@ internal static class RepositoryFiles
     public static string ReadAllText(string relativePath) => File.ReadAllText(Path.Combine(Root, relativePath));
 
     public static string[] ReadAllLines(string relativePath) => File.ReadAllLines(Path.Combine(Root, relativePath));
-
-    /// <summary>
-    /// The entries of the newest released section of CHANGELOG.md — the first heading after
-    /// <c>## [Unreleased]</c>, which empties at every release — up to the next heading.
-    /// </summary>
-    public static string LatestReleaseChangelog()
-    {
-        var changelog = ReadAllText("CHANGELOG.md");
-        var unreleased = changelog.IndexOf("## [Unreleased]", StringComparison.Ordinal);
-        Assert.True(unreleased >= 0, "CHANGELOG.md has no Unreleased section");
-        var heading = changelog.IndexOf("\n## [", unreleased, StringComparison.Ordinal);
-        Assert.True(heading >= 0, "CHANGELOG.md has no released section");
-        var body = changelog[(changelog.IndexOf('\n', heading + 1) + 1)..];
-        var next = body.IndexOf("\n## [", StringComparison.Ordinal);
-        return next < 0 ? body : body[..next];
-    }
 }
