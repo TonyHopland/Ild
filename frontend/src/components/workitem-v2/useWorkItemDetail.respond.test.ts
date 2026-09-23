@@ -63,26 +63,26 @@ function stubServices() {
 }
 
 describe("answering a parked run", () => {
-  test("answering twice in one go sends the files and the answer once", async () => {
+  test("answering twice in one go sends the answer once", async () => {
     stubServices();
     const upload = vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue([]);
     const answer = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useWorkItemDetail(makeParkedWorkItem(), vi.fn()));
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
-      result.current.attachments.add([new File(["x"], "shot.png", { type: "image/png" })]);
+      result.current.setFeedbackInput("Looks good");
     });
 
     // Both presses land before React can render the buttons disabled, which is
-    // what an impatient second click on a slow upload looks like.
+    // what an impatient second click looks like.
     await act(async () => {
       await Promise.all([result.current.handleApprove(), result.current.handleApprove()]);
     });
 
-    expect(upload).toHaveBeenCalledTimes(1);
     expect(answer).toHaveBeenCalledTimes(1);
-    expect(answer.mock.calls[0][1]).toBe("Attached files: shot.png");
+    expect(answer.mock.calls[0][1]).toBe("Looks good");
+    expect(upload).not.toHaveBeenCalled();
   });
 
   test("a second answer is allowed once the first has finished", async () => {
@@ -90,7 +90,7 @@ describe("answering a parked run", () => {
     const answer = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
 
     const { result } = renderHook(() => useWorkItemDetail(makeParkedWorkItem(), vi.fn()));
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
     await act(async () => await result.current.handleApprove());
     await act(async () => await result.current.handleApprove());
@@ -106,7 +106,7 @@ describe("answering a parked run", () => {
       .mockRejectedValue({ status: 400, message: "Input is too long." });
 
     const { result } = renderHook(() => useWorkItemDetail(makeParkedWorkItem(), vi.fn()));
-    await waitFor(() => expect(result.current.attachments.limits).not.toBeNull());
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
     await act(async () => await result.current.handleApprove());
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { attachedNote, formatBytes, oversizeMessage, stagedFileName } from "./attachments";
+import { formatBytes, oversizeMessage, stagedFileName } from "./attachments";
 
 const MB = 1024 * 1024;
 
@@ -20,22 +20,6 @@ describe("oversizeMessage", () => {
 
     expect(message).toContain("big.bin");
     expect(message).toContain("25 MB");
-  });
-});
-
-describe("attachedNote", () => {
-  test("lists the attached file names under whatever the human typed", () => {
-    expect(attachedNote("Looks good", ["a.png", "b.pdf"])).toBe(
-      "Looks good\n\nAttached files: a.png, b.pdf",
-    );
-  });
-
-  test("is the list alone when nothing was typed", () => {
-    expect(attachedNote("", ["a.png"])).toBe("Attached files: a.png");
-  });
-
-  test("leaves the typed text alone when no file is attached", () => {
-    expect(attachedNote("Looks good", [])).toBe("Looks good");
   });
 });
 

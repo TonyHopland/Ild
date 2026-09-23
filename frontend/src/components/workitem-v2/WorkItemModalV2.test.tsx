@@ -526,6 +526,8 @@ describe("WorkItemModalV2", () => {
       within(actionPanel as HTMLElement).getByRole("button", { name: "Approve" }),
     ).toBeTruthy();
     expect(within(actionPanel as HTMLElement).getByRole("button", { name: "Reject" })).toBeTruthy();
+    // Attachments belong to the work item and are handled from the Overview.
+    expect((actionPanel as HTMLElement).querySelector('input[type="file"]')).toBeNull();
 
     // Guards only that the flex layout is wired on (the wiv2-action-feedback
     // modifier). jsdom has no layout engine, so this cannot prove the buttons
