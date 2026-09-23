@@ -72,10 +72,9 @@ tree is the cause; one uid removes the class.
 - **The child's environment is constructed, not inherited.** A named helper,
   `AgentIsolation.StripOrchestratorEnvironment`, removes the secrets and the
   topology variables (since joined by `ILD_AGENT_READ_ROOT`, ADR-0014). It is deliberately **not** folded into
-  `DropInheritedCapabilities`, which `ProcessRunner` (git, npm) and
-  `AIProviderService.RunShellAsync` (Cmd nodes) also use and where a user's command
-  may legitimately rely on the inherited environment; scrubbing there would change
-  both silently.
+  `DropInheritedCapabilities`, which `ProcessRunner` (git, npm) and the Cmd node
+  executor also use and where a user's command may legitimately rely on the
+  inherited environment; scrubbing there would change both silently.
 - **Stripping happens before the resolved step's environment is applied**, never
   after. What is removed is therefore only ever what was _inherited_: a preview
   that legitimately needs one of these names sets it in `ild.config.json` or the

@@ -324,9 +324,9 @@ public static class AgentIsolation
     /// <para>
     /// This is deliberately <em>not</em> folded into
     /// <see cref="DropInheritedCapabilities(ProcessStartInfo)"/>. That helper also
-    /// wraps <c>ProcessRunner</c> (git, npm) and <c>AIProviderService.RunShellAsync</c>
-    /// (Cmd nodes), where a user's command may legitimately rely on the inherited
-    /// environment; scrubbing there would change those silently. Callers that must
+    /// wraps <c>ProcessRunner</c> (git, npm) and the Cmd node executor, where a
+    /// user's command may legitimately rely on the inherited environment;
+    /// scrubbing there would change those silently. Callers that must
     /// not inherit say so by name.
     /// </para>
     ///

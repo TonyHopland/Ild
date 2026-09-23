@@ -672,8 +672,8 @@ public class AgentIsolationTests
     [Fact]
     public void DropInheritedCapabilities_leaves_the_environment_untouched()
     {
-        // ProcessRunner (git, npm) and AIProviderService.RunShellAsync share this
-        // helper, and a Cmd node may legitimately rely on the inherited
+        // ProcessRunner (git, npm) and the Cmd node executor share this helper,
+        // and a Cmd node may legitimately rely on the inherited
         // environment. Folding the preview's scrub in here would change both
         // silently, so the two concerns stay separate helpers (ADR-0016).
         var psi = new ProcessStartInfo("/bin/sh");

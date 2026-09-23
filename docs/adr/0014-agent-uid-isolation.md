@@ -259,12 +259,14 @@ rules.
   would have _raised_ the ceiling of a successful escape while lowering its
   everyday reach. Every orchestrator-side spawn that can reach agent-authored
   input therefore goes through `AgentIsolation.DropInheritedCapabilities` —
-  `ProcessRunner` (git, npm), `AIProviderService.RunShellAsync` and the Cmd node
-  executor — which wraps them in `setpriv --inh-caps=-all --ambient-caps=-all`
-  (no uid change, needs no privilege). `AgentIsolationSpawnSiteTests` scans
-  ILD.Core for `Process` spawn sites this list has missed — the Cmd node executor
-  was one from the drop landing in 0.5.0 until 0.10.0. It does not cover the
-  PTY `RouteCommand` sites, or the other projects.
+  `ProcessRunner` (git, npm) and the Cmd node executor — which wraps them in
+  `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
+  privilege). The built-in provider's shell tool runs a model-authored command,
+  so it goes further and runs as the agent via `AgentIsolation.Route`.
+  `AgentIsolationSpawnSiteTests` scans ILD.Core for `Process` spawn sites this
+  list has missed — the Cmd node executor was one from the drop landing in 0.5.0
+  until 0.10.0. It does not cover the PTY `RouteCommand` sites, or the other
+  projects.
 - **The preview service was the one place where dropping capabilities was not
   enough, and it now runs as the agent outright.** Its command comes from the
   worktree's `ild.config.json`, which the agent writes and can trigger itself
