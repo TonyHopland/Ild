@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-23
+
 ### Added
 
 - **A file's diff in the Files tab now shows line numbers for both the original and the changed file.**
@@ -30,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A chat that is working always offers a stop button — including right after you interrupt it with another message, and when you reopen a chat that is still replying.**
+
+- **Shell commands the built-in AI provider runs no longer get ILD's own environment, nor its privileges when agent isolation is on, as it is by default in the container image.**
 
 ## [0.12.0] - 2026-09-06
 
