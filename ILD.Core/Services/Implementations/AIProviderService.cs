@@ -160,11 +160,13 @@ public class AIProviderService : IAIProviderService
             ?? await _providerStore.GetFirstAiProviderAsync();
     }
 
-    private static string? SafePath(string root, string relative)
+    internal static string? SafePath(string root, string relative)
     {
         var full = Path.GetFullPath(Path.Combine(root, relative));
         var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        return full == rootFull || full.StartsWith(rootFull + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+        // A filesystem root (`/`, `C:\`) keeps its separator through the trim.
+        var prefix = Path.EndsInDirectorySeparator(rootFull) ? rootFull : rootFull + Path.DirectorySeparatorChar;
+        return full == rootFull || full.StartsWith(prefix, StringComparison.Ordinal)
             ? full
             : null;
     }

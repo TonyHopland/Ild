@@ -93,11 +93,12 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   it can only be set on the Docker host's kernel, which is outside anything this
   repo provisions. No `sysctls` entry belongs here.
 
-- **One code seam.** Every agent launch goes through
+- **One code seam.** Every CLI agent launch goes through
   `CliAgentAdapterBase.StartAgentProcess`, which applies
   `AgentIsolation.Route(ProcessStartInfo)` and starts the process — so "a CLI
   launch crosses to the agent uid" is owned in one place rather than remembered at
-  each of the adapters' call sites. Routing is a no-op unless `ILD_AGENT_USER` is
+  each of the adapters' call sites. The built-in provider's shell tool is not a
+  CLI launch and calls `Route` directly, through `AIProviderService.IsolateShell`. Routing is a no-op unless `ILD_AGENT_USER` is
   set, so local development, unit tests and any single-uid deployment keep the
   pre-isolation behavior unchanged; the container image sets the variable.
   `ProcessRunner` (git, npm) is deliberately **not** routed — those are

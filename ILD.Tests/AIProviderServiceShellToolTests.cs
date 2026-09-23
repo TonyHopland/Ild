@@ -229,6 +229,13 @@ public class AIProviderServiceShellToolTests : IDisposable
     }
 
     [Fact]
+    public void File_tools_accept_paths_under_the_filesystem_root()
+    {
+        Assert.Equal("/etc/hostname", AIProviderService.SafePath("/", "etc/hostname"));
+        Assert.Equal("/", AIProviderService.SafePath("/", "."));
+    }
+
+    [Fact]
     public async Task File_tools_accept_a_root_given_with_a_trailing_separator()
     {
         var (root, _) = RootWithEvilSibling();
