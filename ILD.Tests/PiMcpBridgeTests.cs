@@ -212,9 +212,12 @@ public sealed class PiMcpBridgeTests : IDisposable
     [Fact]
     public void A_server_that_never_replies_registers_nothing_and_lets_pi_run()
     {
-        var run = Run(FakeServer("never-reply", startupTimeoutMs: 1000));
+        var spec = FakeServer("never-reply", startupTimeoutMs: 600000);
+        spec["fireTimerMs"] = 600000;
+        var run = Run(spec);
 
         AssertStartedWithoutTools(run);
+        Assert.Contains("no reply within 600000ms", run.Stderr);
     }
 
     [Fact]
@@ -378,6 +381,14 @@ public sealed class PiMcpBridgeTests : IDisposable
         import { registerIldMcpTools } from "./ild-mcp-bridge.js";
 
         const spec = JSON.parse(readFileSync(process.argv[2], "utf8"));
+
+        // A timer of the length the spec names fires as soon as it is armed, so a
+        // timeout the test means to reach is reached without waiting it out.
+        if (spec.fireTimerMs !== undefined) {
+          const realSetTimeout = globalThis.setTimeout;
+          globalThis.setTimeout = (callback, ms, ...args) =>
+            realSetTimeout(callback, ms === spec.fireTimerMs ? 0 : ms, ...args);
+        }
 
         const registered = [];
         const shutdownHandlers = [];
