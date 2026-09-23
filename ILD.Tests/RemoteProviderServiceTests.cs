@@ -1076,7 +1076,7 @@ public class RemoteProviderServiceTests
 
         var handler = new AzureHandler().On(_ => true, "{}");
 
-        Assert.True(await CreateService(db, handler).CreatePullRequestCommentAsync(AzureRepoUrl, "7", "well spotted"));
+        Assert.True((await CreateService(db, handler).CreatePullRequestCommentAsync(AzureRepoUrl, "7", "well spotted")).Ok);
         var call = Assert.Single(handler.Calls);
         Assert.Equal($"{AzureGitApi}/pullrequests/7/threads?api-version=7.1", call.Url);
         Assert.Contains("well spotted", call.Body);

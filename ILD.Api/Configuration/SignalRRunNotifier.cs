@@ -121,4 +121,17 @@ public class SignalRRunNotifier : IRunNotifier
             _logger.LogError(ex, "Failed to send PrSnapshotChanged for run {RunId}", runId);
         }
     }
+
+    public async Task PrQueueChangedAsync(Guid runId)
+    {
+        try
+        {
+            await _runHub.Clients.Group(runId.ToString())
+                .SendAsync("PrQueueChanged", new PrQueueChangedPayload(runId));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send PrQueueChanged for run {RunId}", runId);
+        }
+    }
 }

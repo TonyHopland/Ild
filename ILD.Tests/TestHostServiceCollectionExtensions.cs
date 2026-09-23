@@ -125,8 +125,6 @@ internal static class TestHostServiceCollectionExtensions
         public Task<bool> EnablePullRequestAutoMergeAsync(string repoUrl, string prNumber)
             => throw Unexpected(nameof(IRemoteProvider));
 
-        public Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(string repoUrl, string prNumber)
-            => throw Unexpected(nameof(IRemoteProvider));
 
         public Task RegisterWebhookAsync(string repoUrl, string callbackUrl)
             => throw Unexpected(nameof(IRemoteProvider));
@@ -146,7 +144,19 @@ internal static class TestHostServiceCollectionExtensions
         public Task<bool> DeleteBranchAsync(string repoUrl, string branchName)
             => throw Unexpected(nameof(IRemoteProvider));
 
-        public Task<bool> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body)
+        public Task<RemotePrWriteResult> CreatePullRequestCommentAsync(string repoUrl, string prNumber, string body)
+            => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(string repoUrl, string prNumber)
+            => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<RemotePrWriteResult> ReplyToReviewThreadAsync(string repoUrl, string prNumber, string commentId, string body)
+            => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId)
+            => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<bool> SupportsThreadResolutionAsync(string repoUrl)
             => throw Unexpected(nameof(IRemoteProvider));
     }
 

@@ -418,6 +418,12 @@ namespace ILD.Data.Migrations
                     b.Property<int>("NodeExecutionCount")
                         .HasColumnType("integer");
 
+                    b.Property<string>("PrCommentLedger")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PrCommentQueue")
+                        .HasColumnType("text");
+
                     b.Property<string>("PrPolledEdgeStates")
                         .HasMaxLength(512)
                         .HasColumnType("character varying(512)");

@@ -80,16 +80,6 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             null);
     }
 
-    public virtual async Task<IEnumerable<RemotePrComment>> GetPullRequestCommentsAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
-    {
-        ApplyHeaders(http, repo.Provider);
-        using var resp = await http.GetAsync($"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/issues/{prNumber}/comments");
-        if (!resp.IsSuccessStatusCode)
-            return Array.Empty<RemotePrComment>();
-
-        return await ReadCommentsAsync(resp);
-    }
-
     public virtual async Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);
@@ -327,10 +317,10 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         return ReadId(run);
     }
 
-    /// <summary>An <c>id</c> field as a string, whether the provider sends it as a number or a string.</summary>
-    private static string? ReadId(JsonElement element)
+    /// <summary>An id field as a string, whether the provider sends it as a number or a string.</summary>
+    protected static string? ReadId(JsonElement element, string property = "id")
     {
-        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty("id", out var id))
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var id))
             return null;
         return id.ValueKind switch
         {
@@ -339,6 +329,14 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             _ => null,
         };
     }
+
+    protected static int? ReadInt(JsonElement element, string property)
+        => element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(property, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt32(out var number)
+                ? number
+                : null;
 
     /// <summary>
     /// No log to fetch by default: a provider whose checks are commit statuses
@@ -535,25 +533,323 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         }
     }
 
-    private static string ReadUserLogin(JsonElement element)
+    protected static string ReadUserLogin(JsonElement element)
         => element.TryGetProperty("user", out var user) ? ReadString(user, "login") ?? string.Empty : string.Empty;
 
-    private static DateTime? ReadDate(JsonElement element, string property)
+    protected static DateTime? ReadDate(JsonElement element, string property)
         => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String && value.TryGetDateTime(out var dt)
             ? dt
             : null;
 
-    private static string? ReadString(JsonElement element, string property)
+    protected static string? ReadString(JsonElement element, string property)
     {
         if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(property, out var value))
             return null;
         return value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 
+    /// <summary>
+    /// How much of one review item's prose the ledger carries. A suppressed
+    /// finding runs to several hundred characters and a review can hold a dozen
+    /// of them; the same budget a check's own output gets, for the same reason.
+    /// </summary>
+    protected const int MaxReviewItemLength = MaxCheckSummaryLength;
+
+    /// <summary>
+    /// No review ledger by default. The shape it is assembled from is GitHub's,
+    /// not this base class's "GitHub and Gitea agree" middle ground: a Forgejo
+    /// 9.0.3 (Gitea 1.22.0 API) instance has no
+    /// <c>pulls/{index}/comments</c> collection at all — its review comments
+    /// hang off <c>pulls/{index}/reviews/{id}/comments</c>, one request per
+    /// review — and no reply route. Inheriting the GitHub read there would 404
+    /// on every tick and report an outage for something simply not implemented,
+    /// so the honest answer is that the ledger is not supported, the same
+    /// degradation <see cref="GetCheckLogAsync"/> and
+    /// <see cref="ResolveReviewThreadAsync"/> already give.
+    /// </summary>
+    public virtual Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        => Task.FromResult(RemotePrReviewLedger.Unavailable(
+            $"Reading a pull request's review is not supported for {ProviderType} — its API has no pull-request review-comment collection to read one from."));
+
+    /// <summary>
+    /// The ledger as GitHub's REST API serves it, for adapters whose API is that
+    /// shape: the submitted reviews (whose bodies also carry the findings that
+    /// never became threads), the inline review comments, and the comments on
+    /// the pull request itself. Inline comments take <c>original_commit_id</c>
+    /// and <c>original_line</c> — the commit and line the reviewer wrote against
+    /// — because <c>commit_id</c>/<c>line</c> drift as the branch moves, and the
+    /// per-head repeat suppression keys on what was reviewed.
+    /// </summary>
+    protected async Task<RemotePrReviewLedger> ReadRestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        ApplyHeaders(http, repo.Provider);
+        var apiRepo = $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}";
+
+        // Deliberately not GetObjectAsync: a forge that will not answer at all
+        // must reach the caller as "could not read", not as an empty review.
+        using var prResp = await http.GetAsync($"{apiRepo}/pulls/{prNumber}");
+        if (!prResp.IsSuccessStatusCode)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read pull request #{prNumber} from {ProviderType} (HTTP {(int)prResp.StatusCode}).");
+        using var prDoc = JsonDocument.Parse(await prResp.Content.ReadAsStringAsync());
+        var headSha = prDoc.RootElement.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
+
+        // Every one of these is paged. A forge serves 30 per page by default,
+        // oldest first, so on a busy pull request the NEWEST comments are the
+        // ones that fall off page one — which is this feature's founding bug in
+        // a new form: they would never enter the ledger, never be delivered, and
+        // never fire the edge.
+        var reviewPages = await ReadAllPagesAsync(http, $"{apiRepo}/pulls/{prNumber}/reviews");
+        if (reviewPages is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the reviews on pull request #{prNumber} from {ProviderType}.");
+
+        var reviews = new List<RemotePrReviewSummary>();
+        var items = new List<RemotePrReviewItem>();
+        foreach (var review in reviewPages)
+        {
+            var body = ReadString(review, "body");
+            var summary = new RemotePrReviewSummary(
+                ReadId(review) ?? string.Empty,
+                NormalizeReviewState(ReadString(review, "state")),
+                body,
+                ReadString(review, "commit_id"),
+                ReadDate(review, "submitted_at") ?? DateTime.MinValue,
+                ReadUserLogin(review),
+                PrReviewBodyParser.IsIncomplete(body));
+            reviews.Add(summary);
+            foreach (var suppressed in PrReviewBodyParser.Suppressed(summary))
+                items.Add(suppressed with { Body = Truncate(suppressed.Body, MaxReviewItemLength) ?? suppressed.Body });
+        }
+
+        var comments = await ReadAllPagesAsync(http, $"{apiRepo}/pulls/{prNumber}/comments");
+        if (comments is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the review comments on pull request #{prNumber} from {ProviderType}.");
+
+        var threads = await GetReviewThreadsAsync(http, repo, prNumber);
+        if (threads is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the review threads on pull request #{prNumber} from {ProviderType}.");
+
+        var threadByComment = new Dictionary<string, RemotePrReviewThread>(StringComparer.Ordinal);
+        foreach (var thread in threads)
+            foreach (var commentId in thread.CommentIds)
+                threadByComment[commentId] = thread;
+        var replyRoots = ReplyRoots(comments);
+
+        foreach (var comment in comments)
+        {
+            var id = ReadId(comment);
+            if (id is null) continue;
+            var thread = threadByComment.GetValueOrDefault(id);
+            items.Add(new RemotePrReviewItem(
+                "review",
+                id,
+                thread?.ThreadId ?? replyRoots.GetValueOrDefault(id, id),
+                ReadId(comment, "pull_request_review_id"),
+                ReadString(comment, "path"),
+                ReadInt(comment, "original_line") ?? ReadInt(comment, "line"),
+                Truncate(ReadString(comment, "body"), MaxReviewItemLength) ?? string.Empty,
+                ReadUserLogin(comment),
+                ReadString(comment, "original_commit_id") ?? ReadString(comment, "commit_id"),
+                ReadDate(comment, "created_at") ?? DateTime.MinValue,
+                thread?.Resolved ?? false,
+                PrCommentMarker.IsStamped(ReadString(comment, "body"))));
+        }
+
+        var issueComments = await ReadAllPagesAsync(http, $"{apiRepo}/issues/{prNumber}/comments");
+        if (issueComments is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the comments on pull request #{prNumber} from {ProviderType}.");
+
+        foreach (var comment in issueComments)
+        {
+            var id = ReadId(comment);
+            if (id is null) continue;
+            items.Add(new RemotePrReviewItem(
+                "issue",
+                id,
+                ThreadId: null,
+                ReviewId: null,
+                Path: null,
+                Line: null,
+                Truncate(ReadString(comment, "body"), MaxReviewItemLength) ?? string.Empty,
+                ReadUserLogin(comment),
+                headSha,
+                ReadDate(comment, "created_at") ?? DateTime.MinValue,
+                Resolved: false,
+                PrCommentMarker.IsStamped(ReadString(comment, "body"))));
+        }
+
+        return new RemotePrReviewLedger(reviews, items, headSha, null);
+    }
+
+    /// <summary>Items asked for per page — GitHub's maximum, and what Gitea honours as <c>limit</c>.</summary>
+    private const int ListPageSize = 100;
+
+    /// <summary>
+    /// Ceiling on the page walk, so a pathological pull request cannot hold the
+    /// heartbeat open. Far more items than any reviewed pull request carries.
+    /// </summary>
+    private const int MaxListPages = 20;
+
+    /// <summary>
+    /// Every page of a paged REST collection, or null when the forge would not
+    /// serve one. Deliberately not <see cref="GetArrayAsync"/>: that swallows a
+    /// failure into an empty array, which here is indistinguishable from "the
+    /// last page", and a ledger silently missing its tail is the very failure
+    /// this feature exists to stop. A null instead reaches the caller as
+    /// "could not read", and an unreadable ledger changes no delivery state.
+    ///
+    /// Both spellings of the size go out — GitHub reads <c>per_page</c>,
+    /// Gitea/Forgejo read <c>limit</c>, and each ignores the other's — but a
+    /// short page is NOT taken as the end on its own, because a forge is free to
+    /// cap what it was asked for: Gitea clamps to its <c>MAX_RESPONSE_ITEMS</c>,
+    /// 50 by default, so "shorter than the 100 I wanted" is its every page. The
+    /// walk follows the <c>Link</c> header's <c>rel="next"</c>, which both
+    /// families send on paged list routes and which says exactly whether more
+    /// exists; a response with no <c>Link</c> at all is the one case left to a
+    /// short page, and neither supported forge both caps and omits it.
+    /// </summary>
+    protected static async Task<IReadOnlyList<JsonElement>?> ReadAllPagesAsync(HttpClient http, string url)
+    {
+        var all = new List<JsonElement>();
+        var separator = url.Contains('?', StringComparison.Ordinal) ? '&' : '?';
+
+        for (var page = 1; page <= MaxListPages; page++)
+        {
+            using var resp = await http.GetAsync($"{url}{separator}per_page={ListPageSize}&limit={ListPageSize}&page={page}");
+            if (!resp.IsSuccessStatusCode)
+                return null;
+
+            List<JsonElement> batch;
+            try
+            {
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+                if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                    return null;
+                batch = doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList();
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
+
+            all.AddRange(batch);
+            if (batch.Count == 0)
+                return all;
+
+            var link = resp.Headers.TryGetValues("Link", out var values) ? string.Join(",", values) : null;
+            if (link is not null)
+            {
+                if (!HasNextPage(link)) return all;
+            }
+            else if (batch.Count < ListPageSize)
+            {
+                return all;
+            }
+        }
+
+        // Falling out of the loop means the forge was still offering a next page
+        // at the ceiling. Returning what we have would be the founding bug with
+        // a bigger number on it: the tail a forge serves last is the NEWEST
+        // comments, so a pull request past 2,000 entries would report a valid
+        // ledger that can never deliver its most recent review. "Could not read"
+        // is the honest answer, and it changes no delivery state.
+        return null;
+    }
+
+    /// <summary>Whether a <c>Link</c> header offers a next page (RFC 5988, as both forge families send it).</summary>
+    private static bool HasNextPage(string link)
+        => link.Contains("rel=\"next\"", StringComparison.OrdinalIgnoreCase)
+            || link.Contains("rel=next", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The provider's own review threads, when it has a thread concept to report
+    /// (GitHub, over GraphQL). Empty by default, which leaves every comment keyed
+    /// by the root of its reply chain and no thread reported as resolved — that
+    /// is a provider with nothing to say, and it is not the same answer as null,
+    /// which means the provider HAS threads and they could not be read.
+    /// </summary>
+    protected virtual Task<IReadOnlyList<RemotePrReviewThread>?> GetReviewThreadsAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        => Task.FromResult<IReadOnlyList<RemotePrReviewThread>?>(Array.Empty<RemotePrReviewThread>());
+
+    /// <summary>Each inline comment's root comment, walking <c>in_reply_to_id</c> back up the chain.</summary>
+    private static Dictionary<string, string> ReplyRoots(IReadOnlyList<JsonElement> comments)
+    {
+        var parents = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var comment in comments)
+        {
+            var id = ReadId(comment);
+            var parent = ReadId(comment, "in_reply_to_id");
+            if (id is not null && parent is not null)
+                parents[id] = parent;
+        }
+
+        var roots = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var id in parents.Keys)
+        {
+            var root = id;
+            // Bounded by the chain's length; a provider that ever reported a
+            // cycle would otherwise hang the heartbeat.
+            for (var hops = 0; hops < parents.Count && parents.TryGetValue(root, out var parent); hops++)
+                root = parent;
+            roots[id] = root;
+        }
+
+        return roots;
+    }
+
+    /// <summary>
+    /// No thread reply by default, for the same reason as the ledger: the
+    /// <c>comments/{id}/replies</c> route is GitHub's, and a Gitea-family API
+    /// has nothing of the shape. Saying so beats posting into a 404.
+    /// </summary>
+    public virtual Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+        => Task.FromResult(new RemotePrWriteResult(
+            false, null, $"Replying to a review thread is not supported for {ProviderType} — its API has no reply route on a review comment."));
+
+    /// <summary>A reply as GitHub's REST API takes one, for adapters of that shape.</summary>
+    protected async Task<RemotePrWriteResult> PostRestThreadReplyAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+    {
+        ApplyHeaders(http, repo.Provider);
+        using var resp = await http.PostAsJsonAsync(
+            $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/comments/{Uri.EscapeDataString(commentId)}/replies",
+            new { body });
+        if (!resp.IsSuccessStatusCode)
+            return new RemotePrWriteResult(false, null, $"The reply was refused by {ProviderType} (HTTP {(int)resp.StatusCode}).");
+
+        return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
+    }
+
+    /// <summary>
+    /// Whether this provider can mark a review thread resolved at all. Asked
+    /// before an agent queues a resolve, so it is told "not supported" there and
+    /// then rather than being answered "queued" for something that can never
+    /// happen.
+    /// </summary>
+    public virtual bool SupportsThreadResolution => false;
+
+    /// <summary>
+    /// No thread resolution by default: outside GitHub's GraphQL API a review
+    /// thread is not a resolvable object, so saying so is the answer — the same
+    /// degradation <see cref="GetCheckLogAsync"/> uses.
+    /// </summary>
+    public virtual Task<RemotePrWriteResult> ResolveReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string threadId)
+        => Task.FromResult(new RemotePrWriteResult(
+            false, null, $"Resolving review threads is not supported by {ProviderType} — its API has no thread to resolve."));
+
     public Task UnregisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl)
         => Task.CompletedTask;
 
-    public virtual Task<bool> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
+    public virtual Task<RemotePrWriteResult> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
         => PrCommentHelper.CreatePullRequestCommentAsync(http, repo, prNumber, body, ApplyHeaders);
 
     public virtual bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)
@@ -572,22 +868,6 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     public abstract Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);
     public abstract Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName);
     public abstract WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers);
-
-    protected static async Task<IEnumerable<RemotePrComment>> ReadCommentsAsync(HttpResponseMessage resp)
-    {
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-        var list = new List<RemotePrComment>();
-        foreach (var el in doc.RootElement.EnumerateArray())
-        {
-            list.Add(new RemotePrComment(
-                el.GetProperty("id").GetRawText(),
-                el.GetProperty("body").GetString() ?? string.Empty,
-                el.GetProperty("user").GetProperty("login").GetString() ?? string.Empty,
-                el.GetProperty("created_at").GetDateTime()));
-        }
-
-        return list;
-    }
 
     protected static string? GetHeader(IReadOnlyDictionary<string, string> headers, string name)
         => headers.TryGetValue(name, out var value) ? value : null;

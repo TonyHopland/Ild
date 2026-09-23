@@ -2,6 +2,7 @@ using System.Text.Json;
 using ILD.Api.Contracts;
 using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -128,6 +129,20 @@ public class LoopRunsController : ControllerBase
             // Embedded as JSON (camelCase from the poller) so the feedback UI can
             // render the full PR view; null until the heartbeat poller's first pass.
             prSnapshot = ParsePrSnapshot(run.PrSnapshot),
+            // What this round intends to write on the pull request but has not
+            // written yet. Visible from the moment an agent queues it until the
+            // PR node drains it, which is the window a person has to drop any of
+            // it — so it is sent whatever the run's status.
+            prQueuedWrites = PrCommentQueueJson.TryParse(run.PrCommentQueue).Select(q => new
+            {
+                id = q.Id,
+                kind = q.Kind,
+                targetId = q.TargetId,
+                body = q.Body,
+                path = q.Path,
+                line = q.Line,
+                queuedAt = q.QueuedAt,
+            }),
             totalInputTokens = totals.TotalInputTokens,
             totalOutputTokens = totals.TotalOutputTokens,
             totalCostUsd = totals.TotalCostUsd,
@@ -164,6 +179,23 @@ public class LoopRunsController : ControllerBase
         if (string.IsNullOrEmpty(json)) return null;
         try { return JsonSerializer.Deserialize<JsonElement>(json); }
         catch (JsonException) { return null; }
+    }
+
+    /// <summary>
+    /// Drop one of the pull-request writes this round intends to make, before
+    /// the PR node makes it. Nothing is lost by dropping: the thread stays open
+    /// and the finding stays undelivered, so a later review raises it again.
+    /// </summary>
+    [HttpDelete("{id}/pr-queue/{writeId}")]
+    public async Task<IActionResult> DropQueuedPrWrite(
+        string id, string writeId, [FromServices] IPrWriteQueue queue)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        return await queue.DropQueuedAsync(guid, writeId)
+            ? Ok(new { dropped = writeId })
+            : NotFound(new { error = $"No queued pull-request write '{writeId}' on this run." });
     }
 
     [HttpPost("{id}/pause")]

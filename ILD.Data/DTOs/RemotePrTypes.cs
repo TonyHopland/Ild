@@ -17,13 +17,6 @@ public enum RemotePrStatus
     Merged
 }
 
-public record RemotePrComment(
-    string Id,
-    string Body,
-    string Author,
-    DateTime CreatedAt
-);
-
 /// <summary>
 /// Aggregate continuous-integration verdict for a PR's head commit, derived
 /// from check runs and commit statuses combined. Serialized by its string name

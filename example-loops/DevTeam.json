@@ -185,7 +185,6 @@
           "on_merged",
           "on_abandoned"
         ],
-        "prCommentTemplate": "DevTeam loop update:\n\n{{Var.DevHandoff}}",
         "prDescriptionTemplate": "## Summary\n\n{{Var.DevHandoff}}\n\n## QA\n\n{{Var.QAReport}}\n\n## Review\n\n{{Var.ReviewFeedback}}\n\n---\n_Automated by the DevTeam loop."
       }
     },
@@ -268,7 +267,7 @@
           "x": 500,
           "y": 560
         },
-        "prompt": "The pull request needs work — it was rejected, CI failed, or there is a merge conflict. Details:\n\n{{Node.Input}}\n\nInspect the PR (review comments, CI logs, conflict state), fix the problems, and commit. If human PR feedback settled a product or design question, append that decision verbatim to the `Decisions` loop variable with set_loop_variable — the reviewer treats `Decisions` as settled and will not relitigate it. Update `DevHandoff` with set_loop_variable and end your final message with exactly TO_QA or TO_REVIEW.\n\nBlocked instead — on a product decision, or on something you can't deliver as briefed? Same rule as your original brief: set `DevBlocker` (what's blocked, 2–3 options, your recommendation) and end with exactly NEEDS_DECISION."
+        "prompt": "The pull request needs work — it was rejected, CI failed, or there is a merge conflict. Details:\n\n{{Node.Input}}\n\nRead the whole review with get_pr_review before you start: the rendered review on the forge leaves findings out, and that call returns every one of them. Answer each finding where it was raised — reply_to_pr_review_comment for one you are NOT changing the code for, so the thread closes instead of the same objection coming back on every later review; close_pr_review_item for one you read and are deliberately not answering, with resolve if its thread should close with it. Nothing you call posts anything: each one is queued, and the PR node sends it when the loop returns there, so a human can read it and drop it first. If the round has something general to say that belongs on no single thread — what you changed and why, a decision you took — say it once with comment_on_pr. Nothing else comments on the pull request, so a round that calls none of these leaves it silent.\n\nFix the problems and commit. If human PR feedback settled a product or design question, append that decision verbatim to the `Decisions` loop variable with set_loop_variable — the reviewer treats `Decisions` as settled and will not relitigate it. Update `DevHandoff` with set_loop_variable and end your final message with exactly TO_QA or TO_REVIEW.\n\nBlocked instead — on a product decision, or on something you can't deliver as briefed? Same rule as your original brief: set `DevBlocker` (what's blocked, 2–3 options, your recommendation) and end with exactly NEEDS_DECISION."
       }
     },
     {

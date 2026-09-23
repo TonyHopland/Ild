@@ -543,6 +543,148 @@ public class AgentController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// The whole review ledger for the work item's current pull request: every
+    /// inline comment with its thread and the commit it was written against,
+    /// every finding a review body suppressed without surfacing it as a thread,
+    /// and each review's verdict. <c>sinceCommit</c> narrows it to what a round
+    /// has not already seen. The fetch runs here, with the provider credentials
+    /// the agent does not hold.
+    /// </summary>
+    [HttpGet("workitems/{id}/pr-review")]
+    public async Task<IActionResult> GetPrReview(
+        string id,
+        [FromServices] IPrReviewService reviews,
+        [FromQuery] string? sinceCommit = null)
+    {
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var ledger = await reviews.ReadAsync(id, sinceCommit, CallerRunId());
+        return Ok(new
+        {
+            headSha = ledger.HeadSha,
+            message = ledger.Message,
+            reviews = ledger.Reviews.Select(r => new
+            {
+                id = r.Id,
+                state = r.State,
+                // The review own prose. Also delivered as a "body" item, but an
+                // agent reading the ledger directly must be able to see it here.
+                body = r.Body,
+                headSha = r.HeadSha,
+                submittedAt = r.SubmittedAt,
+                author = r.Author,
+                incomplete = r.Incomplete,
+            }),
+            items = ledger.Items.Select(i => new
+            {
+                kind = i.Kind,
+                commentId = i.CommentId,
+                threadId = i.ThreadId,
+                reviewId = i.ReviewId,
+                path = i.Path,
+                line = i.Line,
+                body = i.Body,
+                author = i.Author,
+                commit = i.Commit,
+                createdAt = i.CreatedAt,
+                resolved = i.Resolved,
+                postedByIld = i.PostedByIld,
+            }),
+        });
+    }
+
+    /// <summary>
+    /// Answer one review comment on its own thread, so an item that was argued
+    /// rather than changed stops coming back on every later review. A refusal —
+    /// a comment id this pull request does not hold, a provider that would not
+    /// take it — is 200 with a message, as <see cref="GetCiLog"/> is.
+    /// </summary>
+    [HttpPost("workitems/{id}/pr-review/reply")]
+    public async Task<IActionResult> ReplyToPrReview(
+        string id,
+        [FromServices] IPrReviewService reviews,
+        [FromBody] AgentPrReviewReplyRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request?.CommentId) || string.IsNullOrWhiteSpace(request.Body))
+            return BadRequest(new { error = "commentId and body are required." });
+
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var result = await reviews.ReplyAsync(id, request.CommentId, request.Body, CallerRunId());
+        return Ok(new { ok = result.Ok, commentId = result.Id, message = result.Message });
+    }
+
+    /// <summary>Mark a review thread resolved once it has been answered or fixed.</summary>
+    [HttpPost("workitems/{id}/pr-review/resolve")]
+    public async Task<IActionResult> ResolvePrReviewThread(
+        string id,
+        [FromServices] IPrReviewService reviews,
+        [FromBody] AgentPrReviewResolveRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request?.ThreadId))
+            return BadRequest(new { error = "threadId is required." });
+
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var result = await reviews.ResolveAsync(id, request.ThreadId, CallerRunId());
+        return Ok(new { ok = result.Ok, threadId = request.ThreadId, message = result.Message });
+    }
+
+    /// <summary>
+    /// Say something general on the pull request, tied to no item. This is the
+    /// round's own account of itself, and it exists because the PR node no
+    /// longer writes one: only the round knows whether it has anything to add
+    /// beyond the answers it gave on the threads, so a round with nothing to add
+    /// leaves the pull request quiet.
+    /// </summary>
+    [HttpPost("workitems/{id}/pr-review/comment")]
+    public async Task<IActionResult> CommentOnPr(
+        string id,
+        [FromServices] IPrReviewService reviews,
+        [FromBody] AgentPrCommentRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request?.Body))
+            return BadRequest(new { error = "body is required." });
+
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var result = await reviews.CommentAsync(id, request.Body, CallerRunId());
+        return Ok(new { ok = result.Ok, message = result.Message });
+    }
+
+    /// <summary>
+    /// Record that this round read an item and chose not to answer it, closing
+    /// its thread as well when <c>resolve</c> is set and the forge can. Closing
+    /// suppresses nothing that was not already suppressed: the item was recorded
+    /// as delivered when it was handed over, and that record is per-head, so a
+    /// reviewer restating the point against new code still fires.
+    /// </summary>
+    [HttpPost("workitems/{id}/pr-review/close")]
+    public async Task<IActionResult> ClosePrReviewItem(
+        string id,
+        [FromServices] IPrReviewService reviews,
+        [FromBody] AgentPrReviewCloseRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request?.CommentId))
+            return BadRequest(new { error = "commentId is required." });
+
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var result = await reviews.CloseAsync(id, request.CommentId, request.Resolve, CallerRunId());
+        return Ok(new { ok = result.Ok, commentId = request.CommentId, message = result.Message });
+    }
+
     [HttpGet("repositories")]
     public async Task<IActionResult> ListRepositories([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
@@ -694,6 +836,13 @@ public class AgentController : ControllerBase
         return Request.Headers.TryGetValue(RunIdHeader, out var hdr)
             && Guid.TryParse(hdr.ToString(), out runId);
     }
+
+    /// <summary>
+    /// The run this call came from, or null when there is no usable header —
+    /// a chat agent borrows the agent API without being a loop run, and that
+    /// difference decides whether a review read consumes what it returned.
+    /// </summary>
+    private Guid? CallerRunId() => TryResolveRunId(out var runId) ? runId : null;
 
     private bool TryResolveChatSessionId(out Guid chatSessionId)
     {

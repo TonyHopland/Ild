@@ -10,6 +10,7 @@ import LoopRunTerminal from "../LoopRunTerminal";
 import { useWorkItemDetail } from "./useWorkItemDetail";
 import {
   FeedbackBanner,
+  QueuedPrWrites,
   ConversationPanel,
   PreviewPanel,
   MetaPanel,
@@ -302,6 +303,7 @@ export default function WorkItemModalV2({
             onCleanupBacklog={detail.handleCleanupBacklog}
             showAbandon={false}
           />
+          <QueuedPrWrites workItem={workItem} detail={detail} />
           <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
           {!detail.shouldStream && !actionRequired && (
             <div className="wiv2-empty">No action required.</div>

@@ -551,20 +551,31 @@ export function NodeSettingsModal({
                 />
               </div>
               <div className="config-field">
-                <label htmlFor="pr-comment-template">PR Comment Template</label>
+                <label htmlFor="pr-comment-template">PR Comment Template (no longer posted)</label>
                 <PromptEditor
                   id="pr-comment-template"
                   rows={4}
                   value={prCommentTemplate}
                   onChange={onPrCommentTemplateChange}
                 />
+                <small className="config-help-text">
+                  The node no longer posts this. It used to go out on every re-visit, which meant a
+                  round that had already answered on the threads announced itself a second time
+                  carrying nothing. The round decides now: an agent calls{" "}
+                  <strong>comment_on_pr</strong> when it has something general to say, and a round
+                  with nothing to add leaves the pull request quiet. Existing templates keep this
+                  field; it simply does nothing.
+                </small>
               </div>
               <small className="config-help-text">
                 The PR heartbeat fires these reserved edges on PR state changes (in priority order):
-                on_rejected, on_merge_conflict, on_ci_failed, on_approved, on_ci_passed, on_merged,
-                on_abandoned. Only wired edges route; there is no fallback to on_success/on_failure,
-                so wire <strong>on_merged</strong> and <strong>on_abandoned</strong> to a Cleanup
-                path or the run parks forever once the PR closes.
+                on_rejected, on_merge_conflict, on_ci_failed, on_comment, on_approved, on_ci_passed,
+                on_merged, on_abandoned. Only wired edges route; there is no fallback to
+                on_success/on_failure, so wire <strong>on_merged</strong> and{" "}
+                <strong>on_abandoned</strong> to a Cleanup path or the run parks forever once the PR
+                closes. <strong>on_comment</strong> carries review and comment items the run has not
+                been handed yet — while a review has changes requested, on_rejected outranks it
+                every tick, and that round reads the comments with the get_pr_review tool instead.
               </small>
               <CustomEdgesEditor
                 names={customEdgeNames}

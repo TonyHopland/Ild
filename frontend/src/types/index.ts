@@ -474,6 +474,28 @@ export interface LoopRun {
   prUrl?: string | null;
   /** Full PR snapshot from the heartbeat poller; null until the first poll. */
   prSnapshot?: RemotePrSnapshot | null;
+  /** What this round intends to write on the PR but has not written yet. */
+  prQueuedWrites?: PrQueuedWrite[] | null;
+}
+
+/**
+ * A reply or a thread resolution an agent has asked for, recorded against the
+ * run rather than sent. Agents never write to a pull request: the PR node
+ * drains this at the end of the round, so everything here can still be dropped.
+ */
+export interface PrQueuedWrite {
+  id: string;
+  /**
+   * "comment" is a pull-request comment of its own: either an answer to
+   * something with no thread (a top-level comment, a review body), which carries
+   * the id it answers, or the round's own general comment, which has no target.
+   */
+  kind: "reply" | "resolve" | "comment";
+  targetId: string;
+  body?: string | null;
+  path?: string | null;
+  line?: number | null;
+  queuedAt: string;
 }
 
 /** Aggregate CI verdict for a PR's head commit (mirrors RemotePrCiStatus). */
@@ -575,13 +597,6 @@ export interface WorkItemServerConfig {
 
 export interface RemoteProviderTypeOption {
   type: string;
-}
-
-export interface PrComment {
-  id: string;
-  body: string;
-  author: string;
-  createdAt: string;
 }
 
 export interface AiProvider {
@@ -731,6 +746,10 @@ export interface NodeProgressPayload {
 }
 
 export interface PrSnapshotChangedPayload {
+  runId: string;
+}
+
+export interface PrQueueChangedPayload {
   runId: string;
 }
 

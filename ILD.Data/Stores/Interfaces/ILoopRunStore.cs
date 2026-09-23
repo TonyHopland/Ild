@@ -145,6 +145,51 @@ public interface ILoopRunStore
     Task ClearSteeringNoteAsync(Guid runId);
 
     /// <summary>
+    /// Overwrite what the run has been handed of its PR's review, touching only
+    /// that column and without checking what was there. Every real writer goes
+    /// through <see cref="TrySetPrCommentLedgerAsync"/> instead; this remains
+    /// for setting the column outright, where there is nothing to lose a race to.
+    /// </summary>
+    Task SetPrCommentLedgerAsync(Guid runId, string? json);
+
+    /// <summary>
+    /// The ledger as the row holds it now, bypassing the change tracker — what a
+    /// compare-and-set has to start from.
+    /// </summary>
+    Task<string?> GetPrCommentLedgerAsync(Guid runId);
+
+    /// <summary>
+    /// Replace the ledger only if it still holds <paramref name="expected"/>.
+    /// Four writers share this column and every one of them is a
+    /// read-modify-write: the heartbeat's delivery and seed, a read consuming
+    /// what it returned, the PR node recording what it posted, and a dropped or
+    /// refused answer putting its finding back. The heartbeat decides from a
+    /// copy loaded before a forge fetch that takes seconds, so a blind write at
+    /// the end of its tick reverts anything recorded in between — a drop landing
+    /// there was silently undone and the finding stayed suppressed.
+    /// <see cref="UpdateRunAsync"/> leaves the column out for the same reason.
+    /// </summary>
+    Task<bool> TrySetPrCommentLedgerAsync(Guid runId, string? expected, string? json);
+
+    /// <summary>
+    /// The queue as the row holds it right now, bypassing the change tracker —
+    /// what a compare-and-set has to start from.
+    /// </summary>
+    Task<string?> GetPrCommentQueueAsync(Guid runId);
+
+    /// <summary>
+    /// Replace the queue only if it still holds <paramref name="expected"/>,
+    /// reporting whether it did. This is the ONLY way this column changes: an
+    /// agent queues, a person drops and the PR node claims the lot before it
+    /// posts, all against a row the others are moving. An unconditional write
+    /// anywhere on that path puts back the item another writer just removed —
+    /// which then goes out on the pull request after a human had stopped it —
+    /// so no such write exists, and <see cref="UpdateRunAsync"/> is careful to
+    /// leave this one column alone.
+    /// </summary>
+    Task<bool> TrySetPrCommentQueueAsync(Guid runId, string? expected, string? json);
+
+    /// <summary>
     /// Refresh a tracked <see cref="LoopRun"/> instance with the row's current
     /// column values, discarding unsaved in-memory changes. Used by the engine
     /// before persisting so a stale instance held across a long node execution

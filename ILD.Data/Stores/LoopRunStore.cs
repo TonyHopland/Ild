@@ -287,6 +287,11 @@ public class LoopRunStore : ILoopRunStore
         if (entry.State == EntityState.Detached)
             _db.LoopRuns.Attach(run);
         _db.Entry(run).State = EntityState.Modified;
+        // The two contended PR columns are not excluded here: doing it per call
+        // only ever covered the run passed to this one, while a heartbeat pass
+        // holds every waiting run tracked in the same scope. The rule is in the
+        // model instead (AppDbContext.ConfigureTargetedOnlyColumns), so no save
+        // anywhere can carry them.
         await _db.SaveChangesAsync();
     }
 
@@ -299,6 +304,53 @@ public class LoopRunStore : ILoopRunStore
         => await _db.LoopRuns
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.SteeringNote, (string?)null));
+
+    public async Task SetPrCommentLedgerAsync(Guid runId, string? json)
+        => await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentLedger, json));
+
+    public async Task<string?> GetPrCommentLedgerAsync(Guid runId)
+        => await _db.LoopRuns
+            .AsNoTracking()
+            .Where(r => r.Id == runId)
+            .Select(r => r.PrCommentLedger)
+            .FirstOrDefaultAsync();
+
+    public async Task<bool> TrySetPrCommentLedgerAsync(Guid runId, string? expected, string? json)
+    {
+        var rows = expected is null
+            ? await _db.LoopRuns
+                .Where(r => r.Id == runId && r.PrCommentLedger == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentLedger, json))
+            : await _db.LoopRuns
+                .Where(r => r.Id == runId && r.PrCommentLedger == expected)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentLedger, json));
+        return rows > 0;
+    }
+
+    public async Task<string?> GetPrCommentQueueAsync(Guid runId)
+        // No tracking: a caller re-reading inside one scope must see the row as
+        // it is now, not the copy the change tracker already handed it.
+        => await _db.LoopRuns
+            .AsNoTracking()
+            .Where(r => r.Id == runId)
+            .Select(r => r.PrCommentQueue)
+            .FirstOrDefaultAsync();
+
+    public async Task<bool> TrySetPrCommentQueueAsync(Guid runId, string? expected, string? json)
+    {
+        // Null is its own branch because SQL never matches a parameter against
+        // NULL with '='; the two shapes have to be written separately.
+        var rows = expected is null
+            ? await _db.LoopRuns
+                .Where(r => r.Id == runId && r.PrCommentQueue == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentQueue, json))
+            : await _db.LoopRuns
+                .Where(r => r.Id == runId && r.PrCommentQueue == expected)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrCommentQueue, json));
+        return rows > 0;
+    }
 
     public async Task CreateRunNodeAsync(LoopRunNode runNode)
     {

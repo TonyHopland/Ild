@@ -18,6 +18,14 @@ public interface IRunNotifier
 
     /// <summary>The run's persisted PR snapshot was refreshed by the heartbeat poller.</summary>
     Task PrSnapshotChangedAsync(Guid runId);
+
+    /// <summary>
+    /// What the run intends to write on its pull request changed — an agent
+    /// queued an answer, a person dropped one, or the PR node claimed the lot to
+    /// send it. The window in which a person can still drop something opens
+    /// while the round is mid-flight, so it cannot wait for the next snapshot.
+    /// </summary>
+    Task PrQueueChangedAsync(Guid runId);
 }
 
 public sealed class NoopRunNotifier : IRunNotifier
@@ -30,4 +38,5 @@ public sealed class NoopRunNotifier : IRunNotifier
     public Task HaltedAsync(Guid runId) => Task.CompletedTask;
     public Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq) => Task.CompletedTask;
     public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
+    public Task PrQueueChangedAsync(Guid runId) => Task.CompletedTask;
 }

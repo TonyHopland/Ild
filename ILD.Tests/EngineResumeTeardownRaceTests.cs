@@ -163,5 +163,6 @@ public class EngineResumeTeardownRaceTests
         public Task HaltedAsync(Guid runId) => Task.CompletedTask;
         public Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq) => Task.CompletedTask;
         public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
+        public Task PrQueueChangedAsync(Guid runId) => Task.CompletedTask;
     }
 }

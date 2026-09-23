@@ -27,12 +27,11 @@ public class WorkItemsController : ControllerBase
     private readonly ILoopRunStore _loopRunStore;
     private readonly ILogger<WorkItemsController> _logger;
     private readonly IWorkItemNotifier _notifier;
-    private readonly IRemoteProvider? _remoteProvider;
     private readonly IProviderStore _providerStore;
     private readonly IBranchNameOverrideService _branchNames;
     private readonly AttachmentLimits _attachmentLimits;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IBranchNameOverrideService branchNames, AttachmentLimits attachmentLimits, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null, IRemoteProvider? remoteProvider = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IBranchNameOverrideService branchNames, AttachmentLimits attachmentLimits, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
@@ -42,7 +41,6 @@ public class WorkItemsController : ControllerBase
         _providerStore = providerStore;
         _logger = logger;
         _notifier = notifier ?? new NoopWorkItemNotifier();
-        _remoteProvider = remoteProvider;
         _branchNames = branchNames;
         _attachmentLimits = attachmentLimits;
     }
@@ -757,48 +755,6 @@ public class WorkItemsController : ControllerBase
         // Branch deletion is best effort: surface a warning but report success
         // so the UI advances the loop just like Approve.
         return Ok(new { branchDeleted = result.BranchDeleted, warning = result.BranchWarning });
-    }
-
-    [HttpGet("{id}/pr-comments")]
-    public async Task<IActionResult> GetPrComments(string id)
-    {
-        var wi = await _workItemManager.GetWorkItemAsync(id);
-        if (wi == null) return NotFound();
-        if (string.IsNullOrEmpty(wi.PrUrl)) return Ok(Array.Empty<RemotePrComment>());
-        if (_remoteProvider == null) return Ok(Array.Empty<RemotePrComment>());
-
-        var prNumber = ExtractPrNumber(wi.PrUrl);
-        if (prNumber == null) return Ok(Array.Empty<RemotePrComment>());
-
-        var repoUrl = wi.PrUrl[..wi.PrUrl.IndexOf("/pulls/", StringComparison.Ordinal)];
-
-        try
-        {
-            var comments = await _remoteProvider.GetPullRequestCommentsAsync(repoUrl, prNumber);
-            return Ok(comments);
-        }
-        catch (Exception ex)
-        {
-            // Surface the outage rather than masquerading as "no comments" — an
-            // empty 200 here is indistinguishable from a PR that genuinely has
-            // none, which is the degraded-silently behavior GetAll deliberately
-            // rejects (it returns 503 too).
-            _logger.LogWarning(ex, "Failed to fetch PR comments for work item {WorkItemId}", id);
-            return StatusCode(503, new { error = "Failed to fetch PR comments from remote provider", detail = ex.Message });
-        }
-    }
-
-    private static string? ExtractPrNumber(string prUrl)
-    {
-        var marker = "/pulls/";
-        var idx = prUrl.IndexOf(marker, StringComparison.Ordinal);
-        if (idx < 0) return null;
-        var tail = prUrl[(idx + marker.Length)..].Trim('/');
-        if (tail.Length == 0) return null;
-        // Strip any trailing path or query.
-        var slash = tail.IndexOfAny(new[] { '/', '?', '#' });
-        if (slash >= 0) tail = tail[..slash];
-        return tail;
     }
 
     [HttpPost("{id}/cleanup-to-done")]

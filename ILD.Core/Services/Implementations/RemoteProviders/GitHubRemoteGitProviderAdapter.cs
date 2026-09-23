@@ -112,6 +112,182 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
             : window;
     }
 
+    public override bool SupportsThreadResolution => true;
+
+    /// <summary>The review ledger is GitHub's REST shape, so this is where it is opted into.</summary>
+    public override Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        => ReadRestReviewLedgerAsync(http, repo, prNumber);
+
+    public override Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+        => PostRestThreadReplyAsync(http, repo, prNumber, commentId, body);
+
+    private const string ReviewThreadsQuery =
+        "query($owner: String!, $repo: String!, $number: Int!, $cursor: String) { "
+        + "repository(owner: $owner, name: $repo) { pullRequest(number: $number) { "
+        + "reviewThreads(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } "
+        + "nodes { id isResolved comments(first: 100) { nodes { fullDatabaseId } } } } } } }";
+
+    /// <summary>
+    /// Page ceiling, so a pathological pull request cannot hold the heartbeat
+    /// open: 100 threads a page covers far more than any PR a loop opens carries.
+    /// </summary>
+    private const int MaxReviewThreadPages = 20;
+
+    /// <summary>
+    /// Review threads and their resolved state, which REST does not expose at
+    /// all — a comment resource says nothing about the thread it sits in. Comment
+    /// ids come back as <c>fullDatabaseId</c>, not the deprecated
+    /// <c>databaseId</c>: this repository's own review comment ids overflow the
+    /// 32-bit Int that field returns.
+    ///
+    /// Threads are walked to the end; the comments within one thread are not,
+    /// and stop at GraphQL's own maximum of 100. Past that the tail of a single
+    /// conversation falls back to the root of its reply chain for a thread id
+    /// and reports unresolved — those comments are still read and still
+    /// delivered, so it costs the reply route on one very long thread, not the
+    /// item.
+    /// </summary>
+    protected override async Task<IReadOnlyList<RemotePrReviewThread>?> GetReviewThreadsAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        if (!int.TryParse(prNumber, out var number))
+            return Array.Empty<RemotePrReviewThread>();
+
+        ApplyHeaders(http, repo.Provider);
+        var threads = new List<RemotePrReviewThread>();
+        string? cursor = null;
+
+        for (var page = 0; page < MaxReviewThreadPages; page++)
+        {
+            using var resp = await http.PostAsJsonAsync(
+                GraphQlEndpoint(repo.ApiBase),
+                new
+                {
+                    query = ReviewThreadsQuery,
+                    variables = new { owner = repo.Owner, repo = repo.Repo, number, cursor },
+                });
+            // Every exit below returns null rather than the pages read so far.
+            // A half-read thread list is not a shorter answer, it is a WRONG
+            // one: the comments whose threads were on the missing pages come
+            // back with a fallback thread id and `resolved: false`, so a
+            // resolve is aimed at the wrong handle and an already-settled
+            // thread reads as open — all under a ledger reporting success.
+            if (!resp.IsSuccessStatusCode)
+                return null;
+
+            JsonDocument parsed;
+            try { parsed = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()); }
+            catch (JsonException) { return null; }
+            using var doc = parsed;
+
+            if (!TryGetPath(doc.RootElement, out var reviewThreads,
+                    "data", "repository", "pullRequest", "reviewThreads"))
+                return null;
+
+            if (reviewThreads.TryGetProperty("nodes", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var node in nodes.EnumerateArray())
+                {
+                    var threadId = node.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String
+                        ? id.GetString()
+                        : null;
+                    if (threadId is null) continue;
+                    threads.Add(new RemotePrReviewThread(
+                        threadId,
+                        ReadCommentIds(node),
+                        node.TryGetProperty("isResolved", out var resolved) && resolved.ValueKind == JsonValueKind.True));
+                }
+            }
+
+            if (!TryGetPath(reviewThreads, out var pageInfo, "pageInfo"))
+                return null;
+            if (!pageInfo.TryGetProperty("hasNextPage", out var hasNext) || hasNext.ValueKind != JsonValueKind.True)
+                return threads;
+            // More to come and no cursor to ask for it with: there is no way to
+            // finish the list, so it is unreadable rather than short.
+            cursor = pageInfo.TryGetProperty("endCursor", out var end) && end.ValueKind == JsonValueKind.String
+                ? end.GetString()
+                : null;
+            if (cursor is null)
+                return null;
+        }
+
+        // The ceiling, with GitHub still offering another page.
+        return null;
+    }
+
+    /// <summary>
+    /// Resolving a thread is a GraphQL-only mutation keyed by the thread's global
+    /// node id, which is the id <see cref="GetReviewThreadsAsync"/> reports.
+    /// </summary>
+    public override async Task<RemotePrWriteResult> ResolveReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string threadId)
+    {
+        ApplyHeaders(http, repo.Provider);
+
+        const string mutation = "mutation($thread: ID!) { resolveReviewThread(input: { threadId: $thread }) { thread { isResolved } } }";
+        using var resp = await http.PostAsJsonAsync(
+            GraphQlEndpoint(repo.ApiBase),
+            new { query = mutation, variables = new { thread = threadId } });
+        if (!resp.IsSuccessStatusCode)
+            return new RemotePrWriteResult(false, null, $"GitHub refused to resolve the thread (HTTP {(int)resp.StatusCode}).");
+
+        // GitHub answers 200 with an "errors" array when the credentials may not
+        // resolve threads; that is a refusal, not a success.
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var error = FirstGraphQlError(doc.RootElement);
+        return error is null
+            ? new RemotePrWriteResult(true, threadId, null)
+            : new RemotePrWriteResult(false, null, $"GitHub refused to resolve the thread: {error}");
+    }
+
+    private static IReadOnlyList<string> ReadCommentIds(JsonElement thread)
+    {
+        var ids = new List<string>();
+        if (!TryGetPath(thread, out var nodes, "comments", "nodes") || nodes.ValueKind != JsonValueKind.Array)
+            return ids;
+
+        foreach (var comment in nodes.EnumerateArray())
+        {
+            if (!comment.TryGetProperty("fullDatabaseId", out var id)) continue;
+            var value = id.ValueKind switch
+            {
+                JsonValueKind.String => id.GetString(),
+                JsonValueKind.Number => id.GetRawText(),
+                _ => null,
+            };
+            if (value is not null) ids.Add(value);
+        }
+
+        return ids;
+    }
+
+    private static string? FirstGraphQlError(JsonElement root)
+    {
+        if (!root.TryGetProperty("errors", out var errors)
+            || errors.ValueKind != JsonValueKind.Array
+            || errors.GetArrayLength() == 0)
+            return null;
+
+        var first = errors[0];
+        return first.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String
+            ? message.GetString()
+            : "the API reported an error";
+    }
+
+    private static bool TryGetPath(JsonElement root, out JsonElement value, params string[] path)
+    {
+        value = root;
+        foreach (var segment in path)
+        {
+            if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(segment, out value))
+                return false;
+        }
+        return true;
+    }
+
     public override WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers)
     {
         using var doc = JsonDocument.Parse(body);
@@ -177,8 +353,8 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
         return new WebhookPayload(
             merged ? "pull_request.merged" : "pull_request.rejected",
             repoId,
-            ReadString(pr, "number"),
-            ReadString(pr, "html_url") ?? ReadString(pr, "url"),
+            ReadValueText(pr, "number"),
+            ReadValueText(pr, "html_url") ?? ReadValueText(pr, "url"),
             null,
             merged ? "merged" : "closed");
     }
@@ -193,9 +369,9 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
         return new WebhookPayload(
             "pull_request.comment",
             repoId,
-            ReadString(issue, "number"),
-            ReadString(issue, "html_url"),
-            ReadString(comment, "body"),
+            ReadValueText(issue, "number"),
+            ReadValueText(issue, "html_url"),
+            ReadValueText(comment, "body"),
             null);
     }
 
@@ -205,37 +381,44 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
             || !root.TryGetProperty("review", out var review))
             return null;
 
-        var state = ReadString(review, "state");
+        var state = ReadValueText(review, "state");
         if (string.Equals(state, "changes_requested", StringComparison.OrdinalIgnoreCase))
         {
             return new WebhookPayload(
                 "pull_request.rejected",
                 repoId,
-                ReadString(pr, "number"),
-                ReadString(pr, "html_url") ?? ReadString(pr, "url"),
-                ReadString(review, "body"),
+                ReadValueText(pr, "number"),
+                ReadValueText(pr, "html_url") ?? ReadValueText(pr, "url"),
+                ReadValueText(review, "body"),
                 "changes_requested");
         }
 
-        var comment = ReadString(review, "body");
+        var comment = ReadValueText(review, "body");
         if (string.IsNullOrWhiteSpace(comment))
             return null;
 
         return new WebhookPayload(
             "pull_request.review",
             repoId,
-            ReadString(pr, "number"),
-            ReadString(pr, "html_url") ?? ReadString(pr, "url"),
+            ReadValueText(pr, "number"),
+            ReadValueText(pr, "html_url") ?? ReadValueText(pr, "url"),
             comment,
             null);
     }
 
     private static string GetRepositoryId(JsonElement root)
         => root.TryGetProperty("repository", out var repository)
-            ? ReadString(repository, "id") ?? ReadString(repository, "full_name") ?? ReadString(repository, "name") ?? "unknown"
+            ? ReadValueText(repository, "id") ?? ReadValueText(repository, "full_name") ?? ReadValueText(repository, "name") ?? "unknown"
             : "unknown";
 
-    private static string? ReadString(JsonElement element, string propertyName)
+    /// <summary>
+    /// A property's text whatever its JSON type, which is what a webhook payload
+    /// needs: <c>number</c> and <c>id</c> arrive unquoted and would otherwise
+    /// read as absent. Deliberately not the base class's <c>ReadString</c>,
+    /// which answers null for anything but a string — sharing a name with it
+    /// while disagreeing about numbers is how a caller picks the wrong one.
+    /// </summary>
+    private static string? ReadValueText(JsonElement element, string propertyName)
     {
         if (!element.TryGetProperty(propertyName, out var value))
             return null;

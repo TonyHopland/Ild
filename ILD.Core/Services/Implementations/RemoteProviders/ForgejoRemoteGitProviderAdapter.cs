@@ -21,6 +21,20 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
     protected override string BuildApiBase(Uri providerUri)
         => providerUri.ToString().TrimEnd('/') + "/api/v1";
 
+    /// <summary>
+    /// Forgejo answers "I do not have this" with a zero or an empty string
+    /// rather than by leaving the field out, so a plain <c>??</c> fallback never
+    /// fires. Seen on 9.0.3: every inline comment carries
+    /// <c>original_position: 0</c> and <c>original_commit_id: ""</c>, which
+    /// recorded every one of them at line 0 on commit "". A reply then went out
+    /// with <c>new_position: 0</c>, which Forgejo cannot place — it rendered the
+    /// answer once per hunk line on the files page — and the empty commit broke
+    /// both fresh-vs-re-delivered detection and the one-round-per-head throttle.
+    /// </summary>
+    private static int? Present(int? value) => value is > 0 ? value : null;
+
+    private static string? Present(string? value) => string.IsNullOrEmpty(value) ? null : value;
+
     // Forgejo/Gitea reports a changes-requested review as "REQUEST_CHANGES";
     // map it onto GitHub's "CHANGES_REQUESTED" so the snapshot logic is uniform.
     protected override string NormalizeReviewState(string? state)
@@ -61,6 +75,153 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
                 events = new[] { "push", "pull_request", "pull_request_comment" },
                 active = true,
             });
+    }
+
+    /// <summary>
+    /// Forgejo keeps review comments under each review rather than in one
+    /// collection of its own (verified against Forgejo 9.0.3 / Gitea 1.22.0:
+    /// there is no <c>pulls/{index}/comments</c>), so the ledger costs one
+    /// request per review on top of the reviews list and the pull request's own
+    /// comments. A comment carries a <c>resolver</c> once someone has resolved
+    /// it, which is how resolved state is reported here; there is no API to set
+    /// it, so <see cref="ResolveReviewThreadAsync"/> stays refused.
+    ///
+    /// The nearest thing to a line number is the diff <c>position</c>, which is
+    /// what the API offers; <c>original_commit_id</c> is the commit reviewed,
+    /// as on GitHub. Suppressed findings are a Copilot artifact and simply do
+    /// not occur here, so the review bodies yield none.
+    /// </summary>
+    public override async Task<RemotePrReviewLedger> GetPullRequestReviewLedgerAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    {
+        ApplyHeaders(http, repo.Provider);
+        var apiRepo = $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}";
+
+        using var prResp = await http.GetAsync($"{apiRepo}/pulls/{prNumber}");
+        if (!prResp.IsSuccessStatusCode)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read pull request #{prNumber} from {ProviderType} (HTTP {(int)prResp.StatusCode}).");
+        using var prDoc = JsonDocument.Parse(await prResp.Content.ReadAsStringAsync());
+        var headSha = prDoc.RootElement.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
+
+        var reviewPages = await ReadAllPagesAsync(http, $"{apiRepo}/pulls/{prNumber}/reviews");
+        if (reviewPages is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the reviews on pull request #{prNumber} from {ProviderType}.");
+
+        var reviews = new List<RemotePrReviewSummary>();
+        var items = new List<RemotePrReviewItem>();
+        foreach (var review in reviewPages)
+        {
+            var reviewId = ReadId(review) ?? string.Empty;
+            reviews.Add(new RemotePrReviewSummary(
+                reviewId,
+                NormalizeReviewState(ReadString(review, "state")),
+                ReadString(review, "body"),
+                ReadString(review, "commit_id"),
+                ReadDate(review, "submitted_at") ?? DateTime.MinValue,
+                ReadUserLogin(review),
+                Incomplete: false));
+
+            if (reviewId.Length == 0) continue;
+            var comments = await ReadAllPagesAsync(
+                http, $"{apiRepo}/pulls/{prNumber}/reviews/{Uri.EscapeDataString(reviewId)}/comments");
+            if (comments is null)
+                return RemotePrReviewLedger.Unavailable(
+                    $"Could not read the comments on review {reviewId} of pull request #{prNumber} from {ProviderType}.");
+
+            foreach (var comment in comments)
+            {
+                var id = ReadId(comment);
+                if (id is null) continue;
+                var body = ReadString(comment, "body");
+                items.Add(new RemotePrReviewItem(
+                    "review",
+                    id,
+                    // No thread resource: a review is the nearest grouping there is.
+                    reviewId,
+                    reviewId,
+                    ReadString(comment, "path"),
+                    Present(ReadInt(comment, "original_position")) ?? Present(ReadInt(comment, "position")),
+                    Truncate(body, MaxReviewItemLength) ?? string.Empty,
+                    ReadUserLogin(comment),
+                    Present(ReadString(comment, "original_commit_id")) ?? Present(ReadString(comment, "commit_id")),
+                    ReadDate(comment, "created_at") ?? DateTime.MinValue,
+                    Resolved: comment.TryGetProperty("resolver", out var resolver)
+                        && resolver.ValueKind == JsonValueKind.Object
+                        && !string.IsNullOrEmpty(ReadString(resolver, "login")),
+                    PrCommentMarker.IsStamped(body)));
+            }
+        }
+
+        var issueComments = await ReadAllPagesAsync(http, $"{apiRepo}/issues/{prNumber}/comments");
+        if (issueComments is null)
+            return RemotePrReviewLedger.Unavailable(
+                $"Could not read the comments on pull request #{prNumber} from {ProviderType}.");
+
+        foreach (var comment in issueComments)
+        {
+            var id = ReadId(comment);
+            if (id is null) continue;
+            var body = ReadString(comment, "body");
+            items.Add(new RemotePrReviewItem(
+                "issue", id, ThreadId: null, ReviewId: null, Path: null, Line: null,
+                Truncate(body, MaxReviewItemLength) ?? string.Empty,
+                ReadUserLogin(comment),
+                headSha,
+                ReadDate(comment, "created_at") ?? DateTime.MinValue,
+                Resolved: false,
+                PrCommentMarker.IsStamped(body)));
+        }
+
+        return new RemotePrReviewLedger(reviews, items, headSha, null);
+    }
+
+    /// <summary>
+    /// Forgejo has no reply route on a review comment, so an answer is a fresh
+    /// one-comment review anchored to the same file and line — which is where
+    /// the reviewer raised it and where a reader looks for the answer.
+    /// </summary>
+    public override async Task<RemotePrWriteResult> ReplyToReviewThreadAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
+    {
+        var ledger = await GetPullRequestReviewLedgerAsync(http, repo, prNumber);
+        if (ledger.Message is not null)
+            return new RemotePrWriteResult(false, null, ledger.Message);
+
+        var answered = ledger.Items.FirstOrDefault(i => string.Equals(i.CommentId, commentId, StringComparison.Ordinal));
+        if (answered?.Path is null)
+            return new RemotePrWriteResult(false, null,
+                $"No review comment with id '{commentId}' on pull request #{prNumber}, so there is no file and line to answer on.");
+
+        ApplyHeaders(http, repo.Provider);
+        using var resp = await http.PostAsJsonAsync(
+            $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/reviews",
+            new
+            {
+                body = string.Empty,
+                @event = "COMMENT",
+                comments = new[] { new { path = answered.Path, body, new_position = answered.Line ?? 1 } },
+            });
+        if (!resp.IsSuccessStatusCode)
+            return new RemotePrWriteResult(false, null, $"The reply was refused by {ProviderType} (HTTP {(int)resp.StatusCode}).");
+
+        // The response is the REVIEW that was created, and its id lives in a
+        // different sequence from the comment ids this adapter's ledger keys on
+        // — recording it would eventually mark a real review comment as ILD's
+        // own and swallow it. Read the one comment the review carries instead,
+        // and hand back nothing rather than a wrong-space id if that read fails.
+        var reviewId = await PrCommentHelper.ReadCreatedIdAsync(resp);
+        return new RemotePrWriteResult(true, reviewId is null ? null : await ReadOnlyCommentIdAsync(http, repo, prNumber, reviewId), null);
+    }
+
+    /// <summary>The id of the single comment a just-created one-comment review holds.</summary>
+    private static async Task<string?> ReadOnlyCommentIdAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string reviewId)
+    {
+        var comments = await GetArrayAsync(
+            http, $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/reviews/{Uri.EscapeDataString(reviewId)}/comments");
+        return comments.Count == 1 ? ReadId(comments[0]) : null;
     }
 
     public override async Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName)

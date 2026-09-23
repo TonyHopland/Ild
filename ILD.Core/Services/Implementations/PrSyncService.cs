@@ -13,13 +13,20 @@ public class PrSyncService : IPrSyncService
     private readonly IEventLogStore _eventLogStore;
     private readonly IWorkItemManager _workItems;
     private readonly ILoopEngine _loopEngine;
+    private readonly IPrStatusPoller _poller;
 
-    public PrSyncService(ILoopRunStore loopRunStore, IEventLogStore eventLogStore, IWorkItemManager workItems, ILoopEngine loopEngine)
+    public PrSyncService(
+        ILoopRunStore loopRunStore,
+        IEventLogStore eventLogStore,
+        IWorkItemManager workItems,
+        ILoopEngine loopEngine,
+        IPrStatusPoller poller)
     {
         _loopRunStore = loopRunStore;
         _eventLogStore = eventLogStore;
         _workItems = workItems;
         _loopEngine = loopEngine;
+        _poller = poller;
     }
 
     public async Task HandleWebhookAsync(WebhookPayload payload)
@@ -71,23 +78,44 @@ public class PrSyncService : IPrSyncService
             }
         }
 
-        if (edgeName == null)
+        if (edgeName != null && await TryResumeAsync(run, edgeName, payload))
+            // This webhook has resumed the run itself. Waking the heartbeat as
+            // well would race a second resume against it for the same node: a
+            // changes-requested review carries its prose as the comment, so
+            // before this it did both — signalled on_rejected here and pulsed
+            // the pass that would have signalled on_rejected too.
             return;
 
+        // Nothing was resumed, so prose on the payload is something no edge has
+        // accounted for — an approving review's body, a plain comment, a
+        // rejection on a node that does not wire on_rejected. Make the heartbeat
+        // early and let it decide: firing on_comment here would bypass every
+        // throttle it has — the delivered ledger, ILD's own marker, the
+        // cut-short-review check — since all of them live in the poll pass and
+        // none of them here.
+        if (!string.IsNullOrEmpty(payload.Comment))
+            _poller.Pulse();
+    }
+
+    /// <summary>
+    /// Resume the run on <paramref name="edgeName"/>, and report whether it
+    /// happened. Connected-only (mirrors the PR heartbeat poller): a named
+    /// custom edge with no wired connection fails the run ("missing edge
+    /// connection"), so emit only when the PR node actually wires that edge.
+    /// No fallback to OnSuccess/OnFailure for any state.
+    /// </summary>
+    private async Task<bool> TryResumeAsync(LoopRun run, string edgeName, WebhookPayload payload)
+    {
         var runNode = await ResolveRunNodeAsync(run);
         if (runNode == null)
-            return;
+            return false;
 
-        // Connected-only (mirrors the PR heartbeat poller): a named custom edge
-        // with no wired connection fails the run ("missing edge connection"), so
-        // emit only when the PR node actually wires that edge. No fallback to
-        // OnSuccess/OnFailure for any state.
         var edges = await _loopRunStore.GetEdgesForNodeIdsAsync(new[] { runNode.LoopNodeId });
         var connected = edges.Any(e => e.SourceNodeId == runNode.LoopNodeId
             && e.EdgeType == EdgeType.Custom
             && string.Equals(e.Name, edgeName, StringComparison.Ordinal));
         if (!connected)
-            return;
+            return false;
 
         // Same reason text as the heartbeat path, so a node behaves identically
         // whichever resume path reached it first. The webhook's own comment is
@@ -96,6 +124,7 @@ public class PrSyncService : IPrSyncService
         var reason = PrNodeEdges.Describe(
             edgeName, PrSnapshotJson.TryParse(run.PrSnapshot), payload.Comment, run.WorkItemId);
         await _loopEngine.SignalNodeResultAsync(run.Id, runNode.Id, NodeSignal.Custom(edgeName, reason));
+        return true;
     }
 
     public Task<bool> IsPullRequestMergedAsync(string prUrl) => Task.FromResult(false);

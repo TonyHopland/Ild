@@ -75,13 +75,14 @@ describe("getCustomEdgeNames", () => {
     expect(getCustomEdgeNames(cond)).toEqual(["approved", "urgent", "otherwise"]);
   });
 
-  test("PR node offers the seven reserved heartbeat edges plus any declared ones", () => {
+  test("PR node offers the eight reserved heartbeat edges plus any declared ones", () => {
     const pr = node("p", NodeType.PR, { customEdges: ["custom_extra"] });
     const names = getCustomEdgeNames(pr);
     for (const reserved of [
       "on_rejected",
       "on_merge_conflict",
       "on_ci_failed",
+      "on_comment",
       "on_approved",
       "on_ci_passed",
       "on_merged",

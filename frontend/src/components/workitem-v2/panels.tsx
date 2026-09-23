@@ -8,7 +8,7 @@ import {
   WorkItemStatus,
   WorktreePreviewService,
 } from "../../types";
-import { repositoryService } from "../../services/auth";
+import { loopRunService, repositoryService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
@@ -17,6 +17,117 @@ import FeedbackActions from "../FeedbackActions";
 import AttachmentPicker from "./AttachmentPicker";
 import AttachmentList from "./AttachmentList";
 import type { WorkItemDetail } from "./useWorkItemDetail";
+
+/**
+ * What the round is about to say on the pull request, and the chance to stop
+ * it. Agents never write to a pull request themselves — they record an intent
+ * and the PR node sends it at the end of the round — so this is the window in
+ * which a person can read each answer and drop any of it. Rendered whatever the
+ * run's status, because that window opens while the round is still running.
+ *
+ * Dropping loses nothing: the thread stays open and the finding stays
+ * undelivered, so the next review raises it again.
+ */
+export function QueuedPrWrites({
+  workItem,
+  detail,
+}: {
+  workItem: WorkItem;
+  detail: WorkItemDetail;
+}) {
+  const [dropping, setDropping] = useState<string | null>(null);
+  const [dropError, setDropError] = useState<string | null>(null);
+  const queued = detail.currentRun?.prQueuedWrites ?? [];
+  // The refusal outlives the list it came from: the usual reason a drop is
+  // refused is that the round reached the PR node and sent everything, which
+  // empties the queue. Returning early on that would swallow the one message
+  // saying the comment is already public.
+  if (queued.length === 0 && !dropError) return null;
+
+  const runId = workItem.currentLoopRunId;
+  const busy = dropping !== null;
+  const drop = async (writeId: string) => {
+    if (!runId || busy) return;
+    setDropping(writeId);
+    setDropError(null);
+    try {
+      await loopRunService.dropQueuedPrWrite(runId, writeId);
+    } catch (error) {
+      setDropError(
+        (error as { message?: string })?.message ??
+          "Could not drop this. It may already have gone out on the pull request.",
+      );
+    } finally {
+      setDropping(null);
+    }
+    // On either outcome, and the queue lives on the current run rather than the
+    // runs list. A refusal is itself evidence this panel is stale, so it is the
+    // case that most needs the re-read: without it the panel goes on offering to
+    // stop comments that are already on the pull request.
+    try {
+      await detail.refreshCurrentRun();
+    } catch {
+      setDropError((prev) => prev ?? "Could not re-read the run; this list may be out of date.");
+    }
+  };
+
+  return (
+    <div className="wiv2-pr-queue">
+      {queued.length > 0 && (
+        <>
+          <div className="wiv2-pr-queue-title">
+            Waiting to go out on the pull request ({queued.length})
+          </div>
+          <div className="wiv2-pr-queue-hint">
+            Sent when the PR node next runs. Drop anything you do not want said — the thread stays
+            open and the finding comes back on the next review.
+          </div>
+        </>
+      )}
+      {dropError && (
+        <div className="wiv2-pr-queue-error" role="alert">
+          {dropError}
+          <button
+            type="button"
+            className="wiv2-pr-queue-dismiss"
+            onClick={() => setDropError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {queued.map((write) => (
+        <div key={write.id} className="wiv2-pr-queue-item">
+          <div className="wiv2-pr-queue-where">
+            {writeLabel(write)}
+            {write.path ? ` · ${write.path}${write.line ? `:${write.line}` : ""}` : ""}
+          </div>
+          {write.body && <div className="wiv2-pr-queue-body">{write.body}</div>}
+          <button
+            type="button"
+            className="wiv2-pr-queue-drop"
+            disabled={busy}
+            onClick={() => void drop(write.id)}
+          >
+            {dropping === write.id ? "Dropping…" : "Drop"}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * What a queued write is called in the panel. A general comment answers nothing
+ * and has no target, so calling it a reply — as this did while the only comments
+ * were answers to something — misreads the one write a person is most likely to
+ * want to stop.
+ */
+function writeLabel(write: { kind: string; targetId?: string | null }): string {
+  if (write.kind === "resolve") return "Resolve thread";
+  if (write.kind === "comment" && !write.targetId) return "Comment on the pull request";
+  return "Reply";
+}
 
 /** Prominent feedback banner shown in the Action tab while the item waits on a human. */
 export function FeedbackBanner({
@@ -75,11 +186,7 @@ export function FeedbackBanner({
         value={detail.feedbackInput}
         onChange={(e) => detail.setFeedbackInput(e.target.value)}
         placeholder={
-          isPr
-            ? detail.prCommentsLoading
-              ? "Loading PR comments..."
-              : "Optional feedback for the next node..."
-            : "Optional input or context..."
+          isPr ? "Optional feedback for the next node..." : "Optional input or context..."
         }
         rows={isPr ? 5 : 3}
       />

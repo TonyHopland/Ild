@@ -5,6 +5,7 @@ using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.Executors;
 
@@ -129,6 +130,11 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
             RemotePrResult? prResult = null;
             string? err = null;
+            // Before the call, so the window it opens cannot start after a
+            // comment that was posted while the pull request was being created.
+            // Back-dated by the skew allowance: this stamp is ILD's clock and
+            // what it is compared against is the forge's.
+            var openedAt = DateTime.UtcNow - PrCommentLedger.ClockSkewAllowance;
             try { var r = await remote.CreatePullRequestAsync(repo.CloneUrl, branch, target, wi.Title, body); prResult = r; }
             catch (Exception ex) { err = ex.Message; }
             if (err is not null || prResult is null || !string.IsNullOrEmpty(prResult.Error))
@@ -138,6 +144,22 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
             prUrl = prResult.HtmlUrl ?? prResult.Url ?? string.Empty;
             yield return new NodeOutcome.PrCreated(prUrl);
+
+            // Start watching from the moment this pull request existed.
+            //
+            // Without this the ledger stays null until the node posts something,
+            // and the first heartbeat then treats EVERYTHING already on the pull
+            // request as history it has seen — so anything said between creating
+            // the pull request and that first poll is never handed over. Normally
+            // that is up to one heartbeat interval; if polls fail it is unbounded.
+            // A run that predates this still arrives with no ledger and still
+            // seeds from what is there, which is right: it did not open that
+            // pull request and has no claim to have been watching it.
+            if (sp.GetService<ILoopRunStore>() is { } opening)
+            {
+                await PrCommentLedgerWriter.MutateAsync(opening, ctx.Run.Id, state =>
+                    state ?? PrCommentLedger.Empty with { WatchedFrom = openedAt });
+            }
 
             // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
             // the provider to merge the PR once its checks pass. Best-effort — a
@@ -150,38 +172,242 @@ public sealed class PRNodeExecutor : INodeExecutor
                     await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber);
             }
         }
-        else if (!string.IsNullOrEmpty(cfg.PrCommentTemplate))
+        else if (await HasQueuedWritesAsync(ctx, sp))
         {
-            // PR already exists for this run — render the comment template and
-            // post it on the existing PR. Each re-visit of this node posts a
-            // fresh comment.
+            // PR already exists for this run, and the round has things to say on
+            // it. This is where they go out: agents record what they intend to
+            // write and nothing reaches the pull request until here, so a human
+            // has the whole round to see it and drop any of it.
+            //
+            // The node no longer posts a comment of its own. It used to render
+            // prCommentTemplate on every re-visit, which meant a round that had
+            // already answered on the threads announced itself a second time
+            // carrying nothing — and no amount of tuning the rule for when to
+            // skip it could work, because only the round knows whether it has
+            // anything general left to say. So the round decides: it queues a
+            // comment when it does, and the pull request stays quiet when it
+            // does not.
             var remote = sp.GetRequiredService<IRemoteProvider>();
             var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
             if (string.IsNullOrEmpty(prNumber))
             {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to post comment");
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Cannot derive PR number from '{prUrl}' to send the round's answers");
                 yield break;
             }
-            string commentBody = cfg.PrCommentTemplate;
-            if (rendering is not null)
-            {
-                try { commentBody = await rendering.RenderAsync(cfg.PrCommentTemplate, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
-                catch { }
-            }
-            bool posted = false;
-            string? commentErr = null;
-            try { posted = await remote.CreatePullRequestCommentAsync(repo.CloneUrl, prNumber, commentBody); }
-            catch (Exception ex) { commentErr = ex.Message; }
-            if (!posted)
-            {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"PR comment failed: {commentErr ?? "remote returned false"}");
-                yield break;
-            }
+
+            await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
         }
 
         // Surface the rendered prompt template to the work item as the parked
         // node's content — mirrors the Human node, which parks on its rendered
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
+    }
+
+    /// <summary>Attempts before a contended claim gives up; each re-reads the row it lost to.</summary>
+    private const int QueueClaimAttempts = 5;
+
+    /// <summary>
+    /// Whether anything is waiting to go out, read from the row rather than from
+    /// the instance the engine has been carrying since the iteration began. An
+    /// agent queues its answers DURING the round — after that instance was
+    /// loaded — so the in-memory copy says "nothing waiting" for exactly the
+    /// replies this node exists to send, and the node would skip the branch
+    /// that sends them entirely.
+    /// </summary>
+    private static async Task<bool> HasQueuedWritesAsync(NodeExecutionContext ctx, IServiceProvider sp)
+    {
+        // With no store there is no row, and so no queue: the intents an agent
+        // records live nowhere else.
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
+            return false;
+        return PrCommentQueueJson.TryParse(await runs.GetPrCommentQueueAsync(ctx.Run.Id)).Count > 0;
+    }
+
+    /// <summary>
+    /// Claims the whole queue in one step — reads the column and clears it only
+    /// if it still holds what was read, retrying when it does not — and hands
+    /// back what it took.
+    ///
+    /// Claiming BEFORE anything goes out is what makes dropping a real stop. The
+    /// instance the engine carries was loaded when the iteration began, which on
+    /// a round that did any work at all is long before this; posting from it
+    /// would send a list that no longer describes what the human wants said, and
+    /// clearing the column afterwards would throw away an intent queued in
+    /// between. A drop that lands before the claim changes what is claimed; one
+    /// that lands after is late by definition, and the panel now says so.
+    ///
+    /// The claim is therefore irreversible, and that is the trade, not an
+    /// oversight (D25). A crash between here and the writes loses those intents
+    /// while their findings stay marked delivered: the round's answers are gone
+    /// and the round looks finished. Holding them in an in-flight state instead
+    /// would trade that for a DOUBLE-POSTED answer — a crash after the forge
+    /// accepted a reply but before the entry cleared reposts it on restart — and
+    /// a comment on a public pull request cannot be un-posted, while a lost
+    /// intent is recoverable both by a human reading the queue and by the next
+    /// review raising the finding again.
+    /// </summary>
+    private static async Task<IReadOnlyList<PrQueuedWrite>> ClaimQueuedWritesAsync(
+        ILoopRunStore runs, LoopRun run)
+    {
+        for (var attempt = 0; attempt < QueueClaimAttempts; attempt++)
+        {
+            var current = await runs.GetPrCommentQueueAsync(run.Id);
+            var queued = PrCommentQueueJson.TryParse(current);
+            if (queued.Count == 0)
+                return queued;
+
+            if (await runs.TrySetPrCommentQueueAsync(run.Id, current, null))
+                return queued;
+        }
+
+        return Array.Empty<PrQueuedWrite>();
+    }
+
+    /// <summary>
+    /// What a claimed intent is called in the record: the handle it was aimed
+    /// at, where that is in the diff, and enough of what it said to recognise.
+    /// The id comes first and always — it is the only part a person can act on
+    /// afterwards, and a general comment has no place in the diff at all.
+    /// </summary>
+    private static string Describe(PrQueuedWrite write)
+    {
+        var target = string.IsNullOrEmpty(write.TargetId) ? "the pull request" : write.TargetId;
+        var where = write.Path is null ? string.Empty : $" ({write.Path}:{write.Line?.ToString() ?? "?"})";
+        var said = string.IsNullOrWhiteSpace(write.Body)
+            ? string.Empty
+            : ": " + (write.Body!.Length <= ClaimRecordBodyLength ? write.Body : write.Body[..ClaimRecordBodyLength] + "…");
+        return $"{write.Kind} on {target}{where}{said}";
+    }
+
+    /// <summary>Enough of an answer to recognise it in the event log, and no more.</summary>
+    private const int ClaimRecordBodyLength = 200;
+
+    /// <summary>
+    /// Write down what the claim took. Best-effort, and deliberately so: a store
+    /// that will not take the record must not stop the answers going out, which
+    /// is the thing the round actually owes the pull request.
+    /// </summary>
+    private static async Task RecordClaimAsync(
+        NodeExecutionContext ctx, IServiceProvider sp, IReadOnlyList<PrQueuedWrite> queued)
+    {
+        if (sp.GetService<IEventLogStore>() is not { } events)
+            return;
+
+        try
+        {
+            await events.AppendAsync(new EventLog
+            {
+                Id = Guid.NewGuid(),
+                LoopRunId = ctx.Run.Id,
+                EventType = EventType.PrQueuedWritesClaimed,
+                Data = string.Join("\n", queued.Select(Describe)),
+                Timestamp = DateTime.UtcNow,
+            });
+        }
+        catch (Exception ex)
+        {
+            sp.GetService<ILogger<PRNodeExecutor>>()?.LogWarning(
+                ex, "Could not record the PR write claim for run {RunId}", ctx.Run.Id);
+        }
+    }
+
+    /// <summary>
+    /// Write what the round said it intended to write. This is the ONLY place
+    /// anything reaches the pull request: the agent tools record intents, a
+    /// human can drop any of them up to this moment, and whatever is still
+    /// queued goes out here — every piece of it stamped, so nothing the round
+    /// writes fires <c>on_comment</c> back at the loop. That includes the
+    /// round's own general comment, which it queues like any other write; the
+    /// node has no comment of its own to post.
+    ///
+    /// A refused write does not fail the node. Nothing is lost by it: the thread
+    /// stays open and the finding stays undelivered, so the next review raises
+    /// it again — whereas failing here would park the run on something no human
+    /// asked for. The claim happens either way, so a provider that keeps
+    /// refusing cannot make the node retry for ever.
+    /// </summary>
+    private static async Task DrainQueuedWritesAsync(
+        NodeExecutionContext ctx, IServiceProvider sp, IRemoteProvider remote, string cloneUrl, string prNumber)
+    {
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
+            return;
+
+        var queued = await ClaimQueuedWritesAsync(runs, ctx.Run);
+        if (queued.Count == 0)
+            return;
+
+        // Say what was taken, before a line of it goes out. The claim cannot be
+        // undone, so this is the only thing standing between "the process died
+        // here" and answers that are simply gone — the queue is empty, the round
+        // reads as finished, and nothing else records that they ever existed.
+        await RecordClaimAsync(ctx, sp, queued);
+
+        // The claim emptied the queue, so the panel is now offering to stop
+        // answers that are on their way out. Same signal the service sends when
+        // an agent queues or a person drops: the column changed, re-read it.
+        if (sp.GetService<IRunNotifier>() is { } notifier)
+            await notifier.PrQueueChangedAsync(ctx.Run.Id);
+
+        var log = sp.GetService<ILogger<PRNodeExecutor>>();
+        var posted = new List<string>();
+
+        // Findings whose answer never arrived. The poll path marked each one
+        // delivered when it handed it over, so leaving them marked would mean a
+        // refused answer quietly retires the finding: the thread stays open on
+        // the pull request and nothing ever raises it again.
+        var unanswered = new List<string>();
+
+        foreach (var write in queued)
+        {
+            try
+            {
+                var stamped = PrCommentMarker.Stamp(write.Body ?? string.Empty, ctx.Run.Id);
+                var result = write.Kind switch
+                {
+                    PrQueuedWrite.Resolve => await remote.ResolveReviewThreadAsync(cloneUrl, prNumber, write.TargetId),
+                    // Nothing to reply on, so it goes out as a comment of its own.
+                    PrQueuedWrite.Comment => await remote.CreatePullRequestCommentAsync(cloneUrl, prNumber, stamped),
+                    _ => await remote.ReplyToReviewThreadAsync(cloneUrl, prNumber, write.TargetId, stamped),
+                };
+
+                if (!result.Ok)
+                {
+                    log?.LogWarning("Queued PR {Kind} on {Target} was refused: {Message}",
+                        write.Kind, write.TargetId, result.Message);
+                    if (write.SourceHash is { } refusedHash)
+                        unanswered.Add(refusedHash);
+                }
+                else if (result.Id is not null && write.Kind != PrQueuedWrite.Resolve)
+                {
+                    // Keyed by the space it landed in: a thread reply is a review
+                    // comment, a standalone answer is a pull-request comment.
+                    posted.Add(PrCommentLedger.KeyFor(
+                        write.Kind == PrQueuedWrite.Comment ? "issue" : "review", result.Id));
+                }
+            }
+            catch (Exception ex)
+            {
+                log?.LogWarning(ex, "Queued PR {Kind} on {Target} could not be written", write.Kind, write.TargetId);
+                if (write.SourceHash is { } thrownHash)
+                    unanswered.Add(thrownHash);
+            }
+        }
+
+        if (posted.Count == 0 && unanswered.Count == 0)
+            return;
+
+        // Against the ledger as it stands: this node has been executing for the
+        // length of a round, and the heartbeat has been writing this column
+        // throughout it.
+        await PrCommentLedgerWriter.MutateAsync(runs, ctx.Run.Id, state =>
+        {
+            var ledger = state ?? PrCommentLedger.Empty with { WatchedFrom = DateTime.UtcNow };
+            foreach (var key in posted)
+                ledger = ledger.WithPosted(key);
+            foreach (var hash in unanswered)
+                ledger = ledger.ForgetDeliveredContent(hash);
+            return ledger;
+        });
     }
 }

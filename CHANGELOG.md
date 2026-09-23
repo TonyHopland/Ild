@@ -19,7 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **You can now attach images and files to a work item — when you create or edit it, or when you answer a run waiting for you — and download or remove them from the work item.**
 
+- **A loop now answers the review comments on its pull request by itself, and you can read each answer and drop any of it before it is sent.**
+
 ### Changed
+
+- **A round only comments on its pull request when it has something to say, instead of posting a notice every time it passes the PR node.**
 
 - **The form for adding a forward now labels each box, so it is clear which is the name, which is the destination, and which port a client connects to on `127.0.0.1`.**
 

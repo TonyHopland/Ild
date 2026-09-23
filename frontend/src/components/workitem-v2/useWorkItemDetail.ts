@@ -36,7 +36,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [feedbackInput, setFeedbackInput] = useState("");
-  const [prCommentsLoading, setPrCommentsLoading] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -126,16 +125,18 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // Detail for the work item's current run — its pinned template, the node the
   // engine is on, and the persisted PR snapshot. The run list endpoint omits
   // these, so the detail is fetched separately and refreshed live.
+  // Rejects when the run cannot be re-read. A caller that only wants the view
+  // kept fresh can ignore that, but one acting on what it reads back — the
+  // queued-writes panel, which tells a person whether their drop took — cannot
+  // tell "nothing changed" from "the read failed" if the failure is swallowed
+  // here. Each caller says which it is, at its own call site.
   const refreshCurrentRun = useCallback(() => {
     const runId = workItem?.currentLoopRunId;
     if (!runId) {
       setCurrentRun(null);
       return Promise.resolve();
     }
-    return loopRunService
-      .getById(runId)
-      .then((r) => setCurrentRun(r))
-      .catch(() => {});
+    return loopRunService.getById(runId).then((r) => setCurrentRun(r));
   }, [workItem?.currentLoopRunId]);
 
   // The parent refetches the work item on every node state change, so depending
@@ -172,41 +173,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   useEffect(() => {
     feedbackInputRef.current = feedbackInput;
   }, [feedbackInput]);
-
-  useEffect(() => {
-    // When parked at a PR node, prefill the feedback textarea with any
-    // unread PR comments so the human can edit them before approving or
-    // rejecting. Best-effort: failures leave the textarea empty.
-    if (
-      !workItem ||
-      workItem.status !== WorkItemStatus.HumanFeedback ||
-      workItem.humanFeedbackReason !== "PR Awaiting Merge"
-    ) {
-      return;
-    }
-    let cancelled = false;
-    setPrCommentsLoading(true);
-    void (async () => {
-      try {
-        const comments = await workItemService.getPrComments(workItem.id);
-        if (cancelled) return;
-        if (Array.isArray(comments) && comments.length > 0) {
-          const text = comments
-            .map((c) => `${c.author}: ${c.body}`.trim())
-            .filter(Boolean)
-            .join("\n\n");
-          setFeedbackInput((prev) => (prev.length === 0 ? text : prev));
-        }
-      } catch {
-        // Ignore — empty textarea is fine.
-      } finally {
-        if (!cancelled) setPrCommentsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [workItem?.id, workItem?.status, workItem?.humanFeedbackReason]);
 
   const refreshPreview = useCallback(async () => {
     if (!workItem?.id || !workItem.worktreePath) {
@@ -560,36 +526,50 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     refetchWorkItem,
   ]);
 
-  // Live PR snapshot while parked at a PR node. The run isn't "streaming" here
-  // (status is HumanFeedback, not Running), so this attaches to the run hub on
-  // its own and refetches the current run whenever the heartbeat poller pushes
-  // a fresh snapshot, keeping the full PR view current without a manual reload.
-  const isPrParked =
-    workItem?.status === WorkItemStatus.HumanFeedback &&
-    workItem?.humanFeedbackReason === "PR Awaiting Merge" &&
-    !!workItem?.currentLoopRunId;
+  // Live PR state for the current run: the heartbeat's snapshot, and what the
+  // round intends to write on the pull request. This attaches to the run hub on
+  // its own because a parked run isn't "streaming" (status is HumanFeedback,
+  // not Running), and refetches the current run on either signal.
+  //
+  // Attached for ANY current run, not only a parked one. An agent queues its
+  // answers while the round is mid-flight and the item is still Running, and
+  // that is the whole window in which a person can read them and drop one — a
+  // subscription that waits for the PR park opens after the PR node has already
+  // sent them.
+  const hasCurrentRun = !!workItem?.currentLoopRunId;
 
   useEffect(() => {
     const runId = workItem?.currentLoopRunId;
-    if (!isPrParked || !runId || runConnectionState !== "connected") return;
+    if (!hasCurrentRun || !runId || runConnectionState !== "connected") return;
+
+    // Keeping the view fresh: a failed re-read here is not worth reporting, so
+    // it is swallowed at the call site rather than inside refreshCurrentRun,
+    // which callers acting on what it returns need to see fail.
+    const reread = () => void refreshCurrentRun().catch(() => {});
 
     const onPrSnapshotChanged = (message: TypedSignalRMessage<"PrSnapshotChanged">) => {
       if (message.payload.runId !== runId) return;
-      void refreshCurrentRun();
+      reread();
+    };
+    const onPrQueueChanged = (message: TypedSignalRMessage<"PrQueueChanged">) => {
+      if (message.payload.runId !== runId) return;
+      reread();
     };
 
     runOn("PrSnapshotChanged", onPrSnapshotChanged);
+    runOn("PrQueueChanged", onPrQueueChanged);
     void Promise.resolve(runInvoke?.("SubscribeToRun", runId)).catch(() => {});
-    // Pull the latest snapshot once on attach so the view is current even if no
-    // poll fires while the dialog is open.
-    void refreshCurrentRun();
+    // Pull the latest once on attach so the view is current even if nothing
+    // fires while the dialog is open.
+    reread();
 
     return () => {
       runOff("PrSnapshotChanged", onPrSnapshotChanged);
+      runOff("PrQueueChanged", onPrQueueChanged);
       void Promise.resolve(runInvoke?.("UnsubscribeFromRun", runId)).catch(() => {});
     };
   }, [
-    isPrParked,
+    hasCurrentRun,
     runConnectionState,
     workItem?.currentLoopRunId,
     runOn,
@@ -800,6 +780,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     runs,
     currentRun,
     refreshRuns,
+    refreshCurrentRun,
     dependencies,
     allWorkItems,
     repositories,
@@ -808,7 +789,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     aiProviders,
     feedbackInput,
     setFeedbackInput,
-    prCommentsLoading,
     progressText,
     shouldStream,
     preview,
