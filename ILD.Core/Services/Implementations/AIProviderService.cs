@@ -160,14 +160,30 @@ public class AIProviderService : IAIProviderService
             ?? await _providerStore.GetFirstAiProviderAsync();
     }
 
-    private static string? SafePath(string root, string relative)
+    internal static string? SafePath(string root, string relative)
     {
         var full = Path.GetFullPath(Path.Combine(root, relative));
-        var rootFull = Path.GetFullPath(root);
-        return full.StartsWith(rootFull, StringComparison.Ordinal) ? full : null;
+        var rootFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        // A filesystem root (`/`, `C:\`) keeps its separator through the trim.
+        var prefix = Path.EndsInDirectorySeparator(rootFull) ? rootFull : rootFull + Path.DirectorySeparatorChar;
+        return full == rootFull || full.StartsWith(prefix, StringComparison.Ordinal)
+            ? full
+            : null;
     }
 
     private static async Task<ToolExecutionResult> RunShellAsync(string command, string cwd)
+    {
+        using var proc = Process.Start(IsolateShell(
+            ShellStartInfo(command, cwd),
+            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
+            AgentIsolation.EgressProxyUrl(aiProviderId: null)))!;
+        var stdout = await proc.StandardOutput.ReadToEndAsync();
+        var stderr = await proc.StandardError.ReadToEndAsync();
+        await proc.WaitForExitAsync();
+        return new ToolExecutionResult(proc.ExitCode == 0, stdout, proc.ExitCode == 0 ? null : stderr, proc.ExitCode);
+    }
+
+    internal static ProcessStartInfo ShellStartInfo(string command, string cwd)
     {
         var psi = new ProcessStartInfo("/bin/sh")
         {
@@ -179,17 +195,21 @@ public class AIProviderService : IAIProviderService
         };
         psi.ArgumentList.Add("-c");
         psi.ArgumentList.Add(command);
-        // Runs a model-authored command as the orchestrator, so it must not
-        // inherit the orchestrator's ambient capabilities — same reasoning as the
-        // preview spawn sites (ADR-0014). Effective CAP_SETUID in a hijacked
-        // orchestrator-side command is the difference between "runs as ild" and
-        // "runs as container root".
-        using var proc = Process.Start(AgentIsolation.DropInheritedCapabilities(psi))!;
-        var stdout = await proc.StandardOutput.ReadToEndAsync();
-        var stderr = await proc.StandardError.ReadToEndAsync();
-        await proc.WaitForExitAsync();
-        return new ToolExecutionResult(proc.ExitCode == 0, stdout, proc.ExitCode == 0 ? null : stderr, proc.ExitCode);
+        return psi;
     }
+
+    /// <summary>
+    /// The command is model-authored, so it runs with exactly the agent's
+    /// privileges (ADR-0014, ADR-0016). The orchestrator's secrets and topology
+    /// are stripped in every mode, since the command has no legitimate use for
+    /// them. Under uid isolation it also crosses to the agent uid with no
+    /// capabilities. In single-uid mode it stays a plain shell as the
+    /// orchestrator uid, which can still read the orchestrator's
+    /// <c>/proc/&lt;pid&gt;/environ</c>, so only uid isolation closes that fully.
+    /// </summary>
+    internal static ProcessStartInfo IsolateShell(
+        ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy)
+        => AgentIsolation.Route(AgentIsolation.StripOrchestratorEnvironment(psi), agentUser, agentGroup, agentHome, egressProxy);
 
     private async Task<ToolExecutionResult> CreateWorkItemAsync(string arguments)
     {

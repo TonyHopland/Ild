@@ -202,9 +202,11 @@ public static class AgentIsolation
 
     /// <summary>
     /// Rewrite <paramref name="psi"/> in place so its command runs as the
-    /// configured agent user, returning the same instance for fluent use. Adapters
-    /// do not call this directly — <c>CliAgentAdapterBase.StartAgentProcess</c>
-    /// applies it so no launch site can forget to.
+    /// configured agent user, returning the same instance for fluent use. CLI
+    /// adapters do not call this themselves — they get it through
+    /// <c>CliAgentAdapterBase.StartAgentProcess</c>, so no launch site can forget
+    /// to. The built-in provider's shell tool calls it directly, through
+    /// <c>AIProviderService.IsolateShell</c>.
     /// A no-op returning <paramref name="psi"/> unchanged when
     /// <c>ILD_AGENT_USER</c> is unset. Preserves the redirected streams, working
     /// directory and environment already configured on <paramref name="psi"/>;
@@ -324,9 +326,9 @@ public static class AgentIsolation
     /// <para>
     /// This is deliberately <em>not</em> folded into
     /// <see cref="DropInheritedCapabilities(ProcessStartInfo)"/>. That helper also
-    /// wraps <c>ProcessRunner</c> (git, npm) and <c>AIProviderService.RunShellAsync</c>
-    /// (Cmd nodes), where a user's command may legitimately rely on the inherited
-    /// environment; scrubbing there would change those silently. Callers that must
+    /// wraps <c>ProcessRunner</c> (git, npm) and the Cmd node executor, where a
+    /// user's command may legitimately rely on the inherited environment;
+    /// scrubbing there would change those silently. Callers that must
     /// not inherit say so by name.
     /// </para>
     ///

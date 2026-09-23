@@ -93,13 +93,17 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   it can only be set on the Docker host's kernel, which is outside anything this
   repo provisions. No `sysctls` entry belongs here.
 
-- **One code seam.** Every agent launch goes through
+- **One code seam.** Every CLI agent launch goes through
   `CliAgentAdapterBase.StartAgentProcess`, which applies
   `AgentIsolation.Route(ProcessStartInfo)` and starts the process — so "a CLI
   launch crosses to the agent uid" is owned in one place rather than remembered at
-  each of the adapters' call sites. Routing is a no-op unless `ILD_AGENT_USER` is
-  set, so local development, unit tests and any single-uid deployment keep the
-  pre-isolation behavior unchanged; the container image sets the variable.
+  each of the adapters' call sites. The built-in provider's shell tool is not a
+  CLI launch and calls `Route` directly, through `AIProviderService.IsolateShell`.
+  `Route` itself is a no-op unless `ILD_AGENT_USER` is set, so CLI launches in
+  local development, unit tests and single-uid deployments keep the pre-isolation
+  behavior; the container image sets the variable. The shell tool still has the
+  orchestrator environment stripped in single-uid mode (see the shell-tool
+  paragraph below).
   `ProcessRunner` (git, npm) is deliberately **not** routed — those are
   orchestrator operations and must keep running as `ild`.
 
@@ -259,12 +263,18 @@ rules.
   would have _raised_ the ceiling of a successful escape while lowering its
   everyday reach. Every orchestrator-side spawn that can reach agent-authored
   input therefore goes through `AgentIsolation.DropInheritedCapabilities` —
-  `ProcessRunner` (git, npm), `AIProviderService.RunShellAsync` and the Cmd node
-  executor — which wraps them in `setpriv --inh-caps=-all --ambient-caps=-all`
-  (no uid change, needs no privilege). `AgentIsolationSpawnSiteTests` scans
-  ILD.Core for `Process` spawn sites this list has missed — the Cmd node executor
-  was one from the drop landing in 0.5.0 until 0.10.0. It does not cover the
-  PTY `RouteCommand` sites, or the other projects.
+  `ProcessRunner` (git, npm) and the Cmd node executor — which wraps them in
+  `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
+  privilege). The built-in provider's shell tool runs a model-authored command,
+  so it goes further. It always loses the orchestrator's secrets and topology
+  (`StripOrchestratorEnvironment`), and it runs as the agent via
+  `AgentIsolation.Route`. In single-uid mode the strip is not a full boundary:
+  the same uid can still read the orchestrator's `/proc/<pid>/environ`, and only
+  uid isolation closes that.
+  `AgentIsolationSpawnSiteTests` scans ILD.Core for `Process` spawn sites this
+  list has missed — the Cmd node executor was one from the drop landing in 0.5.0
+  until 0.10.0. It does not cover the PTY `RouteCommand` sites, or the other
+  projects.
 - **The preview service was the one place where dropping capabilities was not
   enough, and it now runs as the agent outright.** Its command comes from the
   worktree's `ild.config.json`, which the agent writes and can trigger itself

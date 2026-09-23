@@ -143,7 +143,7 @@ public class WorktreePreviewServiceInstallTests : IDisposable
         // Position, not mere presence. Under uid isolation this directory is the
         // AGENT's ($AGENT_HOME/.local/bin, chowned to it by the entrypoint), and
         // this is the ORCHESTRATOR's own PATH — inherited by ProcessRunner, which
-        // spawns bare `git` and `npm`, and by AIProviderService's Cmd nodes. First
+        // spawns bare `git` and `npm`, and by Cmd nodes. First
         // position would let a file the agent dropped there answer for them and run
         // as the orchestrator. Appending means the image's copies win ties and only
         // genuinely new tools are contributed, which is all this was ever for.
