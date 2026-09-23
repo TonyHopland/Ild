@@ -148,4 +148,18 @@ internal static class RepositoryFiles
     public static string ReadAllText(string relativePath) => File.ReadAllText(Path.Combine(Root, relativePath));
 
     public static string[] ReadAllLines(string relativePath) => File.ReadAllLines(Path.Combine(Root, relativePath));
+
+    /// <summary>
+    /// The entries under one <c>## [version]</c> heading of CHANGELOG.md, up to the next heading.
+    /// Name the release that shipped a change, not <c>Unreleased</c>, which empties at every release.
+    /// </summary>
+    public static string ChangelogSection(string version)
+    {
+        var changelog = ReadAllText("CHANGELOG.md");
+        var heading = changelog.IndexOf($"## [{version}]", StringComparison.Ordinal);
+        Assert.True(heading >= 0, $"CHANGELOG.md has no '{version}' section");
+        var body = changelog[(changelog.IndexOf('\n', heading) + 1)..];
+        var next = body.IndexOf("\n## [", StringComparison.Ordinal);
+        return next < 0 ? body : body[..next];
+    }
 }

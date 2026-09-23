@@ -60,12 +60,7 @@ public class AttachmentDocumentationTests
     [Fact]
     public void The_changelog_says_what_is_different_now()
     {
-        var changelog = RepositoryFiles.ReadAllText("CHANGELOG.md");
-        var afterHeading = changelog[(changelog.IndexOf("## [Unreleased]", StringComparison.Ordinal) + 1)..];
-        var nextRelease = afterHeading.IndexOf("\n## [", StringComparison.Ordinal);
-        var unreleased = nextRelease < 0 ? afterHeading : afterHeading[..nextRelease];
-
-        Assert.Contains("attach", unreleased, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("attach", RepositoryFiles.ChangelogSection("0.13.0"), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>The environment block of each top-level compose service, keyed by service name.</summary>

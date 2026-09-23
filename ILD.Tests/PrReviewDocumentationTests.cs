@@ -97,11 +97,6 @@ public class PrReviewDocumentationTests
     [Fact]
     public void The_changelog_says_what_is_different_now()
     {
-        var changelog = RepositoryFiles.ReadAllText("CHANGELOG.md");
-        var afterHeading = changelog[(changelog.IndexOf("## [Unreleased]", StringComparison.Ordinal) + 1)..];
-        var nextRelease = afterHeading.IndexOf("\n## [", StringComparison.Ordinal);
-        var unreleased = nextRelease < 0 ? afterHeading : afterHeading[..nextRelease];
-
-        AssertMentionsOneOf(unreleased, "the unreleased changelog section", "review", "comment");
+        AssertMentionsOneOf(RepositoryFiles.ChangelogSection("0.13.0"), "the 0.13.0 changelog section", "review", "comment");
     }
 }
