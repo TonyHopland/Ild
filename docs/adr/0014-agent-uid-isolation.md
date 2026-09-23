@@ -98,9 +98,12 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   `AgentIsolation.Route(ProcessStartInfo)` and starts the process — so "a CLI
   launch crosses to the agent uid" is owned in one place rather than remembered at
   each of the adapters' call sites. The built-in provider's shell tool is not a
-  CLI launch and calls `Route` directly, through `AIProviderService.IsolateShell`. Routing is a no-op unless `ILD_AGENT_USER` is
-  set, so local development, unit tests and any single-uid deployment keep the
-  pre-isolation behavior unchanged; the container image sets the variable.
+  CLI launch and calls `Route` directly, through `AIProviderService.IsolateShell`.
+  `Route` itself is a no-op unless `ILD_AGENT_USER` is set, so CLI launches in
+  local development, unit tests and single-uid deployments keep the pre-isolation
+  behavior; the container image sets the variable. The shell tool still has the
+  orchestrator environment stripped in single-uid mode (see the shell-tool
+  paragraph below).
   `ProcessRunner` (git, npm) is deliberately **not** routed — those are
   orchestrator operations and must keep running as `ild`.
 
