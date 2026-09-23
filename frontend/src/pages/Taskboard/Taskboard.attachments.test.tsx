@@ -213,4 +213,60 @@ describe("a dialog belongs to the work item it was opened for", () => {
       ["wi-c", "c.txt"],
     ]);
   });
+
+  test("a refused answer to one item is not carried into the item opened next", async () => {
+    const parked = makeItem("wi-a", "Item A", {
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+      currentLoopRunId: "run-1",
+    });
+    // Item B waits on a human too, so it has a feedback pane of its own — the
+    // place another item's refusal would surface if the two shared one dialog.
+    const items = [
+      parked,
+      makeItem("wi-b", "Item B", {
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Human Input Needed",
+        currentLoopRunId: "run-2",
+      }),
+    ];
+    mockServices(items);
+    vi.spyOn(authServices.loopRunService, "getById").mockRejectedValue({ status: 404 });
+    const upload = vi.spyOn(authServices.workItemService, "uploadAttachment");
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackInput")
+      .mockRejectedValue({ status: 400, message: "Input must be 8192 characters or fewer." });
+    // A read of the item, held open until item B is up.
+    const read = deferred<WorkItem>();
+    vi.spyOn(authServices.workItemService, "getById").mockReturnValue(read.promise);
+
+    renderBoard("wi-a");
+    await dialogSettled("Item A");
+    const feedback = await waitForNode(() => dialog().querySelector<HTMLElement>(".wiv2-feedback"));
+
+    await act(async () => {
+      fireEvent.change(feedback.querySelector("textarea") as HTMLTextAreaElement, {
+        target: { value: "Looks good" },
+      });
+      await Promise.resolve();
+    });
+    await click(within(feedback).getByRole("button", { name: "Approve" }));
+
+    await openCard("Item B");
+    await act(async () => {
+      read.resolve(parked);
+      await Promise.resolve();
+    });
+
+    // Item A's answer was sent for item A and refused there. Item B's dialog is
+    // its own: it holds none of A's text, says nothing about A's refusal, and
+    // was never answered in A's place.
+    await waitFor(() => expect(openTitle()).toBe("Item B"));
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    expect(answer).toHaveBeenCalledWith("wi-a", "Looks good");
+    expect(dialog().querySelector<HTMLTextAreaElement>(".wiv2-feedback textarea")?.value).toBe("");
+    expect(dialog().textContent).not.toContain("Looks good");
+    expect(dialog().textContent).not.toContain("Input must be 8192 characters or fewer.");
+    expect(upload).not.toHaveBeenCalled();
+  });
 });
