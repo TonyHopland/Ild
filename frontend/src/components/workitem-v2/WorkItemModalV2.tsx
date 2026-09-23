@@ -83,13 +83,13 @@ export default function WorkItemModalV2({
   }, [clearStaged]);
 
   // Closing must not silently discard an in-progress edit, the create form,
-  // typed feedback, or a file staged for either. The create form (null workItem)
-  // is always an open form, so its dirty flag counts the same as an edit's.
+  // typed feedback, or a file staged in the form. The create form (null
+  // workItem) is always an open form, so its dirty flag counts the same as an
+  // edit's.
   const isCreate = workItem === null;
   const hasUnsavedChanges =
     ((editMode || isCreate) && editDirty) ||
     detail.feedbackInput.trim().length > 0 ||
-    detail.attachments.staged.length > 0 ||
     detail.editAttachments.staged.length > 0;
 
   const requestClose = useCallback(() => {

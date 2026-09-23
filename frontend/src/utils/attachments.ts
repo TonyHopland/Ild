@@ -19,20 +19,6 @@ export function oversizeMessage(fileName: string, maxBytesPerFile: number): stri
   return `'${fileName}' is larger than the ${formatBytes(maxBytesPerFile)} allowed per file.`;
 }
 
-/**
- * The answer recorded in the conversation: what the human typed, then the names
- * of the files now on the work item. The agent reads this verbatim, so the names
- * are how it learns the attachments are there at all.
- */
-export function attachedNote(typed: string, fileNames: string[]): string {
-  if (fileNames.length === 0) return typed;
-  const list = `Attached files: ${fileNames.join(", ")}`;
-  // Whatever the human typed is recorded as they typed it, here as much as when
-  // nothing is attached; the trim only decides whether there is anything to put
-  // the list under.
-  return typed.trim() ? `${typed}\n\n${list}` : list;
-}
-
 const pad = (value: number) => String(value).padStart(2, "0");
 
 /**

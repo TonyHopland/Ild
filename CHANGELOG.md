@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A Claude Code or GitHub Copilot provider can now pick its model, so one provider runs Opus and another Sonnet. Leave it blank to keep the CLI's own default.**
 
-- **You can now attach images and files to a work item — when you create or edit it, or when you answer a run waiting for you — and download or remove them from the work item.**
+- **You can now attach images and files to a work item when you create or edit it, and download or remove them from the work item.**
 
 - **A loop now answers the review comments on its pull request by itself, and you can read each answer and drop any of it before it is sent.**
 
