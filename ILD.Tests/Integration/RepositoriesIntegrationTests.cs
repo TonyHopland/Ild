@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ILD.Tests.Integration;
 
@@ -182,6 +184,99 @@ public class RepositoriesIntegrationTests
         var updateResponse = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", NewRepoPayload(providerId, newEnv));
         Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
         Assert.Equal(newEnv, await ReadStoredPreviewEnvAsync(factory, id));
+    }
+
+    private static async Task<(string RepoId, Guid ProviderId)> SeedRepositoryAsync(ApiFactory factory, string cloneUrl, string? providerApiKey = null)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>();
+        var provider = new RemoteProvider { Id = Guid.NewGuid(), Name = "prov", Type = "Forgejo", Url = "https://git.example.com", ApiKey = providerApiKey };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "app", CloneUrl = cloneUrl, DefaultBranch = "main", RemoteProviderId = provider.Id, CreatedAt = DateTime.UtcNow };
+        db.RemoteProviders.Add(provider);
+        db.Repositories.Add(repo);
+        await db.SaveChangesAsync();
+        return (repo.Id.ToString(), provider.Id);
+    }
+
+    [Fact]
+    public async Task Test_returns_the_result_as_data_for_a_stored_repository()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        // A blank clone URL answers without running git.
+        var (id, _) = await SeedRepositoryAsync(factory, cloneUrl: "");
+
+        var response = await client.PostAsync($"/api/v1/repositories/{id}/test", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.False(body.GetProperty("ok").GetBoolean());
+        Assert.Equal("Misconfigured", body.GetProperty("outcome").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("message").GetString()));
+        Assert.True(body.TryGetProperty("detail", out _));
+    }
+
+    private sealed class RecordingConnectionTester : IConnectionTester
+    {
+        public List<(Repository Repo, RemoteProvider? Provider)> RepositoryCalls { get; } = new();
+
+        public Task<ConnectionTestResult> TestRemoteProviderAsync(RemoteProvider provider, CancellationToken ct)
+            => throw new InvalidOperationException("not expected");
+
+        public Task<ConnectionTestResult> TestRepositoryAsync(Repository repo, RemoteProvider? provider, CancellationToken ct)
+        {
+            RepositoryCalls.Add((repo, provider));
+            return Task.FromResult(new ConnectionTestResult(ConnectionTestOutcome.Ok, "Reached main.", null));
+        }
+    }
+
+    [Fact]
+    public async Task Test_probes_the_repository_with_its_stored_provider_credentials()
+    {
+        var tester = new RecordingConnectionTester();
+        await using var factory = new ApiFactory(configureServices: services =>
+        {
+            services.RemoveAll<IConnectionTester>();
+            services.AddSingleton<IConnectionTester>(tester);
+        });
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var (id, providerId) = await SeedRepositoryAsync(factory, "https://git.example.com/team/app.git", providerApiKey: "stored-key-1");
+
+        var response = await client.PostAsync($"/api/v1/repositories/{id}/test", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var (repo, provider) = Assert.Single(tester.RepositoryCalls);
+        Assert.Equal(id, repo.Id.ToString());
+        Assert.Equal("https://git.example.com/team/app.git", repo.CloneUrl);
+        Assert.NotNull(provider);
+        Assert.Equal(providerId, provider!.Id);
+        Assert.Equal("stored-key-1", provider.ApiKey);
+    }
+
+    [Fact]
+    public async Task Test_rejects_a_malformed_id_and_an_unknown_one()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var malformed = await client.PostAsync("/api/v1/repositories/not-a-guid/test", null);
+        var unknown = await client.PostAsync($"/api/v1/repositories/{Guid.NewGuid()}/test", null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+    }
+
+    [Fact]
+    public async Task Test_is_for_signed_in_users_only()
+    {
+        await using var factory = new ApiFactory();
+        var (id, _) = await SeedRepositoryAsync(factory, cloneUrl: "");
+
+        var anonymous = await factory.CreateClient().PostAsync($"/api/v1/repositories/{id}/test", null);
+        var agent = await CreateAgentClient(factory).PostAsync($"/api/v1/repositories/{id}/test", null);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, agent.StatusCode);
     }
 
     /// <summary>

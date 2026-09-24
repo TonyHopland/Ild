@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import Repositories from "./index";
@@ -958,5 +958,122 @@ describe("Repositories page", () => {
       "https://git.example.com/my-repo.git",
     );
     expect((screen.getByLabelText("Default Branch") as HTMLInputElement).value).toBe("main");
+  });
+});
+
+type FakeResponse = { ok: boolean; status: number; text: () => Promise<string> };
+
+function reply(body: unknown, status = 200): FakeResponse {
+  return { ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) };
+}
+
+const testProviders = [
+  {
+    id: "prov-1",
+    name: "Forgejo",
+    type: "Forgejo",
+    baseUrl: "https://git.example.com",
+    apiKey: "***",
+    webhookSecret: null,
+    createdAt: "2025-01-01T00:00:00Z",
+  },
+];
+
+function repo(id: string, name: string) {
+  return {
+    id,
+    name,
+    cloneUrl: `https://git.example.com/${name}.git`,
+    remoteProviderId: "prov-1",
+    defaultBranch: "main",
+    worktreesPath: null,
+    defaultIntakeStatus: "Backlog",
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: null,
+  };
+}
+
+/** Answers the page's list/update/.env calls from `state`; test calls go to `onTest`. */
+function routedFetch(
+  state: { repos: Record<string, unknown>[] },
+  onTest: (id: string) => Promise<FakeResponse>,
+) {
+  return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    const test = /\/repositories\/([^/]+)\/test$/.exec(url);
+    if (test && method === "POST") return onTest(test[1]);
+    if (/\/repositories\/[^/]+\/preview-env$/.test(url))
+      return Promise.resolve(reply({ previewEnv: null }));
+    const one = /\/repositories\/([^/?]+)$/.exec(url);
+    if (one && method === "PUT") {
+      state.repos = state.repos.map((r) =>
+        r.id === one[1] ? { ...r, updatedAt: new Date(Date.now() + 60_000).toISOString() } : r,
+      );
+      return Promise.resolve(reply(state.repos.find((r) => r.id === one[1])));
+    }
+    if (url.includes("/remoteproviders")) return Promise.resolve(reply(testProviders));
+    if (url.includes("/repositories")) return Promise.resolve(reply(state.repos));
+    return Promise.resolve(reply(null, 404));
+  });
+}
+
+function repoCard(name: string): HTMLElement {
+  return screen.getByText(name).closest(".repo-card") as HTMLElement;
+}
+
+describe("Repositories page — Test button", () => {
+  test("each card tests its own repository and shows the result in that card only", async () => {
+    const state = { repos: [repo("repo-1", "alpha-app"), repo("repo-2", "beta-app")] };
+    const fetchMock = routedFetch(state, () =>
+      Promise.resolve(
+        reply({
+          ok: false,
+          outcome: "BranchMissing",
+          message: "The default branch 'main' is not on the remote.",
+          detail: "ls-remote exited 2",
+        }),
+      ),
+    );
+    renderPage(fetchMock);
+    await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
+
+    expect(within(repoCard("alpha-app")).getByRole("button", { name: "Test" })).toBeTruthy();
+    fireEvent.click(within(repoCard("beta-app")).getByRole("button", { name: "Test" }));
+
+    await within(repoCard("beta-app")).findByText(
+      "The default branch 'main' is not on the remote.",
+    );
+    expect(
+      within(repoCard("beta-app")).getByText("ls-remote exited 2").closest("pre"),
+    ).not.toBeNull();
+    expect(
+      within(repoCard("alpha-app")).queryByText("The default branch 'main' is not on the remote."),
+    ).toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/repositories/repo-2/test"),
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  test("saving a repository clears its result", async () => {
+    const state = { repos: [repo("repo-1", "alpha-app")] };
+    renderPage(
+      routedFetch(state, () =>
+        Promise.resolve(
+          reply({ ok: true, outcome: "Ok", message: "Reached branch main.", detail: null }),
+        ),
+      ),
+    );
+    await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
+
+    fireEvent.click(within(repoCard("alpha-app")).getByRole("button", { name: "Test" }));
+    await within(repoCard("alpha-app")).findByText("Reached branch main.");
+
+    fireEvent.click(within(repoCard("alpha-app")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Repository");
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Repository")).toBeNull());
+
+    await waitFor(() => expect(screen.queryByText("Reached branch main.")).toBeNull());
   });
 });
