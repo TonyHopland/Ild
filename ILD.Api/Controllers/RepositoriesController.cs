@@ -12,11 +12,13 @@ public class RepositoriesController : ControllerBase
 {
     private readonly IRepositoryManager _repositoryManager;
     private readonly AppDbContext _db;
+    private readonly IConnectionTester _connectionTester;
 
-    public RepositoriesController(IRepositoryManager repositoryManager, AppDbContext db)
+    public RepositoriesController(IRepositoryManager repositoryManager, AppDbContext db, IConnectionTester connectionTester)
     {
         _repositoryManager = repositoryManager;
         _db = db;
+        _connectionTester = connectionTester;
     }
 
     // The custom .env holds secrets, so it is never echoed back in plaintext by
@@ -160,5 +162,15 @@ public class RepositoriesController : ControllerBase
         _db.Repositories.Remove(repo);
         await _db.SaveChangesAsync();
         return NoContent();
+    }
+
+    [HttpPost("{id}/test")]
+    public async Task<IActionResult> Test(string id, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        var repo = await _db.Repositories.AsNoTracking().FirstOrDefaultAsync(r => r.Id == guid, cancellationToken);
+        if (repo == null) return NotFound();
+        var provider = await _db.RemoteProviders.AsNoTracking().FirstOrDefaultAsync(p => p.Id == repo.RemoteProviderId, cancellationToken);
+        return Ok(await _connectionTester.TestRepositoryAsync(repo, provider, cancellationToken));
     }
 }

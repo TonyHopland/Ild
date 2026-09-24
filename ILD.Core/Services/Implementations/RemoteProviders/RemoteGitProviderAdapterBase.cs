@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -851,6 +852,91 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
 
     public virtual Task<RemotePrWriteResult> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
         => PrCommentHelper.CreatePullRequestCommentAsync(http, repo, prNumber, body, ApplyHeaders);
+
+    public async Task<ConnectionTestResult> TestConnectionAsync(HttpClient http, RemoteProvider provider, CancellationToken ct)
+    {
+        if (!Uri.TryCreate(provider.Url, UriKind.Absolute, out var providerUri)
+            || (providerUri.Scheme != Uri.UriSchemeHttp && providerUri.Scheme != Uri.UriSchemeHttps))
+            return new ConnectionTestResult(
+                ConnectionTestOutcome.Misconfigured,
+                $"The base URL '{provider.Url}' is not an absolute http(s) URL.",
+                null);
+
+        var host = providerUri.Authority;
+        ApplyHeaders(http, provider);
+        HttpStatusCode status;
+        string body;
+        try
+        {
+            using var resp = await http.GetAsync(IdentityUrl(providerUri), ct);
+            status = resp.StatusCode;
+            body = await resp.Content.ReadAsStringAsync(ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            return new ConnectionTestResult(ConnectionTestOutcome.Unreachable, $"Could not reach {host}.", MessageChain(ex));
+        }
+
+        var evidence = $"HTTP {(int)status} {status}\n{body}";
+        if (string.IsNullOrEmpty(provider.ApiKey)
+            && ((int)status is >= 200 and < 300 || status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
+            return new ConnectionTestResult(ConnectionTestOutcome.MissingApiKey, $"Reached {host}, but no API key is set.", evidence);
+
+        if (RejectsCredentials(status))
+            return new ConnectionTestResult(ConnectionTestOutcome.InvalidApiKey, $"{host} rejected the API key.", evidence);
+
+        switch (status)
+        {
+            case HttpStatusCode.Forbidden:
+                return new ConnectionTestResult(
+                    ConnectionTestOutcome.AccessDenied,
+                    $"{host} accepted the API key but refused the request — check its scopes, SSO authorisation or rate limit.",
+                    evidence);
+            case HttpStatusCode.NotFound:
+                return new ConnectionTestResult(
+                    ConnectionTestOutcome.NotFound,
+                    $"There is no {ProviderType} API at {provider.Url} — check the URL and the provider type.",
+                    evidence);
+        }
+
+        if ((int)status is < 200 or >= 300)
+            return new ConnectionTestResult(ConnectionTestOutcome.Error, $"{host} answered with HTTP {(int)status}.", evidence);
+
+        var identity = ReadIdentityOrNull(body);
+        return string.IsNullOrWhiteSpace(identity)
+            ? new ConnectionTestResult(ConnectionTestOutcome.Error, $"{host} answered, but did not name a {ProviderType} account.", evidence)
+            : new ConnectionTestResult(ConnectionTestOutcome.Ok, $"Signed in to {host} as {identity}.", null);
+    }
+
+    /// <summary>The "who am I" endpoint for a provider instance.</summary>
+    protected virtual string IdentityUrl(Uri providerUri) => BuildApiBase(providerUri) + "/user";
+
+    /// <summary>The account name in the <see cref="IdentityUrl"/> response.</summary>
+    protected virtual string? ReadIdentity(JsonElement root) => ReadString(root, "login");
+
+    /// <summary>Whether this status means the forge refused the credentials themselves.</summary>
+    protected virtual bool RejectsCredentials(HttpStatusCode status) => status == HttpStatusCode.Unauthorized;
+
+    private string? ReadIdentityOrNull(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return ReadIdentity(doc.RootElement);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string MessageChain(Exception ex)
+    {
+        var messages = new List<string>();
+        for (var e = ex; e is not null; e = e.InnerException)
+            messages.Add(e.Message);
+        return string.Join(" → ", messages.Distinct());
+    }
 
     public virtual bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)
         => VerifyHmacSha256(body, GetHeader(headers, SignatureHeaderName), secret);

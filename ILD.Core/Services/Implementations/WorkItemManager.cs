@@ -1037,7 +1037,7 @@ public class WorkItemManager : IWorkItemManager
             return new PullBranchResult(
                 PullBranchOutcome.Failed,
                 ctx.Branch,
-                "Failed to fetch origin — check the repository's credentials and connectivity.",
+                "Failed to fetch origin — run Test on this repository in Repositories to see why.",
                 []);
 
         if (!await _repoManager.RemoteBranchExistsAsync(ctx.WorktreePath, ctx.Branch))

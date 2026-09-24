@@ -44,6 +44,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRemoteGitProviderAdapter, AzureDevOpsRemoteGitProviderAdapter>();
         services.AddSingleton<IRemoteProviderTypeCatalog, RemoteProviderTypeCatalog>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
+        services.AddScoped<IConnectionTester, ConnectionTester>();
         services.AddHttpClient<IAIProviderService, AIProviderService>();
         services.AddHttpClient<IManagedAgentService, ManagedAgentService>();
         services.AddSingleton<ManagedAgentProvisioner>();
