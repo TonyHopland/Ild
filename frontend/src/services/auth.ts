@@ -10,6 +10,7 @@ import {
   Repository,
   RemoteProvider,
   RemoteProviderTypeOption,
+  ConnectionTestResult,
   AiProvider,
   ChatSession,
   ChatSendAccepted,
@@ -530,6 +531,10 @@ export const repositoryService = {
     return api.delete<Repository>(`/repositories/${id}/preview-env`);
   },
 
+  test: async (id: string): Promise<ConnectionTestResult> => {
+    return api.post<ConnectionTestResult>(`/repositories/${id}/test`, {});
+  },
+
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/repositories/${id}`);
   },
@@ -568,6 +573,10 @@ export const remoteProviderService = {
 
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/remoteproviders/${id}`);
+  },
+
+  test: async (id: string): Promise<ConnectionTestResult> => {
+    return api.post<ConnectionTestResult>(`/remoteproviders/${id}/test`, {});
   },
 };
 

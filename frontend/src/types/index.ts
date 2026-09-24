@@ -590,6 +590,7 @@ export interface Repository {
   previewEnv?: string | null;
   hasPreviewEnv?: boolean;
   createdAt: string;
+  updatedAt?: string | null;
 }
 
 export interface RemoteProvider {
@@ -601,6 +602,25 @@ export interface RemoteProvider {
   hasApiKey?: boolean;
   webhookSecret: string;
   createdAt: string;
+  updatedAt?: string | null;
+}
+
+export type ConnectionTestOutcome =
+  | "Ok"
+  | "Unreachable"
+  | "MissingApiKey"
+  | "InvalidApiKey"
+  | "AccessDenied"
+  | "NotFound"
+  | "BranchMissing"
+  | "Misconfigured"
+  | "Error";
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  outcome: ConnectionTestOutcome;
+  message: string;
+  detail: string | null;
 }
 
 export interface WorkItemServerConfig {

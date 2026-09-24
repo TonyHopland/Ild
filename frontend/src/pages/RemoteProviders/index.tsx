@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { RemoteProvider, RemoteProviderTypeOption } from "../../types";
 import { remoteProviderService } from "../../services/auth";
+import ConnectionTest from "../../components/ConnectionTest";
 
 function generateWebhookSecret(): string {
   const bytes = new Uint8Array(32);
@@ -142,6 +143,10 @@ export default function RemoteProviders() {
                 </span>
               </div>
             </div>
+            <ConnectionTest
+              key={`${provider.id}|${provider.updatedAt ?? provider.createdAt}`}
+              run={() => remoteProviderService.test(provider.id)}
+            />
           </div>
         ))}
       </div>

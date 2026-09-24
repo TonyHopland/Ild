@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Repositories and remote providers have a Test button that tells you whether the server can't be reached, the API key is missing or wrong, or something else is failing.**
+
 ### Changed
 
 - **Cmd nodes now run as the agent user and can no longer read ILD's own secrets.** A command that relied on ILD's environment or on files only ILD can read must now be given its own configuration.
