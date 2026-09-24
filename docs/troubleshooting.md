@@ -37,13 +37,13 @@ Access to the path '...' is denied.
 
 Two different users have built in the same worktree. A file created `0755` by one of them clamps the inherited `g:ild-agents:rwx` ACL to an effective `r-x` for the other (`MSB3021`), and setting an explicit mtime through `utimensat` requires being the file's **owner** — group write is irrelevant and no mode or ACL scheme can grant it (`MSB3374`). Other toolchains that rewrite an existing output tree can hit the same wall; .NET just names it precisely.
 
-Previews now run as the `agent` user, the same one the coding agent builds under ([ADR-0016](adr/0016-preview-runs-as-the-agent.md)), so this cannot arise on a worktree used since. A worktree previewed on an older build still holds mixed-ownership output and needs clearing **once**:
+Previews ([ADR-0016](adr/0016-preview-runs-as-the-agent.md)) and Cmd nodes now run as the `agent` user, the same one the coding agent builds under, so this cannot arise on a worktree used since. A worktree previewed or built by a Cmd node on an older build still holds mixed-ownership output and needs clearing **once**:
 
 ```sh
 find /worktrees/<worktree> -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +
 ```
 
-Adjust the directory names for your toolchain (`target`, `build`, `node_modules/.cache`, …), then start the preview again. If it recurs on a fresh worktree, something else is building as the orchestrator — a Cmd node, for instance — and that is what to look at, not the file modes.
+Adjust the directory names for your toolchain (`target`, `build`, `node_modules/.cache`, …), then start the preview or rerun the Cmd node. If it recurs on a fresh worktree, something else is building as the orchestrator, and that is what to look at, not the file modes.
 
 **`setpriv: setresuid failed: Operation not permitted` inside a preview**
 

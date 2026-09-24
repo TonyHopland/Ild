@@ -41,7 +41,7 @@ The entry point of a loop graph. Optionally creates a worktree and branch. If th
 _Avoid_: init, setup
 
 **Cmd Node**:
-Executes a shell command in the worktree. Succeeds on exit code 0. Bounded by run-scoped cancellation only — no per-node timeout.
+Executes a shell command in the worktree. Succeeds on exit code 0. Under uid isolation it runs as the agent user, with the agent's environment, `HOME` and network (egress) rules, and has no access to the orchestrator's secrets — the command runs whatever the agent just wrote into the worktree, so it gets exactly the agent's privileges. There is no way to run it as the orchestrator. Bounded by run-scoped cancellation only — no per-node timeout.
 _Avoid_: shell, command
 
 **AI Node**:

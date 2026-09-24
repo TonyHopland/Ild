@@ -45,25 +45,14 @@ public sealed class CmdNodeExecutor : INodeExecutor
     private static async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
         string command, string workingDirectory, NodeExecutionContext ctx)
     {
-        var psi = new ProcessStartInfo("/bin/sh")
-        {
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-
         var sb = new StringBuilder();
         var err = new StringBuilder();
-        // A loop-authored command, run as the orchestrator against a worktree the
-        // agent just wrote: it must not inherit the orchestrator's ambient
-        // capabilities. Same wrap as git/npm and the AI provider's shell tool
-        // (ADR-0014).
         using var p = new Process
         {
-            StartInfo = AgentIsolation.DropInheritedCapabilities(psi),
+            StartInfo = IsolateCommand(
+                ShellStartInfo(command, workingDirectory),
+                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
+                AgentIsolation.EgressProxyUrl(aiProviderId: null)),
             EnableRaisingEvents = true,
         };
         // Forward the full stdout+stderr stream verbatim (newline included, ANSI
@@ -93,10 +82,11 @@ public sealed class CmdNodeExecutor : INodeExecutor
         {
             // Waiting stops; the shell does not. Without this reap a cancelled or
             // timed-out node leaves /bin/sh and its children running over the
-            // worktree the engine is about to commit and delete. The tree is the
-            // orchestrator's own — the wrap above changes no uid — so the kill
-            // needs no privilege and a failure means something worth reading, not
-            // something to swallow.
+            // worktree the engine is about to commit and delete. setpriv execs the
+            // shell in place, so p is the tree's root. Under uid isolation the tree
+            // is the agent uid's and the kill relies on the orchestrator's ambient
+            // CAP_KILL across uids, so a failure means something worth reading,
+            // not something to swallow.
             var reaped = await ReapAsync(p);
             return (false, Combined(), ex.Message + reaped);
         }
@@ -108,6 +98,33 @@ public sealed class CmdNodeExecutor : INodeExecutor
             return (false, Combined(), $"exit code {p.ExitCode}");
         return (true, Combined(), null);
     }
+
+    internal static ProcessStartInfo ShellStartInfo(string command, string workingDirectory)
+    {
+        var psi = new ProcessStartInfo("/bin/sh")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(command);
+        return psi;
+    }
+
+    /// <summary>
+    /// The command is loop-authored, but it runs in a worktree the agent just
+    /// wrote — its builds, test suites and scripts — so it runs with exactly the
+    /// agent's privileges (ADR-0014, ADR-0016). The orchestrator's secrets and
+    /// topology are stripped in every mode. Under uid isolation it also crosses
+    /// to the agent uid, HOME and egress rules with no capabilities. In
+    /// single-uid mode it stays a plain shell as the orchestrator uid, which can
+    /// still read the orchestrator's <c>/proc/&lt;pid&gt;/environ</c>.
+    /// </summary>
+    internal static ProcessStartInfo IsolateCommand(
+        ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy)
+        => AgentIsolation.Route(AgentIsolation.StripOrchestratorEnvironment(psi), agentUser, agentGroup, agentHome, egressProxy);
 
     // Long enough that only a tree genuinely stuck in the kernel — an
     // uninterruptible write to a slow mount — reaches the timeout, short enough

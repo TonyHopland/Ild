@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Cmd nodes now run as the agent user and can no longer read ILD's own secrets.** A command that relied on ILD's environment or on files only ILD can read must now be given its own configuration.
+
 ## [0.14.0] - 2026-09-24
 
 ### Changed

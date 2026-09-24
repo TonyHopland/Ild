@@ -72,9 +72,11 @@ tree is the cause; one uid removes the class.
 - **The child's environment is constructed, not inherited.** A named helper,
   `AgentIsolation.StripOrchestratorEnvironment`, removes the secrets and the
   topology variables (since joined by `ILD_AGENT_READ_ROOT`, ADR-0014). It is deliberately **not** folded into
-  `DropInheritedCapabilities`, which `ProcessRunner` (git, npm) and the Cmd node
-  executor also use and where a user's command may legitimately rely on the
-  inherited environment; scrubbing there would change both silently.
+  `DropInheritedCapabilities`, which `ProcessRunner` (git, npm) also uses and
+  where the command may legitimately rely on the inherited environment;
+  scrubbing there would change it silently. (The Cmd node executor used it too,
+  until Cmd nodes moved to the agent uid through the same strip and `Route` as
+  the preview.)
 - **Stripping happens before the resolved step's environment is applied**, never
   after. What is removed is therefore only ever what was _inherited_: a preview
   that legitimately needs one of these names sets it in `ild.config.json` or the
@@ -129,8 +131,10 @@ tree is the cause; one uid removes the class.
 
 - **The npm prefix on the orchestrator's `PATH` is now agent-writable.** ILD adds
   `$AGENT_HOME/.local/bin` to its own process `PATH` so tools an install step
-  provisioned are resolvable to the Cmd nodes and CLI adapters that run afterwards,
-  and Cmd nodes run as the orchestrator. The contents of that directory were always
+  provisioned are resolvable to the Cmd nodes and CLI adapters that run afterwards.
+  Both of those now run as the agent, but the orchestrator's own `PATH` still
+  carries the directory, and the orchestrator still resolves commands against it.
+  The contents of that directory were always
   agent-controlled — what writes them is an agent-authored install command — but
   the change in _directness_ is large: the agent CLI now writes it with an ordinary
   `echo >`, needing no preview config and no orchestrator-executed step. Two things
@@ -152,9 +156,10 @@ tree is the cause; one uid removes the class.
 
   It is also why the entrypoint provisions the directory as the agent up front — a
   prefix the orchestrator created would be owned by a uid the agent is not, and the
-  agent's own `npm install -g` would fail on it. Narrowing the remaining exposure
-  means changing how Cmd nodes reach installed tools at all, which is a broader
-  decision than this ADR.
+  agent's own `npm install -g` would fail on it. With Cmd nodes running as the
+  agent, what remains exposed on the orchestrator's side is exactly the two
+  resolutions above: `setpriv`, named by absolute path, and `ProcessRunner`'s bare
+  `git` and `npm`, which the append leaves to the image's binaries.
 
 - **A preview that needs configuration must be given it.** This is the one
   migration cost, and it falls on any existing profile whose service came up on

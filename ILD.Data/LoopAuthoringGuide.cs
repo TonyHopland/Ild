@@ -26,7 +26,7 @@ public static class LoopAuthoringGuide
         Each node: { "id", "type", "label" (unique), "config": {...} }. Each edge: { "id", "sourceNodeId", "targetNodeId", "edgeType" (OnSuccess|OnFailure|Custom), "name" (Custom only) }.
         Node types and their key config fields:
         - Start: entry point; creates the worktree/branch. config.createWorktree (bool), config.runInstall (bool).
-        - Cmd: runs a shell command in the worktree, succeeds on exit 0. config.command.
+        - Cmd: runs a shell command in the worktree, succeeds on exit 0. config.command. Under uid isolation (the default) it runs as the agent user, with the agent's environment, HOME and network (egress) rules, and cannot read ILD's own secrets; a command that needs credentials must be given its own. With uid isolation off it runs as ILD's own user, which can still read ILD's process environment.
         - AI: runs the agent. config.prompt, config.aiProviderId, config.toolAllowlist (string[]), config.matchRules ([{ "pattern", "edgeName" }] routing the AI output to Custom edges by name; no match takes OnSuccess).
         - Human: pauses for human input (becomes {{PreviousNode.Output}}). config.inputLabel, config.prompt, config.customEdges (string[] of Custom edge names this node may emit).
         - Prompt: renders a templated string as its Output (compose a downstream AI prompt). config.prompt. Always routes OnSuccess.
