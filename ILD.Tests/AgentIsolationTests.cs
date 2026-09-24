@@ -672,10 +672,10 @@ public class AgentIsolationTests
     [Fact]
     public void DropInheritedCapabilities_leaves_the_environment_untouched()
     {
-        // ProcessRunner (git, npm) and the Cmd node executor share this helper,
-        // and a Cmd node may legitimately rely on the inherited
-        // environment. Folding the preview's scrub in here would change both
-        // silently, so the two concerns stay separate helpers (ADR-0016).
+        // ProcessRunner (git, npm) uses this helper and may legitimately rely on
+        // the inherited environment. Folding the preview's scrub in here would
+        // change it silently, so the two concerns stay separate helpers
+        // (ADR-0016).
         var psi = new ProcessStartInfo("/bin/sh");
         psi.ArgumentList.Add("-lc");
         psi.ArgumentList.Add("git status");

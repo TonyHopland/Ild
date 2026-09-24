@@ -263,14 +263,18 @@ rules.
   would have _raised_ the ceiling of a successful escape while lowering its
   everyday reach. Every orchestrator-side spawn that can reach agent-authored
   input therefore goes through `AgentIsolation.DropInheritedCapabilities` —
-  `ProcessRunner` (git, npm) and the Cmd node executor — which wraps them in
+  `ProcessRunner` (git, npm) — which wraps it in
   `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
   privilege). The built-in provider's shell tool runs a model-authored command,
-  so it goes further. It always loses the orchestrator's secrets and topology
-  (`StripOrchestratorEnvironment`), and it runs as the agent via
-  `AgentIsolation.Route`. In single-uid mode the strip is not a full boundary:
-  the same uid can still read the orchestrator's `/proc/<pid>/environ`, and only
-  uid isolation closes that.
+  and a Cmd node's command runs in a worktree the agent has just written — its
+  builds, test suites and scripts — so both go further. They always lose the
+  orchestrator's secrets and topology (`StripOrchestratorEnvironment`), and they
+  run as the agent via `AgentIsolation.Route`, with the agent's `HOME` and egress
+  rules. There is deliberately no switch to run a Cmd node as the orchestrator:
+  work that needs orchestrator-only access belongs in a dedicated executor, not
+  a shell. In single-uid mode the strip is not a full boundary: the same uid can
+  still read the orchestrator's `/proc/<pid>/environ`, and only uid isolation
+  closes that.
   `AgentIsolationSpawnSiteTests` scans ILD.Core for `Process` spawn sites this
   list has missed — the Cmd node executor was one from the drop landing in 0.5.0
   until 0.10.0. It does not cover the PTY `RouteCommand` sites, or the other
