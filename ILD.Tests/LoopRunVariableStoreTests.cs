@@ -171,7 +171,7 @@ public class LoopRunVariableStoreTests
     }
 
     [Fact]
-    public async Task A_write_the_database_refuses_fails_with_its_own_error_not_as_a_race()
+    public async Task A_database_error_on_create_is_surfaced_rather_than_retried_as_a_race()
     {
         using var db = new TestDb();
 

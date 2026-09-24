@@ -136,7 +136,8 @@ public class LoopEngineRoutingTests
         Assert.Equal(LoopRunStatus.Failed, run.Status);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.AtLeastOnce);
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), It.IsAny<Guid?>()), Times.AtLeastOnce);
     }
 
     [Fact]

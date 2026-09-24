@@ -100,4 +100,88 @@ public class LoopEngineConversationLinkTests
 
         Assert.Equal(expectLinked ? execution.Id : null, linked);
     }
+
+    private static Func<Guid?> CaptureFailureLink(LoopEngineHarness h, out Func<string?> name)
+    {
+        Guid? linked = Guid.Empty;
+        string? author = "<none>";
+        h.WorkItemsMock
+            .Setup(m => m.TransitionAsync(
+                h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(),
+                It.IsAny<string?>(), It.IsAny<Guid?>()))
+            .Callback((string _, RemoteWorkItemStatus _, string? _, string? _, Guid? _, string? _, string? n, Guid? runNodeId) =>
+            {
+                linked = runNodeId;
+                author = n;
+            })
+            .ReturnsAsync(true);
+        name = () => author;
+        return () => linked;
+    }
+
+    [Fact]
+    public async Task A_node_failure_names_the_execution_that_failed()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("ai", NodeType.AI, "Developer");
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+            new NodeOutcome.NodeStarting("ai"),
+            new NodeOutcome.Fail(EdgeType.OnFailure, "tests failed")));
+        var linked = CaptureFailureLink(h, out var author);
+
+        h.SeedRun("ai");
+        await h.RunAsync();
+
+        var failed = Assert.Single(h.ReloadRunNodes());
+        Assert.Equal(failed.Id, linked());
+        Assert.Equal("Developer", author());
+    }
+
+    [Fact]
+    public async Task A_missing_edge_after_a_successful_turn_does_not_claim_that_turn()
+    {
+        // The execution succeeded and posted its own turn; the failure that
+        // follows must not show that turn's variables a second time.
+        using var h = new LoopEngineHarness();
+        h.AddNode("ai", NodeType.AI, "Developer");
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI,
+            new NodeOutcome.NodeStarting("ai"),
+            new NodeOutcome.Success(EdgeType.Custom, "done", EdgeName: "nowhere")));
+        var linked = CaptureFailureLink(h, out _);
+
+        h.SeedRun("ai");
+        await h.RunAsync();
+
+        Assert.Null(linked());
+    }
+
+    [Fact]
+    public async Task A_crash_mid_node_names_the_execution_it_cut_short()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("ai", NodeType.AI, "Developer");
+        h.Registry.Register(new ThrowingExecutor(NodeType.AI));
+        var linked = CaptureFailureLink(h, out var author);
+
+        h.SeedRun("ai");
+        await h.LaunchAsync();
+        await h.WaitUntilIdleAsync();
+
+        var crashed = Assert.Single(h.ReloadRunNodes());
+        Assert.Equal(crashed.Id, linked());
+        Assert.Equal("Developer", author());
+    }
+
+    private sealed class ThrowingExecutor(NodeType type) : INodeExecutor
+    {
+        public NodeType NodeType { get; } = type;
+
+        public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
+        {
+            yield return new NodeOutcome.NodeStarting("ai");
+            await Task.Yield();
+            throw new InvalidOperationException("adapter blew up");
+        }
+    }
 }
