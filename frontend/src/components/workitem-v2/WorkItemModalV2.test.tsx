@@ -44,6 +44,7 @@ vi.mock("../LoopRunTerminal", () => ({
 }));
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   vi.restoreAllMocks();
   localStorage.clear();
@@ -179,14 +180,50 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("Description")).toBeTruthy();
   });
 
-  test("opens on the Overview tab even for a running item", async () => {
-    mockServices();
-    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+  const OPENING_TAB_CASES: Array<{
+    name: string;
+    item: Partial<WorkItem>;
+    selected: string | RegExp;
+    notSelected: string | RegExp;
+  }> = [
+    {
+      name: "opens on the Overview tab even for a running item",
+      item: { status: WorkItemStatus.Running, currentLoopRunId: "run-1" },
+      selected: "Overview",
+      notSelected: /Runs/,
+    },
+    {
+      name: "opens on the Action tab when the item is waiting on human feedback",
+      item: {
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "PR Awaiting Merge",
+        currentLoopRunId: "run-1",
+      },
+      selected: /Action/,
+      notSelected: "Overview",
+    },
+    {
+      // An item nominally in HumanFeedback but missing a reason has no pending
+      // prompt to show, so it falls back to Overview like any other item.
+      name: "opens on Overview when HumanFeedback has no reason set",
+      item: {
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: null,
+        currentLoopRunId: "run-1",
+      },
+      selected: "Overview",
+      notSelected: /Action/,
+    },
+  ];
 
-    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
-      "true",
+  test.each(OPENING_TAB_CASES)("$name", async ({ item, selected, notSelected }) => {
+    mockServices();
+    await renderDialog(makeWorkItem(item));
+
+    expect(screen.getByRole("tab", { name: selected }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: notSelected }).getAttribute("aria-selected")).toBe(
+      "false",
     );
-    expect(screen.getByRole("tab", { name: /Runs/ }).getAttribute("aria-selected")).toBe("false");
   });
 
   test("arrow keys move selection and focus along the tab strip", async () => {
@@ -348,54 +385,49 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("Dependencies")).toBeTruthy();
   });
 
-  test("overview shows the loop name and current node while the item is mid run", async () => {
-    const run = makeRun({
-      status: LoopRunStatus.Running,
-      completedAt: null,
-      currentNodeId: "n-1",
-    });
-    mockServices([run]);
+  const LOOP_ROW_CASES: Array<{
+    name: string;
+    run: Partial<LoopRun>;
+    status: WorkItemStatus;
+    loopRow: { contains: string[]; lacks: string[] } | null;
+  }> = [
+    {
+      name: "overview shows the loop name and current node while the item is mid run",
+      run: { status: LoopRunStatus.Running, completedAt: null, currentNodeId: "n-1" },
+      status: WorkItemStatus.Running,
+      // The current node label is shown beside the loop name.
+      loopRow: { contains: ["build-loop", "Implement"], lacks: [] },
+    },
+    {
+      name: "overview shows the loop name without a node when the run has no current node",
+      run: { status: LoopRunStatus.Running, completedAt: null, currentNodeId: null },
+      status: WorkItemStatus.Running,
+      loopRow: { contains: ["build-loop"], lacks: ["·"] },
+    },
+    {
+      name: "overview hides the loop row when the item is not mid run",
+      run: { currentNodeId: "n-1" },
+      status: WorkItemStatus.Done,
+      loopRow: null,
+    },
+  ];
+
+  test.each(LOOP_ROW_CASES)("$name", async ({ run, status, loopRow }) => {
+    mockServices([makeRun(run)]);
     vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
       makeTemplate({ id: "tmpl-1", name: "build-loop" }),
     ]);
-    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+    await renderDialog(makeWorkItem({ status, currentLoopRunId: "run-1" }));
 
-    const loopLabel = await screen.findByText("Loop");
-    const row = loopLabel.parentElement;
-    expect(row?.textContent).toContain("build-loop");
-    // The current node label is shown beside the loop name.
-    expect(row?.textContent).toContain("Implement");
-  });
-
-  test("overview shows the loop name without a node when the run has no current node", async () => {
-    const run = makeRun({
-      status: LoopRunStatus.Running,
-      completedAt: null,
-      currentNodeId: null,
-    });
-    mockServices([run]);
-    vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
-      makeTemplate({ id: "tmpl-1", name: "build-loop" }),
-    ]);
-    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
-
-    const loopLabel = await screen.findByText("Loop");
-    const row = loopLabel.parentElement;
-    expect(row?.textContent).toContain("build-loop");
-    expect(row?.textContent).not.toContain("·");
-  });
-
-  test("overview hides the loop row when the item is not mid run", async () => {
-    const run = makeRun({ currentNodeId: "n-1" });
-    mockServices([run]);
-    vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([
-      makeTemplate({ id: "tmpl-1", name: "build-loop" }),
-    ]);
-    await renderDialog(makeWorkItem({ status: WorkItemStatus.Done, currentLoopRunId: "run-1" }));
-
-    // Overview is rendered (repository name resolves) but the loop row is absent.
-    expect(await screen.findByText("my-repo")).toBeTruthy();
-    expect(screen.queryByText("Loop")).toBeNull();
+    if (loopRow) {
+      const row = (await screen.findByText("Loop")).parentElement;
+      for (const text of loopRow.contains) expect(row?.textContent).toContain(text);
+      for (const text of loopRow.lacks) expect(row?.textContent).not.toContain(text);
+    } else {
+      // Overview is rendered (repository name resolves) but the loop row is absent.
+      expect(await screen.findByText("my-repo")).toBeTruthy();
+      expect(screen.queryByText("Loop")).toBeNull();
+    }
   });
 
   test("overview push branch button commits and pushes, then shows the branch", async () => {
@@ -435,11 +467,16 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("Failed to push branch 'ild/wi-1-run-1': no upstream")).toBeTruthy();
   });
 
-  test("overview hides push branch button when there is no worktree", async () => {
+  const NO_WORKTREE_BUTTON_CASES = [
+    { name: "overview hides push branch button when there is no worktree", button: "Push branch" },
+    { name: "overview hides pull branch button when there is no worktree", button: "Pull branch" },
+  ];
+
+  test.each(NO_WORKTREE_BUTTON_CASES)("$name", async ({ button }) => {
     mockServices();
     await renderDialog(makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: null }));
 
-    expect(screen.queryByRole("button", { name: "Push branch" })).toBeNull();
+    expect(screen.queryByRole("button", { name: button })).toBeNull();
   });
 
   test("overview pull branch button reports what the pull integrated", async () => {
@@ -495,13 +532,6 @@ describe("WorkItemModalV2", () => {
     ).toBeTruthy();
   });
 
-  test("overview hides pull branch button when there is no worktree", async () => {
-    mockServices();
-    await renderDialog(makeWorkItem({ branchName: "ild/wi-1-run-1", worktreePath: null }));
-
-    expect(screen.queryByRole("button", { name: "Pull branch" })).toBeNull();
-  });
-
   test("feedback pane lives in the Action tab while waiting on a human", async () => {
     mockServices();
     await renderDialog(
@@ -534,40 +564,6 @@ describe("WorkItemModalV2", () => {
     // stay on screen — the pixel behaviour depends on the CSS cascade and must
     // be checked in a real browser, not here.
     expect((actionPanel as HTMLElement).querySelector(".wiv2-action-feedback")).not.toBeNull();
-  });
-
-  test("opens on the Action tab when the item is waiting on human feedback", async () => {
-    mockServices();
-    await renderDialog(
-      makeWorkItem({
-        status: WorkItemStatus.HumanFeedback,
-        humanFeedbackReason: "PR Awaiting Merge",
-        currentLoopRunId: "run-1",
-      }),
-    );
-
-    expect(screen.getByRole("tab", { name: /Action/ }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
-      "false",
-    );
-  });
-
-  test("opens on Overview when HumanFeedback has no reason set", async () => {
-    // Edge case: an item nominally in HumanFeedback but missing a reason has no
-    // pending prompt to show, so it falls back to Overview like any other item.
-    mockServices();
-    await renderDialog(
-      makeWorkItem({
-        status: WorkItemStatus.HumanFeedback,
-        humanFeedbackReason: null,
-        currentLoopRunId: "run-1",
-      }),
-    );
-
-    expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
-      "true",
-    );
-    expect(screen.getByRole("tab", { name: /Action/ }).getAttribute("aria-selected")).toBe("false");
   });
 
   test("Action tab shows the indicator when the item needs human action", async () => {
@@ -927,16 +923,20 @@ describe("WorkItemModalV2", () => {
       await Promise.resolve();
     });
 
+    vi.useFakeTimers();
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Branch name (optional)"), {
         target: { value: "feature/foo" },
       });
       await Promise.resolve();
     });
+    expect(checkSpy).not.toHaveBeenCalled();
 
-    // The advice is debounced, so it lands a moment after typing stops.
-    await waitFor(() => expect(checkSpy).toHaveBeenCalled());
-    await screen.findByText(/already exists on origin/);
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(checkSpy).toHaveBeenCalled();
+    expect(screen.getByText(/already exists on origin/)).toBeTruthy();
 
     // A taken name is advice, not a refusal: Update still goes through.
     await act(async () => {
@@ -1216,16 +1216,24 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("done")).toBeTruthy();
   });
 
-  test("shows a Terminal tab only once the run has a worktree", async () => {
-    mockServices();
-    await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/tmp/wt/wi-1" }));
-    expect(screen.getByRole("tab", { name: /Terminal/ })).toBeTruthy();
-  });
+  const TERMINAL_TAB_CASES: Array<{ name: string; worktreePath: string | null; shown: boolean }> = [
+    {
+      name: "shows a Terminal tab only once the run has a worktree",
+      worktreePath: "/tmp/wt/wi-1",
+      shown: true,
+    },
+    {
+      name: "hides the Terminal tab when the run has no worktree",
+      worktreePath: null,
+      shown: false,
+    },
+  ];
 
-  test("hides the Terminal tab when the run has no worktree", async () => {
+  test.each(TERMINAL_TAB_CASES)("$name", async ({ worktreePath, shown }) => {
     mockServices();
-    await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: null }));
-    expect(screen.queryByRole("tab", { name: /Terminal/ })).toBeNull();
+    await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath }));
+    if (shown) expect(screen.getByRole("tab", { name: /Terminal/ })).toBeTruthy();
+    else expect(screen.queryByRole("tab", { name: /Terminal/ })).toBeNull();
   });
 
   test("opens the terminal in its tab and keeps the session mounted across tab switches", async () => {

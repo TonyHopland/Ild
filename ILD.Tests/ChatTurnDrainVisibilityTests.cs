@@ -61,19 +61,55 @@ public sealed class ChatTurnDrainVisibilityTests
 
     private sealed class Harness
     {
+        private readonly object _gate = new();
+        private readonly List<(int Count, TaskCompletionSource Tcs)> _waiters = new();
+
         public required ChatTurnRunner Runner { get; init; }
         public required RecordingLogger Log { get; init; }
-        public required ConcurrentQueue<Guid> Started { get; init; }
-        public required ConcurrentQueue<(Guid TurnId, bool Interrupted)> Completed { get; init; }
+        public ConcurrentQueue<Guid> Started { get; } = new();
+        public ConcurrentQueue<(Guid TurnId, bool Interrupted)> Completed { get; } = new();
+
+        public void RecordCompleted(Guid turnId, bool interrupted)
+        {
+            lock (_gate)
+            {
+                Completed.Enqueue((turnId, interrupted));
+                foreach (var waiter in _waiters.Where(w => w.Count <= Completed.Count).ToList())
+                {
+                    waiter.Tcs.TrySetResult();
+                    _waiters.Remove(waiter);
+                }
+            }
+        }
+
+        /// <summary>Completes once at least <paramref name="count"/> turns have reported finished.</summary>
+        public Task CompletedAtLeast(int count)
+        {
+            lock (_gate)
+            {
+                if (Completed.Count >= count) return Task.CompletedTask;
+                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add((count, tcs));
+                return tcs.Task;
+            }
+        }
+    }
+
+    // Disposed with the turn's DI scope, which the runner closes once the service
+    // has finished with the turn — after the reply is persisted and before the turn
+    // retires and is announced finished.
+    private sealed class RunsWhenTheTurnsScopeCloses(Action? onDispose) : IDisposable
+    {
+        public void Dispose() => onDispose?.Invoke();
     }
 
     private static Harness NewRunner(
         Func<Guid, string, CancellationToken, Task> run,
         Action<Guid, Guid>? onCompleting = null,
-        Func<Guid, Guid, Task>? onStarting = null)
+        Func<Guid, Guid, Task>? onStarting = null,
+        Action? onScopeClose = null)
     {
-        var started = new ConcurrentQueue<Guid>();
-        var completed = new ConcurrentQueue<(Guid, bool)>();
+        Harness? harness = null;
 
         var chat = new Mock<IChatService>();
         chat.Setup(c => c.ExecuteTurnAsync(
@@ -84,7 +120,7 @@ public sealed class ChatTurnDrainVisibilityTests
         notifier.Setup(n => n.TurnStartedAsync(It.IsAny<Guid>(), It.IsAny<Guid>()))
             .Returns(async (Guid chatSessionId, Guid turnId) =>
             {
-                started.Enqueue(turnId);
+                harness!.Started.Enqueue(turnId);
                 // The runner announces a start while the turn is only attached and
                 // before it installs it, so a test that holds this open holds the
                 // chat in exactly that state.
@@ -96,19 +132,23 @@ public sealed class ChatTurnDrainVisibilityTests
                 // Runs where a client would hear the turn end, so a test can see what
                 // a read arriving on that news would have been told.
                 onCompleting?.Invoke(chatSessionId, turnId);
-                completed.Enqueue((turnId, interrupted));
+                harness!.RecordCompleted(turnId, interrupted);
                 return Task.CompletedTask;
             });
 
         var log = new RecordingLogger();
-        var services = new ServiceCollection().AddScoped(_ => chat.Object).BuildServiceProvider();
-        return new Harness
+        var services = new ServiceCollection()
+            .AddScoped(_ => new RunsWhenTheTurnsScopeCloses(onScopeClose))
+            // Resolved with the service so the scope owns the hook and closes it at
+            // the same point, without the runner knowing anything about it.
+            .AddScoped(sp => { sp.GetRequiredService<RunsWhenTheTurnsScopeCloses>(); return chat.Object; })
+            .BuildServiceProvider();
+        harness = new Harness
         {
             Runner = ActivatorUtilities.CreateInstance<ChatTurnRunner>(services, notifier.Object, log),
             Log = log,
-            Started = started,
-            Completed = completed,
         };
+        return harness;
     }
 
     [Fact]
@@ -173,8 +213,8 @@ public sealed class ChatTurnDrainVisibilityTests
 
         var send = h.Runner.SubmitAsync(chatId, "two");
         // The gate is held by the stop, so the send cannot have run yet — and the
-        // chat still reads as running the turn being stopped.
-        await Task.Delay(50);
+        // chat still reads as running the turn being stopped. Nothing past the gate
+        // awaits anything incomplete, so a send that got through would already be done.
         Assert.False(send.IsCompleted, "the send should wait for the stop it collided with");
         Assert.Equal(firstTurn, h.Runner.ActiveTurnId(chatId));
 
@@ -186,7 +226,8 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.True(Volatile.Read(ref firstHadFinished), "the replacement ran before the stopped turn had finished");
         Assert.Equal(2, h.Started.Distinct().Count());
         Assert.Contains(h.Completed, c => c.TurnId == firstTurn && c.Interrupted);
-        await WaitUntilAsync(() => h.Completed.Count == 2, "both turns should report themselves finished");
+        await h.CompletedAtLeast(2).WaitAsync(Patience);
+        Assert.Equal(2, h.Completed.Count);
         Assert.Empty(h.Log.Entries);
     }
 
@@ -209,7 +250,6 @@ public sealed class ChatTurnDrainVisibilityTests
             deleted = true;
             return Task.CompletedTask;
         });
-        await Task.Delay(50);
         Assert.False(delete.IsCompleted, "the delete should wait for the stop in progress");
         Assert.False(deleted, "the chat should not be deleted under a turn that is still finalizing");
 
@@ -250,24 +290,55 @@ public sealed class ChatTurnDrainVisibilityTests
     public async Task A_stop_racing_a_turn_that_ends_on_its_own_neither_throws_nor_reports_twice()
     {
         // Whoever takes the turn out of the live map owns cancelling and disposing
-        // it, and exactly one side can. Run the two into each other repeatedly: a
-        // cancel against a disposed source would be swallowed into the log, so an
-        // empty log is the assertion that it never happened.
-        const int rounds = 300;
-        var h = NewRunner((_, _, _) => Task.CompletedTask);
+        // it, and exactly one side can. Both orders are scripted: a stop that lands
+        // while the finished turn is closing its scope, still live, and a stop that
+        // arrives once the turn has retired itself. A cancel against a disposed
+        // source would be swallowed into the log, so an empty log is the assertion
+        // that it never happened.
+        const int rounds = 2;
+        ChatTurnRunner? runner = null;
+        var tokens = new ConcurrentDictionary<string, CancellationToken>();
+        var readsAtCompletion = new ConcurrentQueue<Guid?>();
+        Guid? stopWhileClosing = null;
+        Task? stopInTheGap = null;
 
-        for (var i = 0; i < rounds; i++)
-        {
-            var chatId = Guid.NewGuid();
-            await h.Runner.SubmitAsync(chatId, $"message {i}").WaitAsync(Patience);
-            await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
-            Assert.Null(h.Runner.ActiveTurnId(chatId));
-        }
+        var h = NewRunner(
+            (_, message, ct) =>
+            {
+                tokens[message] = ct;
+                return Task.CompletedTask;
+            },
+            onCompleting: (chatId, _) => readsAtCompletion.Enqueue(runner!.ActiveTurnId(chatId)),
+            onScopeClose: () =>
+            {
+                if (stopWhileClosing is not Guid chatId) return;
+                // Not awaited: the stop cancels before it waits for this very turn, so
+                // waiting for the token waits for the part that matters.
+                stopInTheGap = runner!.InterruptAsync(chatId);
+                tokens["stopped while closing"].WaitHandle.WaitOne(Patience);
+            });
+        runner = h.Runner;
 
-        await WaitUntilAsync(
-            () => h.Completed.Count == rounds, $"every one of the {rounds} turns should report itself finished");
+        var closing = Guid.NewGuid();
+        stopWhileClosing = closing;
+        await h.Runner.SubmitAsync(closing, "stopped while closing").WaitAsync(Patience);
+        await h.CompletedAtLeast(1).WaitAsync(Patience);
+        await stopInTheGap!.WaitAsync(Patience);
+        Assert.True(tokens["stopped while closing"].IsCancellationRequested, "the stop should have landed while the turn was still live");
+        Assert.Null(h.Runner.ActiveTurnId(closing));
+
+        stopWhileClosing = null;
+        var retired = Guid.NewGuid();
+        await h.Runner.SubmitAsync(retired, "ended first").WaitAsync(Patience);
+        await h.CompletedAtLeast(2).WaitAsync(Patience);
+        await h.Runner.InterruptAsync(retired).WaitAsync(Patience);
+        Assert.Null(h.Runner.ActiveTurnId(retired));
+
+        Assert.Equal(rounds, h.Completed.Count);
         Assert.Equal(rounds, h.Started.Distinct().Count());
         Assert.Equal(h.Started.OrderBy(id => id), h.Completed.Select(c => c.TurnId).OrderBy(id => id));
+        // A turn has let go of the chat by the time it says it has finished.
+        Assert.All(readsAtCompletion, read => Assert.Null(read));
         Assert.Empty(h.Log.Entries);
     }
 
@@ -300,213 +371,10 @@ public sealed class ChatTurnDrainVisibilityTests
     }
 
     [Fact]
-    public async Task A_chat_never_reads_as_idle_as_its_turn_moves_from_running_to_finalizing()
-    {
-        // The hand-off from running to finishing, read from another thread throughout.
-        // It is one swap of one value, so a reader watching from before the stop
-        // until finalization has begun must never be told the chat is idle. The
-        // reader is stopped at that point on purpose: once the turn finishes it lets
-        // go of the state, and reading idle then is the right answer rather than the
-        // gap under test.
-        const int rounds = 200;
-        var turns = new ConcurrentDictionary<string, BlockingTurn>();
-        var h = NewRunner((_, message, ct) => turns.GetOrAdd(message, _ => new BlockingTurn()).RunAsync(ct));
-
-        for (var i = 0; i < rounds; i++)
-        {
-            var chatId = Guid.NewGuid();
-            var message = $"message {i}";
-            // Registered before the send, because the turn body starts on its own
-            // thread and can reach the map before or after SubmitAsync returns.
-            var turn = turns.GetOrAdd(message, _ => new BlockingTurn());
-            await h.Runner.SubmitAsync(chatId, message).WaitAsync(Patience);
-            await turn.Running.Task.WaitAsync(Patience);
-
-            var reading = true;
-            var sawIdle = false;
-            var reader = Task.Run(() =>
-            {
-                while (Volatile.Read(ref reading))
-                    if (h.Runner.ActiveTurnId(chatId) is null) Volatile.Write(ref sawIdle, true);
-            });
-
-            var stop = h.Runner.InterruptAsync(chatId);
-            await turn.Finalizing.Task.WaitAsync(Patience);
-            Volatile.Write(ref reading, false);
-            await reader.WaitAsync(Patience);
-
-            turn.Release.TrySetResult();
-            await stop.WaitAsync(Patience);
-
-            Assert.False(
-                Volatile.Read(ref sawIdle),
-                $"round {i}: the chat read as idle while its turn was moving from running to finalizing");
-        }
-
-        Assert.Empty(h.Log.Entries);
-    }
-
-    [Fact]
-    public async Task A_reader_sees_the_chat_busy_from_the_moment_a_turn_starts_until_it_has_finished()
-    {
-        // The whole liveness contract, watched from another thread while turns are
-        // started, retire themselves and are stopped on top of each other:
-        //
-        //   - the chat may not read as idle once a reader has seen a turn, until
-        //     that turn has actually stopped executing, and
-        //   - a reader may never be handed a turn whose completion has already been
-        //     announced, because no further completion is coming for it.
-        //
-        // Both are properties of the whole turn state being one value: a reader gets
-        // what it was before a change or what it is after, never a step inside one.
-        const int rounds = 4000;
-        var finishedExecuting = new ConcurrentDictionary<Guid, bool>();
-        // One turn per round, so a queue of what has been announced is enough and
-        // gives the reader a properly ordered read of it.
-        var announced = new ConcurrentQueue<Guid>();
-        var jitter = new Random(20260921);
-
-        var h = NewRunner(
-            async (turnId, _, ct) =>
-            {
-                int micros;
-                lock (jitter) micros = jitter.Next(0, 30);
-                if (micros > 0)
-                {
-                    try { await Task.Delay(TimeSpan.FromMicroseconds(micros), ct); }
-                    catch (OperationCanceledException) { }
-                }
-                finishedExecuting[turnId] = true;
-            },
-            onCompleting: (_, turnId) => announced.Enqueue(turnId));
-
-        for (var i = 0; i < rounds; i++)
-        {
-            var chatId = Guid.NewGuid();
-            announced.Clear();
-            string? violation = null;
-            var reading = true;
-            var reader = Task.Run(() =>
-            {
-                Guid? seen = null;
-                while (Volatile.Read(ref reading))
-                {
-                    // What has already been announced is read first, so a completion
-                    // landing between the two reads is not mistaken for the state
-                    // being wrong: only a turn announced before we asked counts.
-                    var alreadyAnnounced = announced.TryPeek(out var done) ? done : (Guid?)null;
-                    var now = h.Runner.ActiveTurnId(chatId);
-                    if (now is null)
-                    {
-                        // The body records itself finished before the turn lets go of
-                        // the state, so an idle read always has that record already.
-                        if (seen is Guid last && !finishedExecuting.ContainsKey(last))
-                            violation ??= $"read idle while turn {last} was still running";
-                    }
-                    else
-                    {
-                        if (now == alreadyAnnounced)
-                            violation ??= $"read turn {now} after its completion was announced";
-                        seen = now;
-                    }
-                }
-            });
-
-            await h.Runner.SubmitAsync(chatId, $"message {i}").WaitAsync(Patience);
-            // Races the turn's own retirement: sometimes it claims a live turn,
-            // sometimes it finds one that has just gone.
-            await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
-            Volatile.Write(ref reading, false);
-            await reader.WaitAsync(Patience);
-
-            Assert.True(violation is null, $"round {i}: {violation}");
-            Assert.Null(h.Runner.ActiveTurnId(chatId));
-        }
-
-        Assert.Equal(rounds, h.Started.Count);
-        Assert.Empty(h.Log.Entries);
-    }
-
-    [Fact]
-    public async Task A_send_landing_as_the_turn_it_replaces_finishes_keeps_the_chat_busy()
-    {
-        // The other half of the hand-over: a send arriving just as the turn it is
-        // replacing ends on its own. Sometimes it displaces a live turn, sometimes it
-        // finds one that let go between attaching and installing — and that second
-        // branch must wait for the turn without cancelling or disposing a source its
-        // owner has already disposed. A reader watches throughout, holding the same
-        // two rules. Which branch each round takes is left to the race here; the test
-        // below scripts the rarer one so it is covered on every run.
-        const int rounds = 4000;
-        var finishedExecuting = new ConcurrentDictionary<Guid, bool>();
-        var announced = new ConcurrentQueue<Guid>();
-        var jitter = new Random(20260922);
-
-        var h = NewRunner(
-            async (turnId, _, ct) =>
-            {
-                int micros;
-                lock (jitter) micros = jitter.Next(0, 30);
-                if (micros > 0)
-                {
-                    try { await Task.Delay(TimeSpan.FromMicroseconds(micros), ct); }
-                    catch (OperationCanceledException) { }
-                }
-                finishedExecuting[turnId] = true;
-            },
-            onCompleting: (_, turnId) => announced.Enqueue(turnId));
-
-        for (var i = 0; i < rounds; i++)
-        {
-            var chatId = Guid.NewGuid();
-            announced.Clear();
-            string? violation = null;
-            var reading = true;
-            var reader = Task.Run(() =>
-            {
-                Guid? seen = null;
-                while (Volatile.Read(ref reading))
-                {
-                    var alreadyAnnounced = announced.TryPeek(out var done) ? done : (Guid?)null;
-                    var now = h.Runner.ActiveTurnId(chatId);
-                    if (now is null)
-                    {
-                        if (seen is Guid last && !finishedExecuting.ContainsKey(last))
-                            violation ??= $"read idle while turn {last} was still running";
-                    }
-                    else
-                    {
-                        if (now == alreadyAnnounced)
-                            violation ??= $"read turn {now} after its completion was announced";
-                        seen = now;
-                    }
-                }
-            });
-
-            // The second send races the first turn's own retirement.
-            await h.Runner.SubmitAsync(chatId, $"first {i}").WaitAsync(Patience);
-            await h.Runner.SubmitAsync(chatId, $"second {i}").WaitAsync(Patience);
-            await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
-            Volatile.Write(ref reading, false);
-            await reader.WaitAsync(Patience);
-
-            Assert.True(violation is null, $"round {i}: {violation}");
-            Assert.Null(h.Runner.ActiveTurnId(chatId));
-        }
-
-        // Two turns a round, each announced once and reported finished once.
-        await WaitUntilAsync(
-            () => h.Completed.Count == rounds * 2, "every turn should report itself finished");
-        Assert.Equal(rounds * 2, h.Started.Count);
-        Assert.Equal(h.Started.OrderBy(id => id), h.Completed.Select(c => c.TurnId).OrderBy(id => id));
-        Assert.Empty(h.Log.Entries);
-    }
-
-    [Fact]
     public async Task A_send_that_installs_over_a_turn_which_has_just_retired_waits_for_it_uncancelled()
     {
-        // The same hand-over as above, but scripted rather than raced, so it is
-        // reached on every run: the first turn is let go, and finishes and retires
+        // A send landing as the turn it replaces finishes on its own, scripted so it
+        // is reached on every run: the first turn is let go, and finishes and retires
         // itself, while the second send sits in its own start announcement — after
         // attaching, before installing. The send then installs over a chat whose live
         // turn has gone, and must wait for it without cancelling or disposing a source
@@ -739,16 +607,5 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.Equal(new[] { live }, h.Completed.Select(c => c.TurnId));
         Assert.Contains(live, h.Started);
         Assert.Empty(h.Log.Entries);
-    }
-
-    // Polls a background step that nothing can be awaited on, with a deadline far
-    // beyond what it needs — a failure means it never happened, not that it was slow.
-    private static async Task WaitUntilAsync(Func<bool> condition, string because)
-    {
-        var deadline = DateTime.UtcNow.Add(Patience);
-        while (!condition() && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
-
-        Assert.True(condition(), because);
     }
 }

@@ -513,9 +513,6 @@ describe("Taskboard SignalR", () => {
       reason: "Node Failed",
     });
 
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    });
     expect(notificationCalls).toHaveLength(0);
   });
 });

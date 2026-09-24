@@ -186,9 +186,10 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var timer = Task.Delay(delay, _time, linked.Token);
         var pulse = _pulse.WaitAsync(linked.Token);
+        Task winner;
         try
         {
-            await Task.WhenAny(timer, pulse);
+            winner = await Task.WhenAny(timer, pulse);
         }
         finally
         {
@@ -197,6 +198,15 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
             // the next Pulse() is consumed by that orphan instead of waking
             // the next iteration's waiter.
             try { linked.Cancel(); } catch (ObjectDisposedException) { }
+        }
+
+        // Cancel only asks the losing wait to unwind; until it does, it is
+        // still queued on the semaphore and a Pulse() in that gap goes to it.
+        // Hand such a count back so the next wait wakes at once.
+        await pulse.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (winner == timer && pulse.IsCompletedSuccessfully)
+        {
+            try { _pulse.Release(); } catch (SemaphoreFullException) { /* already pending */ }
         }
     }
 }

@@ -187,9 +187,9 @@ internal sealed class LoopEngineHarness : IDisposable
     private static readonly FieldInfo RunTasksField =
         typeof(LoopEngine).GetField("_runTasks", BindingFlags.NonPublic | BindingFlags.Instance)!;
 
-    private Task? OutstandingDriveTask()
-        => ((ConcurrentDictionary<Guid, Task>)RunTasksField.GetValue(_engine)!)
-            .TryGetValue(RunId, out var t) ? t : null;
+    private static Task? OutstandingDriveTask(LoopEngine engine, Guid runId)
+        => ((ConcurrentDictionary<Guid, Task>)RunTasksField.GetValue(engine)!)
+            .TryGetValue(runId, out var t) ? t : null;
 
     /// <summary>
     /// Waits until this harness's run has no in-flight drive — i.e. any
@@ -201,7 +201,14 @@ internal sealed class LoopEngineHarness : IDisposable
     /// state alone (which becomes visible mid-drive, while post-park DB work is still
     /// running on the shared connection).
     /// </summary>
-    public async Task WaitUntilIdleAsync(TimeSpan? timeout = null)
+    public Task WaitUntilIdleAsync(TimeSpan? timeout = null)
+        => WaitUntilIdleAsync(_engine, RunId, timeout);
+
+    /// <summary>
+    /// The same wait for any engine and run, for tests that drive an engine
+    /// without this harness.
+    /// </summary>
+    internal static async Task WaitUntilIdleAsync(LoopEngine engine, Guid runId, TimeSpan? timeout = null)
     {
         var limit = timeout ?? TimeSpan.FromSeconds(10);
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -209,7 +216,7 @@ internal sealed class LoopEngineHarness : IDisposable
         {
             // Await the actual drive Task (it completes cleanly — the engine catches
             // inside the loop), then re-check in case a relaunch chained another one.
-            if (OutstandingDriveTask() is { IsCompleted: false } drive)
+            if (OutstandingDriveTask(engine, runId) is { IsCompleted: false } drive)
             {
                 try { await drive.WaitAsync(limit - sw.Elapsed); } catch { /* drained or timed out */ }
                 continue;
@@ -217,7 +224,7 @@ internal sealed class LoopEngineHarness : IDisposable
             // No stored drive Task. If the run still owns a drive slot, a launch is
             // in flight but its Task handle isn't stored yet — spin briefly. Otherwise
             // the run is fully idle and the connection is safe to tear down.
-            if (!(await Engine.GetActiveRunIdsAsync()).Contains(RunId))
+            if (!(await engine.GetActiveRunIdsAsync()).Contains(runId))
                 return;
             await Task.Delay(2);
         }

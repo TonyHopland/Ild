@@ -47,16 +47,23 @@ public class ManagedAgentProvisionerTests
         Assert.Equal(["pi"], ensured.ToArray());
     }
 
+    // A queued ensure is recorded here synchronously and only dropped once its
+    // install ends, so with an install that never ends it stays for good.
+    private static readonly System.Reflection.FieldInfo InFlightField =
+        typeof(ManagedAgentProvisioner).GetField("_inFlight", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+
     [Fact]
-    public async Task EnsureInstalledForProviderType_ignores_unmanaged_provider_types()
+    public void EnsureInstalledForProviderType_ignores_unmanaged_provider_types()
     {
-        var svc = new Mock<IManagedAgentService>(MockBehavior.Strict);
+        var svc = new Mock<IManagedAgentService>();
+        svc.Setup(s => s.EnsureInstalledAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Returns(new TaskCompletionSource<ManagedAgentStatus>().Task);
 
         using var sp = (ServiceProvider)BuildProvider(svc.Object);
-        Create(sp).EnsureInstalledForProviderType("openai");
+        var provisioner = Create(sp);
+        provisioner.EnsureInstalledForProviderType("openai");
 
-        // Give any erroneously-queued background work a chance to run before asserting.
-        await Task.Delay(100);
+        Assert.Empty((ConcurrentDictionary<string, byte>)InFlightField.GetValue(provisioner)!);
         svc.Verify(
             s => s.EnsureInstalledAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);

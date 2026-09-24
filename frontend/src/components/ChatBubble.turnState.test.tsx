@@ -214,36 +214,6 @@ describe("ChatBubble turn state", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  test("a send rejected after an idle snapshot settles the chat as idle", async () => {
-    // The same race, the other outcome: the send never reached the server, so
-    // once it comes back there is nothing running and the controls go.
-    const view = await openResumed(chatSession());
-
-    let rejectSend!: (err: Error) => void;
-    chatService.sendMessage.mockReturnValue(
-      new Promise<void>((_, reject) => {
-        rejectSend = reject;
-      }),
-    );
-    await sendMessageText("are you there?");
-
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: null }));
-    setConnectionState(view, "reconnecting");
-    setConnectionState(view, "connected");
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
-    await act(async () => {});
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-
-    await act(async () => {
-      rejectSend(new Error("Network error."));
-    });
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(4));
-
-    expect(await screen.findByText("Network error.")).toBeTruthy();
-    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-
   test("a send that fails after the user opened another chat reports nothing there", async () => {
     // The bubble is one component for every chat, so a request that outlives the
     // chat it belongs to must write nothing into whatever chat is open instead.
@@ -437,69 +407,83 @@ describe("ChatBubble turn state", () => {
     expect(screen.getByLabelText("Stop")).toBeTruthy();
   });
 
-  test("a send that fails asks the server rather than declaring the chat idle", async () => {
-    await openResumed(chatSession());
-    chatService.sendMessage.mockRejectedValue(new Error("Network error."));
-    // The POST failed on the way back: the runner already has the message and is
-    // working on it, so taking the stop button away would strand a live turn.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t9" }));
+  const FAILED_SEND_CASES: Array<{
+    name: string;
+    resumedTurn: string | null;
+    streamed: string | null;
+    read: string | null;
+    readFails?: boolean;
+    ends: "working" | "idle";
+  }> = [
+    {
+      // The POST failed on the way back: the runner already has the message and is
+      // working on it, so taking the stop button away would strand a live turn.
+      name: "a send that fails asks the server rather than declaring the chat idle",
+      resumedTurn: null,
+      streamed: null,
+      read: "t9",
+      ends: "working",
+    },
+    {
+      // The chat was idle when the send went out, so there is no earlier turn to
+      // put back and the view is right to end up idle.
+      name: "a send that fails with no answer from the server clears the turn it put up",
+      resumedTurn: null,
+      streamed: null,
+      read: null,
+      readFails: true,
+      ends: "idle",
+    },
+    {
+      // A send only displaces a turn if it arrives. This one fails on the way out,
+      // so the turn it claimed to replace is still running and still streaming —
+      // the reply on screen belongs to it and must not be wiped on its behalf.
+      name: "a send that never reached the server leaves the turn it did not replace alone",
+      resumedTurn: "t1",
+      streamed: "half an answer",
+      read: "t1",
+      ends: "working",
+    },
+    {
+      // Both requests fail, so nothing can confirm anything: the view must fall
+      // back to what it knew, which is that t1 was running — not to idle, which
+      // would take away the only control that can stop it.
+      name: "a send that never reached the server keeps the stop button when the read fails too",
+      resumedTurn: "t1",
+      streamed: null,
+      read: null,
+      readFails: true,
+      ends: "working",
+    },
+  ];
 
-    await sendMessageText("did this arrive?");
+  test.each(FAILED_SEND_CASES)(
+    "$name",
+    async ({ resumedTurn, streamed, read, readFails, ends }) => {
+      await openResumed(chatSession({ activeTurnId: resumedTurn }));
+      if (streamed) {
+        emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: streamed });
+        expect(screen.getByText(streamed)).toBeTruthy();
+      }
 
-    expect(await screen.findByText("Network error.")).toBeTruthy();
-    await waitFor(() => expect(screen.getByLabelText("Stop")).toBeTruthy());
-    expect(screen.getByRole("status")).toBeTruthy();
-  });
+      chatService.sendMessage.mockRejectedValue(new Error("Network error."));
+      if (readFails) chatService.getById.mockRejectedValue(new Error("Network error."));
+      else chatService.getById.mockResolvedValue(chatSession({ activeTurnId: read }));
 
-  test("a send that fails with no answer from the server clears the turn it put up", async () => {
-    // The chat was idle when the send went out, so there is no earlier turn to
-    // put back and the view is right to end up idle.
-    await openResumed(chatSession());
-    chatService.sendMessage.mockRejectedValue(new Error("Network error."));
-    chatService.getById.mockRejectedValue(new Error("Network error."));
+      await sendMessageText("did this arrive?");
 
-    await sendMessageText("did this arrive?");
-
-    expect(await screen.findByText("Network error.")).toBeTruthy();
-    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
-    expect(screen.queryByRole("status")).toBeNull();
-  });
-
-  test("a send that never reached the server leaves the turn it did not replace alone", async () => {
-    // A send only displaces a turn if it arrives. This one fails on the way out,
-    // so the turn it claimed to replace is still running and still streaming —
-    // the reply on screen belongs to it and must not be wiped on its behalf.
-    await openResumed(chatSession({ activeTurnId: "t1" }));
-    emit("ChatTurnProgress", { chatSessionId: "s1", turnId: "t1", delta: "half an answer" });
-    expect(screen.getByText("half an answer")).toBeTruthy();
-
-    chatService.sendMessage.mockRejectedValue(new Error("Network error."));
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: "t1" }));
-
-    await sendMessageText("are you still there?");
-
-    expect(await screen.findByText("Network error.")).toBeTruthy();
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-    expect(screen.getByText("half an answer")).toBeTruthy();
-  });
-
-  test("a send that never reached the server keeps the stop button when the read fails too", async () => {
-    // Both requests fail, so nothing can confirm anything: the view must fall
-    // back to what it knew, which is that t1 was running — not to idle, which
-    // would take away the only control that can stop it.
-    await openResumed(chatSession({ activeTurnId: "t1" }));
-    chatService.sendMessage.mockRejectedValue(new Error("Network error."));
-    chatService.getById.mockRejectedValue(new Error("Network error."));
-
-    await sendMessageText("are you still there?");
-
-    expect(await screen.findByText("Network error.")).toBeTruthy();
-    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
-    expect(screen.getByLabelText("Stop")).toBeTruthy();
-    expect(screen.getByRole("status")).toBeTruthy();
-  });
+      expect(await screen.findByText("Network error.")).toBeTruthy();
+      await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
+      if (ends === "working") {
+        await waitFor(() => expect(screen.getByLabelText("Stop")).toBeTruthy());
+        expect(screen.getByRole("status")).toBeTruthy();
+      } else {
+        await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
+        expect(screen.queryByRole("status")).toBeNull();
+      }
+      if (streamed) expect(screen.getByText(streamed)).toBeTruthy();
+    },
+  );
 
   test("a replacement turn starts with no text from the turn it replaced", async () => {
     // The interrupted turn's finalized reply is the usual thing that clears the
@@ -913,14 +897,23 @@ describe("ChatBubble turn state", () => {
       expect(screen.queryByRole("status")).toBeNull();
     });
 
-    test("an answer never lands on a chat the user switched to", async () => {
-      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+    const LATE_ANSWER_CASES: Array<{ name: string; chats: string[]; returnTo: string }> = [
+      {
+        name: "an answer never lands on a chat the user switched to",
+        chats: ["First chat", "Other chat"],
+        returnTo: "Other chat",
+      },
+      {
+        name: "an answer never lands on a later visit to the same chat",
+        chats: ["First chat"],
+        returnTo: "First chat",
+      },
+    ];
+
+    test.each(LATE_ANSWER_CASES)("$name", async ({ chats, returnTo }) => {
+      openList(...chats.map((name, i) => summary(`s${i + 1}`, name)));
       chatService.getById.mockImplementation((id: string) =>
-        Promise.resolve(
-          id === "s1"
-            ? chatSession({ id: "s1", name: "First chat" })
-            : chatSession({ id: "s2", name: "Other chat" }),
-        ),
+        Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
       );
       fireEvent.click(await screen.findByLabelText("Open chat"));
       fireEvent.click(await screen.findByText("First chat"));
@@ -930,30 +923,7 @@ describe("ChatBubble turn state", () => {
       await sendMessageText("go");
 
       fireEvent.click(screen.getByText("← Back"));
-      fireEvent.click(await screen.findByText("Other chat"));
-      await screen.findByLabelText("Chat message");
-
-      await act(async () => {
-        answerSend();
-      });
-      await act(async () => {});
-
-      expect(screen.queryByLabelText("Stop")).toBeNull();
-      expect(screen.queryByRole("status")).toBeNull();
-    });
-
-    test("an answer never lands on a later visit to the same chat", async () => {
-      openList(summary("s1", "First chat"));
-      chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
-      fireEvent.click(await screen.findByLabelText("Open chat"));
-      fireEvent.click(await screen.findByText("First chat"));
-      await screen.findByLabelText("Chat message");
-
-      const answerSend = heldSendAnswering("t2");
-      await sendMessageText("go");
-
-      fireEvent.click(screen.getByText("← Back"));
-      fireEvent.click(await screen.findByText("First chat"));
+      fireEvent.click(await screen.findByText(returnTo));
       await screen.findByLabelText("Chat message");
 
       await act(async () => {

@@ -191,28 +191,32 @@ describe("the overview's attachment list", () => {
 });
 
 describe("attachment failures are visible", () => {
-  test("a download that fails shows the server's message", async () => {
+  const FAILURE_CASES: Array<{
+    name: string;
+    service: "downloadAttachment" | "deleteAttachment";
+    button: string;
+  }> = [
+    {
+      name: "a download that fails shows the server's message",
+      service: "downloadAttachment",
+      button: "Download shot.png",
+    },
+    {
+      name: "a removal that fails shows the server's message and keeps the attachment",
+      service: "deleteAttachment",
+      button: "Remove attachment shot.png",
+    },
+  ];
+
+  test.each(FAILURE_CASES)("$name", async ({ service, button }) => {
     mockServices();
-    vi.spyOn(authServices.workItemService, "downloadAttachment").mockRejectedValue({
+    vi.spyOn(authServices.workItemService, service).mockRejectedValue({
       status: 503,
       message: "WorkItemServer unreachable",
     });
     await renderDialog(makeWorkItem());
 
-    await click(screen.getByRole("button", { name: "Download shot.png" }));
-
-    await waitFor(() => expect(overview().textContent).toContain("WorkItemServer unreachable"));
-  });
-
-  test("a removal that fails shows the server's message and keeps the attachment", async () => {
-    mockServices();
-    vi.spyOn(authServices.workItemService, "deleteAttachment").mockRejectedValue({
-      status: 503,
-      message: "WorkItemServer unreachable",
-    });
-    await renderDialog(makeWorkItem());
-
-    await click(screen.getByRole("button", { name: "Remove attachment shot.png" }));
+    await click(screen.getByRole("button", { name: button }));
 
     await waitFor(() => expect(overview().textContent).toContain("WorkItemServer unreachable"));
     expect(screen.getByRole("button", { name: "Download shot.png" })).toBeTruthy();

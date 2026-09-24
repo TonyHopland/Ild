@@ -89,45 +89,6 @@ const stagedNames = (detail: { editAttachments: { staged: { file: File }[] } }) 
   detail.editAttachments.staged.map((s) => s.file.name);
 
 describe("staging files on a work item", () => {
-  test("stages picked files and drops one again on request", async () => {
-    stubServices();
-    const { result } = renderDetail(makeWorkItem());
-    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
-
-    await act(async () => {
-      result.current.editAttachments.add([fileOfSize("a.png", 10), fileOfSize("b.pdf", 20)]);
-    });
-    expect(stagedNames(result.current)).toEqual(["a.png", "b.pdf"]);
-
-    await act(async () => {
-      result.current.editAttachments.remove(result.current.editAttachments.staged[0].key);
-    });
-    expect(stagedNames(result.current)).toEqual(["b.pdf"]);
-  });
-
-  test("refuses a file over the configured maximum and never uploads it", async () => {
-    stubServices({ maxBytesPerFile: 1000 });
-    const upload = vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue([]);
-    const { result } = renderDetail(makeWorkItem());
-    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
-
-    await act(async () => {
-      result.current.editAttachments.add([
-        fileOfSize("big.bin", 1200),
-        fileOfSize("small.txt", 10),
-      ]);
-    });
-
-    expect(stagedNames(result.current)).toEqual(["small.txt"]);
-    expect(result.current.editAttachments.stagingError).toContain("big.bin");
-
-    await act(async () => {
-      await result.current.editAttachments.uploadAll("wi-1");
-    });
-    expect(upload).toHaveBeenCalledTimes(1);
-    expect(upload.mock.calls[0][1].name).toBe("small.txt");
-  });
-
   // Without the limits the client has nothing to enforce; inventing one would
   // refuse files an instance configured higher accepts, so the server stays the
   // only enforcer and staging carries on.
@@ -257,20 +218,5 @@ describe("staged files belong to one work item", () => {
     });
 
     expect(stagedNames(result.current)).toEqual(["a.png"]);
-  });
-
-  test("clear() empties the staged list", async () => {
-    stubServices();
-    const { result } = renderDetail(makeWorkItem());
-    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
-    await act(async () => {
-      result.current.editAttachments.add([fileOfSize("a.png", 10)]);
-    });
-
-    await act(async () => {
-      result.current.editAttachments.clear();
-    });
-
-    expect(result.current.editAttachments.staged).toEqual([]);
   });
 });

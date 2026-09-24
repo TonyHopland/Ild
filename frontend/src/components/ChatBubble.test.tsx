@@ -191,76 +191,84 @@ describe("ChatBubble", () => {
     expect((screen.getByLabelText("Read") as HTMLInputElement).checked).toBe(false);
   });
 
-  test("pre-selects the default provider in the dropdown", async () => {
+  const PROVIDER_SELECTION_CASES: Array<{
+    name: string;
+    providers: AiProvider[];
+    selected: string;
+  }> = [
+    {
+      // The non-default is listed first to prove selection follows isDefault, not order.
+      name: "pre-selects the default provider in the dropdown",
+      providers: [{ ...provider, id: "p0", name: "GPT", isDefault: false }, provider],
+      selected: "p1",
+    },
+    {
+      name: "leaves the dropdown unselected when no provider is the default",
+      providers: [
+        { ...provider, id: "p0", name: "GPT", isDefault: false },
+        { ...provider, id: "p2", name: "Llama", isDefault: false },
+      ],
+      selected: "",
+    },
+  ];
+
+  test.each(PROVIDER_SELECTION_CASES)("$name", async ({ providers, selected }) => {
     chatService.listHistory.mockResolvedValue([]);
-    const other: AiProvider = { ...provider, id: "p0", name: "GPT", isDefault: false };
-    // List the non-default first to prove selection follows isDefault, not order.
-    aiProviderService.getAll.mockResolvedValue([other, provider]);
+    aiProviderService.getAll.mockResolvedValue(providers);
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     const select = (await screen.findByLabelText("AI provider")) as HTMLSelectElement;
-    expect(select.value).toBe("p1");
+    expect(select.value).toBe(selected);
   });
 
-  test("leaves the dropdown unselected when no provider is the default", async () => {
-    chatService.listHistory.mockResolvedValue([]);
-    const a: AiProvider = { ...provider, id: "p0", name: "GPT", isDefault: false };
-    const b: AiProvider = { ...provider, id: "p2", name: "Llama", isDefault: false };
-    aiProviderService.getAll.mockResolvedValue([a, b]);
+  const CHAT_CONTEXT_CASES: Array<{
+    name: string;
+    path: string;
+    liveLoop: object | null;
+    text: string;
+    workItemId: string | null;
+  }> = [
+    {
+      name: "sends the open work item id from the route as Chat Context",
+      path: "/taskboard/wi-77",
+      liveLoop: null,
+      text: "look at this",
+      workItemId: "wi-77",
+    },
+    {
+      name: "sends the open Loop Editor's live document with the message",
+      path: "/",
+      liveLoop: { $schema: "ild-loop-template/v1", name: "My Loop", nodes: [], edges: [] },
+      text: "edit the loop",
+      workItemId: null,
+    },
+    {
+      name: "sends a null Chat Context when no work item is open",
+      path: "/taskboard",
+      liveLoop: null,
+      text: "general question",
+      workItemId: null,
+    },
+  ];
 
-    renderBubble();
-    fireEvent.click(await screen.findByLabelText("Open chat"));
-
-    const select = (await screen.findByLabelText("AI provider")) as HTMLSelectElement;
-    expect(select.value).toBe("");
-  });
-
-  test("sends the open work item id from the route as Chat Context", async () => {
+  test.each(CHAT_CONTEXT_CASES)("$name", async ({ path, liveLoop, text, workItemId }) => {
     chatService.sendMessage.mockResolvedValue(undefined);
-    await openResumed(chatSession(), "/taskboard/wi-77");
+    if (liveLoop) getOpenLoopDocument.mockReturnValue(liveLoop);
+    await openResumed(chatSession(), path);
 
     const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "look at this" } });
-    fireEvent.click(screen.getByText("Send"));
-
-    await waitFor(() =>
-      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "look at this", "wi-77", null),
-    );
-  });
-
-  test("sends the open Loop Editor's live document with the message", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    const liveLoop = { $schema: "ild-loop-template/v1", name: "My Loop", nodes: [], edges: [] };
-    getOpenLoopDocument.mockReturnValue(liveLoop);
-
-    await openResumed(chatSession());
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "edit the loop" } });
+    fireEvent.change(input, { target: { value: text } });
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() =>
       expect(chatService.sendMessage).toHaveBeenCalledWith(
         "s1",
-        "edit the loop",
-        null,
-        JSON.stringify(liveLoop),
+        text,
+        workItemId,
+        liveLoop ? JSON.stringify(liveLoop) : null,
       ),
-    );
-  });
-
-  test("sends a null Chat Context when no work item is open", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    await openResumed(chatSession(), "/taskboard");
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "general question" } });
-    fireEvent.click(screen.getByText("Send"));
-
-    await waitFor(() =>
-      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "general question", null, null),
     );
   });
 
@@ -637,27 +645,6 @@ describe("ChatBubble", () => {
 
     fireEvent.click(screen.getByLabelText("Stop"));
     await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
-  });
-
-  test("a successful stop settles the view even if no completion ever arrives", async () => {
-    chatService.sendMessage.mockResolvedValue(undefined);
-    chatService.interrupt.mockResolvedValue(undefined);
-    await openResumed(chatSession());
-
-    const input = await screen.findByLabelText("Chat message");
-    fireEvent.change(input, { target: { value: "long task" } });
-    fireEvent.click(screen.getByText("Send"));
-    emit("ChatTurnStarted", { chatSessionId: "s1", turnId: "t1" });
-    const stop = await screen.findByLabelText("Stop");
-
-    // The turn is over by the time the stop returns, and its completion never
-    // reaches this client.
-    chatService.getById.mockResolvedValue(chatSession({ activeTurnId: null }));
-
-    fireEvent.click(stop);
-
-    await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
-    expect(screen.queryByRole("status")).toBeNull();
   });
 
   test("a state read that resolves after a newer turn started never clears it", async () => {

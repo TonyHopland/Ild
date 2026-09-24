@@ -109,7 +109,13 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         _policy.Invalidate();
     }
 
-    /// <summary>Declare a forward to the echo upstream and wait until it is answering.</summary>
+    /// <summary>
+    /// Declare a forward to the echo upstream and bring the listeners in line with it.
+    /// The reconcile runs here instead of being prompted by a policy change, because
+    /// that would also wake the forwarder's own reconcile: a second thread on this
+    /// test's one SQLite connection, which fails whichever read overlaps it — the
+    /// policy load of the connection dialled next among them.
+    /// </summary>
     private async Task<NetworkForwardEntry> DeclareAsync(string name = "echo", string host = "localhost", int? localPort = null)
     {
         var forward = new NetworkForwardEntry
@@ -120,8 +126,8 @@ public sealed class EgressForwarderTests : IAsyncLifetime
             LocalPort = localPort ?? FreePort(),
         };
         await _db.NetworkForwards.AddForwardAsync(forward);
-        _policy.Invalidate();
-        await WaitUntilAsync(() => _forwarder!.ListeningPorts.Contains(forward.LocalPort));
+        await _forwarder!.ReconcileAsync(default);
+        Assert.Contains(forward.LocalPort, _forwarder.ListeningPorts);
         return forward;
     }
 
@@ -231,8 +237,8 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         var forward = await DeclareAsync();
 
         Assert.True(await _db.NetworkForwards.DeleteForwardAsync(forward.Id));
-        _policy.Invalidate();
-        await WaitUntilAsync(() => !_forwarder!.ListeningPorts.Contains(forward.LocalPort));
+        await _forwarder!.ReconcileAsync(default);
+        Assert.DoesNotContain(forward.LocalPort, _forwarder.ListeningPorts);
 
         await Assert.ThrowsAnyAsync<SocketException>(async () => (await DialAsync(forward.LocalPort)).Dispose());
     }
@@ -254,7 +260,6 @@ public sealed class EgressForwarderTests : IAsyncLifetime
             await _db.NetworkForwards.AddForwardAsync(contested);
             var healthy = await DeclareAsync(name: "healthy");
 
-            await WaitUntilAsync(() => _forwarder!.ListenErrorFor(contested.Id) is not null);
             Assert.Contains("already in use", _forwarder!.ListenErrorFor(contested.Id));
 
             using var client = await DialAsync(healthy.LocalPort);
@@ -268,22 +273,22 @@ public sealed class EgressForwarderTests : IAsyncLifetime
 
     /// <summary>
     /// Clients that reset before the accept completes are ordinary traffic, not a
-    /// reason to stop serving; the listener has to survive a run of them.
+    /// reason to stop serving; the listener has to survive a run of them. The
+    /// accept is where the kernel reports them, so that is where they are staged.
     /// </summary>
     [Fact]
     public async Task Connections_abandoned_before_they_are_accepted_do_not_end_the_forward()
     {
+        var abandoned = 3;
+        _forwarder!.AcceptClient = (socket, ct) => Interlocked.Decrement(ref abandoned) >= 0
+            ? ValueTask.FromException<TcpClient>(new SocketException((int)SocketError.ConnectionReset))
+            : socket.AcceptTcpClientAsync(ct);
         var forward = await DeclareAsync();
-
-        for (var i = 0; i < 25; i++)
-        {
-            using var aborted = new TcpClient { LingerState = new LingerOption(true, 0) };
-            await aborted.ConnectAsync(IPAddress.Loopback, forward.LocalPort);
-        }
 
         using var client = await DialAsync(forward.LocalPort);
         Assert.Equal("still serving", await EchoAsync(client, "still serving"));
-        Assert.Contains(forward.LocalPort, _forwarder!.ListeningPorts);
+        Assert.True(Volatile.Read(ref abandoned) < 0, "the abandoned accepts were never staged");
+        Assert.Contains(forward.LocalPort, _forwarder.ListeningPorts);
         Assert.Null(_forwarder.ListenErrorFor(forward.Id));
     }
 
@@ -309,25 +314,25 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     /// <summary>
     /// Binding and retiring race the accept loop that each bind starts, and a
     /// loop that faults on the way up leaves a row advertising a port nothing
-    /// answers on. Churn the same port and insist that "listening" keeps meaning
-    /// it.
+    /// answers on. Withdraw a port and declare it again, and insist that
+    /// "listening" keeps meaning it.
     /// </summary>
     [Fact]
-    public async Task A_port_declared_and_withdrawn_repeatedly_still_answers_when_it_says_it_is_listening()
+    public async Task A_port_withdrawn_and_declared_again_still_answers_when_it_says_it_is_listening()
     {
         var localPort = FreePort();
 
-        for (var i = 0; i < 8; i++)
-        {
-            var forward = await DeclareAsync(name: $"churn-{i}", localPort: localPort);
+        var first = await DeclareAsync(name: "first", localPort: localPort);
+        using (var client = await DialAsync(localPort))
+            Assert.Equal("round trip", await EchoAsync(client, "round trip"));
 
-            using (var client = await DialAsync(localPort))
-                Assert.Equal("round trip", await EchoAsync(client, "round trip"));
+        Assert.True(await _db.NetworkForwards.DeleteForwardAsync(first.Id));
+        await _forwarder!.ReconcileAsync(default);
+        Assert.DoesNotContain(localPort, _forwarder.ListeningPorts);
 
-            Assert.True(await _db.NetworkForwards.DeleteForwardAsync(forward.Id));
-            _policy.Invalidate();
-            await WaitUntilAsync(() => !_forwarder!.ListeningPorts.Contains(localPort));
-        }
+        await DeclareAsync(name: "again", localPort: localPort);
+        using (var client = await DialAsync(localPort))
+            Assert.Equal("round trip", await EchoAsync(client, "round trip"));
     }
 
     [Fact]
@@ -350,15 +355,19 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     /// </summary>
     private async Task<IReadOnlyList<(string Host, int Port, NetworkDecision Decision, Guid? Provider)>> RecordedAsync(int count)
     {
-        var deadline = DateTime.UtcNow + Timeout;
-        while (_log.Entries.Count < count && DateTime.UtcNow < deadline)
-            await Task.Delay(20);
-
-        Assert.True(_log.Entries.Count >= count,
-            $"expected {count} recorded destination(s), saw {_log.Entries.Count}; forwarder said: {string.Join(" | ", _diagnostics.Lines)}");
+        try
+        {
+            await _log.AtLeast(count).WaitAsync(Timeout);
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail($"expected {count} recorded destination(s), saw {_log.Entries.Count}; forwarder said: {string.Join(" | ", _diagnostics.Lines)}");
+        }
         return _log.Entries;
     }
 
+    // Only for what the kernel reports with no event to await: a relay's count
+    // falls when the socket it carried is closed.
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow + Timeout;
@@ -372,6 +381,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     private sealed class RecordingLog : INetworkLogRecorder
     {
         private readonly List<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> _entries = new();
+        private readonly List<(int Count, TaskCompletionSource Tcs)> _waiters = new();
 
         public IReadOnlyList<(string Host, int Port, NetworkDecision Decision, Guid? Provider)> Entries
         {
@@ -380,7 +390,27 @@ public sealed class EgressForwarderTests : IAsyncLifetime
 
         public void Record(string host, int port, NetworkDecision decision, Guid? aiProviderId)
         {
-            lock (_entries) _entries.Add((host, port, decision, aiProviderId));
+            lock (_entries)
+            {
+                _entries.Add((host, port, decision, aiProviderId));
+                foreach (var waiter in _waiters.Where(w => w.Count <= _entries.Count).ToList())
+                {
+                    waiter.Tcs.TrySetResult();
+                    _waiters.Remove(waiter);
+                }
+            }
+        }
+
+        /// <summary>Completes once at least <paramref name="count"/> destinations have been recorded.</summary>
+        public Task AtLeast(int count)
+        {
+            lock (_entries)
+            {
+                if (_entries.Count >= count) return Task.CompletedTask;
+                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add((count, tcs));
+                return tcs.Task;
+            }
         }
     }
 

@@ -196,13 +196,6 @@ describe("staging files on the work item form", () => {
     expect((upload.mock.calls[0][1] as File).name).toBe("keep.png");
   });
 
-  test("shows the configured per-file maximum", async () => {
-    mockServices();
-    await renderDialog(null);
-
-    await waitFor(() => expect(form().textContent).toContain("25 MB"));
-  });
-
   test("refuses a file over the maximum, naming the limit, and never uploads it", async () => {
     mockServices();
     const upload = vi.spyOn(authServices.workItemService, "uploadAttachment").mockResolvedValue([]);

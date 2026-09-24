@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Status changes and scheduler setting changes are picked up immediately, instead of occasionally waiting for the next poll.**
+
 ## [0.13.0] - 2026-09-23
 
 ### Added

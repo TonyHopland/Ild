@@ -239,9 +239,9 @@ public sealed class ChatTurnLifecycleTests
 
         release.SetResult();
         await notifier.CompletedAtLeast(1).WaitAsync(Patience);
-        // The turn drops itself as it unwinds, so give that last step a moment.
-        await WaitUntilAsync(() => runner.ActiveTurnId(chatId) is null,
-            "a finished turn should leave the chat reading as idle");
+        // A turn retires before it announces that it finished, so by then the chat
+        // already reads as idle.
+        Assert.Null(runner.ActiveTurnId(chatId));
     }
 
     [Fact]
@@ -304,16 +304,5 @@ public sealed class ChatTurnLifecycleTests
         await notifier.CompletedAtLeast(2).WaitAsync(Patience);
         Assert.Equal(secondTurn, notifier.Completed[1].TurnId);
         Assert.False(notifier.Completed[1].Interrupted);
-    }
-
-    // Polls a background step that nothing can be awaited on, with a deadline far
-    // beyond what it needs — a failure means it never happened, not that it was slow.
-    private static async Task WaitUntilAsync(Func<bool> condition, string because)
-    {
-        var deadline = DateTime.UtcNow.Add(Patience);
-        while (!condition() && DateTime.UtcNow < deadline)
-            await Task.Delay(10);
-
-        Assert.True(condition(), because);
     }
 }

@@ -85,14 +85,17 @@ public class CmdNodeExecutorTests : IDisposable
     {
         // The node's own /bin/sh is not the risk — a background grandchild is: it
         // outlives a kill that only reaches the direct child, and keeps writing the
-        // worktree the engine is about to commit and delete. This one announces
-        // itself, then writes a marker two seconds later; the marker is the orphan.
+        // worktree the engine is about to commit and delete. This one records its
+        // pid before the node announces itself, then would write a marker once its
+        // sleep ends; the marker is the orphan.
         var survivor = Path.Combine(_worktree, "survivor.txt");
+        var pidFile = Path.Combine(_worktree, "gc.pid");
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancel = new CancellationTokenSource();
 
         var ctx = Context(
-            $"(sleep 2; echo alive > '{survivor}') & echo started; sleep 30",
+            $"sh -c 'echo $$ > \"{pidFile}\"; sleep 30; echo alive > \"{survivor}\"' & " +
+            $"while [ ! -s '{pidFile}' ]; do :; done; echo started; sleep 30",
             cancel.Token,
             line =>
             {
@@ -102,6 +105,7 @@ public class CmdNodeExecutorTests : IDisposable
 
         var run = RunAsync(ctx);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var grandchild = int.Parse(File.ReadAllText(pidFile).Trim());
         cancel.Cancel();
 
         var outcomes = await run.WaitAsync(TimeSpan.FromSeconds(30));
@@ -112,9 +116,28 @@ public class CmdNodeExecutorTests : IDisposable
         Assert.DoesNotContain("still alive", fail.Reason, StringComparison.Ordinal);
         Assert.DoesNotContain("failed to kill", fail.Reason, StringComparison.Ordinal);
 
-        // Longer than the marker's delay, so "absent" means killed rather than
-        // "not written yet".
-        await Task.Delay(TimeSpan.FromSeconds(5));
+        Assert.True(await HasExitedAsync(grandchild), "a background child of the cancelled command survived the node");
         Assert.False(File.Exists(survivor), "a background child of the cancelled command survived the node");
+    }
+
+    // The grandchild is not our child, so there is no exit to await: poll /proc
+    // until it is gone or a zombie. The deadline is only the failure path.
+    private static async Task<bool> HasExitedAsync(int pid)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline)
+        {
+            string stat;
+            try { stat = File.ReadAllText($"/proc/{pid}/stat"); }
+            catch (IOException) { return true; }
+            catch (UnauthorizedAccessException) { return true; }
+
+            // The state follows the parenthesised command name, which may itself
+            // contain spaces or parentheses.
+            if (stat[(stat.LastIndexOf(')') + 2)..].StartsWith('Z')) return true;
+            await Task.Delay(20);
+        }
+
+        return false;
     }
 }

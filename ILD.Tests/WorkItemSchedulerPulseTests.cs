@@ -9,24 +9,23 @@ namespace ILD.Tests;
 
 public class WorkItemSchedulerPulseTests
 {
+    private static readonly TimeSpan Patience = TimeSpan.FromSeconds(30);
+
     /// <summary>
     /// Regression: after several timer-driven passes, a Pulse() must still wake
-    /// the scheduler near-instantly. Earlier the loser of the timer/pulse race
-    /// was left parked in the SemaphoreSlim queue, so Pulse() releases were
-    /// absorbed by orphans and the next pass had to wait for the timer.
+    /// the scheduler on its own. Earlier the loser of the timer/pulse race was
+    /// left parked in the SemaphoreSlim queue, so Pulse() releases were absorbed
+    /// by orphans and the next pass had to wait for the timer.
     /// </summary>
     [Fact]
     public async Task Pulse_wakes_scheduler_after_several_timer_driven_passes()
     {
-        // gate is replaced before each pulse so the assertion sees only the
-        // pass triggered by that pulse, not a stale earlier completion.
-        var gateRef = new GateRef();
-
+        var passes = new SemaphoreSlim(0);
         var coord = new Mock<IRemoteWorkItemCoordinator>();
         coord.Setup(c => c.RunPollCycleAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<int>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(() =>
             {
-                gateRef.Current?.TrySetResult(true);
+                passes.Release();
                 return new PollCycleResult();
             });
 
@@ -44,69 +43,138 @@ public class WorkItemSchedulerPulseTests
             Enabled = true,
             BaseUrl = "http://localhost",
             ApiKey = "k",
-            // Short interval so several timer-driven passes happen quickly,
-            // each parking a WaitAsync waiter on the semaphore (the bug).
-            PollInterval = TimeSpan.FromMilliseconds(50),
+            PollInterval = TimeSpan.FromSeconds(30),
         });
 
+        var time = new ManualTimeProvider();
         var scheduler = new WorkItemScheduler(
             sp.GetRequiredService<IServiceScopeFactory>(),
             monitor,
             NullLogger<WorkItemScheduler>.Instance,
-            TimeProvider.System);
+            time);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        await scheduler.StartAsync(cts.Token);
-
-        // Drive ~5 timer-win passes to accumulate any orphan waiters.
-        for (int i = 0; i < 5; i++)
-            await WaitForOnePassAsync(gateRef, TimeSpan.FromSeconds(2));
-
-        // Switch to a long interval so the next wait can only be ended by a
-        // pulse — a timer-driven pass would mask the bug.
-        monitor.Set(new WorkItemSchedulerOptions
+        await scheduler.StartAsync(CancellationToken.None);
+        try
         {
-            Enabled = true,
-            BaseUrl = "http://localhost",
-            ApiKey = "k",
-            PollInterval = TimeSpan.FromSeconds(30),
-        });
+            await PassAsync(passes);
 
-        // Give the scheduler a moment to enter the long wait.
-        await Task.Delay(150, cts.Token);
+            // Timer-driven passes, each of which used to leave its pulse waiter
+            // parked on the semaphore (the bug).
+            for (int i = 0; i < 5; i++)
+            {
+                await time.TimerCreatedAsync();
+                time.Fire();
+                await PassAsync(passes);
+            }
 
-        // Pulse — without the fix this is consumed by an orphan and the next
-        // pass waits the full 30s timer interval.
-        var pulseTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        gateRef.Current = pulseTcs;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        scheduler.Pulse();
-        var winner = await Task.WhenAny(pulseTcs.Task, Task.Delay(TimeSpan.FromSeconds(3), cts.Token));
-        sw.Stop();
+            // The scheduler is waiting on a timer that is never fired from here on,
+            // so only the pulse can end this wait — without the fix it is consumed
+            // by an orphan and no pass follows.
+            await time.TimerCreatedAsync();
+            var firedBeforePulse = time.Fired;
+            scheduler.Pulse();
+            await PassAsync(passes);
 
-        Assert.True(winner == pulseTcs.Task,
-            $"Pulse did not trigger a pass within 3s (took {sw.ElapsedMilliseconds}ms before timeout)");
-        Assert.True(sw.ElapsedMilliseconds < 2000,
-            $"Pulse-driven pass took {sw.ElapsedMilliseconds}ms; expected near-instant");
+            Assert.Equal(firedBeforePulse, time.Fired);
 
-        await scheduler.StopAsync(CancellationToken.None);
+            // A Pulse() that arrives just after a timer win, while the cancelled
+            // pulse wait may still be queued on the semaphore, must still get a pass
+            // of its own. The scheduler re-reads its options right after the win, so
+            // pulsing from that read puts the pulse in that gap.
+            await time.TimerCreatedAsync();
+            monitor.OnNextRead = scheduler.Pulse;
+            time.Fire();
+            var firedAfterWin = time.Fired;
+            await PassAsync(passes);
+            await PassAsync(passes);
+
+            Assert.Equal(firedAfterWin, time.Fired);
+        }
+        finally
+        {
+            await scheduler.StopAsync(CancellationToken.None);
+        }
     }
 
-    private static async Task WaitForOnePassAsync(GateRef gateRef, TimeSpan timeout)
+    private static async Task PassAsync(SemaphoreSlim passes)
+        => Assert.True(await passes.WaitAsync(Patience), "the scheduler never ran the expected pass");
+
+    /// <summary>
+    /// A clock whose timers fire only when the test says so. The scheduler's wait is
+    /// Task.Delay on this provider, so every timer it creates lands here.
+    /// </summary>
+    private sealed class ManualTimeProvider : TimeProvider
     {
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        gateRef.Current = tcs;
-        var winner = await Task.WhenAny(tcs.Task, Task.Delay(timeout));
-        Assert.True(winner == tcs.Task, "Timed out waiting for a poll cycle pass");
-    }
+        private readonly object _gate = new();
+        private readonly List<ManualTimer> _pending = new();
+        private readonly SemaphoreSlim _created = new(0);
+        private int _fired;
 
-    private sealed class GateRef { public TaskCompletionSource<bool>? Current; }
+        public int Fired => Volatile.Read(ref _fired);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer(this, callback, state);
+            lock (_gate) _pending.Add(timer);
+            _created.Release();
+            return timer;
+        }
+
+        public async Task TimerCreatedAsync()
+            => Assert.True(await _created.WaitAsync(Patience), "the scheduler never started waiting on a timer");
+
+        /// <summary>Fires every timer that is still pending.</summary>
+        public void Fire()
+        {
+            List<ManualTimer> due;
+            lock (_gate)
+            {
+                due = _pending.ToList();
+                _pending.Clear();
+            }
+
+            foreach (var timer in due)
+            {
+                Interlocked.Increment(ref _fired);
+                timer.Invoke();
+            }
+        }
+
+        private void Remove(ManualTimer timer)
+        {
+            lock (_gate) _pending.Remove(timer);
+        }
+
+        private sealed class ManualTimer(ManualTimeProvider owner, TimerCallback callback, object? state) : ITimer
+        {
+            public void Invoke() => callback(state);
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => true;
+
+            public void Dispose() => owner.Remove(this);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
 
     private sealed class StaticOptionsMonitor<T> : IOptionsMonitor<T>
     {
         private T _value;
         public StaticOptionsMonitor(T value) { _value = value; }
-        public T CurrentValue => _value;
+        public Action? OnNextRead;
+
+        public T CurrentValue
+        {
+            get
+            {
+                Interlocked.Exchange(ref OnNextRead, null)?.Invoke();
+                return _value;
+            }
+        }
         public T Get(string? name) => _value;
         public void Set(T value) => _value = value;
         public IDisposable OnChange(Action<T, string?> listener) => new Noop();

@@ -133,7 +133,7 @@ public class EngineFeedbackResumeTransitionTests
         await h.Engine.SignalNodeResultAsync(h.RunId, Guid.NewGuid(),
             new NodeSignal(ExternalActionResultType.Success, Output: "user-text"));
 
-        await Task.Delay(200);
+        await h.WaitUntilIdleAsync();
         Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<string>(), RemoteWorkItemStatus.Running,

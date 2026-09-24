@@ -293,9 +293,9 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     /// "Collection was modified", which here would surface as a bare 500 on a page
     /// that happened to be loading when someone restarted a service.
     /// <para>
-    /// A stress test can only ever fail to reproduce a race, never falsely report
-    /// one, so this is a guard rather than a proof: it fails reliably against an
-    /// in-place mutated list and cannot fail against the copy-on-write one.
+    /// So a reader that took the process list before a restart must be left holding
+    /// exactly what it took. The list is held the way a resolve in flight holds it,
+    /// then one service is stopped and started again under it.
     /// </para>
     /// </summary>
     [Fact]
@@ -306,30 +306,21 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         await service.StartAsync(_worktree);
         var workItems = WorkItemsPointingAtThisWorktree();
 
-        using var done = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var resolutions = 0;
+        var runtimes = (System.Collections.IDictionary)typeof(WorktreePreviewService)
+            .GetField("_runtimes", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(service)!;
+        var runtime = Assert.Single(runtimes.Values.Cast<object>());
+        var held = (System.Collections.IEnumerable)runtime.GetType().GetProperty("Processes")!.GetValue(runtime)!;
+        var before = held.Cast<object>().ToArray();
 
-        var reader = Task.Run(async () =>
-        {
-            while (!done.IsCancellationRequested)
-            {
-                // Both forms: one filters the collection, the other scans it.
-                await service.ResolvePreviewTargetAsync("wi-7", workItems);
-                await service.ResolvePreviewTargetAsync("wi-7-api", workItems);
-                Interlocked.Increment(ref resolutions);
-            }
-        });
+        await service.StopServiceAsync(_worktree, "api");
+        await service.StartServiceAsync(_worktree, "api");
 
-        for (var i = 0; i < 6 && !done.IsCancellationRequested; i++)
-        {
-            await service.StopServiceAsync(_worktree, "api");
-            await service.StartServiceAsync(_worktree, "api");
-        }
+        Assert.Equal(before, held.Cast<object>().ToArray());
 
-        done.Cancel();
-        await reader; // An unhandled enumeration failure surfaces here.
-
-        Assert.True(resolutions > 0, "the reader should have resolved at least once");
+        // Both forms: one filters the collection, the other scans it.
+        Assert.Equal(PreviewTargetOutcome.Resolved, (await service.ResolvePreviewTargetAsync("wi-7", workItems)).Outcome);
+        Assert.Equal(PreviewTargetOutcome.Resolved, (await service.ResolvePreviewTargetAsync("wi-7-api", workItems)).Outcome);
     }
 
     private static int FindFreePort()

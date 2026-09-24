@@ -54,7 +54,7 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     [Fact]
     public void Aborting_a_call_rejects_it_and_tells_the_server()
     {
-        var (result, _) = Run(new JsonObject { ["tool"] = "hang", ["abortAfterMs"] = 200 });
+        var (result, _) = Run(new JsonObject { ["tool"] = "hang", ["abortOnCall"] = true });
 
         Assert.Contains("aborted", (string?)result["error"]);
         Assert.True((bool)result["serverSawCancel"]!, "the server was not sent notifications/cancelled");
@@ -63,7 +63,13 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     [Fact]
     public void A_call_the_server_never_answers_times_out_and_tells_the_server()
     {
-        var (result, _) = Run(new JsonObject { ["tool"] = "hang", ["callTimeoutMs"] = 300 });
+        var (result, _) = Run(new JsonObject
+        {
+            ["tool"] = "hang",
+            ["callTimeoutMs"] = 600000,
+            ["holdTimerMs"] = 600000,
+            ["timeoutAt"] = "tools/call",
+        });
 
         Assert.Contains("timed out", (string?)result["error"]);
         Assert.True((bool)result["serverSawCancel"]!, "the server was not sent notifications/cancelled");
@@ -127,11 +133,19 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
     [Fact]
     public void A_stalled_server_holds_up_pis_start_for_ten_seconds_at_most_by_default()
     {
-        var (result, stderr) = Run(new JsonObject { ["tool"] = "none", ["serverMode"] = "stall" });
+        // The default is held rather than waited out: the one timer startup arms is
+        // ten seconds long, nothing ends startup before it fires, and firing it does.
+        var (result, stderr) = Run(new JsonObject
+        {
+            ["tool"] = "none",
+            ["serverMode"] = "stall",
+            ["holdTimerMs"] = 10000,
+            ["timeoutAt"] = "initialize",
+        });
 
         Assert.Empty(result["registered"]!.AsArray());
         Assert.Contains("no reply within 10000ms", stderr);
-        Assert.InRange((double)result["startupMs"]!, 9000, 15000);
+        Assert.False((bool)result["startupEndedBeforeTimeout"]!, "startup gave up on the stalled server before its timeout fired");
     }
 
     private (JsonObject Result, string Stderr) Run(JsonObject spec)
@@ -173,7 +187,35 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
 
         const [, , serverScript, logFile, resultFile, specJson] = process.argv;
         const spec = JSON.parse(specJson);
-        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const realSetTimeout = globalThis.setTimeout;
+        const sleep = (ms) => new Promise((r) => realSetTimeout(r, ms));
+
+        // A timer of the length the spec names is held instead of run, and fired
+        // once the server is where that timeout is meant to find it: the bridge's
+        // timeouts are then exercised without waiting them out.
+        const held = [];
+        globalThis.setTimeout = (callback, ms, ...args) => {
+          if (spec.holdTimerMs === undefined || ms !== spec.holdTimerMs) return realSetTimeout(callback, ms, ...args);
+          const handle = realSetTimeout(() => {}, 0x7fffffff);
+          handle.unref();
+          held.push(() => { clearTimeout(handle); callback(...args); });
+          return handle;
+        };
+        const fireHeldTimer = () => {
+          if (held.length !== 1) throw new Error(`expected one ${spec.holdTimerMs}ms timer, saw ${held.length}`);
+          held.shift()();
+        };
+
+        // The server logs every message as it reads it, so this returns once it has
+        // one; the bound only fails a server that never gets it.
+        const log = () => (existsSync(logFile) ? readFileSync(logFile, "utf8") : "");
+        const serverHasRead = async (method) => {
+          for (let i = 0; i < 500; i++) {
+            if (log().includes(`"method":"${method}"`)) return;
+            await sleep(20);
+          }
+          throw new Error(`the server never read ${method}`);
+        };
 
         const registered = [];
         const shutdownHandlers = [];
@@ -201,18 +243,25 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         }
         const formatSize = (bytes) => `${bytes}B`;
 
-        const started = Date.now();
-        await registerIldMcpTools(pi, {
+        let startupEnded = false;
+        const registering = registerIldMcpTools(pi, {
           command: "node",
           args: [serverScript, logFile, spec.serverMode ?? "normal", String(spec.pad ?? 0)],
           toolPrefix: "ild_",
           truncate: { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES },
           startupTimeoutMs: spec.startupTimeoutMs,
           callTimeoutMs: spec.callTimeoutMs,
-        });
+        }).finally(() => { startupEnded = true; });
+        let startupEndedBeforeTimeout = null;
+        if (spec.timeoutAt === "initialize") {
+          await serverHasRead("initialize");
+          startupEndedBeforeTimeout = startupEnded;
+          fireHeldTimer();
+        }
+        await registering;
         const result = {
           registered: registered.map((t) => t.name),
-          startupMs: Date.now() - started,
+          startupEndedBeforeTimeout,
           content: null,
           error: null,
           serverSawCancel: false,
@@ -221,11 +270,19 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         const tool = registered.find((t) => t.name === `ild_${spec.tool}`);
         if (tool) {
           const controller = new AbortController();
-          if (spec.abortAfterMs !== undefined) setTimeout(() => controller.abort(), spec.abortAfterMs);
-          try { result.content = (await tool.execute("call-0", {}, controller.signal, () => {}, {})).content; }
-          catch (err) { result.error = String(err?.message ?? err); }
+          // Settled into a value at once, so a rejection while the server is still
+          // being watched is never an unhandled one.
+          const calling = tool.execute("call-0", {}, controller.signal, () => {}, {})
+            .then((out) => ({ out }), (err) => ({ err }));
+          if (spec.abortOnCall || spec.timeoutAt === "tools/call") {
+            await serverHasRead("tools/call");
+            if (spec.abortOnCall) controller.abort();
+            else fireHeldTimer();
+          }
+          const { out, err } = await calling;
+          if (out) result.content = out.content;
+          else result.error = String(err?.message ?? err);
 
-          const log = () => (existsSync(logFile) ? readFileSync(logFile, "utf8") : "");
           for (let i = 0; spec.tool === "hang" && i < 100 && !result.serverSawCancel; i++) {
             result.serverSawCancel = log().includes("notifications/cancelled");
             if (!result.serverSawCancel) await sleep(50);

@@ -74,6 +74,9 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
         _relay = new EgressRelay(policy, log, logger);
     }
 
+    /// <summary>The accept call on a listening socket; the test seam for a client that drops mid-handshake.</summary>
+    internal Func<TcpListener, CancellationToken, ValueTask<TcpClient>> AcceptClient { get; set; } = static (s, ct) => s.AcceptTcpClientAsync(ct);
+
     public int OpenRelayCount => _relay.OpenCount;
 
     public string? ListenErrorFor(Guid forwardId)
@@ -132,7 +135,7 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
     /// everything declared is now serving, which is what decides how soon this
     /// runs again unprompted.
     /// </summary>
-    private async Task<bool> ReconcileAsync(CancellationToken ct)
+    internal async Task<bool> ReconcileAsync(CancellationToken ct)
     {
         await _reconciling.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -267,7 +270,7 @@ public sealed class EgressForwarder : BackgroundService, IEgressForwarderState
             TcpClient client;
             try
             {
-                client = await listener.Socket.AcceptTcpClientAsync(token).ConfigureAwait(false);
+                client = await AcceptClient(listener.Socket, token).ConfigureAwait(false);
             }
             catch (SocketException ex) when (IsAbandonedHandshake(ex.SocketErrorCode))
             {
