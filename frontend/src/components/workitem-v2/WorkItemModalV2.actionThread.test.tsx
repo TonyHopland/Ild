@@ -10,6 +10,7 @@ import {
   LoopRunStatus,
   LoopRunNodeStatus,
   LoopRunNode,
+  LoopRunVariableWrite,
   RemotePrSnapshot,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
@@ -104,7 +105,7 @@ function snapshot(overrides: Partial<RemotePrSnapshot> = {}): RemotePrSnapshot {
   };
 }
 
-function mockServices(run: LoopRun) {
+function mockServices(run: LoopRun, writes: LoopRunVariableWrite[] = []) {
   vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
     on: vi.fn(),
     off: vi.fn(),
@@ -118,6 +119,7 @@ function mockServices(run: LoopRun) {
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(run);
+  vi.spyOn(authServices.workItemService, "getVariableWrites").mockResolvedValue(writes);
   vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
     entries: [],
     nextCursor: 0,
@@ -204,17 +206,33 @@ describe("variables a turn set", () => {
       execution("exec-1", "Coder", "2026-09-24T09:00:00Z", "2026-09-24T09:10:00Z"),
       execution("exec-2", "Coder", "2026-09-24T09:20:00Z", "2026-09-24T09:30:00Z"),
     ],
-    variableWrites: [
-      { name: "summary", value: "draft", runNodeId: "exec-1", writtenAt: "2026-09-24T09:05:00Z" },
-      {
-        name: "handoff",
-        value: "for review",
-        runNodeId: "exec-1",
-        writtenAt: "2026-09-24T09:06:00Z",
-      },
-      { name: "summary", value: "final", runNodeId: "exec-2", writtenAt: "2026-09-24T09:25:00Z" },
-    ],
   });
+  const writes: LoopRunVariableWrite[] = [
+    {
+      runId: "run-1",
+      runNodeId: "exec-1",
+      name: "summary",
+      value: "draft",
+      previousValue: null,
+      writtenAt: "2026-09-24T09:05:00Z",
+    },
+    {
+      runId: "run-1",
+      runNodeId: "exec-1",
+      name: "handoff",
+      value: "for review",
+      previousValue: null,
+      writtenAt: "2026-09-24T09:06:00Z",
+    },
+    {
+      runId: "run-1",
+      runNodeId: "exec-2",
+      name: "summary",
+      value: "final",
+      previousValue: "draft",
+      writtenAt: "2026-09-24T09:25:00Z",
+    },
+  ];
   const conversation = [
     {
       role: "ai",
@@ -232,8 +250,24 @@ describe("variables a turn set", () => {
     },
   ];
 
+  test("the thread reads the history in one request, not one per run", async () => {
+    mockServices(run, writes);
+    vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([
+      run,
+      makeRun({ id: "run-0" }),
+      makeRun({ id: "run-older" }),
+    ]);
+    const getById = vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(run);
+    const history = vi.spyOn(authServices.workItemService, "getVariableWrites");
+
+    await openActionTab(makeWorkItem({ conversation }));
+
+    expect(history).toHaveBeenCalledTimes(1);
+    expect(new Set(getById.mock.calls.map(([id]) => id))).toEqual(new Set(["run-1"]));
+  });
+
   test("each variable a turn touched gets its own pill, labelled new or changed", async () => {
-    mockServices(run);
+    mockServices(run, writes);
     const panel = await openActionTab(makeWorkItem({ conversation }));
 
     const first = row(within(panel).getByText("first turn"));
@@ -245,7 +279,7 @@ describe("variables a turn set", () => {
   });
 
   test("a pill opens its own variable, showing the value that turn left", async () => {
-    mockServices(run);
+    mockServices(run, writes);
     const panel = await openActionTab(makeWorkItem({ conversation }));
     const first = row(within(panel).getByText("first turn"));
 

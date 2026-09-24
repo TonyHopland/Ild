@@ -241,7 +241,6 @@ public class LoopRunsControllerTests
             },
         });
         store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunVariable>());
-        store.Setup(s => s.GetVariableWritesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunVariableWrite>());
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
@@ -294,19 +293,6 @@ public class LoopRunsControllerTests
                 UpdatedAt = DateTime.UtcNow.AddMinutes(-1),
             },
         });
-        var writerNodeId = Guid.NewGuid();
-        store.Setup(s => s.GetVariableWritesAsync(runId)).ReturnsAsync(new[]
-        {
-            new LoopRunVariableWrite
-            {
-                Id = Guid.NewGuid(),
-                LoopRunId = runId,
-                RunNodeId = writerNodeId,
-                Name = "handoff",
-                Value = "draft",
-                WrittenAt = DateTime.UtcNow.AddMinutes(-5),
-            },
-        });
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
@@ -321,11 +307,6 @@ public class LoopRunsControllerTests
         var item = Assert.Single(variables.Cast<object>());
         Assert.Equal("handoff", item.GetType().GetProperty("name")!.GetValue(item));
         Assert.Equal("# Summary\n\nall done", item.GetType().GetProperty("value")!.GetValue(item));
-
-        var writes = (System.Collections.IEnumerable)payload.GetType().GetProperty("variableWrites")!.GetValue(payload)!;
-        var write = Assert.Single(writes.Cast<object>());
-        Assert.Equal("draft", write.GetType().GetProperty("value")!.GetValue(write));
-        Assert.Equal(writerNodeId, write.GetType().GetProperty("runNodeId")!.GetValue(write));
     }
 
     [Theory]
@@ -354,7 +335,6 @@ public class LoopRunsControllerTests
         store.Setup(s => s.GetSessionSnapshotsAsync(runId)).ReturnsAsync(Array.Empty<AdapterSessionSnapshot>());
         store.Setup(s => s.GetSessionBindingsAsync(runId)).ReturnsAsync(Array.Empty<LoopRunSessionBinding>());
         store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunVariable>());
-        store.Setup(s => s.GetVariableWritesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunVariableWrite>());
 
         var result = await BuildController(store, new Mock<IRunReclaimer>()).GetById(runId.ToString());
 

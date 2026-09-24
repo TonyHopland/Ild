@@ -225,6 +225,7 @@ public class LoopRunStore : ILoopRunStore
     {
         var existing = await _db.LoopRunVariables
             .FirstOrDefaultAsync(v => v.LoopRunId == runId && v.Name == name);
+        var previousValue = existing?.Value;
         if (existing is null)
         {
             _db.LoopRunVariables.Add(new LoopRunVariable
@@ -252,16 +253,17 @@ public class LoopRunStore : ILoopRunStore
             RunNodeId = runningNodeId,
             Name = name,
             Value = value,
+            PreviousValue = previousValue,
             WrittenAt = DateTime.UtcNow,
         });
 
         await _db.SaveChangesAsync();
     }
 
-    public async Task<IReadOnlyList<LoopRunVariableWrite>> GetVariableWritesAsync(Guid runId)
+    public async Task<IReadOnlyList<LoopRunVariableWrite>> GetVariableWritesForWorkItemAsync(string workItemId)
         => await _db.LoopRunVariableWrites
             .AsNoTracking()
-            .Where(w => w.LoopRunId == runId)
+            .Where(w => w.LoopRun.WorkItemId == workItemId)
             .OrderBy(w => w.WrittenAt)
             .ToListAsync();
 

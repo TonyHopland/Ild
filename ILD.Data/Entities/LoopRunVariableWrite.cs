@@ -28,6 +28,14 @@ public class LoopRunVariableWrite
     [MaxLength(8192)]
     public string Value { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The value this write replaced, or null when the write created the
+    /// variable. Captured at the write rather than read off the previous history
+    /// row, which does not exist for a variable set before history was kept.
+    /// </summary>
+    [MaxLength(8192)]
+    public string? PreviousValue { get; set; }
+
     public DateTime WrittenAt { get; set; }
 
     [ForeignKey(nameof(LoopRunId))]

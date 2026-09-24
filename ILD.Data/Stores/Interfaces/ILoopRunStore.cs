@@ -125,8 +125,8 @@ public interface ILoopRunStore
     /// </summary>
     Task SetVariableAsync(Guid runId, string name, string value);
 
-    /// <summary>Every write to the run's variables, oldest first.</summary>
-    Task<IReadOnlyList<LoopRunVariableWrite>> GetVariableWritesAsync(Guid runId);
+    /// <summary>Every variable write across the work item's runs, oldest first.</summary>
+    Task<IReadOnlyList<LoopRunVariableWrite>> GetVariableWritesForWorkItemAsync(string workItemId);
     Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId);
     Task<LoopRunNode?> GetRunNodeByIdAsync(Guid runNodeId);
     Task CreateRunAsync(LoopRun run);

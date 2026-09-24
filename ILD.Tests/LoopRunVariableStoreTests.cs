@@ -136,9 +136,57 @@ public class LoopRunVariableStoreTests
         await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "first");
         await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "second");
 
-        var writes = await new LoopRunStore(db.Fresh()).GetVariableWritesAsync(run.Id);
+        var writes = await new LoopRunStore(db.Fresh()).GetVariableWritesForWorkItemAsync(run.WorkItemId);
 
         Assert.Equal(new[] { "first", "second" }, writes.Select(w => w.Value));
+    }
+
+    [Fact]
+    public async Task Each_write_records_the_value_it_replaced_and_none_when_it_created_the_variable()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "first");
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "second");
+
+        var writes = await new LoopRunStore(db.Fresh()).GetVariableWritesForWorkItemAsync(run.WorkItemId);
+
+        Assert.Equal(new string?[] { null, "first" }, writes.Select(w => w.PreviousValue));
+    }
+
+    [Fact]
+    public async Task A_variable_set_before_history_was_kept_is_recorded_as_changed_not_created()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+        db.Context.LoopRunVariables.Add(new LoopRunVariable { LoopRunId = run.Id, Name = "handoff", Value = "old" });
+        await db.Context.SaveChangesAsync();
+
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "new");
+
+        var write = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariableWritesForWorkItemAsync(run.WorkItemId));
+        Assert.Equal("old", write.PreviousValue);
+    }
+
+    [Fact]
+    public async Task The_history_covers_every_run_of_the_work_item_and_no_other()
+    {
+        using var db = new TestDb();
+        var first = await SeedRunAsync(db);
+        var retry = await SeedRunAsync(db);
+        retry.WorkItemId = first.WorkItemId;
+        var other = await SeedRunAsync(db);
+        await db.Context.SaveChangesAsync();
+        var store = new LoopRunStore(db.Fresh());
+
+        await store.SetVariableAsync(first.Id, "handoff", "from first");
+        await store.SetVariableAsync(retry.Id, "handoff", "from retry");
+        await store.SetVariableAsync(other.Id, "handoff", "elsewhere");
+
+        var writes = await new LoopRunStore(db.Fresh()).GetVariableWritesForWorkItemAsync(first.WorkItemId);
+
+        Assert.Equal(new[] { "from first", "from retry" }, writes.Select(w => w.Value));
     }
 
     [Fact]
@@ -151,7 +199,7 @@ public class LoopRunVariableStoreTests
 
         await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "value");
 
-        var write = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariableWritesAsync(run.Id));
+        var write = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariableWritesForWorkItemAsync(run.WorkItemId));
         Assert.Equal(running, write.RunNodeId);
     }
 
@@ -163,7 +211,7 @@ public class LoopRunVariableStoreTests
 
         await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "value");
 
-        var write = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariableWritesAsync(run.Id));
+        var write = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariableWritesForWorkItemAsync(run.WorkItemId));
         Assert.Null(write.RunNodeId);
     }
     [Fact]

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { LoopRun, WorkItem, WorkItemStatus } from "../../types";
-import { loopRunService } from "../../services/auth";
+import { LoopRunVariableWrite, WorkItem, WorkItemStatus } from "../../types";
+import { workItemService } from "../../services/auth";
 import { parseConversation } from "../../utils/workItemJson";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
@@ -146,28 +146,24 @@ function PrDetails({
 }
 
 /**
- * The run list omits variables, so each run's detail is fetched again whenever
- * the conversation grows — a new turn is the moment a new variable can appear.
+ * The item's variable history, re-read whenever the conversation grows — a new
+ * turn is the moment a new variable can appear.
  */
-function useRunDetails(runIds: string[], refreshKey: number): LoopRun[] {
-  const [details, setDetails] = useState<LoopRun[]>([]);
-  const key = runIds.join(",");
+function useVariableWrites(workItemId: string, refreshKey: number): LoopRunVariableWrite[] {
+  const [writes, setWrites] = useState<LoopRunVariableWrite[]>([]);
   useEffect(() => {
-    if (!key) {
-      setDetails([]);
-      return;
-    }
     let cancelled = false;
-    void Promise.all(key.split(",").map((id) => loopRunService.getById(id).catch(() => null))).then(
-      (runs) => {
-        if (!cancelled) setDetails(runs.filter((r): r is LoopRun => r !== null));
-      },
-    );
+    void workItemService
+      .getVariableWrites(workItemId)
+      .catch(() => [])
+      .then((w) => {
+        if (!cancelled) setWrites(w);
+      });
     return () => {
       cancelled = true;
     };
-  }, [key, refreshKey]);
-  return details;
+  }, [workItemId, refreshKey]);
+  return writes;
 }
 
 /**
@@ -187,10 +183,7 @@ export default function ActionThread({
   active: boolean;
 }) {
   const messages = parseConversation(workItem);
-  const runDetails = useRunDetails(
-    detail.runs.map((r) => r.id),
-    messages.length,
-  );
+  const variableWrites = useVariableWrites(workItem.id, messages.length);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const awaitingHuman =
@@ -233,7 +226,7 @@ export default function ActionThread({
     <div className="wiv2-thread" ref={threadRef}>
       {messages.map((m, i) => {
         const side: Side = m.role.toLowerCase() === "human" ? "human" : "ai";
-        const variables = variablesSetByTurn(m, runDetails);
+        const variables = variablesSetByTurn(m, variableWrites);
         return (
           <Bubble
             key={i}

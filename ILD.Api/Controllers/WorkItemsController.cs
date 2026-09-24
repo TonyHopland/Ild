@@ -674,6 +674,25 @@ public class WorkItemsController : ControllerBase
         return Ok(runs);
     }
 
+    /// <summary>
+    /// The item's loop-variable history in one response, so a view that ties
+    /// writes to conversation turns does not have to fetch every run's detail.
+    /// </summary>
+    [HttpGet("{id}/variable-writes")]
+    public async Task<IActionResult> GetVariableWrites(string id)
+    {
+        var writes = await _loopRunStore.GetVariableWritesForWorkItemAsync(id);
+        return Ok(writes.Select(w => new
+        {
+            runId = w.LoopRunId,
+            runNodeId = w.RunNodeId,
+            name = w.Name,
+            value = w.Value,
+            previousValue = w.PreviousValue,
+            writtenAt = w.WrittenAt,
+        }));
+    }
+
     [HttpPost("{id}/link-pr")]
     public async Task<IActionResult> LinkPr(string id, [FromBody] LinkPrRequest request)
     {
