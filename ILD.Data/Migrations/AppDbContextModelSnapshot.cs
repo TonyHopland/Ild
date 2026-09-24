@@ -688,9 +688,11 @@ namespace ILD.Data.Migrations
 
             modelBuilder.Entity("ILD.Data.Entities.LoopRunVariableWrite", b =>
                 {
-                    b.Property<Guid>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
                     b.Property<Guid>("LoopRunId")
                         .HasColumnType("uuid");
@@ -717,7 +719,7 @@ namespace ILD.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("LoopRunId", "WrittenAt");
+                    b.HasIndex("LoopRunId", "Name");
 
                     b.ToTable("LoopRunVariableWrites");
                 });

@@ -233,7 +233,7 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<LoopRunVariableWrite>(e =>
         {
-            e.HasIndex(w => new { w.LoopRunId, w.WrittenAt });
+            e.HasIndex(w => new { w.LoopRunId, w.Name });
         });
 
         modelBuilder.Entity<EventLog>(e =>

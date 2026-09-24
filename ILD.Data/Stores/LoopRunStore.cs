@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Runtime.ExceptionServices;
 using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -243,15 +244,46 @@ public class LoopRunStore : ILoopRunStore
                 .Select(v => v.Value)
                 .FirstOrDefaultAsync();
 
-            if (!await TryReplaceVariableAsync(runId, name, previousValue, value))
+            DbUpdateException? createFailure = null;
+            bool applied;
+            if (previousValue is not null)
+            {
+                applied = await _db.LoopRunVariables
+                    .Where(v => v.LoopRunId == runId && v.Name == name && v.Value == previousValue)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(v => v.Value, value)
+                        .SetProperty(v => v.UpdatedAt, DateTime.UtcNow)) == 1;
+            }
+            else
+            {
+                var created = new LoopRunVariable { LoopRunId = runId, Name = name, Value = value };
+                _db.LoopRunVariables.Add(created);
+                try
+                {
+                    await _db.SaveChangesAsync();
+                    applied = true;
+                }
+                catch (DbUpdateException ex)
+                {
+                    _db.Entry(created).State = EntityState.Detached;
+                    createFailure = ex;
+                    applied = false;
+                }
+            }
+
+            if (!applied)
             {
                 await tx.RollbackAsync();
+                // A create only loses to another write creating the same variable;
+                // if it still does not exist, the failure was something else.
+                if (createFailure is not null
+                    && !await _db.LoopRunVariables.AnyAsync(v => v.LoopRunId == runId && v.Name == name))
+                    ExceptionDispatchInfo.Throw(createFailure);
                 continue;
             }
 
             _db.LoopRunVariableWrites.Add(new LoopRunVariableWrite
             {
-                Id = Guid.NewGuid(),
                 LoopRunId = runId,
                 RunNodeId = runningNodeId,
                 Name = name,
@@ -268,38 +300,12 @@ public class LoopRunStore : ILoopRunStore
             $"Variable '{name}' kept changing underneath this write; giving up after 5 attempts.");
     }
 
-    private async Task<bool> TryReplaceVariableAsync(Guid runId, string name, string? expected, string value)
-    {
-        if (expected is not null)
-        {
-            return await _db.LoopRunVariables
-                .Where(v => v.LoopRunId == runId && v.Name == name && v.Value == expected)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(v => v.Value, value)
-                    .SetProperty(v => v.UpdatedAt, DateTime.UtcNow)) == 1;
-        }
-
-        var created = new LoopRunVariable { LoopRunId = runId, Name = name, Value = value };
-        _db.LoopRunVariables.Add(created);
-        try
-        {
-            await _db.SaveChangesAsync();
-            return true;
-        }
-        catch (DbUpdateException)
-        {
-            // Another write created it first; retry as a replace of its value.
-            _db.Entry(created).State = EntityState.Detached;
-            return false;
-        }
-    }
-
     public async Task<IReadOnlyList<TurnVariableChange>> GetTurnVariableChangesForWorkItemAsync(string workItemId)
     {
         var writes = await _db.LoopRunVariableWrites
             .AsNoTracking()
             .Where(w => w.LoopRun.WorkItemId == workItemId)
-            .OrderBy(w => w.WrittenAt)
+            .OrderBy(w => w.Id)
             .Select(w => new { w.LoopRunId, w.RunNodeId, w.Name, w.Value, w.PreviousValue })
             .ToListAsync();
 

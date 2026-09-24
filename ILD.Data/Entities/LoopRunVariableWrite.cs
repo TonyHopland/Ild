@@ -11,8 +11,13 @@ namespace ILD.Data.Entities;
 /// </summary>
 public class LoopRunVariableWrite
 {
+    /// <summary>
+    /// Database-assigned and increasing, so it is also the order of the writes:
+    /// timestamps can tie or step backwards with the clock.
+    /// </summary>
     [Key]
-    public Guid Id { get; set; }
+    [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public long Id { get; set; }
 
     [Required]
     [ForeignKey(nameof(LoopRun))]

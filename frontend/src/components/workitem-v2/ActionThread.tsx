@@ -192,11 +192,14 @@ export default function ActionThread({
   const turnVariables = useTurnVariables(workItem.id, messages.length);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
+  const savedScrollTop = useRef(0);
   const awaitingHuman =
     workItem.status === WorkItemStatus.HumanFeedback && !!workItem.humanFeedbackReason;
 
   // Stay on the newest entry while content loads in and grows beneath it
-  // (prompt, PR snapshot, live output), until the reader scrolls away.
+  // (prompt, PR snapshot, live output), until the reader scrolls away. Coming
+  // back to the tab returns to where the reader left it: the bottom if they
+  // were following it, otherwise the same place.
   useEffect(() => {
     const thread = threadRef.current;
     const scroller = thread?.closest<HTMLElement>(".wiv2-tabpanel");
@@ -207,9 +210,10 @@ export default function ActionThread({
     const onScroll = () => {
       pinnedToBottom.current =
         scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
+      savedScrollTop.current = scroller.scrollTop;
     };
-    pinnedToBottom.current = true;
-    toBottom();
+    if (pinnedToBottom.current) toBottom();
+    else scroller.scrollTop = savedScrollTop.current;
     scroller.addEventListener("scroll", onScroll);
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(toBottom) : null;
     ro?.observe(thread);

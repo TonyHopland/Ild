@@ -170,10 +170,21 @@ public class LoopRunVariableStoreTests
         Assert.Equal("old", write.PreviousValue);
     }
 
+    [Fact]
+    public async Task A_write_the_database_refuses_fails_with_its_own_error_not_as_a_race()
+    {
+        using var db = new TestDb();
+
+        // No such run: the insert breaks its foreign key. That is not another
+        // write creating the variable first, so it must not be retried as one.
+        await Assert.ThrowsAsync<DbUpdateException>(
+            () => new LoopRunStore(db.Fresh()).SetVariableAsync(Guid.NewGuid(), "handoff", "value"));
+    }
+
     private static async Task<List<LoopRunVariableWrite>> WritesAsync(TestDb db, string workItemId)
         => await db.Fresh().LoopRunVariableWrites
             .Where(w => w.LoopRun.WorkItemId == workItemId)
-            .OrderBy(w => w.WrittenAt)
+            .OrderBy(w => w.Id)
             .ToListAsync();
 
     /// <summary>Finishes whatever execution of the run is running and starts the next.</summary>
