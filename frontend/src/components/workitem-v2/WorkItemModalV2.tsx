@@ -3,25 +3,16 @@ import "./workitem-v2.css";
 import { WorkItem, WorkItemStatus } from "../../types";
 import { workItemService } from "../../services/auth";
 import useRenderedPrompt from "../../hooks/useRenderedPrompt";
-import { parseConversation } from "../../utils/workItemJson";
-import LiveStream from "../NodeTimeline/LiveStream";
 import ConfirmModal from "../ConfirmModal";
 import LoopRunTerminal from "../LoopRunTerminal";
 import { useWorkItemDetail } from "./useWorkItemDetail";
-import {
-  FeedbackBanner,
-  QueuedPrWrites,
-  ConversationPanel,
-  PreviewPanel,
-  MetaPanel,
-  DescriptionPanel,
-} from "./panels";
+import { PreviewPanel, MetaPanel, DescriptionPanel } from "./panels";
 import RunsPanel from "./RunsPanel";
-import HaltSteerControls from "./HaltSteerControls";
+import ActionThread from "./ActionThread";
 import EditPanel from "./EditPanel";
 import FilesPanel from "./FilesPanel";
 
-type TabId = "overview" | "action" | "runs" | "conversation" | "files" | "preview" | "terminal";
+type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal";
 
 /**
  * An item is awaiting human action when it is parked in HumanFeedback with a
@@ -43,10 +34,10 @@ interface WorkItemModalV2Props {
 
 /**
  * Near-fullscreen work item detail dialog: a horizontal tab bar (Overview,
- * Action, Runs, Conversation, Files, Preview) over the full width, with run
- * history shown inline rather than on a separate page. The Action tab holds the
- * live progress stream, the halt-and-steer control beneath it, and the
- * human-feedback pane — all space-hungry — and flags itself with an indicator
+ * Action, Runs, Files, Preview) over the full width, with run
+ * history shown inline rather than on a separate page. The Action tab is one chat
+ * thread: the conversation, the live progress stream in the latest AI bubble,
+ * and the human-feedback pane in the latest human bubble. It flags itself with an indicator
  * while the item waits on a human. An item opened while waiting on a human lands
  * directly on the Action tab so the pending prompt is immediately visible. With a null
  * workItem the dialog drops the tabs and shows the creation form instead, so a
@@ -218,8 +209,6 @@ export default function WorkItemModalV2({
     );
   }
 
-  const conversationCount = parseConversation(workItem).length;
-
   // "Action required" mirrors the FeedbackBanner's render condition: the item is
   // waiting on a human. The Action tab flags this with the same ● indicator the
   // Preview tab uses for a running preview, and the dialog opens onto it.
@@ -229,10 +218,6 @@ export default function WorkItemModalV2({
     { id: "overview", label: "Overview" },
     { id: "action", label: `Action${actionRequired ? " ●" : ""}` },
     { id: "runs", label: `Runs${detail.runs.length > 0 ? ` (${detail.runs.length})` : ""}` },
-    {
-      id: "conversation",
-      label: `Conversation${conversationCount > 0 ? ` (${conversationCount})` : ""}`,
-    },
     { id: "files", label: "Files" },
     { id: "preview", label: `Preview${detail.preview?.state === "running" ? " ●" : ""}` },
     ...(canUseTerminal
@@ -290,23 +275,12 @@ export default function WorkItemModalV2({
         className="wiv2-tabpanel"
         hidden={activeTab !== "action"}
       >
-        <div className={`wiv2-action${actionRequired ? " wiv2-action-feedback" : ""}`}>
-          {detail.shouldStream && <LiveStream text={detail.progressText} />}
-          <HaltSteerControls
-            run={detail.currentRun}
-            workItemStatus={workItem.status}
-            onHalt={detail.handleHalt}
-            onResumeSteer={detail.handleResumeSteer}
-            onCleanupDone={detail.handleCleanupDone}
-            onCleanupBacklog={detail.handleCleanupBacklog}
-            showAbandon={false}
-          />
-          <QueuedPrWrites workItem={workItem} detail={detail} />
-          <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
-          {!detail.shouldStream && !actionRequired && (
-            <div className="wiv2-empty">No action required.</div>
-          )}
-        </div>
+        <ActionThread
+          workItem={workItem}
+          detail={detail}
+          feedbackPrompt={feedbackPrompt}
+          active={activeTab === "action"}
+        />
       </section>
       <section
         role="tabpanel"
@@ -326,15 +300,6 @@ export default function WorkItemModalV2({
           onCleanupBacklog={detail.handleCleanupBacklog}
           onReclaimRun={detail.handleReclaimRun}
         />
-      </section>
-      <section
-        role="tabpanel"
-        id="wiv2-panel-conversation"
-        aria-labelledby="wiv2-tab-conversation"
-        className="wiv2-tabpanel"
-        hidden={activeTab !== "conversation"}
-      >
-        <ConversationPanel workItem={workItem} />
       </section>
       <section
         role="tabpanel"

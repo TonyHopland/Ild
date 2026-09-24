@@ -1,3 +1,4 @@
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 
@@ -120,9 +121,16 @@ public interface ILoopRunStore
     /// <summary>
     /// Create or overwrite a single loop variable by (runId, name), touching only
     /// that row so concurrent writes to other variables / control-plane columns
-    /// are never clobbered.
+    /// are never clobbered. Also appends the write to the run's variable history,
+    /// attributed to whichever node execution is running at the time.
     /// </summary>
     Task SetVariableAsync(Guid runId, string name, string value);
+
+    /// <summary>
+    /// What each node execution of the work item's runs did to each variable it
+    /// wrote: one entry per execution and variable, not per write.
+    /// </summary>
+    Task<IReadOnlyList<TurnVariableChange>> GetTurnVariableChangesForWorkItemAsync(string workItemId);
     Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId);
     Task<LoopRunNode?> GetRunNodeByIdAsync(Guid runNodeId);
     Task CreateRunAsync(LoopRun run);

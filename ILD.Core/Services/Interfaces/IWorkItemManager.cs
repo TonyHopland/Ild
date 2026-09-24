@@ -62,6 +62,7 @@ public interface IWorkItemManager
     /// <param name="reason">Content stored in the server conversation thread.</param>
     /// <param name="humanFeedbackReason">Short label stored on LoopRun for frontend UI routing. Falls back to <paramref name="reason"/> when null.</param>
     /// <param name="name">Optional author display name for the conversation entry (e.g. the originating node's title).</param>
+    /// <param name="runNodeId">The node execution the conversation entry comes from.</param>
     Task<bool> TransitionAsync(
         string workItemId,
         RemoteWorkItemStatus targetStatus,
@@ -69,14 +70,16 @@ public interface IWorkItemManager
         string? actions = null,
         Guid? currentLoopRunId = null,
         string? humanFeedbackReason = null,
-        string? name = null);
+        string? name = null,
+        Guid? runNodeId = null);
 
     /// <summary>
     /// Append an AI-authored conversation turn (e.g. an AI node's output) to the
     /// work item's thread without changing its status. <paramref name="name"/> is
-    /// the author label shown in the UI, typically the node's title.
+    /// the author label shown in the UI, typically the node's title;
+    /// <paramref name="runNodeId"/> is the node execution that produced it.
     /// </summary>
-    Task<bool> AppendAiTurnAsync(string workItemId, string name, string content);
+    Task<bool> AppendAiTurnAsync(string workItemId, string name, string content, Guid? runNodeId = null);
     Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId);
     Task<bool> RemoveDependencyAsync(string workItemId, string dependsOnWorkItemId);
     Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId);

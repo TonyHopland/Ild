@@ -677,7 +677,8 @@ public class WorkItemManager : IWorkItemManager
         string? actions = null,
         Guid? currentLoopRunId = null,
         string? humanFeedbackReason = null,
-        string? name = null)
+        string? name = null,
+        Guid? runNodeId = null)
     {
         var prevWi = await GetWorkItemAsync(workItemId);
         if (prevWi == null) return false;
@@ -690,6 +691,7 @@ public class WorkItemManager : IWorkItemManager
             Reason = reason,
             Actions = actions,
             Name = name,
+            RunNodeId = runNodeId,
         });
 
         if (!resp.Success)
@@ -747,12 +749,12 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<bool> AppendAiTurnAsync(string workItemId, string name, string content)
+    public async Task<bool> AppendAiTurnAsync(string workItemId, string name, string content, Guid? runNodeId = null)
     {
         try
         {
             var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            return await _server.AppendConversationAsync(opts, workItemId, "ai", content, name);
+            return await _server.AppendConversationAsync(opts, workItemId, "ai", content, name, runNodeId);
         }
         catch (InvalidOperationException) { return false; /* No remote — local only. */ }
     }

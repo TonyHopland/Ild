@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The work item's Action tab is now one conversation: your and the AI's messages in order, each showing the variables it set, followed by the live run and the pull request.**
+
 ### Fixed
 
 - **Status changes and scheduler setting changes are picked up immediately, instead of occasionally waiting for the next poll.**

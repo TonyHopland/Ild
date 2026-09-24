@@ -42,12 +42,14 @@ describe("parseConversation", () => {
       content: "Need approval",
       timestamp: "2025-01-01T00:00:00Z",
       name: null,
+      runNodeId: null,
     });
     expect(result[1]).toEqual({
       role: "human",
       content: "Approved",
       timestamp: "2025-01-01T01:00:00Z",
       name: null,
+      runNodeId: null,
     });
   });
 
@@ -62,6 +64,19 @@ describe("parseConversation", () => {
     const result = parseConversation(workItem);
     expect(result[0].name).toBe("AI Coder");
     expect(result[1].name).toBeNull();
+  });
+
+  test("carries the producing node execution through, defaulting to null", () => {
+    const workItem = {
+      conversation: [
+        { role: "ai", content: "done", timestamp: "2025-01-01T00:00:00Z", runNodeId: "exec-1" },
+        { role: "human", content: "ok", timestamp: "2025-01-01T01:00:00Z" },
+      ],
+    } as unknown as WorkItem;
+
+    const result = parseConversation(workItem);
+    expect(result[0].runNodeId).toBe("exec-1");
+    expect(result[1].runNodeId).toBeNull();
   });
 
   test("returns empty array when conversation is undefined", () => {
@@ -99,6 +114,7 @@ describe("parseConversation", () => {
       content: "Looks good",
       timestamp: "2025-01-01T01:00:00Z",
       name: null,
+      runNodeId: null,
     });
   });
 

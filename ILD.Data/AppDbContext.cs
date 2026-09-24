@@ -25,6 +25,7 @@ public class AppDbContext : DbContext
     public DbSet<AdapterSessionSnapshot> AdapterSessionSnapshots => Set<AdapterSessionSnapshot>();
     public DbSet<LoopRunSessionBinding> LoopRunSessionBindings => Set<LoopRunSessionBinding>();
     public DbSet<LoopRunVariable> LoopRunVariables => Set<LoopRunVariable>();
+    public DbSet<LoopRunVariableWrite> LoopRunVariableWrites => Set<LoopRunVariableWrite>();
     public DbSet<EventLog> EventLogs => Set<EventLog>();
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
     public DbSet<User> Users => Set<User>();
@@ -230,6 +231,11 @@ public class AppDbContext : DbContext
             e.HasKey(v => new { v.LoopRunId, v.Name });
         });
 
+        modelBuilder.Entity<LoopRunVariableWrite>(e =>
+        {
+            e.HasIndex(w => new { w.LoopRunId, w.Name });
+        });
+
         modelBuilder.Entity<EventLog>(e =>
         {
             e.HasIndex(e => new { e.LoopRunId, e.Sequence });
@@ -421,6 +427,12 @@ public class AppDbContext : DbContext
             .HasOne(v => v.LoopRun)
             .WithMany(lr => lr.Variables)
             .HasForeignKey(v => v.LoopRunId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<LoopRunVariableWrite>()
+            .HasOne(w => w.LoopRun)
+            .WithMany()
+            .HasForeignKey(w => w.LoopRunId)
             .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<UserSession>()

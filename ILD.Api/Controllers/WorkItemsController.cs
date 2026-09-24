@@ -674,6 +674,26 @@ public class WorkItemsController : ControllerBase
         return Ok(runs);
     }
 
+    /// <summary>
+    /// What each turn of the item's runs did to the variables it wrote, in one
+    /// response: an entry per execution and variable rather than every raw
+    /// write, so its size follows the conversation instead of the write count.
+    /// </summary>
+    [HttpGet("{id}/turn-variables")]
+    public async Task<IActionResult> GetTurnVariables(string id)
+    {
+        var changes = await _loopRunStore.GetTurnVariableChangesForWorkItemAsync(id);
+        return Ok(changes.Select(c => new
+        {
+            runId = c.RunId,
+            runNodeId = c.RunNodeId,
+            name = c.Name,
+            value = c.Value,
+            change = c.Created ? "created" : "changed",
+            changedLater = c.ChangedLater,
+        }));
+    }
+
     [HttpPost("{id}/link-pr")]
     public async Task<IActionResult> LinkPr(string id, [FromBody] LinkPrRequest request)
     {

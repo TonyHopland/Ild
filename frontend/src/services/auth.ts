@@ -6,6 +6,7 @@ import {
   AttachmentLimits,
   LoopTemplate,
   LoopRun,
+  TurnVariableChange,
   Repository,
   RemoteProvider,
   RemoteProviderTypeOption,
@@ -195,6 +196,10 @@ export const workItemService = {
 
   getRuns: async (id: string, opts?: { skip?: number; take?: number }): Promise<LoopRun[]> => {
     return api.get<LoopRun[]>(`/workitems/${id}/runs${pageQuery(opts)}`);
+  },
+
+  getTurnVariables: async (id: string): Promise<TurnVariableChange[]> => {
+    return api.get<TurnVariableChange[]>(`/workitems/${id}/turn-variables`);
   },
 
   linkPr: async (id: string, prUrl: string): Promise<void> => {

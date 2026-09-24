@@ -49,6 +49,8 @@ export interface ConversationMessage {
   timestamp: string;
   /** Author display name (e.g. the node's title). Falls back to role when absent. */
   name?: string | null;
+  /** The node execution that produced the entry; null for human replies and older entries. */
+  runNodeId?: string | null;
 }
 
 export interface WorkItem {
@@ -440,6 +442,20 @@ export interface LoopRunVariable {
   value: string;
   createdAt: string;
   updatedAt: string | null;
+}
+
+/**
+ * What one node execution did to one loop variable: the value it left, whether
+ * it created or changed it, and whether a later write in the same run — by any
+ * execution or none — overwrote that value.
+ */
+export interface TurnVariableChange {
+  runId: string;
+  runNodeId: string;
+  name: string;
+  value: string;
+  change: "created" | "changed";
+  changedLater: boolean;
 }
 
 export interface LoopRun {

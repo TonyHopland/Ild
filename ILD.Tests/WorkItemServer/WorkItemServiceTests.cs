@@ -480,6 +480,27 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Conversation_entries_keep_the_node_execution_they_came_from()
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var coderRun = Guid.NewGuid();
+        var reviewRun = Guid.NewGuid();
+
+        await _svc.AppendConversationAsync(dto.Id, "ai", "Implemented the feature", "AI Coder", coderRun);
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest
+        {
+            TargetStatus = WorkItemStatus.HumanFeedback,
+            Reason = "Need approval",
+            Name = "Code Review",
+            RunNodeId = reviewRun,
+        });
+        await _svc.AppendConversationAsync(dto.Id, "ai", "No link", "AI Coder");
+
+        var fresh = await _svc.GetAsync(dto.Id);
+        Assert.Equal(new Guid?[] { coderRun, reviewRun, null }, fresh!.Conversation.Select(m => m.RunNodeId));
+    }
+
+    [Fact]
     public async Task AppendConversation_returns_false_for_missing_work_item()
     {
         var ok = await _svc.AppendConversationAsync("does-not-exist", "ai", "hi", "AI Coder");

@@ -280,7 +280,7 @@ public class AgentController : ControllerBase
             // The conversation is the largest field and rarely needed for
             // planning, so it is gated behind an explicit flag (ADR scope note).
             conversation = includeConversation
-                ? wi.Conversation.Select(m => new { role = m.Role, content = m.Content, timestamp = m.Timestamp, name = m.Name })
+                ? wi.Conversation.Select(m => new { role = m.Role, content = m.Content, timestamp = m.Timestamp, name = m.Name, runNodeId = m.RunNodeId })
                 : null,
         });
     }

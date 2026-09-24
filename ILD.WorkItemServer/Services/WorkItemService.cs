@@ -25,7 +25,7 @@ public interface IWorkItemService
     /// Used by the engine to record AI-node turns (coder ↔ reviewer ↔ human)
     /// as they happen, so the dialogue can be followed in the UI.
     /// </summary>
-    Task<bool> AppendConversationAsync(string id, string role, string content, string? name, CancellationToken ct = default);
+    Task<bool> AppendConversationAsync(string id, string role, string content, string? name, Guid? runNodeId = null, CancellationToken ct = default);
 
     /// <summary>
     /// Record a pull request against a work item, keyed by URL: a URL the item
@@ -234,7 +234,8 @@ public sealed class WorkItemService : IWorkItemService
                 Role: "ai",
                 Content: req.Reason,
                 Timestamp: now,
-                Name: req.Name));
+                Name: req.Name,
+                RunNodeId: req.RunNodeId));
             WorkItemMapper.WriteConversation(w, msgs);
         }
 
@@ -433,13 +434,13 @@ public sealed class WorkItemService : IWorkItemService
         return true;
     }
 
-    public async Task<bool> AppendConversationAsync(string id, string role, string content, string? name, CancellationToken ct = default)
+    public async Task<bool> AppendConversationAsync(string id, string role, string content, string? name, Guid? runNodeId = null, CancellationToken ct = default)
     {
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null) return false;
         var now = _clock.GetUtcNow().UtcDateTime;
         var msgs = WorkItemMapper.ReadConversation(w);
-        msgs.Add(new ConversationMessage(role, content, now, name));
+        msgs.Add(new ConversationMessage(role, content, now, name, runNodeId));
         WorkItemMapper.WriteConversation(w, msgs);
         // Status is intentionally left untouched — an AI turn is dialogue, not
         // a lifecycle transition.

@@ -10,7 +10,7 @@ import {
 } from "../../types";
 import { loopRunService, repositoryService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
-import { makeLoopTagMatcher, parseConversation, parseTags } from "../../utils/workItemJson";
+import { makeLoopTagMatcher, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
@@ -144,7 +144,6 @@ export function FeedbackBanner({
 
   const isInput = workItem.humanFeedbackReason === "Human Input Needed";
   const isPr = workItem.humanFeedbackReason === "PR Awaiting Merge";
-  const prSnapshot = isPr ? (detail.currentRun?.prSnapshot ?? null) : null;
 
   if (!isInput && !isPr) {
     return (
@@ -157,27 +156,12 @@ export function FeedbackBanner({
 
   return (
     <div className="wiv2-feedback">
-      <div className="wiv2-feedback-title">
-        {isPr ? "PR Feedback" : "Human Feedback"}
-        {isPr && workItem.prUrl && (
-          <a
-            className="feedback-pr-link"
-            href={workItem.prUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Open PR
-          </a>
-        )}
-      </div>
-      {(prSnapshot || prompt) && (
+      <div className="wiv2-feedback-title">{isPr ? "PR Feedback" : "Human Feedback"}</div>
+      {prompt && (
         <div className="feedback-scroll">
-          {prSnapshot && <PrView snapshot={prSnapshot} />}
-          {prompt && (
-            <div className="markdown-container">
-              <MarkdownRenderer content={prompt} />
-            </div>
-          )}
+          <div className="markdown-container">
+            <MarkdownRenderer content={prompt} />
+          </div>
         </div>
       )}
       <textarea
@@ -253,31 +237,6 @@ export function PrView({ snapshot }: { snapshot: RemotePrSnapshot }) {
           ))
         )}
       </div>
-    </div>
-  );
-}
-
-/** Full-height conversation thread, newest message first. */
-export function ConversationPanel({ workItem }: { workItem: WorkItem }) {
-  const messages = parseConversation(workItem);
-  if (messages.length === 0) {
-    return <div className="wiv2-empty">No conversation yet.</div>;
-  }
-  return (
-    <div className="conversation-thread wiv2-conversation">
-      {[...messages].reverse().map((m, i) => (
-        <div key={i} className={`conversation-message conversation-${m.role.toLowerCase()}`}>
-          <div className="conversation-message-header">
-            <strong className="conversation-message-role">
-              {m.name ?? (m.role.toLowerCase() === "human" ? "You" : "AI")}
-            </strong>
-            <span>{new Date(m.timestamp).toLocaleString()}</span>
-          </div>
-          <div className="conversation-message-content">
-            <MarkdownRenderer content={m.content} />
-          </div>
-        </div>
-      ))}
     </div>
   );
 }

@@ -290,6 +290,9 @@ public sealed class LoopEngine : ILoopEngine
         var nodes = await templateStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
         var node = nodes.FirstOrDefault(n => n.Id == run.CurrentNodeId.Value);
         if (node is null || node.NodeType != NodeType.AI) return;
+        // Read before the cancel below, which turns the running execution Interrupted.
+        var haltedRunNode = await loopRunStore.GetRunNodeAsync(run.Id, node.Id);
+        var haltedRunNodeId = haltedRunNode?.Status == LoopRunNodeStatus.Running ? haltedRunNode.Id : (Guid?)null;
 
         var old = run.Status;
         run.Status = LoopRunStatus.WaitingHuman;
@@ -309,7 +312,7 @@ public sealed class LoopEngine : ILoopEngine
         await _notifier.HaltedAsync(runId);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: HumanFeedbackReasons.RunHalted, humanFeedbackReason: HumanFeedbackReasons.RunHalted,
-            currentLoopRunId: run.Id, name: node.Label);
+            currentLoopRunId: run.Id, name: node.Label, runNodeId: haltedRunNodeId);
     }
 
     public async Task DrainForShutdownAsync(TimeSpan timeout)
@@ -812,7 +815,7 @@ public sealed class LoopEngine : ILoopEngine
                         // Authored by the node's title; best-effort so a conversation
                         // write never blocks or breaks the run.
                         if (node.NodeType == NodeType.AI && !string.IsNullOrWhiteSpace(ok.Output))
-                            await TrySafe(() => workItems.AppendAiTurnAsync(run.WorkItemId, node.Label, ok.Output!));
+                            await TrySafe(() => workItems.AppendAiTurnAsync(run.WorkItemId, node.Label, ok.Output!, runNodeId));
                         var successEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, ok.Edge, ok.EdgeName);
                         if (successEdge is null)
                         {
@@ -822,7 +825,10 @@ public sealed class LoopEngine : ILoopEngine
                             // sink still completes the run.
                             if (ok.Edge == EdgeType.Custom && !string.IsNullOrEmpty(ok.EdgeName))
                             {
-                                await FailRunAsync(run, $"missing edge connection: {ok.EdgeName}", loopRunStore, sp);
+                                // Unlinked: this execution succeeded and its own turn
+                                // already carries what it did.
+                                await FailRunAsync(run, $"missing edge connection: {ok.EdgeName}", loopRunStore, sp,
+                                    node.Label, runNodeId: null);
                                 return ParkResult.Stop;
                             }
                             return await CompleteRunAsync(run, loopRunStore, workItems, ok.Output);
@@ -868,7 +874,7 @@ public sealed class LoopEngine : ILoopEngine
                         var failEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, f.Edge);
                         if (failEdge is null)
                         {
-                            await FailRunAsync(run, f.Reason, loopRunStore, sp);
+                            await FailRunAsync(run, f.Reason, loopRunStore, sp, node.Label, runNodeId);
                             return ParkResult.Stop;
                         }
                         run.CurrentNodeId = failEdge.TargetNodeId;
@@ -911,7 +917,7 @@ public sealed class LoopEngine : ILoopEngine
                         // provider cut off a node that HAD started, so Resume
                         // should continue that same session.
                         await ParkForHumanAsync(run, node, HaltReason.Throttled,
-                            HumanFeedbackReasons.AiProviderThrottled, intr.Reason, loopRunStore, workItems);
+                            HumanFeedbackReasons.AiProviderThrottled, intr.Reason, loopRunStore, workItems, runNodeId);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.WaitingAction wa:
@@ -948,7 +954,7 @@ public sealed class LoopEngine : ILoopEngine
                             .Distinct());
                         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
                             reason: wa.Reason, actions: string.IsNullOrEmpty(actions) ? null : actions,
-                            humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id, name: node.Label);
+                            humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id, name: node.Label, runNodeId: runNodeId);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.WaitingIld wi:
@@ -1135,7 +1141,7 @@ public sealed class LoopEngine : ILoopEngine
             HumanFeedbackReasons.MaxAiTraversalsReached,
             $"The AI ran {run.AiTraversalCount} steps without human input (limit {limit}). "
                 + "Continue, continue with guidance, or abandon the run.",
-            store, sp.GetRequiredService<IWorkItemManager>());
+            store, sp.GetRequiredService<IWorkItemManager>(), runNodeId: null);
         return ParkResult.Stop;
     }
 
@@ -1169,7 +1175,7 @@ public sealed class LoopEngine : ILoopEngine
     /// </summary>
     private async Task ParkForHumanAsync(
         LoopRun run, LoopNode node, HaltReason haltReason, string feedbackReason,
-        string reason, ILoopRunStore store, IWorkItemManager workItems)
+        string reason, ILoopRunStore store, IWorkItemManager workItems, Guid? runNodeId)
     {
         var old = run.Status;
         run.Status = LoopRunStatus.WaitingHuman;
@@ -1181,7 +1187,7 @@ public sealed class LoopEngine : ILoopEngine
         await _notifier.HaltedAsync(run.Id);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: feedbackReason,
-            currentLoopRunId: run.Id, name: node.Label);
+            currentLoopRunId: run.Id, name: node.Label, runNodeId: runNodeId);
     }
 
     private async Task<ParkResult> CompleteRunAsync(LoopRun run, ILoopRunStore store, IWorkItemManager workItems, string? output)
@@ -1195,7 +1201,8 @@ public sealed class LoopEngine : ILoopEngine
         return ParkResult.Stop;
     }
 
-    private async Task FailRunAsync(LoopRun run, string reason, ILoopRunStore store, IServiceProvider sp)
+    private async Task FailRunAsync(
+        LoopRun run, string reason, ILoopRunStore store, IServiceProvider sp, string nodeLabel, Guid? runNodeId)
     {
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         run.Status = LoopRunStatus.Failed;
@@ -1204,7 +1211,8 @@ public sealed class LoopEngine : ILoopEngine
         await store.UpdateRunAsync(run);
         _progressBuffer.Clear(run.Id);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            reason: reason, humanFeedbackReason: HumanFeedbackReasons.NodeFailed, currentLoopRunId: run.Id);
+            reason: reason, humanFeedbackReason: HumanFeedbackReasons.NodeFailed, currentLoopRunId: run.Id,
+            name: nodeLabel, runNodeId: runNodeId);
     }
 
     /// <summary>
@@ -1227,6 +1235,13 @@ public sealed class LoopEngine : ILoopEngine
         // caller's TrySafe — leaving the run stuck Running and never parked.
         reason = Truncate(reason, MaxHumanFeedbackReasonLength);
 
+        // Only an execution the crash cut short is this turn; one that already
+        // finished has had its own.
+        var crashed = run.CurrentNodeId is Guid currentNodeId
+            ? await store.GetRunNodeAsync(run.Id, currentNodeId)
+            : null;
+        if (crashed?.Status != LoopRunNodeStatus.Running) crashed = null;
+
         var workItems = sp.GetRequiredService<IWorkItemManager>();
         var old = run.Status;
         run.Status = LoopRunStatus.Failed;
@@ -1236,7 +1251,8 @@ public sealed class LoopEngine : ILoopEngine
         _progressBuffer.Clear(runId);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Failed);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            reason: reason, humanFeedbackReason: HumanFeedbackReasons.RunCrashed, currentLoopRunId: run.Id);
+            reason: reason, humanFeedbackReason: HumanFeedbackReasons.RunCrashed, currentLoopRunId: run.Id,
+            name: crashed?.NodeLabel, runNodeId: crashed?.Id);
     }
 
     private static async Task TrySafe(Func<Task> f) { try { await f(); } catch { } }
