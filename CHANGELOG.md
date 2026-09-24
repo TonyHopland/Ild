@@ -7,13 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Each AI message shows the variables it set or changed, with the value they had at that point in the conversation.**
-
 ### Changed
 
-- **The work item's Action tab is now one conversation: the AI's and your messages in order, the live run, and the pull request with any replies still waiting to be posted.** The Conversation tab is gone.
+- **The work item's Action tab is now one conversation: your and the AI's messages in order, each showing the variables it set, followed by the live run and the pull request.**
 
 ### Fixed
 

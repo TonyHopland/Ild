@@ -266,6 +266,27 @@ public class LoopRunVariableStoreTests
     }
 
     [Fact]
+    public async Task A_turns_value_overwritten_by_a_write_no_execution_made_is_still_changed_later()
+    {
+        // The turn's pill shows the value it left; once anything has overwritten
+        // it, the pill must not read as the variable's current value.
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+        var store = new LoopRunStore(db.Fresh());
+        var turn = await NextTurnAsync(db, run);
+        await store.SetVariableAsync(run.Id, "handoff", "a");
+        using (var ctx = db.Fresh())
+        {
+            await ctx.LoopRunNodes.Where(rn => rn.Id == turn)
+                .ExecuteUpdateAsync(s => s.SetProperty(rn => rn.Status, LoopRunNodeStatus.Succeeded));
+        }
+        await store.SetVariableAsync(run.Id, "handoff", "b");
+
+        var change = Assert.Single(await new LoopRunStore(db.Fresh()).GetTurnVariableChangesForWorkItemAsync(run.WorkItemId));
+        Assert.Equal(("a", true), (change.Value, change.ChangedLater));
+    }
+
+    [Fact]
     public async Task A_write_no_execution_made_belongs_to_no_turn()
     {
         using var db = new TestDb();

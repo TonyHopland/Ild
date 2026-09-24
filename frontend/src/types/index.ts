@@ -446,8 +446,8 @@ export interface LoopRunVariable {
 
 /**
  * What one node execution did to one loop variable: the value it left, whether
- * it created or changed it, and whether a later execution of the same run
- * changed it again.
+ * it created or changed it, and whether a later write in the same run — by any
+ * execution or none — overwrote that value.
  */
 export interface TurnVariableChange {
   runId: string;
