@@ -1,3 +1,4 @@
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 
@@ -125,8 +126,11 @@ public interface ILoopRunStore
     /// </summary>
     Task SetVariableAsync(Guid runId, string name, string value);
 
-    /// <summary>Every variable write across the work item's runs, oldest first.</summary>
-    Task<IReadOnlyList<LoopRunVariableWrite>> GetVariableWritesForWorkItemAsync(string workItemId);
+    /// <summary>
+    /// What each node execution of the work item's runs did to each variable it
+    /// wrote: one entry per execution and variable, not per write.
+    /// </summary>
+    Task<IReadOnlyList<TurnVariableChange>> GetTurnVariableChangesForWorkItemAsync(string workItemId);
     Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId);
     Task<LoopRunNode?> GetRunNodeByIdAsync(Guid runNodeId);
     Task CreateRunAsync(LoopRun run);

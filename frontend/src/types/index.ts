@@ -444,15 +444,18 @@ export interface LoopRunVariable {
   updatedAt: string | null;
 }
 
-/** One write to a loop variable; `runNodeId` is the node execution that made it. */
-export interface LoopRunVariableWrite {
+/**
+ * What one node execution did to one loop variable: the value it left, whether
+ * it created or changed it, and whether a later execution of the same run
+ * changed it again.
+ */
+export interface TurnVariableChange {
   runId: string;
-  runNodeId: string | null;
+  runNodeId: string;
   name: string;
   value: string;
-  /** The value this write replaced; null when it created the variable. */
-  previousValue: string | null;
-  writtenAt: string;
+  change: "created" | "changed";
+  changedLater: boolean;
 }
 
 export interface LoopRun {

@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using ILD.Data.Analytics;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -223,49 +224,109 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task SetVariableAsync(Guid runId, string name, string value)
     {
-        var existing = await _db.LoopRunVariables
-            .FirstOrDefaultAsync(v => v.LoopRunId == runId && v.Name == name);
-        var previousValue = existing?.Value;
-        if (existing is null)
-        {
-            _db.LoopRunVariables.Add(new LoopRunVariable
-            {
-                LoopRunId = runId,
-                Name = name,
-                Value = value,
-            });
-        }
-        else
-        {
-            existing.Value = value;
-        }
-
         var runningNodeId = await _db.LoopRunNodes
             .AsNoTracking()
             .Where(rn => rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.Running)
             .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
             .Select(rn => (Guid?)rn.Id)
             .FirstOrDefaultAsync();
-        _db.LoopRunVariableWrites.Add(new LoopRunVariableWrite
-        {
-            Id = Guid.NewGuid(),
-            LoopRunId = runId,
-            RunNodeId = runningNodeId,
-            Name = name,
-            Value = value,
-            PreviousValue = previousValue,
-            WrittenAt = DateTime.UtcNow,
-        });
 
-        await _db.SaveChangesAsync();
+        // The history row must name the value this write actually replaced, so
+        // the replace is a compare-and-swap on the value read: a concurrent write
+        // to the same variable in between makes it miss, and it re-reads.
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            await using var tx = await _db.Database.BeginTransactionAsync();
+            var previousValue = await _db.LoopRunVariables
+                .AsNoTracking()
+                .Where(v => v.LoopRunId == runId && v.Name == name)
+                .Select(v => v.Value)
+                .FirstOrDefaultAsync();
+
+            if (!await TryReplaceVariableAsync(runId, name, previousValue, value))
+            {
+                await tx.RollbackAsync();
+                continue;
+            }
+
+            _db.LoopRunVariableWrites.Add(new LoopRunVariableWrite
+            {
+                Id = Guid.NewGuid(),
+                LoopRunId = runId,
+                RunNodeId = runningNodeId,
+                Name = name,
+                Value = value,
+                PreviousValue = previousValue,
+                WrittenAt = DateTime.UtcNow,
+            });
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"Variable '{name}' kept changing underneath this write; giving up after 5 attempts.");
     }
 
-    public async Task<IReadOnlyList<LoopRunVariableWrite>> GetVariableWritesForWorkItemAsync(string workItemId)
-        => await _db.LoopRunVariableWrites
+    private async Task<bool> TryReplaceVariableAsync(Guid runId, string name, string? expected, string value)
+    {
+        if (expected is not null)
+        {
+            return await _db.LoopRunVariables
+                .Where(v => v.LoopRunId == runId && v.Name == name && v.Value == expected)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(v => v.Value, value)
+                    .SetProperty(v => v.UpdatedAt, DateTime.UtcNow)) == 1;
+        }
+
+        var created = new LoopRunVariable { LoopRunId = runId, Name = name, Value = value };
+        _db.LoopRunVariables.Add(created);
+        try
+        {
+            await _db.SaveChangesAsync();
+            return true;
+        }
+        catch (DbUpdateException)
+        {
+            // Another write created it first; retry as a replace of its value.
+            _db.Entry(created).State = EntityState.Detached;
+            return false;
+        }
+    }
+
+    public async Task<IReadOnlyList<TurnVariableChange>> GetTurnVariableChangesForWorkItemAsync(string workItemId)
+    {
+        var writes = await _db.LoopRunVariableWrites
             .AsNoTracking()
             .Where(w => w.LoopRun.WorkItemId == workItemId)
             .OrderBy(w => w.WrittenAt)
+            .Select(w => new { w.LoopRunId, w.RunNodeId, w.Name, w.Value, w.PreviousValue })
             .ToListAsync();
+
+        var changes = new List<TurnVariableChange>();
+        foreach (var variable in writes.GroupBy(w => (w.LoopRunId, w.Name)))
+        {
+            var history = variable.ToList();
+            foreach (var turn in history
+                .Select((w, index) => (w, index))
+                .Where(x => x.w.RunNodeId is not null)
+                .GroupBy(x => x.w.RunNodeId!.Value))
+            {
+                var first = turn.First().w;
+                var (last, lastIndex) = turn.Last();
+                if (first.PreviousValue is not null && last.Value == first.PreviousValue)
+                    continue;
+                changes.Add(new TurnVariableChange(
+                    last.LoopRunId,
+                    turn.Key,
+                    last.Name,
+                    last.Value,
+                    Created: first.PreviousValue is null,
+                    ChangedLater: history.Skip(lastIndex + 1).Any(w => w.Value != last.Value)));
+            }
+        }
+        return changes;
+    }
 
     public async Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId)
         => await _db.LoopRunNodes

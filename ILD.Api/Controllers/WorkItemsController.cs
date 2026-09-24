@@ -675,21 +675,22 @@ public class WorkItemsController : ControllerBase
     }
 
     /// <summary>
-    /// The item's loop-variable history in one response, so a view that ties
-    /// writes to conversation turns does not have to fetch every run's detail.
+    /// What each turn of the item's runs did to the variables it wrote, in one
+    /// response: an entry per execution and variable rather than every raw
+    /// write, so its size follows the conversation instead of the write count.
     /// </summary>
-    [HttpGet("{id}/variable-writes")]
-    public async Task<IActionResult> GetVariableWrites(string id)
+    [HttpGet("{id}/turn-variables")]
+    public async Task<IActionResult> GetTurnVariables(string id)
     {
-        var writes = await _loopRunStore.GetVariableWritesForWorkItemAsync(id);
-        return Ok(writes.Select(w => new
+        var changes = await _loopRunStore.GetTurnVariableChangesForWorkItemAsync(id);
+        return Ok(changes.Select(c => new
         {
-            runId = w.LoopRunId,
-            runNodeId = w.RunNodeId,
-            name = w.Name,
-            value = w.Value,
-            previousValue = w.PreviousValue,
-            writtenAt = w.WrittenAt,
+            runId = c.RunId,
+            runNodeId = c.RunNodeId,
+            name = c.Name,
+            value = c.Value,
+            change = c.Created ? "created" : "changed",
+            changedLater = c.ChangedLater,
         }));
     }
 

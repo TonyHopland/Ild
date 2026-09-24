@@ -10,7 +10,7 @@ import {
   LoopRunStatus,
   LoopRunNodeStatus,
   LoopRunNode,
-  LoopRunVariableWrite,
+  TurnVariableChange,
   RemotePrSnapshot,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
@@ -105,7 +105,7 @@ function snapshot(overrides: Partial<RemotePrSnapshot> = {}): RemotePrSnapshot {
   };
 }
 
-function mockServices(run: LoopRun, writes: LoopRunVariableWrite[] = []) {
+function mockServices(run: LoopRun, turnVariables: TurnVariableChange[] = []) {
   vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
     on: vi.fn(),
     off: vi.fn(),
@@ -119,7 +119,7 @@ function mockServices(run: LoopRun, writes: LoopRunVariableWrite[] = []) {
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(run);
-  vi.spyOn(authServices.workItemService, "getVariableWrites").mockResolvedValue(writes);
+  vi.spyOn(authServices.workItemService, "getTurnVariables").mockResolvedValue(turnVariables);
   vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
     entries: [],
     nextCursor: 0,
@@ -207,30 +207,30 @@ describe("variables a turn set", () => {
       execution("exec-2", "Coder", "2026-09-24T09:20:00Z", "2026-09-24T09:30:00Z"),
     ],
   });
-  const writes: LoopRunVariableWrite[] = [
+  const writes: TurnVariableChange[] = [
     {
       runId: "run-1",
       runNodeId: "exec-1",
       name: "summary",
       value: "draft",
-      previousValue: null,
-      writtenAt: "2026-09-24T09:05:00Z",
+      change: "created",
+      changedLater: true,
     },
     {
       runId: "run-1",
       runNodeId: "exec-1",
       name: "handoff",
       value: "for review",
-      previousValue: null,
-      writtenAt: "2026-09-24T09:06:00Z",
+      change: "created",
+      changedLater: false,
     },
     {
       runId: "run-1",
       runNodeId: "exec-2",
       name: "summary",
       value: "final",
-      previousValue: "draft",
-      writtenAt: "2026-09-24T09:25:00Z",
+      change: "changed",
+      changedLater: false,
     },
   ];
   const conversation = [
@@ -258,7 +258,7 @@ describe("variables a turn set", () => {
       makeRun({ id: "run-older" }),
     ]);
     const getById = vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(run);
-    const history = vi.spyOn(authServices.workItemService, "getVariableWrites");
+    const history = vi.spyOn(authServices.workItemService, "getTurnVariables");
 
     await openActionTab(makeWorkItem({ conversation }));
 
@@ -314,6 +314,17 @@ describe("PR details", () => {
       queuedAt: "2026-09-24T10:05:00Z",
     },
   ];
+
+  test("counts as content, so the tab does not also say nothing is there", async () => {
+    // Nothing else is in the thread: no conversation, no live run, no feedback.
+    mockServices(makeRun({ prSnapshot: snapshot() }));
+    const panel = await openActionTab(
+      makeWorkItem({ status: WorkItemStatus.Done, prUrl: "https://git.example/pr/1" }),
+    );
+
+    expect(within(panel).getByRole("button", { name: /PR details/ })).toBeTruthy();
+    expect(within(panel).queryByText("No action required.")).toBeNull();
+  });
 
   test("is not shown for an item with no pull request", async () => {
     mockServices(makeRun());

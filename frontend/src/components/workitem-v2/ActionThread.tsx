@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { LoopRunVariableWrite, WorkItem, WorkItemStatus } from "../../types";
+import { TurnVariableChange, WorkItem, WorkItemStatus } from "../../types";
 import { workItemService } from "../../services/auth";
 import { parseConversation } from "../../utils/workItemJson";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
 import HaltSteerControls from "./HaltSteerControls";
 import { FeedbackBanner, PrView, QueuedPrWrites } from "./panels";
-import { variablesSetByTurn, type TurnVariable } from "./turnVariables";
+import { variablesSetByTurn } from "./turnVariables";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
 type Side = "ai" | "human";
@@ -41,7 +41,7 @@ function Bubble({
   );
 }
 
-function TurnVariables({ variables }: { variables: TurnVariable[] }) {
+function TurnVariables({ variables }: { variables: TurnVariableChange[] }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const toggle = (name: string) =>
     setOpen((prev) => {
@@ -84,6 +84,12 @@ function TurnVariables({ variables }: { variables: TurnVariable[] }) {
   );
 }
 
+/** Whether the current run has a pull request, or anything queued for one, to show. */
+function hasPrDetails(workItem: WorkItem, detail: WorkItemDetail): boolean {
+  const run = detail.currentRun;
+  return !!run?.prSnapshot || (run?.prQueuedWrites?.length ?? 0) > 0 || !!workItem.prUrl;
+}
+
 /**
  * The current run's pull request as it stands, rather than a turn in the
  * dialogue: the PR and its review thread, and what the AI has queued to say on
@@ -106,7 +112,7 @@ function PrDetails({
   }, [open]);
   const snapshot = detail.currentRun?.prSnapshot ?? null;
   const pending = detail.currentRun?.prQueuedWrites?.length ?? 0;
-  if (!snapshot && pending === 0 && !workItem.prUrl) return null;
+  if (!hasPrDetails(workItem, detail)) return null;
   return (
     <section ref={panelRef} className="wiv2-pr-details">
       <div className="wiv2-pr-details-header">
@@ -146,24 +152,24 @@ function PrDetails({
 }
 
 /**
- * The item's variable history, re-read whenever the conversation grows — a new
- * turn is the moment a new variable can appear.
+ * What each turn of the item did to its variables, re-read whenever the
+ * conversation grows — a new turn is the moment a new variable can appear.
  */
-function useVariableWrites(workItemId: string, refreshKey: number): LoopRunVariableWrite[] {
-  const [writes, setWrites] = useState<LoopRunVariableWrite[]>([]);
+function useTurnVariables(workItemId: string, refreshKey: number): TurnVariableChange[] {
+  const [changes, setChanges] = useState<TurnVariableChange[]>([]);
   useEffect(() => {
     let cancelled = false;
     void workItemService
-      .getVariableWrites(workItemId)
+      .getTurnVariables(workItemId)
       .catch(() => [])
-      .then((w) => {
-        if (!cancelled) setWrites(w);
+      .then((c) => {
+        if (!cancelled) setChanges(c);
       });
     return () => {
       cancelled = true;
     };
   }, [workItemId, refreshKey]);
-  return writes;
+  return changes;
 }
 
 /**
@@ -183,7 +189,7 @@ export default function ActionThread({
   active: boolean;
 }) {
   const messages = parseConversation(workItem);
-  const variableWrites = useVariableWrites(workItem.id, messages.length);
+  const turnVariables = useTurnVariables(workItem.id, messages.length);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const awaitingHuman =
@@ -220,13 +226,17 @@ export default function ActionThread({
     el.scrollIntoView?.({ block: "start" });
   };
 
-  const isEmpty = messages.length === 0 && !detail.shouldStream && !awaitingHuman;
+  const isEmpty =
+    messages.length === 0 &&
+    !detail.shouldStream &&
+    !awaitingHuman &&
+    !hasPrDetails(workItem, detail);
 
   return (
     <div className="wiv2-thread" ref={threadRef}>
       {messages.map((m, i) => {
         const side: Side = m.role.toLowerCase() === "human" ? "human" : "ai";
-        const variables = variablesSetByTurn(m, variableWrites);
+        const variables = variablesSetByTurn(m, turnVariables);
         return (
           <Bubble
             key={i}
