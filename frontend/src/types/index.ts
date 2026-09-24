@@ -49,6 +49,8 @@ export interface ConversationMessage {
   timestamp: string;
   /** Author display name (e.g. the node's title). Falls back to role when absent. */
   name?: string | null;
+  /** The node execution that produced the entry; null for human replies and older entries. */
+  runNodeId?: string | null;
 }
 
 export interface WorkItem {
@@ -442,6 +444,14 @@ export interface LoopRunVariable {
   updatedAt: string | null;
 }
 
+/** One write to a loop variable; `runNodeId` is the node execution that made it. */
+export interface LoopRunVariableWrite {
+  name: string;
+  value: string;
+  runNodeId: string | null;
+  writtenAt: string;
+}
+
 export interface LoopRun {
   id: string;
   workItemId: string;
@@ -469,6 +479,8 @@ export interface LoopRun {
   totalCostUsd?: number | null;
   availableSessions?: LoopRunAvailableSession[];
   availableVariables?: LoopRunVariable[];
+  /** Every variable write, oldest first; only populated by the run-detail endpoint. */
+  variableWrites?: LoopRunVariableWrite[];
   nodes: LoopRunNode[];
   /** The run's linked PR URL, if a PR node has opened one. */
   prUrl?: string | null;

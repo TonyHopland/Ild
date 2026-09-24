@@ -239,8 +239,31 @@ public class LoopRunStore : ILoopRunStore
             existing.Value = value;
         }
 
+        var runningNodeId = await _db.LoopRunNodes
+            .AsNoTracking()
+            .Where(rn => rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.Running)
+            .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
+            .Select(rn => (Guid?)rn.Id)
+            .FirstOrDefaultAsync();
+        _db.LoopRunVariableWrites.Add(new LoopRunVariableWrite
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            RunNodeId = runningNodeId,
+            Name = name,
+            Value = value,
+            WrittenAt = DateTime.UtcNow,
+        });
+
         await _db.SaveChangesAsync();
     }
+
+    public async Task<IReadOnlyList<LoopRunVariableWrite>> GetVariableWritesAsync(Guid runId)
+        => await _db.LoopRunVariableWrites
+            .AsNoTracking()
+            .Where(w => w.LoopRunId == runId)
+            .OrderBy(w => w.WrittenAt)
+            .ToListAsync();
 
     public async Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId)
         => await _db.LoopRunNodes

@@ -38,7 +38,8 @@ public enum RemoteAiProviderOverrideMode
     OverrideAll = 2,
 }
 
-public sealed record RemoteConversationMessage(string Role, string Content, DateTime Timestamp, string? Name = null);
+public sealed record RemoteConversationMessage(
+    string Role, string Content, DateTime Timestamp, string? Name = null, Guid? RunNodeId = null);
 
 /// <summary>
 /// One PR the server holds against a work item (mirrors the server's
@@ -175,6 +176,8 @@ public sealed class RemoteTransitionRequest
     /// <summary>Optional author display name for the conversation entry this
     /// transition appends (e.g. the originating node's title).</summary>
     public string? Name { get; set; }
+    /// <summary>The node execution the appended conversation entry comes from.</summary>
+    public Guid? RunNodeId { get; set; }
 }
 
 public sealed class RemoteTransitionResponse

@@ -174,7 +174,8 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByRole("tab", { name: "Overview" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Action" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: /Runs/ })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: /Conversation/ })).toBeTruthy();
+    // The conversation lives in the Action tab's thread, not a tab of its own.
+    expect(screen.queryByRole("tab", { name: /Conversation/ })).toBeNull();
     expect(screen.getByRole("tab", { name: /Preview/ })).toBeTruthy();
     // Overview shows the description by default.
     expect(screen.getByText("Description")).toBeTruthy();
@@ -364,16 +365,17 @@ describe("WorkItemModalV2", () => {
     expect(retrySpy).not.toHaveBeenCalled();
   });
 
-  test("conversation tab shows messages", async () => {
+  test("the Action tab shows the conversation as a thread", async () => {
     mockServices();
     await renderDialog(makeWorkItem());
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Conversation/ }));
+      fireEvent.click(screen.getByRole("tab", { name: "Action" }));
       await Promise.resolve();
     });
 
-    expect(screen.getByText("hello")).toBeTruthy();
+    const actionPanel = document.getElementById("wiv2-panel-action") as HTMLElement;
+    expect(within(actionPanel).getByText("hello")).toBeTruthy();
   });
 
   test("overview shows work item metadata", async () => {
@@ -559,11 +561,9 @@ describe("WorkItemModalV2", () => {
     // Attachments belong to the work item and are handled from the Overview.
     expect((actionPanel as HTMLElement).querySelector('input[type="file"]')).toBeNull();
 
-    // Guards only that the flex layout is wired on (the wiv2-action-feedback
-    // modifier). jsdom has no layout engine, so this cannot prove the buttons
-    // stay on screen — the pixel behaviour depends on the CSS cascade and must
-    // be checked in a real browser, not here.
-    expect((actionPanel as HTMLElement).querySelector(".wiv2-action-feedback")).not.toBeNull();
+    // The feedback card closes the thread, on the human side.
+    const card = within(actionPanel as HTMLElement).getByText("Human Feedback");
+    expect(card.closest(".wiv2-bubble-row-human")).not.toBeNull();
   });
 
   test("Action tab shows the indicator when the item needs human action", async () => {
@@ -579,9 +579,9 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByRole("tab", { name: "Action ●" })).toBeTruthy();
   });
 
-  test("Action tab has no indicator and shows an empty state when no action is required", async () => {
+  test("Action tab has no indicator and shows an empty state when there is nothing in it", async () => {
     mockServices();
-    await renderDialog(makeWorkItem());
+    await renderDialog(makeWorkItem({ conversation: [] }));
 
     expect(screen.getByRole("tab", { name: "Action" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Action ●" })).toBeNull();
@@ -604,9 +604,6 @@ describe("WorkItemModalV2", () => {
 
     const actionPanel = document.getElementById("wiv2-panel-action");
     expect(within(actionPanel as HTMLElement).getByText("Live Output")).toBeTruthy();
-    // A running item is not the human-feedback layout, so the flex-fill modifier
-    // is off and the streaming view keeps the tab's normal scrolling.
-    expect((actionPanel as HTMLElement).querySelector(".wiv2-action-feedback")).toBeNull();
     // The live stream is no longer duplicated in the Overview panel.
     const overviewPanel = document.getElementById("wiv2-panel-overview");
     expect(within(overviewPanel as HTMLElement).queryByText("Live Output")).toBeNull();
@@ -1206,7 +1203,7 @@ describe("WorkItemModalV2", () => {
     // Hop to another tab and back — the node should still be expanded without
     // re-clicking, because the panel was not unmounted.
     await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: /Conversation/ }));
+      fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
       await Promise.resolve();
     });
     await act(async () => {

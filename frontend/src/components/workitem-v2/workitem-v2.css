@@ -327,53 +327,280 @@
   flex: 1;
 }
 
-/* ---------- action tab ---------- */
+/* ---------- action tab: chat thread ---------- */
 
-.wiv2-action {
+.wiv2-thread {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  max-width: 1100px;
+  margin: 0 auto;
 }
 
-/* The feedback banner no longer floats above the tabs, so drop the pinning
-   margin and height cap — the Action tabpanel owns scrolling now. */
-.wiv2-action .wiv2-feedback {
+.wiv2-bubble-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/* A bubble whose content rendered nothing (no queued writes, no pending
+   feedback, no run to halt) has no reason to exist. */
+.wiv2-bubble-row:has(.wiv2-bubble-body:empty) {
+  display: none;
+}
+
+.wiv2-bubble-row-ai {
+  margin-right: 4rem;
+}
+
+.wiv2-bubble-row-human {
+  margin-left: 4rem;
+}
+
+.wiv2-bubble {
+  padding: 0.6rem 0.8rem 0.75rem;
+  border: 1px solid #2a2a3a;
+  border-radius: 0.75rem;
+  min-width: 0;
+}
+
+.wiv2-bubble-ai {
+  background: #1a1a24;
+  border-top-left-radius: 0.2rem;
+}
+
+.wiv2-bubble-human {
+  background: #1f1f3a;
+  border-color: #3b3b6b;
+  border-top-right-radius: 0.2rem;
+}
+
+/* The pending feedback card is a form to fill in, not a sent message, so it
+   takes the full width instead of the human offset. */
+.wiv2-bubble-row-human:has(.wiv2-feedback) {
+  margin-left: 0;
+}
+
+.wiv2-bubble-human:has(.wiv2-feedback) {
+  border-color: #f59e0b;
+  border-top-right-radius: 0.75rem;
+}
+
+.wiv2-bubble-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
+
+.wiv2-bubble-meta:empty {
+  display: none;
+}
+
+.wiv2-bubble-meta strong {
+  color: #e5e7eb;
+}
+
+.wiv2-bubble-row-human .wiv2-bubble-meta {
+  justify-content: flex-end;
+}
+
+.wiv2-bubble-live {
+  color: #22c55e;
+}
+
+.wiv2-turn-vars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #2a2a3a;
+}
+
+.wiv2-turn-vars-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.wiv2-turn-vars-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  color: #c4b5fd;
+  background: #2a2540;
+  border: 1px solid #4c3f7a;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.wiv2-turn-vars-toggle:hover {
+  background: #342d52;
+}
+
+.wiv2-turn-vars-toggle[aria-expanded="true"] {
+  background: #3b3266;
+  border-color: #7c6bc4;
+}
+
+.wiv2-turn-vars-icon {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+}
+
+.wiv2-turn-vars-chevron {
+  color: #8b83b0;
+}
+
+.wiv2-turn-var-tag {
+  padding: 0 0.35rem;
+  font-size: 0.65rem;
+  border-radius: 0.25rem;
+}
+
+.wiv2-turn-var-created {
+  color: #86efac;
+  background: #14301f;
+}
+
+.wiv2-turn-var-changed {
+  color: #fcd34d;
+  background: #33280f;
+}
+
+.wiv2-turn-var-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #c4b5fd;
+}
+
+.wiv2-turn-var-later {
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 0.65rem;
+  font-style: italic;
+  color: #8b8ba0;
+}
+
+.wiv2-turn-var pre {
   margin: 0;
+  padding: 0.5rem 0.6rem;
+  max-height: 20rem;
+  overflow: auto;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #12121a;
+  border: 1px solid #2a2a3a;
+  border-radius: 0.375rem;
+}
+
+/* Current PR state, not a turn: full width like the feedback card, collapsed
+   until asked for. */
+.wiv2-pr-details {
+  background: #1b1b2e;
+  border: 1px solid #3b3b6b;
+  border-radius: 0.75rem;
+}
+
+.wiv2-pr-details-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.8rem;
+}
+
+.wiv2-pr-details-toggle {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #c7d2fe;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.wiv2-pr-details-chevron {
+  width: 0.8rem;
+  color: #8b83b0;
+}
+
+.wiv2-pr-details-header .feedback-pr-link {
+  font-size: 0.8rem;
+}
+
+.wiv2-pr-details-pending {
+  padding: 0.05rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #1e1b4b;
+  background: #a5b4fc;
+  border-radius: 999px;
+}
+
+.wiv2-pr-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0 0.8rem 0.8rem;
+  border-top: 1px solid #2d2d4a;
+}
+
+.wiv2-pr-details .pr-view-conversation {
   max-height: none;
 }
 
-/* While waiting on a human the Action tab is dedicated to the feedback card, so
-   let it fill the panel and drive its own layout with flexbox: the card is a
-   bounded column whose scrollable region (PR view + prompt) flexes to whatever
-   space is left, while the textarea and action buttons keep their size. The
-   card grows and shrinks with the window, so the buttons never leave the
-   screen — no fixed heights involved. */
-.wiv2-action-feedback {
-  height: 100%;
-  min-height: 0;
+.wiv2-pr-details .wiv2-pr-queue {
+  margin: 0;
+  padding: 0.75rem 0 0;
+  max-height: none;
+  background: none;
+  border: none;
+  border-top: 1px solid #2d2d4a;
+  border-radius: 0;
 }
 
-.wiv2-action-feedback .wiv2-feedback {
-  /* Fill the panel and stay bounded by it. The base .wiv2-feedback rule pins
-     flex-shrink: 0, which would let the card grow past the panel and defeat the
-     inner scroll region, so flex here must reset both grow and shrink. */
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+/* The bubble is the card now, so the panels inside it drop their own frame. */
+.wiv2-bubble .wiv2-feedback,
+.wiv2-bubble .wiv2-pr-queue {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  max-height: none;
+  overflow: visible;
 }
 
-.wiv2-action-feedback .feedback-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
+.wiv2-bubble .feedback-scroll {
+  max-height: 50vh;
   overflow-y: auto;
 }
 
-/* The halt control sits beneath the live view; pin its button to the right so
-   it reads as an action on the stream above rather than a header for it. */
-.wiv2-action .wiv2-halt-bar {
+.wiv2-bubble .node-livestream-section h4 {
+  display: none;
+}
+
+.wiv2-bubble .livestream-container {
+  height: 45vh;
+}
+
+.wiv2-bubble .wiv2-halt-bar {
   justify-content: flex-end;
+  margin-bottom: 0;
 }
 
 /* ---------- overview tab ---------- */
@@ -826,11 +1053,7 @@
   line-height: 1;
 }
 
-/* ---------- conversation / qa / misc ---------- */
-
-.wiv2-conversation {
-  max-height: none;
-}
+/* ---------- qa / misc ---------- */
 
 .wiv2-empty {
   color: #606070;

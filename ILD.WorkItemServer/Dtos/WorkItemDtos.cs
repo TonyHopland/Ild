@@ -115,6 +115,8 @@ public sealed class TransitionRequest
     /// <summary>Optional author display name for the conversation entry this
     /// transition appends (e.g. the originating node's title).</summary>
     public string? Name { get; set; }
+    /// <summary>The ILD node execution the appended conversation entry comes from.</summary>
+    public Guid? RunNodeId { get; set; }
 }
 
 public sealed class TransitionResponse
@@ -134,6 +136,7 @@ public sealed class AppendConversationRequest
     public string? Role { get; set; }
     public string? Content { get; set; }
     public string? Name { get; set; }
+    public Guid? RunNodeId { get; set; }
 }
 
 /// <summary>

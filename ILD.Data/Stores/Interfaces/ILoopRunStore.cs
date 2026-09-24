@@ -120,9 +120,13 @@ public interface ILoopRunStore
     /// <summary>
     /// Create or overwrite a single loop variable by (runId, name), touching only
     /// that row so concurrent writes to other variables / control-plane columns
-    /// are never clobbered.
+    /// are never clobbered. Also appends the write to the run's variable history,
+    /// attributed to whichever node execution is running at the time.
     /// </summary>
     Task SetVariableAsync(Guid runId, string name, string value);
+
+    /// <summary>Every write to the run's variables, oldest first.</summary>
+    Task<IReadOnlyList<LoopRunVariableWrite>> GetVariableWritesAsync(Guid runId);
     Task<LoopRunNode?> GetRunNodeAsync(Guid runId, Guid nodeId);
     Task<LoopRunNode?> GetRunNodeByIdAsync(Guid runNodeId);
     Task CreateRunAsync(LoopRun run);

@@ -96,7 +96,7 @@ public class LoopEngineThrottleParkTests
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             ParkReason, It.IsAny<string?>(), It.IsAny<Guid?>(),
-            HumanFeedbackReasons.AiProviderThrottled, "Coder"), Times.Once);
+            HumanFeedbackReasons.AiProviderThrottled, "Coder", It.IsNotNull<Guid?>()), Times.Once);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<string>(), RemoteWorkItemStatus.WaitingForIld,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(),

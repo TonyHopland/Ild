@@ -53,6 +53,7 @@ export function parseConversation(workItem: Pick<WorkItem, "conversation">): Con
         content: m.content,
         timestamp: m.timestamp,
         name: typeof m.name === "string" ? m.name : null,
+        runNodeId: typeof m.runNodeId === "string" ? m.runNodeId : null,
       });
     }
   }

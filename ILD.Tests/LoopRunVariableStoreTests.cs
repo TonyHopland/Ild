@@ -103,6 +103,69 @@ public class LoopRunVariableStoreTests
         Assert.Equal("A value", Assert.Single(aVars).Value);
     }
 
+
+    private static async Task<Guid> SeedRunNodeAsync(TestDb db, LoopRun run, LoopRunNodeStatus status)
+    {
+        var node = new LoopNode
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateVersionId = run.LoopTemplateVersionId,
+            NodeType = NodeType.AI,
+            Label = "ai",
+        };
+        db.Context.LoopNodes.Add(node);
+        var runNode = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = run.Id,
+            LoopNodeId = node.Id,
+            Status = status,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopRunNodes.Add(runNode);
+        await db.Context.SaveChangesAsync();
+        return runNode.Id;
+    }
+
+    [Fact]
+    public async Task Every_write_is_kept_in_the_history_after_the_variable_is_overwritten()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "first");
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "second");
+
+        var writes = await new LoopRunStore(db.Fresh()).GetVariableWritesAsync(run.Id);
+
+        Assert.Equal(new[] { "first", "second" }, writes.Select(w => w.Value));
+    }
+
+    [Fact]
+    public async Task A_write_is_attributed_to_the_node_execution_running_when_it_landed()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+        await SeedRunNodeAsync(db, run, LoopRunNodeStatus.Succeeded);
+        var running = await SeedRunNodeAsync(db, run, LoopRunNodeStatus.Running);
+
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "value");
+
+        var write = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariableWritesAsync(run.Id));
+        Assert.Equal(running, write.RunNodeId);
+    }
+
+    [Fact]
+    public async Task A_write_with_no_node_running_is_kept_unattributed()
+    {
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+
+        await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "value");
+
+        var write = Assert.Single(await new LoopRunStore(db.Fresh()).GetVariableWritesAsync(run.Id));
+        Assert.Null(write.RunNodeId);
+    }
     [Fact]
     public async Task Deleting_a_run_cascades_to_its_variables()
     {
@@ -119,5 +182,6 @@ public class LoopRunVariableStoreTests
 
         using var verify = db.Fresh();
         Assert.Equal(0, await verify.LoopRunVariables.Where(v => v.LoopRunId == run.Id).CountAsync());
+        Assert.Equal(0, await verify.LoopRunVariableWrites.Where(w => w.LoopRunId == run.Id).CountAsync());
     }
 }

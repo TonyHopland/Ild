@@ -23,7 +23,7 @@ public interface IWorkItemServerClient
     Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default);
     Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default);
     Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default);
-    Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default);
+    Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, Guid? runNodeId = null, CancellationToken ct = default);
 
     /// <summary>
     /// Record a PR against a work item on the server, keyed by URL — reporting
@@ -183,10 +183,10 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default)
+    public async Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, Guid? runNodeId = null, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/conversation");
-        msg.Content = JsonContent.Create(new { role, content, name }, options: JsonOpts);
+        msg.Content = JsonContent.Create(new { role, content, name, runNodeId }, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }

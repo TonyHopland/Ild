@@ -96,7 +96,7 @@ public sealed class WorkItemsController : ControllerBase
     {
         if (string.IsNullOrEmpty(req.Content)) return BadRequest("Content is required");
         var role = string.IsNullOrWhiteSpace(req.Role) ? "ai" : req.Role;
-        return await _svc.AppendConversationAsync(id, role, req.Content, req.Name, ct) ? NoContent() : NotFound();
+        return await _svc.AppendConversationAsync(id, role, req.Content, req.Name, req.RunNodeId, ct) ? NoContent() : NotFound();
     }
 
     [HttpPost("{id}/pull-requests")]

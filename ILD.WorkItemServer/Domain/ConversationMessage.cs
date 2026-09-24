@@ -13,8 +13,13 @@ namespace ILD.WorkItemServer.Domain;
 /// Optional display name for the author — e.g. the node's title ("AI Coder",
 /// "AI Reviewer"). Null for legacy entries; the UI falls back to the role.
 /// </param>
+/// <param name="RunNodeId">
+/// The ILD node execution that produced the entry, when a node did. Null for
+/// human replies and legacy entries.
+/// </param>
 public sealed record ConversationMessage(
     string Role,
     string Content,
     DateTime Timestamp,
-    string? Name = null);
+    string? Name = null,
+    Guid? RunNodeId = null);

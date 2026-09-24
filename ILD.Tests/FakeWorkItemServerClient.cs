@@ -40,7 +40,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         Tags = dto.Tags,
         Dependencies = dto.Dependencies,
         Conversation = dto.Conversation
-            .Select(m => new RemoteConversationMessage(m.Role, m.Content, m.Timestamp, m.Name))
+            .Select(m => new RemoteConversationMessage(m.Role, m.Content, m.Timestamp, m.Name, m.RunNodeId))
             .ToList(),
         PullRequests = dto.PullRequests
             .Select(p => new RemoteWorkItemPullRequest(p.Url, p.LoopRunId, p.Merged, p.CreatedAt))
@@ -111,6 +111,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Reason = req.Reason,
             Actions = req.Actions,
             Name = req.Name,
+            RunNodeId = req.RunNodeId,
         }, ct);
         return new RemoteTransitionResponse
         {
@@ -129,8 +130,8 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     public Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default)
         => _svc.AppendFeedbackAsync(id, content, ct);
 
-    public Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, CancellationToken ct = default)
-        => _svc.AppendConversationAsync(id, role, content, name, ct);
+    public Task<bool> AppendConversationAsync(WorkItemServerOptions opts, string id, string role, string content, string? name, Guid? runNodeId = null, CancellationToken ct = default)
+        => _svc.AppendConversationAsync(id, role, content, name, runNodeId, ct);
 
     /// <summary>
     /// Mirrors the HTTP client, which reports success as the status code: only
