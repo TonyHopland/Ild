@@ -128,8 +128,20 @@ public class AiProvidersController : ControllerBase
         return (tags, null);
     }
 
-    private const string ConcurrentTagSaveError =
-        "Another save changed the same tags at the same time. Reload and try again.";
+    /// <summary>
+    /// After a failed save: the conflict message when a concurrent save gave one
+    /// of <paramref name="tags"/> to another provider (the unique tag index then
+    /// refused ours), or null when the save failed for another reason.
+    /// </summary>
+    private async Task<string?> TagTakenConcurrentlyAsync(Guid providerId, IEnumerable<string> tags)
+    {
+        foreach (var tag in tags)
+        {
+            if (await _providerStore.GetAiProviderByTagAsync(tag) is { } holder && holder.Id != providerId)
+                return $"Tag '{tag}' was saved on provider '{holder.Name}' at the same time. Reload and try again.";
+        }
+        return null;
+    }
 
     private static object ToResponse(AiProvider p) => new
     {
@@ -204,7 +216,8 @@ public class AiProvidersController : ControllerBase
         }
         catch (DbUpdateException) when (tags is not null)
         {
-            return Conflict(new { error = ConcurrentTagSaveError });
+            if (await TagTakenConcurrentlyAsync(p.Id, tags) is not { } conflict) throw;
+            return Conflict(new { error = conflict });
         }
         // Agents aren't baked into the image; if this provider uses a managed
         // agent that isn't installed yet, install it in the background so the
@@ -274,7 +287,8 @@ public class AiProvidersController : ControllerBase
         }
         catch (DbUpdateException) when (tags is not null)
         {
-            return Conflict(new { error = ConcurrentTagSaveError });
+            if (await TagTakenConcurrentlyAsync(p.Id, tags) is not { } conflict) throw;
+            return Conflict(new { error = conflict });
         }
         // If the type was changed to a managed agent, make sure it is installed.
         _agentProvisioner.EnsureInstalledForProviderType(p.Type);
