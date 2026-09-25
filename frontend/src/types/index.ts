@@ -631,6 +631,8 @@ export interface AiProvider {
    * save; the server folds it back into `AiProvider.Config`.
    */
   customMcpServersJson?: string | null;
+  /** Labels AI nodes name to run on this provider; each is held by at most one provider. */
+  tags?: string[];
   supportedTools?: AiToolDefinition[];
   createdAt: string;
 }

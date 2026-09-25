@@ -10,12 +10,20 @@ import {
 import { aiProviderService, agentAdapterService, managedAgentService } from "../../services/auth";
 import AdapterConfigFields from "../../components/AdapterConfigFields";
 import ProviderTerminal from "../../components/ProviderTerminal";
+import { sameTag } from "../../utils/providerTags";
 
 /** Adapter config value shapes rendered by {@link AdapterConfigFields}. */
 type ConfigValue = string | number | boolean;
 
 /** The one schema field the server round-trips as a dedicated, non-secret value. */
 const CUSTOM_MCP_SERVERS_FIELD = "customMcpServersJson";
+
+/** The tags typed into the comma-separated Tags field, first spelling of each kept. */
+const parseTags = (text: string) =>
+  text
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag, index, all) => tag !== "" && all.findIndex((t) => sameTag(t, tag)) === index);
 
 const isInstalled = (agent: ManagedAgentStatus) => agent.installedVersion != null;
 
@@ -37,6 +45,8 @@ export default function AiProviders() {
   const [model, setModel] = useState("");
   const [isDefault, setIsDefault] = useState(false);
   const [parallelism, setParallelism] = useState<number>(0);
+  const [tagsText, setTagsText] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [configSchema, setConfigSchema] = useState<ConfigFieldDescriptor[]>([]);
   const [configValues, setConfigValues] = useState<Record<string, ConfigValue>>({});
   const [agents, setAgents] = useState<ManagedAgentStatus[]>([]);
@@ -128,6 +138,8 @@ export default function AiProviders() {
     setModel(provider.model);
     setIsDefault(provider.isDefault);
     setParallelism(provider.parallelism ?? 0);
+    setTagsText((provider.tags ?? []).join(", "));
+    setSaveError(null);
     setConfigValues(
       provider.customMcpServersJson != null
         ? { [CUSTOM_MCP_SERVERS_FIELD]: provider.customMcpServersJson }
@@ -146,6 +158,8 @@ export default function AiProviders() {
     setModel("");
     setIsDefault(false);
     setParallelism(0);
+    setTagsText("");
+    setSaveError(null);
     setConfigValues({});
   };
 
@@ -173,6 +187,16 @@ export default function AiProviders() {
   )?.modelSupport;
   const supportsModel = modelSupport === "Required" || modelSupport === "Optional";
 
+  // A tag has one holder, so saving one another provider holds takes it from them.
+  const tagMoves = parseTags(tagsText).flatMap((tag) => {
+    const holder = providers.find(
+      (provider) =>
+        provider.id !== editingProvider?.id &&
+        (provider.tags ?? []).some((held) => sameTag(held, tag)),
+    );
+    return holder ? [{ tag, from: holder.name }] : [];
+  });
+
   const handleSetDefault = async (provider: AiProvider) => {
     await aiProviderService.setDefault(provider.id);
     await loadData();
@@ -190,6 +214,7 @@ export default function AiProviders() {
       model: modelSupport === "Unsupported" ? "" : model,
       isDefault,
       parallelism,
+      tags: parseTags(tagsText),
     };
 
     // Send the Custom MCP servers value whenever the selected type exposes it
@@ -201,14 +226,20 @@ export default function AiProviders() {
       data.customMcpServersJson = String(configValues[CUSTOM_MCP_SERVERS_FIELD] ?? "");
     }
 
-    if (editingProvider) {
-      if (!cliAuth && apiKey) {
-        data.apiKey = apiKey;
+    setSaveError(null);
+    try {
+      if (editingProvider) {
+        if (!cliAuth && apiKey) {
+          data.apiKey = apiKey;
+        }
+        await aiProviderService.update(editingProvider.id, data);
+      } else {
+        data.apiKey = cliAuth ? "" : apiKey;
+        await aiProviderService.create(data);
       }
-      await aiProviderService.update(editingProvider.id, data);
-    } else {
-      data.apiKey = cliAuth ? "" : apiKey;
-      await aiProviderService.create(data);
+    } catch (error) {
+      setSaveError((error as ApiError)?.message ?? "Saving the provider failed.");
+      return;
     }
 
     await loadData();
@@ -332,13 +363,18 @@ export default function AiProviders() {
               <div className="ap-name">
                 {provider.name}
                 {provider.isDefault && <span className="ap-default-badge">Default</span>}
+                {(provider.tags ?? []).map((tag) => (
+                  <span key={tag} className="ap-tag-badge">
+                    {tag}
+                  </span>
+                ))}
               </div>
               <div className="ap-actions">
                 {!provider.isDefault && (
                   <button
                     className="btn btn-secondary btn-small"
                     onClick={() => handleSetDefault(provider)}
-                    title="Promote this provider so AI nodes without an explicit provider use it"
+                    title="Promote this provider so AI nodes without a matching tag use it"
                   >
                     Set as default
                   </button>
@@ -507,6 +543,22 @@ export default function AiProviders() {
                   onChange={(e) => setParallelism(parseInt(e.target.value, 10) || 0)}
                 />
               </div>
+              <div className="form-group">
+                <label htmlFor="apTags">Tags (comma-separated)</label>
+                <input
+                  id="apTags"
+                  type="text"
+                  value={tagsText}
+                  onChange={(e) => setTagsText(e.target.value)}
+                  placeholder="QA, Fast, Thinking"
+                />
+                <small>AI nodes with one of these tags run on this provider.</small>
+                {tagMoves.map((move) => (
+                  <div key={move.tag} className="ap-tag-move">
+                    Saving moves {move.tag} from {move.from}
+                  </div>
+                ))}
+              </div>
               <div className="form-group form-checkbox">
                 <label>
                   <input
@@ -521,6 +573,11 @@ export default function AiProviders() {
                   other default.
                 </div>
               </div>
+              {saveError && (
+                <div role="alert" className="ap-form-error">
+                  {saveError}
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button
@@ -754,6 +811,27 @@ export default function AiProviders() {
           border-radius: 0.25rem;
           background-color: #1a3a2a;
           color: #22c55e;
+        }
+
+        .ap-tag-badge {
+          font-size: 0.65rem;
+          font-weight: 500;
+          padding: 0.125rem 0.375rem;
+          border-radius: 0.25rem;
+          background-color: #1e2a3a;
+          color: #93c5fd;
+        }
+
+        .ap-tag-move {
+          margin-top: 0.375rem;
+          font-size: 0.75rem;
+          color: #f59e0b;
+        }
+
+        .ap-form-error {
+          margin-top: 0.75rem;
+          font-size: 0.8rem;
+          color: #ef4444;
         }
 
         .ap-actions {

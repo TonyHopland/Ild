@@ -20,7 +20,7 @@ export interface NodeSettingsSnapshot {
   label: string;
   cmdCommand: string;
   aiPrompt: string;
-  aiProvider: string;
+  aiProviderTag: string;
   aiTools: string[];
   aiMatchRules: AiMatchRule[];
   customEdgeNames: string[];

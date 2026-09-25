@@ -11,6 +11,7 @@ import {
   type ConfigFieldDescriptor,
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
+import { resolveProviderForTag } from "../../../utils/providerTags";
 import { PR_RESERVED_EDGE_NAMES } from "../../../utils/edgeUtils";
 import type { AdapterConfigValue, SessionPlaceholderUsage } from "../types";
 
@@ -20,7 +21,7 @@ interface NodeSettingsModalProps {
   nodeLabel: string;
   cmdCommand: string;
   aiPrompt: string;
-  aiProvider: string;
+  aiProviderTag: string;
   aiTools: string[];
   aiMatchRules: AiMatchRule[];
   customEdgeNames: string[];
@@ -50,7 +51,7 @@ interface NodeSettingsModalProps {
   onNodeLabelChange: (value: string) => void;
   onCmdCommandChange: (value: string) => void;
   onAiPromptChange: (value: string) => void;
-  onAiProviderChange: (value: string) => void;
+  onAiProviderTagChange: (value: string) => void;
   onAiToolsChange: (value: string[]) => void;
   onAiMatchRulesChange: (value: AiMatchRule[]) => void;
   onCustomEdgeNamesChange: (value: string[]) => void;
@@ -239,13 +240,61 @@ function ConditionCasesEditor({
   );
 }
 
+/** States the provider the backend will run the node on for `tag`. */
+function describeProviderForTag(providers: AiProvider[], tag: string): string {
+  const { provider, byTag } = resolveProviderForTag(providers, tag);
+  const tagSet = tag.trim() !== "";
+  if (byTag && provider) return `Runs on ${provider.name}`;
+  if (provider) {
+    return tagSet
+      ? `No provider has this tag — runs on the default provider (${provider.name})`
+      : `Runs on the default provider (${provider.name})`;
+  }
+  return tagSet
+    ? "No provider has this tag and no default provider is configured, so this node cannot run."
+    : "No default provider is configured, so this node cannot run.";
+}
+
+function AiProviderTagField({
+  tag,
+  providers,
+  onChange,
+}: {
+  tag: string;
+  providers: AiProvider[];
+  onChange: (value: string) => void;
+}) {
+  const suggestions = [...new Set(providers.flatMap((provider) => provider.tags ?? []))].sort(
+    (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }),
+  );
+  return (
+    <div className="config-field">
+      <label htmlFor="ai-provider-tag">Provider tag</label>
+      <input
+        id="ai-provider-tag"
+        type="text"
+        list="ai-provider-tag-suggestions"
+        value={tag}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Default provider"
+      />
+      <datalist id="ai-provider-tag-suggestions">
+        {suggestions.map((suggestion) => (
+          <option key={suggestion} value={suggestion} />
+        ))}
+      </datalist>
+      <small className="config-help-text">{describeProviderForTag(providers, tag)}</small>
+    </div>
+  );
+}
+
 export function NodeSettingsModal({
   selectedNode,
   labelError,
   nodeLabel,
   cmdCommand,
   aiPrompt,
-  aiProvider,
+  aiProviderTag,
   aiTools,
   aiMatchRules,
   customEdgeNames,
@@ -275,7 +324,7 @@ export function NodeSettingsModal({
   onNodeLabelChange,
   onCmdCommandChange,
   onAiPromptChange,
-  onAiProviderChange,
+  onAiProviderTagChange,
   onAiToolsChange,
   onAiMatchRulesChange,
   onCustomEdgeNamesChange,
@@ -372,21 +421,11 @@ export function NodeSettingsModal({
               </ConfigSection>
 
               <ConfigSection title="Model & tools">
-                <div className="config-field">
-                  <label htmlFor="ai-provider">AI Provider</label>
-                  <select
-                    id="ai-provider"
-                    value={aiProvider}
-                    onChange={(event) => onAiProviderChange(event.target.value)}
-                  >
-                    <option value="">Default</option>
-                    {aiProviders.map((provider) => (
-                      <option key={provider.id} value={provider.id}>
-                        {provider.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <AiProviderTagField
+                  tag={aiProviderTag}
+                  providers={aiProviders}
+                  onChange={onAiProviderTagChange}
+                />
 
                 {adapterConfigSchema.length > 0 && (
                   <AdapterConfigFields

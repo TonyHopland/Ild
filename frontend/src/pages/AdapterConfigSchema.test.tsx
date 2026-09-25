@@ -112,7 +112,7 @@ const sampleProviders = [
 ];
 
 describe("Adapter config schema", () => {
-  test("clicking an AI node with a provider fetches the adapter config schema", async () => {
+  test("clicking an AI node on the default provider fetches the adapter config schema", async () => {
     const fetchCalls: Array<{ url: string; method: string }> = [];
 
     const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
@@ -162,11 +162,7 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // Select a provider to trigger schema fetch
-    const select = screen.getByLabelText("AI Provider");
-    fireEvent.change(select, { target: { value: "prov-1" } });
-
-    // The schema endpoint should have been called
+    // The node runs on the default provider, so its schema is fetched on open
     await waitFor(() => {
       const schemaCall = fetchCalls.find(
         (c) => c.method === "GET" && c.url.includes("AgentAdapters"),
@@ -175,7 +171,7 @@ describe("Adapter config schema", () => {
     });
   });
 
-  test("adapter config fields render after selecting a provider", async () => {
+  test("adapter config fields render for the provider the node runs on", async () => {
     const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
       const method = (init?.method as string) ?? "GET";
 
@@ -222,11 +218,7 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // Select a provider
-    const select = screen.getByLabelText("AI Provider");
-    fireEvent.change(select, { target: { value: "prov-1" } });
-
-    // Wait for schema to be fetched and adapter config fields to render
+    // Wait for the default provider's schema to be fetched and adapter config fields to render
     await waitFor(() => {
       expect(screen.getByText("Temperature")).toBeTruthy();
     });
@@ -235,9 +227,13 @@ describe("Adapter config schema", () => {
     expect(screen.getByText("Max Tokens")).toBeTruthy();
   });
 
-  test("no adapter config fields shown when default provider selected", async () => {
+  test("no adapter config fields shown when no provider resolves", async () => {
+    const noDefault = sampleProviders.map((provider) => ({ ...provider, isDefault: false }));
+    const schemaCalls: string[] = [];
+
     const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
       const method = (init?.method as string) ?? "GET";
+      if (url.includes("AgentAdapters")) schemaCalls.push(url);
 
       if (method === "GET" && url.includes("looptemplates")) {
         return {
@@ -251,7 +247,7 @@ describe("Adapter config schema", () => {
         return {
           ok: true,
           status: 200,
-          text: () => Promise.resolve(JSON.stringify(sampleProviders)),
+          text: () => Promise.resolve(JSON.stringify(noDefault)),
         };
       }
 
@@ -274,12 +270,13 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // With default provider (no selection), adapter config fields should NOT appear
-    // Temperature should not be visible since no provider is selected
+    // No tag and no default provider: nothing to run on, so no fields to offer.
+    expect(await screen.findByText(/no default provider is configured/i)).toBeTruthy();
     expect(screen.queryByText("Temperature")).toBeFalsy();
+    expect(schemaCalls).toEqual([]);
   });
 
-  test("changing AI provider re-fetches schema for new provider type", async () => {
+  test("a tag held by another provider re-fetches schema for its type", async () => {
     const sampleProvidersMulti = [
       {
         id: "prov-1",
@@ -299,6 +296,7 @@ describe("Adapter config schema", () => {
         apiKey: "",
         model: "claude-3",
         isDefault: false,
+        tags: ["Review"],
         createdAt: "2025-01-01T00:00:00Z",
       },
     ];
@@ -371,63 +369,13 @@ describe("Adapter config schema", () => {
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
 
-    // Change provider to OpenCode
-    const select = screen.getByLabelText("AI Provider");
-    fireEvent.change(select, { target: { value: "prov-2" } });
+    // Tag the node with OpenCode's tag
+    fireEvent.change(screen.getByLabelText("Provider tag"), { target: { value: "Review" } });
 
     // Verify a schema fetch was made for the opencode type
     await waitFor(() => {
       const opencodeCall = schemaCalls.find((c) => c.includes("opencode"));
       expect(opencodeCall).toBeTruthy();
-    });
-  });
-
-  test("AI provider dropdown populates from API", async () => {
-    const trackingFetch = vi.fn(async (url: string, init?: RequestInit) => {
-      const method = (init?.method as string) ?? "GET";
-
-      if (method === "GET" && url.includes("looptemplates")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
-        };
-      }
-
-      if (method === "GET" && url.includes("aiproviders")) {
-        return {
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve(JSON.stringify(sampleProviders)),
-        };
-      }
-
-      return { ok: false, status: 500, text: () => Promise.resolve("") };
-    });
-
-    renderPage(trackingFetch);
-
-    await waitFor(() => {
-      expect(screen.getByText("Dev Loop")).toBeTruthy();
-    });
-
-    // Click the template to load the graph
-    fireEvent.click(screen.getByText("Dev Loop"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Initialize")).toBeTruthy();
-    });
-
-    // Click the AI node
-    fireEvent.click(screen.getByText("Code"));
-
-    // The AI provider dropdown should show "My Pi"
-    await waitFor(() => {
-      const select = screen.getByLabelText("AI Provider");
-      expect(select).toBeTruthy();
-      const options = (select as HTMLSelectElement).options;
-      const providerLabels = Array.from(options).map((o) => o.label);
-      expect(providerLabels).toContain("My Pi");
     });
   });
 
@@ -477,10 +425,6 @@ describe("Adapter config schema", () => {
 
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
-
-    // Select a provider to show adapter config fields
-    const select = screen.getByLabelText("AI Provider");
-    fireEvent.change(select, { target: { value: "prov-1" } });
 
     // Wait for schema fields to render
     await waitFor(() => {
@@ -560,10 +504,6 @@ describe("Adapter config schema", () => {
 
     // Click the AI node
     fireEvent.click(screen.getByText("Code"));
-
-    // Select a provider
-    const select = screen.getByLabelText("AI Provider");
-    fireEvent.change(select, { target: { value: "prov-1" } });
 
     // Wait for schema fields to render
     await waitFor(() => {
@@ -664,9 +604,6 @@ describe("Adapter config schema", () => {
     });
 
     fireEvent.click(screen.getByText("Code"));
-
-    const select = screen.getByLabelText("AI Provider");
-    fireEvent.change(select, { target: { value: "prov-1" } });
 
     // A genuinely node-scoped field renders…
     await waitFor(() => {

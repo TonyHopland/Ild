@@ -74,6 +74,7 @@ import type {
 } from "./types";
 import { validateLoopGraphLocally } from "./utils/loopGraphValidation";
 import { isTemplatedSessionName, sessionPlaceholderError } from "./utils/sessionPlaceholder";
+import { resolveProviderForTag } from "../../utils/providerTags";
 import { resolveToolSelection } from "./utils/toolSelection";
 
 function loadErrorMessage(error: unknown, fallback: string): string {
@@ -152,19 +153,6 @@ function sanitizeAdapterConfigValues(
   }
 
   return values;
-}
-
-function resolveActiveAiProvider(
-  aiProviders: AiProvider[] | null | undefined,
-  providerId: string,
-): AiProvider | null {
-  const providers = Array.isArray(aiProviders) ? aiProviders : [];
-  return (
-    providers.find((provider) => provider.id === providerId) ??
-    providers.find((provider) => provider.isDefault) ??
-    providers[0] ??
-    null
-  );
 }
 
 /** Reads an AI node's ordered output-match rules from its config. */
@@ -265,7 +253,7 @@ export default function LoopEditor() {
   const [nodeLabel, setNodeLabel] = useState("");
   const [cmdCommand, setCmdCommand] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
-  const [aiProvider, setAiProvider] = useState("");
+  const [aiProviderTag, setAiProviderTag] = useState("");
   const [aiTools, setAiTools] = useState<string[]>([]);
   const [aiMatchRules, setAiMatchRules] = useState<AiMatchRule[]>([]);
   const [customEdgeNames, setCustomEdgeNames] = useState<string[]>([]);
@@ -347,15 +335,19 @@ export default function LoopEditor() {
   const selectedPlaceholderUsage = sessionPlaceholderUsages.find(
     (entry) => entry.name === aiSessionPlaceholder.trim(),
   );
-  const availableAiTools: AiToolDefinition[] = useMemo(
-    () => resolveActiveAiProvider(aiProviders, aiProvider)?.supportedTools ?? [],
-    [aiProviders, aiProvider],
+  const resolvedAiProvider = useMemo(
+    () => resolveProviderForTag(aiProviders, aiProviderTag).provider,
+    [aiProviders, aiProviderTag],
   );
+  const availableAiTools: AiToolDefinition[] = resolvedAiProvider?.supportedTools ?? [];
 
+  // Only the latest schema load may land: an earlier one resolving late would
+  // show a provider's fields the node no longer runs on.
+  const adapterSchemaRequestRef = useRef(0);
   const loadAdapterSchema = useCallback(
-    async (providerId: string, initialAdapterConfig: Record<string, unknown> = {}) => {
-      const selectedProvider = aiProviders.find((provider) => provider.id === providerId);
-      if (!selectedProvider) {
+    async (provider: AiProvider | null, initialAdapterConfig: Record<string, unknown> = {}) => {
+      const request = ++adapterSchemaRequestRef.current;
+      if (!provider) {
         setAdapterConfigSchema([]);
         setAdapterConfigValues({});
         return;
@@ -367,9 +359,10 @@ export default function LoopEditor() {
       // surfacing this field here would let users set it in a place that does
       // nothing. Exclude it from the node editor while keeping the schema-driven
       // rendering generic for any genuinely node-scoped fields added later.
-      const schema = (await agentAdapterService.getConfigSchema(selectedProvider.type)).filter(
+      const schema = (await agentAdapterService.getConfigSchema(provider.type)).filter(
         (field) => field.name !== "customMcpServersJson",
       );
+      if (request !== adapterSchemaRequestRef.current) return;
       const nextValues: Record<string, AdapterConfigValue> = {};
       for (const field of schema) {
         const nodeValue = initialAdapterConfig[field.name];
@@ -387,7 +380,7 @@ export default function LoopEditor() {
       setAdapterConfigSchema(schema);
       setAdapterConfigValues(nextValues);
     },
-    [aiProviders],
+    [],
   );
 
   useEffect(() => {
@@ -1117,10 +1110,8 @@ export default function LoopEditor() {
       const config = data.config || {};
       const adapterConfig = (config.adapterConfig as Record<string, unknown>) || {};
       const initialAdapterValues = sanitizeAdapterConfigValues(adapterConfig);
-      const activeProvider = resolveActiveAiProvider(
-        aiProviders,
-        (config.aiProviderId as string) || "",
-      );
+      const nodeAiProviderTag = (config.aiProviderTag as string) || "";
+      const activeProvider = resolveProviderForTag(aiProviders, nodeAiProviderTag).provider;
       const resolvedAiTools = resolveToolSelection(activeProvider, config.toolAllowlist);
       // Human/PR nodes declare custom edges in config, but seeded and migrated
       // templates wire the edge without that declaration — union the connected
@@ -1136,7 +1127,7 @@ export default function LoopEditor() {
       setNodeLabel(data.label || "");
       setCmdCommand((config.command as string) || "");
       setAiPrompt((config.prompt as string) || "");
-      setAiProvider((config.aiProviderId as string) || "");
+      setAiProviderTag(nodeAiProviderTag);
       setAiTools(resolvedAiTools);
       setAiMatchRules(readMatchRules(config));
       setCustomEdgeNames(resolvedCustomEdges);
@@ -1155,18 +1146,13 @@ export default function LoopEditor() {
       setConditionOutput((config.output as string) ?? CONDITION_DEFAULT_TEMPLATE);
       setAdapterConfigValues(initialAdapterValues);
 
-      if (data.type === NodeType.AI) {
-        void loadAdapterSchema((config.aiProviderId as string) || "", adapterConfig);
-      } else {
-        setAdapterConfigSchema([]);
-        setAdapterConfigValues({});
-      }
+      void loadAdapterSchema(data.type === NodeType.AI ? activeProvider : null, adapterConfig);
 
       setOriginalNodeConfig({
         label: data.label || "",
         cmdCommand: (config.command as string) || "",
         aiPrompt: (config.prompt as string) || "",
-        aiProvider: (config.aiProviderId as string) || "",
+        aiProviderTag: nodeAiProviderTag,
         aiTools: resolvedAiTools,
         aiMatchRules: readMatchRules(config),
         customEdgeNames: resolvedCustomEdges,
@@ -1190,13 +1176,17 @@ export default function LoopEditor() {
     [aiProviders, loadAdapterSchema],
   );
 
-  const handleAiProviderChange = useCallback(
-    (providerId: string) => {
-      setAiProvider(providerId);
-      setAiTools(resolveToolSelection(resolveActiveAiProvider(aiProviders, providerId), undefined));
-      void loadAdapterSchema(providerId);
+  // A keystroke that still resolves to the same provider keeps the node's
+  // allowlist and adapter values; only a change of provider resets them.
+  const handleAiProviderTagChange = useCallback(
+    (nextTag: string) => {
+      setAiProviderTag(nextTag);
+      const next = resolveProviderForTag(aiProviders, nextTag).provider;
+      if (next?.id === resolvedAiProvider?.id) return;
+      setAiTools(resolveToolSelection(next, undefined));
+      void loadAdapterSchema(next);
     },
-    [aiProviders, loadAdapterSchema],
+    [aiProviders, resolvedAiProvider, loadAdapterSchema],
   );
 
   const handleSaveNodeSettings = useCallback(() => {
@@ -1227,7 +1217,8 @@ export default function LoopEditor() {
     } else if (selectedNodeType === NodeType.AI) {
       config.prompt = aiPrompt;
       config.useSession = aiUseSession;
-      config.aiProviderId = aiProvider;
+      config.aiProviderTag = aiProviderTag.trim() || undefined;
+      config.aiProviderId = undefined;
       config.toolAllowlist = aiTools;
       config.adapterConfig = { ...adapterConfigValues };
       const cleanRules = aiMatchRules
@@ -1301,7 +1292,7 @@ export default function LoopEditor() {
     setOriginalNodeConfig(null);
   }, [
     selectedNode,
-    aiProvider,
+    aiProviderTag,
     aiPrompt,
     aiMatchRules,
     customEdgeNames,
@@ -1330,7 +1321,7 @@ export default function LoopEditor() {
       setNodeLabel(originalNodeConfig.label);
       setCmdCommand(originalNodeConfig.cmdCommand);
       setAiPrompt(originalNodeConfig.aiPrompt);
-      setAiProvider(originalNodeConfig.aiProvider);
+      setAiProviderTag(originalNodeConfig.aiProviderTag);
       setAiTools(originalNodeConfig.aiTools);
       setAiMatchRules(originalNodeConfig.aiMatchRules);
       setCustomEdgeNames(originalNodeConfig.customEdgeNames);
@@ -1732,7 +1723,7 @@ export default function LoopEditor() {
                       nodeLabel={nodeLabel}
                       cmdCommand={cmdCommand}
                       aiPrompt={aiPrompt}
-                      aiProvider={aiProvider}
+                      aiProviderTag={aiProviderTag}
                       aiTools={aiTools}
                       aiMatchRules={aiMatchRules}
                       customEdgeNames={customEdgeNames}
@@ -1762,7 +1753,7 @@ export default function LoopEditor() {
                       onNodeLabelChange={setNodeLabel}
                       onCmdCommandChange={setCmdCommand}
                       onAiPromptChange={setAiPrompt}
-                      onAiProviderChange={handleAiProviderChange}
+                      onAiProviderTagChange={handleAiProviderTagChange}
                       onAiToolsChange={setAiTools}
                       onAiMatchRulesChange={setAiMatchRules}
                       onCustomEdgeNamesChange={setCustomEdgeNames}
