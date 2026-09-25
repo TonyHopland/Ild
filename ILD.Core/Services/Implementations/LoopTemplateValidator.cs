@@ -1,5 +1,6 @@
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Data.DTOs;
+using ILD.Data.Entities;
 using ILD.Data.Enums;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -212,6 +213,9 @@ public static class LoopTemplateValidator
                 var cfg = NodeConfig.Parse<NodeConfig.Ai>(System.Text.Json.JsonSerializer.Serialize(node.Config));
                 if (cfg.UseSession == true && string.IsNullOrWhiteSpace(cfg.SessionPlaceholder))
                     errors.Add($"AI node {node.Id} with useSession=true must set sessionPlaceholder.");
+
+                if (cfg.AiProviderTag?.Trim() is { } tag && AiProviderTag.Problem(tag) is { } tagProblem)
+                    errors.Add($"AI node {node.Id} aiProviderTag '{tag}' {tagProblem}.");
 
                 // Session fields are templated, but on a narrower grammar than a
                 // prompt: {{Var.<name>}} only. They are checked here rather than

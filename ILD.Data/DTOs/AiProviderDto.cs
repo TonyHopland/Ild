@@ -43,5 +43,8 @@ public class AiProviderDto
     /// </summary>
     public string? CustomMcpServersJson { get; set; }
 
+    /// <summary>The provider's tags. Null on update leaves them unchanged.</summary>
+    public List<string>? Tags { get; set; }
+
     public DateTime CreatedAt { get; set; }
 }

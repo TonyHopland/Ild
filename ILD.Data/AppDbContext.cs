@@ -28,6 +28,7 @@ public class AppDbContext : DbContext
     public DbSet<LoopRunVariableWrite> LoopRunVariableWrites => Set<LoopRunVariableWrite>();
     public DbSet<EventLog> EventLogs => Set<EventLog>();
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
+    public DbSet<AiProviderTag> AiProviderTags => Set<AiProviderTag>();
     public DbSet<User> Users => Set<User>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
@@ -247,6 +248,13 @@ public class AppDbContext : DbContext
             e.HasIndex(a => a.Name);
         });
 
+        modelBuilder.Entity<AiProviderTag>(e =>
+        {
+            // One holder per tag, enforced where the race is: two providers
+            // saved at once with the same tag must not both keep it.
+            e.HasIndex(t => t.NormalizedName).IsUnique();
+        });
+
         modelBuilder.Entity<User>(e =>
         {
             e.HasIndex(u => u.Username).IsUnique();
@@ -345,6 +353,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<AiProvider>(e =>
         {
             e.Property(a => a.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<AiProviderTag>(e =>
+        {
+            e.Property(t => t.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
         modelBuilder.Entity<User>(e =>
@@ -447,6 +460,12 @@ public class AppDbContext : DbContext
             .HasOne(p => p.AiProvider)
             .WithMany()
             .HasForeignKey(p => p.AiProviderId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<AiProvider>()
+            .HasMany(p => p.Tags)
+            .WithOne(t => t.AiProvider)
+            .HasForeignKey(t => t.AiProviderId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 

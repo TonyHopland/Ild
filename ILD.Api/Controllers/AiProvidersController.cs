@@ -107,6 +107,30 @@ public class AiProvidersController : ControllerBase
         return obj.Count == 0 ? null : obj.ToJsonString();
     }
 
+    /// <summary>
+    /// Trims the requested tags, drops blank ones and collapses case-duplicates
+    /// to their first spelling. Null stays null: the caller isn't managing tags.
+    /// </summary>
+    private static (List<string>? Tags, string? Error) NormalizeTags(List<string>? requested)
+    {
+        if (requested is null) return (null, null);
+        var tags = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tag in requested.Select(t => t?.Trim()))
+        {
+            if (string.IsNullOrEmpty(tag) || !seen.Add(AiProviderTag.Normalize(tag))) continue;
+            if (AiProviderTag.Problem(tag) is { } problem)
+                return (null, $"Tag '{tag}' {problem}.");
+            tags.Add(tag);
+        }
+        if (tags.Count > AiProviderTag.MaxPerProvider)
+            return (null, $"A provider can have at most {AiProviderTag.MaxPerProvider} tags; got {tags.Count}.");
+        return (tags, null);
+    }
+
+    private const string ConcurrentTagSaveError =
+        "Another save changed the same tags at the same time. Reload and try again.";
+
     private static object ToResponse(AiProvider p) => new
     {
         id = p.Id,
@@ -124,6 +148,7 @@ public class AiProvidersController : ControllerBase
         // user-editable Custom MCP servers value so the AI Providers form can seed
         // and round-trip it without leaking the rest of the blob.
         customMcpServersJson = AiProviderConfig.Parse(p.Config).CustomMcpServersJson,
+        tags = p.Tags.Select(t => t.Name).Order(StringComparer.OrdinalIgnoreCase).ToList(),
         supportedTools = AiToolCatalog.GetSupportedToolsForProviderType(p.Type),
         createdAt = p.CreatedAt,
         updatedAt = p.UpdatedAt,
@@ -135,7 +160,7 @@ public class AiProvidersController : ControllerBase
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
-        var items = await _db.AiProviders.AsNoTracking().OrderBy(p => p.Name).Skip(skip).Take(take).ToListAsync();
+        var items = await _db.AiProviders.AsNoTracking().Include(p => p.Tags).OrderBy(p => p.Name).Skip(skip).Take(take).ToListAsync();
         return Ok(items.Select(ToResponse));
     }
 
@@ -143,7 +168,7 @@ public class AiProvidersController : ControllerBase
     public async Task<IActionResult> GetById(string id)
     {
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
-        var p = await _db.AiProviders.FindAsync(guid);
+        var p = await _providerStore.GetAiProviderByIdAsync(guid);
         return p == null ? NotFound() : Ok(ToResponse(p));
     }
 
@@ -156,6 +181,9 @@ public class AiProvidersController : ControllerBase
             return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
         if (ValidateConnectionFields(request) is { } validationError)
             return BadRequest(new { error = validationError });
+        var (tags, tagsError) = NormalizeTags(request.Tags);
+        if (tagsError is not null)
+            return BadRequest(new { error = tagsError });
 
         var p = new AiProvider
         {
@@ -170,7 +198,14 @@ public class AiProvidersController : ControllerBase
             Config = ApplyCustomMcpServers(request.Config, request.CustomMcpServersJson),
             CreatedAt = DateTime.UtcNow,
         };
-        await _providerStore.CreateAiProviderAsync(p);
+        try
+        {
+            await _providerStore.CreateAiProviderAsync(p, tags);
+        }
+        catch (DbUpdateException) when (tags is not null)
+        {
+            return Conflict(new { error = ConcurrentTagSaveError });
+        }
         // Agents aren't baked into the image; if this provider uses a managed
         // agent that isn't installed yet, install it in the background so the
         // first run doesn't fail on a missing CLI.
@@ -217,6 +252,9 @@ public class AiProvidersController : ControllerBase
             return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
         if (ValidateConnectionFields(request) is { } validationError)
             return BadRequest(new { error = validationError });
+        var (tags, tagsError) = NormalizeTags(request.Tags);
+        if (tagsError is not null)
+            return BadRequest(new { error = tagsError });
         p.Name = request.Name;
         p.Type = request.Type;
         p.BaseUrl = request.BaseUrl;
@@ -230,7 +268,14 @@ public class AiProvidersController : ControllerBase
         // folded in on top.
         p.Config = ApplyCustomMcpServers(request.Config ?? p.Config, request.CustomMcpServersJson);
         p.UpdatedAt = DateTime.UtcNow;
-        await _providerStore.UpdateAiProviderAsync(p);
+        try
+        {
+            await _providerStore.UpdateAiProviderAsync(p, tags);
+        }
+        catch (DbUpdateException) when (tags is not null)
+        {
+            return Conflict(new { error = ConcurrentTagSaveError });
+        }
         // If the type was changed to a managed agent, make sure it is installed.
         _agentProvisioner.EnsureInstalledForProviderType(p.Type);
         return Ok(ToResponse(p));
