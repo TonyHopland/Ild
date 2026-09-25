@@ -54,6 +54,10 @@ public class ConnectionTesterMalformedInputTests
     [InlineData("GitHub", "sekrit-KEY-9f3a\r\n")]
     [InlineData("Forgejo", "sekrit-KEY-9f3a\n")]
     [InlineData("Forgejo", "sekrit\0KEY-9f3a")]
+    [InlineData("GitHub", "sekrit KEY-9f3a")]
+    [InlineData("Forgejo", "sekrit KEY-9f3a")]
+    [InlineData("GitHub", "“sekrit-KEY-9f3a”")]
+    [InlineData("Forgejo", "sékrit-KEY-9f3a")]
     public async Task A_key_that_cannot_be_sent_in_a_header_is_misconfigured_without_the_key(string type, string key)
     {
         var (port, listener) = Serve(Http(200, "application/json", "{\"login\":\"someone\"}"));
@@ -64,7 +68,24 @@ public class ConnectionTesterMalformedInputTests
 
             Assert.Equal(ConnectionTestOutcome.Misconfigured, result.Outcome);
             Assert.Contains("API key", result.Message);
-            Assert.DoesNotContain("sekrit", $"{result.Message}\n{result.Detail}");
+            Assert.DoesNotContain("krit", $"{result.Message}\n{result.Detail}");
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task Azure_DevOps_sends_a_non_ascii_key_encoded_so_the_forge_judges_it()
+    {
+        var (port, listener) = Serve(Http(401, "application/json", "{\"message\":\"Bad credentials\"}"));
+        try
+        {
+            var result = await Tester(new HttpClient()).TestRemoteProviderAsync(
+                Provider("AzureDevOps", $"http://127.0.0.1:{port}", "sekrit KEY-9f3a"), CancellationToken.None);
+
+            Assert.Equal(ConnectionTestOutcome.InvalidApiKey, result.Outcome);
         }
         finally
         {

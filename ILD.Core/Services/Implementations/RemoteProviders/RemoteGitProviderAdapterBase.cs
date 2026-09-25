@@ -862,6 +862,12 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 $"The base URL '{provider.Url}' is not an absolute http(s) URL.",
                 null);
 
+        if (SendsApiKeyAsTyped && FirstUnsendable(provider.ApiKey) is { } unsendable)
+            return new ConnectionTestResult(
+                ConnectionTestOutcome.Misconfigured,
+                "The API key contains a character that cannot be sent in a request header — a line break or a non-ASCII character such as a non-breaking space or a curly quote. Enter it again.",
+                $"The key contains U+{(int)unsendable:X4}.");
+
         var host = providerUri.Authority;
         HttpStatusCode status;
         string body;
@@ -877,14 +883,6 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         catch (HttpRequestException ex)
         {
             return new ConnectionTestResult(ConnectionTestOutcome.Unreachable, $"Could not reach {host}.", MessageChain(ex));
-        }
-        catch (FormatException ex)
-        {
-            // The API key is the only header value that comes from the user.
-            return new ConnectionTestResult(
-                ConnectionTestOutcome.Misconfigured,
-                "The API key contains a line break or NUL character, so it cannot be sent — enter it again.",
-                ex.Message);
         }
 
         var evidence = $"HTTP {(int)status} {status}\n{body}";
@@ -926,6 +924,24 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
 
     /// <summary>Whether this status means the forge refused the credentials themselves.</summary>
     protected virtual bool RejectsCredentials(HttpStatusCode status) => status == HttpStatusCode.Unauthorized;
+
+    /// <summary>
+    /// Whether <see cref="ApplyHeaders"/> puts the API key into the Authorization
+    /// header as typed, so .NET refuses to send one it cannot carry.
+    /// </summary>
+    protected virtual bool SendsApiKeyAsTyped => true;
+
+    /// <summary>
+    /// The first character .NET refuses in a header value: CR, LF and NUL are
+    /// rejected when the header is built, anything outside ASCII when it is sent.
+    /// </summary>
+    private static char? FirstUnsendable(string? key)
+    {
+        foreach (var c in key ?? string.Empty)
+            if (c is '\r' or '\n' or '\0' || c > '\u007F')
+                return c;
+        return null;
+    }
 
     private string? ReadIdentityOrNull(string body)
     {

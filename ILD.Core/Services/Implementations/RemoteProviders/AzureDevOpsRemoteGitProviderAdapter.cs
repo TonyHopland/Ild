@@ -689,6 +689,9 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     protected override bool RejectsCredentials(HttpStatusCode status)
         => status is HttpStatusCode.Unauthorized or HttpStatusCode.NonAuthoritativeInformation;
 
+    /// <summary>The key travels base64-encoded inside Basic credentials.</summary>
+    protected override bool SendsApiKeyAsTyped => false;
+
     private static string? LegacyOrganization(string host)
         => host.EndsWith(LegacyHostSuffix, StringComparison.OrdinalIgnoreCase)
             ? host[..^LegacyHostSuffix.Length]
