@@ -808,6 +808,43 @@ public sealed class RemoteWorkItemCoordinatorTests
         Assert.Single((await free.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
     }
 
+    [Theory]
+    [MemberData(nameof(AiNodeProviderResolutionScenarios.NoDefaultCases), MemberType = typeof(AiNodeProviderResolutionScenarios))]
+    public async Task With_no_default_provider_resume_gates_on_the_provider_the_executor_runs_on(
+        string nodeConfig, RemoteAiProviderOverrideMode mode, bool overrideTargetSet, string expected)
+    {
+        using var db = new TestDb();
+        var seeded = await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
+        var overrideId = overrideTargetSet ? seeded.Bravo.Id : (Guid?)null;
+        var target = seeded.ByName(expected);
+
+        var targetFull = new AiProviderConcurrencyTracker();
+        Assert.True(targetFull.TryEnter(target.Id, target.Parallelism));
+        var (blocked, _) = BuildResumeGate(nodeConfig, mode, overrideId, targetFull, db.Providers);
+        Assert.Empty((await blocked.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
+
+        var othersFull = new AiProviderConcurrencyTracker();
+        foreach (var other in seeded.All.Where(p => p.Id != target.Id))
+            Assert.True(othersFull.TryEnter(other.Id, other.Parallelism));
+        var (free, _) = BuildResumeGate(nodeConfig, mode, overrideId, othersFull, db.Providers);
+        Assert.Single((await free.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
+    }
+
+    [Fact]
+    public async Task With_no_default_provider_and_nothing_resolvable_the_run_resumes_so_the_executor_reports_it()
+    {
+        using var db = new TestDb();
+        var seeded = await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
+        var allFull = new AiProviderConcurrencyTracker();
+        foreach (var p in seeded.All)
+            Assert.True(allFull.TryEnter(p.Id, p.Parallelism));
+
+        var (sut, _) = BuildResumeGate(
+            @"{""aiProviderTag"":""Nightly""}", RemoteAiProviderOverrideMode.None, null, allFull, db.Providers);
+
+        Assert.Single((await sut.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
+    }
+
     [Fact]
     public async Task Resumes_when_the_override_target_has_unlimited_parallelism()
     {

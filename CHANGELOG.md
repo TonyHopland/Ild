@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **AI nodes no longer have their own adapter settings.** They never took effect; set them on the AI provider instead.
 
+- **A work item's AI provider override now applies even when no default provider is configured.**
+
 ## [0.14.0] - 2026-09-24
 
 ### Changed
