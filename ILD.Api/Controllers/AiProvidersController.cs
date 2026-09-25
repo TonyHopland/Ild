@@ -128,17 +128,56 @@ public class AiProvidersController : ControllerBase
         return (tags, null);
     }
 
-    /// <summary>
-    /// After a failed save: the conflict message when a concurrent save gave one
-    /// of <paramref name="tags"/> to another provider (the unique tag index then
-    /// refused ours), or null when the save failed for another reason.
-    /// </summary>
-    private async Task<string?> TagTakenConcurrentlyAsync(Guid providerId, IEnumerable<string> tags)
+    private sealed record TagHolder(Guid ProviderId, string ProviderName);
+
+    /// <summary>Who holds each of <paramref name="tags"/> now, keyed by normalised name.</summary>
+    private async Task<Dictionary<string, TagHolder>> TagHoldersAsync(IReadOnlyList<string> tags)
     {
+        var normalized = tags.Select(AiProviderTag.Normalize).ToList();
+        return await _db.AiProviderTags.AsNoTracking()
+            .Where(t => normalized.Contains(t.NormalizedName))
+            .Select(t => new { t.NormalizedName, t.AiProviderId, t.AiProvider!.Name })
+            .ToDictionaryAsync(t => t.NormalizedName, t => new TagHolder(t.AiProviderId, t.Name));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="save"/> and returns the conflict message when the
+    /// database refused it because a concurrent save gave one of
+    /// <paramref name="tags"/> to another provider (the unique tag index), or
+    /// null when it succeeded. Any other failure propagates. The rollback puts a
+    /// tag this save was moving back on its old holder, so only a holder that
+    /// changed since before the save means another save took it.
+    /// </summary>
+    private async Task<string?> SaveReportingTagConflictAsync(Guid providerId, IReadOnlyList<string>? tags, Func<Task> save)
+    {
+        if (tags is null)
+        {
+            await save();
+            return null;
+        }
+        var holdersBefore = await TagHoldersAsync(tags);
+        try
+        {
+            await save();
+            return null;
+        }
+        catch (DbUpdateException)
+        {
+            if (await TagTakenConcurrentlyAsync(providerId, tags, holdersBefore) is not { } conflict) throw;
+            return conflict;
+        }
+    }
+
+    private async Task<string?> TagTakenConcurrentlyAsync(
+        Guid providerId, IReadOnlyList<string> tags, Dictionary<string, TagHolder> holdersBefore)
+    {
+        var holdersAfter = await TagHoldersAsync(tags);
         foreach (var tag in tags)
         {
-            if (await _providerStore.GetAiProviderByTagAsync(tag) is { } holder && holder.Id != providerId)
-                return $"Tag '{tag}' was saved on provider '{holder.Name}' at the same time. Reload and try again.";
+            var key = AiProviderTag.Normalize(tag);
+            if (holdersAfter.GetValueOrDefault(key) is { } holder && holder.ProviderId != providerId
+                && holder.ProviderId != holdersBefore.GetValueOrDefault(key)?.ProviderId)
+                return $"Tag '{tag}' was saved on provider '{holder.ProviderName}' at the same time. Reload and try again.";
         }
         return null;
     }
@@ -210,15 +249,8 @@ public class AiProvidersController : ControllerBase
             Config = ApplyCustomMcpServers(request.Config, request.CustomMcpServersJson),
             CreatedAt = DateTime.UtcNow,
         };
-        try
-        {
-            await _providerStore.CreateAiProviderAsync(p, tags);
-        }
-        catch (DbUpdateException) when (tags is not null)
-        {
-            if (await TagTakenConcurrentlyAsync(p.Id, tags) is not { } conflict) throw;
+        if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.CreateAiProviderAsync(p, tags)) is { } conflict)
             return Conflict(new { error = conflict });
-        }
         // Agents aren't baked into the image; if this provider uses a managed
         // agent that isn't installed yet, install it in the background so the
         // first run doesn't fail on a missing CLI.
@@ -281,15 +313,8 @@ public class AiProvidersController : ControllerBase
         // folded in on top.
         p.Config = ApplyCustomMcpServers(request.Config ?? p.Config, request.CustomMcpServersJson);
         p.UpdatedAt = DateTime.UtcNow;
-        try
-        {
-            await _providerStore.UpdateAiProviderAsync(p, tags);
-        }
-        catch (DbUpdateException) when (tags is not null)
-        {
-            if (await TagTakenConcurrentlyAsync(p.Id, tags) is not { } conflict) throw;
+        if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.UpdateAiProviderAsync(p, tags)) is { } conflict)
             return Conflict(new { error = conflict });
-        }
         // If the type was changed to a managed agent, make sure it is installed.
         _agentProvisioner.EnsureInstalledForProviderType(p.Type);
         return Ok(ToResponse(p));

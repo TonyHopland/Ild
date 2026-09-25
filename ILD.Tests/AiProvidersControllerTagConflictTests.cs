@@ -33,13 +33,10 @@ public class AiProvidersControllerTagConflictTests
             Mock.Of<IManagedAgentProvisioner>());
     }
 
-    /// <summary>A store whose create fails after <paramref name="meanwhile"/> ran, reading tags from the real database.</summary>
-    private static IProviderStore FailingCreate(TestDb db, Func<Task> meanwhile)
+    /// <summary>A store whose create fails after <paramref name="meanwhile"/> ran.</summary>
+    private static IProviderStore FailingCreate(Func<Task> meanwhile)
     {
-        var real = new ProviderStore(db.Context);
         var store = new Mock<IProviderStore>();
-        store.Setup(s => s.GetAiProviderByTagAsync(It.IsAny<string>()))
-            .Returns((string tag) => real.GetAiProviderByTagAsync(tag));
         store.Setup(s => s.CreateAiProviderAsync(It.IsAny<AiProvider>(), It.IsAny<IReadOnlyList<string>?>()))
             .Returns(async () =>
             {
@@ -62,7 +59,7 @@ public class AiProvidersControllerTagConflictTests
     public async Task A_save_refused_because_another_save_took_its_tag_is_a_conflict_naming_both()
     {
         using var db = new TestDb();
-        var store = FailingCreate(db, () => new ProviderStore(db.Context).CreateAiProviderAsync(
+        var store = FailingCreate(() => new ProviderStore(db.Context).CreateAiProviderAsync(
             new AiProvider { Id = Guid.NewGuid(), Name = "Rival", Type = "claude-code", Model = "m" },
             ["fast"]));
 
@@ -78,7 +75,19 @@ public class AiProvidersControllerTagConflictTests
     public async Task A_save_refused_for_another_reason_is_not_reported_as_a_tag_conflict()
     {
         using var db = new TestDb();
-        var store = FailingCreate(db, () => Task.CompletedTask);
+        var store = FailingCreate(() => Task.CompletedTask);
+
+        await Assert.ThrowsAsync<DbUpdateException>(() => Controller(db, store).Create(Dto("QA", "Fast")));
+    }
+
+    [Fact]
+    public async Task A_save_moving_a_held_tag_that_fails_for_another_reason_is_not_a_tag_conflict()
+    {
+        using var db = new TestDb();
+        await new ProviderStore(db.Context).CreateAiProviderAsync(
+            new AiProvider { Id = Guid.NewGuid(), Name = "Holder", Type = "claude-code", Model = "m" },
+            ["fast"]);
+        var store = FailingCreate(() => Task.CompletedTask);
 
         await Assert.ThrowsAsync<DbUpdateException>(() => Controller(db, store).Create(Dto("QA", "Fast")));
     }
