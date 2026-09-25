@@ -43,6 +43,24 @@ public static class AiNodeProviderResolutionScenarios
         { @"{}", RemoteAiProviderOverrideMode.OverrideAll, false, Dflt },
     };
 
+    /// <summary>
+    /// Cases seeded with <c>withDefault: false</c>, so no provider is the
+    /// default: an override that applies must still win, and OverrideDefault
+    /// counts an unset or unmatched tag as falling back to the missing default.
+    /// </summary>
+    public static TheoryData<string, RemoteAiProviderOverrideMode, bool, string> NoDefaultCases => new()
+    {
+        { @"{""aiProviderTag"":""Nobody""}", RemoteAiProviderOverrideMode.OverrideAll, true, Bravo },
+        { @"{""aiProviderTag"":""   ""}", RemoteAiProviderOverrideMode.OverrideAll, true, Bravo },
+        { @"{}", RemoteAiProviderOverrideMode.OverrideAll, true, Bravo },
+        { @"{""aiProviderTag"":""QA""}", RemoteAiProviderOverrideMode.OverrideAll, true, Bravo },
+        { @"{""aiProviderTag"":""Nobody""}", RemoteAiProviderOverrideMode.OverrideDefault, true, Bravo },
+        { @"{""aiProviderTag"":""   ""}", RemoteAiProviderOverrideMode.OverrideDefault, true, Bravo },
+        { @"{}", RemoteAiProviderOverrideMode.OverrideDefault, true, Bravo },
+        { @"{""aiProviderTag"":""QA""}", RemoteAiProviderOverrideMode.OverrideDefault, true, Alpha },
+        { @"{""aiProviderTag"":""QA""}", RemoteAiProviderOverrideMode.None, true, Alpha },
+    };
+
     public sealed record Seeded(AiProvider Alpha, AiProvider Dflt, AiProvider Bravo)
     {
         public IReadOnlyList<AiProvider> All => [Alpha, Dflt, Bravo];
@@ -55,8 +73,11 @@ public static class AiNodeProviderResolutionScenarios
             .Replace("{Missing}", Guid.NewGuid().ToString());
     }
 
-    /// <summary>Seeds the three providers, each with one concurrency slot.</summary>
-    public static async Task<Seeded> SeedAsync(IProviderStore store, string providerType = "stub")
+    /// <summary>
+    /// Seeds the three providers, each with one concurrency slot. With
+    /// <paramref name="withDefault"/> false, Dflt exists but is not the default.
+    /// </summary>
+    public static async Task<Seeded> SeedAsync(IProviderStore store, string providerType = "stub", bool withDefault = true)
     {
         AiProvider Make(string name, bool isDefault) => new()
         {
@@ -70,7 +91,7 @@ public static class AiNodeProviderResolutionScenarios
         };
 
         var alpha = Make(Alpha, isDefault: false);
-        var dflt = Make(Dflt, isDefault: true);
+        var dflt = Make(Dflt, isDefault: withDefault);
         var bravo = Make(Bravo, isDefault: false);
         await store.CreateAiProviderAsync(alpha, ["QA"]);
         await store.CreateAiProviderAsync(dflt);

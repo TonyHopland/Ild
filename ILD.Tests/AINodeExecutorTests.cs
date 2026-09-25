@@ -397,6 +397,65 @@ public class AINodeExecutorTests
     }
 
     [Theory]
+    [MemberData(nameof(AiNodeProviderResolutionScenarios.NoDefaultCases), MemberType = typeof(AiNodeProviderResolutionScenarios))]
+    public async Task With_no_default_provider_an_applicable_override_still_picks_the_provider(
+        string nodeConfig, RemoteAiProviderOverrideMode mode, bool overrideTargetSet, string expected)
+    {
+        using var db = new TestDb();
+        var seeded = await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
+        var workItem = WorkItem(mode, overrideTargetSet ? seeded.Bravo.Id : null);
+        var target = seeded.ByName(expected);
+
+        var (resolved, last) = await RunAsync(db.Providers, nodeConfig, workItem, new AiProviderConcurrencyTracker());
+
+        Assert.IsType<NodeOutcome.Success>(last);
+        Assert.Equal(expected, resolved?.Name);
+
+        // The slot claimed is the chosen provider's: with it full, the node waits.
+        var targetFull = new AiProviderConcurrencyTracker();
+        Assert.True(targetFull.TryEnter(target.Id, target.Parallelism));
+        var (_, waited) = await RunAsync(db.Providers, nodeConfig, workItem, targetFull);
+        var waiting = Assert.IsType<NodeOutcome.WaitingIld>(waited);
+        Assert.Contains(expected, waiting.Reason);
+    }
+
+    [Theory]
+    [InlineData(@"{""aiProviderTag"":""Nightly""}", RemoteAiProviderOverrideMode.OverrideAll, "Nightly")]
+    [InlineData(@"{""aiProviderTag"":""Nightly""}", RemoteAiProviderOverrideMode.OverrideDefault, "Nightly")]
+    [InlineData(@"{}", RemoteAiProviderOverrideMode.OverrideDefault, null)]
+    public async Task With_no_default_provider_an_override_mode_without_a_target_still_fails_saying_so(
+        string nodeConfig, RemoteAiProviderOverrideMode mode, string? namedTag)
+    {
+        using var db = new TestDb();
+        await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
+
+        var (resolved, last) = await RunAsync(db.Providers, nodeConfig, WorkItem(mode, null));
+
+        Assert.Null(resolved);
+        var fail = Assert.IsType<NodeOutcome.Fail>(last);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("no default provider", fail.Reason, StringComparison.OrdinalIgnoreCase);
+        if (namedTag is not null)
+            Assert.Contains(namedTag, fail.Reason);
+    }
+
+    [Fact]
+    public async Task With_no_default_provider_a_missing_override_target_fails_naming_it()
+    {
+        using var db = new TestDb();
+        await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers, withDefault: false);
+        var missingId = Guid.NewGuid();
+
+        var (_, last) = await RunAsync(
+            db.Providers, @"{""aiProviderTag"":""Nightly""}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, missingId));
+
+        var fail = Assert.IsType<NodeOutcome.Fail>(last);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains(missingId.ToString(), fail.Reason);
+    }
+
+    [Theory]
     [InlineData(@"{}", null)]
     [InlineData(@"{""aiProviderTag"":""  ""}", null)]
     [InlineData(@"{""aiProviderTag"":""Nightly""}", "Nightly")]
