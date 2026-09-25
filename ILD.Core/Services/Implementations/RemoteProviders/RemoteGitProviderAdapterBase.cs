@@ -863,18 +863,28 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 null);
 
         var host = providerUri.Authority;
-        ApplyHeaders(http, provider);
         HttpStatusCode status;
         string body;
         try
         {
+            ApplyHeaders(http, provider);
             using var resp = await http.GetAsync(IdentityUrl(providerUri), ct);
             status = resp.StatusCode;
-            body = await resp.Content.ReadAsStringAsync(ct);
+            // Decoded as UTF-8 whatever charset the forge claims: an unknown
+            // charset makes ReadAsStringAsync throw, and this is only evidence.
+            body = Encoding.UTF8.GetString(await resp.Content.ReadAsByteArrayAsync(ct));
         }
         catch (HttpRequestException ex)
         {
             return new ConnectionTestResult(ConnectionTestOutcome.Unreachable, $"Could not reach {host}.", MessageChain(ex));
+        }
+        catch (FormatException ex)
+        {
+            // The API key is the only header value that comes from the user.
+            return new ConnectionTestResult(
+                ConnectionTestOutcome.Misconfigured,
+                "The API key contains a line break or NUL character, so it cannot be sent — enter it again.",
+                ex.Message);
         }
 
         var evidence = $"HTTP {(int)status} {status}\n{body}";
