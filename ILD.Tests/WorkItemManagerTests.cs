@@ -977,6 +977,10 @@ public class WorkItemManagerTests
 
             Assert.Equal(PullBranchOutcome.Failed, result.Outcome);
             Assert.False(result.Success);
+            // The fetch cannot say why it failed; the repository's Test button can.
+            Assert.Contains("Failed to fetch origin", result.Message);
+            Assert.Contains("Test", result.Message);
+            Assert.Contains("Repositories", result.Message);
             // A stale remote-tracking ref must not be rebased onto as if it were
             // current — the same invariant the Start node enforces.
             repoMgr.Verify(r => r.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);

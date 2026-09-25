@@ -1,3 +1,4 @@
+using System.Text;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
@@ -518,6 +519,33 @@ public class RepositoryManager : IRepositoryManager
         };
     }
 
+    public async Task<GitRemoteProbe> ProbeRemoteAsync(string cloneUrl, string? branch, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
+    {
+        // The probe holds the key, so it must not discover a repository whose
+        // config or hooks another user could have planted (/tmp is agent-writable):
+        // run in the owner-only private root and stop discovery from climbing out.
+        var cwd = AgentIsolation.CreatePrivateDirectory();
+        var environment = new Dictionary<string, string?>(
+            BuildGitEnvironment(auth) ?? new Dictionary<string, string?>(), StringComparer.Ordinal)
+        {
+            ["GIT_TERMINAL_PROMPT"] = "0",
+            ["GIT_CEILING_DIRECTORIES"] = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(cwd)),
+        };
+        var target = string.IsNullOrWhiteSpace(branch) ? "HEAD" : $"refs/heads/{branch}";
+
+        var r = await _runner.RunAsync("git", new[] { "ls-remote", "--exit-code", "--", cloneUrl, target }, cwd, cancellationToken, environment);
+        // ls-remote matches its pattern as a glob against the tail of each ref,
+        // so "main*" or "x/refs/heads/main" can satisfy "main": only the exact
+        // ref in its listing counts as found, anything else is an answer without it.
+        var found = r.ExitCode == 0 && ListsRef(r.StdOut, target);
+        return new GitRemoteProbe(r.ExitCode == 0 && !found ? 2 : r.ExitCode, r.StdErr);
+    }
+
+    private static bool ListsRef(string lsRemoteOutput, string refName)
+        => lsRemoteOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(line => line.Split('\t', 2) is [_, var name] && name == refName);
+
     // `git ls-remote --symref <url> HEAD` advertises the default branch as a
     // line like "ref: refs/heads/main\tHEAD"; pull the branch name out of it.
     private static string? ParseSymrefDefaultBranch(string lsRemoteOutput)
@@ -750,6 +778,16 @@ public class RepositoryManager : IRepositoryManager
             ["ILD_GIT_PASSWORD"] = auth.ApiKey,
         };
     }
+
+    /// <summary>
+    /// The Basic credential git sends for <paramref name="auth"/> (askpass answers
+    /// the username and key from <see cref="BuildGitEnvironment"/>), or null when
+    /// git sends none — the form a server echoing request headers would show.
+    /// </summary>
+    internal static string? GitBasicCredential(GitAuthOptions? auth)
+        => auth == null || string.IsNullOrWhiteSpace(auth.ApiKey)
+            ? null
+            : Convert.ToBase64String(Encoding.UTF8.GetBytes($"{ResolveGitUsername(auth.ProviderType, auth.RemoteUrl)}:{auth.ApiKey}"));
 
     private static string ResolveGitUsername(string? providerType, string remoteUrl)
     {

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -851,6 +852,117 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
 
     public virtual Task<RemotePrWriteResult> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body)
         => PrCommentHelper.CreatePullRequestCommentAsync(http, repo, prNumber, body, ApplyHeaders);
+
+    public async Task<ConnectionTestResult> TestConnectionAsync(HttpClient http, RemoteProvider provider, CancellationToken ct)
+    {
+        if (!Uri.TryCreate(provider.Url, UriKind.Absolute, out var providerUri)
+            || (providerUri.Scheme != Uri.UriSchemeHttp && providerUri.Scheme != Uri.UriSchemeHttps))
+            return new ConnectionTestResult(
+                ConnectionTestOutcome.Misconfigured,
+                $"The base URL '{provider.Url}' is not an absolute http(s) URL.",
+                null);
+
+        if (SendsApiKeyAsTyped && FirstUnsendable(provider.ApiKey) is { } unsendable)
+            return new ConnectionTestResult(
+                ConnectionTestOutcome.Misconfigured,
+                "The API key contains a character that cannot be sent in a request header — a line break or a non-ASCII character such as a non-breaking space or a curly quote. Enter it again.",
+                $"The key contains U+{(int)unsendable:X4}.");
+
+        var host = providerUri.Authority;
+        HttpStatusCode status;
+        string body;
+        try
+        {
+            ApplyHeaders(http, provider);
+            using var resp = await http.GetAsync(IdentityUrl(providerUri), ct);
+            status = resp.StatusCode;
+            // Decoded as UTF-8 whatever charset the forge claims: an unknown
+            // charset makes ReadAsStringAsync throw, and this is only evidence.
+            body = Encoding.UTF8.GetString(await resp.Content.ReadAsByteArrayAsync(ct));
+        }
+        catch (HttpRequestException ex)
+        {
+            return new ConnectionTestResult(ConnectionTestOutcome.Unreachable, $"Could not reach {host}.", MessageChain(ex));
+        }
+
+        var evidence = $"HTTP {(int)status} {status}\n{body}";
+        if (string.IsNullOrEmpty(provider.ApiKey)
+            && ((int)status is >= 200 and < 300 || status is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
+            return new ConnectionTestResult(ConnectionTestOutcome.MissingApiKey, $"Reached {host}, but no API key is set.", evidence);
+
+        if (RejectsCredentials(status))
+            return new ConnectionTestResult(ConnectionTestOutcome.InvalidApiKey, $"{host} rejected the API key.", evidence);
+
+        switch (status)
+        {
+            case HttpStatusCode.Forbidden:
+                return new ConnectionTestResult(
+                    ConnectionTestOutcome.AccessDenied,
+                    $"{host} accepted the API key but refused the request — check its scopes, SSO authorisation or rate limit.",
+                    evidence);
+            case HttpStatusCode.NotFound:
+                return new ConnectionTestResult(
+                    ConnectionTestOutcome.NotFound,
+                    $"There is no {ProviderType} API at {provider.Url} — check the URL and the provider type.",
+                    evidence);
+        }
+
+        if ((int)status is < 200 or >= 300)
+            return new ConnectionTestResult(ConnectionTestOutcome.Error, $"{host} answered with HTTP {(int)status}.", evidence);
+
+        var identity = ReadIdentityOrNull(body);
+        return string.IsNullOrWhiteSpace(identity)
+            ? new ConnectionTestResult(ConnectionTestOutcome.Error, $"{host} answered, but did not name a {ProviderType} account.", evidence)
+            : new ConnectionTestResult(ConnectionTestOutcome.Ok, $"Signed in to {host} as {identity}.", null);
+    }
+
+    /// <summary>The "who am I" endpoint for a provider instance.</summary>
+    protected virtual string IdentityUrl(Uri providerUri) => BuildApiBase(providerUri) + "/user";
+
+    /// <summary>The account name in the <see cref="IdentityUrl"/> response.</summary>
+    protected virtual string? ReadIdentity(JsonElement root) => ReadString(root, "login");
+
+    /// <summary>Whether this status means the forge refused the credentials themselves.</summary>
+    protected virtual bool RejectsCredentials(HttpStatusCode status) => status == HttpStatusCode.Unauthorized;
+
+    /// <summary>
+    /// Whether <see cref="ApplyHeaders"/> puts the API key into the Authorization
+    /// header as typed, so .NET refuses to send one it cannot carry.
+    /// </summary>
+    protected virtual bool SendsApiKeyAsTyped => true;
+
+    /// <summary>
+    /// The first character .NET refuses in a header value: CR, LF and NUL are
+    /// rejected when the header is built, anything outside ASCII when it is sent.
+    /// </summary>
+    private static char? FirstUnsendable(string? key)
+    {
+        foreach (var c in key ?? string.Empty)
+            if (c is '\r' or '\n' or '\0' || c > '\u007F')
+                return c;
+        return null;
+    }
+
+    private string? ReadIdentityOrNull(string body)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return ReadIdentity(doc.RootElement);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string MessageChain(Exception ex)
+    {
+        var messages = new List<string>();
+        for (var e = ex; e is not null; e = e.InnerException)
+            messages.Add(e.Message);
+        return string.Join(" → ", messages.Distinct());
+    }
 
     public virtual bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret)
         => VerifyHmacSha256(body, GetHeader(headers, SignatureHeaderName), secret);

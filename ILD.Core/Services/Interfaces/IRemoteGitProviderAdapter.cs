@@ -51,6 +51,13 @@ public interface IRemoteGitProviderAdapter
 
     Task<bool> DeleteBranchAsync(HttpClient http, ResolvedRemoteRepository repo, string branchName);
     Task<RemotePrWriteResult> CreatePullRequestCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string body);
+    /// <summary>
+    /// Ask the provider who its API key belongs to, with the same auth every
+    /// other call uses, and classify the answer. Transport failures are
+    /// answers; only cancellation of <paramref name="ct"/> escapes.
+    /// </summary>
+    Task<ConnectionTestResult> TestConnectionAsync(HttpClient http, RemoteProvider provider, CancellationToken ct);
+
     bool VerifyWebhookSignature(string body, IReadOnlyDictionary<string, string> headers, string secret);
     WebhookPayload? ParseWebhookPayload(string body, IReadOnlyDictionary<string, string> headers);
 }

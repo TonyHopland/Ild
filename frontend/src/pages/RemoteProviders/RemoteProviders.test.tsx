@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import RemoteProviders from "./index";
@@ -357,5 +357,180 @@ describe("Remote Providers page", () => {
 
     expect(webhookSecretInput.value).not.toBe("");
     expect(webhookSecretInput.value).not.toBe(initialValue);
+  });
+});
+
+type FakeResponse = { ok: boolean; status: number; text: () => Promise<string> };
+
+function reply(body: unknown, status = 200): FakeResponse {
+  return { ok: status < 400, status, text: () => Promise.resolve(JSON.stringify(body)) };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/**
+ * Answers the page's list/type/update calls from `state`, and hands every test
+ * call to `onTest` so a test decides when (and how) each one settles.
+ */
+function routedFetch(
+  state: { providers: Record<string, unknown>[] },
+  onTest: (id: string) => Promise<FakeResponse>,
+) {
+  return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    const test = /\/remoteproviders\/([^/]+)\/test$/.exec(url);
+    if (test && method === "POST") return onTest(test[1]);
+    if (url.includes("/remoteproviders/types")) return Promise.resolve(reply(availableTypes));
+    const one = /\/remoteproviders\/([^/?]+)$/.exec(url);
+    if (one && method === "PUT") {
+      state.providers = state.providers.map((p) =>
+        p.id === one[1] ? { ...p, updatedAt: new Date(Date.now() + 60_000).toISOString() } : p,
+      );
+      return Promise.resolve(reply(state.providers.find((p) => p.id === one[1])));
+    }
+    if (url.includes("/remoteproviders")) return Promise.resolve(reply(state.providers));
+    return Promise.resolve(reply(null, 404));
+  });
+}
+
+function provider(id: string, name: string) {
+  return {
+    id,
+    name,
+    type: "Forgejo",
+    baseUrl: `https://${id}.example.com`,
+    apiKey: "***",
+    hasApiKey: true,
+    webhookSecret: null,
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: null,
+  };
+}
+
+function card(name: string): HTMLElement {
+  return screen.getByText(name).closest(".rp-card") as HTMLElement;
+}
+
+describe("Remote Providers page — Test button", () => {
+  test("each card tests its own provider and shows the result in that card only", async () => {
+    const state = {
+      providers: [provider("prov-1", "Alpha Forge"), provider("prov-2", "Beta Forge")],
+    };
+    const pending: Record<string, ReturnType<typeof deferred<FakeResponse>>> = {};
+    const fetchMock = routedFetch(state, (id) => {
+      pending[id] = deferred<FakeResponse>();
+      return pending[id].promise;
+    });
+    renderPage(fetchMock);
+    await waitFor(() => expect(screen.getByText("Alpha Forge")).toBeTruthy());
+
+    expect(within(card("Alpha Forge")).getByRole("button", { name: "Test" })).toBeTruthy();
+    expect(within(card("Beta Forge")).getByRole("button", { name: "Test" })).toBeTruthy();
+
+    fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Test" }));
+
+    const running = await within(card("Alpha Forge")).findByRole("button", { name: "Testing…" });
+    expect((running as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (within(card("Beta Forge")).getByRole("button", { name: "Test" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/remoteproviders/prov-1/test"),
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    pending["prov-1"].resolve(
+      reply({ ok: true, outcome: "Ok", message: "Signed in as forge-bot.", detail: null }),
+    );
+    await within(card("Alpha Forge")).findByText("Signed in as forge-bot.");
+    expect(card("Alpha Forge").querySelector("pre")).toBeNull();
+    expect(within(card("Beta Forge")).queryByText("Signed in as forge-bot.")).toBeNull();
+    expect(
+      (within(card("Alpha Forge")).getByRole("button", { name: "Test" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+
+    fireEvent.click(within(card("Beta Forge")).getByRole("button", { name: "Test" }));
+    pending["prov-2"].resolve(
+      reply({
+        ok: false,
+        outcome: "InvalidApiKey",
+        message: "The API key was rejected.",
+        detail: "HTTP 401: user does not exist",
+      }),
+    );
+
+    await within(card("Beta Forge")).findByText("The API key was rejected.");
+    const detail = within(card("Beta Forge")).getByText("HTTP 401: user does not exist");
+    expect(detail.closest("pre")).not.toBeNull();
+    expect(within(card("Alpha Forge")).getByText("Signed in as forge-bot.")).toBeTruthy();
+    expect(within(card("Alpha Forge")).queryByText("The API key was rejected.")).toBeNull();
+  });
+
+  test("a call to ILD that fails says the test couldn't run, with the error", async () => {
+    const state = { providers: [provider("prov-1", "Alpha Forge")] };
+    const answers: Array<() => Promise<FakeResponse>> = [
+      () => Promise.reject(new TypeError("Failed to fetch")),
+      () => Promise.resolve(reply({ error: "boom" }, 500)),
+    ];
+    renderPage(routedFetch(state, () => answers.shift()!()));
+    await waitFor(() => expect(screen.getByText("Alpha Forge")).toBeTruthy());
+
+    fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Test" }));
+    await within(card("Alpha Forge")).findByText("Couldn't run the test: Failed to fetch");
+
+    fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Test" }));
+    await within(card("Alpha Forge")).findByText("Couldn't run the test: boom");
+    expect(within(card("Alpha Forge")).queryByText(/Failed to fetch/)).toBeNull();
+  });
+
+  test("saving a provider clears its result, and drops one still in flight", async () => {
+    const state = { providers: [provider("prov-1", "Alpha Forge")] };
+    const pending: Array<ReturnType<typeof deferred<FakeResponse>>> = [];
+    renderPage(
+      routedFetch(state, () => {
+        const d = deferred<FakeResponse>();
+        pending.push(d);
+        return d.promise;
+      }),
+    );
+    await waitFor(() => expect(screen.getByText("Alpha Forge")).toBeTruthy());
+
+    const save = async () => {
+      fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Edit" }));
+      await screen.findByText("Edit Provider");
+      fireEvent.click(screen.getByText("Update"));
+      await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeNull());
+    };
+
+    fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Test" }));
+    pending[0].resolve(
+      reply({ ok: true, outcome: "Ok", message: "Signed in as forge-bot.", detail: null }),
+    );
+    await within(card("Alpha Forge")).findByText("Signed in as forge-bot.");
+
+    await save();
+    await waitFor(() => expect(screen.queryByText("Signed in as forge-bot.")).toBeNull());
+
+    fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Test" }));
+    await within(card("Alpha Forge")).findByRole("button", { name: "Testing…" });
+    await save();
+    await within(card("Alpha Forge")).findByRole("button", { name: "Test" });
+
+    pending[1].resolve(
+      reply({ ok: false, outcome: "Unreachable", message: "Stale answer.", detail: "old" }),
+    );
+    await pending[1].promise;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText("Stale answer.")).toBeNull();
   });
 });

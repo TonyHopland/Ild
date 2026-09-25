@@ -14,6 +14,13 @@ public sealed record GitAuthOptions(string RemoteUrl, string? ApiKey, string? Pr
 public sealed record RemoteRepositoryInfo(string? DefaultBranch, string? Name);
 
 /// <summary>
+/// What <see cref="IRepositoryManager.ProbeRemoteAsync"/> heard back: git's
+/// <c>ls-remote --exit-code</c> status (0 the exact ref is listed, 2 the remote
+/// answered without it, anything else no answer) and its stderr.
+/// </summary>
+public sealed record GitRemoteProbe(int ExitCode, string StdErr);
+
+/// <summary>
 /// Outcome of <see cref="IRepositoryManager.RebaseAsync"/>. On failure
 /// <paramref name="ConflictedFiles"/> lists the paths git could not merge — empty
 /// when the rebase was refused before it started (e.g. untracked files in the way),
@@ -136,6 +143,16 @@ public interface IRepositoryManager
     /// "absent": it means the question went unanswered.
     /// </returns>
     Task<bool?> RemoteHasBranchAsync(string cloneUrl, string branchName, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
+
+    /// <summary>
+    /// Ask the git server at <paramref name="cloneUrl"/> for
+    /// <paramref name="branch"/> (the remote's <c>HEAD</c> when blank), with the
+    /// same <paramref name="auth"/> fetch uses, never prompting. Unlike
+    /// <see cref="RemoteHasBranchAsync"/> it hands back git's own exit code and
+    /// stderr, so a caller can say why the remote did not answer. Runs where no
+    /// other user can plant repository config or hooks.
+    /// </summary>
+    Task<GitRemoteProbe> ProbeRemoteAsync(string cloneUrl, string? branch, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
 
     /// <summary>
     /// Delete a local branch from the repository at <paramref name="repoPath"/>.

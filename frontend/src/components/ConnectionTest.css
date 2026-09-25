@@ -1,0 +1,52 @@
+.connection-test {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0 1rem 0.75rem;
+}
+
+.connection-test-result {
+  align-self: stretch;
+  border-left: 3px solid;
+  padding: 0.375rem 0.625rem;
+  font-size: 0.8rem;
+  color: #c0c0d0;
+  background-color: #17172a;
+  border-radius: 0.25rem;
+}
+
+.connection-test-result.is-ok {
+  border-left-color: #22c55e;
+}
+
+.connection-test-result.is-failed {
+  border-left-color: #ef4444;
+}
+
+.connection-test-summary {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.connection-test-marker {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.is-ok .connection-test-marker {
+  color: #22c55e;
+}
+
+.is-failed .connection-test-marker {
+  color: #ef4444;
+}
+
+.connection-test-detail {
+  margin: 0.375rem 0 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #a0a0b0;
+}

@@ -12,11 +12,13 @@ public class RemoteProvidersController : ControllerBase
 {
     private readonly AppDbContext _db;
     private readonly IRemoteProviderTypeCatalog _providerTypes;
+    private readonly IConnectionTester _connectionTester;
 
-    public RemoteProvidersController(AppDbContext db, IRemoteProviderTypeCatalog providerTypes)
+    public RemoteProvidersController(AppDbContext db, IRemoteProviderTypeCatalog providerTypes, IConnectionTester connectionTester)
     {
         _db = db;
         _providerTypes = providerTypes;
+        _connectionTester = connectionTester;
     }
 
     private static object ToResponse(ILD.Data.Entities.RemoteProvider p) => new
@@ -98,5 +100,14 @@ public class RemoteProvidersController : ControllerBase
         p.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return Ok(ToResponse(p));
+    }
+
+    [HttpPost("{id}/test")]
+    public async Task<IActionResult> Test(string id, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        var p = await _db.RemoteProviders.AsNoTracking().FirstOrDefaultAsync(x => x.Id == guid, cancellationToken);
+        if (p == null) return NotFound();
+        return Ok(await _connectionTester.TestRemoteProviderAsync(p, cancellationToken));
     }
 }

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Repository, RemoteProvider, WorkItemStatus } from "../../types";
 import { repositoryService, remoteProviderService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
+import ConnectionTest from "../../components/ConnectionTest";
 
 export default function Repositories() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -197,6 +198,10 @@ export default function Repositories() {
                 </span>
               </div>
             </div>
+            <ConnectionTest
+              key={`${repo.id}|${repo.updatedAt ?? repo.createdAt}`}
+              run={() => repositoryService.test(repo.id)}
+            />
           </div>
         ))}
       </div>

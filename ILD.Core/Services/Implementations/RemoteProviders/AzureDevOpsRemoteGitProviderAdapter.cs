@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -675,6 +676,21 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ILD", "1.0"));
     }
+
+    protected override string IdentityUrl(Uri providerUri)
+        => Versioned($"{providerUri.ToString().TrimEnd('/')}/_apis/connectionData");
+
+    protected override string? ReadIdentity(JsonElement root)
+        => ReadString(Child(root, "authenticatedUser"), "providerDisplayName");
+
+    /// <summary>
+    /// A rejected PAT is answered with 203 and the sign-in page rather than 401.
+    /// </summary>
+    protected override bool RejectsCredentials(HttpStatusCode status)
+        => status is HttpStatusCode.Unauthorized or HttpStatusCode.NonAuthoritativeInformation;
+
+    /// <summary>The key travels base64-encoded inside Basic credentials.</summary>
+    protected override bool SendsApiKeyAsTyped => false;
 
     private static string? LegacyOrganization(string host)
         => host.EndsWith(LegacyHostSuffix, StringComparison.OrdinalIgnoreCase)
