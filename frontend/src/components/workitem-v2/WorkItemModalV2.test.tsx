@@ -155,14 +155,36 @@ async function renderDialog(
   workItem: WorkItem,
   props: Partial<React.ComponentProps<typeof WorkItemModalV2>> = {},
 ) {
+  let result!: ReturnType<typeof render>;
   await act(async () => {
-    render(
+    result = render(
       <MemoryRouter>
         <WorkItemModalV2 workItem={workItem} onClose={vi.fn()} onSave={vi.fn()} {...props} />
       </MemoryRouter>,
     );
     await Promise.resolve();
   });
+  return result;
+}
+
+async function rerenderDialog(rerender: ReturnType<typeof render>["rerender"], workItem: WorkItem) {
+  await act(async () => {
+    rerender(
+      <MemoryRouter>
+        <WorkItemModalV2 workItem={workItem} onClose={vi.fn()} onSave={vi.fn()} />
+      </MemoryRouter>,
+    );
+    await Promise.resolve();
+  });
+}
+
+// "On a tab" means both halves: the tab is selected and the panel it controls
+// is the only one not hidden.
+function expectOnTab(name: string | RegExp) {
+  const tab = screen.getByRole("tab", { name });
+  expect(tab.getAttribute("aria-selected")).toBe("true");
+  const visible = screen.getAllByRole("tabpanel", { hidden: true }).filter((p) => !p.hidden);
+  expect(visible.map((p) => p.id)).toEqual([tab.getAttribute("aria-controls")]);
 }
 
 describe("WorkItemModalV2", () => {
@@ -183,48 +205,109 @@ describe("WorkItemModalV2", () => {
 
   const OPENING_TAB_CASES: Array<{
     name: string;
-    item: Partial<WorkItem>;
-    selected: string | RegExp;
-    notSelected: string | RegExp;
+    status: WorkItemStatus;
+    item?: Partial<WorkItem>;
+    tab: string | RegExp;
   }> = [
+    { name: "a Backlog item", status: WorkItemStatus.Backlog, tab: "Overview" },
+    { name: "a WorkQueue item", status: WorkItemStatus.WorkQueue, tab: "Overview" },
+    { name: "a Ready item", status: WorkItemStatus.Ready, tab: "Overview" },
     {
-      name: "opens on the Overview tab even for a running item",
-      item: { status: WorkItemStatus.Running, currentLoopRunId: "run-1" },
-      selected: "Overview",
-      notSelected: /Runs/,
+      name: "a Done item",
+      status: WorkItemStatus.Done,
+      item: { currentLoopRunId: "run-1" },
+      tab: "Overview",
     },
     {
-      name: "opens on the Action tab when the item is waiting on human feedback",
-      item: {
-        status: WorkItemStatus.HumanFeedback,
-        humanFeedbackReason: "PR Awaiting Merge",
-        currentLoopRunId: "run-1",
-      },
-      selected: /Action/,
-      notSelected: "Overview",
+      name: "a Running item",
+      status: WorkItemStatus.Running,
+      item: { currentLoopRunId: "run-1" },
+      tab: /Action/,
     },
     {
-      // An item nominally in HumanFeedback but missing a reason has no pending
-      // prompt to show, so it falls back to Overview like any other item.
-      name: "opens on Overview when HumanFeedback has no reason set",
-      item: {
-        status: WorkItemStatus.HumanFeedback,
-        humanFeedbackReason: null,
-        currentLoopRunId: "run-1",
-      },
-      selected: "Overview",
-      notSelected: /Action/,
+      name: "a WaitingForIld item",
+      status: WorkItemStatus.WaitingForIld,
+      item: { currentLoopRunId: "run-1" },
+      tab: /Action/,
+    },
+    {
+      name: "a HumanFeedback item with a reason",
+      status: WorkItemStatus.HumanFeedback,
+      item: { humanFeedbackReason: "PR Awaiting Merge", currentLoopRunId: "run-1" },
+      tab: /Action/,
+    },
+    {
+      name: "a HumanFeedback item with no reason",
+      status: WorkItemStatus.HumanFeedback,
+      item: { humanFeedbackReason: null, currentLoopRunId: "run-1" },
+      tab: /Action/,
     },
   ];
 
-  test.each(OPENING_TAB_CASES)("$name", async ({ item, selected, notSelected }) => {
+  test.each(OPENING_TAB_CASES)("$name opens on $tab", async ({ status, item, tab }) => {
     mockServices();
-    await renderDialog(makeWorkItem(item));
+    await renderDialog(makeWorkItem({ ...item, status }));
 
-    expect(screen.getByRole("tab", { name: selected }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("tab", { name: notSelected }).getAttribute("aria-selected")).toBe(
-      "false",
+    expectOnTab(tab);
+  });
+
+  test("switching to a different item re-applies its opening tab whatever was selected", async () => {
+    mockServices();
+    const { rerender } = await renderDialog(
+      makeWorkItem({ id: "wi-1", status: WorkItemStatus.Ready }),
     );
+    expectOnTab("Overview");
+
+    await rerenderDialog(
+      rerender,
+      makeWorkItem({ id: "wi-2", status: WorkItemStatus.Running, currentLoopRunId: "run-1" }),
+    );
+    expectOnTab(/Action/);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+    await rerenderDialog(
+      rerender,
+      makeWorkItem({ id: "wi-3", status: WorkItemStatus.WaitingForIld, currentLoopRunId: "run-2" }),
+    );
+    expectOnTab(/Action/);
+
+    await rerenderDialog(rerender, makeWorkItem({ id: "wi-4", status: WorkItemStatus.Done }));
+    expectOnTab("Overview");
+  });
+
+  test("a status change on the open item does not move the selected tab", async () => {
+    mockServices();
+    const { rerender } = await renderDialog(
+      makeWorkItem({ id: "wi-1", status: WorkItemStatus.Ready }),
+    );
+    expectOnTab("Overview");
+
+    await rerenderDialog(
+      rerender,
+      makeWorkItem({ id: "wi-1", status: WorkItemStatus.Running, currentLoopRunId: "run-1" }),
+    );
+    expectOnTab("Overview");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+      await Promise.resolve();
+    });
+    await rerenderDialog(
+      rerender,
+      makeWorkItem({ id: "wi-1", status: WorkItemStatus.Done, currentLoopRunId: "run-1" }),
+    );
+    expectOnTab(/Action/);
+  });
+
+  test("a running item opens on an Action tab without the indicator", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+
+    expectOnTab("Action");
+    expect(screen.queryByRole("tab", { name: "Action ●" })).toBeNull();
   });
 
   test("arrow keys move selection and focus along the tab strip", async () => {
@@ -1263,6 +1346,24 @@ describe("WorkItemModalV2", () => {
     const stillThere = screen.getByTestId("embedded-terminal");
     expect(stillThere).toBe(term);
     expect(stillThere.closest("[role='tabpanel']")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  test("losing the worktree while on the Terminal tab falls back to Overview, even when running", async () => {
+    mockServices();
+    const running = { status: WorkItemStatus.Running, currentLoopRunId: "run-1" };
+    const { rerender } = await renderDialog(
+      makeWorkItem({ ...running, worktreePath: "/tmp/wt/wi-1" }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      await Promise.resolve();
+    });
+    expectOnTab(/Terminal/);
+
+    await rerenderDialog(rerender, makeWorkItem({ ...running, worktreePath: null }));
+
+    expect(screen.queryByRole("tab", { name: /Terminal/ })).toBeNull();
+    expectOnTab("Overview");
   });
 
   test("closing the terminal tears down the session and returns to the open prompt", async () => {
