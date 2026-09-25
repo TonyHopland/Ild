@@ -54,8 +54,8 @@ public class ConnectionTesterMalformedInputTests
     [InlineData("GitHub", "sekrit-KEY-9f3a\r\n")]
     [InlineData("Forgejo", "sekrit-KEY-9f3a\n")]
     [InlineData("Forgejo", "sekrit\0KEY-9f3a")]
-    [InlineData("GitHub", "sekrit KEY-9f3a")]
-    [InlineData("Forgejo", "sekrit KEY-9f3a")]
+    [InlineData("GitHub", "sekrit\u00A0KEY-9f3a")]
+    [InlineData("Forgejo", "sekrit\u00A0KEY-9f3a")]
     [InlineData("GitHub", "“sekrit-KEY-9f3a”")]
     [InlineData("Forgejo", "sékrit-KEY-9f3a")]
     public async Task A_key_that_cannot_be_sent_in_a_header_is_misconfigured_without_the_key(string type, string key)
@@ -83,7 +83,7 @@ public class ConnectionTesterMalformedInputTests
         try
         {
             var result = await Tester(new HttpClient()).TestRemoteProviderAsync(
-                Provider("AzureDevOps", $"http://127.0.0.1:{port}", "sekrit KEY-9f3a"), CancellationToken.None);
+                Provider("AzureDevOps", $"http://127.0.0.1:{port}", "sekrit\u00A0KEY-9f3a"), CancellationToken.None);
 
             Assert.Equal(ConnectionTestOutcome.InvalidApiKey, result.Outcome);
         }
