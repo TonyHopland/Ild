@@ -38,8 +38,6 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     conditionOutput: "{{Node.Input}}",
     aiProviders: [],
     availableAiTools: [],
-    adapterConfigSchema: [],
-    adapterConfigValues: {},
     sessionPlaceholderUsages: [],
     selectedPlaceholderUsage: undefined,
     onClose: vi.fn(),
@@ -66,7 +64,6 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     onConditionCasesChange: vi.fn(),
     onConditionDefaultEdgeChange: vi.fn(),
     onConditionOutputChange: vi.fn(),
-    onAdapterConfigChange: vi.fn(),
     ...overrides,
   };
   render(<NodeSettingsModal {...props} />);

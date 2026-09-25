@@ -39,7 +39,6 @@
         "sessionPlaceholder": "plan",
         "aiProviderTag": "",
         "toolAllowlist": ["read", "write", "execute", "ild"],
-        "adapterConfig": {},
         "__pos": {
           "x": -270,
           "y": 128

@@ -2,14 +2,14 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, cleanup, fireEvent, within, act } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
-import { ConfigFieldType, EdgeType, NodeType, RecoveryPolicy } from "../../types";
+import { EdgeType, NodeType, RecoveryPolicy } from "../../types";
 import type { AiProvider } from "../../types";
 
 // An AI node picks its provider by tag: the provider holding the tag
 // (case-insensitively, after trimming), else the default provider, else none.
 // The editor must show and act on exactly that rule.
 
-const { loopTemplateService, aiProviderService, agentAdapterService } = vi.hoisted(() => ({
+const { loopTemplateService, aiProviderService } = vi.hoisted(() => ({
   loopTemplateService: {
     getAll: vi.fn(),
     validate: vi.fn(),
@@ -17,7 +17,6 @@ const { loopTemplateService, aiProviderService, agentAdapterService } = vi.hoist
     update: vi.fn(),
   },
   aiProviderService: { getAll: vi.fn() },
-  agentAdapterService: { getConfigSchema: vi.fn() },
 }));
 
 vi.mock("../../hooks/useSignalR", () => ({
@@ -32,7 +31,6 @@ vi.mock("../../hooks/useSignalR", () => ({
 vi.mock("../../services/auth", () => ({
   loopTemplateService,
   aiProviderService,
-  agentAdapterService,
 }));
 
 import LoopEditor from "./index";
@@ -72,31 +70,6 @@ const beta: AiProvider = {
   createdAt: "2025-01-02T00:00:00Z",
 };
 
-const schemas: Record<string, unknown[]> = {
-  pi: [
-    {
-      name: "reasoning",
-      type: ConfigFieldType.Text,
-      label: "Reasoning",
-      required: false,
-      defaultValue: "low",
-      description: null,
-      options: null,
-    },
-  ],
-  "claude-code": [
-    {
-      name: "effort",
-      type: ConfigFieldType.Text,
-      label: "Effort",
-      required: false,
-      defaultValue: "medium",
-      description: null,
-      options: null,
-    },
-  ],
-};
-
 function templateWithAiNode(aiConfig: Record<string, unknown>) {
   return {
     id: "tpl-1",
@@ -119,11 +92,10 @@ function templateWithAiNode(aiConfig: Record<string, unknown>) {
   };
 }
 
-/** A node on the default provider (Alpha) with a non-default allowlist and adapter value. */
+/** A node on the default provider (Alpha) with a non-default allowlist. */
 const customisedOnDefault = {
   prompt: "Review it",
   toolAllowlist: ["execute"],
-  adapterConfig: { reasoning: "high" },
 };
 
 const authValue = {
@@ -140,9 +112,6 @@ async function openAiNode(aiConfig: Record<string, unknown>, providers: AiProvid
   loopTemplateService.validate.mockResolvedValue({ valid: true, errors: [] });
   loopTemplateService.update.mockResolvedValue({ id: "tpl-1" });
   aiProviderService.getAll.mockResolvedValue(providers);
-  agentAdapterService.getConfigSchema.mockImplementation(
-    async (type: string) => schemas[type] ?? [],
-  );
 
   render(
     <MemoryRouter initialEntries={["/loop-editor/tpl-1"]}>
@@ -253,37 +222,29 @@ describe("Loop Editor — AI node provider tag", () => {
     expect(statement(dialog, expected)).toBeTruthy();
   });
 
-  test("a tag nobody holds with no default provider says so and offers no tools or adapter fields", async () => {
+  test("a tag nobody holds with no default provider says so and offers no tools", async () => {
     const noDefault = { ...alpha, isDefault: false };
     const dialog = await openAiNode({ prompt: "p", aiProviderTag: "Nightly" }, [noDefault, beta]);
 
     expect(statement(dialog, /no default provider/i)).toBeTruthy();
     expect(within(dialog).queryByLabelText("Read files")).toBeNull();
-    expect(within(dialog).queryByLabelText("Reasoning")).toBeNull();
-    expect(within(dialog).queryByLabelText("Effort")).toBeNull();
 
-    // A tag that resolves brings its provider's tools and fields back.
+    // A tag that resolves brings its provider's tools back.
     fireEvent.change(tagField(dialog), { target: { value: "QA" } });
     expect(statement(dialog, "Runs on Beta")).toBeTruthy();
     expect(toolIsChecked(dialog, "ILD tools")).toBe(true);
-    expect(await within(dialog).findByLabelText("Effort")).toBeTruthy();
   });
 
-  test("the tools and adapter fields are those of the tag's provider when the node opens", async () => {
+  test("the tools are those of the tag's provider when the node opens", async () => {
     const dialog = await openAiNode({ prompt: "p", aiProviderTag: "qa" }, [alpha, beta]);
 
     expect(statement(dialog, "Runs on Beta")).toBeTruthy();
     expect(toolIsChecked(dialog, "ILD tools")).toBe(true);
     expect(within(dialog).queryByLabelText("Run commands")).toBeNull();
-    expect(await within(dialog).findByLabelText("Effort")).toBeTruthy();
-    expect(within(dialog).queryByLabelText("Reasoning")).toBeNull();
   });
 
-  test("typing a tag that still resolves to the same provider keeps the allowlist and adapter values", async () => {
+  test("typing a tag that still resolves to the same provider keeps the allowlist", async () => {
     const dialog = await openAiNode(customisedOnDefault, [alpha, beta]);
-    await waitFor(() =>
-      expect((within(dialog).getByLabelText("Reasoning") as HTMLInputElement).value).toBe("high"),
-    );
     expect(toolIsChecked(dialog, "Run commands")).toBe(true);
     expect(toolIsChecked(dialog, "Read files")).toBe(false);
 
@@ -296,33 +257,36 @@ describe("Loop Editor — AI node provider tag", () => {
 
     expect(toolIsChecked(dialog, "Run commands")).toBe(true);
     expect(toolIsChecked(dialog, "Read files")).toBe(false);
-    expect((within(dialog).getByLabelText("Reasoning") as HTMLInputElement).value).toBe("high");
 
     const config = await saveAndReadAiConfig(dialog);
     expect(config.aiProviderTag).toBe("FAST");
     expect(config.toolAllowlist).toEqual(["execute"]);
-    expect(config.adapterConfig).toEqual({ reasoning: "high" });
   });
 
   test("a tag that resolves to a different provider resets to that provider's defaults", async () => {
     const dialog = await openAiNode(customisedOnDefault, [alpha, beta]);
-    await waitFor(() =>
-      expect((within(dialog).getByLabelText("Reasoning") as HTMLInputElement).value).toBe("high"),
-    );
 
     // "Q" still falls back to Alpha; "QA" is Beta's.
     fireEvent.change(tagField(dialog), { target: { value: "Q" } });
     expect(toolIsChecked(dialog, "Run commands")).toBe(true);
     fireEvent.change(tagField(dialog), { target: { value: "QA" } });
 
-    expect(await within(dialog).findByLabelText("Effort")).toBeTruthy();
-    expect(within(dialog).queryByLabelText("Reasoning")).toBeNull();
     expect(toolIsChecked(dialog, "Read files")).toBe(true);
     expect(toolIsChecked(dialog, "ILD tools")).toBe(true);
 
     const config = await saveAndReadAiConfig(dialog);
     expect(config.aiProviderTag).toBe("QA");
     expect([...(config.toolAllowlist as string[])].sort()).toEqual(["ild", "read"]);
-    expect(config.adapterConfig).toEqual({ effort: "medium" });
+  });
+
+  test("saving drops the node's own adapter settings, which nothing reads", async () => {
+    const dialog = await openAiNode(
+      { ...customisedOnDefault, adapterConfig: { reasoning: "high" } },
+      [alpha, beta],
+    );
+
+    const config = await saveAndReadAiConfig(dialog);
+    expect(JSON.parse(JSON.stringify(config))).not.toHaveProperty("adapterConfig");
+    expect(config.toolAllowlist).toEqual(["execute"]);
   });
 });

@@ -50,7 +50,6 @@
         "aiProviderTag": "",
         "timeout": 1800,
         "toolAllowlist": [],
-        "adapterConfig": {},
         "__pos": {
           "x": 447,
           "y": 392.5
@@ -85,7 +84,6 @@
         "aiProviderTag": "",
         "timeout": 3600,
         "toolAllowlist": [],
-        "adapterConfig": {},
         "__pos": {
           "x": 205,
           "y": 288.5

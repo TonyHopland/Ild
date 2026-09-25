@@ -216,7 +216,6 @@ public sealed class ChatService : IChatService
                 streamed.Append(chunk);
                 await _notifier.TurnProgressAsync(chatSessionId, turnId, chunk);
             },
-            AdapterConfig: null,
             ToolAllowlist: tools,
             SessionId: session.CurrentSessionId,
             IncomingSessionId: session.CurrentSessionId,

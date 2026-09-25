@@ -1,7 +1,5 @@
 import type { AiMatchRule, ConditionCase } from "../../types";
 
-export type AdapterConfigValue = string | number | boolean;
-
 /** Per-file outcome shown after a (possibly multi-file) template import. */
 export interface ImportFeedbackItem {
   filename: string;
@@ -37,7 +35,6 @@ export interface NodeSettingsSnapshot {
   conditionCases: ConditionCase[];
   conditionDefaultEdge: string;
   conditionOutput: string;
-  adapterConfigValues: Record<string, AdapterConfigValue>;
 }
 
 export interface LoopTemplateVersion {

@@ -20,7 +20,7 @@ import LoopNodeComponent from "../../components/LoopNodeComponent";
 import LoopEdgeComponent from "../../components/LoopEdgeComponent";
 import { LoopEdgeInteractionContext } from "../../components/loopEdgeInteraction";
 import ErrorBanner from "../../components/ErrorBanner";
-import { loopTemplateService, agentAdapterService, aiProviderService } from "../../services/auth";
+import { loopTemplateService, aiProviderService } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 import { setOpenLoopProvider } from "../../utils/openLoopDocument";
 import { getCurrentChatSessionId, subscribeChatSessionId } from "../../services/chatSessionStore";
@@ -50,7 +50,6 @@ import {
   type AiToolDefinition,
   type AiProvider,
   type ConditionCase,
-  type ConfigFieldDescriptor,
   type LoopNode,
   type LoopNodeEdge,
   type LoopTemplate,
@@ -66,7 +65,6 @@ import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
 import SaveDiffModal from "./components/SaveDiffModal";
 import type {
-  AdapterConfigValue,
   ImportFeedbackItem,
   LoopTemplateVersion,
   NodeSettingsSnapshot,
@@ -139,20 +137,6 @@ function collectSessionPlaceholderUsages(nodes: Node[]): SessionPlaceholderUsage
   return Array.from(counts.entries())
     .map(([name, count]) => ({ name, count, templated: isTemplatedSessionName(name) }))
     .sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function sanitizeAdapterConfigValues(
-  adapterConfig: Record<string, unknown>,
-): Record<string, AdapterConfigValue> {
-  const values: Record<string, AdapterConfigValue> = {};
-
-  for (const [name, value] of Object.entries(adapterConfig)) {
-    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-      values[name] = value;
-    }
-  }
-
-  return values;
 }
 
 /** Reads an AI node's ordered output-match rules from its config. */
@@ -280,10 +264,6 @@ export default function LoopEditor() {
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [versionHistory, setVersionHistory] = useState<LoopTemplateVersion[]>([]);
   const [readOnlyVersion, setReadOnlyVersion] = useState<number | null>(null);
-  const [adapterConfigSchema, setAdapterConfigSchema] = useState<ConfigFieldDescriptor[]>([]);
-  const [adapterConfigValues, setAdapterConfigValues] = useState<
-    Record<string, AdapterConfigValue>
-  >({});
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [errorText, setErrorText] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -340,48 +320,6 @@ export default function LoopEditor() {
     [aiProviders, aiProviderTag],
   );
   const availableAiTools: AiToolDefinition[] = resolvedAiProvider?.supportedTools ?? [];
-
-  // Only the latest schema load may land: an earlier one resolving late would
-  // show a provider's fields the node no longer runs on.
-  const adapterSchemaRequestRef = useRef(0);
-  const loadAdapterSchema = useCallback(
-    async (provider: AiProvider | null, initialAdapterConfig: Record<string, unknown> = {}) => {
-      const request = ++adapterSchemaRequestRef.current;
-      if (!provider) {
-        setAdapterConfigSchema([]);
-        setAdapterConfigValues({});
-        return;
-      }
-
-      // The "Custom MCP servers (JSON)" field is a *provider*-scoped setting: the
-      // adapters inject it from AiProvider.Config, and it is set on the AI
-      // Providers page. A node's AdapterConfig is never read at run time, so
-      // surfacing this field here would let users set it in a place that does
-      // nothing. Exclude it from the node editor while keeping the schema-driven
-      // rendering generic for any genuinely node-scoped fields added later.
-      const schema = (await agentAdapterService.getConfigSchema(provider.type)).filter(
-        (field) => field.name !== "customMcpServersJson",
-      );
-      if (request !== adapterSchemaRequestRef.current) return;
-      const nextValues: Record<string, AdapterConfigValue> = {};
-      for (const field of schema) {
-        const nodeValue = initialAdapterConfig[field.name];
-        if (
-          typeof nodeValue === "string" ||
-          typeof nodeValue === "number" ||
-          typeof nodeValue === "boolean"
-        ) {
-          nextValues[field.name] = nodeValue;
-        } else if (field.defaultValue !== null && field.defaultValue !== undefined) {
-          nextValues[field.name] = field.defaultValue as AdapterConfigValue;
-        }
-      }
-
-      setAdapterConfigSchema(schema);
-      setAdapterConfigValues(nextValues);
-    },
-    [],
-  );
 
   useEffect(() => {
     void loadTemplates();
@@ -1108,8 +1046,6 @@ export default function LoopEditor() {
         config?: Record<string, unknown>;
       };
       const config = data.config || {};
-      const adapterConfig = (config.adapterConfig as Record<string, unknown>) || {};
-      const initialAdapterValues = sanitizeAdapterConfigValues(adapterConfig);
       const nodeAiProviderTag = (config.aiProviderTag as string) || "";
       const activeProvider = resolveProviderForTag(aiProviders, nodeAiProviderTag).provider;
       const resolvedAiTools = resolveToolSelection(activeProvider, config.toolAllowlist);
@@ -1144,9 +1080,6 @@ export default function LoopEditor() {
       setConditionCases(readConditionCases(config));
       setConditionDefaultEdge(readConditionDefaultEdge(config));
       setConditionOutput((config.output as string) ?? CONDITION_DEFAULT_TEMPLATE);
-      setAdapterConfigValues(initialAdapterValues);
-
-      void loadAdapterSchema(data.type === NodeType.AI ? activeProvider : null, adapterConfig);
 
       setOriginalNodeConfig({
         label: data.label || "",
@@ -1169,24 +1102,22 @@ export default function LoopEditor() {
         conditionCases: readConditionCases(config),
         conditionDefaultEdge: readConditionDefaultEdge(config),
         conditionOutput: (config.output as string) ?? CONDITION_DEFAULT_TEMPLATE,
-        adapterConfigValues: initialAdapterValues,
       });
       setShowNodeSettingsModal(true);
     },
-    [aiProviders, loadAdapterSchema],
+    [aiProviders],
   );
 
   // A keystroke that still resolves to the same provider keeps the node's
-  // allowlist and adapter values; only a change of provider resets them.
+  // allowlist; only a change of provider resets it.
   const handleAiProviderTagChange = useCallback(
     (nextTag: string) => {
       setAiProviderTag(nextTag);
       const next = resolveProviderForTag(aiProviders, nextTag).provider;
       if (next?.id === resolvedAiProvider?.id) return;
       setAiTools(resolveToolSelection(next, undefined));
-      void loadAdapterSchema(next);
     },
-    [aiProviders, resolvedAiProvider, loadAdapterSchema],
+    [aiProviders, resolvedAiProvider],
   );
 
   const handleSaveNodeSettings = useCallback(() => {
@@ -1220,7 +1151,7 @@ export default function LoopEditor() {
       config.aiProviderTag = aiProviderTag.trim() || undefined;
       config.aiProviderId = undefined;
       config.toolAllowlist = aiTools;
-      config.adapterConfig = { ...adapterConfigValues };
+      config.adapterConfig = undefined;
       const cleanRules = aiMatchRules
         .map((rule) => ({ pattern: rule.pattern.trim(), edgeName: rule.edgeName.trim() }))
         .filter((rule) => rule.pattern !== "" && rule.edgeName !== "");
@@ -1300,7 +1231,6 @@ export default function LoopEditor() {
     aiForkFromPlaceholder,
     aiTools,
     aiUseSession,
-    adapterConfigValues,
     cmdCommand,
     humanInputLabel,
     humanPrompt,
@@ -1338,7 +1268,6 @@ export default function LoopEditor() {
       setConditionCases(originalNodeConfig.conditionCases);
       setConditionDefaultEdge(originalNodeConfig.conditionDefaultEdge);
       setConditionOutput(originalNodeConfig.conditionOutput);
-      setAdapterConfigValues(originalNodeConfig.adapterConfigValues);
     }
 
     setSelectedNode(null);
@@ -1742,8 +1671,6 @@ export default function LoopEditor() {
                       conditionOutput={conditionOutput}
                       aiProviders={aiProviders}
                       availableAiTools={availableAiTools}
-                      adapterConfigSchema={adapterConfigSchema}
-                      adapterConfigValues={adapterConfigValues}
                       sessionPlaceholderUsages={sessionPlaceholderUsages}
                       selectedPlaceholderUsage={selectedPlaceholderUsage}
                       onClose={handleCancelNodeSettings}
@@ -1770,9 +1697,6 @@ export default function LoopEditor() {
                       onConditionCasesChange={setConditionCases}
                       onConditionDefaultEdgeChange={setConditionDefaultEdge}
                       onConditionOutputChange={setConditionOutput}
-                      onAdapterConfigChange={(name, value) =>
-                        setAdapterConfigValues((current) => ({ ...current, [name]: value }))
-                      }
                     />
                   )}
 

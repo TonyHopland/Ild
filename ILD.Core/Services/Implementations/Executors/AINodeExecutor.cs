@@ -6,7 +6,6 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace ILD.Core.Services.Implementations.Executors;
@@ -182,7 +181,6 @@ public sealed class AINodeExecutor : INodeExecutor
             // the halt, regardless of the node's UseSession/fork config.
             if (isSteering)
                 incomingSessionId = ctx.Run.CurrentAiSessionId;
-            var adapterConfigDict = ParseAdapterConfig(cfg.AdapterConfig);
             var runContext = new LoopRunContext(
                 ctx.Run.Id, wi.Id, wi.Title, wi.Description ?? string.Empty,
                 ctx.Run.WorktreePath ?? string.Empty, ctx.Run.BranchName ?? string.Empty,
@@ -190,7 +188,7 @@ public sealed class AINodeExecutor : INodeExecutor
             var runId = ctx.Run.Id;
             var agentCtx = new AgentExecutionContext(
                 provider, rendered, runContext, 0, ctx.CancellationToken,
-                ctx.ProgressCallback, adapterConfigDict, cfg.ToolAllowlist,
+                ctx.ProgressCallback, cfg.ToolAllowlist,
                 SessionId: incomingSessionId, IncomingSessionId: incomingSessionId,
                 ManageSession: manageSession,
                 OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid),
@@ -429,15 +427,5 @@ public sealed class AINodeExecutor : INodeExecutor
             await store.ClearSteeringNoteAsync(runId);
         }
         catch { /* best-effort */ }
-    }
-
-    private static Dictionary<string, object?>? ParseAdapterConfig(JsonElement? cfg)
-    {
-        if (cfg is null) return null;
-        try
-        {
-            return JsonSerializer.Deserialize<Dictionary<string, object?>>(cfg.Value.GetRawText());
-        }
-        catch { return null; }
     }
 }

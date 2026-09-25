@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import type { Node } from "@xyflow/react";
-import AdapterConfigFields from "../../../components/AdapterConfigFields";
 import PromptEditor from "../../../components/PromptEditor";
 import {
   NodeType,
@@ -8,12 +7,11 @@ import {
   type AiProvider,
   type AiToolDefinition,
   type ConditionCase,
-  type ConfigFieldDescriptor,
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
 import { resolveProviderForTag } from "../../../utils/providerTags";
 import { PR_RESERVED_EDGE_NAMES } from "../../../utils/edgeUtils";
-import type { AdapterConfigValue, SessionPlaceholderUsage } from "../types";
+import type { SessionPlaceholderUsage } from "../types";
 
 interface NodeSettingsModalProps {
   selectedNode: Node;
@@ -40,8 +38,6 @@ interface NodeSettingsModalProps {
   conditionOutput: string;
   aiProviders: AiProvider[];
   availableAiTools: AiToolDefinition[];
-  adapterConfigSchema: ConfigFieldDescriptor[];
-  adapterConfigValues: Record<string, AdapterConfigValue>;
   sessionPlaceholderUsages: SessionPlaceholderUsage[];
   selectedPlaceholderUsage?: SessionPlaceholderUsage;
   onClose: () => void;
@@ -68,7 +64,6 @@ interface NodeSettingsModalProps {
   onConditionCasesChange: (value: ConditionCase[]) => void;
   onConditionDefaultEdgeChange: (value: string) => void;
   onConditionOutputChange: (value: string) => void;
-  onAdapterConfigChange: (name: string, value: AdapterConfigValue) => void;
 }
 
 /** Titled group of related fields inside the node settings body. */
@@ -313,8 +308,6 @@ export function NodeSettingsModal({
   conditionOutput,
   aiProviders,
   availableAiTools,
-  adapterConfigSchema,
-  adapterConfigValues,
   sessionPlaceholderUsages,
   selectedPlaceholderUsage,
   onClose,
@@ -341,7 +334,6 @@ export function NodeSettingsModal({
   onConditionCasesChange,
   onConditionDefaultEdgeChange,
   onConditionOutputChange,
-  onAdapterConfigChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
 
@@ -426,14 +418,6 @@ export function NodeSettingsModal({
                   providers={aiProviders}
                   onChange={onAiProviderTagChange}
                 />
-
-                {adapterConfigSchema.length > 0 && (
-                  <AdapterConfigFields
-                    schema={adapterConfigSchema}
-                    values={adapterConfigValues}
-                    onChange={onAdapterConfigChange}
-                  />
-                )}
 
                 <div className="config-field">
                   <label>Tool Allowlist</label>

@@ -68,7 +68,6 @@ internal static class NodeConfig
         /// </summary>
         public List<AiMatchRule>? MatchRules { get; init; }
 
-        public JsonElement? AdapterConfig { get; init; }
         public string? SessionPlaceholder { get; init; }
 
         /// <summary>
