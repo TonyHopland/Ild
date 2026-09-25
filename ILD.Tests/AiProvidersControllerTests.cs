@@ -357,4 +357,169 @@ public class AiProvidersControllerTests : IDisposable
         var json = System.Text.Json.JsonSerializer.Serialize(badRequest.Value);
         Assert.Contains("Unsupported AI provider type", json);
     }
+
+    // ── Provider tags ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A controller over a cleared change tracker: each call sees the database
+    /// the way a fresh request would, not entities an earlier call left tracked.
+    /// </summary>
+    private AiProvidersController Request()
+    {
+        _db.ChangeTracker.Clear();
+        return CreateController();
+    }
+
+    private static AiProviderDto TagDto(string name, IEnumerable<string>? tags) => new()
+    {
+        Name = name,
+        Type = "claude-code",
+        BaseUrl = string.Empty,
+        Model = string.Empty,
+        Tags = tags?.ToList(),
+    };
+
+    private static System.Text.Json.JsonElement Body(IActionResult result)
+        => System.Text.Json.JsonSerializer.SerializeToElement(((ObjectResult)result).Value);
+
+    private static string[] TagsOf(System.Text.Json.JsonElement provider)
+        => provider.GetProperty("tags").EnumerateArray().Select(t => t.GetString()!).ToArray();
+
+    private static string[] TagsOf(IActionResult result) => TagsOf(Body(result));
+
+    private static string ErrorOf(IActionResult result)
+    {
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        return System.Text.Json.JsonSerializer.SerializeToElement(bad.Value).GetProperty("error").GetString()!;
+    }
+
+    private async Task<Guid> CreateTaggedAsync(string name, params string[] tags)
+    {
+        var result = Assert.IsType<CreatedAtActionResult>(
+            await Request().Create(TagDto(name, tags.Length == 0 ? null : tags)));
+        return Body(result).GetProperty("id").GetGuid();
+    }
+
+    private async Task<string[]> StoredTagsAsync(Guid id)
+        => TagsOf(await Request().GetById(id.ToString()));
+
+    [Fact]
+    public async Task Every_provider_response_carries_its_tags_in_case_insensitive_order()
+    {
+        var created = await Request().Create(TagDto("tagged", ["Zeta", "alpha", "beta"]));
+        Assert.Equal(["alpha", "beta", "Zeta"], TagsOf(created));
+        var id = Body(created).GetProperty("id").GetGuid();
+
+        var untagged = await Request().Create(TagDto("untagged", null));
+        Assert.Empty(TagsOf(untagged));
+
+        var all = Body(await Request().GetAll()).EnumerateArray().ToList();
+        Assert.Equal(["alpha", "beta", "Zeta"], TagsOf(all.Single(p => p.GetProperty("name").GetString() == "tagged")));
+        Assert.Empty(TagsOf(all.Single(p => p.GetProperty("name").GetString() == "untagged")));
+
+        Assert.Equal(["alpha", "beta", "Zeta"], TagsOf(await Request().GetById(id.ToString())));
+        Assert.Equal(["alpha", "beta", "Zeta"], TagsOf(await Request().SetDefault(id.ToString())));
+
+        // Omitting tags on update leaves them as they were.
+        var updated = await Request().Update(id.ToString(), TagDto("tagged renamed", null));
+        Assert.Equal(["alpha", "beta", "Zeta"], TagsOf(updated));
+        Assert.Equal(["alpha", "beta", "Zeta"], await StoredTagsAsync(id));
+    }
+
+    [Fact]
+    public async Task Tags_are_trimmed_blanks_dropped_and_case_duplicates_collapsed_to_the_first_spelling()
+    {
+        var created = await Request().Create(TagDto("p", [" QA ", "", "   ", "qa", "Fast", "FAST"]));
+
+        Assert.Equal(["Fast", "QA"], TagsOf(created));
+        Assert.Equal(["Fast", "QA"], await StoredTagsAsync(Body(created).GetProperty("id").GetGuid()));
+    }
+
+    [Fact]
+    public async Task Tags_at_the_limits_are_accepted()
+    {
+        var longest = new string('x', 64);
+        var thirtyTwo = Enumerable.Range(0, 31).Select(i => $"t{i}").Append(longest).ToList();
+
+        var id = await CreateTaggedAsync("p", [.. thirtyTwo]);
+
+        var stored = await StoredTagsAsync(id);
+        Assert.Equal(32, stored.Length);
+        Assert.Contains(longest, stored);
+    }
+
+    public static TheoryData<string[], string?> InvalidTags => new()
+    {
+        { ["ok", new string('y', 65)], new string('y', 65) },
+        { ["ok", "qa,fast"], "qa,fast" },
+        { Enumerable.Range(0, 33).Select(i => $"t{i}").ToArray(), null },
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidTags))]
+    public async Task Create_with_an_invalid_tag_set_is_rejected_and_saves_nothing(string[] tags, string? named)
+    {
+        var result = await Request().Create(TagDto("p", tags));
+
+        var error = ErrorOf(result);
+        if (named is not null) Assert.Contains(named, error);
+        _db.ChangeTracker.Clear();
+        Assert.Empty(_db.AiProviders);
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidTags))]
+    public async Task Update_with_an_invalid_tag_set_is_rejected_and_saves_nothing(string[] tags, string? named)
+    {
+        var id = await CreateTaggedAsync("before", "keep");
+
+        var result = await Request().Update(id.ToString(), TagDto("after", tags));
+
+        var error = ErrorOf(result);
+        if (named is not null) Assert.Contains(named, error);
+        Assert.Equal(["keep"], await StoredTagsAsync(id));
+        _db.ChangeTracker.Clear();
+        Assert.Equal("before", (await _db.AiProviders.FindAsync(id))!.Name);
+    }
+
+    [Fact]
+    public async Task Update_replaces_the_tag_set_exactly_and_an_empty_list_removes_all()
+    {
+        var id = await CreateTaggedAsync("p", "one", "two");
+
+        var replaced = await Request().Update(id.ToString(), TagDto("p", ["two", "three"]));
+        Assert.Equal(["three", "two"], TagsOf(replaced));
+        Assert.Equal(["three", "two"], await StoredTagsAsync(id));
+
+        var cleared = await Request().Update(id.ToString(), TagDto("p", []));
+        Assert.Empty(TagsOf(cleared));
+        Assert.Empty(await StoredTagsAsync(id));
+    }
+
+    [Fact]
+    public async Task Saving_a_tag_another_provider_holds_moves_it_and_leaves_its_other_tags()
+    {
+        var a = await CreateTaggedAsync("A", "QA", "Fast", "Thinking");
+
+        // On create, compared case-insensitively.
+        var b = await CreateTaggedAsync("B", "qa");
+        Assert.Equal(["qa"], await StoredTagsAsync(b));
+        Assert.Equal(["Fast", "Thinking"], await StoredTagsAsync(a));
+
+        // On update.
+        var moved = await Request().Update(b.ToString(), TagDto("B", ["qa", "FAST"]));
+        Assert.Equal(["FAST", "qa"], TagsOf(moved));
+        Assert.Equal(["Thinking"], await StoredTagsAsync(a));
+    }
+
+    [Fact]
+    public async Task Changing_only_the_case_of_a_tag_on_the_same_provider_keeps_the_new_spelling()
+    {
+        var id = await CreateTaggedAsync("p", "qa", "fast");
+
+        var updated = await Request().Update(id.ToString(), TagDto("p", ["QA", "fast"]));
+
+        Assert.Equal(["fast", "QA"], TagsOf(updated));
+        Assert.Equal(["fast", "QA"], await StoredTagsAsync(id));
+    }
 }

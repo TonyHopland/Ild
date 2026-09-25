@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Cmd nodes now run as the agent user and can no longer read ILD's own secrets.** A command that relied on ILD's environment or on files only ILD can read must now be given its own configuration.
 
+- **AI nodes now pick their provider by tag instead of by a provider selector.** Nodes that previously named a specific provider now run on the default provider until you give them a tag.
+
+- **AI nodes no longer have their own adapter settings.** They never took effect; set them on the AI provider instead.
+
 ## [0.14.0] - 2026-09-24
 
 ### Changed

@@ -49,9 +49,8 @@
       "config": {
         "prompt": "{{Node.Input}}",
         "useSession": true,
-        "aiProviderId": "",
+        "aiProviderTag": "",
         "toolAllowlist": ["read", "execute", "ild"],
-        "adapterConfig": {},
         "sessionPlaceholder": "Q&A",
         "__pos": {
           "x": -270.5,

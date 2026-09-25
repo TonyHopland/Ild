@@ -107,6 +107,81 @@ public class AiProvidersController : ControllerBase
         return obj.Count == 0 ? null : obj.ToJsonString();
     }
 
+    /// <summary>
+    /// Trims the requested tags, drops blank ones and collapses case-duplicates
+    /// to their first spelling. Null stays null: the caller isn't managing tags.
+    /// </summary>
+    private static (List<string>? Tags, string? Error) NormalizeTags(List<string>? requested)
+    {
+        if (requested is null) return (null, null);
+        var tags = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tag in requested.Select(t => t?.Trim()))
+        {
+            if (string.IsNullOrEmpty(tag) || !seen.Add(AiProviderTag.Normalize(tag))) continue;
+            if (AiProviderTag.Problem(tag) is { } problem)
+                return (null, $"Tag '{tag}' {problem}.");
+            tags.Add(tag);
+        }
+        if (tags.Count > AiProviderTag.MaxPerProvider)
+            return (null, $"A provider can have at most {AiProviderTag.MaxPerProvider} tags; got {tags.Count}.");
+        return (tags, null);
+    }
+
+    private sealed record TagHolder(Guid ProviderId, string ProviderName);
+
+    /// <summary>Who holds each of <paramref name="tags"/> now, keyed by normalised name.</summary>
+    private async Task<Dictionary<string, TagHolder>> TagHoldersAsync(IReadOnlyList<string> tags)
+    {
+        var normalized = tags.Select(AiProviderTag.Normalize).ToList();
+        return await _db.AiProviderTags.AsNoTracking()
+            .Where(t => normalized.Contains(t.NormalizedName))
+            .Select(t => new { t.NormalizedName, t.AiProviderId, t.AiProvider!.Name })
+            .ToDictionaryAsync(t => t.NormalizedName, t => new TagHolder(t.AiProviderId, t.Name));
+    }
+
+    /// <summary>
+    /// Runs <paramref name="save"/> and returns the conflict message when the
+    /// database refused it because a concurrent save gave one of
+    /// <paramref name="tags"/> to another provider (the unique tag index), or
+    /// null when it succeeded. Any other failure propagates. The rollback puts a
+    /// tag this save was moving back on its old holder, so only a holder that
+    /// changed since before the save means another save took it.
+    /// </summary>
+    private async Task<string?> SaveReportingTagConflictAsync(Guid providerId, IReadOnlyList<string>? tags, Func<Task> save)
+    {
+        if (tags is null)
+        {
+            await save();
+            return null;
+        }
+        var holdersBefore = await TagHoldersAsync(tags);
+        try
+        {
+            await save();
+            return null;
+        }
+        catch (DbUpdateException)
+        {
+            if (await TagTakenConcurrentlyAsync(providerId, tags, holdersBefore) is not { } conflict) throw;
+            return conflict;
+        }
+    }
+
+    private async Task<string?> TagTakenConcurrentlyAsync(
+        Guid providerId, IReadOnlyList<string> tags, Dictionary<string, TagHolder> holdersBefore)
+    {
+        var holdersAfter = await TagHoldersAsync(tags);
+        foreach (var tag in tags)
+        {
+            var key = AiProviderTag.Normalize(tag);
+            if (holdersAfter.GetValueOrDefault(key) is { } holder && holder.ProviderId != providerId
+                && holder.ProviderId != holdersBefore.GetValueOrDefault(key)?.ProviderId)
+                return $"Tag '{tag}' was saved on provider '{holder.ProviderName}' at the same time. Reload and try again.";
+        }
+        return null;
+    }
+
     private static object ToResponse(AiProvider p) => new
     {
         id = p.Id,
@@ -124,6 +199,7 @@ public class AiProvidersController : ControllerBase
         // user-editable Custom MCP servers value so the AI Providers form can seed
         // and round-trip it without leaking the rest of the blob.
         customMcpServersJson = AiProviderConfig.Parse(p.Config).CustomMcpServersJson,
+        tags = p.Tags.Select(t => t.Name).Order(StringComparer.OrdinalIgnoreCase).ToList(),
         supportedTools = AiToolCatalog.GetSupportedToolsForProviderType(p.Type),
         createdAt = p.CreatedAt,
         updatedAt = p.UpdatedAt,
@@ -135,7 +211,7 @@ public class AiProvidersController : ControllerBase
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
-        var items = await _db.AiProviders.AsNoTracking().OrderBy(p => p.Name).Skip(skip).Take(take).ToListAsync();
+        var items = await _db.AiProviders.AsNoTracking().Include(p => p.Tags).OrderBy(p => p.Name).ThenBy(p => p.Id).Skip(skip).Take(take).ToListAsync();
         return Ok(items.Select(ToResponse));
     }
 
@@ -143,7 +219,7 @@ public class AiProvidersController : ControllerBase
     public async Task<IActionResult> GetById(string id)
     {
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
-        var p = await _db.AiProviders.FindAsync(guid);
+        var p = await _providerStore.GetAiProviderByIdAsync(guid);
         return p == null ? NotFound() : Ok(ToResponse(p));
     }
 
@@ -156,6 +232,9 @@ public class AiProvidersController : ControllerBase
             return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
         if (ValidateConnectionFields(request) is { } validationError)
             return BadRequest(new { error = validationError });
+        var (tags, tagsError) = NormalizeTags(request.Tags);
+        if (tagsError is not null)
+            return BadRequest(new { error = tagsError });
 
         var p = new AiProvider
         {
@@ -170,7 +249,8 @@ public class AiProvidersController : ControllerBase
             Config = ApplyCustomMcpServers(request.Config, request.CustomMcpServersJson),
             CreatedAt = DateTime.UtcNow,
         };
-        await _providerStore.CreateAiProviderAsync(p);
+        if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.CreateAiProviderAsync(p, tags)) is { } conflict)
+            return Conflict(new { error = conflict });
         // Agents aren't baked into the image; if this provider uses a managed
         // agent that isn't installed yet, install it in the background so the
         // first run doesn't fail on a missing CLI.
@@ -217,6 +297,9 @@ public class AiProvidersController : ControllerBase
             return BadRequest(new { error = $"Unsupported AI provider type '{request.Type}'." });
         if (ValidateConnectionFields(request) is { } validationError)
             return BadRequest(new { error = validationError });
+        var (tags, tagsError) = NormalizeTags(request.Tags);
+        if (tagsError is not null)
+            return BadRequest(new { error = tagsError });
         p.Name = request.Name;
         p.Type = request.Type;
         p.BaseUrl = request.BaseUrl;
@@ -230,7 +313,8 @@ public class AiProvidersController : ControllerBase
         // folded in on top.
         p.Config = ApplyCustomMcpServers(request.Config ?? p.Config, request.CustomMcpServersJson);
         p.UpdatedAt = DateTime.UtcNow;
-        await _providerStore.UpdateAiProviderAsync(p);
+        if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.UpdateAiProviderAsync(p, tags)) is { } conflict)
+            return Conflict(new { error = conflict });
         // If the type was changed to a managed agent, make sure it is installed.
         _agentProvisioner.EnsureInstalledForProviderType(p.Type);
         return Ok(ToResponse(p));

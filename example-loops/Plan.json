@@ -37,9 +37,8 @@
         "prompt": "{{Node.Input}}",
         "useSession": true,
         "sessionPlaceholder": "plan",
-        "aiProviderId": "",
+        "aiProviderTag": "",
         "toolAllowlist": ["read", "write", "execute", "ild"],
-        "adapterConfig": {},
         "__pos": {
           "x": -270,
           "y": 128

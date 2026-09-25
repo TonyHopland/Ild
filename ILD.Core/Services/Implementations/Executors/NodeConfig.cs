@@ -52,7 +52,10 @@ internal static class NodeConfig
 
     public sealed record Ai
     {
-        public string? AiProviderId { get; init; }
+        /// <summary>
+        /// The provider tag this node runs on; see <see cref="Remote.AiNodeProviderResolver"/>.
+        /// </summary>
+        public string? AiProviderTag { get; init; }
         public bool? UseSession { get; init; }
         public string? Prompt { get; init; }
         public string[]? ToolAllowlist { get; init; }
@@ -65,7 +68,6 @@ internal static class NodeConfig
         /// </summary>
         public List<AiMatchRule>? MatchRules { get; init; }
 
-        public JsonElement? AdapterConfig { get; init; }
         public string? SessionPlaceholder { get; init; }
 
         /// <summary>

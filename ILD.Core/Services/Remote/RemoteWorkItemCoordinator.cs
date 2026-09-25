@@ -1,6 +1,6 @@
 namespace ILD.Core.Services.Remote;
 
-using System.Text.Json;
+using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -293,16 +293,14 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     /// <summary>
     /// True if the run associated with <paramref name="item"/> is not parked on
     /// an AI node, or the provider it will actually execute against currently
-    /// has spare capacity. That provider is the node's pinned one, or the
-    /// configured default when the node pins nothing \u2014 in either case swapped
-    /// for the work item's override when
-    /// <see cref="AiProviderOverrideRule"/> says the override applies, exactly
-    /// as <c>AINodeExecutor</c> resolves it before claiming its slot. Peeking a
+    /// has spare capacity. That provider comes from
+    /// <see cref="AiNodeProviderResolver"/>, the same resolution
+    /// <c>AINodeExecutor</c> makes before claiming its slot. Peeking a
     /// different provider than the executor claims would strand the run (gate
     /// on a full provider the run never uses) or flap it (resume, then
     /// immediately re-park at the executor's gate).
-    /// Re-evaluated each poll so changes to provider parallelism settings
-    /// take effect without restart.
+    /// Re-evaluated each poll so changes to provider parallelism settings and
+    /// tags take effect without restart.
     /// </summary>
     private async Task<bool> HasProviderCapacityForResumeAsync(RemoteWorkItem item, CancellationToken ct)
     {
@@ -316,17 +314,9 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             var node = nodes.FirstOrDefault(n => n.Id == currentNodeId);
             if (node == null || node.NodeType != ILD.Data.Enums.NodeType.AI) return true;
 
-            var pinnedId = TryReadAiProviderId(node.Config);
-            var targetId = AiProviderOverrideRule.Applies(
-                    item.AiProviderOverride, item.AiProviderOverrideId, nodePinsProvider: pinnedId != null)
-                ? item.AiProviderOverrideId
-                : pinnedId;
-
-            // No pin and no override \u2192 the executor falls back to the default
-            // provider, so gate on that rather than waving the resume through.
-            var provider = targetId is { } id
-                ? await _providerStore.GetAiProviderByIdAsync(id)
-                : await _providerStore.GetDefaultAiProviderAsync();
+            var tag = NodeConfig.Parse<NodeConfig.Ai>(node.Config).AiProviderTag;
+            var (provider, _) = await AiNodeProviderResolver.ResolveAsync(
+                _providerStore, tag, item.AiProviderOverride, item.AiProviderOverrideId);
             if (provider == null) return true; // let the executor report the missing provider
 
             return _aiTracker.HasCapacity(provider.Id, provider.Parallelism);
@@ -336,23 +326,5 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             _logger?.LogWarning(ex, "Provider capacity check failed for work item {WorkItemId}", item.Id);
             return true; // be permissive on errors so we don't strand work items
         }
-    }
-
-    private static Guid? TryReadAiProviderId(string? configJson)
-    {
-        if (string.IsNullOrWhiteSpace(configJson)) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(configJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
-            foreach (var prop in doc.RootElement.EnumerateObject())
-            {
-                if (!string.Equals(prop.Name, "aiProviderId", StringComparison.OrdinalIgnoreCase)) continue;
-                if (prop.Value.ValueKind == JsonValueKind.String &&
-                    Guid.TryParse(prop.Value.GetString(), out var g)) return g;
-            }
-        }
-        catch { /* malformed config \u2192 treat as no provider */ }
-        return null;
     }
 }

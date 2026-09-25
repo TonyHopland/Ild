@@ -717,39 +717,26 @@ public sealed class RemoteWorkItemCoordinatorTests
         Assert.Equal(new[] { busy }, result.SlotHolders);
     }
 
-    // ---- Resume gating vs. the work item's AI provider override -------------
+    // ---- Resume gating vs. provider tags and the work item's override ------
     //
     // The resume gate must peek the capacity of the provider the AI node will
-    // ACTUALLY run against — i.e. after the work item's override is applied,
-    // using the same OverrideAll / OverrideDefault semantics AINodeExecutor
-    // uses. Gating on the node's pinned provider instead both strands items
-    // (their real provider is idle) and pointlessly resumes them (their real
-    // provider is full, so the executor immediately parks them again).
-
-    private static AiProvider Provider(string name, int parallelism) => new()
-    {
-        Id = Guid.NewGuid(), Name = name, Type = "claude", Model = "m", Parallelism = parallelism,
-    };
-
-    /// <summary>Fills every slot of <paramref name="p"/> so it reports no capacity.</summary>
-    private static void Saturate(IAiProviderConcurrencyTracker tracker, AiProvider p)
-    {
-        for (var i = 0; i < p.Parallelism; i++)
-            Assert.True(tracker.TryEnter(p.Id, p.Parallelism));
-    }
+    // ACTUALLY run against — the tag's holder or the default, then the work
+    // item's override — exactly as AINodeExecutor resolves it. Gating on any
+    // other provider both strands items (their real provider is idle) and
+    // pointlessly resumes them (their real provider is full, so the executor
+    // immediately parks them again).
 
     /// <summary>
     /// A coordinator whose single WaitingForIld item has a run parked on an AI
-    /// node. <paramref name="nodeConfig"/> is the node's raw config JSON (pinning
-    /// a provider, or not); the item carries the override the server reported.
+    /// node with <paramref name="nodeConfig"/>; the item carries the override
+    /// the server reported, and providers come from <paramref name="providerStore"/>.
     /// </summary>
     private static (RemoteWorkItemCoordinator Sut, RemoteWorkItem Waiting) BuildResumeGate(
         string? nodeConfig,
         RemoteAiProviderOverrideMode overrideMode,
         Guid? overrideId,
         IAiProviderConcurrencyTracker concurrency,
-        AiProvider? defaultProvider,
-        params AiProvider[] providers)
+        IProviderStore providerStore)
     {
         var waiting = new RemoteWorkItem
         {
@@ -789,151 +776,59 @@ public sealed class RemoteWorkItemCoordinatorTests
         // the resume gate, not concurrency, so keep the set empty.
         runStore.Setup(s => s.GetActiveWorkItemIdsAsync()).ReturnsAsync(Array.Empty<string>());
 
-        var providerStore = new Mock<IProviderStore>();
-        foreach (var p in providers)
-            providerStore.Setup(s => s.GetAiProviderByIdAsync(p.Id)).ReturnsAsync(p);
-        providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(defaultProvider);
-
         var sut = new RemoteWorkItemCoordinator(
             client.Object, new Mock<ILoopTemplateResolver>().Object, new Mock<ILoopEngine>().Object,
-            runStore.Object, providerStore: providerStore.Object, aiTracker: concurrency);
+            runStore.Object, providerStore: providerStore, aiTracker: concurrency);
 
         return (sut, waiting);
     }
 
-    [Fact]
-    public async Task Does_not_resume_when_the_override_target_is_at_capacity()
+    [Theory]
+    [MemberData(nameof(AiNodeProviderResolutionScenarios.Cases), MemberType = typeof(AiNodeProviderResolutionScenarios))]
+    public async Task Resume_gates_on_exactly_the_provider_the_executor_runs_on(
+        string nodeConfig, RemoteAiProviderOverrideMode mode, bool overrideTargetSet, string expected)
     {
-        // Node pins A (idle); the item overrides every AI node to B, which is
-        // full. The run would execute against B, so it must stay parked.
-        var pinnedA = Provider("A", parallelism: 2);
-        var overrideB = Provider("B", parallelism: 1);
-        var tracker = new AiProviderConcurrencyTracker();
-        Saturate(tracker, overrideB);
+        using var db = new TestDb();
+        var seeded = await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers);
+        var config = seeded.Expand(nodeConfig);
+        var overrideId = overrideTargetSet ? seeded.Bravo.Id : (Guid?)null;
+        var target = seeded.ByName(expected);
 
-        var (sut, _) = BuildResumeGate(
-            $@"{{""aiProviderId"":""{pinnedA.Id}""}}",
-            RemoteAiProviderOverrideMode.OverrideAll, overrideB.Id,
-            tracker, defaultProvider: null, pinnedA, overrideB);
+        // Only the provider the node runs on is full: the run must stay parked.
+        var targetFull = new AiProviderConcurrencyTracker();
+        Assert.True(targetFull.TryEnter(target.Id, target.Parallelism));
+        var (blocked, _) = BuildResumeGate(config, mode, overrideId, targetFull, db.Providers);
+        Assert.Empty((await blocked.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
 
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
-
-        Assert.Empty(result.Resumed);
-    }
-
-    [Fact]
-    public async Task Resumes_when_the_override_target_is_idle_though_the_pinned_provider_is_full()
-    {
-        // The inverse: A (pinned) is saturated but irrelevant — the override
-        // sends this run to B, which is idle. Gating on A strands the item.
-        var pinnedA = Provider("A", parallelism: 1);
-        var overrideB = Provider("B", parallelism: 4);
-        var tracker = new AiProviderConcurrencyTracker();
-        Saturate(tracker, pinnedA);
-
-        var (sut, _) = BuildResumeGate(
-            $@"{{""aiProviderId"":""{pinnedA.Id}""}}",
-            RemoteAiProviderOverrideMode.OverrideAll, overrideB.Id,
-            tracker, defaultProvider: null, pinnedA, overrideB);
-
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
-
-        Assert.Single(result.Resumed);
+        // Every other provider is full but that one is idle: the run resumes.
+        var othersFull = new AiProviderConcurrencyTracker();
+        foreach (var other in seeded.All.Where(p => p.Id != target.Id))
+            Assert.True(othersFull.TryEnter(other.Id, other.Parallelism));
+        var (free, _) = BuildResumeGate(config, mode, overrideId, othersFull, db.Providers);
+        Assert.Single((await free.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
     }
 
     [Fact]
     public async Task Resumes_when_the_override_target_has_unlimited_parallelism()
     {
-        // Parallelism 0 means unlimited: B never blocks, however many runs are
-        // already on it. A fix must not treat 0 as "no slots".
-        var pinnedA = Provider("A", parallelism: 1);
-        var overrideB = Provider("B", parallelism: 0);
+        // Parallelism 0 means unlimited: the target never blocks, however many
+        // runs are already on it. A fix must not treat 0 as "no slots".
+        using var db = new TestDb();
+        var tagged = new AiProvider { Id = Guid.NewGuid(), Name = "A", Type = "claude", Model = "m", Parallelism = 1 };
+        var unlimited = new AiProvider { Id = Guid.NewGuid(), Name = "B", Type = "claude", Model = "m", Parallelism = 0 };
+        await db.Providers.CreateAiProviderAsync(tagged, ["QA"]);
+        await db.Providers.CreateAiProviderAsync(unlimited);
         var tracker = new AiProviderConcurrencyTracker();
-        Saturate(tracker, pinnedA);
-        for (var i = 0; i < 5; i++) tracker.TryEnter(overrideB.Id, overrideB.Parallelism);
+        Assert.True(tracker.TryEnter(tagged.Id, tagged.Parallelism));
+        for (var i = 0; i < 5; i++) tracker.TryEnter(unlimited.Id, unlimited.Parallelism);
 
         var (sut, _) = BuildResumeGate(
-            $@"{{""aiProviderId"":""{pinnedA.Id}""}}",
-            RemoteAiProviderOverrideMode.OverrideAll, overrideB.Id,
-            tracker, defaultProvider: null, pinnedA, overrideB);
+            @"{""aiProviderTag"":""QA""}",
+            RemoteAiProviderOverrideMode.OverrideAll, unlimited.Id,
+            tracker, db.Providers);
 
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
 
         Assert.Single(result.Resumed);
-    }
-
-    [Fact]
-    public async Task OverrideDefault_gates_on_the_override_target_when_the_node_is_not_pinned()
-    {
-        // Unpinned node + OverrideDefault → the override applies, so the run
-        // lands on B. B is full, so no resume — even though the default is idle.
-        var defaultD = Provider("D", parallelism: 4);
-        var overrideB = Provider("B", parallelism: 1);
-        var tracker = new AiProviderConcurrencyTracker();
-        Saturate(tracker, overrideB);
-
-        var (sut, _) = BuildResumeGate(
-            "{}", RemoteAiProviderOverrideMode.OverrideDefault, overrideB.Id,
-            tracker, defaultProvider: defaultD, defaultD, overrideB);
-
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
-
-        Assert.Empty(result.Resumed);
-    }
-
-    [Fact]
-    public async Task OverrideDefault_gates_on_the_pinned_provider_when_the_node_is_pinned()
-    {
-        // OverrideDefault must leave a deliberately pinned node alone, so the
-        // saturated A still blocks the resume even though B is idle.
-        var pinnedA = Provider("A", parallelism: 1);
-        var overrideB = Provider("B", parallelism: 4);
-        var tracker = new AiProviderConcurrencyTracker();
-        Saturate(tracker, pinnedA);
-
-        var (sut, _) = BuildResumeGate(
-            $@"{{""aiProviderId"":""{pinnedA.Id}""}}",
-            RemoteAiProviderOverrideMode.OverrideDefault, overrideB.Id,
-            tracker, defaultProvider: null, pinnedA, overrideB);
-
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
-
-        Assert.Empty(result.Resumed);
-    }
-
-    [Fact]
-    public async Task Override_without_a_target_provider_gates_on_the_pinned_provider()
-    {
-        // Mode set but no target → no override, so A (full) governs.
-        var pinnedA = Provider("A", parallelism: 1);
-        var tracker = new AiProviderConcurrencyTracker();
-        Saturate(tracker, pinnedA);
-
-        var (sut, _) = BuildResumeGate(
-            $@"{{""aiProviderId"":""{pinnedA.Id}""}}",
-            RemoteAiProviderOverrideMode.OverrideAll, overrideId: null,
-            tracker, defaultProvider: null, pinnedA);
-
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
-
-        Assert.Empty(result.Resumed);
-    }
-
-    [Fact]
-    public async Task Does_not_resume_an_unpinned_node_when_the_default_provider_is_at_capacity()
-    {
-        // No pin, no override → the node falls back to the default provider,
-        // which is full. Reporting capacity here resumes into an immediate park.
-        var defaultD = Provider("D", parallelism: 1);
-        var tracker = new AiProviderConcurrencyTracker();
-        Saturate(tracker, defaultD);
-
-        var (sut, _) = BuildResumeGate(
-            "{}", RemoteAiProviderOverrideMode.None, overrideId: null,
-            tracker, defaultProvider: defaultD, defaultD);
-
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
-
-        Assert.Empty(result.Resumed);
     }
 }

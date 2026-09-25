@@ -6,7 +6,6 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace ILD.Core.Services.Implementations.Executors;
@@ -32,44 +31,15 @@ public sealed class AINodeExecutor : INodeExecutor
             yield break;
         }
 
-        // Resolve the provider the loop node itself selects: an explicit GUID
-        // pins a specific provider, otherwise the node falls back to the
-        // configured default.
-        var nodePinsProvider = Guid.TryParse(cfg.AiProviderId, out var parsedId);
-        AiProvider? provider;
-        if (nodePinsProvider)
+        // The resolution is shared with RemoteWorkItemCoordinator's resume gate,
+        // which must peek capacity on the same provider this executor claims a
+        // slot against.
+        var (provider, providerError) = await AiNodeProviderResolver.ResolveAsync(
+            providerStore, cfg.AiProviderTag, wi.AiProviderOverride, wi.AiProviderOverrideId);
+        if (provider is null)
         {
-            provider = await providerStore.GetAiProviderByIdAsync(parsedId);
-            if (provider is null)
-            {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"AiProvider {parsedId} not found");
-                yield break;
-            }
-        }
-        else
-        {
-            provider = await providerStore.GetDefaultAiProviderAsync();
-            if (provider is null)
-            {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, "AI node has no aiProviderId and no default provider is configured");
-                yield break;
-            }
-        }
-
-        // A work item can override the node's provider. The rule is shared with
-        // RemoteWorkItemCoordinator's resume gate, which must peek capacity on
-        // the same provider this executor claims a slot against.
-        var shouldOverride = AiProviderOverrideRule.Applies(
-            wi.AiProviderOverride, wi.AiProviderOverrideId, nodePinsProvider);
-        if (shouldOverride)
-        {
-            var overrideProvider = await providerStore.GetAiProviderByIdAsync(wi.AiProviderOverrideId!.Value);
-            if (overrideProvider is null)
-            {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Work item AI provider override {wi.AiProviderOverrideId} not found");
-                yield break;
-            }
-            provider = overrideProvider;
+            yield return new NodeOutcome.Fail(EdgeType.OnFailure, providerError!);
+            yield break;
         }
 
         if (registry is null)
@@ -211,7 +181,6 @@ public sealed class AINodeExecutor : INodeExecutor
             // the halt, regardless of the node's UseSession/fork config.
             if (isSteering)
                 incomingSessionId = ctx.Run.CurrentAiSessionId;
-            var adapterConfigDict = ParseAdapterConfig(cfg.AdapterConfig);
             var runContext = new LoopRunContext(
                 ctx.Run.Id, wi.Id, wi.Title, wi.Description ?? string.Empty,
                 ctx.Run.WorktreePath ?? string.Empty, ctx.Run.BranchName ?? string.Empty,
@@ -219,7 +188,7 @@ public sealed class AINodeExecutor : INodeExecutor
             var runId = ctx.Run.Id;
             var agentCtx = new AgentExecutionContext(
                 provider, rendered, runContext, 0, ctx.CancellationToken,
-                ctx.ProgressCallback, adapterConfigDict, cfg.ToolAllowlist,
+                ctx.ProgressCallback, cfg.ToolAllowlist,
                 SessionId: incomingSessionId, IncomingSessionId: incomingSessionId,
                 ManageSession: manageSession,
                 OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid),
@@ -458,15 +427,5 @@ public sealed class AINodeExecutor : INodeExecutor
             await store.ClearSteeringNoteAsync(runId);
         }
         catch { /* best-effort */ }
-    }
-
-    private static Dictionary<string, object?>? ParseAdapterConfig(JsonElement? cfg)
-    {
-        if (cfg is null) return null;
-        try
-        {
-            return JsonSerializer.Deserialize<Dictionary<string, object?>>(cfg.Value.GetRawText());
-        }
-        catch { return null; }
     }
 }

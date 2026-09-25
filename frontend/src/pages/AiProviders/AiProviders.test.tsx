@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { AdapterModelSupport, ConfigFieldType } from "../../types";
@@ -51,9 +51,18 @@ function routingFetch(options: {
   schema?: unknown[];
   agents?: unknown[];
   onWrite?: (url: string, init: RequestInit) => unknown;
+  writeStatus?: number;
   requests: Array<{ url: string; method: string; body: unknown }>;
 }) {
-  const { providers = [], types = [], schema = [], agents = [], onWrite, requests } = options;
+  const {
+    providers = [],
+    types = [],
+    schema = [],
+    agents = [],
+    onWrite,
+    writeStatus = 200,
+    requests,
+  } = options;
   return vi.fn(async (url: string, init?: RequestInit) => {
     const method = (init?.method as string) ?? "GET";
     const body = init?.body ? JSON.parse(init.body as string) : undefined;
@@ -68,7 +77,7 @@ function routingFetch(options: {
     if (method === "GET" && url.includes("AgentAdapters")) return ok(adapterList(types));
     if (method === "GET" && url.includes("managedagents")) return ok(agents);
     if (method === "GET" && url.includes("aiproviders")) return ok(providers);
-    if (method === "POST" || method === "PUT") return ok(onWrite?.(url, init!) ?? {});
+    if (method === "POST" || method === "PUT") return ok(onWrite?.(url, init!) ?? {}, writeStatus);
     return ok(null);
   });
 }
@@ -1298,5 +1307,174 @@ describe("AI Providers page", () => {
 
     const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
     expect((putReq!.body as { model?: string }).model).toBe("some-model");
+  });
+});
+
+describe("AI provider tags", () => {
+  const taggedProviders = () => [
+    {
+      id: "ai-alpha",
+      name: "Alpha",
+      type: "claude-code",
+      baseUrl: "",
+      apiKey: "",
+      model: "",
+      isDefault: true,
+      parallelism: 0,
+      tags: ["Fast"],
+      createdAt: "2025-01-01T00:00:00Z",
+    },
+    {
+      id: "ai-beta",
+      name: "Beta",
+      type: "claude-code",
+      baseUrl: "",
+      apiKey: "",
+      model: "",
+      isDefault: false,
+      parallelism: 0,
+      tags: ["QA", "Thinking"],
+      createdAt: "2025-01-02T00:00:00Z",
+    },
+  ];
+
+  const splitTags = (value: string) =>
+    value
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter((tag) => tag !== "");
+
+  async function openEdit(providerName: string) {
+    await waitFor(() => expect(screen.getByText(providerName)).toBeTruthy());
+    const card = screen.getByText(providerName).closest(".ap-card") as HTMLElement;
+    fireEvent.click(within(card).getByText("Edit"));
+    await screen.findByText("Edit Provider");
+    return screen.getByLabelText(/^Tags/) as HTMLInputElement;
+  }
+
+  test("each provider card shows its tags", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(routingFetch({ providers: taggedProviders(), types: ["claude-code"], requests }));
+
+    await waitFor(() => expect(screen.getByText("Beta")).toBeTruthy());
+
+    const alpha = screen.getByText("Alpha").closest(".ap-card") as HTMLElement;
+    const beta = screen.getByText("Beta").closest(".ap-card") as HTMLElement;
+    expect(within(alpha).getByText("Fast")).toBeTruthy();
+    expect(within(beta).getByText("QA")).toBeTruthy();
+    expect(within(beta).getByText("Thinking")).toBeTruthy();
+    expect(within(alpha).queryByText("QA")).toBeNull();
+  });
+
+  test("the edit form seeds the provider's tags and saves the edited list", async () => {
+    const providers = taggedProviders();
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["claude-code"],
+        onWrite: () => providers[1],
+        requests,
+      }),
+    );
+
+    const input = await openEdit("Beta");
+    expect(splitTags(input.value)).toEqual(["QA", "Thinking"]);
+
+    fireEvent.change(input, { target: { value: " QA , Review,, " } });
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const put = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-beta"));
+    expect((put!.body as { tags?: string[] }).tags).toEqual(["QA", "Review"]);
+  });
+
+  test("clearing the tags field saves an empty list", async () => {
+    const providers = taggedProviders();
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({ providers, types: ["claude-code"], onWrite: () => providers[1], requests }),
+    );
+
+    const input = await openEdit("Beta");
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const put = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-beta"));
+    expect((put!.body as { tags?: string[] }).tags).toEqual([]);
+  });
+
+  test("a new provider is created with the tags typed into the form", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers: taggedProviders(),
+        types: ["claude-code"],
+        onWrite: () => ({}),
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("Beta")).toBeTruthy());
+    fireEvent.click(screen.getByText("+ New Provider"));
+    await screen.findByText("New Provider");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Gamma" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "claude-code" } });
+    fireEvent.change(screen.getByLabelText(/^Tags/), { target: { value: "Nightly, Docs" } });
+    fireEvent.click(screen.getByText("Create"));
+    await waitFor(() => expect(screen.queryByText("New Provider")).toBeFalsy());
+
+    const post = requests.find((r) => r.method === "POST" && r.url.endsWith("/aiproviders"));
+    expect((post!.body as { tags?: string[] }).tags).toEqual(["Nightly", "Docs"]);
+  });
+
+  test("warns before saving that a tag held by another provider will move from it", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(routingFetch({ providers: taggedProviders(), types: ["claude-code"], requests }));
+
+    const input = await openEdit("Beta");
+    expect(screen.queryByText(/Saving moves/i)).toBeNull();
+
+    // Held by Alpha, matched case-insensitively.
+    fireEvent.change(input, { target: { value: "QA, Thinking, fast" } });
+
+    expect(screen.getByText(/Saving moves fast from Alpha/i)).toBeTruthy();
+    expect(requests.some((r) => r.method === "PUT")).toBe(false);
+  });
+
+  test("does not warn about tags the provider already holds or nobody holds", async () => {
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(routingFetch({ providers: taggedProviders(), types: ["claude-code"], requests }));
+
+    const input = await openEdit("Alpha");
+    fireEvent.change(input, { target: { value: "FAST, Brand-new" } });
+
+    expect(screen.queryByText(/Saving moves/i)).toBeNull();
+  });
+
+  test.each([400, 409])("shows the server's %i error and keeps the form open", async (status) => {
+    const message =
+      status === 400
+        ? "Tag 'a,b' must not contain a comma."
+        : "Tag 'QA' was just taken by another provider.";
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers: taggedProviders(),
+        types: ["claude-code"],
+        onWrite: () => ({ error: message }),
+        writeStatus: status,
+        requests,
+      }),
+    );
+
+    const input = await openEdit("Beta");
+    fireEvent.change(input, { target: { value: "QA" } });
+    fireEvent.click(screen.getByText("Update"));
+
+    const escaped = message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(await screen.findByText(new RegExp(escaped))).toBeTruthy();
+    expect(screen.getByText("Edit Provider")).toBeTruthy();
   });
 });

@@ -580,9 +580,23 @@ export const remoteProviderService = {
   },
 };
 
+/** The most providers the API returns for one request. */
+const AI_PROVIDER_PAGE_SIZE = 500;
+
 export const aiProviderService = {
-  getAll: async (opts?: { skip?: number; take?: number }): Promise<AiProvider[]> => {
-    return api.get<AiProvider[]>(`/aiproviders${pageQuery(opts)}`);
+  /**
+   * Every provider. Tag holders and the default provider can be anywhere in
+   * the list, so callers resolving a tag need all of it, not the first page.
+   */
+  getAll: async (): Promise<AiProvider[]> => {
+    const providers: AiProvider[] = [];
+    for (;;) {
+      const page = await api.get<AiProvider[]>(
+        `/aiproviders${pageQuery({ skip: providers.length, take: AI_PROVIDER_PAGE_SIZE })}`,
+      );
+      providers.push(...page);
+      if (page.length < AI_PROVIDER_PAGE_SIZE) return providers;
+    }
   },
 
   getById: async (id: string): Promise<AiProvider> => {
