@@ -50,7 +50,10 @@ export default function ConnectionTest({ run }: ConnectionTestProps) {
         {busy ? "Testing…" : "Test"}
       </button>
       {result && (
-        <div className={`connection-test-result ${result.ok ? "is-ok" : "is-failed"}`}>
+        <div
+          className={`connection-test-result ${result.ok ? "is-ok" : "is-failed"}`}
+          role={result.ok ? "status" : "alert"}
+        >
           <div className="connection-test-summary">
             <span className="connection-test-marker">{result.ok ? "✓ OK" : "✗ Failed"}</span>
             <span>{result.message}</span>
@@ -59,7 +62,10 @@ export default function ConnectionTest({ run }: ConnectionTestProps) {
         </div>
       )}
       {error !== null && (
-        <div className="connection-test-result is-failed">{`Couldn't run the test: ${error}`}</div>
+        <div
+          className="connection-test-result is-failed"
+          role="alert"
+        >{`Couldn't run the test: ${error}`}</div>
       )}
     </div>
   );
