@@ -9,6 +9,7 @@
 | `RemoteProvider`           | Git provider settings                                                                                                     |
 | WorkItem Server connection | App-wide URL, API key, and poll/grace cadence for reaching the WorkItem Server (stored in app settings, not per provider) |
 | `AiProvider`               | Adapter-resolved AI provider configuration                                                                                |
+| `AiProviderTag`            | User-chosen label on at most one `AiProvider`; an AI node's `aiProviderTag` runs it there, else on the default provider   |
 | `RecoveryPolicy`           | `AutoResume`, `NeedsReview`, or `Cancel` after restart                                                                    |
 | `UserSession`              | One signed-in device. Distinct from a Chat Session (a transcript) and from an agent/adapter session                       |
 | Active Work Item Set       | Work items behind this instance's live runs; derived per poll pass, and both the heartbeat list and the concurrency gate  |

@@ -333,7 +333,7 @@
           "y": 294.1048895899054
         },
         "adapterConfig": {},
-        "aiProviderId": "",
+        "aiProviderTag": "",
         "matchRules": [
           {
             "edgeName": "rejected",
