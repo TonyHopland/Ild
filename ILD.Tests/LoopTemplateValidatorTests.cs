@@ -112,6 +112,44 @@ public class LoopTemplateValidatorTests
         Assert.Contains(errs, e => e.Contains("sessionPlaceholder"));
     }
 
+    private static LoopTemplateGraph TaggedAiGraph(string aiProviderTag)
+    {
+        var ai = Node("ai-review", "AI", "Review {{WorkItem.Title}}");
+        ai.Config["aiProviderTag"] = aiProviderTag;
+        return new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), ai, Node("c", "Cleanup") },
+            new() { Edge("s", "ai-review"), Edge("ai-review", "c") });
+    }
+
+    public static TheoryData<string> InvalidAiProviderTags => new()
+    {
+        new string('x', 65),
+        "QA,Fast",
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidAiProviderTags))]
+    public void Ai_provider_tag_too_long_or_with_a_comma_is_invalid_and_names_the_node(string tag)
+    {
+        var errs = LoopTemplateValidator.Validate(TaggedAiGraph(tag));
+
+        Assert.Contains(errs, e => e.Contains("ai-review"));
+    }
+
+    public static TheoryData<string> ValidAiProviderTags => new()
+    {
+        new string('x', 64),
+        "Nobody holds this one",
+        "",
+    };
+
+    [Theory]
+    [MemberData(nameof(ValidAiProviderTags))]
+    public void Any_other_ai_provider_tag_saves(string tag)
+    {
+        Assert.Empty(LoopTemplateValidator.Validate(TaggedAiGraph(tag)));
+    }
+
     /// <summary>Minimal Start → AI → Cleanup graph whose AI node uses a session.</summary>
     private static LoopTemplateGraph SessionGraph(string sessionPlaceholder, string? forkFromPlaceholder = null)
     {

@@ -4,6 +4,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
@@ -330,90 +331,7 @@ public class AINodeExecutorTests
         Assert.Equal(EdgeType.OnFailure, fail.Edge);
     }
 
-    [Fact]
-    public async Task Empty_aiProviderId_uses_default_provider()
-    {
-        var defaultProvider = new AiProvider
-        {
-            Id = Guid.NewGuid(),
-            Name = "default",
-            IsDefault = true,
-            CreatedAt = DateTime.UtcNow,
-        };
-        var providerStore = new Mock<IProviderStore>();
-        providerStore.Setup(s => s.GetDefaultAiProviderAsync())
-            .ReturnsAsync(defaultProvider);
-
-        var sp = BuildServices(providerStore.Object);
-        var executor = new AINodeExecutor();
-        var ctx = BuildCtx(MakeNode(@"{}"), MakeRun(), sp);
-
-        var outcomes = new List<NodeOutcome>();
-        await foreach (var o in executor.ExecuteAsync(ctx))
-            outcomes.Add(o);
-
-        // Should not fail with "missing aiProviderId"
-        Assert.DoesNotContain(outcomes, o =>
-            o is NodeOutcome.Fail f && f.Reason.Contains("aiProviderId"));
-
-        // Verify the default provider was looked up
-        providerStore.Verify(s => s.GetDefaultAiProviderAsync(), Times.Once);
-    }
-
-    [Fact]
-    public async Task Null_aiProviderId_and_no_default_provider_yields_descriptive_fail()
-    {
-        var providerStore = new Mock<IProviderStore>();
-        providerStore.Setup(s => s.GetDefaultAiProviderAsync())
-            .ReturnsAsync((AiProvider?)null);
-
-        var sp = BuildServices(providerStore.Object);
-        var executor = new AINodeExecutor();
-        var ctx = BuildCtx(MakeNode(null), MakeRun(), sp);
-
-        var outcomes = new List<NodeOutcome>();
-        await foreach (var o in executor.ExecuteAsync(ctx))
-            outcomes.Add(o);
-
-        var fail = Assert.IsType<NodeOutcome.Fail>(outcomes.Last());
-        Assert.Contains("no default provider", fail.Reason, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task Explicit_aiProviderId_not_found_yields_fail()
-    {
-        var providerId = Guid.NewGuid();
-        var providerStore = new Mock<IProviderStore>();
-        providerStore.Setup(s => s.GetAiProviderByIdAsync(providerId))
-            .ReturnsAsync((AiProvider?)null);
-
-        var sp = BuildServices(providerStore.Object);
-        var executor = new AINodeExecutor();
-        var ctx = BuildCtx(
-            MakeNode($@"{{""aiProviderId"":""{providerId}""}}"),
-            MakeRun(), sp);
-
-        var outcomes = new List<NodeOutcome>();
-        await foreach (var o in executor.ExecuteAsync(ctx))
-            outcomes.Add(o);
-
-        var fail = Assert.IsType<NodeOutcome.Fail>(outcomes.Last());
-        Assert.Contains(providerId.ToString(), fail.Reason);
-        // The default-provider path must NOT be called
-        providerStore.Verify(s => s.GetDefaultAiProviderAsync(), Times.Never);
-    }
-
-    // ── Work-item AI provider override ──────────────────────────────────────
-
-    private static AiProvider Provider(string name, bool isDefault = false) => new()
-    {
-        Id = Guid.NewGuid(),
-        Name = name,
-        Type = "stub",
-        IsDefault = isDefault,
-        Parallelism = 1,
-        CreatedAt = DateTime.UtcNow,
-    };
+    // ── Provider resolution by tag ──────────────────────────────────────────
 
     /// <summary>
     /// A registry that records the provider the executor resolved an adapter for,
@@ -429,29 +347,16 @@ public class AINodeExecutorTests
         return (reg.Object, () => captured);
     }
 
-    private static (Mock<IProviderStore> store, AiProvider def, AiProvider pinned, AiProvider ovr) BuildOverrideProviderStore()
-    {
-        var def = Provider("default", isDefault: true);
-        var pinned = Provider("pinned");
-        var ovr = Provider("override");
-        var store = new Mock<IProviderStore>();
-        store.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(def);
-        store.Setup(s => s.GetAiProviderByIdAsync(def.Id)).ReturnsAsync(def);
-        store.Setup(s => s.GetAiProviderByIdAsync(pinned.Id)).ReturnsAsync(pinned);
-        store.Setup(s => s.GetAiProviderByIdAsync(ovr.Id)).ReturnsAsync(ovr);
-        return (store, def, pinned, ovr);
-    }
-
-    private async Task<(AiProvider? resolved, NodeOutcome last)> RunWithOverrideAsync(
-        Mock<IProviderStore> store, string? nodeConfig, WorkItemView workItem)
+    private static async Task<(AiProvider? resolved, NodeOutcome last)> RunAsync(
+        IProviderStore store, string? nodeConfig, WorkItemView? workItem = null,
+        IAiProviderConcurrencyTracker? concurrency = null)
     {
         var (registry, resolved) = CapturingRegistry();
-        var sp = BuildServices(store.Object, registry: registry, workItem: workItem);
-        var executor = new AINodeExecutor();
+        var sp = BuildServices(store, registry: registry, workItem: workItem, concurrency: concurrency);
         var ctx = BuildCtx(MakeNode(nodeConfig), MakeRun(), sp);
 
         NodeOutcome? last = null;
-        await foreach (var o in executor.ExecuteAsync(ctx))
+        await foreach (var o in new AINodeExecutor().ExecuteAsync(ctx))
             last = o;
         return (resolved(), last!);
     }
@@ -463,140 +368,169 @@ public class AINodeExecutorTests
         AiProviderOverrideId = overrideId,
     };
 
-    [Fact]
-    public async Task OverrideAll_replaces_even_a_node_pinned_to_a_specific_provider()
+    private static AiProvider Provider(string name, bool isDefault = false) => new()
     {
-        var (store, _, pinned, ovr) = BuildOverrideProviderStore();
-        var (resolved, _) = await RunWithOverrideAsync(
-            store,
-            $@"{{""aiProviderId"":""{pinned.Id}""}}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, ovr.Id));
+        Id = Guid.NewGuid(),
+        Name = name,
+        Type = "stub",
+        Model = "m",
+        IsDefault = isDefault,
+        Parallelism = 1,
+        CreatedAt = DateTime.UtcNow,
+    };
 
-        Assert.Equal(ovr.Id, resolved!.Id);
+    [Theory]
+    [MemberData(nameof(AiNodeProviderResolutionScenarios.Cases), MemberType = typeof(AiNodeProviderResolutionScenarios))]
+    public async Task Runs_on_the_provider_the_tag_default_and_override_rules_pick(
+        string nodeConfig, RemoteAiProviderOverrideMode mode, bool overrideTargetSet, string expected)
+    {
+        using var db = new TestDb();
+        var seeded = await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers);
+
+        var (resolved, last) = await RunAsync(
+            db.Providers,
+            seeded.Expand(nodeConfig),
+            WorkItem(mode, overrideTargetSet ? seeded.Bravo.Id : null));
+
+        Assert.IsType<NodeOutcome.Success>(last);
+        Assert.Equal(expected, resolved?.Name);
+    }
+
+    [Theory]
+    [InlineData(@"{}", null)]
+    [InlineData(@"{""aiProviderTag"":""  ""}", null)]
+    [InlineData(@"{""aiProviderTag"":""Nightly""}", "Nightly")]
+    public async Task No_matching_tag_and_no_default_provider_fails_saying_so(string nodeConfig, string? namedTag)
+    {
+        using var db = new TestDb();
+        // A provider exists but is neither the default nor holds the tag.
+        await db.Providers.CreateAiProviderAsync(Provider("other"), ["QA"]);
+
+        var (resolved, last) = await RunAsync(db.Providers, nodeConfig);
+
+        Assert.Null(resolved);
+        var fail = Assert.IsType<NodeOutcome.Fail>(last);
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("no default provider", fail.Reason, StringComparison.OrdinalIgnoreCase);
+        if (namedTag is not null)
+            Assert.Contains(namedTag, fail.Reason);
     }
 
     [Fact]
-    public async Task OverrideDefault_leaves_a_node_pinned_to_a_specific_provider_alone()
+    public async Task A_legacy_provider_id_does_not_rescue_a_node_when_there_is_no_default()
     {
-        var (store, _, pinned, ovr) = BuildOverrideProviderStore();
-        var (resolved, _) = await RunWithOverrideAsync(
-            store,
-            $@"{{""aiProviderId"":""{pinned.Id}""}}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideDefault, ovr.Id));
+        using var db = new TestDb();
+        var legacy = Provider("legacy");
+        await db.Providers.CreateAiProviderAsync(legacy);
 
-        // The node deliberately pinned a provider, so OverrideDefault must not touch it.
-        Assert.Equal(pinned.Id, resolved!.Id);
-    }
+        var (resolved, last) = await RunAsync(db.Providers, $@"{{""aiProviderId"":""{legacy.Id}""}}");
 
-    [Fact]
-    public async Task OverrideDefault_replaces_a_node_that_fell_back_to_the_default()
-    {
-        var (store, _, _, ovr) = BuildOverrideProviderStore();
-        var (resolved, _) = await RunWithOverrideAsync(
-            store,
-            @"{}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideDefault, ovr.Id));
-
-        Assert.Equal(ovr.Id, resolved!.Id);
-    }
-
-    [Fact]
-    public async Task None_mode_never_overrides_even_with_a_target_set()
-    {
-        var (store, def, _, ovr) = BuildOverrideProviderStore();
-        var (resolved, _) = await RunWithOverrideAsync(
-            store,
-            @"{}",
-            WorkItem(RemoteAiProviderOverrideMode.None, ovr.Id));
-
-        Assert.Equal(def.Id, resolved!.Id);
-    }
-
-    [Fact]
-    public async Task Override_without_a_target_provider_is_a_no_op()
-    {
-        var (store, def, _, _) = BuildOverrideProviderStore();
-        var (resolved, _) = await RunWithOverrideAsync(
-            store,
-            @"{}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, overrideId: null));
-
-        Assert.Equal(def.Id, resolved!.Id);
+        Assert.Null(resolved);
+        var fail = Assert.IsType<NodeOutcome.Fail>(last);
+        Assert.Contains("no default provider", fail.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
     public async Task Override_target_provider_not_found_fails_the_node()
     {
-        var (store, _, _, _) = BuildOverrideProviderStore();
+        using var db = new TestDb();
+        await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers);
         var missingId = Guid.NewGuid();
-        var (_, last) = await RunWithOverrideAsync(
-            store,
-            @"{}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, missingId));
+
+        var (_, last) = await RunAsync(
+            db.Providers, @"{}", WorkItem(RemoteAiProviderOverrideMode.OverrideAll, missingId));
 
         var fail = Assert.IsType<NodeOutcome.Fail>(last);
         Assert.Equal(EdgeType.OnFailure, fail.Edge);
         Assert.Contains(missingId.ToString(), fail.Reason);
     }
 
-    // ── Concurrency is claimed against the post-override provider ───────────
-    //
-    // These pin the layer that is already correct: whatever the node pins, the
-    // slot is taken from the provider the override actually routes to. They are
-    // the backstop that keeps RemoteWorkItemCoordinator's wrong-provider resume
-    // peek from becoming a real parallelism breach — so a fix there must not
-    // change what happens here.
-
-    private async Task<(AiProvider? resolved, NodeOutcome last)> RunWithConcurrencyAsync(
-        Mock<IProviderStore> store, string? nodeConfig, WorkItemView workItem,
-        IAiProviderConcurrencyTracker concurrency)
+    [Fact]
+    public async Task A_tag_moved_or_removed_between_runs_takes_effect_on_the_next_run()
     {
-        var (registry, resolved) = CapturingRegistry();
-        var sp = BuildServices(store.Object, registry: registry, workItem: workItem, concurrency: concurrency);
-        var executor = new AINodeExecutor();
-        var ctx = BuildCtx(MakeNode(nodeConfig), MakeRun(), sp);
+        using var db = new TestDb();
+        var dflt = Provider("dflt", isDefault: true);
+        var first = Provider("first");
+        var second = Provider("second");
+        await db.Providers.CreateAiProviderAsync(dflt);
+        await db.Providers.CreateAiProviderAsync(first, ["Fast"]);
+        await db.Providers.CreateAiProviderAsync(second);
+        const string config = @"{""aiProviderTag"":""fast""}";
 
-        NodeOutcome? last = null;
-        await foreach (var o in executor.ExecuteAsync(ctx))
-            last = o;
-        return (resolved(), last!);
+        Assert.Equal("first", (await RunAsync(db.Providers, config)).resolved?.Name);
+
+        // The edit arrives the way the API makes it: another context, same database.
+        await using (var api = db.Fresh())
+        {
+            var apiStore = new ProviderStore(api);
+            var loaded = (await apiStore.GetAiProviderByIdAsync(second.Id))!;
+            await apiStore.UpdateAiProviderAsync(loaded, ["FAST"]);
+        }
+        Assert.Equal("second", (await RunAsync(db.Providers, config)).resolved?.Name);
+
+        await using (var api = db.Fresh())
+        {
+            var apiStore = new ProviderStore(api);
+            var loaded = (await apiStore.GetAiProviderByIdAsync(second.Id))!;
+            await apiStore.UpdateAiProviderAsync(loaded, []);
+        }
+        Assert.Equal("dflt", (await RunAsync(db.Providers, config)).resolved?.Name);
     }
 
-    [Fact]
-    public async Task Waits_when_the_override_target_is_at_capacity_though_the_pinned_provider_is_free()
-    {
-        var (store, _, pinned, ovr) = BuildOverrideProviderStore();
-        var tracker = new AiProviderConcurrencyTracker();
-        Assert.True(tracker.TryEnter(ovr.Id, ovr.Parallelism)); // fill the override's only slot
+    // ── Concurrency is claimed against the resolved provider ────────────────
+    //
+    // The slot is taken from the provider the node actually runs on — the tag's
+    // holder, or the override target when the override applies. This is the
+    // backstop behind RemoteWorkItemCoordinator's resume peek.
 
-        var (_, last) = await RunWithConcurrencyAsync(
-            store,
-            $@"{{""aiProviderId"":""{pinned.Id}""}}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, ovr.Id),
-            tracker);
+    [Fact]
+    public async Task Waits_when_the_tagged_provider_is_at_capacity_though_the_default_is_free()
+    {
+        using var db = new TestDb();
+        var seeded = await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers);
+        var tracker = new AiProviderConcurrencyTracker();
+        Assert.True(tracker.TryEnter(seeded.Alpha.Id, seeded.Alpha.Parallelism));
+
+        var (_, last) = await RunAsync(
+            db.Providers, @"{""aiProviderTag"":""QA""}", concurrency: tracker);
 
         var waiting = Assert.IsType<NodeOutcome.WaitingIld>(last);
-        Assert.Contains(ovr.Name, waiting.Reason);
-        // The pinned provider was never entered — it is not the gate.
-        Assert.Equal(0, tracker.ActiveCount(pinned.Id));
+        Assert.Contains(seeded.Alpha.Name, waiting.Reason);
+        Assert.Equal(0, tracker.ActiveCount(seeded.Dflt.Id));
     }
 
     [Fact]
-    public async Task Runs_when_the_override_target_is_free_though_the_pinned_provider_is_at_capacity()
+    public async Task Waits_when_the_override_target_is_at_capacity_though_the_tagged_provider_is_free()
     {
-        var (store, _, pinned, ovr) = BuildOverrideProviderStore();
+        using var db = new TestDb();
+        var seeded = await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers);
         var tracker = new AiProviderConcurrencyTracker();
-        Assert.True(tracker.TryEnter(pinned.Id, pinned.Parallelism)); // saturate the pinned provider
+        Assert.True(tracker.TryEnter(seeded.Bravo.Id, seeded.Bravo.Parallelism));
 
-        var (resolved, last) = await RunWithConcurrencyAsync(
-            store,
-            $@"{{""aiProviderId"":""{pinned.Id}""}}",
-            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, ovr.Id),
-            tracker);
+        var (_, last) = await RunAsync(
+            db.Providers, @"{""aiProviderTag"":""QA""}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, seeded.Bravo.Id), tracker);
+
+        var waiting = Assert.IsType<NodeOutcome.WaitingIld>(last);
+        Assert.Contains(seeded.Bravo.Name, waiting.Reason);
+        Assert.Equal(0, tracker.ActiveCount(seeded.Alpha.Id));
+    }
+
+    [Fact]
+    public async Task Runs_when_the_override_target_is_free_though_the_tagged_provider_is_at_capacity()
+    {
+        using var db = new TestDb();
+        var seeded = await AiNodeProviderResolutionScenarios.SeedAsync(db.Providers);
+        var tracker = new AiProviderConcurrencyTracker();
+        Assert.True(tracker.TryEnter(seeded.Alpha.Id, seeded.Alpha.Parallelism));
+
+        var (resolved, last) = await RunAsync(
+            db.Providers, @"{""aiProviderTag"":""QA""}",
+            WorkItem(RemoteAiProviderOverrideMode.OverrideAll, seeded.Bravo.Id), tracker);
 
         Assert.IsNotType<NodeOutcome.WaitingIld>(last);
-        Assert.Equal(ovr.Id, resolved!.Id);
+        Assert.Equal(seeded.Bravo.Id, resolved!.Id);
         // The override's slot was claimed and released around the adapter call.
-        Assert.Equal(0, tracker.ActiveCount(ovr.Id));
+        Assert.Equal(0, tracker.ActiveCount(seeded.Bravo.Id));
     }
 }
