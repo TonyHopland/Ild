@@ -15,7 +15,7 @@ public sealed record RemoteRepositoryInfo(string? DefaultBranch, string? Name);
 
 /// <summary>
 /// What <see cref="IRepositoryManager.ProbeRemoteAsync"/> heard back: git's
-/// <c>ls-remote --exit-code</c> status (0 the ref is there, 2 the remote
+/// <c>ls-remote --exit-code</c> status (0 the exact ref is listed, 2 the remote
 /// answered without it, anything else no answer) and its stderr.
 /// </summary>
 public sealed record GitRemoteProbe(int ExitCode, string StdErr);

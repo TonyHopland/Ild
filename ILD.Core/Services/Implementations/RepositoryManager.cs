@@ -534,8 +534,17 @@ public class RepositoryManager : IRepositoryManager
         var target = string.IsNullOrWhiteSpace(branch) ? "HEAD" : $"refs/heads/{branch}";
 
         var r = await _runner.RunAsync("git", new[] { "ls-remote", "--exit-code", "--", cloneUrl, target }, cwd, cancellationToken, environment);
-        return new GitRemoteProbe(r.ExitCode, r.StdErr);
+        // ls-remote matches its pattern as a glob against the tail of each ref,
+        // so "main*" or "x/refs/heads/main" can satisfy "main": only the exact
+        // ref in its listing counts as found, anything else is an answer without it.
+        var found = r.ExitCode == 0 && ListsRef(r.StdOut, target);
+        return new GitRemoteProbe(r.ExitCode == 0 && !found ? 2 : r.ExitCode, r.StdErr);
     }
+
+    private static bool ListsRef(string lsRemoteOutput, string refName)
+        => lsRemoteOutput
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(line => line.Split('\t', 2) is [_, var name] && name == refName);
 
     // `git ls-remote --symref <url> HEAD` advertises the default branch as a
     // line like "ref: refs/heads/main\tHEAD"; pull the branch name out of it.
