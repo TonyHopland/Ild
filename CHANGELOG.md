@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A work item's AI provider override now applies even when no default provider is configured.**
 
+- **Opening a work item now shows its Action tab while it is running, waiting on you or waiting on ILD, and its Overview tab otherwise.**
+
 ## [0.14.0] - 2026-09-24
 
 ### Changed
