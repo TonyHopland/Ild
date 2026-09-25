@@ -13,33 +13,32 @@ namespace ILD.Core.Services.Remote;
 public static class AiNodeProviderResolver
 {
     /// <summary>
-    /// The provider holding the node's tag (compared trimmed and
-    /// case-insensitively), else the default provider; then swapped for the
-    /// work item's override when <see cref="AiProviderOverrideRule"/> says it
-    /// applies. Exactly one of the two results is set.
+    /// The work item's override when <see cref="AiProviderOverrideRule"/> says
+    /// it applies (a node whose tag no provider holds counts as falling back to
+    /// the default, whether or not a default exists); otherwise the provider
+    /// holding the node's tag (compared trimmed and case-insensitively), else
+    /// the default provider. Exactly one of the two results is set.
     /// </summary>
     public static async Task<(AiProvider? Provider, string? Error)> ResolveAsync(
         IProviderStore store, string? tag, RemoteAiProviderOverrideMode overrideMode, Guid? overrideId)
     {
         var trimmedTag = tag?.Trim();
-        var provider = string.IsNullOrEmpty(trimmedTag) ? null : await store.GetAiProviderByTagAsync(trimmedTag);
-        var tagMatched = provider is not null;
-        if (provider is null)
+        var tagged = string.IsNullOrEmpty(trimmedTag) ? null : await store.GetAiProviderByTagAsync(trimmedTag);
+
+        if (AiProviderOverrideRule.Applies(overrideMode, overrideId, nodePinsProvider: tagged is not null))
         {
-            provider = await store.GetDefaultAiProviderAsync();
-            if (provider is null)
-            {
-                return (null, string.IsNullOrEmpty(trimmedTag)
-                    ? "AI node has no provider: no default provider is configured"
-                    : $"AI node has no provider: no default provider is configured and no provider has tag '{trimmedTag}'");
-            }
+            var overrideProvider = await store.GetAiProviderByIdAsync(overrideId!.Value);
+            return overrideProvider is null
+                ? (null, $"Work item AI provider override {overrideId} not found")
+                : (overrideProvider, null);
         }
 
-        if (AiProviderOverrideRule.Applies(overrideMode, overrideId, nodePinsProvider: tagMatched))
+        var provider = tagged ?? await store.GetDefaultAiProviderAsync();
+        if (provider is null)
         {
-            provider = await store.GetAiProviderByIdAsync(overrideId!.Value);
-            if (provider is null)
-                return (null, $"Work item AI provider override {overrideId} not found");
+            return (null, string.IsNullOrEmpty(trimmedTag)
+                ? "AI node has no provider: no default provider is configured"
+                : $"AI node has no provider: no default provider is configured and no provider has tag '{trimmedTag}'");
         }
 
         return (provider, null);
