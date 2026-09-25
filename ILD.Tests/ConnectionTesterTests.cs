@@ -290,11 +290,12 @@ public class ConnectionTesterTests : IDisposable
     [Fact]
     public async Task Provider_refusing_connections_is_unreachable_with_the_reason()
     {
-        // A real refused connection on loopback, through the real socket handler.
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
+        // A real refused connection on loopback, through the real socket handler. The
+        // port stays bound, so no test running alongside can be handed it, but it never
+        // listens, so a connect to it is refused.
+        using var bound = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        bound.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        var port = ((IPEndPoint)bound.LocalEndPoint!).Port;
         var tester = new ConnectionTester(Adapters(), new RepositoryManager(ScriptedRunner.Exit(0)), new HttpClient());
 
         var result = await tester.TestRemoteProviderAsync(Provider("Forgejo", $"http://127.0.0.1:{port}", Key), CancellationToken.None);

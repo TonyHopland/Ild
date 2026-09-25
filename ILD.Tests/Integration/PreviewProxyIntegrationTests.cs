@@ -327,7 +327,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task A_preview_that_stopped_listening_is_indistinguishable_from_one_that_never_existed()
     {
-        // A port nothing is bound to: the runtime still lists the service, but the
+        // A port nothing listens on: the runtime still lists the service, but the
         // process behind it has gone. Reporting that as a 502 would confirm the
         // preview exists, which is exactly what the 404 is there to avoid.
         _resolve = _ => PreviewTarget.Resolved(_backend.ClosedPort, "app", rewriteHost: true);
@@ -363,18 +363,23 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         private readonly WebApplication _app;
         private readonly string _webRoot;
         private readonly TaskCompletionSource _streamGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly System.Net.Sockets.Socket _closedPortHolder;
 
-        private PreviewBackend(WebApplication app, string webRoot, int port, int closedPort)
+        private PreviewBackend(WebApplication app, string webRoot, int port, System.Net.Sockets.Socket closedPortHolder)
         {
             _app = app;
             _webRoot = webRoot;
             Port = port;
-            ClosedPort = closedPort;
+            _closedPortHolder = closedPortHolder;
+            ClosedPort = ((IPEndPoint)closedPortHolder.LocalEndPoint!).Port;
         }
 
         public int Port { get; }
 
-        /// <summary>A port that was bound long enough to be reserved, then released.</summary>
+        /// <summary>
+        /// A port held bound for the backend's lifetime but never listening, so a
+        /// connect to it is refused and no test running alongside can be handed it.
+        /// </summary>
         public int ClosedPort { get; }
 
         public void ReleaseStream() => _streamGate.TrySetResult();
@@ -463,12 +468,11 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
 
             await app.StartAsync();
 
-            var closedListener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-            closedListener.Start();
-            var closedPort = ((IPEndPoint)closedListener.LocalEndpoint).Port;
-            closedListener.Stop();
+            var closedPortHolder = new System.Net.Sockets.Socket(
+                System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+            closedPortHolder.Bind(new IPEndPoint(IPAddress.Loopback, 0));
 
-            backend = new PreviewBackend(app, webRoot, PortOf(app), closedPort);
+            backend = new PreviewBackend(app, webRoot, PortOf(app), closedPortHolder);
             return backend;
         }
 
@@ -477,6 +481,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
             ReleaseStream();
             await _app.StopAsync();
             await _app.DisposeAsync();
+            _closedPortHolder.Dispose();
             try { Directory.Delete(_webRoot, recursive: true); } catch { /* best effort */ }
         }
     }
