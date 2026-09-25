@@ -1,3 +1,4 @@
+using System.Text;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
@@ -768,6 +769,16 @@ public class RepositoryManager : IRepositoryManager
             ["ILD_GIT_PASSWORD"] = auth.ApiKey,
         };
     }
+
+    /// <summary>
+    /// The Basic credential git sends for <paramref name="auth"/> (askpass answers
+    /// the username and key from <see cref="BuildGitEnvironment"/>), or null when
+    /// git sends none — the form a server echoing request headers would show.
+    /// </summary>
+    internal static string? GitBasicCredential(GitAuthOptions? auth)
+        => auth == null || string.IsNullOrWhiteSpace(auth.ApiKey)
+            ? null
+            : Convert.ToBase64String(Encoding.UTF8.GetBytes($"{ResolveGitUsername(auth.ProviderType, auth.RemoteUrl)}:{auth.ApiKey}"));
 
     private static string ResolveGitUsername(string? providerType, string remoteUrl)
     {

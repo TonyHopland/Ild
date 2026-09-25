@@ -37,7 +37,9 @@ public sealed class ConnectionTester : IConnectionTester
                 $"ILD does not support the provider type '{provider.Type}'.",
                 null)
             : await WithTimeoutAsync(ProviderTimeout, ct, token => adapter.TestConnectionAsync(_http, provider, token));
-        return Report(result, "Remote provider", provider.Id, provider.ApiKey);
+        // The adapter set this client's Authorization for the request, so its
+        // parameter is the credential exactly as the forge received it.
+        return Report(result, "Remote provider", provider.Id, provider.ApiKey, _http.DefaultRequestHeaders.Authorization?.Parameter);
     }
 
     public async Task<ConnectionTestResult> TestRepositoryAsync(Repository repo, RemoteProvider? provider, CancellationToken ct)
@@ -55,7 +57,7 @@ public sealed class ConnectionTester : IConnectionTester
                 branch,
                 hadApiKey: !string.IsNullOrWhiteSpace(provider?.ApiKey),
                 hasProvider: provider is not null));
-        return Report(result, "Repository", repo.Id, provider?.ApiKey);
+        return Report(result, "Repository", repo.Id, provider?.ApiKey, RepositoryManager.GitBasicCredential(auth));
     }
 
     /// <summary>
@@ -80,15 +82,36 @@ public sealed class ConnectionTester : IConnectionTester
         }
     }
 
-    private ConnectionTestResult Report(ConnectionTestResult result, string kind, Guid id, string? apiKey)
+    /// <summary>
+    /// The one place a result is finished. A forge or git server may echo the
+    /// credential back, so every form it went on the wire as (<paramref name="credentials"/>)
+    /// is masked in the evidence first; only then is it trimmed and capped, since
+    /// a cut through the credential would leave a fragment no mask matches.
+    /// </summary>
+    private ConnectionTestResult Report(ConnectionTestResult result, string kind, Guid id, params string?[] credentials)
     {
         _log?.LogInformation("{Kind} {Id} connection test: {Outcome}", kind, id, result.Outcome);
-        if (string.IsNullOrEmpty(apiKey))
-            return result;
+        var masks = credentials
+            .Where(credential => !string.IsNullOrEmpty(credential))
+            .Distinct(StringComparer.Ordinal)
+            .OrderByDescending(credential => credential!.Length)
+            .ToArray();
         return result with
         {
-            Message = result.Message.Replace(apiKey, "***", StringComparison.Ordinal),
-            Detail = result.Detail?.Replace(apiKey, "***", StringComparison.Ordinal),
+            Message = Mask(result.Message, masks)!,
+            Detail = Cap(Mask(result.Detail, masks)),
         };
+    }
+
+    private static string? Mask(string? text, string?[] masks)
+        => masks.Aggregate(text, (masked, credential) => masked?.Replace(credential!, "***", StringComparison.Ordinal));
+
+    private static string? Cap(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail)) return null;
+        var trimmed = detail.Trim();
+        return trimmed.Length <= ConnectionTestResult.MaxDetailLength
+            ? trimmed
+            : trimmed[..(ConnectionTestResult.MaxDetailLength - 1)] + "…";
     }
 }
