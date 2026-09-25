@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { authService, loopRunService, workItemService } from "./auth";
+import { aiProviderService, authService, loopRunService, workItemService } from "./auth";
 
 const okJsonResponse = (body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -166,5 +166,30 @@ describe("authService.onTokenChange", () => {
     authService.clearAuth();
 
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("aiProviderService.getAll", () => {
+  const providers = (count: number, from = 0) =>
+    Array.from({ length: count }, (_, i) => ({ id: `p-${from + i}` }));
+
+  test("pages past the API's per-request cap until a short page", async () => {
+    fetchSpy
+      .mockResolvedValueOnce(okJsonResponse(providers(500)))
+      .mockResolvedValueOnce(okJsonResponse(providers(1, 500)));
+
+    const all = await aiProviderService.getAll();
+
+    expect(all.map((provider) => provider.id)).toEqual(providers(501).map((p) => p.id));
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls[0][0]).toBe("/api/v1/aiproviders?skip=0&take=500");
+    expect(fetchSpy.mock.calls[1][0]).toBe("/api/v1/aiproviders?skip=500&take=500");
+  });
+
+  test("stops after one request when the first page is short", async () => {
+    fetchSpy.mockResolvedValueOnce(okJsonResponse(providers(3)));
+
+    expect(await aiProviderService.getAll()).toHaveLength(3);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
