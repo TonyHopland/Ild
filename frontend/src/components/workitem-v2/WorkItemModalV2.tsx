@@ -132,8 +132,11 @@ export default function WorkItemModalV2({
 
   // If the worktree is reclaimed while the Terminal tab is open, the tab (and its
   // panel) disappear — fall back to Overview so the content area is never blank.
+  // The updater re-checks the tab because an item switch in the same commit has
+  // already queued the new item's opening tab, which must win.
   useEffect(() => {
-    if (activeTab === "terminal" && !canUseTerminal) setActiveTab("overview");
+    if (activeTab === "terminal" && !canUseTerminal)
+      setActiveTab((tab) => (tab === "terminal" ? "overview" : tab));
   }, [activeTab, canUseTerminal]);
 
   // Rendered prompt for the currently-suspended Human/PR node, same as classic.

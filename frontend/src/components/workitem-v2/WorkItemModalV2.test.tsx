@@ -1366,6 +1366,23 @@ describe("WorkItemModalV2", () => {
     expectOnTab("Overview");
   });
 
+  test("switching from the Terminal tab to a running item with no worktree opens on Action", async () => {
+    mockServices();
+    const running = { status: WorkItemStatus.Running, currentLoopRunId: "run-1" };
+    const { rerender } = await renderDialog(
+      makeWorkItem({ ...running, id: "wi-1", worktreePath: "/tmp/wt/wi-1" }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Terminal/ }));
+      await Promise.resolve();
+    });
+    expectOnTab(/Terminal/);
+
+    await rerenderDialog(rerender, makeWorkItem({ ...running, id: "wi-2", worktreePath: null }));
+
+    expectOnTab(/Action/);
+  });
+
   test("closing the terminal tears down the session and returns to the open prompt", async () => {
     mockServices();
     await renderDialog(makeWorkItem({ currentLoopRunId: "run-1", worktreePath: "/tmp/wt/wi-1" }));
