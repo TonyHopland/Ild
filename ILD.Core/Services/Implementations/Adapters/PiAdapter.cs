@@ -13,12 +13,13 @@ namespace ILD.Core.Services.Implementations.Adapters;
 
 public sealed class PiAdapter : CliAgentAdapterBase
 {
-    public PiAdapter()
+    public PiAdapter(IProcessEnvironment? environment = null)
+        : base(environment)
     {
     }
 
-    public PiAdapter(IServiceScopeFactory scopeFactory)
-        : base(scopeFactory)
+    public PiAdapter(IServiceScopeFactory scopeFactory, IProcessEnvironment? environment = null)
+        : base(scopeFactory, environment)
     {
     }
 
@@ -30,7 +31,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     {
         try
         {
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
@@ -563,11 +564,13 @@ public sealed class PiAdapter : CliAgentAdapterBase
             : [];
     }
 
-    private static PiAdapterSettings ResolveSettings(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId = null)
+    private static PiAdapterSettings ResolveSettings(
+        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId,
+        IProcessEnvironment environment)
     {
         var loopRunId = runContext.LoopRunId;
         var config = AiProviderConfig.Parse(provider.Config);
-        var binaryPath = config.BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Pi));
+        var binaryPath = config.BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Pi, environment));
         var apiKey = config.ApiKey ?? provider.ApiKey;
         var providerName = config.Provider;
         var model = config.Model ?? provider.Model;
@@ -575,7 +578,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
         var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
         var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
-            ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId)
+            ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
         var ildServerDll = (ildServer?["args"] as string[])?.FirstOrDefault();
         var toolNames = BuildPiToolNames(enabledToolKeys, ildServerDll);

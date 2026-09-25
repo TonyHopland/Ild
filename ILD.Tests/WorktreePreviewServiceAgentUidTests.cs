@@ -22,7 +22,6 @@ namespace ILD.Tests;
 /// could not.
 /// </para>
 /// </summary>
-[Collection("EnvironmentPath")]
 public class WorktreePreviewServiceAgentUidTests : IDisposable
 {
     private const string AgentUser = "agent";
@@ -30,8 +29,7 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
 
     private readonly string _agentHome;
     private readonly string _stateDirectory;
-    private readonly string? _originalHome;
-    private readonly string? _originalPath;
+    private readonly TestProcessEnvironment _environment = new TestProcessEnvironment().WithRealPath();
     private string? _redirectedHome;
 
     public WorktreePreviewServiceAgentUidTests()
@@ -41,17 +39,10 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
         _stateDirectory = Path.Combine(Path.GetTempPath(), "ild-agentuid-state-" + id);
         Directory.CreateDirectory(_agentHome);
         Directory.CreateDirectory(_stateDirectory);
-
-        // BuildDefaultEnvironment reads (and EnsureInstalledToolsOnProcessPath
-        // mutates) the process HOME/PATH; restore both so no other test inherits it.
-        _originalHome = Environment.GetEnvironmentVariable("HOME");
-        _originalPath = Environment.GetEnvironmentVariable("PATH");
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("HOME", _originalHome);
-        Environment.SetEnvironmentVariable("PATH", _originalPath);
         foreach (var directory in new[] { _agentHome, _stateDirectory, _redirectedHome })
         {
             if (directory is null) continue;
@@ -66,7 +57,7 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
         var configuration = new ConfigurationBuilder().Build();
         return new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
             NullLogger<WorktreePreviewService>.Instance,
-            agentUser, AgentGroup, withAgentHome ? _agentHome : null);
+            agentUser, AgentGroup, withAgentHome ? _agentHome : null, environment: _environment);
     }
 
     private WorktreePreviewService.ResolvedStep Step() => new(
@@ -75,15 +66,14 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
         new Dictionary<string, string>(StringComparer.Ordinal));
 
     /// <summary>
-    /// Point the orchestrator's own <c>HOME</c> at an empty directory for one test.
-    /// Process-global, and safe only inside the serialized <c>EnvironmentPath</c>
-    /// collection.
+    /// Point the orchestrator's own <c>HOME</c>, as the service reads it, at an
+    /// empty directory for one test.
     /// </summary>
     private string RedirectOrchestratorHome()
     {
         _redirectedHome = Path.Combine(Path.GetTempPath(), "ild-agentuid-orchhome-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_redirectedHome);
-        Environment.SetEnvironmentVariable("HOME", _redirectedHome);
+        _environment.Set("HOME", _redirectedHome);
         return _redirectedHome;
     }
 

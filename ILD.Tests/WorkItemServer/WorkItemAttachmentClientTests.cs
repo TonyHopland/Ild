@@ -12,7 +12,6 @@ namespace ILD.Tests.WorkItemServer;
 /// its callers report as "WorkItemServer unreachable", which would bury the one
 /// answer the user needs to see — which limit they broke.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public sealed class WorkItemAttachmentClientTests
 {
     private static async Task<string> CreateWorkItemAsync(HttpClient http)

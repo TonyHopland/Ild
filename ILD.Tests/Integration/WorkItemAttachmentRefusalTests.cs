@@ -17,7 +17,6 @@ namespace ILD.Tests.Integration;
 /// would otherwise cross the network to be refused there, or come back as an
 /// empty success that stored nothing.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public class WorkItemAttachmentRefusalTests
 {
     private static async Task<string> CreateWorkItemAsync(ApiFactory factory, HttpClient client)

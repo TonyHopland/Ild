@@ -48,13 +48,15 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 {
     private readonly ILogger _logger;
 
-    public CopilotAdapter(ILogger<CopilotAdapter>? logger = null)
+    public CopilotAdapter(ILogger<CopilotAdapter>? logger = null, IProcessEnvironment? environment = null)
+        : base(environment)
     {
         _logger = logger ?? NullLogger<CopilotAdapter>.Instance;
     }
 
-    public CopilotAdapter(IServiceScopeFactory scopeFactory, ILogger<CopilotAdapter>? logger = null)
-        : base(scopeFactory)
+    public CopilotAdapter(
+        IServiceScopeFactory scopeFactory, ILogger<CopilotAdapter>? logger = null, IProcessEnvironment? environment = null)
+        : base(scopeFactory, environment)
     {
         _logger = logger ?? NullLogger<CopilotAdapter>.Instance;
     }
@@ -71,14 +73,14 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         try
         {
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
-                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Copilot));
+                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.Copilot, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
                 return NodeExecutionResult.Fail(
                     "[copilot-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger);
+            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             Process? proc;
             try
@@ -230,13 +232,19 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     /// there is nothing to write, which is not logged, or the temp file can't be
     /// written, which is logged to <paramref name="logger"/>.
     /// </summary>
-    public static string? TryWriteMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null, ILogger? logger = null)
+    /// <param name="environment">
+    /// Where the <c>ild</c> server and the agent read root are configured; the
+    /// process environment by default.
+    /// </param>
+    public static string? TryWriteMcpConfig(
+        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null,
+        ILogger? logger = null, IProcessEnvironment? environment = null)
     {
         var servers = new Dictionary<string, object?>();
 
         var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, allowlist);
         if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
-            && ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId) is { } ild)
+            && ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment) is { } ild)
             servers["ild"] = WithCopilotKeys(ild);
 
         // The parser reserves the "ild" name, so these can never clobber it.
@@ -247,7 +255,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             ? null
             : IldMcpServer.TryWriteConfigFile(
                 "ild-copilot-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers },
-                logger ?? NullLogger.Instance);
+                logger ?? NullLogger.Instance, environment);
     }
 
     private static Dictionary<string, object?> WithCopilotKeys(Dictionary<string, object?> entry)

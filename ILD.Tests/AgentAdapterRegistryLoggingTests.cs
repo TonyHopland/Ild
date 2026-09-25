@@ -13,24 +13,19 @@ namespace ILD.Tests;
 /// <c>ActivatorUtilities</c>, not the container, so the adapter it builds must
 /// still get the application logger for a failed MCP config write to be seen.
 /// </summary>
-[Collection("EnvironmentPath")]
 public sealed class AgentAdapterRegistryLoggingTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("ild-registry-logging-root-").FullName;
     private readonly string _worktree = Directory.CreateTempSubdirectory("ild-registry-logging-wt-").FullName;
     private readonly string _configDir;
-    private readonly string? _previousReadRoot;
 
     public AgentAdapterRegistryLoggingTests()
     {
         _configDir = Path.Combine(_root, "ild-mcp-config");
-        _previousReadRoot = Environment.GetEnvironmentVariable(AgentIsolation.AgentReadRootEnvVar);
-        Environment.SetEnvironmentVariable(AgentIsolation.AgentReadRootEnvVar, _root);
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable(AgentIsolation.AgentReadRootEnvVar, _previousReadRoot);
         if (OperatingSystem.IsLinux() && Directory.Exists(_configDir))
             File.SetUnixFileMode(_configDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         Directory.Delete(_root, recursive: true);
@@ -50,6 +45,7 @@ public sealed class AgentAdapterRegistryLoggingTests : IDisposable
         var warnings = new WarningCollector();
         var services = new ServiceCollection();
         services.AddLogging(logging => logging.AddProvider(warnings));
+        services.AddSingleton<IProcessEnvironment>(new TestProcessEnvironment { { AgentIsolation.AgentReadRootEnvVar, _root } });
         services.AddSingleton<IAgentAdapter, CopilotAdapter>();
         services.AddSingleton<IAgentAdapter, ClaudeCodeAdapter>();
         services.AddSingleton<IAgentAdapterRegistry, AgentAdapterRegistry>();

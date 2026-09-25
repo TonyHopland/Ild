@@ -14,7 +14,7 @@ namespace ILD.Tests;
 /// direct host:port. The unset-proxy-base case is the important one — turning the
 /// feature off has to leave every existing deployment's URLs exactly as they were.
 /// </summary>
-[Collection("EnvironmentPath")]
+[Collection(PreviewPortsCollection.Name)]
 public class WorktreePreviewServicePublicUrlTests : IDisposable
 {
     private readonly string _worktree;

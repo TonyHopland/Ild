@@ -13,7 +13,6 @@ namespace ILD.Tests;
 /// provider's notice in the result's <c>Output</c>, not its <c>Error</c> — by
 /// running all four adapters against a stub binary that throttles.
 /// </summary>
-[Collection("EnvironmentPath")]
 public class AiFailureClassifierTests
 {
     /// <summary>

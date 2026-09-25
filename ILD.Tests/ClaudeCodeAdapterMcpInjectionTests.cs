@@ -11,13 +11,10 @@ namespace ILD.Tests;
 /// discover the ILD MCP — the user's <c>~/.claude</c> config is irrelevant
 /// when the agent runs inside an isolated worktree without prior setup.
 /// </summary>
-[Collection("EnvironmentPath")]
 public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly string _previousDllOverride;
-    private readonly string _previousApiUrl;
-    private readonly string _previousApiToken;
+    private readonly TestProcessEnvironment _environment;
 
     public ClaudeCodeAdapterMcpInjectionTests()
     {
@@ -26,20 +23,16 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
         var fakeDll = Path.Combine(_tempDir, "ild-mcp-server.dll");
         File.WriteAllText(fakeDll, "");
 
-        _previousDllOverride = Environment.GetEnvironmentVariable("ILD_MCP_SERVER_DLL") ?? string.Empty;
-        _previousApiUrl = Environment.GetEnvironmentVariable("ILD_API_URL") ?? string.Empty;
-        _previousApiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN") ?? string.Empty;
-
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", fakeDll);
-        Environment.SetEnvironmentVariable("ILD_API_URL", "http://api.invalid:1234");
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", "test-token");
+        _environment = new TestProcessEnvironment
+        {
+            { "ILD_MCP_SERVER_DLL", fakeDll },
+            { "ILD_API_URL", "http://api.invalid:1234" },
+            { "ILD_API_TOKEN", "test-token" },
+        };
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", string.IsNullOrEmpty(_previousDllOverride) ? null : _previousDllOverride);
-        Environment.SetEnvironmentVariable("ILD_API_URL", string.IsNullOrEmpty(_previousApiUrl) ? null : _previousApiUrl);
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", string.IsNullOrEmpty(_previousApiToken) ? null : _previousApiToken);
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best effort */ }
         GC.SuppressFinalize(this);
     }
@@ -58,7 +51,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
             EventLogSummary: new List<string>(),
             PreviousNodeOutput: null);
 
-        var entry = ClaudeCodeAdapter.BuildIldMcpEntry(ctx);
+        var entry = ClaudeCodeAdapter.BuildIldMcpEntry(ctx, environment: _environment);
         Assert.NotNull(entry);
 
         // Claude's --mcp-config uses the standard MCP shape:
@@ -89,7 +82,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
             EventLogSummary: new List<string>(),
             PreviousNodeOutput: null);
 
-        var entry = ClaudeCodeAdapter.BuildIldMcpEntry(ctx, chatSessionId);
+        var entry = ClaudeCodeAdapter.BuildIldMcpEntry(ctx, chatSessionId, _environment);
         Assert.NotNull(entry);
 
         var env = (Dictionary<string, object?>)entry!["env"]!;
@@ -114,7 +107,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
         var runId = Guid.NewGuid();
         var ctx = new LoopRunContext(runId, "wi", "t", "d", "/tmp", "main", new List<string>(), null);
 
-        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: null);
+        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: null, environment: _environment);
         Assert.NotNull(path);
         try
         {
@@ -149,7 +142,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
 
         // Explicit allowlist without "ild" — the MCP config must be skipped so
         // we don't expose the work-item API to nodes that opted out.
-        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "read" });
+        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "read" }, environment: _environment);
         Assert.Null(path);
     }
 
@@ -207,7 +200,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
         };
         var ctx = new LoopRunContext(Guid.NewGuid(), "wi", "t", "d", "/tmp", "main", new List<string>(), null);
 
-        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "ild" });
+        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "ild" }, environment: _environment);
         Assert.NotNull(path);
         try
         {
@@ -245,7 +238,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
 
         // "ild" NOT in the allowlist — the ild entry is skipped, but the custom
         // server must still be written so a provider variant can carry it.
-        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "read" });
+        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "read" }, environment: _environment);
         Assert.NotNull(path);
         try
         {
@@ -276,7 +269,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
 
         // Malformed custom JSON with ild disabled ⇒ nothing to write ⇒ null, and
         // crucially no throw.
-        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "read" });
+        var path = ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, ctx, toolAllowlist: new[] { "read" }, environment: _environment);
         Assert.Null(path);
     }
 

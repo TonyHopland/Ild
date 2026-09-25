@@ -12,10 +12,10 @@ namespace ILD.Tests;
 /// pepper — which is what a party with write access to the database is.
 ///
 /// Mutates the process-wide pepper through <see cref="SessionTokenHasher.Configure"/>,
-/// so it shares the non-parallel "AuthEnvironment" collection with the other tests
-/// that read it and restores the unkeyed baseline in a finally.
+/// so it runs in <see cref="ProcessGlobalStateCollection"/> and restores the
+/// unkeyed baseline in a finally.
 /// </summary>
-[Collection("AuthEnvironment")]
+[Collection(ProcessGlobalStateCollection.Name)]
 public class SessionTokenHasherTests
 {
     private const string Pepper = "a-strong-test-pepper";

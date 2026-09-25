@@ -14,7 +14,7 @@ namespace ILD.Tests;
 /// <see cref="WorktreePreviewService.GetServiceConfigAsync"/> and
 /// <see cref="WorktreePreviewService.UpdateServiceConfigAsync"/>.
 /// </summary>
-[Collection("EnvironmentPath")]
+[Collection(PreviewPortsCollection.Name)]
 public class WorktreePreviewServiceGranularTests : IDisposable
 {
     private readonly string _worktree;

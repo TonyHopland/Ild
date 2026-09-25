@@ -28,13 +28,15 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 {
     private readonly ILogger _logger;
 
-    public ClaudeCodeAdapter(ILogger<ClaudeCodeAdapter>? logger = null)
+    public ClaudeCodeAdapter(ILogger<ClaudeCodeAdapter>? logger = null, IProcessEnvironment? environment = null)
+        : base(environment)
     {
         _logger = logger ?? NullLogger<ClaudeCodeAdapter>.Instance;
     }
 
-    public ClaudeCodeAdapter(IServiceScopeFactory scopeFactory, ILogger<ClaudeCodeAdapter>? logger = null)
-        : base(scopeFactory)
+    public ClaudeCodeAdapter(
+        IServiceScopeFactory scopeFactory, ILogger<ClaudeCodeAdapter>? logger = null, IProcessEnvironment? environment = null)
+        : base(scopeFactory, environment)
     {
         _logger = logger ?? NullLogger<ClaudeCodeAdapter>.Instance;
     }
@@ -50,7 +52,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         try
         {
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
-                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode));
+                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.ClaudeCode, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
@@ -62,7 +64,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // accepts a JSON config via `--mcp-config <file>`, which we merge
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
-            mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger);
+            mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             // Fork: seed a copy of the source session's transcript under the
             // destination id (leaving the source file untouched) so the restore
@@ -247,16 +249,18 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// Returns <c>null</c> when no server DLL can be located, in which case
     /// the entry is omitted (failing open rather than poisoning the config).
     /// </summary>
-    public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext, Guid? chatSessionId = null)
+    /// <param name="environment">Where the server's DLL, URL and token are configured; the process environment by default.</param>
+    public static Dictionary<string, object?>? BuildIldMcpEntry(
+        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null)
     {
-        var dllPath = IldMcpServer.ResolveServerDll();
+        var dllPath = IldMcpServer.ResolveServerDll(environment);
         if (dllPath == null) return null;
 
         return new Dictionary<string, object?>
         {
             ["command"] = "dotnet",
             ["args"] = new[] { dllPath },
-            ["env"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId),
+            ["env"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
         };
     }
 
@@ -297,14 +301,20 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// to write (no ild entry and no custom servers), which is not logged, or the
     /// temp file can't be written, which is logged to <paramref name="logger"/>.
     /// </summary>
-    public static string? TryWriteIldMcpConfig(AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist, Guid? chatSessionId = null, ILogger? logger = null)
+    /// <param name="environment">
+    /// Where the <c>ild</c> server and the agent read root are configured; the
+    /// process environment by default.
+    /// </param>
+    public static string? TryWriteIldMcpConfig(
+        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist, Guid? chatSessionId = null,
+        ILogger? logger = null, IProcessEnvironment? environment = null)
     {
         var servers = new Dictionary<string, object?>();
 
         var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, toolAllowlist);
         if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
         {
-            var entry = BuildIldMcpEntry(runContext, chatSessionId);
+            var entry = BuildIldMcpEntry(runContext, chatSessionId, environment);
             if (entry != null)
                 servers["ild"] = entry;
         }
@@ -318,7 +328,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             ? null
             : IldMcpServer.TryWriteConfigFile(
                 "ild-claude-mcp", runContext.LoopRunId, new Dictionary<string, object?> { ["mcpServers"] = servers },
-                logger ?? NullLogger.Instance);
+                logger ?? NullLogger.Instance, environment);
     }
 
     private static async Task<ClaudeStreamOutput> ReadStreamJsonAsync(
@@ -469,7 +479,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         // Claude keeps its session files in the shared credential store, which the
         // agent can write, so they are only checked, written and read as the agent
         // (see AgentWritableFiles), never by the orchestrator through a link.
-        var path = GetSessionFilePath(worktreePath, sessionId);
+        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
         if (path is null || await AgentWritableFiles.FileExistsAsync(path, ctx.Cancel)) return;
 
         AdapterSessionSnapshot? snapshot;
@@ -499,7 +509,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     {
         if (ScopeFactory is null) return;
 
-        var path = GetSessionFilePath(worktreePath, sessionId);
+        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
         if (path is null) return;
 
         var jsonl = await AgentWritableFiles.ReadFileAsync(path, ctx.Cancel);
@@ -521,13 +531,15 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     // Claude keeps its sessions under the HOME it runs with, which under uid
     // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
     public static string? GetSessionFilePath(string worktreePath, string sessionId)
-        => GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome);
+        => GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, ProcessEnvironment.Current);
 
     /// <inheritdoc cref="GetSessionFilePath(string, string)"/>
-    internal static string? GetSessionFilePath(string worktreePath, string sessionId, string? agentUser, string? agentHome)
+    /// <param name="environment">Where our own <c>HOME</c> is read.</param>
+    internal static string? GetSessionFilePath(
+        string worktreePath, string sessionId, string? agentUser, string? agentHome, IProcessEnvironment environment)
     {
         if (string.IsNullOrEmpty(worktreePath) || string.IsNullOrEmpty(sessionId)) return null;
-        var home = AgentIsolation.ResolveChildHome(agentUser, agentHome) ?? Environment.GetEnvironmentVariable("HOME");
+        var home = AgentIsolation.ResolveChildHome(agentUser, agentHome) ?? environment.Get("HOME");
         if (string.IsNullOrEmpty(home))
             home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (string.IsNullOrEmpty(home)) return null;

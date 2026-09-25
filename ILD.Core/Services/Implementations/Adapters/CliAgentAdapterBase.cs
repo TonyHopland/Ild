@@ -30,11 +30,20 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// <summary>Null when constructed without DI (e.g. unit tests); session snapshot helpers no-op in that case.</summary>
     protected IServiceScopeFactory? ScopeFactory { get; }
 
-    protected CliAgentAdapterBase()
+    /// <summary>
+    /// Where the adapter reads the deployment variables it launches with
+    /// (<c>ILD_DATA_PATH</c>, the MCP server's URL, token and DLL, the agent read
+    /// root, <c>HOME</c>): the process environment unless a test supplies its own.
+    /// </summary>
+    protected IProcessEnvironment EnvironmentVariables { get; }
+
+    protected CliAgentAdapterBase(IProcessEnvironment? environment = null)
     {
+        EnvironmentVariables = environment ?? ProcessEnvironment.Current;
     }
 
-    protected CliAgentAdapterBase(IServiceScopeFactory scopeFactory)
+    protected CliAgentAdapterBase(IServiceScopeFactory scopeFactory, IProcessEnvironment? environment = null)
+        : this(environment)
     {
         ScopeFactory = scopeFactory;
     }

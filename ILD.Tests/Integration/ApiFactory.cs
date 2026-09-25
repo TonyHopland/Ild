@@ -1,4 +1,5 @@
 using ILD.Core.Services.Remote;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -24,10 +25,11 @@ namespace ILD.Tests.Integration;
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     private readonly SqliteConnection _connection;
-    private readonly FakeWorkItemServerHarness _serverHarness = new();
+    private readonly FakeWorkItemServerHarness _serverHarness;
     private readonly string _dataRoot;
     private readonly IReadOnlyDictionary<string, string?> _extraConfiguration;
     private readonly Action<IServiceCollection>? _configureServices;
+    private readonly Func<string, string?> _readVariable;
 
     public string AdminUsername { get; } = "admin";
     public string AdminPassword { get; } = "ild-int-tests-admin-pw";
@@ -42,24 +44,34 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// Applied last, after the test defaults, so a test can swap in a stub for a
     /// service the pipeline would otherwise reach the real world through.
     /// </param>
+    /// <param name="environment">
+    /// The deployment variables this host reads in place of the process ones: the
+    /// bootstrap credentials (<c>ILD_USERNAME</c>/<c>ILD_PASSWORD</c>, by default
+    /// <see cref="AdminUsername"/>/<see cref="AdminPassword"/>) and the attachment
+    /// limits, which reach the fake WorkItem server too. A name not given reads as
+    /// unset, whatever the test process has.
+    /// </param>
     public ApiFactory(
         IReadOnlyDictionary<string, string?>? extraConfiguration = null,
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        IReadOnlyDictionary<string, string?>? environment = null)
     {
         _extraConfiguration = extraConfiguration ?? new Dictionary<string, string?>();
         _configureServices = configureServices;
+        var variables = new Dictionary<string, string?>
+        {
+            [BootstrapCredentials.UsernameVariable] = AdminUsername,
+            [BootstrapCredentials.PasswordVariable] = AdminPassword,
+        };
+        foreach (var (name, value) in environment ?? new Dictionary<string, string?>())
+            variables[name] = value;
+        _readVariable = name => variables.GetValueOrDefault(name);
+        _serverHarness = new FakeWorkItemServerHarness(
+            limits: ILD.WorkItemServer.Attachments.AttachmentLimits.FromEnvironment(_readVariable));
         _connection = new SqliteConnection("DataSource=:memory:");
         _connection.Open();
         _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dataRoot);
-        // Tests may run in parallel, so the env var must be a constant: every factory
-        // that boots the API expects the same admin credentials to bootstrap login.
-        // Both halves have to be pinned, not just the password: AuthService takes the
-        // bootstrap username from ILD_USERNAME, so an ambient value — a preview shell
-        // exports one — seeds a user LoginAsync's hardcoded "admin" cannot log in as,
-        // and every test that needs a token fails at the handshake.
-        Environment.SetEnvironmentVariable("ILD_USERNAME", AdminUsername);
-        Environment.SetEnvironmentVariable("ILD_PASSWORD", AdminPassword);
         Environment.SetEnvironmentVariable("ILD_DATA_PATH", null);
         Environment.SetEnvironmentVariable("ILD_WORKTREES_PATH", null);
         Environment.SetEnvironmentVariable("ILD_DB_CONNECTION_STRING", null);
@@ -98,6 +110,8 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             services.RemoveHostedService<ILD.Core.Services.Remote.WorkItemScheduler>();
             services.GuardExternalServices();
             services.ReplaceSingleton<IAgentAdapterRegistry>(new FixedAgentAdapterRegistry());
+            services.ReplaceSingleton(BootstrapCredentials.FromEnvironment(_readVariable));
+            services.ReplaceSingleton(ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(_readVariable));
 
             services.RemoveAll<IWorkItemServerClient>();
             services.RemoveAll<IWorkItemServerOptionsResolver>();

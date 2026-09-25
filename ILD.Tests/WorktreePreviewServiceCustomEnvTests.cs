@@ -16,7 +16,6 @@ namespace ILD.Tests;
 /// install step is a real preview process that writes what it actually saw to a
 /// marker file, so the assertions observe the injected environment end-to-end.
 /// </summary>
-[Collection("EnvironmentPath")]
 public class WorktreePreviewServiceCustomEnvTests : IDisposable
 {
     private readonly string _worktree;

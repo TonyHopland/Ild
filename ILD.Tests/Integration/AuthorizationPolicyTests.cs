@@ -14,7 +14,6 @@ namespace ILD.Tests.Integration;
 /// SPA shell, its bundle, the probes — still do, and if the clients that cannot
 /// send an Authorization header can still authenticate.
 /// </summary>
-[Collection("AuthEnvironment")]
 public class AuthorizationPolicyTests
 {
     [Theory]

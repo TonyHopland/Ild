@@ -15,7 +15,7 @@ namespace ILD.Tests;
 /// each produces a distinct outcome the proxy renders as its own page, so all of
 /// them are pinned here alongside the happy paths.
 /// </summary>
-[Collection("EnvironmentPath")]
+[Collection(PreviewPortsCollection.Name)]
 public class WorktreePreviewServiceProxyTargetTests : IDisposable
 {
     private readonly string _worktree;

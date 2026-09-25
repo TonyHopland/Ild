@@ -28,13 +28,18 @@ public static class IldMcpServer
     /// and <see cref="AgentRunFiles.SweepAtStartupAsync(IReadOnlySet{Guid}, ILogger, CancellationToken)"/>
     /// clears the ones a dead process left.
     /// </summary>
-    public static string? TryWriteConfigFile(string namePrefix, Guid loopRunId, object config, ILogger logger)
+    /// <param name="environment">Where the agent read root is configured; the process environment by default.</param>
+    public static string? TryWriteConfigFile(
+        string namePrefix, Guid loopRunId, object config, ILogger logger, IProcessEnvironment? environment = null)
     {
+        environment ??= ProcessEnvironment.Current;
+        var root = AgentReadRoot(environment);
         string? path = null;
         try
         {
             path = Path.Combine(
-                AgentIsolation.CreateAgentReadDirectory(ConfigDirectorySegment),
+                AgentIsolation.CreateAgentReadDirectoryUnder(
+                    root, environment.Get(AgentIsolation.AgentUserEnvVar), ConfigDirectorySegment),
                 $"{namePrefix}-{loopRunId:N}-{Guid.NewGuid():N}.json");
             AgentIsolation.WriteAgentReadableFile(path, JsonSerializer.SerializeToUtf8Bytes(config));
             return path;
@@ -43,15 +48,17 @@ public static class IldMcpServer
         {
             logger.LogWarning(ex,
                 "Could not write the MCP config {Path}, so the agent runs without its MCP servers: {Reason}",
-                path ?? Path.Combine(AgentIsolation.AgentReadRoot, ConfigDirectorySegment), ex.Message);
+                path ?? Path.Combine(root, ConfigDirectorySegment), ex.Message);
             return null;
         }
     }
 
     /// <summary>Delete every MCP config file written for a loop run or chat session.</summary>
-    public static void DeleteConfigFiles(Guid loopRunId) => DeleteConfigFiles(AgentIsolation.AgentReadRoot, loopRunId);
+    /// <param name="environment">Where the agent read root is configured; the process environment by default.</param>
+    public static void DeleteConfigFiles(Guid loopRunId, IProcessEnvironment? environment = null)
+        => DeleteConfigFiles(AgentReadRoot(environment ?? ProcessEnvironment.Current), loopRunId);
 
-    /// <inheritdoc cref="DeleteConfigFiles(Guid)"/>
+    /// <inheritdoc cref="DeleteConfigFiles(Guid, IProcessEnvironment?)"/>
     internal static void DeleteConfigFiles(string agentReadRoot, Guid loopRunId)
     {
         var directory = Path.Combine(agentReadRoot, ConfigDirectorySegment);
@@ -83,14 +90,17 @@ public static class IldMcpServer
     /// current loop-run id. Returned as a loosely-typed dictionary so each adapter
     /// can splice it directly into its CLI config JSON.
     /// </summary>
-    public static Dictionary<string, object?> BuildEnvironment(LoopRunContext? runContext, Guid? chatSessionId = null)
+    /// <param name="environment">Where the URL and token come from; the process environment by default.</param>
+    public static Dictionary<string, object?> BuildEnvironment(
+        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null)
     {
+        environment ??= ProcessEnvironment.Current;
         var env = new Dictionary<string, object?>
         {
-            ["ILD_API_URL"] = Environment.GetEnvironmentVariable("ILD_API_URL") ?? "http://localhost:5000",
+            ["ILD_API_URL"] = environment.Get("ILD_API_URL") ?? "http://localhost:5000",
         };
 
-        var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
+        var apiToken = environment.Get("ILD_API_TOKEN");
         if (!string.IsNullOrEmpty(apiToken))
             env["ILD_API_TOKEN"] = apiToken;
 
@@ -110,9 +120,10 @@ public static class IldMcpServer
     ///      <c>ILD.McpServer/bin/{Debug|Release}/net*</c> directory (dev case).
     /// Returns <c>null</c> if nothing is found.
     /// </summary>
-    public static string? ResolveServerDll()
+    /// <param name="environment">Where the override is read; the process environment by default.</param>
+    public static string? ResolveServerDll(IProcessEnvironment? environment = null)
     {
-        var envOverride = Environment.GetEnvironmentVariable("ILD_MCP_SERVER_DLL");
+        var envOverride = (environment ?? ProcessEnvironment.Current).Get("ILD_MCP_SERVER_DLL");
         if (!string.IsNullOrEmpty(envOverride) && File.Exists(envOverride))
             return Path.GetFullPath(envOverride);
 
@@ -141,4 +152,12 @@ public static class IldMcpServer
 
         return null;
     }
+
+    /// <summary>
+    /// <see cref="AgentIsolation.AgentReadRoot"/>, read from <paramref name="environment"/>
+    /// rather than from the process.
+    /// </summary>
+    private static string AgentReadRoot(IProcessEnvironment environment)
+        => AgentIsolation.ResolveAgentReadRoot(
+            environment.Get(AgentIsolation.AgentReadRootEnvVar), environment.Get(AgentIsolation.AgentUserEnvVar));
 }

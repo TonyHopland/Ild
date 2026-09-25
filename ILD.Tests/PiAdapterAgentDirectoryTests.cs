@@ -15,10 +15,10 @@ namespace ILD.Tests;
 /// its day, and pi loads it before any <c>-e</c> path, keeping the first tool of a
 /// name. Nothing left there may fail a turn, the old extension must go, and the
 /// ones of runs that never launch again are swept. One test briefly replaces the
-/// shared scratch segments with links, so this runs with every class that uses
-/// them in the non-parallel environment collection.
+/// shared scratch segments with links, so this runs alone, in
+/// <see cref="ProcessGlobalStateCollection"/>.
 /// </summary>
-[Collection("EnvironmentPath")]
+[Collection(ProcessGlobalStateCollection.Name)]
 public sealed class PiAdapterAgentDirectoryTests : IDisposable
 {
     private readonly Guid _runId = Guid.NewGuid();

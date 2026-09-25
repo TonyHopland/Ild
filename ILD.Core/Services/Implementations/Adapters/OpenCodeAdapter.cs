@@ -12,12 +12,13 @@ namespace ILD.Core.Services.Implementations.Adapters;
 
 public class OpenCodeAdapter : CliAgentAdapterBase
 {
-    public OpenCodeAdapter()
+    public OpenCodeAdapter(IProcessEnvironment? environment = null)
+        : base(environment)
     {
     }
 
-    public OpenCodeAdapter(IServiceScopeFactory scopeFactory)
-        : base(scopeFactory)
+    public OpenCodeAdapter(IServiceScopeFactory scopeFactory, IProcessEnvironment? environment = null)
+        : base(scopeFactory, environment)
     {
     }
 
@@ -31,7 +32,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         try
         {
             var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
-                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode));
+                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode, EnvironmentVariables));
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
@@ -52,7 +53,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories);
 
             Process? proc = null;
             try
@@ -630,7 +631,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null)
+    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
@@ -678,7 +679,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         var mcp = new Dictionary<string, object?>();
 
         var ildMcp = enabled.Contains(AiToolCatalog.Ild)
-            ? BuildIldMcpEntry(runContext, chatSessionId)
+            ? BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
         if (ildMcp != null)
             mcp["ild"] = ildMcp;
@@ -720,16 +721,18 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     /// Returns <c>null</c> when no server DLL can be located, in which case
     /// the entry is omitted (failing open rather than poisoning the config).
     /// </summary>
-    public static Dictionary<string, object?>? BuildIldMcpEntry(LoopRunContext? runContext, Guid? chatSessionId = null)
+    /// <param name="environment">Where the server's DLL, URL and token are configured; the process environment by default.</param>
+    public static Dictionary<string, object?>? BuildIldMcpEntry(
+        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null)
     {
-        var dllPath = IldMcpServer.ResolveServerDll();
+        var dllPath = IldMcpServer.ResolveServerDll(environment);
         if (dllPath == null) return null;
 
         return new Dictionary<string, object?>
         {
             ["type"] = "local",
             ["command"] = new[] { "dotnet", dllPath },
-            ["environment"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId),
+            ["environment"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
         };
     }
 
@@ -761,7 +764,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     /// Locate the published <c>ild-mcp-server.dll</c>. Retained as a stable
     /// entry point (covered by tests); delegates to <see cref="IldMcpServer"/>.
     /// </summary>
-    public static string? ResolveIldMcpServerDll() => IldMcpServer.ResolveServerDll();
+    /// <param name="environment">Where the override is read; the process environment by default.</param>
+    public static string? ResolveIldMcpServerDll(IProcessEnvironment? environment = null) => IldMcpServer.ResolveServerDll(environment);
 
     private static string SanitizeProviderId(string name)
     {

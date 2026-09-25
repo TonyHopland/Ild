@@ -15,7 +15,6 @@ namespace ILD.Tests.WorkItemServer;
 /// nowhere else, and every one of the four operations is reachable over HTTP
 /// with no ILD instance and no UI in front of it.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
 {
     private AttachmentServerFactory _factory = null!;

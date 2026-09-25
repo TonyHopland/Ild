@@ -15,7 +15,6 @@ namespace ILD.Tests.WorkItemServer;
 /// Everything here is a caller mistake the server has to answer with a reason
 /// rather than a 500 from the database or an empty 201 that stored nothing.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
 {
     private AttachmentServerFactory _factory = null!;

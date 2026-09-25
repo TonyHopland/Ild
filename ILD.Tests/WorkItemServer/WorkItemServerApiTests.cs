@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Reflection;
 using ILD.WorkItemServer;
+using ILD.WorkItemServer.Auth;
 using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Dtos;
 using Microsoft.AspNetCore.Hosting;
@@ -35,7 +36,6 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            Environment.SetEnvironmentVariable("WORKITEM_API_KEYS", ApiKey);
             Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
             builder.UseEnvironment("Testing");
             builder.ConfigureAppConfiguration((_, config) =>
@@ -49,6 +49,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
             builder.ConfigureServices(services =>
             {
                 services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
+                services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
                 var dbDescriptor = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
                 if (dbDescriptor != null) services.Remove(dbDescriptor);
                 services.AddDbContext<WorkItemServerDbContext>(opt =>

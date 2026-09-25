@@ -23,7 +23,7 @@ namespace ILD.Tests;
 /// without turning uid isolation on for the whole suite.
 /// </para>
 /// </summary>
-[Collection("EnvironmentPath")]
+[Collection(ProcessGlobalStateCollection.Name)]
 public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
 {
     private const string SeededSecret = "ILD_DB_CONNECTION_STRING";
@@ -282,9 +282,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
 
     /// <summary>
     /// Sets process-global environment variables and puts them back on dispose.
-    /// Safe only because the preview suites share the serialized
-    /// <c>EnvironmentPath</c> collection, which already exists because
-    /// <c>EnsureInstalledToolsOnProcessPath</c> mutates the host <c>PATH</c>.
+    /// Safe only because this class runs alone, in <see cref="ProcessGlobalStateCollection"/>.
     /// </summary>
     private sealed class EnvironmentScope : IDisposable
     {

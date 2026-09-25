@@ -12,14 +12,11 @@ namespace ILD.Tests;
 /// the only place the server's credentials travel, so it must never be inline in
 /// argv and must be gone once the run ends.
 /// </summary>
-[Collection("EnvironmentPath")]
 public class CopilotAdapterMcpInjectionTests : IDisposable
 {
     private readonly string _tempDir;
     private readonly string _fakeDll;
-    private readonly string? _previousDllOverride;
-    private readonly string? _previousApiUrl;
-    private readonly string? _previousApiToken;
+    private readonly TestProcessEnvironment _environment;
 
     public CopilotAdapterMcpInjectionTests()
     {
@@ -28,20 +25,16 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
         _fakeDll = Path.Combine(_tempDir, "ild-mcp-server.dll");
         File.WriteAllText(_fakeDll, "");
 
-        _previousDllOverride = Environment.GetEnvironmentVariable("ILD_MCP_SERVER_DLL");
-        _previousApiUrl = Environment.GetEnvironmentVariable("ILD_API_URL");
-        _previousApiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
-
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", _fakeDll);
-        Environment.SetEnvironmentVariable("ILD_API_URL", "http://api.invalid:1234");
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", "test-token");
+        _environment = new TestProcessEnvironment
+        {
+            { "ILD_MCP_SERVER_DLL", _fakeDll },
+            { "ILD_API_URL", "http://api.invalid:1234" },
+            { "ILD_API_TOKEN", "test-token" },
+        };
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", _previousDllOverride);
-        Environment.SetEnvironmentVariable("ILD_API_URL", _previousApiUrl);
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", _previousApiToken);
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best effort */ }
         GC.SuppressFinalize(this);
     }
@@ -51,7 +44,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
     {
         var runId = Guid.NewGuid();
 
-        using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(Provider(), RunContext(runId), allowlist: null));
+        using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(Provider(), RunContext(runId), allowlist: null, environment: _environment));
 
         var ild = doc.RootElement.GetProperty("mcpServers").GetProperty("ild");
         Assert.Equal("local", ild.GetProperty("type").GetString());
@@ -72,7 +65,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
         var chatSessionId = Guid.NewGuid();
 
         using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(
-            Provider(), RunContext(chatSessionId), allowlist: new[] { "ild" }, chatSessionId));
+            Provider(), RunContext(chatSessionId), allowlist: new[] { "ild" }, chatSessionId, environment: _environment));
 
         var env = doc.RootElement.GetProperty("mcpServers").GetProperty("ild").GetProperty("env");
         Assert.Equal(chatSessionId.ToString(), env.GetProperty("ILD_CHAT_SESSION_ID").GetString());
@@ -83,9 +76,9 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
     [Fact]
     public void TryWriteMcpConfig_omits_the_token_when_none_is_configured()
     {
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", null);
+        _environment.Set("ILD_API_TOKEN", null);
 
-        using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(Provider(), RunContext(Guid.NewGuid()), allowlist: null));
+        using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(Provider(), RunContext(Guid.NewGuid()), allowlist: null, environment: _environment));
 
         var env = doc.RootElement.GetProperty("mcpServers").GetProperty("ild").GetProperty("env");
         Assert.False(env.TryGetProperty("ILD_API_TOKEN", out _));
@@ -102,7 +95,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
             }
             """);
 
-        using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(provider, RunContext(Guid.NewGuid()), allowlist: new[] { "ild" }));
+        using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(provider, RunContext(Guid.NewGuid()), allowlist: new[] { "ild" }, environment: _environment));
 
         var servers = doc.RootElement.GetProperty("mcpServers");
         Assert.Equal("dotnet", servers.GetProperty("ild").GetProperty("command").GetString());
@@ -119,7 +112,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
     {
         var provider = Provider(customMcpServersJson: "{ not valid json");
 
-        using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(provider, RunContext(Guid.NewGuid()), allowlist: null));
+        using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(provider, RunContext(Guid.NewGuid()), allowlist: null, environment: _environment));
 
         var servers = doc.RootElement.GetProperty("mcpServers");
         Assert.Equal(new[] { "ild" }, servers.EnumerateObject().Select(p => p.Name).ToArray());
@@ -137,7 +130,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
 
         foreach (var allowlist in IldOffSelections)
         {
-            using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(provider, RunContext(Guid.NewGuid()), allowlist));
+            using var doc = ReadAndDelete(CopilotAdapter.TryWriteMcpConfig(provider, RunContext(Guid.NewGuid()), allowlist, environment: _environment));
 
             var servers = doc.RootElement.GetProperty("mcpServers");
             Assert.Equal(new[] { "chrome-devtools" }, servers.EnumerateObject().Select(p => p.Name).ToArray());
@@ -148,7 +141,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
     public void TryWriteMcpConfig_with_ild_off_and_no_custom_servers_writes_nothing()
     {
         foreach (var allowlist in IldOffSelections)
-            Assert.Null(CopilotAdapter.TryWriteMcpConfig(Provider(), RunContext(Guid.NewGuid()), allowlist));
+            Assert.Null(CopilotAdapter.TryWriteMcpConfig(Provider(), RunContext(Guid.NewGuid()), allowlist, environment: _environment));
     }
 
     [Fact]
@@ -183,7 +176,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
         var worktree = CreateWorktree();
         var script = WriteRecordingCopilot(worktree, exitCode: 0);
 
-        var result = await new CopilotAdapter().ExecuteAsync(Context(script, worktree, runId));
+        var result = await new CopilotAdapter(environment: _environment).ExecuteAsync(Context(script, worktree, runId));
 
         Assert.True(result.Success, result.Error);
         var argv = File.ReadAllLines(Path.Combine(worktree, "argv.txt"));
@@ -210,7 +203,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
         var worktree = CreateWorktree();
         var script = WriteRecordingCopilot(worktree, exitCode: 0);
 
-        var result = await new CopilotAdapter().ExecuteAsync(
+        var result = await new CopilotAdapter(environment: _environment).ExecuteAsync(
             Context(script, worktree, chatSessionId) with { ChatSessionId = chatSessionId });
 
         Assert.True(result.Success, result.Error);
@@ -226,7 +219,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
         var worktree = CreateWorktree();
         var script = WriteRecordingCopilot(worktree, exitCode: 1);
 
-        var result = await new CopilotAdapter().ExecuteAsync(Context(script, worktree, Guid.NewGuid()));
+        var result = await new CopilotAdapter(environment: _environment).ExecuteAsync(Context(script, worktree, Guid.NewGuid()));
 
         Assert.False(result.Success);
         var argv = File.ReadAllLines(Path.Combine(worktree, "argv.txt"));
@@ -240,7 +233,7 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
         var worktree = CreateWorktree();
         var script = WriteRecordingCopilot(worktree, exitCode: 0);
 
-        var result = await new CopilotAdapter().ExecuteAsync(
+        var result = await new CopilotAdapter(environment: _environment).ExecuteAsync(
             Context(script, worktree, Guid.NewGuid()) with { ToolAllowlist = Array.Empty<string>() });
 
         Assert.True(result.Success, result.Error);
