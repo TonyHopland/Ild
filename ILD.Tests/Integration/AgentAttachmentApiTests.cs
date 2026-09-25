@@ -16,7 +16,6 @@ namespace ILD.Tests.Integration;
 /// there is nothing on this surface that writes — an agent may not add or remove
 /// a human's files.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public class AgentAttachmentApiTests
 {
     private static async Task<Guid> SeedRepositoryAsync(ApiFactory factory)

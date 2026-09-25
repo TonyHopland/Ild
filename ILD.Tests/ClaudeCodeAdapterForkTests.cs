@@ -12,11 +12,9 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ILD.Tests;
 
 /// <summary>
-/// Fork coverage for the claude-code adapter. Mutates <c>HOME</c> (claude stores
-/// session JSONL under <c>$HOME/.claude/projects</c>) so it joins the
-/// non-parallel environment collection.
+/// Fork coverage for the claude-code adapter. The adapter is given its own
+/// <c>HOME</c>, because claude stores session JSONL under <c>$HOME/.claude/projects</c>.
 /// </summary>
-[Collection("EnvironmentPath")]
 public class ClaudeCodeAdapterForkTests
 {
     [Fact]
@@ -31,8 +29,7 @@ public class ClaudeCodeAdapterForkTests
             "source-sess",
             "{\"session_id\":\"source-sess\",\"type\":\"assistant\",\"text\":\"hi\"}\n");
 
-        var previousHome = Environment.GetEnvironmentVariable("HOME");
-        Environment.SetEnvironmentVariable("HOME", home);
+        var environment = new TestProcessEnvironment { { "HOME", home } };
         try
         {
             await using var harness = await CreateSessionHarnessAsync();
@@ -40,7 +37,7 @@ public class ClaudeCodeAdapterForkTests
             await harness.SeedRunAsync(runId);
             await harness.SeedSnapshotAsync(runId, "ClaudeCode", "source-sess", sourceJson);
 
-            var adapter = new ClaudeCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var adapter = new ClaudeCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>(), environment: environment);
             var ctx = BuildContext(
                 binaryPath: "/bin/true",
                 worktreePath: worktreeDir,
@@ -63,7 +60,6 @@ public class ClaudeCodeAdapterForkTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("HOME", previousHome);
             Directory.Delete(worktreeDir, true);
             Directory.Delete(home, true);
         }

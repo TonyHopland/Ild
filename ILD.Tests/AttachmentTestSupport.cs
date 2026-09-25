@@ -6,17 +6,6 @@ using Xunit;
 
 namespace ILD.Tests;
 
-/// <summary>
-/// Work-item attachment tests share one process-global environment (the limits
-/// are read from environment variables at host startup), so every class that
-/// boots a host reading them joins this collection rather than racing the
-/// others' values.
-/// </summary>
-[CollectionDefinition("AttachmentEnvironment", DisableParallelization = true)]
-public sealed class AttachmentEnvironmentCollection
-{
-}
-
 /// <summary>Multipart bodies shaped the way the attachment endpoints accept them.</summary>
 internal static class AttachmentUpload
 {
@@ -46,29 +35,6 @@ internal static class AttachmentUpload
         var bytes = new byte[count];
         for (var i = 0; i < count; i++) bytes[i] = (byte)((i * 31 + seed) % 251);
         return bytes;
-    }
-}
-
-/// <summary>
-/// Sets an environment variable for the duration of a test and restores whatever
-/// was there. Attachment limits are read once at host startup, so a test that
-/// wants a different limit has to set it before the factory boots.
-/// </summary>
-internal sealed class EnvironmentVariableScope : IDisposable
-{
-    private readonly (string Name, string? Previous)[] _restore;
-
-    public EnvironmentVariableScope(params (string Name, string? Value)[] variables)
-    {
-        _restore = variables.Select(v => (v.Name, Environment.GetEnvironmentVariable(v.Name))).ToArray();
-        foreach (var (name, value) in variables)
-            Environment.SetEnvironmentVariable(name, value);
-    }
-
-    public void Dispose()
-    {
-        foreach (var (name, previous) in _restore)
-            Environment.SetEnvironmentVariable(name, previous);
     }
 }
 

@@ -15,9 +15,6 @@ namespace ILD.Tests;
 /// once the chat row is gone, failing to remove it keeps the chat; nothing the
 /// agent planted in its own directories may ever block a delete.
 /// </summary>
-// Creates directories under the shared pi scratch segments, which
-// PiAdapterAgentDirectoryTests briefly replaces with links.
-[Collection("EnvironmentPath")]
 public sealed class ChatServiceIldExtensionTests : IDisposable
 {
     private readonly TestDb _db = new();

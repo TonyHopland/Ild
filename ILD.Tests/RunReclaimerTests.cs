@@ -7,9 +7,6 @@ using Moq;
 
 namespace ILD.Tests;
 
-// Creates directories under the shared pi scratch segments, which
-// PiAdapterAgentDirectoryTests briefly replaces with links.
-[Collection("EnvironmentPath")]
 public class RunReclaimerTests : IDisposable
 {
     private readonly List<string> _tempDirs = new();
@@ -250,7 +247,9 @@ public class RunReclaimerTests : IDisposable
     {
         var run = Run(worktree: null, branch: null);
         var agentDir = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-agent", run.Id.ToString("N"));
-        var locked = Directory.CreateDirectory(Path.Combine(agentDir, "extensions", "ild.ts", "locked")).FullName;
+        // Not under extensions/ild.ts: every API host's startup sweep deletes that
+        // path in shared scratch, which would remove the folder before the reclaim.
+        var locked = Directory.CreateDirectory(Path.Combine(agentDir, "planted", "locked")).FullName;
         File.WriteAllText(Path.Combine(locked, "file"), "x");
         if (OperatingSystem.IsLinux())
             File.SetUnixFileMode(locked, UnixFileMode.UserRead | UnixFileMode.UserExecute);

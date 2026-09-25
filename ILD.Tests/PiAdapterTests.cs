@@ -12,7 +12,6 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
-[Collection("EnvironmentPath")]
 public class PiAdapterTests
 {
     [Fact]
@@ -192,7 +191,12 @@ public class PiAdapterTests
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-baseurl-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
-        var scriptPath = Path.Combine(worktreeDir, "pi");
+        // No binaryPath, so the adapter falls back to the managed install under ILD_DATA_PATH.
+        var dataRoot = Path.Combine(worktreeDir, "data");
+        var scriptPath = ManagedAgentInstall.BinaryIn(
+            ManagedAgentInstall.VersionDir(dataRoot, ManagedAgentCatalog.Pi, "v1"), ManagedAgentCatalog.Pi);
+        Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
+        File.WriteAllText(ManagedAgentInstall.PointerFile(dataRoot, ManagedAgentCatalog.Pi), "v1");
         File.WriteAllText(scriptPath,
             "#!/bin/sh\n" +
             "cat >/dev/null\n" +
@@ -200,12 +204,9 @@ public class PiAdapterTests
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
         System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
 
-        var previousPath = Environment.GetEnvironmentVariable("PATH");
-        Environment.SetEnvironmentVariable("PATH", worktreeDir + Path.PathSeparator + previousPath);
-
         try
         {
-            var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
+            var result = await new PiAdapter(new TestProcessEnvironment { { "ILD_DATA_PATH", dataRoot } }).ExecuteAsync(new AgentExecutionContext(
                 Provider: new AiProvider
                 {
                     Name = "test-provider",
@@ -233,7 +234,6 @@ public class PiAdapterTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("PATH", previousPath);
             Directory.Delete(worktreeDir, true);
         }
     }

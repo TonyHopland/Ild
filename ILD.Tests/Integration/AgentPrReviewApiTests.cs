@@ -16,7 +16,6 @@ namespace ILD.Tests.Integration;
 /// the surface uses — that header is what decides whether a read consumes the
 /// items it returned or merely shows them.
 /// </summary>
-[Collection("AuthEnvironment")]
 public class AgentPrReviewApiTests
 {
     private sealed class StubPrReviewService : IPrReviewService

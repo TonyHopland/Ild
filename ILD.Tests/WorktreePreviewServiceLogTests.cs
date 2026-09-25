@@ -11,7 +11,7 @@ namespace ILD.Tests;
 /// Preview tab's per-service Log column uses to surface what a service printed,
 /// especially the failure output of a service that exited.
 /// </summary>
-[Collection("EnvironmentPath")]
+[Collection(PreviewPortsCollection.Name)]
 public class WorktreePreviewServiceLogTests : IDisposable
 {
     private readonly string _worktree;

@@ -11,7 +11,6 @@ namespace ILD.Tests.WorkItemServer;
 /// holding a quote or a newline, which would leave the upload as a 500 from the
 /// ILD API — so the client makes the name safe and the file still lands.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public sealed class WorkItemAttachmentClientFileNameTests
 {
     [Theory]

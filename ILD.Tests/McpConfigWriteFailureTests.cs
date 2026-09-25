@@ -20,7 +20,6 @@ namespace ILD.Tests;
 /// to write stays silent. The agent read root is pointed at a temporary one
 /// whose <c>ild-mcp-config</c> directory this user cannot write into.
 /// </summary>
-[Collection("EnvironmentPath")]
 public sealed class McpConfigWriteFailureTests : IDisposable
 {
     private const string Token = "write-failure-test-token";
@@ -29,9 +28,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("ild-mcp-write-failure-root-").FullName;
     private readonly string _workDir = Directory.CreateTempSubdirectory("ild-mcp-write-failure-work-").FullName;
     private readonly string _configDir;
-    private readonly string? _previousReadRoot;
-    private readonly string? _previousDllOverride;
-    private readonly string? _previousApiToken;
+    private readonly TestProcessEnvironment _environment;
 
     public McpConfigWriteFailureTests()
     {
@@ -39,19 +36,16 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         var fakeDll = Path.Combine(_workDir, "ild-mcp-server.dll");
         File.WriteAllText(fakeDll, "");
 
-        _previousReadRoot = Environment.GetEnvironmentVariable(AgentIsolation.AgentReadRootEnvVar);
-        _previousDllOverride = Environment.GetEnvironmentVariable("ILD_MCP_SERVER_DLL");
-        _previousApiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN");
-        Environment.SetEnvironmentVariable(AgentIsolation.AgentReadRootEnvVar, _root);
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", fakeDll);
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", Token);
+        _environment = new TestProcessEnvironment
+        {
+            { AgentIsolation.AgentReadRootEnvVar, _root },
+            { "ILD_MCP_SERVER_DLL", fakeDll },
+            { "ILD_API_TOKEN", Token },
+        };
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable(AgentIsolation.AgentReadRootEnvVar, _previousReadRoot);
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", _previousDllOverride);
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", _previousApiToken);
         if (OperatingSystem.IsLinux() && Directory.Exists(_configDir))
         {
             try { File.SetUnixFileMode(_configDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); } catch { /* best effort */ }
@@ -157,7 +151,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         var logger = new RecordingLogger<CopilotAdapter>();
         var worktree = CreateWorktree();
 
-        var result = await new CopilotAdapter(logger).ExecuteAsync(Context("copilot", worktree, WriteRecordingCli(worktree)));
+        var result = await new CopilotAdapter(logger, _environment).ExecuteAsync(Context("copilot", worktree, WriteRecordingCli(worktree)));
 
         Assert.True(result.Success, result.Error);
         var argv = File.ReadAllLines(Path.Combine(worktree, "argv.txt"));
@@ -174,7 +168,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         var logger = new RecordingLogger<ClaudeCodeAdapter>();
         var worktree = CreateWorktree();
 
-        var result = await new ClaudeCodeAdapter(logger).ExecuteAsync(Context("claude-code", worktree, WriteRecordingCli(worktree)));
+        var result = await new ClaudeCodeAdapter(logger, _environment).ExecuteAsync(Context("claude-code", worktree, WriteRecordingCli(worktree)));
 
         Assert.True(result.Success, result.Error);
         var argv = File.ReadAllLines(Path.Combine(worktree, "argv.txt"));
@@ -190,7 +184,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         var logger = new RecordingLogger<CopilotAdapter>();
         var worktree = CreateWorktree();
 
-        var result = await new CopilotAdapter(logger).ExecuteAsync(
+        var result = await new CopilotAdapter(logger, _environment).ExecuteAsync(
             Context("copilot", worktree, WriteRecordingCli(worktree), withCustomServer: false) with { ToolAllowlist = IldOff });
 
         Assert.True(result.Success, result.Error);
@@ -206,7 +200,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         var logger = new RecordingLogger<ClaudeCodeAdapter>();
         var worktree = CreateWorktree();
 
-        var result = await new ClaudeCodeAdapter(logger).ExecuteAsync(
+        var result = await new ClaudeCodeAdapter(logger, _environment).ExecuteAsync(
             Context("claude-code", worktree, WriteRecordingCli(worktree), withCustomServer: false) with { ToolAllowlist = IldOff });
 
         Assert.True(result.Success, result.Error);
@@ -223,8 +217,8 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         StageGroupWritableConfigDirectory();
         var worktree = CreateWorktree();
         IAgentAdapter adapter = type == "copilot"
-            ? new CopilotAdapter(new RecordingLogger<CopilotAdapter>())
-            : new ClaudeCodeAdapter(new RecordingLogger<ClaudeCodeAdapter>());
+            ? new CopilotAdapter(new RecordingLogger<CopilotAdapter>(), _environment)
+            : new ClaudeCodeAdapter(new RecordingLogger<ClaudeCodeAdapter>(), _environment);
 
         var result = await adapter.ExecuteAsync(Context(type, worktree, WriteRecordingCli(worktree)));
 
@@ -241,6 +235,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         var provider = new RecordingLoggerProvider();
         IServiceCollection services = new ServiceCollection();
         services.AddLogging(logging => logging.AddProvider(provider));
+        services.AddSingleton<IProcessEnvironment>(_environment);
         foreach (var descriptor in new ServiceCollection().AddIldServices().Where(d =>
                      d.ServiceType == typeof(IAgentAdapter)
                      && (d.ImplementationType == typeof(CopilotAdapter) || d.ImplementationType == typeof(ClaudeCodeAdapter))))
@@ -271,12 +266,12 @@ public sealed class McpConfigWriteFailureTests : IDisposable
         Assert.DoesNotContain(Token, warning);
     }
 
-    private static string? WriteConfig(string type, AiProvider provider, IReadOnlyList<string>? allowlist, ILogger logger)
+    private string? WriteConfig(string type, AiProvider provider, IReadOnlyList<string>? allowlist, ILogger logger)
     {
         var runContext = new LoopRunContext(Guid.NewGuid(), "wi", "t", "d", "/tmp", "main", new List<string>(), null);
         return type == "copilot"
-            ? CopilotAdapter.TryWriteMcpConfig(provider, runContext, allowlist, logger: logger)
-            : ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, runContext, allowlist, logger: logger);
+            ? CopilotAdapter.TryWriteMcpConfig(provider, runContext, allowlist, logger: logger, environment: _environment)
+            : ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, runContext, allowlist, logger: logger, environment: _environment);
     }
 
     private void StageUnwritableConfigDirectory()

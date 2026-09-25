@@ -66,15 +66,15 @@ public sealed class WorkItemServerProgram
 
         // Attachment sizes are read once, here: the same variables are set on the
         // ILD container, and both processes enforce them independently.
-        var attachmentLimits = AttachmentLimits.FromEnvironment();
-        builder.Services.AddSingleton(attachmentLimits);
-        builder.Services.Configure<FormOptions>(form =>
-        {
-            form.MultipartBodyLengthLimit = attachmentLimits.MaxRequestBytes;
-            // A file within the limit is buffered in memory, so an accepted
-            // upload never reaches a temp file.
-            form.MemoryBufferThreshold = (int)Math.Min(attachmentLimits.MaxBytesPerFile, int.MaxValue);
-        });
+        builder.Services.AddSingleton(AttachmentLimits.FromEnvironment());
+        builder.Services.AddOptions<FormOptions>()
+            .Configure<AttachmentLimits>((form, attachmentLimits) =>
+            {
+                form.MultipartBodyLengthLimit = attachmentLimits.MaxRequestBytes;
+                // A file within the limit is buffered in memory, so an accepted
+                // upload never reaches a temp file.
+                form.MemoryBufferThreshold = (int)Math.Min(attachmentLimits.MaxBytesPerFile, int.MaxValue);
+            });
 
         builder.Services.Configure<ApiKeyOptions>(opts =>
         {

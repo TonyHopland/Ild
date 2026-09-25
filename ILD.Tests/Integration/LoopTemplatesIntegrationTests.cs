@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 
 namespace ILD.Tests.Integration;
 
-[Collection("AuthEnvironment")]
 public class LoopTemplatesIntegrationTests
 {
     [Fact]

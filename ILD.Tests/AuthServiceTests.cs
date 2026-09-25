@@ -8,16 +8,12 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
 
-[Collection("AuthEnvironment")]
 public class AuthServiceTests
 {
-    private static AuthService Make(TestDb db, string password = "secret")
-    {
-        Environment.SetEnvironmentVariable("ILD_PASSWORD", password);
-        return new AuthService(db.Auth, db.Settings);
-    }
+    internal static AuthService Make(TestDb db, string password = "secret")
+        => new(db.Auth, db.Settings, new BootstrapCredentials(BootstrapCredentials.DefaultUsername, password));
 
-    private static async Task<string> LoginAsync(AuthService svc, string? userAgent = null)
+    internal static async Task<string> LoginAsync(AuthService svc, string? userAgent = null)
         => (await svc.LoginAsync("admin", "secret", userAgent)).SessionToken!;
 
     [Fact]
@@ -304,25 +300,18 @@ public class AuthServiceTests
     public async Task ILD_USERNAME_overrides_the_bootstrapped_username()
     {
         using var db = new TestDb();
-        Environment.SetEnvironmentVariable("ILD_PASSWORD", "secret");
-        Environment.SetEnvironmentVariable("ILD_USERNAME", "tony");
-        try
-        {
-            var svc = new AuthService(db.Auth, db.Settings);
+        var variables = new Dictionary<string, string?> { ["ILD_PASSWORD"] = "secret", ["ILD_USERNAME"] = "tony" };
+        var svc = new AuthService(db.Auth, db.Settings,
+            BootstrapCredentials.FromEnvironment(name => variables.GetValueOrDefault(name)));
 
-            // The configured username bootstraps and authenticates.
-            var ok = await svc.LoginAsync("tony", "secret");
-            Assert.True(ok.Success);
-            Assert.Equal("tony", ok.Username);
+        // The configured username bootstraps and authenticates.
+        var ok = await svc.LoginAsync("tony", "secret");
+        Assert.True(ok.Success);
+        Assert.Equal("tony", ok.Username);
 
-            // "admin" no longer bootstraps when a custom username is configured.
-            var admin = await svc.LoginAsync("admin", "secret");
-            Assert.False(admin.Success);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ILD_USERNAME", null);
-        }
+        // "admin" no longer bootstraps when a custom username is configured.
+        var admin = await svc.LoginAsync("admin", "secret");
+        Assert.False(admin.Success);
     }
 
     /// <summary>
@@ -349,35 +338,9 @@ public class AuthServiceTests
     }
 
     /// <summary>
-    /// The reason the pepper exists. Anything that can write the database — the
-    /// lower-trust agent uid of ADR-0014, a restored backup — can insert a
-    /// UserSessions row naming a token it chose. With a pepper configured it cannot
-    /// compute the value that row has to be addressed by, so the token it holds
-    /// resolves to nothing.
-    /// </summary>
-    [Fact]
-    public async Task A_session_row_whose_hash_the_attacker_computed_does_not_authenticate()
-    {
-        SessionTokenHasher.Configure("a-strong-test-pepper");
-        try
-        {
-            using var db = new TestDb();
-            var svc = Make(db);
-            var minted = await LoginAsync(svc);
-
-            var forged = await InsertUnkeyedSessionAsync(db, "attacker-chosen-token");
-
-            Assert.False(await svc.ValidateSessionAsync(forged));
-            Assert.Null(await svc.GetUsernameAsync(forged));
-            Assert.Empty(await svc.GetSessionsAsync(forged));
-            Assert.True(await svc.ValidateSessionAsync(minted));
-        }
-        finally { SessionTokenHasher.Configure(null); }
-    }
-
-    /// <summary>
-    /// The same insert against the pre-pepper hashing, to pin that it is the pepper
-    /// doing the work above rather than some other property of the lookup.
+    /// The same insert as <see cref="AuthServicePepperTests.A_session_row_whose_hash_the_attacker_computed_does_not_authenticate"/>
+    /// against the pre-pepper hashing, to pin that it is the pepper doing the work
+    /// there rather than some other property of the lookup.
     /// </summary>
     [Fact]
     public async Task Without_a_pepper_that_same_row_does_authenticate()
@@ -391,27 +354,11 @@ public class AuthServiceTests
         Assert.True(await svc.ValidateSessionAsync(forged));
     }
 
-    [Fact]
-    public async Task Turning_the_pepper_on_signs_existing_devices_out()
-    {
-        using var db = new TestDb();
-        var svc = Make(db);
-        var token = await LoginAsync(svc);
-
-        SessionTokenHasher.Configure("a-strong-test-pepper");
-        try
-        {
-            Assert.False(await svc.ValidateSessionAsync(token));
-            Assert.True(await svc.ValidateSessionAsync(await LoginAsync(Make(db))));
-        }
-        finally { SessionTokenHasher.Configure(null); }
-    }
-
     /// <summary>
     /// A row addressed by the plain SHA-256 of <paramref name="token"/> — everything
     /// an attacker with database write access can produce. Returns the token.
     /// </summary>
-    private static async Task<string> InsertUnkeyedSessionAsync(TestDb db, string token)
+    internal static async Task<string> InsertUnkeyedSessionAsync(TestDb db, string token)
     {
         var now = DateTime.UtcNow;
         db.Context.UserSessions.Add(new UserSession

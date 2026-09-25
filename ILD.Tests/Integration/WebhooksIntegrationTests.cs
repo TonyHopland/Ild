@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
-[Collection("AuthEnvironment")]
 public class WebhooksIntegrationTests
 {
     [Fact]

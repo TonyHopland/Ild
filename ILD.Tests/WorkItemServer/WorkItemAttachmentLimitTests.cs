@@ -17,7 +17,6 @@ namespace ILD.Tests.WorkItemServer;
 /// Each case boots its own server: the limits are read once at startup, so
 /// "the same file under a different setting" can only be two hosts.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public sealed class WorkItemAttachmentLimitTests
 {
     private const int Megabyte = 1024 * 1024;

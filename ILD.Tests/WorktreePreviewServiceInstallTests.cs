@@ -11,7 +11,6 @@ namespace ILD.Tests;
 /// Start node uses when "Run ild.config install" is enabled — the executor tests
 /// only mock the preview service, so the install runner itself is proven here.
 /// </summary>
-[Collection("EnvironmentPath")]
 public class WorktreePreviewServiceInstallTests : IDisposable
 {
     private readonly string _worktree;
@@ -28,12 +27,20 @@ public class WorktreePreviewServiceInstallTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private WorktreePreviewService BuildService()
+    /// <summary>
+    /// With no <paramref name="environment"/>, the constructor DI uses, which reads
+    /// and writes the process environment.
+    /// </summary>
+    private static WorktreePreviewService BuildService(IProcessEnvironment? environment = null)
     {
         var factory = new Mock<IHttpClientFactory>();
         var configuration = new ConfigurationBuilder().Build();
-        return new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance);
+        return environment is null
+            ? new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
+                NullLogger<WorktreePreviewService>.Instance)
+            : new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
+                NullLogger<WorktreePreviewService>.Instance,
+                agentUser: null, agentGroup: null, agentHome: null, environment: environment);
     }
 
     private void WriteConfig(string installCommand)
@@ -104,37 +111,23 @@ public class WorktreePreviewServiceInstallTests : IDisposable
     }
 
     [Fact]
-    public async Task InstallAsync_exposes_npm_global_bin_on_the_host_process_path()
+    public async Task InstallAsync_exposes_npm_global_bin_on_the_supplied_path()
     {
         // npm install -g lands global CLIs in $HOME/.local/bin; the agents that
         // run after the Start node inherit the host process PATH, so install must
         // surface that directory there or the installed tools stay invisible.
-        var originalPath = Environment.GetEnvironmentVariable("PATH");
-        var originalHome = Environment.GetEnvironmentVariable("HOME");
-        try
-        {
-            // Pin HOME to a fresh temp dir so the expected bin path is deterministic
-            // and provably absent from PATH before install runs.
-            var home = Path.Combine(Path.GetTempPath(), "ild-install-home-" + Guid.NewGuid().ToString("N"));
-            Environment.SetEnvironmentVariable("HOME", home);
-            var expectedBin = Path.Combine(home, ".local", "bin");
-            Assert.DoesNotContain(
-                expectedBin,
-                (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator));
+        // A fresh HOME makes the expected bin path deterministic and provably
+        // absent from PATH before install runs.
+        var environment = SuppliedEnvironment(out var expectedBin).WithRealPath();
+        Assert.DoesNotContain(expectedBin, (environment.Get("PATH") ?? string.Empty).Split(Path.PathSeparator));
 
-            WriteConfig("true");
-            var service = BuildService();
+        WriteConfig("true");
+        var service = BuildService(environment);
 
-            await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+        await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
 
-            var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            Assert.Contains(expectedBin, path.Split(Path.PathSeparator));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PATH", originalPath);
-            Environment.SetEnvironmentVariable("HOME", originalHome);
-        }
+        Assert.Contains(expectedBin, (environment.Get("PATH") ?? string.Empty).Split(Path.PathSeparator));
+        Assert.DoesNotContain(expectedBin, (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator));
     }
 
     [Fact]
@@ -149,60 +142,93 @@ public class WorktreePreviewServiceInstallTests : IDisposable
         // genuinely new tools are contributed, which is all this was ever for.
         // (ADR-0016; the preview's own children still get it first, which is a
         // different PATH and crosses no boundary.)
-        var originalPath = Environment.GetEnvironmentVariable("PATH");
-        var originalHome = Environment.GetEnvironmentVariable("HOME");
-        try
-        {
-            var home = Path.Combine(Path.GetTempPath(), "ild-install-home-" + Guid.NewGuid().ToString("N"));
-            Environment.SetEnvironmentVariable("HOME", home);
-            var expectedBin = Path.Combine(home, ".local", "bin");
+        var environment = SuppliedEnvironment(out var expectedBin);
 
-            // A directory that shadows a real tool, ahead of everything, so "still
-            // last" is a claim about ordering rather than about an empty PATH.
-            Environment.SetEnvironmentVariable("PATH", "/usr/bin" + Path.PathSeparator + "/bin");
+        // A directory that shadows a real tool, ahead of everything, so "still
+        // last" is a claim about ordering rather than about an empty PATH.
+        environment.Set("PATH", "/usr/bin" + Path.PathSeparator + "/bin");
 
-            WriteConfig("true");
-            var service = BuildService();
+        WriteConfig("true");
+        var service = BuildService(environment);
 
-            await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+        await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
 
-            var segments = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-            Assert.Equal(expectedBin, segments[^1]);
-            Assert.Equal(new[] { "/usr/bin", "/bin", expectedBin }, segments);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PATH", originalPath);
-            Environment.SetEnvironmentVariable("HOME", originalHome);
-        }
+        var segments = (environment.Get("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(expectedBin, segments[^1]);
+        Assert.Equal(new[] { "/usr/bin", "/bin", expectedBin }, segments);
     }
 
     [Fact]
     public async Task InstallAsync_does_not_duplicate_npm_global_bin_on_repeated_installs()
     {
-        var originalPath = Environment.GetEnvironmentVariable("PATH");
-        var originalHome = Environment.GetEnvironmentVariable("HOME");
-        try
-        {
-            var home = Path.Combine(Path.GetTempPath(), "ild-install-home-" + Guid.NewGuid().ToString("N"));
-            Environment.SetEnvironmentVariable("HOME", home);
-            var expectedBin = Path.Combine(home, ".local", "bin");
+        var environment = SuppliedEnvironment(out var expectedBin).WithRealPath();
 
-            WriteConfig("true");
-            var service = BuildService();
+        WriteConfig("true");
+        var service = BuildService(environment);
 
-            await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
-            await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+        await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+        await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
 
-            var segments = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
-            Assert.Single(segments, segment => segment == expectedBin);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("PATH", originalPath);
-            Environment.SetEnvironmentVariable("HOME", originalHome);
-        }
+        var segments = (environment.Get("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Single(segments, segment => segment == expectedBin);
+    }
+
+    [Fact]
+    public async Task InstallAsync_leaves_a_path_that_already_has_npm_global_bin_as_it_is()
+    {
+        var environment = SuppliedEnvironment(out var expectedBin);
+        var path = string.Join(Path.PathSeparator, "/usr/bin", expectedBin, "/bin");
+        environment.Set("PATH", path);
+
+        WriteConfig("true");
+        var service = BuildService(environment);
+
+        await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+
+        Assert.Equal(path, environment.Get("PATH"));
+    }
+
+    [Fact]
+    public async Task InstallAsync_runs_its_steps_with_npm_global_bin_ahead_of_the_supplied_path()
+    {
+        // The preview's own children get the directory first (see the ordering test
+        // above for why the host PATH gets it last).
+        var environment = SuppliedEnvironment(out var expectedBin).WithRealPath();
+        var suppliedPath = environment.Get("PATH");
+        WriteConfig("printf '%s' \\\"$HOME|$PATH\\\" > env.marker");
+        var service = BuildService(environment);
+
+        await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+
+        var seen = File.ReadAllText(Path.Combine(_worktree, "env.marker")).Split('|');
+        Assert.Equal(environment.Get("HOME"), seen[0]);
+        Assert.Equal($"{expectedBin}{Path.PathSeparator}{suppliedPath}", seen[1]);
+    }
+
+    [Fact]
+    public async Task InstallAsync_with_the_default_environment_puts_npm_global_bin_on_the_process_path()
+    {
+        // The production wiring: nothing supplied means the process environment. Safe
+        // to read in parallel, because every writer appends this same entry.
+        var home = Environment.GetEnvironmentVariable("HOME");
+        Assert.False(string.IsNullOrWhiteSpace(home));
+        var expectedBin = Path.Combine(home!, ".local", "bin");
+
+        WriteConfig("true");
+        var service = BuildService();
+
+        await service.InstallAsync(_worktree, cancellationToken: CancellationToken.None);
+
+        Assert.Contains(expectedBin, (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator));
+    }
+
+    /// <summary>A HOME of its own, so the npm global bin is a path nothing else has put on PATH.</summary>
+    private TestProcessEnvironment SuppliedEnvironment(out string expectedBin)
+    {
+        var home = Path.Combine(_worktree, "home");
+        expectedBin = Path.Combine(home, ".local", "bin");
+        return new TestProcessEnvironment { { "HOME", home } };
     }
 }

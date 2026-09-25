@@ -23,7 +23,11 @@ public sealed class FakeWorkItemServerHarness : IDisposable
     public IWorkItemServerClient Client { get; }
     public IWorkItemServerOptionsResolver Options { get; } = new StubWorkItemServerOptionsResolver();
 
-    public FakeWorkItemServerHarness(TimeProvider? clock = null)
+    /// <param name="limits">
+    /// What the attachment service enforces; by default what the server itself
+    /// would read from the process environment.
+    /// </param>
+    public FakeWorkItemServerHarness(TimeProvider? clock = null, AttachmentLimits? limits = null)
     {
         _connection = new SqliteConnection("Filename=:memory:");
         _connection.Open();
@@ -33,10 +37,8 @@ public sealed class FakeWorkItemServerHarness : IDisposable
         ServerDb = new WorkItemServerDbContext(opts);
         ServerDb.Database.EnsureCreated();
         Service = new WorkItemService(ServerDb, clock ?? TimeProvider.System);
-        // The real attachment service, reading the same environment the server
-        // would, so the limits it enforces are the ones the test set before it.
         Attachments = new WorkItemAttachmentService(
-            ServerDb, AttachmentLimits.FromEnvironment(), clock ?? TimeProvider.System);
+            ServerDb, limits ?? AttachmentLimits.FromEnvironment(), clock ?? TimeProvider.System);
         Client = new FakeWorkItemServerClient(Service, Attachments);
     }
 

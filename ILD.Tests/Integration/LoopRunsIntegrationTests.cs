@@ -10,7 +10,6 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
 
-[Collection("AuthEnvironment")]
 public class LoopRunsIntegrationTests
 {
     [Fact]

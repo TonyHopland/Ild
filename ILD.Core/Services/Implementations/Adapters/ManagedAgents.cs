@@ -116,8 +116,9 @@ public static class ManagedAgentInstall
     /// Adapters read it directly here so launch-path resolution stays free of
     /// DI plumbing.
     /// </summary>
-    public static string ResolveDataRoot()
-        => Environment.GetEnvironmentVariable("ILD_DATA_PATH") is { Length: > 0 } p ? p : "data";
+    /// <param name="environment">Where <c>ILD_DATA_PATH</c> is read; the process environment by default.</param>
+    public static string ResolveDataRoot(IProcessEnvironment? environment = null)
+        => (environment ?? ProcessEnvironment.Current).Get("ILD_DATA_PATH") is { Length: > 0 } p ? p : "data";
 
     /// <summary>
     /// The command an adapter should launch for <paramref name="agent"/>:
@@ -127,10 +128,11 @@ public static class ManagedAgentInstall
     /// <c>binaryPath</c> in the provider config still overrides this (it is
     /// consulted first by the caller).
     /// </summary>
-    public static string ResolveCommand(ManagedAgent agent)
-        => ResolveCommand(agent, ResolveDataRoot());
+    /// <param name="environment">Where the data root is configured (see <see cref="ResolveDataRoot"/>).</param>
+    public static string ResolveCommand(ManagedAgent agent, IProcessEnvironment environment)
+        => ResolveCommand(agent, ResolveDataRoot(environment));
 
-    /// <inheritdoc cref="ResolveCommand(ManagedAgent)"/>
+    /// <inheritdoc cref="ResolveCommand(ManagedAgent, IProcessEnvironment)"/>
     public static string ResolveCommand(ManagedAgent agent, string dataRoot)
         => CurrentBinaryPath(dataRoot, agent) ?? agent.Command;
 }

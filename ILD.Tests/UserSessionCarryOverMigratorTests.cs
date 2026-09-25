@@ -11,7 +11,6 @@ namespace ILD.Tests;
 /// current schema has no <c>Users.SessionToken</c>, so each test re-creates the
 /// legacy column to stand in for a database that predates the sessions table.
 /// </summary>
-[Collection("AuthEnvironment")]
 public class UserSessionCarryOverMigratorTests
 {
     [Fact]
@@ -26,8 +25,7 @@ public class UserSessionCarryOverMigratorTests
 
         Assert.Equal(1, created);
 
-        Environment.SetEnvironmentVariable("ILD_PASSWORD", "secret");
-        var svc = new AuthService(db.Auth, db.Settings);
+        var svc = new AuthService(db.Auth, db.Settings, new BootstrapCredentials(BootstrapCredentials.DefaultUsername, "secret"));
         Assert.True(await svc.ValidateSessionAsync("legacy-token-from-the-old-column"));
         Assert.Equal(user.Username, await svc.GetUsernameAsync("legacy-token-from-the-old-column"));
     }

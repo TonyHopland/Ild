@@ -13,7 +13,6 @@ namespace ILD.Tests;
 /// <c>ild_</c> prefix; this checks the whole list against what
 /// <see cref="IldMcpToolNames"/> reads from the server DLL the adapter launches.
 /// </summary>
-[Collection("EnvironmentPath")]
 public sealed class PiAdapterToolListTests : IDisposable
 {
     private readonly Guid _runId = Guid.NewGuid();

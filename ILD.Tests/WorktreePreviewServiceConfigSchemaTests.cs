@@ -16,7 +16,6 @@ namespace ILD.Tests;
 /// keeping up, these tests fail instead of agents silently producing a config
 /// that installs or previews nothing.
 /// </summary>
-[Collection("EnvironmentPath")]
 public class WorktreePreviewServiceConfigSchemaTests : IDisposable
 {
     private readonly string _worktree;

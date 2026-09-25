@@ -15,7 +15,6 @@ namespace ILD.Tests.Integration;
 /// is sitting safely in a database nobody can currently reach, and a delete
 /// answered 204 or 404 would have them believe it is gone.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public class WorkItemAttachmentOutageTests
 {
     private const string WorkItemId = "42";

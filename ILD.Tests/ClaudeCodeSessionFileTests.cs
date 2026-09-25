@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -15,10 +16,8 @@ namespace ILD.Tests;
 /// Claude keeps its session files under <c>$HOME/.claude/projects</c>, in the shared
 /// credential store the agent can write. ILD restores and saves them only as the
 /// agent: a link planted there is replaced or ignored, never followed, and a
-/// planted directory never fails the run. Mutates <c>HOME</c>, so it joins the
-/// non-parallel environment collection.
+/// planted directory never fails the run. The adapter is given its own <c>HOME</c>.
 /// </summary>
-[Collection("EnvironmentPath")]
 public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
 {
     private const string SessionId = "claude-sess";
@@ -26,16 +25,16 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
     private readonly string _home = Directory.CreateTempSubdirectory("ild-claude-session-home-").FullName;
     private readonly string _worktree = Directory.CreateTempSubdirectory("ild-claude-session-wt-").FullName;
     private readonly Guid _runId = Guid.NewGuid();
-    private string? _previousHome;
+    private readonly TestProcessEnvironment _environment = new();
     private SqliteConnection _connection = null!;
     private ServiceProvider _services = null!;
 
-    private string SessionPath => ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId)!;
+    private string SessionPath => ClaudeCodeAdapter.GetSessionFilePath(
+        _worktree, SessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, _environment)!;
 
     public async Task InitializeAsync()
     {
-        _previousHome = Environment.GetEnvironmentVariable("HOME");
-        Environment.SetEnvironmentVariable("HOME", _home);
+        _environment.Set("HOME", _home);
 
         _connection = new SqliteConnection("Filename=:memory:");
         await _connection.OpenAsync();
@@ -63,7 +62,6 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
 
     public async Task DisposeAsync()
     {
-        Environment.SetEnvironmentVariable("HOME", _previousHome);
         await _services.DisposeAsync();
         await _connection.DisposeAsync();
         foreach (var dir in new[] { _home, _worktree })
@@ -86,10 +84,10 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         var agentProjects = Path.Combine(agentHome, ".claude", "projects") + Path.DirectorySeparatorChar;
         var ownProjects = Path.Combine(_home, ".claude", "projects") + Path.DirectorySeparatorChar;
 
-        Assert.StartsWith(agentProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome));
+        Assert.StartsWith(agentProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome, _environment));
         // Isolation off, or no agent home configured: the crossing leaves HOME alone.
-        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, agentUser: null, agentHome));
-        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome: null));
+        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, agentUser: null, agentHome, _environment));
+        Assert.StartsWith(ownProjects, ClaudeCodeAdapter.GetSessionFilePath(_worktree, SessionId, "agent", agentHome: null, _environment));
     }
 
     [Fact]
@@ -148,7 +146,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
 
     private async Task RunAsync()
     {
-        var adapter = new ClaudeCodeAdapter(_services.GetRequiredService<IServiceScopeFactory>());
+        var adapter = new ClaudeCodeAdapter(_services.GetRequiredService<IServiceScopeFactory>(), environment: _environment);
         var result = await adapter.ExecuteAsync(new AgentExecutionContext(
             Provider: new AiProvider
             {

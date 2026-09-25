@@ -198,6 +198,7 @@ public static class ServiceCollectionExtensions
         // The WorkItem server reads the same two variables and enforces the same
         // numbers; both boundaries check independently.
         services.AddSingleton(_ => ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment());
+        services.AddSingleton(_ => BootstrapCredentials.FromEnvironment());
         services.AddHostedService<GracefulRunDrainService>();
 
         return services;

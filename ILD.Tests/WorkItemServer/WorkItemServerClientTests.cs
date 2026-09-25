@@ -1,6 +1,7 @@
 using System.Net;
 using ILD.Core.Services.Remote;
 using ILD.WorkItemServer;
+using ILD.WorkItemServer.Auth;
 
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -29,7 +30,6 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         _conn = new SqliteConnection("DataSource=:memory:");
         _conn.Open();
 
-        Environment.SetEnvironmentVariable("WORKITEM_API_KEYS", ApiKey);
         Environment.SetEnvironmentVariable("WORKITEM_DB_CONNECTION_STRING", null);
 
         _factory = new WebApplicationFactory<WorkItemServerProgram>().WithWebHostBuilder(b =>
@@ -46,6 +46,7 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
             b.ConfigureServices(services =>
             {
                 services.RemoveHostedService<ILD.WorkItemServer.Hosting.StaleWorkItemReclaimer>();
+                services.PostConfigure<ApiKeyOptions>(options => options.Keys = ApiKey);
                 var existing = services.FirstOrDefault(d => d.ServiceType == typeof(DbContextOptions<WorkItemServerDbContext>));
                 if (existing != null) services.Remove(existing);
                 services.AddDbContext<WorkItemServerDbContext>(o =>

@@ -13,13 +13,10 @@ namespace ILD.Tests;
 /// child opencode process never reads the user's <c>~/.config/opencode</c>,
 /// so we have to inject the entry ourselves.
 /// </summary>
-[Collection("EnvironmentPath")]
 public class OpenCodeAdapterMcpInjectionTests : IDisposable
 {
     private readonly string _tempDir;
-    private readonly string _previousDllOverride;
-    private readonly string _previousApiUrl;
-    private readonly string _previousApiToken;
+    private readonly TestProcessEnvironment _environment;
 
     public OpenCodeAdapterMcpInjectionTests()
     {
@@ -28,20 +25,16 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
         var fakeDll = Path.Combine(_tempDir, "ild-mcp-server.dll");
         File.WriteAllText(fakeDll, "");
 
-        _previousDllOverride = Environment.GetEnvironmentVariable("ILD_MCP_SERVER_DLL") ?? string.Empty;
-        _previousApiUrl = Environment.GetEnvironmentVariable("ILD_API_URL") ?? string.Empty;
-        _previousApiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN") ?? string.Empty;
-
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", fakeDll);
-        Environment.SetEnvironmentVariable("ILD_API_URL", "http://api.invalid:1234");
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", "test-token");
+        _environment = new TestProcessEnvironment
+        {
+            { "ILD_MCP_SERVER_DLL", fakeDll },
+            { "ILD_API_URL", "http://api.invalid:1234" },
+            { "ILD_API_TOKEN", "test-token" },
+        };
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", string.IsNullOrEmpty(_previousDllOverride) ? null : _previousDllOverride);
-        Environment.SetEnvironmentVariable("ILD_API_URL", string.IsNullOrEmpty(_previousApiUrl) ? null : _previousApiUrl);
-        Environment.SetEnvironmentVariable("ILD_API_TOKEN", string.IsNullOrEmpty(_previousApiToken) ? null : _previousApiToken);
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* best effort */ }
         GC.SuppressFinalize(this);
     }
@@ -49,7 +42,7 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
     [Fact]
     public void ResolveIldMcpServerDll_returns_override()
     {
-        var resolved = OpenCodeAdapter.ResolveIldMcpServerDll();
+        var resolved = OpenCodeAdapter.ResolveIldMcpServerDll(_environment);
         Assert.NotNull(resolved);
         Assert.True(File.Exists(resolved));
     }
@@ -68,7 +61,7 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
             EventLogSummary: new List<string>(),
             PreviousNodeOutput: null);
 
-        var entry = OpenCodeAdapter.BuildIldMcpEntry(ctx);
+        var entry = OpenCodeAdapter.BuildIldMcpEntry(ctx, environment: _environment);
         Assert.NotNull(entry);
 
         Assert.Equal("local", entry!["type"]);
@@ -121,13 +114,13 @@ public class OpenCodeAdapterMcpInjectionTests : IDisposable
     [Fact]
     public void BuildIldMcpEntry_returns_null_when_no_dll_can_be_found()
     {
-        Environment.SetEnvironmentVariable("ILD_MCP_SERVER_DLL", "/nonexistent/path/ild-mcp-server.dll");
+        _environment.Set("ILD_MCP_SERVER_DLL", "/nonexistent/path/ild-mcp-server.dll");
 
         // We can't easily defeat the upward-walk fallback in a real repo, but
         // the override path being non-existent should at least drop the value.
         // The fallback may still find a real build artifact; in that case the
         // entry is returned and we just verify it has the right shape.
-        var entry = OpenCodeAdapter.BuildIldMcpEntry(runContext: null);
+        var entry = OpenCodeAdapter.BuildIldMcpEntry(runContext: null, environment: _environment);
         if (entry == null) return; // No build artifact present anywhere — acceptable.
 
         Assert.Equal("local", entry["type"]);

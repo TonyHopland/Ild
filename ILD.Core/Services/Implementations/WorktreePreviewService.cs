@@ -38,6 +38,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly string? _agentGroup;
     private readonly string? _agentHome;
     private readonly string? _egressProxy;
+    private readonly IProcessEnvironment _environment;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -52,7 +53,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         ILogger<WorktreePreviewService> logger)
         : this(httpClientFactory, configuration, proxyBase, logger,
             AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
-            AgentIsolation.EgressProxyUrl(aiProviderId: null))
+            AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current)
     {
     }
 
@@ -64,6 +65,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// every other test in the host process. The DI constructor above supplies the
     /// production values; all three are null when isolation is off, and every
     /// decision keyed off them then reduces to the pre-isolation behaviour.
+    /// <paramref name="environment"/> is where our own <c>HOME</c> and <c>PATH</c>
+    /// are read, and where an install puts the npm global bin on <c>PATH</c>: the
+    /// process environment unless a test supplies its own.
     /// </summary>
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
@@ -73,7 +77,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         string? agentUser,
         string? agentGroup,
         string? agentHome,
-        string? egressProxy = null)
+        string? egressProxy = null,
+        IProcessEnvironment? environment = null)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
@@ -85,6 +90,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _agentGroup = NonEmpty(agentGroup);
         _agentHome = NonEmpty(agentHome);
         _egressProxy = NonEmpty(egressProxy);
+        _environment = environment ?? ProcessEnvironment.Current;
     }
 
     /// <summary>
@@ -1363,7 +1369,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         EnsureNpmDirectory(npmBin);
         Directory.CreateDirectory(npmCache);
 
-        var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var currentPath = _environment.Get("PATH") ?? string.Empty;
 
         environment["HOME"] = home;
         environment["NPM_CONFIG_PREFIX"] = npmPrefix;
@@ -1389,7 +1395,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         if (ChildHome is { } childHome)
             return childHome;
 
-        var home = Environment.GetEnvironmentVariable("HOME");
+        var home = _environment.Get("HOME");
         if (string.IsNullOrWhiteSpace(home))
         {
             // Not reachable in the container (HOME is always set), and only
@@ -1500,7 +1506,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // EnsureNpmDirectory for why the orchestrator must not.
         EnsureNpmDirectory(npmBin);
 
-        var currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var currentPath = _environment.Get("PATH") ?? string.Empty;
 
         var alreadyPresent = currentPath
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
@@ -1508,7 +1514,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         if (alreadyPresent)
             return;
 
-        Environment.SetEnvironmentVariable(
+        _environment.Set(
             "PATH",
             string.IsNullOrWhiteSpace(currentPath) ? npmBin : $"{currentPath}{Path.PathSeparator}{npmBin}");
     }

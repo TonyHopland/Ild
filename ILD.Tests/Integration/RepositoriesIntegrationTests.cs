@@ -9,7 +9,6 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ILD.Tests.Integration;
 
-[Collection("AuthEnvironment")]
 public class RepositoriesIntegrationTests
 {
     [Fact]

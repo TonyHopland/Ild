@@ -25,7 +25,6 @@ public class AuthService : IAuthService
     private const int Pbkdf2Iterations = 100_000;
     private const int SaltBytes = 16;
     private const int HashBytes = 32;
-    private const string DefaultUsername = "admin";
 
     /// <summary>
     /// How stale <see cref="UserSession.LastSeenAt"/> has to be before a request
@@ -43,21 +42,16 @@ public class AuthService : IAuthService
     /// </summary>
     private int? _idleDays;
 
-    private readonly string? _configuredPassword;
-    private readonly string _bootstrapUsername;
+    private readonly BootstrapCredentials _bootstrap;
 
-    public AuthService(IAuthStore authStore, IAppSettingStore settings)
+    // Credentials stay env vars — they are secrets. Expiry lives in AppSettings
+    // because it is a preference an operator changes from the Settings page
+    // without restarting.
+    public AuthService(IAuthStore authStore, IAppSettingStore settings, BootstrapCredentials bootstrap)
     {
         _authStore = authStore;
         _settings = settings;
-        // Credentials stay env vars — they are secrets. Expiry lives in
-        // AppSettings because it is a preference an operator changes from the
-        // Settings page without restarting.
-        _configuredPassword = Environment.GetEnvironmentVariable("ILD_PASSWORD");
-        var configuredUsername = Environment.GetEnvironmentVariable("ILD_USERNAME");
-        _bootstrapUsername = string.IsNullOrWhiteSpace(configuredUsername)
-            ? DefaultUsername
-            : configuredUsername.Trim();
+        _bootstrap = bootstrap;
     }
 
     public async Task<AuthResult> LoginAsync(
@@ -68,13 +62,13 @@ public class AuthService : IAuthService
     {
         var user = await _authStore.GetByUsernameAsync(username);
 
-        if (user == null && username == _bootstrapUsername && !string.IsNullOrEmpty(_configuredPassword))
+        if (user == null && username == _bootstrap.Username && !string.IsNullOrEmpty(_bootstrap.Password))
         {
             user = new User
             {
                 Id = Guid.NewGuid(),
-                Username = _bootstrapUsername,
-                PasswordHash = HashPassword(_configuredPassword),
+                Username = _bootstrap.Username,
+                PasswordHash = HashPassword(_bootstrap.Password),
                 CreatedAt = DateTime.UtcNow,
             };
             await _authStore.CreateUserAsync(user);

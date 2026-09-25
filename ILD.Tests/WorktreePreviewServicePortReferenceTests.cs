@@ -29,7 +29,7 @@ namespace ILD.Tests;
 /// this repo's own <c>ild.config.json</c>) masks.
 /// </para>
 /// </summary>
-[Collection("EnvironmentPath")]
+[Collection(PreviewPortsCollection.Name)]
 public class WorktreePreviewServicePortReferenceTests : IDisposable
 {
     private readonly string _worktree;

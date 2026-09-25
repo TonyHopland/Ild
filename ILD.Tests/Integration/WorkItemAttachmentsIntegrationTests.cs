@@ -13,7 +13,6 @@ namespace ILD.Tests.Integration;
 /// server. Everything here is exercised over HTTP with no UI present — the UI
 /// lands separately and builds against exactly these routes.
 /// </summary>
-[Collection("AttachmentEnvironment")]
 public class WorkItemAttachmentsIntegrationTests
 {
     private const int Megabyte = 1024 * 1024;
@@ -197,10 +196,11 @@ public class WorkItemAttachmentsIntegrationTests
     [Fact]
     public async Task The_limits_endpoint_follows_the_configured_values()
     {
-        using var environment = new EnvironmentVariableScope(
-            ("ILD_MAX_ATTACHMENT_MB", "3"),
-            ("ILD_MAX_ATTACHMENTS_TOTAL_MB", "9"));
-        await using var factory = new ApiFactory();
+        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        {
+            ["ILD_MAX_ATTACHMENT_MB"] = "3",
+            ["ILD_MAX_ATTACHMENTS_TOTAL_MB"] = "9",
+        });
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var limits = await client.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments");
@@ -212,8 +212,10 @@ public class WorkItemAttachmentsIntegrationTests
     [Fact]
     public async Task A_file_over_the_configured_maximum_is_refused_with_400_by_the_api_itself()
     {
-        using var environment = new EnvironmentVariableScope(("ILD_MAX_ATTACHMENT_MB", "1"));
-        await using var factory = new ApiFactory();
+        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        {
+            ["ILD_MAX_ATTACHMENT_MB"] = "1",
+        });
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
 
@@ -252,8 +254,10 @@ public class WorkItemAttachmentsIntegrationTests
     {
         // 40 MB per file puts the derived ceiling above the 30 MB a hosted server
         // caps a request at by default, which is the whole point of deriving it.
-        using var environment = new EnvironmentVariableScope(("ILD_MAX_ATTACHMENT_MB", "40"));
-        await using var factory = new ApiFactory();
+        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        {
+            ["ILD_MAX_ATTACHMENT_MB"] = "40",
+        });
         var expected = ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(
             name => name == "ILD_MAX_ATTACHMENT_MB" ? "40" : null);
 
@@ -268,8 +272,10 @@ public class WorkItemAttachmentsIntegrationTests
     [Fact]
     public async Task Only_the_attachment_endpoint_raises_the_request_body_limit()
     {
-        using var environment = new EnvironmentVariableScope(("ILD_MAX_ATTACHMENT_MB", "40"));
-        await using var factory = new ApiFactory();
+        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        {
+            ["ILD_MAX_ATTACHMENT_MB"] = "40",
+        });
         var client = await factory.CreateAuthenticatedClientAsync();
         var token = await factory.GetAdminTokenAsync();
         var id = await CreateWorkItemAsync(factory, client);
@@ -295,10 +301,11 @@ public class WorkItemAttachmentsIntegrationTests
         // arrives from the WorkItem server. Every other failure of that call is
         // mapped to 503 "WorkItemServer unreachable", which would tell the user
         // their instance is down when in fact their upload was simply too big.
-        using var environment = new EnvironmentVariableScope(
-            ("ILD_MAX_ATTACHMENT_MB", "1"),
-            ("ILD_MAX_ATTACHMENTS_TOTAL_MB", "1"));
-        await using var factory = new ApiFactory();
+        await using var factory = new ApiFactory(environment: new Dictionary<string, string?>
+        {
+            ["ILD_MAX_ATTACHMENT_MB"] = "1",
+            ["ILD_MAX_ATTACHMENTS_TOTAL_MB"] = "1",
+        });
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
 
