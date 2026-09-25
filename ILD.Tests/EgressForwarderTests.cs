@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -231,16 +232,34 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         Assert.Contains(await RecordedAsync(2), e => e.Decision == NetworkDecision.Blocked && e.Host == "localhost");
     }
 
+    /// <summary>
+    /// Once released, the port is the kernel's to hand to anyone, so whether a
+    /// dial to it is refused says nothing about the forwarder. What the forwarder
+    /// owes is closing its own listening socket, so that is what gets checked.
+    /// </summary>
     [Fact]
     public async Task A_forward_deleted_at_runtime_stops_answering_on_its_local_port()
     {
+        // Read once, at a listener's first accept, which runs inside the bind
+        // right after Start: after Stop, TcpListener.Server hands out a fresh socket.
+        var bound = new ConcurrentDictionary<TcpListener, Socket>();
+        _forwarder!.AcceptClient = (listener, ct) =>
+        {
+            bound.GetOrAdd(listener, l => l.Server);
+            return listener.AcceptTcpClientAsync(ct);
+        };
         var forward = await DeclareAsync();
 
+        using (var client = await DialAsync(forward.LocalPort))
+            Assert.Equal("before delete", await EchoAsync(client, "before delete"));
+        Assert.Contains(bound.Values, socket => ((IPEndPoint)socket.LocalEndPoint!).Port == forward.LocalPort);
+        Assert.All(bound.Values, socket => Assert.False(socket.SafeHandle.IsClosed));
+
         Assert.True(await _db.NetworkForwards.DeleteForwardAsync(forward.Id));
-        await _forwarder!.ReconcileAsync(default);
+        await _forwarder.ReconcileAsync(default);
         Assert.DoesNotContain(forward.LocalPort, _forwarder.ListeningPorts);
 
-        await Assert.ThrowsAnyAsync<SocketException>(async () => (await DialAsync(forward.LocalPort)).Dispose());
+        Assert.All(bound.Values, socket => Assert.True(socket.SafeHandle.IsClosed));
     }
 
     [Fact]
