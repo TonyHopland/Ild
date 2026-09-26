@@ -3,10 +3,13 @@ import { describe, expect, test } from "vite-plus/test";
 // without needing Node's filesystem types in this DOM-only project.
 import lockfile from "../../pnpm-lock.yaml?raw";
 
-/** Collects every resolved version of a package from the lockfile's `packages` section. */
+/**
+ * Collects every resolved version of a package from the lockfile's `packages`
+ * section. Scoped names are keys pnpm quotes ('@scope/name@1.2.3':).
+ */
 function resolvedVersions(name: string): string[] {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`^ {2}${escaped}@(\\d+\\.\\d+\\.\\d+):`, "gm");
+  const pattern = new RegExp(`^ {2}'?${escaped}@(\\d+\\.\\d+\\.\\d+)'?:`, "gm");
   const versions = [...lockfile.matchAll(pattern)].map((match) => match[1]);
   return [...new Set(versions)];
 }
@@ -58,6 +61,13 @@ const patchedFloors: { name: string; floors: Record<number, string>; advisory: s
     floors: { 8: "8.9.0" },
     advisory: "GHSA-vxpw-j846-p89q / GHSA-hm92-r4w5-c3mj / GHSA-vmh5-mc38-953g",
   },
+  // vitest and @vitest/mocker GHSA-82fw-gwwq-j7x9, patched 4.1.11. Both arrive with
+  // the vite-plus toolchain, which ships the fix from 0.3.
+  { name: "vitest", floors: { 4: "4.1.11" }, advisory: "GHSA-82fw-gwwq-j7x9" },
+  { name: "@vitest/mocker", floors: { 4: "4.1.11" }, advisory: "GHSA-82fw-gwwq-j7x9" },
+  // nanoid GHSA-2v37-7h3g-55p8 (a zero-size custom generator loops forever),
+  // patched 3.3.18 and held there by a pnpm-workspace.yaml override.
+  { name: "nanoid", floors: { 3: "3.3.18" }, advisory: "GHSA-2v37-7h3g-55p8" },
 ];
 
 describe("dependency security audit", () => {
