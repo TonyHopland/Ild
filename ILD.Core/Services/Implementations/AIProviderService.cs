@@ -280,7 +280,7 @@ public class AIProviderService : IAIProviderService
 
     // The agent tool surface only carries the worktree path, so resolve the repo
     // (and its custom .env) back through the run that owns the worktree —
-    // worktree → run → work item → repository. This keeps an agent-started preview
+    // worktree → run → the repository that run pinned. This keeps an agent-started preview
     // injecting the same secrets the human WorkItems/Agent controllers and the run's
     // Start node do. The work item id comes back from the same walk, since the
     // preview needs it to advertise a wi-{id} proxy URL — an agent-started preview
@@ -291,8 +291,11 @@ public class AIProviderService : IAIProviderService
         if (_loopRuns is null) return (null, null);
         var run = await _loopRuns.GetByWorktreePathAsync(worktreePath);
         if (run is null || string.IsNullOrEmpty(run.WorkItemId)) return (null, null);
-        var workItem = await _workItemManager.GetWorkItemAsync(run.WorkItemId);
-        return (run.WorkItemId, await _providerStore.GetRepositoryPreviewEnvAsync(workItem?.RunRepositoryId));
+        // The worktree's own run, which need not be the item's current one, pinned
+        // the repository; only a run from before runs pinned one falls back to the item.
+        var repositoryId = run.RepositoryId
+            ?? (await _workItemManager.GetWorkItemAsync(run.WorkItemId))?.RepositoryId;
+        return (run.WorkItemId, await _providerStore.GetRepositoryPreviewEnvAsync(repositoryId));
     }
 
     private async Task<ToolExecutionResult> GetPreviewStatusAsync(string worktreePath)

@@ -19,7 +19,10 @@ public sealed class StartNodeExecutor : INodeExecutor
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
         var wi = await workItems.GetWorkItemAsync(ctx.Run.WorkItemId);
-        if (wi is null || wi.RunRepositoryId is null)
+        // The run pinned its repository at creation; re-pointing the item since
+        // only reaches its next run. A run from before runs pinned one falls back.
+        var repositoryId = ctx.Run.RepositoryId ?? wi?.RepositoryId;
+        if (wi is null || repositoryId is null)
         {
             yield return new NodeOutcome.NodeStarting("{\"nodeType\":\"Start\"}");
             yield return new NodeOutcome.Fail(EdgeType.OnFailure,
@@ -27,7 +30,7 @@ public sealed class StartNodeExecutor : INodeExecutor
             yield break;
         }
 
-        var repo = await providerStore.GetRepositoryByIdAsync(wi.RunRepositoryId.Value);
+        var repo = await providerStore.GetRepositoryByIdAsync(repositoryId.Value);
         if (repo is null)
         {
             yield return new NodeOutcome.NodeStarting("{\"nodeType\":\"Start\"}");

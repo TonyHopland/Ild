@@ -56,8 +56,10 @@ public sealed class WorkItemView
     /// <summary>
     /// The repository the current run was pinned to at creation, or
     /// <see cref="RepositoryId"/> when there is no current run or it pinned
-    /// none. Everything acting on the run's worktree, branch, preview or PR
-    /// reads this, so re-pointing the item never moves a run already under way.
+    /// none. Whatever acts on this view's <see cref="WorktreePath"/>, branch,
+    /// preview or PR reads this, so re-pointing the item never moves a run
+    /// already under way. Code that holds a specific <c>LoopRun</c> reads that
+    /// run's own pin instead, since it need not be the current one.
     /// </summary>
     public Guid? RunRepositoryId
     {
