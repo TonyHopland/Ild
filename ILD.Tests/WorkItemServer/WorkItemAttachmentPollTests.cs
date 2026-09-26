@@ -69,8 +69,8 @@ public class WorkItemAttachmentPollTests : IAsyncLifetime
         _commands.Clear();
         var poll = await _service.PollAsync(new[] { active.Id });
 
-        Assert.Empty(Assert.Single(poll.ActiveItems.Where(i => i.Id == active.Id)).Attachments);
-        Assert.Empty(Assert.Single(poll.ReadyItems.Where(i => i.Id == ready.Id)).Attachments);
+        Assert.Empty(Assert.Single(poll.ActiveItems, i => i.Id == active.Id).Attachments);
+        Assert.Empty(Assert.Single(poll.ReadyItems, i => i.Id == ready.Id).Attachments);
         Assert.DoesNotContain(_commands.Executed, sql => sql.Contains("Attachment", StringComparison.OrdinalIgnoreCase));
     }
 

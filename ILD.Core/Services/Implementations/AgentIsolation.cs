@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -973,7 +974,7 @@ public static class AgentIsolation
         {
             ProtectFromAgentWrites(_directory, _agentUser);
 
-            if (_restoreMode is not { } mode)
+            if (_restoreMode is not { } mode || !OperatingSystem.IsLinux())
                 return;
 
             // Restore the captured mode, grant the agent group read+execute (it is
@@ -1002,6 +1003,7 @@ public static class AgentIsolation
         }
     }
 
+    [UnsupportedOSPlatform("windows")]
     private static void TrySetMode(string path, UnixFileMode mode)
     {
         try { File.SetUnixFileMode(path, mode); }
@@ -1026,6 +1028,7 @@ public static class AgentIsolation
         catch (UnauthorizedAccessException) { /* best effort */ }
     }
 
+    [UnsupportedOSPlatform("windows")]
     private static void StripSharedWriteRecursive(DirectoryInfo directory)
     {
         foreach (var entry in directory.EnumerateFileSystemInfos())
@@ -1045,6 +1048,7 @@ public static class AgentIsolation
         StripSharedWrite(directory.FullName);
     }
 
+    [UnsupportedOSPlatform("windows")]
     private static void StripSharedWrite(string path)
     {
         try

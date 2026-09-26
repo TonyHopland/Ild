@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.Versioning;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -149,6 +150,7 @@ public class ManagedAgentServiceTests : IDisposable
     /// skipped — their mode is always 0777 and cannot be changed) that is still
     /// writable by the shared group or by others.
     /// </summary>
+    [UnsupportedOSPlatform("windows")]
     private static List<string> AgentWritableEntries(string root)
     {
         var offenders = new List<string>();
@@ -221,6 +223,7 @@ public class ManagedAgentServiceTests : IDisposable
     /// Symlinks are skipped exactly as the entrypoint skips them (mode 0777 always,
     /// and chmod cannot change it).
     /// </summary>
+    [UnsupportedOSPlatform("windows")]
     private static List<string> SharedReadOnlyDriftEntries(string root)
     {
         var drift = new List<string>();

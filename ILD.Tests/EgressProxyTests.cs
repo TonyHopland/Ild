@@ -579,7 +579,7 @@ public sealed class EgressProxyParseTests
         var head = Forwarded("GET http://api.example.com:8080/v1/things?x=1 HTTP/1.1\r\nAccept: */*\r\n\r\n");
 
         Assert.StartsWith("GET /v1/things?x=1 HTTP/1.1\r\nHost: api.example.com:8080\r\n", head);
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: ").Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: "));
         Assert.EndsWith("Connection: close\r\n\r\n", head);
     }
 
@@ -594,7 +594,7 @@ public sealed class EgressProxyParseTests
     {
         var head = Forwarded("GET http://api.example.com/ HTTP/1.1\r\nHost: api.example.com\r\nProxy-Connection: keep-alive\r\n\r\n");
 
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: ").Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: "));
         Assert.DoesNotContain("Proxy-Connection", head);
     }
 

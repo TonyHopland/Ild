@@ -114,9 +114,9 @@ public class AgentIsolationSpawnSiteTests
         // Every CLI adapter carries `throw new InvalidOperationException("Process.Start
         // returned null")`, so a scan that reads string literals reports six phantom
         // sites and gets muted.
-        Assert.False(SpawnSite.IsMatch(Redact("""
+        Assert.DoesNotMatch(SpawnSite, Redact("""
             var p = proc ?? throw new InvalidOperationException("Process.Start returned null");
-            """)));
+            """));
     }
 
     [Theory]

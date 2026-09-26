@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.Versioning;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.RemoteProviders;
@@ -646,6 +647,7 @@ public class ConnectionTesterTests : IDisposable
     /// <paramref name="dir"/>: it grants group or other write, and every ancestor
     /// lets group or other traverse to it.
     /// </summary>
+    [UnsupportedOSPlatform("windows")]
     private static bool OthersCanWriteInto(string dir)
     {
         const UnixFileMode othersWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;
