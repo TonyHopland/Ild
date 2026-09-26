@@ -96,6 +96,16 @@ expect_reject "private IP at the top of 172.16/12" "ILD.Tests/EgressTests.cs" 2 
   "$allowed_preamble
 Allow(\"172.31.255.254\");"
 
+# A tree the guard cannot list must fail, never pass as clean after scanning nothing.
+not_a_repo="$work/not-a-repo"
+mkdir -p "$not_a_repo"
+printf '%s\n' 'See http://build.acme-corp.io/x' > "$not_a_repo/notes.txt"
+if "$script" "$not_a_repo" >/dev/null 2>&1; then
+  fail "a directory that is not a git repository -> expected non-zero exit, got success"
+else
+  pass "a directory that is not a git repository -> refused"
+fi
+
 good="$(make_fixture good "ILD.Tests/GoodTests.cs" \
 '// Only reserved, documentation, loopback and allowlisted public hosts.
 var a = "https://git.example.com/team/repo.git";
