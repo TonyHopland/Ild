@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Agents can propose edits to any work item, and a proposed edit is applied only when you approve it.**
+
 - **Repositories and remote providers have a Test button that tells you whether the server can't be reached, the API key is missing or wrong, or something else is failing.**
 
 ### Changed
