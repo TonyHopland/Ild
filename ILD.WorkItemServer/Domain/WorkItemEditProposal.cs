@@ -66,6 +66,20 @@ public class WorkItemEditProposal
 
     public Guid? CreatedByChatSessionId { get; set; }
 
+    /// <summary>
+    /// The node execution of <see cref="CreatedByLoopRunId"/> that was running
+    /// when the proposal was made. Only on a loop proposal; null when no step
+    /// was running. Written once, at create.
+    /// </summary>
+    public Guid? CreatedByRunNodeId { get; set; }
+
+    /// <summary>
+    /// The sequence of the reply, in <see cref="CreatedByChatSessionId"/>, that
+    /// the proposal follows. Only on a chat proposal; null when the chat had no
+    /// messages. Written once, at create.
+    /// </summary>
+    public int? ChatReplySequence { get; set; }
+
     public WorkItemEditProposalStatus Status { get; set; } = WorkItemEditProposalStatus.Pending;
 
     [MaxLength(2000)]

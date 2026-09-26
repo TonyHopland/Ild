@@ -206,6 +206,8 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Rationale = req.Rationale,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
+            CreatedByRunNodeId = req.CreatedByRunNodeId,
+            ChatReplySequence = req.ChatReplySequence,
         }, ct);
         return new ILD.Core.Services.Remote.EditProposalCreateResult(
             (ILD.Core.Services.Remote.EditProposalCreateOutcome)(int)result.Outcome,
@@ -254,6 +256,8 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         Rationale = dto.Rationale,
         CreatedByLoopRunId = dto.CreatedByLoopRunId,
         CreatedByChatSessionId = dto.CreatedByChatSessionId,
+        CreatedByRunNodeId = dto.CreatedByRunNodeId,
+        ChatReplySequence = dto.ChatReplySequence,
         RejectionReason = dto.RejectionReason,
         CreatedAt = dto.CreatedAt,
         DecidedAt = dto.DecidedAt,

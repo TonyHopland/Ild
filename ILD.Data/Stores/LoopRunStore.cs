@@ -223,14 +223,17 @@ public class LoopRunStore : ILoopRunStore
             .OrderBy(v => v.Name)
             .ToListAsync();
 
-    public async Task SetVariableAsync(Guid runId, string name, string value)
-    {
-        var runningNodeId = await _db.LoopRunNodes
+    public Task<Guid?> GetRunningNodeIdAsync(Guid runId)
+        => _db.LoopRunNodes
             .AsNoTracking()
             .Where(rn => rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.Running)
             .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
             .Select(rn => (Guid?)rn.Id)
             .FirstOrDefaultAsync();
+
+    public async Task SetVariableAsync(Guid runId, string name, string value)
+    {
+        var runningNodeId = await GetRunningNodeIdAsync(runId);
 
         // The history row must name the value this write actually replaced, so
         // the replace is a compare-and-swap on the value read: a concurrent write

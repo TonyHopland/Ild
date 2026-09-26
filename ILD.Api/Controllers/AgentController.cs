@@ -1251,6 +1251,8 @@ public class AgentController : ControllerBase
                 Rationale = request.Rationale,
                 CreatedByLoopRunId = runId,
                 CreatedByChatSessionId = chatSessionId,
+                CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
+                ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
             }, cancellationToken);
         }
         catch (HttpRequestException ex)
@@ -1318,6 +1320,22 @@ public class AgentController : ControllerBase
         {
             error = $"A proposal needs the proposing session. Send it in the {RunIdHeader} or {ChatSessionIdHeader} header.",
         }));
+    }
+
+    /// <summary>
+    /// The sequence of the reply a chat proposal follows. A chat persists the
+    /// user's message before its turn starts, so a newest user message means
+    /// the proposal comes from that turn, whose reply takes the next sequence.
+    /// </summary>
+    private async Task<int?> ResolveChatReplySequenceAsync(Guid chatSessionId)
+    {
+        var newest = await _db.ChatMessages.AsNoTracking()
+            .Where(m => m.ChatSessionId == chatSessionId)
+            .OrderByDescending(m => m.Sequence)
+            .Select(m => new { m.Role, m.Sequence })
+            .FirstOrDefaultAsync();
+        if (newest is null) return null;
+        return newest.Role == "user" ? newest.Sequence + 1 : newest.Sequence;
     }
 
     /// <summary>
