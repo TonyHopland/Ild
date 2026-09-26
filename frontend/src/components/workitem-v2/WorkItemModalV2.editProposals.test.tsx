@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, fireEvent, cleanup, act, waitFor, within } from "@testing-library/react";
+import { render, fireEvent, cleanup, act, waitFor, within, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import {
@@ -301,6 +301,7 @@ describe("edit proposals in the detail view", () => {
       "Agent's later title",
     ];
     await waitFor(() => expect(action().textContent).toContain("Agent's sharper title"));
+    fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
 
     fireEvent.click(
       within(cardOf("Agent's sharper title")).getByRole("button", { name: "Approve" }),
@@ -338,6 +339,7 @@ describe("edit proposals in the detail view", () => {
       }),
     );
     await waitFor(() => expect(action().textContent).toContain("Agent's sharper title"));
+    fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
 
     fireEvent.click(
       within(cardOf("Agent's sharper title")).getByRole("button", { name: "Approve" }),
