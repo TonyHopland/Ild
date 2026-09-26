@@ -13,7 +13,7 @@
          carry GHSA-v5pm-xwqc-g5wc, and Microsoft.AspNetCore.OpenApi 10 requires
          [2.12.0, 3.0.0), which rules out 3.x. -->
     <PackageReference Include="Microsoft.OpenApi" Version="2.12.2" />
-    <PackageReference Include="Porta.Pty" Version="1.0.7" />
+    <PackageReference Include="Porta.Pty" Version="2.2.2" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
