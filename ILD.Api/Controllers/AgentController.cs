@@ -29,6 +29,10 @@ namespace ILD.Api.Controllers;
 ///    item's <c>CreatedByLoopRunId</c> (or <c>CreatedByChatSessionId</c>)
 ///    must match the caller's session; pre-existing items and items from
 ///    other sessions are off-limits (403),
+///  - propose an edit to ANY work item (a Work Item Edit Proposal, ADR-0022)
+///    and read back what became of it. Proposing applies nothing: a human
+///    approves or rejects each proposal on the human-only
+///    <c>WorkItemsController</c>, and no route here can decide one,
 ///  - read and write per-run loop variables (scoped by the X-ILD-Run-Id
 ///    header) so one node can hand off state to a later node — the values
 ///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>,
@@ -1160,7 +1164,7 @@ public class AgentController : ControllerBase
         var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
         if (!CallerOwns(wi))
-            return StatusCode(403, new { error = "You can only edit work items your own session created." });
+            return StatusCode(403, new { error = "You can only edit work items your own session created. To suggest an edit to this one, use propose_workitem_edit: a human approves or rejects it." });
 
         if (BranchNameRules.Normalize(request.BranchNameOverride) is { } branchName
             && BranchNameRules.Validate(branchName) is { } branchError)
@@ -1200,6 +1204,120 @@ public class AgentController : ControllerBase
         var ok = await _workItems.DeleteAsync(id);
         if (!ok) return NotFound();
         return NoContent();
+    }
+
+    // -- Work Item Edit Proposals ---------------------------------------------
+    //
+    // The way an agent suggests an edit to an item its session did not create.
+    // Proposing applies nothing; approving and rejecting are human-only and live
+    // on WorkItemsController, so nothing on this surface can decide a proposal.
+
+    [HttpPost("workitems/{id}/edit-proposals")]
+    public async Task<IActionResult> ProposeWorkItemEdit(
+        string id, [FromBody] AgentWorkItemEditProposalRequest request, CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        if (sessionError is not null)
+            return sessionError;
+
+        if (request.Title is null && request.Description is null && request.Tags is null
+            && request.BranchNameOverride is null && request.BaseBranchOverride is null)
+            return BadRequest(new { error = "Propose at least one of title, description, tags, branchNameOverride or baseBranchOverride." });
+        if (request.Title is not null && string.IsNullOrWhiteSpace(request.Title))
+            return BadRequest(new { error = "A proposed title cannot be blank." });
+
+        // The same branch rules update_workitem applies, so a proposal that could
+        // never be applied is refused now rather than when a human approves it.
+        if (BranchNameRules.Normalize(request.BranchNameOverride) is { } branchName
+            && BranchNameRules.Validate(branchName) is { } branchError)
+            return BadRequest(new { error = branchError });
+        if (BranchNameRules.Normalize(request.BaseBranchOverride) is { } baseBranch
+            && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
+            return BadRequest(new { error = baseError });
+
+        EditProposalCreateResult result;
+        try
+        {
+            result = await _workItems.ProposeEditAsync(id, new RemoteCreateEditProposalRequest
+            {
+                Title = request.Title,
+                Description = request.Description,
+                Tags = request.Tags,
+                BranchNameOverride = request.BranchNameOverride,
+                BaseBranchOverride = request.BaseBranchOverride,
+                Rationale = request.Rationale,
+                CreatedByLoopRunId = runId,
+                CreatedByChatSessionId = chatSessionId,
+            }, cancellationToken);
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
+
+        switch (result.Outcome)
+        {
+            case EditProposalCreateOutcome.Created:
+                if (chatSessionId is { } chat)
+                    await _chatNotifier.EditProposalsChangedAsync(chat);
+                return CreatedAtAction(nameof(ListWorkItemEditProposals), new { id }, new
+                {
+                    id = result.Proposal!.Id,
+                    workItemId = id,
+                    status = result.Proposal.Status.ToString(),
+                });
+            case EditProposalCreateOutcome.NotFound:
+                return NotFound();
+            case EditProposalCreateOutcome.TooManyPending:
+                return Conflict(new { error = result.Error });
+            default:
+                return BadRequest(new { error = result.Error });
+        }
+    }
+
+    /// <summary>
+    /// What became of the proposals on a work item — how an agent learns a
+    /// rejection's reason, which for a loop run has no next chat turn to carry it.
+    /// </summary>
+    [HttpGet("workitems/{id}/edit-proposals")]
+    public async Task<IActionResult> ListWorkItemEditProposals(string id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var proposals = await _workItems.ListEditProposalsAsync(id, cancellationToken);
+            return proposals == null ? NotFound() : Ok(proposals);
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// The session a proposal is stamped with, resolved the way create-time
+    /// stamping is — the run id wins, and never both — but required to exist:
+    /// the decision is fed back to that session, so a proposal from nowhere
+    /// would have nowhere to go.
+    /// </summary>
+    private async Task<(Guid? RunId, Guid? ChatSessionId, IActionResult? Error)> ResolveProposingSessionAsync()
+    {
+        if (TryResolveRunId(out var runId))
+            return await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == runId)
+                ? (runId, null, null)
+                : (null, null, StatusCode(403, new { error = "Unknown loop run." }));
+
+        if (TryResolveChatSessionId(out var chatSessionId))
+            return await _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == chatSessionId)
+                ? (null, chatSessionId, null)
+                : (null, null, StatusCode(403, new { error = "Unknown or inactive chat session." }));
+
+        return (null, null, BadRequest(new
+        {
+            error = $"A proposal needs the proposing session. Send it in the {RunIdHeader} or {ChatSessionIdHeader} header.",
+        }));
     }
 
     /// <summary>

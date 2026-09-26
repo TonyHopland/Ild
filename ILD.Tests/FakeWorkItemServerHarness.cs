@@ -20,6 +20,7 @@ public sealed class FakeWorkItemServerHarness : IDisposable
     public WorkItemServerDbContext ServerDb { get; }
     public IWorkItemService Service { get; }
     public IWorkItemAttachmentService Attachments { get; }
+    public IWorkItemEditProposalService EditProposals { get; }
     public IWorkItemServerClient Client { get; }
     public IWorkItemServerOptionsResolver Options { get; } = new StubWorkItemServerOptionsResolver();
 
@@ -39,7 +40,8 @@ public sealed class FakeWorkItemServerHarness : IDisposable
         Service = new WorkItemService(ServerDb, clock ?? TimeProvider.System);
         Attachments = new WorkItemAttachmentService(
             ServerDb, limits ?? AttachmentLimits.FromEnvironment(), clock ?? TimeProvider.System);
-        Client = new FakeWorkItemServerClient(Service, Attachments);
+        EditProposals = new WorkItemEditProposalService(ServerDb, Service, clock ?? TimeProvider.System);
+        Client = new FakeWorkItemServerClient(Service, Attachments, EditProposals);
     }
 
     public void Dispose()

@@ -98,6 +98,8 @@ public sealed class ChatServiceTests : IDisposable
             LoopUpdates.Add(document);
             return Task.CompletedTask;
         }
+
+        public Task EditProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
     }
 
     private static IAgentAdapterRegistry RegistryFor(IAgentAdapter adapter)

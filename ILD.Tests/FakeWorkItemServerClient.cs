@@ -15,11 +15,13 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
 {
     private readonly IWorkItemService _svc;
     private readonly IWorkItemAttachmentService _attachments;
+    private readonly IWorkItemEditProposalService _proposals;
 
-    public FakeWorkItemServerClient(IWorkItemService svc, IWorkItemAttachmentService attachments)
+    public FakeWorkItemServerClient(IWorkItemService svc, IWorkItemAttachmentService attachments, IWorkItemEditProposalService proposals)
     {
         _svc = svc;
         _attachments = attachments;
+        _proposals = proposals;
     }
 
     private static ILD.WorkItemServer.Domain.WorkItemStatus Map(RemoteWorkItemStatus s) => (ILD.WorkItemServer.Domain.WorkItemStatus)(int)s;
@@ -54,6 +56,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         RepositoryId = dto.RepositoryId,
         BranchNameOverride = dto.BranchNameOverride,
         BaseBranchOverride = dto.BaseBranchOverride,
+        PendingEditProposalCount = dto.PendingEditProposalCount,
     };
 
     public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, CancellationToken ct = default)
@@ -184,6 +187,86 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
 
     private static RemoteWorkItemAttachment ToRemote(WorkItemAttachmentDto dto)
         => new(dto.Id, dto.FileName, dto.ContentType, dto.SizeBytes, dto.CreatedAt);
+
+
+    /// <summary>
+    /// Mirrors the HTTP client's mapping of the server's answers: 404 for an
+    /// unknown item, 400 for an invalid proposal and 409 past the pending cap,
+    /// each carrying the server's reason.
+    /// </summary>
+    public async Task<ILD.Core.Services.Remote.EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, CancellationToken ct = default)
+    {
+        var result = await _proposals.CreateAsync(workItemId, new CreateEditProposalRequest
+        {
+            Title = req.Title,
+            Description = req.Description,
+            Tags = req.Tags?.ToList(),
+            BranchNameOverride = req.BranchNameOverride,
+            BaseBranchOverride = req.BaseBranchOverride,
+            Rationale = req.Rationale,
+            CreatedByLoopRunId = req.CreatedByLoopRunId,
+            CreatedByChatSessionId = req.CreatedByChatSessionId,
+        }, ct);
+        return new ILD.Core.Services.Remote.EditProposalCreateResult(
+            (ILD.Core.Services.Remote.EditProposalCreateOutcome)(int)result.Outcome,
+            result.Error,
+            result.Proposal is null ? null : ToRemote(result.Proposal));
+    }
+
+    public async Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default)
+        => (await _proposals.ListForItemAsync(workItemId, ct))?.Select(ToRemote).ToList();
+
+    public async Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(WorkItemServerOptions opts, RemoteEditProposalQuery query, CancellationToken ct = default)
+        => (await _proposals.ListAsync(
+                query.Status is { } status ? (WorkItemEditProposalStatus)(int)status : null,
+                query.CreatedByChatSessionId,
+                query.UndeliveredOnly,
+                ct))
+            .Select(ToRemote).ToList();
+
+    public async Task<ILD.Core.Services.Remote.EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, CancellationToken ct = default)
+        => ToRemote(await _proposals.ApproveAsync(workItemId, proposalId, ct));
+
+    /// <summary>The server refuses an over-long reason with a 400, which the HTTP client throws on.</summary>
+    public async Task<ILD.Core.Services.Remote.EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
+    {
+        if (reason?.Trim().Length > WorkItemEditProposalService.MaxRejectionReasonLength)
+            throw new HttpRequestException("The reject was refused: 400 Bad Request.", null, System.Net.HttpStatusCode.BadRequest);
+        return ToRemote(await _proposals.RejectAsync(workItemId, proposalId, reason, ct));
+    }
+
+    public Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, CancellationToken ct = default)
+        => _proposals.MarkDecisionsDeliveredAsync(proposalIds, ct);
+
+    private static ILD.Core.Services.Remote.EditProposalDecisionResult ToRemote(ILD.WorkItemServer.Services.EditProposalDecisionResult result)
+        => new(
+            (ILD.Core.Services.Remote.EditProposalDecisionOutcome)(int)result.Outcome,
+            result.Proposal is null ? null : ToRemote(result.Proposal),
+            result.WorkItem is null ? null : ToRemote(result.WorkItem));
+
+    private static RemoteWorkItemEditProposal ToRemote(WorkItemEditProposalDto dto) => new()
+    {
+        Id = dto.Id,
+        WorkItemId = dto.WorkItemId,
+        Status = (RemoteEditProposalStatus)(int)dto.Status,
+        Proposed = ToRemote(dto.Proposed),
+        Snapshot = ToRemote(dto.Snapshot),
+        Rationale = dto.Rationale,
+        CreatedByLoopRunId = dto.CreatedByLoopRunId,
+        CreatedByChatSessionId = dto.CreatedByChatSessionId,
+        RejectionReason = dto.RejectionReason,
+        CreatedAt = dto.CreatedAt,
+        DecidedAt = dto.DecidedAt,
+    };
+
+    private static RemoteEditProposalFields ToRemote(EditProposalFieldsDto dto) => new()
+    {
+        Title = dto.Title,
+        Description = dto.Description,
+        Tags = dto.Tags,
+        BranchNameOverride = dto.BranchNameOverride,
+        BaseBranchOverride = dto.BaseBranchOverride,
+    };
 
     public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
     {

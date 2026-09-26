@@ -9,25 +9,33 @@ import type { ChatHubEvents } from "../test-support";
 // them, and each of them can land on a chat that has since moved on. These are
 // the paths ChatBubble.test.tsx does not reach — a request that fails, and an
 // answer that arrives for a chat the user has already left.
-const { handlers, invoke, connection, chatService, aiProviderService, getOpenLoopDocument } =
-  vi.hoisted(() => ({
-    handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-    invoke: vi.fn(() => Promise.resolve()),
-    // The bubble only reads the connection state while rendering, so a test
-    // drops and restores it by setting this and re-rendering.
-    connection: { state: "connected" as string },
-    chatService: {
-      listHistory: vi.fn(),
-      getById: vi.fn(),
-      start: vi.fn(),
-      sendMessage: vi.fn(),
-      interrupt: vi.fn(),
-      deleteOne: vi.fn(),
-      deleteAll: vi.fn(),
-    },
-    aiProviderService: { getAll: vi.fn() },
-    getOpenLoopDocument: vi.fn(),
-  }));
+const {
+  handlers,
+  invoke,
+  connection,
+  chatService,
+  aiProviderService,
+  workItemService,
+  getOpenLoopDocument,
+} = vi.hoisted(() => ({
+  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
+  invoke: vi.fn(() => Promise.resolve()),
+  // The bubble only reads the connection state while rendering, so a test
+  // drops and restores it by setting this and re-rendering.
+  connection: { state: "connected" as string },
+  chatService: {
+    listHistory: vi.fn(),
+    getById: vi.fn(),
+    start: vi.fn(),
+    sendMessage: vi.fn(),
+    interrupt: vi.fn(),
+    deleteOne: vi.fn(),
+    deleteAll: vi.fn(),
+  },
+  aiProviderService: { getAll: vi.fn() },
+  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
+  getOpenLoopDocument: vi.fn(),
+}));
 
 vi.mock("../hooks/useSignalR", () => ({
   useSignalR: () => ({
@@ -42,7 +50,7 @@ vi.mock("../hooks/useSignalR", () => ({
   }),
 }));
 
-vi.mock("../services/auth", () => ({ chatService, aiProviderService }));
+vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 

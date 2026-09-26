@@ -96,6 +96,9 @@ public sealed class WorkItemView
     /// from the attachment routes, so no read of the item ever carries them.
     /// </summary>
     public IReadOnlyList<RemoteWorkItemAttachment> Attachments { get; set; } = Array.Empty<RemoteWorkItemAttachment>();
+
+    /// <summary>How many agent-proposed edits to this item wait for a human to approve or reject them.</summary>
+    public int PendingEditProposalCount { get; set; }
 }
 
 /// <summary>

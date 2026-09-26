@@ -37,6 +37,10 @@ public class SignalRWorkItemNotifier : IWorkItemNotifier
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("WorkItemRunProgressed", new WorkItemRunProgressedPayload(workItemId));
 
+    public Task WorkItemEditProposalsChangedAsync(string workItemId)
+        => _hub.Clients.Group(WorkItemGroup)
+            .SendAsync("WorkItemEditProposalsChanged", new WorkItemEditProposalsChangedPayload(workItemId));
+
     public Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent)
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("SchedulerStateChanged", new SchedulerStateChangedPayload(isPaused, maxConcurrent));

@@ -84,6 +84,8 @@ export default function WorkItemCard({
   // lands in Done. The count, not just a marker: a retried item opens one PR per
   // run (ADR-0008) and the board should say how many there were (WI-203).
   const prCount = workItem.pullRequests?.length ?? 0;
+  const proposalCount = workItem.pendingEditProposalCount ?? 0;
+  const proposalLabel = proposalCount === 1 ? "1 proposed edit" : `${proposalCount} proposed edits`;
 
   return (
     <div
@@ -125,6 +127,11 @@ export default function WorkItemCard({
       {prCount > 0 && (
         <div className="work-item-pr-history" title="Pull requests opened for this item">
           {prCount === 1 ? "1 PR" : `${prCount} PRs`}
+        </div>
+      )}
+      {proposalCount > 0 && (
+        <div className="work-item-edit-proposals" title={proposalLabel}>
+          {proposalLabel}
         </div>
       )}
       {showRunningMeta && (
@@ -216,6 +223,20 @@ export default function WorkItemCard({
           border-radius: 0.25rem;
           background-color: #1a2744;
           color: #60a5fa;
+        }
+
+        .work-item-edit-proposals {
+          display: inline-block;
+          font-size: 0.675rem;
+          padding: 0.1rem 0.4rem;
+          margin-bottom: 0.375rem;
+          border-radius: 0.25rem;
+          background-color: #2d2a1a;
+          color: #fbbf24;
+        }
+
+        .work-item-pr-history + .work-item-edit-proposals {
+          margin-left: 0.25rem;
         }
 
         .work-item-running-meta {

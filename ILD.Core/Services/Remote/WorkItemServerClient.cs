@@ -56,6 +56,34 @@ public interface IWorkItemServerClient
     Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default);
 
     Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Propose an edit to a work item. The server validates it and caps the
+    /// pending proposals per item, and a refusal comes back as an outcome
+    /// carrying its reason — see <see cref="EditProposalCreateResult"/>.
+    /// </summary>
+    Task<EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, CancellationToken ct = default);
+
+    /// <summary>The work item's proposals, newest first. Null when there is no such work item.</summary>
+    Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default);
+
+    /// <summary>Proposals across work items, newest first.</summary>
+    Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(WorkItemServerOptions opts, RemoteEditProposalQuery query, CancellationToken ct = default);
+
+    /// <summary>
+    /// Apply a pending proposal if the item's editable fields still equal its
+    /// snapshot, atomically on the server; otherwise it goes Stale and nothing
+    /// is applied. A refusal is an outcome, not an exception.
+    /// </summary>
+    Task<EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, CancellationToken ct = default);
+
+    Task<EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, CancellationToken ct = default);
+
+    /// <summary>
+    /// Record that the proposing chat has been told these decisions. Ids of
+    /// proposals still pending are ignored.
+    /// </summary>
+    Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, CancellationToken ct = default);
 }
 
 public sealed class WorkItemServerClient : IWorkItemServerClient
@@ -240,7 +268,7 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
             return new AttachmentUploadResult(AttachmentUploadOutcome.NotFound, "No such work item.", Array.Empty<RemoteWorkItemAttachment>());
         if (resp.StatusCode == HttpStatusCode.BadRequest)
             return new AttachmentUploadResult(
-                AttachmentUploadOutcome.Rejected, await ReadErrorAsync(resp, ct), Array.Empty<RemoteWorkItemAttachment>());
+                AttachmentUploadOutcome.Rejected, await ReadErrorAsync(resp, "The upload was refused.", ct), Array.Empty<RemoteWorkItemAttachment>());
 
         EnsureSuccess(resp, msg);
         return new AttachmentUploadResult(
@@ -277,6 +305,96 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return true;
     }
 
+    public async Task<EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Post, EditProposalsPath(workItemId));
+        msg.Content = JsonContent.Create(req, options: JsonOpts);
+        using var resp = await _http.SendAsync(msg, ct);
+        switch (resp.StatusCode)
+        {
+            case HttpStatusCode.NotFound:
+                return new EditProposalCreateResult(EditProposalCreateOutcome.NotFound, "No such work item.", null);
+            case HttpStatusCode.BadRequest:
+                return new EditProposalCreateResult(
+                    EditProposalCreateOutcome.Invalid, await ReadErrorAsync(resp, "The proposal was refused.", ct), null);
+            case HttpStatusCode.Conflict:
+                return new EditProposalCreateResult(
+                    EditProposalCreateOutcome.TooManyPending, await ReadErrorAsync(resp, "The work item has too many pending proposals.", ct), null);
+        }
+        EnsureSuccess(resp, msg);
+        return new EditProposalCreateResult(
+            EditProposalCreateOutcome.Created,
+            null,
+            await resp.Content.ReadFromJsonAsync<RemoteWorkItemEditProposal>(JsonOpts, ct));
+    }
+
+    public async Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Get, EditProposalsPath(workItemId));
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        EnsureSuccess(resp, msg);
+        return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItemEditProposal>>(JsonOpts, ct))!;
+    }
+
+    public async Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(WorkItemServerOptions opts, RemoteEditProposalQuery query, CancellationToken ct = default)
+    {
+        var qs = new List<string>();
+        if (query.Status is { } status) qs.Add($"status={(int)status}");
+        if (query.CreatedByChatSessionId is { } chat) qs.Add($"createdByChatSessionId={chat}");
+        if (query.UndeliveredOnly) qs.Add("undelivered=true");
+        var suffix = qs.Count == 0 ? string.Empty : "?" + string.Join('&', qs);
+
+        var msg = Build(opts, HttpMethod.Get, $"/edit-proposals{suffix}");
+        using var resp = await _http.SendAsync(msg, ct);
+        EnsureSuccess(resp, msg);
+        return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItemEditProposal>>(JsonOpts, ct))!;
+    }
+
+    public Task<EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, CancellationToken ct = default)
+        => DecideEditProposalAsync(opts, workItemId, proposalId, "approve", body: null, ct);
+
+    public Task<EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
+        => DecideEditProposalAsync(opts, workItemId, proposalId, "reject", new { reason }, ct);
+
+    /// <summary>
+    /// The server answers a refused decision with a 409 whose body says why and
+    /// carries the proposal as it stands, so the refusal travels back as an
+    /// outcome rather than as the exception an outage is.
+    /// </summary>
+    private async Task<EditProposalDecisionResult> DecideEditProposalAsync(
+        WorkItemServerOptions opts, string workItemId, Guid proposalId, string action, object? body, CancellationToken ct)
+    {
+        var msg = Build(opts, HttpMethod.Post, $"{EditProposalsPath(workItemId)}/{proposalId}/{action}");
+        msg.Content = JsonContent.Create(body ?? new { }, options: JsonOpts);
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound)
+            return new EditProposalDecisionResult(EditProposalDecisionOutcome.NotFound, null, null);
+        if (resp.StatusCode != HttpStatusCode.Conflict)
+            EnsureSuccess(resp, msg);
+
+        var decision = (await resp.Content.ReadFromJsonAsync<EditProposalDecisionBody>(JsonOpts, ct))!;
+        return new EditProposalDecisionResult(decision.Outcome, decision.Proposal, decision.WorkItem);
+    }
+
+    private sealed class EditProposalDecisionBody
+    {
+        public EditProposalDecisionOutcome Outcome { get; set; }
+        public RemoteWorkItemEditProposal? Proposal { get; set; }
+        public RemoteWorkItem? WorkItem { get; set; }
+    }
+
+    public async Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Post, "/edit-proposals/delivered");
+        msg.Content = JsonContent.Create(new { ids = proposalIds }, options: JsonOpts);
+        using var resp = await _http.SendAsync(msg, ct);
+        EnsureSuccess(resp, msg);
+    }
+
+    private static string EditProposalsPath(string workItemId)
+        => $"/workitems/{Uri.EscapeDataString(workItemId)}/edit-proposals";
+
     /// <summary>The form field the server's attachment endpoint reads files from.</summary>
     private const string AttachmentFieldName = "files";
 
@@ -299,11 +417,11 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         => $"/workitems/{Uri.EscapeDataString(workItemId)}/attachments";
 
     /// <summary>
-    /// The <c>{ error }</c> a refusal carries, so the reason a file was turned
-    /// away survives the trip back to whoever tried to upload it. Falls back to
+    /// The <c>{ error }</c> a refusal carries, so the reason a file or a proposal
+    /// was turned away survives the trip back to whoever sent it. Falls back to
     /// the raw body, which is all an older server might send.
     /// </summary>
-    private static async Task<string> ReadErrorAsync(HttpResponseMessage resp, CancellationToken ct)
+    private static async Task<string> ReadErrorAsync(HttpResponseMessage resp, string fallback, CancellationToken ct)
     {
         var raw = await resp.Content.ReadAsStringAsync(ct);
         try
@@ -313,6 +431,6 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
                 return message;
         }
         catch (JsonException) { /* not JSON — the raw body is the best answer there is */ }
-        return string.IsNullOrWhiteSpace(raw) ? "The upload was refused." : raw;
+        return string.IsNullOrWhiteSpace(raw) ? fallback : raw;
     }
 }

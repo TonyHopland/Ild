@@ -153,7 +153,98 @@ namespace ILD.WorkItemServer.Migrations
                     b.ToTable("WorkItemAttachments");
                 });
 
+            modelBuilder.Entity("ILD.WorkItemServer.Domain.WorkItemEditProposal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByLoopRunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DecisionDeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ProposedBaseBranchOverride")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("ProposedBranchNameOverride")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("ProposedDescription")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ProposedTagsJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ProposedTitle")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("Rationale")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("SnapshotBaseBranchOverride")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("SnapshotBranchNameOverride")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("SnapshotDescription")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SnapshotTagsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("SnapshotTitle")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("WorkItemId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByChatSessionId");
+
+                    b.HasIndex("WorkItemId", "Status");
+
+                    b.ToTable("WorkItemEditProposals");
+                });
+
             modelBuilder.Entity("ILD.WorkItemServer.Domain.WorkItemAttachment", b =>
+                {
+                    b.HasOne("ILD.WorkItemServer.Domain.WorkItem", null)
+                        .WithMany()
+                        .HasForeignKey("WorkItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ILD.WorkItemServer.Domain.WorkItemEditProposal", b =>
                 {
                     b.HasOne("ILD.WorkItemServer.Domain.WorkItem", null)
                         .WithMany()

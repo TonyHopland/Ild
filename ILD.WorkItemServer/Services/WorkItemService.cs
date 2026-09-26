@@ -102,19 +102,27 @@ public sealed class WorkItemService : IWorkItemService
     public async Task<WorkItemDto?> GetAsync(string id, CancellationToken ct = default)
     {
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
-        return w == null ? null : await WithAttachmentsAsync(w, ct);
+        return w == null ? null : (await WithDetailsAsync(new[] { w }, ct))[0];
     }
 
     /// <summary>
-    /// The item as a single read answers it: one extra projected query for the
-    /// attachment metadata, never the bytes. Deliberately not used by
+    /// The items as a read answers them: two extra projected queries for any
+    /// number of items, for the attachment metadata (never the bytes) and the
+    /// pending edit proposal counts. Deliberately not used by
     /// <see cref="PollAsync"/>, whose heartbeat carries every active and ready
-    /// item and must not grow a query per item.
+    /// item and must stay bodiless.
     /// </summary>
-    private async Task<WorkItemDto> WithAttachmentsAsync(WorkItem w, CancellationToken ct)
+    private async Task<IReadOnlyList<WorkItemDto>> WithDetailsAsync(IReadOnlyList<WorkItem> items, CancellationToken ct)
     {
-        var attachments = await AttachmentMetadata.ReadAsync(_db, new[] { w.InternalId }, ct);
-        return WorkItemMapper.ToDto(w, attachments[w.InternalId].ToList());
+        var keys = items.Select(w => w.InternalId).ToList();
+        var attachments = await AttachmentMetadata.ReadAsync(_db, keys, ct);
+        var pendingProposals = await PendingEditProposalCounts.ReadAsync(_db, keys, ct);
+        return items.Select(w =>
+        {
+            var dto = WorkItemMapper.ToDto(w, attachments[w.InternalId].ToList());
+            dto.PendingEditProposalCount = pendingProposals.GetValueOrDefault(w.InternalId);
+            return dto;
+        }).ToList();
     }
 
     public async Task<IReadOnlyList<WorkItemDto>> ListAsync(WorkItemStatus? status, IReadOnlyList<string>? tags, CancellationToken ct = default)
@@ -133,8 +141,7 @@ public sealed class WorkItemService : IWorkItemService
             }).ToList();
         }
 
-        var attachments = await AttachmentMetadata.ReadAsync(_db, items.Select(w => w.InternalId).ToList(), ct);
-        return items.Select(w => WorkItemMapper.ToDto(w, attachments[w.InternalId].ToList())).ToList();
+        return await WithDetailsAsync(items, ct);
     }
 
     public async Task<WorkItemDto?> UpdateAsync(string id, UpdateWorkItemRequest req, CancellationToken ct = default)
@@ -166,7 +173,7 @@ public sealed class WorkItemService : IWorkItemService
             w.BaseBranchOverride = WorkItemMapper.NormalizeBranchRef(req.BaseBranchOverride);
         w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         await _db.SaveChangesAsync(ct);
-        return await WithAttachmentsAsync(w, ct);
+        return (await WithDetailsAsync(new[] { w }, ct))[0];
     }
 
     public async Task<bool> DeleteAsync(string id, CancellationToken ct = default)

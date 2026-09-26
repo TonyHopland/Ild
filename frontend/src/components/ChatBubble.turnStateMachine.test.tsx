@@ -15,23 +15,31 @@ import type { ChatHubEvents } from "../test-support";
 // No single event is required for any of it: a lost start, a lost completion and a
 // dropped connection all appear below, and the view still has to end up matching
 // the server.
-const { handlers, invoke, connection, chatService, aiProviderService, getOpenLoopDocument } =
-  vi.hoisted(() => ({
-    handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
-    invoke: vi.fn(() => Promise.resolve()),
-    connection: { state: "connected" as string },
-    chatService: {
-      listHistory: vi.fn(),
-      getById: vi.fn(),
-      start: vi.fn(),
-      sendMessage: vi.fn(),
-      interrupt: vi.fn(),
-      deleteOne: vi.fn(),
-      deleteAll: vi.fn(),
-    },
-    aiProviderService: { getAll: vi.fn() },
-    getOpenLoopDocument: vi.fn(),
-  }));
+const {
+  handlers,
+  invoke,
+  connection,
+  chatService,
+  aiProviderService,
+  workItemService,
+  getOpenLoopDocument,
+} = vi.hoisted(() => ({
+  handlers: {} as Record<string, (msg: { payload: unknown }) => void>,
+  invoke: vi.fn(() => Promise.resolve()),
+  connection: { state: "connected" as string },
+  chatService: {
+    listHistory: vi.fn(),
+    getById: vi.fn(),
+    start: vi.fn(),
+    sendMessage: vi.fn(),
+    interrupt: vi.fn(),
+    deleteOne: vi.fn(),
+    deleteAll: vi.fn(),
+  },
+  aiProviderService: { getAll: vi.fn() },
+  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
+  getOpenLoopDocument: vi.fn(),
+}));
 
 vi.mock("../hooks/useSignalR", () => ({
   useSignalR: () => ({
@@ -46,7 +54,7 @@ vi.mock("../hooks/useSignalR", () => ({
   }),
 }));
 
-vi.mock("../services/auth", () => ({ chatService, aiProviderService }));
+vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 

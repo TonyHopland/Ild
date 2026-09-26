@@ -28,6 +28,7 @@ import {
   type Size,
 } from "./chatPlacement";
 import MarkdownRenderer from "./MarkdownRenderer";
+import ChatEditProposals from "./ChatEditProposals";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
 import { setCurrentChatSessionId } from "../services/chatSessionStore";
 import "./ChatBubble.css";
@@ -920,6 +921,7 @@ export default function ChatBubble() {
                 {m.interrupted && <span className="chat-interrupted">interrupted</span>}
               </div>
             ))}
+            {session && <ChatEditProposals key={session.id} chatSessionId={session.id} />}
             {streaming && (
               <div className="chat-msg chat-msg-assistant chat-msg-streaming">
                 <MarkdownRenderer content={streaming} className="chat-msg-content" />

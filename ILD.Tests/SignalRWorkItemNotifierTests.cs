@@ -98,4 +98,23 @@ public class SignalRWorkItemNotifierTests
         var payload = Assert.IsType<WorkItemRunProgressedPayload>(capturedArgs![0]);
         Assert.Equal(workItemId, payload.WorkItemId);
     }
+
+    [Fact]
+    public async Task WorkItemEditProposalsChangedAsync_hints_the_work_item_group_with_the_item_id()
+    {
+        var workItemId = Guid.NewGuid().ToString();
+        var (ctx, proxy) = BuildHubContext();
+
+        object?[]? capturedArgs = null;
+        proxy.Setup(p => p.SendCoreAsync("WorkItemEditProposalsChanged", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
+            .Returns(Task.CompletedTask);
+
+        var notifier = new SignalRWorkItemNotifier(ctx.Object);
+        await notifier.WorkItemEditProposalsChangedAsync(workItemId);
+
+        var payload = System.Text.Json.JsonSerializer.SerializeToElement(
+            Assert.Single(capturedArgs!), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        Assert.Equal(workItemId, payload.GetProperty("workItemId").GetString());
+    }
 }

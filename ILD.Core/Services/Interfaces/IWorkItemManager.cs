@@ -174,7 +174,46 @@ public interface IWorkItemManager
     Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default);
 
     Task<bool> DeleteAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Propose an edit to any work item (a Work Item Edit Proposal). Nothing on
+    /// the item changes until a human approves it. The WorkItem server has the
+    /// last word on the proposal's limits, so a refusal is an outcome carrying
+    /// its reason.
+    /// </summary>
+    Task<EditProposalCreateResult> ProposeEditAsync(string workItemId, RemoteCreateEditProposalRequest request, CancellationToken ct = default);
+
+    /// <summary>The work item's edit proposals, newest first. Null when there is no such work item.</summary>
+    Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(string workItemId, CancellationToken ct = default);
+
+    /// <summary>Edit proposals across work items, newest first.</summary>
+    Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(RemoteEditProposalQuery query, CancellationToken ct = default);
+
+    /// <summary>
+    /// A human's approve: applies exactly the proposed fields if the item's
+    /// editable fields still equal the proposal's snapshot, atomically on the
+    /// WorkItem server; otherwise the proposal goes Stale and nothing changes.
+    /// </summary>
+    Task<EditProposalApproval> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default);
+
+    Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default);
+
+    /// <summary>Record that the proposing chat has been told these decisions.</summary>
+    Task MarkEditProposalDecisionsDeliveredAsync(IReadOnlyList<Guid> proposalIds, CancellationToken ct = default);
 }
+
+/// <summary>
+/// Outcome of <see cref="IWorkItemManager.ApproveEditProposalAsync"/>. An applied
+/// approve carries the updated item as a work item read shows it, built from what
+/// the approve itself returned: the edit has landed by then, so no further read of
+/// the WorkItem server may turn it into a reported failure.
+/// </summary>
+/// <param name="Proposal">The proposal as it now stands; null only for <see cref="EditProposalDecisionOutcome.NotFound"/>.</param>
+/// <param name="WorkItem">The updated item, for <see cref="EditProposalDecisionOutcome.Applied"/> only.</param>
+public sealed record EditProposalApproval(
+    EditProposalDecisionOutcome Outcome,
+    RemoteWorkItemEditProposal? Proposal,
+    WorkItemView? WorkItem);
 
 /// <summary>
 /// Outcome of a <see cref="IWorkItemManager.MergePullRequestAsync"/> call.

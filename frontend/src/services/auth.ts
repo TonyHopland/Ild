@@ -2,6 +2,8 @@ import { api } from "./api";
 import {
   User,
   WorkItem,
+  WorkItemEditProposal,
+  WorkItemEditProposalStatus,
   WorkItemAttachment,
   AttachmentLimits,
   LoopTemplate,
@@ -197,6 +199,42 @@ export const workItemService = {
 
   getRuns: async (id: string, opts?: { skip?: number; take?: number }): Promise<LoopRun[]> => {
     return api.get<LoopRun[]>(`/workitems/${id}/runs${pageQuery(opts)}`);
+  },
+
+  listEditProposals: async (id: string): Promise<WorkItemEditProposal[]> => {
+    return api.get<WorkItemEditProposal[]>(`/workitems/${id}/edit-proposals`);
+  },
+
+  listEditProposalsFor: async (filter: {
+    status?: WorkItemEditProposalStatus;
+    chatSessionId?: string;
+  }): Promise<WorkItemEditProposal[]> => {
+    const params = new URLSearchParams();
+    if (filter.status) params.set("status", filter.status);
+    if (filter.chatSessionId) params.set("chatSessionId", filter.chatSessionId);
+    const query = params.toString();
+    return api.get<WorkItemEditProposal[]>(`/workitems/edit-proposals${query ? `?${query}` : ""}`);
+  },
+
+  approveEditProposal: async (
+    id: string,
+    proposalId: string,
+  ): Promise<{ proposal: WorkItemEditProposal; workItem: WorkItem }> => {
+    return api.post<{ proposal: WorkItemEditProposal; workItem: WorkItem }>(
+      `/workitems/${id}/edit-proposals/${proposalId}/approve`,
+      {},
+    );
+  },
+
+  rejectEditProposal: async (
+    id: string,
+    proposalId: string,
+    reason?: string,
+  ): Promise<WorkItemEditProposal> => {
+    return api.post<WorkItemEditProposal>(
+      `/workitems/${id}/edit-proposals/${proposalId}/reject`,
+      reason ? { reason } : {},
+    );
   },
 
   getTurnVariables: async (id: string): Promise<TurnVariableChange[]> => {

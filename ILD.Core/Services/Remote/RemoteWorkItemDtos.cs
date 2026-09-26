@@ -120,6 +120,9 @@ public sealed class RemoteWorkItem
     /// repository's default branch. See ADR-0008.
     /// </summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>How many edit proposals on this item still wait for a human. Zero on a poll.</summary>
+    public int PendingEditProposalCount { get; set; }
 }
 
 public sealed class RemoteCreateWorkItemRequest
@@ -191,4 +194,113 @@ public sealed class RemotePollResponse
 {
     public IReadOnlyList<RemoteWorkItem> ActiveItems { get; set; } = Array.Empty<RemoteWorkItem>();
     public IReadOnlyList<RemoteWorkItem> ReadyItems { get; set; } = Array.Empty<RemoteWorkItem>();
+}
+
+/// <summary>Mirrors the WorkItem server's WorkItemEditProposalStatus.</summary>
+public enum RemoteEditProposalStatus
+{
+    Pending = 0,
+    Approved = 1,
+    Rejected = 2,
+    Stale = 3,
+}
+
+/// <summary>
+/// The five editable fields of a work item. On a proposal's
+/// <see cref="RemoteWorkItemEditProposal.Proposed"/> side null means "not
+/// proposed" and a blank branch override means "clear it"; on its
+/// <see cref="RemoteWorkItemEditProposal.Snapshot"/> side they are the item's
+/// values when the proposal was made.
+/// </summary>
+public sealed class RemoteEditProposalFields
+{
+    public string? Title { get; set; }
+    public string? Description { get; set; }
+    public IReadOnlyList<string>? Tags { get; set; }
+    public string? BranchNameOverride { get; set; }
+    public string? BaseBranchOverride { get; set; }
+}
+
+/// <summary>
+/// A Work Item Edit Proposal: an agent's suggested edit to a work item, held on
+/// the WorkItem server and applied only when a human approves it.
+/// </summary>
+public sealed class RemoteWorkItemEditProposal
+{
+    public Guid Id { get; set; }
+    public string WorkItemId { get; set; } = string.Empty;
+    public RemoteEditProposalStatus Status { get; set; }
+    public RemoteEditProposalFields Proposed { get; set; } = new();
+    public RemoteEditProposalFields Snapshot { get; set; } = new();
+    public string? Rationale { get; set; }
+    public Guid? CreatedByLoopRunId { get; set; }
+    public Guid? CreatedByChatSessionId { get; set; }
+    public string? RejectionReason { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? DecidedAt { get; set; }
+}
+
+public sealed class RemoteCreateEditProposalRequest
+{
+    public string? Title { get; set; }
+    public string? Description { get; set; }
+    public IReadOnlyList<string>? Tags { get; set; }
+    public string? BranchNameOverride { get; set; }
+    public string? BaseBranchOverride { get; set; }
+    public string? Rationale { get; set; }
+    public Guid? CreatedByLoopRunId { get; set; }
+    public Guid? CreatedByChatSessionId { get; set; }
+}
+
+/// <summary>
+/// What the WorkItem server made of a proposal. A refusal is not an outage: it
+/// carries the server's reason back to the agent that proposed.
+/// </summary>
+public enum EditProposalCreateOutcome
+{
+    Created = 0,
+    NotFound = 1,
+
+    /// <summary>The proposal broke a rule; <c>Error</c> says which.</summary>
+    Invalid = 2,
+
+    /// <summary>The item already has as many pending proposals as it may.</summary>
+    TooManyPending = 3,
+}
+
+public sealed record EditProposalCreateResult(
+    EditProposalCreateOutcome Outcome,
+    string? Error,
+    RemoteWorkItemEditProposal? Proposal);
+
+/// <summary>Mirrors the WorkItem server's outcome of an approve or reject.</summary>
+public enum EditProposalDecisionOutcome
+{
+    Applied = 0,
+    Rejected = 1,
+
+    /// <summary>The item changed after the proposal was made; nothing was applied and the proposal is Stale.</summary>
+    Stale = 2,
+
+    /// <summary>The proposal had already been decided.</summary>
+    NotPending = 3,
+
+    /// <summary>No such proposal on that work item.</summary>
+    NotFound = 4,
+}
+
+/// <param name="Proposal">The proposal as it now stands; null only for <see cref="EditProposalDecisionOutcome.NotFound"/>.</param>
+/// <param name="WorkItem">The updated item, for <see cref="EditProposalDecisionOutcome.Applied"/> only.</param>
+public sealed record EditProposalDecisionResult(
+    EditProposalDecisionOutcome Outcome,
+    RemoteWorkItemEditProposal? Proposal,
+    RemoteWorkItem? WorkItem);
+
+public sealed class RemoteEditProposalQuery
+{
+    public RemoteEditProposalStatus? Status { get; set; }
+    public Guid? CreatedByChatSessionId { get; set; }
+
+    /// <summary>Only decided proposals whose decision the proposing chat has not been told.</summary>
+    public bool UndeliveredOnly { get; set; }
 }

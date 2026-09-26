@@ -36,6 +36,9 @@ public class SignalRChatNotifier : IChatNotifier
     public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document)
         => SendAsync(chatSessionId, "ChatLoopUpdate", new ChatLoopUpdatePayload(chatSessionId, document));
 
+    public Task EditProposalsChangedAsync(Guid chatSessionId)
+        => SendAsync(chatSessionId, "ChatEditProposalsChanged", new ChatEditProposalsChangedPayload(chatSessionId));
+
     private async Task SendAsync(Guid chatSessionId, string eventName, object payload)
     {
         try

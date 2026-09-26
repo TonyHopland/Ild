@@ -63,6 +63,7 @@ public sealed class WorkItemServerProgram
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddScoped<IWorkItemService, WorkItemService>();
         builder.Services.AddScoped<IWorkItemAttachmentService, WorkItemAttachmentService>();
+        builder.Services.AddScoped<IWorkItemEditProposalService, WorkItemEditProposalService>();
 
         // Attachment sizes are read once, here: the same variables are set on the
         // ILD container, and both processes enforce them independently.

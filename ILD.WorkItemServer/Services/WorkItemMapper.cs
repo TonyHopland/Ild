@@ -16,8 +16,10 @@ internal static class WorkItemMapper
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    public static IReadOnlyList<string> ReadTags(WorkItem w)
-        => JsonSerializer.Deserialize<List<string>>(w.TagsJson, JsonOpts) ?? new();
+    public static IReadOnlyList<string> ReadTags(WorkItem w) => DeserializeTags(w.TagsJson);
+
+    public static IReadOnlyList<string> DeserializeTags(string json)
+        => JsonSerializer.Deserialize<List<string>>(json, JsonOpts) ?? new();
 
     public static IReadOnlyList<string> ReadDependencies(WorkItem w)
         => JsonSerializer.Deserialize<List<string>>(w.DependenciesJson, JsonOpts) ?? new();
@@ -58,7 +60,14 @@ internal static class WorkItemMapper
     }
 
     public static void WriteTags(WorkItem w, IReadOnlyList<string> tags)
-        => w.TagsJson = JsonSerializer.Serialize(tags, JsonOpts);
+        => w.TagsJson = SerializeTags(tags);
+
+    /// <summary>
+    /// The serialized column value, for an edit proposal: it holds proposed tags
+    /// in the column's own form and approving writes them straight to the row.
+    /// </summary>
+    public static string SerializeTags(IReadOnlyList<string> tags)
+        => JsonSerializer.Serialize(tags, JsonOpts);
 
     public static void WriteDependencies(WorkItem w, IReadOnlyList<string> deps)
         => w.DependenciesJson = JsonSerializer.Serialize(deps, JsonOpts);

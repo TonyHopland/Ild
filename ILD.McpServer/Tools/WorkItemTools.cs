@@ -6,8 +6,10 @@ namespace ILD.McpServer.Tools;
 /// <summary>
 /// MCP tools that mutate state. An agent may create work items in the Backlog
 /// column, and edit or delete the items its own session created — but NOT
-/// pre-existing items or items from other sessions. Agents are still NOT
-/// allowed to start, move, or otherwise transition work items via this server.
+/// pre-existing items or items from other sessions. For those it may only
+/// propose an edit, which a human approves or rejects (ADR-0022). Agents are
+/// still NOT allowed to start, move, or otherwise transition work items via
+/// this server.
 /// </summary>
 [McpServerToolType]
 public sealed class WorkItemTools
@@ -48,7 +50,7 @@ public sealed class WorkItemTools
     }
 
     [McpServerTool(Name = "update_workitem")]
-    [Description("Edit a work item THIS session created. In a loop run that means an item whose createdByLoopRunId matches the current run (the ILD_LOOP_RUN_ID env var); in a chat session it means an item whose createdByChatSessionId matches the current chat session (the ILD_CHAT_SESSION_ID env var). You CANNOT edit pre-existing items or items created by other runs or sessions; the server rejects those with 403. Updates the title and description, and optionally replaces the tags (tags determine which loop template executes the item — each must match a loop template name).")]
+    [Description("Edit a work item THIS session created. In a loop run that means an item whose createdByLoopRunId matches the current run (the ILD_LOOP_RUN_ID env var); in a chat session it means an item whose createdByChatSessionId matches the current chat session (the ILD_CHAT_SESSION_ID env var). You CANNOT edit pre-existing items or items created by other runs or sessions; the server rejects those with 403 — use propose_workitem_edit to suggest an edit to one of those for a human to approve. Updates the title and description, and optionally replaces the tags (tags determine which loop template executes the item — each must match a loop template name).")]
     public Task<string> UpdateWorkItem(
         [Description("Work item GUID. Must have been created by this session.")] string id,
         [Description("New title (1..512 chars).")] string title,
@@ -69,4 +71,31 @@ public sealed class WorkItemTools
     public Task<string> DeleteWorkItem(
         [Description("Work item GUID. Must have been created by this session.")] string id)
         => _ild.DeleteAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}");
+
+    [McpServerTool(Name = "propose_workitem_edit")]
+    [Description("Propose an edit to ANY work item, including ones this session did not create. Nothing changes until a human approves the proposal; they may instead reject it, with a reason. Only the fields you pass are proposed — omit a field to leave it out of the proposal. If the item is edited before the human approves, the proposal goes stale and nothing is applied; propose again against the current values if the edit still makes sense. Returns the proposal id and its status (Pending). Use list_workitem_edit_proposals to see what became of it. For items this session created, update_workitem applies edits directly.")]
+    public Task<string> ProposeWorkItemEdit(
+        [Description("Work item GUID. Any work item.")] string id,
+        [Description("Proposed title (1..512 chars). Omit to leave the title out of the proposal.")]
+        string? title = null,
+        [Description("Proposed description (markdown). Omit to leave the description out of the proposal.")]
+        string? description = null,
+        [Description("Proposed replacement list of tags. Tags that name a loop template select the loop that runs the item; other tags are labels loops may read (HIL, for one). Omit to leave tags out of the proposal.")]
+        string[]? tags = null,
+        [Description("Proposed custom branch name used verbatim by every run of the item. Must be a valid git branch name. Pass an empty string to propose going back to the generated per-run branch name; omit to leave it out of the proposal.")]
+        string? branchNameOverride = null,
+        [Description("Proposed base branch the item's runs start from and open PRs against. Pass an empty string to propose going back to the repository's default branch; omit to leave it out of the proposal.")]
+        string? baseBranchOverride = null,
+        [Description("Optional short reason for the edit (up to 2000 chars), shown to the human deciding.")]
+        string? rationale = null)
+    {
+        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, rationale };
+        return _ild.PostJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}/edit-proposals", body);
+    }
+
+    [McpServerTool(Name = "list_workitem_edit_proposals")]
+    [Description("List the edit proposals on a work item, newest first: each one's status (Pending, Approved, Rejected or Stale), the proposed and snapshot values, and a rejection's reason. Read-only — only a human can approve or reject a proposal.")]
+    public Task<string> ListWorkItemEditProposals(
+        [Description("Work item GUID.")] string id)
+        => _ild.GetRawAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}/edit-proposals");
 }

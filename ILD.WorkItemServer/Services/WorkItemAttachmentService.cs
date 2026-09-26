@@ -87,14 +87,14 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
 
     public async Task<IReadOnlyList<WorkItemAttachmentDto>?> ListAsync(string workItemId, CancellationToken ct = default)
     {
-        var key = await ResolveKeyAsync(workItemId, ct);
+        var key = await WorkItemRows.ResolveKeyAsync(_db, workItemId, ct);
         if (key is null) return null;
         return (await AttachmentMetadata.ReadAsync(_db, new[] { key.Value }, ct))[key.Value].ToList();
     }
 
     public async Task<AddAttachmentsResult> AddAsync(string workItemId, IReadOnlyList<IncomingAttachment> files, CancellationToken ct = default)
     {
-        var key = await ResolveKeyAsync(workItemId, ct);
+        var key = await WorkItemRows.ResolveKeyAsync(_db, workItemId, ct);
         if (key is null)
             return AddAttachmentsResult.Refused(AddAttachmentsOutcome.NotFound, "No such work item.");
 
@@ -127,7 +127,7 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         // Claiming nothing means the work item was deleted while this upload was
         // being read; its files would fail the foreign key a moment later.
-        if (await ClaimWorkItemAsync(key.Value, ct) == 0)
+        if (await WorkItemRows.ClaimAsync(_db, key.Value, ct) == 0)
             return AddAttachmentsResult.Refused(AddAttachmentsOutcome.NotFound, "No such work item.");
 
         var incoming = files.Sum(f => f.SizeBytes);
@@ -191,7 +191,7 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
 
     public async Task<StoredAttachment?> GetContentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default)
     {
-        var key = await ResolveKeyAsync(workItemId, ct);
+        var key = await WorkItemRows.ResolveKeyAsync(_db, workItemId, ct);
         if (key is null) return null;
 
         // Projected and untracked: the file is served once, and a tracked entity
@@ -211,7 +211,7 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
 
     public async Task<bool> DeleteAsync(string workItemId, Guid attachmentId, CancellationToken ct = default)
     {
-        var key = await ResolveKeyAsync(workItemId, ct);
+        var key = await WorkItemRows.ResolveKeyAsync(_db, workItemId, ct);
         if (key is null) return false;
 
         // Deleted by key, so the bytes are never read to throw them away.
@@ -219,23 +219,6 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
             .Where(a => a.Id == attachmentId && a.WorkItemId == key.Value)
             .ExecuteDeleteAsync(ct) > 0;
     }
-
-    /// <summary>
-    /// Take the owning work item's row for the rest of the transaction, so the
-    /// total check and the insert that follows it cannot interleave with another
-    /// upload to the same item. Written as an update to the row's own value: it
-    /// changes nothing, and it is the one lock both Postgres and SQLite take.
-    /// </summary>
-    private Task<int> ClaimWorkItemAsync(int workItemKey, CancellationToken ct)
-        => _db.WorkItems
-            .Where(w => w.InternalId == workItemKey)
-            .ExecuteUpdateAsync(s => s.SetProperty(w => w.UpdatedAt, w => w.UpdatedAt), ct);
-
-    private Task<int?> ResolveKeyAsync(string workItemId, CancellationToken ct)
-        => _db.WorkItems
-            .Where(w => w.Id == workItemId)
-            .Select(w => (int?)w.InternalId)
-            .FirstOrDefaultAsync(ct);
 
     /// <summary>
     /// The name as it is stored: the last segment only, since a caller is free

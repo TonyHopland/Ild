@@ -146,6 +146,12 @@ export default function Taskboard() {
       syncWorkItem(message.payload.workItemId);
     };
 
+    const onEditProposalsChanged = (
+      message: TypedSignalRMessage<"WorkItemEditProposalsChanged">,
+    ) => {
+      syncWorkItem(message.payload.workItemId);
+    };
+
     const onSchedulerStateChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {
       setIsPaused(message.payload.isPaused);
     };
@@ -155,6 +161,7 @@ export default function Taskboard() {
     on("PreviewStateChanged", onPreviewStateChanged);
     on("WorkItemRunProgressed", onRunProgressed);
     on("SchedulerStateChanged", onSchedulerStateChanged);
+    on("WorkItemEditProposalsChanged", onEditProposalsChanged);
 
     return () => {
       off("HumanFeedbackRequired", onHumanFeedback);
@@ -162,6 +169,7 @@ export default function Taskboard() {
       off("PreviewStateChanged", onPreviewStateChanged);
       off("WorkItemRunProgressed", onRunProgressed);
       off("SchedulerStateChanged", onSchedulerStateChanged);
+      off("WorkItemEditProposalsChanged", onEditProposalsChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };
   }, [on, off]);
