@@ -300,7 +300,7 @@ public class RepositoryManagerTests : IDisposable
         await mgr.PushAsync(
             _repo,
             "ild/wi-17",
-            auth: new GitAuthOptions("https://git.kube/team/repo.git", "token-123", "Forgejo"));
+            auth: new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo"));
 
         Assert.Single(runner.Calls);
         Assert.NotNull(runner.Calls[0].Environment);
@@ -908,7 +908,7 @@ public class RepositoryManagerTests : IDisposable
     {
         var runner = new RecordingRunner();
         var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
-        var auth = new GitAuthOptions("https://git.kube/team/repo.git", "token-123", "Forgejo");
+        var auth = new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo");
 
         await mgr.FetchAsync(_repo, auth: auth);
         await mgr.RebaseAsync(_repo, "origin/ild/wi-3-run-1");

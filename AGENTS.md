@@ -92,3 +92,8 @@ Manually editing migration files is error-prone and will cause schema drift. The
 Code is the explanation. No comments narrating what a change does or why.
 Comments only for non-obvious invariants or workarounds (with a link).
 No summary paragraphs in the diff. Prefer better names over comments.
+
+Keep code, tests, docs and examples generic. NEVER reference the infrastructure
+of the deployment you are running in: its hostnames, domains, IP addresses or
+accounts. Use reserved example names instead (`example.com`, `*.example`,
+`*.test`, `*.invalid`).
