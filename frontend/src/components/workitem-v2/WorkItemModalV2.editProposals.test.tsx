@@ -388,4 +388,36 @@ describe("edit proposals in the detail view", () => {
     await waitFor(() => expect(action().textContent).toContain("Second item's card"));
     expect(action().textContent).not.toContain("First item's card");
   });
+
+  test("a card keeps a reason being typed when its step's turn arrives and it moves under it", async () => {
+    mockServices(makeRun());
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
+      makeProposal("Live card", "exec-2"),
+    ]);
+    const running = (conversation: ConversationMessage[]) =>
+      makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1", conversation });
+    const { rerender } = await renderDialog(
+      running([aiTurn("Planned.", "exec-1", "2026-09-26T10:00:00Z")]),
+    );
+    await waitFor(() => expect(action().textContent).toContain("Live card"));
+    fireEvent.click(within(cardOf("Live card")).getByRole("button", { name: "Reject" }));
+    fireEvent.change(within(action()).getByLabelText("Rejection reason (optional)"), {
+      target: { value: "Too long" },
+    });
+
+    rerender(
+      dialog(
+        running([
+          aiTurn("Planned.", "exec-1", "2026-09-26T10:00:00Z"),
+          aiTurn("Coded it.", "exec-2", "2026-09-26T10:30:00Z"),
+        ]),
+      ),
+    );
+
+    const expected = ["Planned.", "Coded it.", "Live card", "Live Output"];
+    expect(documentOrder(inAction(expected))).toEqual(expected);
+    expect(
+      (within(action()).getByLabelText("Rejection reason (optional)") as HTMLTextAreaElement).value,
+    ).toBe("Too long");
+  });
 });

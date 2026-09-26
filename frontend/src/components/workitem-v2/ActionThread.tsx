@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { TurnVariableChange, WorkItem, WorkItemStatus } from "../../types";
+import { TurnVariableChange, WorkItem, WorkItemEditProposal, WorkItemStatus } from "../../types";
+import { useEditProposals } from "../../hooks/useEditProposals";
 import { workItemService } from "../../services/auth";
 import { parseConversation } from "../../utils/workItemJson";
+import EditProposalCard from "../EditProposalCard";
+import { placeActionProposals } from "../editProposalPlacement";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
 import HaltSteerControls from "./HaltSteerControls";
@@ -190,6 +193,7 @@ export default function ActionThread({
 }) {
   const messages = parseConversation(workItem);
   const turnVariables = useTurnVariables(workItem.id, messages.length);
+  const { proposals, refresh } = useEditProposals({ workItemId: workItem.id });
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const savedScrollTop = useRef(0);
@@ -230,47 +234,66 @@ export default function ActionThread({
     el.scrollIntoView?.({ block: "start" });
   };
 
+  const { afterTurn, live, end } = placeActionProposals(messages, proposals ?? []);
+  const cards = (list: WorkItemEditProposal[] = []) =>
+    list.map((proposal) => (
+      <EditProposalCard key={`proposal:${proposal.id}`} proposal={proposal} onSettled={refresh} />
+    ));
+
   const isEmpty =
     messages.length === 0 &&
     !detail.shouldStream &&
     !awaitingHuman &&
-    !hasPrDetails(workItem, detail);
+    !hasPrDetails(workItem, detail) &&
+    afterTurn.size === 0 &&
+    live.length === 0 &&
+    end.length === 0;
+
+  // One keyed list, so a card that moves to a new slot (its step's turn
+  // arriving) is moved rather than remounted, and keeps a decision in progress.
+  const entries: ReactNode[] = [];
+  messages.forEach((m, i) => {
+    const side: Side = m.role.toLowerCase() === "human" ? "human" : "ai";
+    const variables = variablesSetByTurn(m, turnVariables);
+    entries.push(
+      <Bubble
+        key={`turn:${i}`}
+        side={side}
+        author={side === "ai" ? (m.name ?? "AI") : undefined}
+        timestamp={m.timestamp}
+        footer={variables.length > 0 && <TurnVariables variables={variables} />}
+      >
+        <div className="conversation-message-content">
+          <MarkdownRenderer content={m.content} />
+        </div>
+      </Bubble>,
+      ...cards(afterTurn.get(i)),
+    );
+  });
+  entries.push(
+    <Bubble key="live" side="ai" author="AI" live={detail.shouldStream}>
+      {detail.shouldStream && <LiveStream text={detail.progressText} />}
+      <HaltSteerControls
+        run={detail.currentRun}
+        workItemStatus={workItem.status}
+        onHalt={detail.handleHalt}
+        onResumeSteer={detail.handleResumeSteer}
+        onCleanupDone={detail.handleCleanupDone}
+        onCleanupBacklog={detail.handleCleanupBacklog}
+        showAbandon={false}
+      />
+    </Bubble>,
+    ...cards(live),
+    <PrDetails key="pr-details" workItem={workItem} detail={detail} onOpen={revealFromTop} />,
+    <Bubble key="feedback" side="human">
+      <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
+    </Bubble>,
+    ...cards(end),
+  );
 
   return (
     <div className="wiv2-thread" ref={threadRef}>
-      {messages.map((m, i) => {
-        const side: Side = m.role.toLowerCase() === "human" ? "human" : "ai";
-        const variables = variablesSetByTurn(m, turnVariables);
-        return (
-          <Bubble
-            key={i}
-            side={side}
-            author={side === "ai" ? (m.name ?? "AI") : undefined}
-            timestamp={m.timestamp}
-            footer={variables.length > 0 && <TurnVariables variables={variables} />}
-          >
-            <div className="conversation-message-content">
-              <MarkdownRenderer content={m.content} />
-            </div>
-          </Bubble>
-        );
-      })}
-      <Bubble side="ai" author="AI" live={detail.shouldStream}>
-        {detail.shouldStream && <LiveStream text={detail.progressText} />}
-        <HaltSteerControls
-          run={detail.currentRun}
-          workItemStatus={workItem.status}
-          onHalt={detail.handleHalt}
-          onResumeSteer={detail.handleResumeSteer}
-          onCleanupDone={detail.handleCleanupDone}
-          onCleanupBacklog={detail.handleCleanupBacklog}
-          showAbandon={false}
-        />
-      </Bubble>
-      <PrDetails workItem={workItem} detail={detail} onOpen={revealFromTop} />
-      <Bubble side="human">
-        <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
-      </Bubble>
+      {entries}
       {isEmpty && <div className="wiv2-empty">No action required.</div>}
     </div>
   );

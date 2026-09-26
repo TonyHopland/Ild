@@ -317,4 +317,37 @@ describe("ChatBubble edit proposals", () => {
       "Now the tags",
     ]);
   });
+
+  test("a card keeps a reason being typed when its reply lands and it moves under it", async () => {
+    workItemService.listEditProposalsFor.mockResolvedValue([
+      card("p-now", "Sharper title", 1, "2026-09-26T10:00:00Z"),
+    ]);
+    await openResumed({
+      ...session(),
+      messages: [message(0, "user", "Rename wi-9")],
+      activeTurnId: "t1",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Reject" }));
+    fireEvent.change(screen.getByLabelText("Rejection reason (optional)"), {
+      target: { value: "Too long" },
+    });
+
+    act(() => {
+      handlers["ChatMessageAppended"]({
+        payload: { chatSessionId: "s1", turnId: "t1", message: message(1, "assistant", "Done.") },
+      });
+      handlers["ChatMessageAppended"]({
+        payload: { chatSessionId: "s1", turnId: "t2", message: message(2, "user", "Next") },
+      });
+    });
+
+    expect(documentOrder(byText(["Done.", "Sharper title", "Next"]))).toEqual([
+      "Done.",
+      "Sharper title",
+      "Next",
+    ]);
+    expect(
+      (screen.getByLabelText("Rejection reason (optional)") as HTMLTextAreaElement).value,
+    ).toBe("Too long");
+  });
 });
