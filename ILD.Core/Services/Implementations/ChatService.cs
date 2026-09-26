@@ -1,10 +1,13 @@
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -38,6 +41,8 @@ public sealed class ChatService : IChatService
     private readonly ChatOptions _options;
     private readonly ILoopRunStore _runs;
     private readonly IChatLoopScratchpad _loopScratchpad;
+    private readonly IWorkItemManager? _workItems;
+    private readonly ILogger<ChatService> _log;
 
     public ChatService(
         AppDbContext db,
@@ -46,7 +51,9 @@ public sealed class ChatService : IChatService
         IChatNotifier notifier,
         ChatOptions options,
         ILoopRunStore runs,
-        IChatLoopScratchpad loopScratchpad)
+        IChatLoopScratchpad loopScratchpad,
+        IWorkItemManager? workItems = null,
+        ILogger<ChatService>? log = null)
     {
         _db = db;
         _providers = providers;
@@ -55,6 +62,8 @@ public sealed class ChatService : IChatService
         _options = options;
         _runs = runs;
         _loopScratchpad = loopScratchpad;
+        _workItems = workItems;
+        _log = log ?? NullLogger<ChatService>.Instance;
     }
 
     public async Task<IReadOnlyList<ChatSessionSummaryView>> ListForUserAsync(string userId, CancellationToken ct = default)
@@ -188,9 +197,16 @@ public sealed class ChatService : IChatService
 
         var (contextPreamble, additionalAllowedDirectories) =
             await BuildChatContextAsync(openWorkItemId, loopEditor, tools);
-        var promptForAgent = contextPreamble is null
-            ? userMessage
-            : $"{contextPreamble}\n\n{userMessage}";
+
+        // Decisions on this chat's edit proposals ride the prompt until a turn
+        // that reached the agent acknowledges them below.
+        var decidedProposals = await ReadUndeliveredProposalDecisionsAsync(chatSessionId, ct);
+        var promptForAgent = string.Join("\n\n", new[]
+        {
+            FormatProposalDecisions(decidedProposals),
+            contextPreamble,
+            userMessage,
+        }.Where(part => part is not null));
 
         var runContext = new LoopRunContext(
             LoopRunId: session.Id,
@@ -265,6 +281,11 @@ public sealed class ChatService : IChatService
         if (loopEditor == LoopEditorContext.NeedsBriefing && boundThisTurn is not null)
             session.DeliveredBriefings = SessionBriefings.Record(
                 session.DeliveredBriefings, SessionBriefings.LoopAuthoring, boundThisTurn);
+
+        // Same rule for the proposal decisions: acknowledged only once they
+        // reached an agent, so a failed launch announces them again next turn.
+        if (decidedProposals.Count > 0 && boundThisTurn is not null)
+            await MarkProposalDecisionsDeliveredAsync(decidedProposals);
 
         await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct);
     }
@@ -387,6 +408,80 @@ public sealed class ChatService : IChatService
         + "with the targeted loop tools; edits reach the live canvas immediately but are transient — "
         + "only the human can save. Call get_loop_authoring_guide for the loop model, the field "
         + "semantics and the save-time graph rules.";
+
+    /// <summary>
+    /// The decided edit proposals this chat made and has not been told about.
+    /// The WorkItem server being down or unconfigured costs the chat nothing but
+    /// the notice, which stays owed and is read again next turn.
+    /// </summary>
+    private async Task<IReadOnlyList<RemoteWorkItemEditProposal>> ReadUndeliveredProposalDecisionsAsync(
+        Guid chatSessionId, CancellationToken ct)
+    {
+        if (_workItems is null) return Array.Empty<RemoteWorkItemEditProposal>();
+        try
+        {
+            return await _workItems.QueryEditProposalsAsync(
+                new RemoteEditProposalQuery { CreatedByChatSessionId = chatSessionId, UndeliveredOnly = true }, ct);
+        }
+        catch (Exception ex) when (IsWorkItemServerUnavailable(ex, ct))
+        {
+            _log.LogWarning(ex, "Could not read edit proposal decisions for chat {ChatSessionId}", chatSessionId);
+            return Array.Empty<RemoteWorkItemEditProposal>();
+        }
+    }
+
+    /// <summary>
+    /// Best effort: an acknowledgement that does not land only means the same
+    /// notice is sent once more.
+    /// </summary>
+    private async Task MarkProposalDecisionsDeliveredAsync(IReadOnlyList<RemoteWorkItemEditProposal> delivered)
+    {
+        try
+        {
+            await _workItems!.MarkEditProposalDecisionsDeliveredAsync(
+                delivered.Select(p => p.Id).ToList(), CancellationToken.None);
+        }
+        catch (Exception ex) when (IsWorkItemServerUnavailable(ex, CancellationToken.None))
+        {
+            _log.LogWarning(ex, "Could not acknowledge {Count} edit proposal decisions", delivered.Count);
+        }
+    }
+
+    /// <summary>
+    /// An unreachable server, one that refused the call, one that timed out, or
+    /// none configured at all — never the turn's own cancellation.
+    /// </summary>
+    private static bool IsWorkItemServerUnavailable(Exception ex, CancellationToken ct)
+        => ex is HttpRequestException or InvalidOperationException
+            || (ex is TaskCanceledException && !ct.IsCancellationRequested);
+
+    private static string? FormatProposalDecisions(IReadOnlyList<RemoteWorkItemEditProposal> decided)
+    {
+        if (decided.Count == 0) return null;
+        var lines = new List<string>
+        {
+            "[Edit proposal decisions]",
+            "A human decided these work item edit proposals you made in this chat since you last heard:",
+        };
+        foreach (var p in decided)
+        {
+            var outcome = p.Status switch
+            {
+                RemoteEditProposalStatus.Approved => "Approved; the proposed fields were applied.",
+                RemoteEditProposalStatus.Rejected => p.RejectionReason is { } reason
+                    ? $"Rejected. Reason: {OneLine(reason)}"
+                    : "Rejected, with no reason given.",
+                _ => "Stale; the work item changed before it was approved, so nothing was applied. "
+                    + "Propose again against its current values if the edit still makes sense.",
+            };
+            lines.Add($"- Proposal {p.Id} on work item {p.WorkItemId}: {outcome}");
+        }
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>A reason on one line, so each decision stays one line of the notice.</summary>
+    private static string OneLine(string text)
+        => string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     public async Task<bool> DeleteAsync(string userId, Guid sessionId, CancellationToken ct = default)
     {

@@ -40,4 +40,10 @@ public interface IChatNotifier
     /// document is discovered only by re-reading the loop on a later turn.
     /// </summary>
     Task LoopUpdateRequestedAsync(Guid chatSessionId, string document);
+
+    /// <summary>
+    /// An edit proposal this chat made was created or decided, so the chat's
+    /// inline proposal cards re-read them. A hint only: it carries no state.
+    /// </summary>
+    Task EditProposalsChangedAsync(Guid chatSessionId);
 }

@@ -21,6 +21,13 @@ public interface IWorkItemNotifier
     /// status changing. Carries no node detail — listeners re-fetch the item.
     /// </summary>
     Task RunProgressedAsync(string workItemId);
+
+    /// <summary>
+    /// Signals that a work item's edit proposals changed — one was made,
+    /// approved, rejected or went stale — so an open detail view and the board
+    /// card re-read them. A hint only: listeners re-fetch.
+    /// </summary>
+    Task WorkItemEditProposalsChangedAsync(string workItemId);
 }
 
 public sealed class NoopWorkItemNotifier : IWorkItemNotifier
@@ -31,4 +38,5 @@ public sealed class NoopWorkItemNotifier : IWorkItemNotifier
     public Task PreviewStateChangedAsync(string workItemId) => Task.CompletedTask;
     public Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent) => Task.CompletedTask;
     public Task RunProgressedAsync(string workItemId) => Task.CompletedTask;
+    public Task WorkItemEditProposalsChangedAsync(string workItemId) => Task.CompletedTask;
 }

@@ -526,7 +526,7 @@ public class WorkItemsController : ControllerBase
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogWarning(ex, "WorkItemServer unreachable for an attachment request");
+            _logger.LogWarning(ex, "WorkItemServer unreachable for {Method} {Path}", Request.Method, Request.Path);
             return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
         }
     }
@@ -612,6 +612,104 @@ public class WorkItemsController : ControllerBase
         await using var stream = file.OpenReadStream();
         await stream.ReadExactlyAsync(content, cancellationToken);
         return content;
+    }
+
+    // -- Work Item Edit Proposals (ADR-0022) -----------------------------------
+    //
+    // Deciding a proposal is human-only: these routes sit behind the user-only
+    // fallback policy, and the agent surface has no route that decides one.
+
+    [HttpGet("{id}/edit-proposals")]
+    public Task<IActionResult> ListEditProposals(string id, CancellationToken cancellationToken)
+        => ForwardToWorkItemServerAsync(async () =>
+        {
+            var proposals = await _workItemManager.ListEditProposalsAsync(id, cancellationToken);
+            return proposals == null ? NotFound() : (IActionResult)Ok(proposals);
+        });
+
+    [HttpGet("edit-proposals")]
+    public Task<IActionResult> QueryEditProposals(
+        [FromQuery] string? status, [FromQuery] string? chatSessionId, CancellationToken cancellationToken)
+    {
+        var query = new RemoteEditProposalQuery();
+        if (!string.IsNullOrEmpty(status))
+        {
+            if (!Enum.TryParse<RemoteEditProposalStatus>(status, ignoreCase: true, out var parsedStatus))
+                return Task.FromResult<IActionResult>(BadRequest(new { error = $"Unknown proposal status: {status}" }));
+            query.Status = parsedStatus;
+        }
+        if (!string.IsNullOrEmpty(chatSessionId))
+        {
+            if (!Guid.TryParse(chatSessionId, out var parsedChat))
+                return Task.FromResult<IActionResult>(BadRequest(new { error = "chatSessionId must be a GUID." }));
+            query.CreatedByChatSessionId = parsedChat;
+        }
+        return ForwardToWorkItemServerAsync(async () =>
+            Ok(await _workItemManager.QueryEditProposalsAsync(query, cancellationToken)));
+    }
+
+    [HttpPost("{id}/edit-proposals/{proposalId:guid}/approve")]
+    public Task<IActionResult> ApproveEditProposal(
+        string id, Guid proposalId, [FromServices] IChatNotifier chatNotifier, CancellationToken cancellationToken)
+        => ForwardToWorkItemServerAsync(async () =>
+        {
+            var result = await _workItemManager.ApproveEditProposalAsync(id, proposalId, cancellationToken);
+            switch (result.Outcome)
+            {
+                case EditProposalDecisionOutcome.Applied:
+                    await HintProposingChatsAsync(id, chatNotifier, cancellationToken);
+                    return Ok(new { proposal = result.Proposal, workItem = await _workItemManager.GetWorkItemAsync(id) });
+                case EditProposalDecisionOutcome.Stale:
+                    await HintProposingChatsAsync(id, chatNotifier, cancellationToken);
+                    return Conflict(new
+                    {
+                        error = "The work item changed after this proposal was made, so nothing was applied. The proposal is now stale.",
+                        proposal = result.Proposal,
+                    });
+                default:
+                    return DecisionRefused(result);
+            }
+        });
+
+    [HttpPost("{id}/edit-proposals/{proposalId:guid}/reject")]
+    public Task<IActionResult> RejectEditProposal(
+        string id, Guid proposalId, [FromBody] RejectEditProposalRequest request,
+        [FromServices] IChatNotifier chatNotifier, CancellationToken cancellationToken)
+        => ForwardToWorkItemServerAsync(async () =>
+        {
+            var result = await _workItemManager.RejectEditProposalAsync(id, proposalId, request.Reason, cancellationToken);
+            if (result.Outcome != EditProposalDecisionOutcome.Rejected)
+                return DecisionRefused(result);
+            await HintProposingChatsAsync(id, chatNotifier, cancellationToken);
+            return Ok(result.Proposal);
+        });
+
+    private IActionResult DecisionRefused(EditProposalDecisionResult result)
+        => result.Outcome == EditProposalDecisionOutcome.NotPending
+            ? Conflict(new { error = $"This proposal was already decided ({result.Proposal?.Status}).", proposal = result.Proposal })
+            : NotFound();
+
+    /// <summary>
+    /// Tell every chat with a proposal on the item to re-read: a decision on one
+    /// proposal can also have made the item's other pending ones stale. Hints
+    /// only, so a chat told needlessly just re-reads — and one that is never
+    /// told re-reads on its next reconnect. The decision has already landed, so
+    /// failing to read who to tell must not report it as failed.
+    /// </summary>
+    private async Task HintProposingChatsAsync(string workItemId, IChatNotifier chatNotifier, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<RemoteWorkItemEditProposal> proposals;
+        try
+        {
+            proposals = await _workItemManager.ListEditProposalsAsync(workItemId, cancellationToken) ?? [];
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Could not read work item {WorkItemId}'s edit proposals to hint their chats", workItemId);
+            return;
+        }
+        foreach (var chat in proposals.Select(p => p.CreatedByChatSessionId).OfType<Guid>().Distinct())
+            await chatNotifier.EditProposalsChangedAsync(chat);
     }
 
     [HttpPost("{id}/transition")]
@@ -865,4 +963,11 @@ public class HumanFeedbackRejectRequest
     /// read it via <c>{{PreviousNode.Output}}</c>.
     /// </summary>
     public string? Input { get; set; }
+}
+
+public class RejectEditProposalRequest
+{
+    /// <summary>Optional reason, handed back to the agent that proposed it.</summary>
+    [System.ComponentModel.DataAnnotations.StringLength(2000)]
+    public string? Reason { get; set; }
 }

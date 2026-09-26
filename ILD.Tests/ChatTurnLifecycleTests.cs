@@ -62,6 +62,7 @@ public sealed class ChatTurnLifecycleTests
         }
 
         public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document) => Task.CompletedTask;
+        public Task EditProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
 
         // Turns run in the background, so every read is a snapshot taken under the
         // same lock the recording writes under.

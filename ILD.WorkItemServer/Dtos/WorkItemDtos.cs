@@ -37,6 +37,12 @@ public sealed class WorkItemDto
 
     /// <summary>The ref every run of this item branches from. Null = the repository's default branch.</summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// How many edit proposals on this item still wait for a human. Zero on the
+    /// poll response, which stays bodiless.
+    /// </summary>
+    public int PendingEditProposalCount { get; set; }
 }
 
 public sealed class WorkItemAttachmentDto
@@ -192,4 +198,97 @@ public sealed class PollResponse
 {
     public IReadOnlyList<WorkItemDto> ActiveItems { get; set; } = Array.Empty<WorkItemDto>();
     public IReadOnlyList<WorkItemDto> ReadyItems { get; set; } = Array.Empty<WorkItemDto>();
+}
+
+/// <summary>
+/// The five editable fields of a work item. On a proposal's <c>Proposed</c>
+/// side a null field was not proposed and a blank branch override clears it;
+/// on its <c>Snapshot</c> side they are the item's values when it was proposed.
+/// </summary>
+public sealed class EditProposalFieldsDto
+{
+    public string? Title { get; set; }
+    public string? Description { get; set; }
+    public IReadOnlyList<string>? Tags { get; set; }
+    public string? BranchNameOverride { get; set; }
+    public string? BaseBranchOverride { get; set; }
+}
+
+public sealed class WorkItemEditProposalDto
+{
+    public Guid Id { get; set; }
+    public string WorkItemId { get; set; } = string.Empty;
+    public WorkItemEditProposalStatus Status { get; set; }
+    public EditProposalFieldsDto Proposed { get; set; } = new();
+    public EditProposalFieldsDto Snapshot { get; set; } = new();
+    public string? Rationale { get; set; }
+    public Guid? CreatedByLoopRunId { get; set; }
+    public Guid? CreatedByChatSessionId { get; set; }
+    public string? RejectionReason { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? DecidedAt { get; set; }
+}
+
+public sealed class CreateEditProposalRequest
+{
+    /// <summary>Null = not proposed. Blank is refused: a work item always has a title.</summary>
+    public string? Title { get; set; }
+    public string? Description { get; set; }
+    public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>Null = not proposed; blank = a proposal to clear it.</summary>
+    public string? BranchNameOverride { get; set; }
+
+    /// <summary>Null = not proposed; blank = a proposal to clear it.</summary>
+    public string? BaseBranchOverride { get; set; }
+
+    public string? Rationale { get; set; }
+    public Guid? CreatedByLoopRunId { get; set; }
+    public Guid? CreatedByChatSessionId { get; set; }
+}
+
+public sealed class RejectEditProposalRequest
+{
+    public string? Reason { get; set; }
+}
+
+public sealed class MarkEditProposalsDeliveredRequest
+{
+    public IReadOnlyList<Guid> Ids { get; set; } = Array.Empty<Guid>();
+}
+
+/// <summary>
+/// The answer to an approve or reject: what came of it, the proposal as it now
+/// stands, and — for an applied approve — the updated work item.
+/// </summary>
+public sealed class EditProposalDecisionResponse
+{
+    public EditProposalDecisionOutcome Outcome { get; set; }
+    public string? Error { get; set; }
+    public WorkItemEditProposalDto? Proposal { get; set; }
+    public WorkItemDto? WorkItem { get; set; }
+}
+
+public enum EditProposalCreateOutcome
+{
+    Created = 0,
+    NotFound = 1,
+
+    /// <summary>The request broke a rule; the result's error says which.</summary>
+    Invalid = 2,
+
+    TooManyPending = 3,
+}
+
+/// <summary>
+/// What came of deciding a proposal. Stale and NotPending are both refusals,
+/// but only Stale means the human's edit is why nothing was applied.
+/// </summary>
+public enum EditProposalDecisionOutcome
+{
+    Applied = 0,
+    Rejected = 1,
+    Stale = 2,
+    NotPending = 3,
+    NotFound = 4,
 }

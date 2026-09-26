@@ -174,6 +174,32 @@ public interface IWorkItemManager
     Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default);
 
     Task<bool> DeleteAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Propose an edit to any work item (a Work Item Edit Proposal). Nothing on
+    /// the item changes until a human approves it. The WorkItem server has the
+    /// last word on the proposal's limits, so a refusal is an outcome carrying
+    /// its reason.
+    /// </summary>
+    Task<EditProposalCreateResult> ProposeEditAsync(string workItemId, RemoteCreateEditProposalRequest request, CancellationToken ct = default);
+
+    /// <summary>The work item's edit proposals, newest first. Null when there is no such work item.</summary>
+    Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(string workItemId, CancellationToken ct = default);
+
+    /// <summary>Edit proposals across work items, newest first.</summary>
+    Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(RemoteEditProposalQuery query, CancellationToken ct = default);
+
+    /// <summary>
+    /// A human's approve: applies exactly the proposed fields if the item's
+    /// editable fields still equal the proposal's snapshot, atomically on the
+    /// WorkItem server; otherwise the proposal goes Stale and nothing changes.
+    /// </summary>
+    Task<EditProposalDecisionResult> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default);
+
+    Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default);
+
+    /// <summary>Record that the proposing chat has been told these decisions.</summary>
+    Task MarkEditProposalDecisionsDeliveredAsync(IReadOnlyList<Guid> proposalIds, CancellationToken ct = default);
 }
 
 /// <summary>

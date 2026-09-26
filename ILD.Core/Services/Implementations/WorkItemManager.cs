@@ -397,6 +397,7 @@ public class WorkItemManager : IWorkItemManager
             PrStatus = ResolvePrStatus(run?.PrSnapshot),
             PullRequests = BuildPrHistory(remote, runs),
             Attachments = remote.Attachments,
+            PendingEditProposalCount = remote.PendingEditProposalCount,
         };
     }
 
@@ -1332,6 +1333,47 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> DeleteAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default)
         => await _server.DeleteAttachmentAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, attachmentId, ct);
+
+    // ──────────────────────────────────────────────────────────────────
+    // Edit proposals
+    // ──────────────────────────────────────────────────────────────────
+
+    public async Task<EditProposalCreateResult> ProposeEditAsync(string workItemId, RemoteCreateEditProposalRequest request, CancellationToken ct = default)
+    {
+        var result = await _server.CreateEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, request, ct);
+        if (result.Outcome == EditProposalCreateOutcome.Created)
+            await _notifier.WorkItemEditProposalsChangedAsync(workItemId);
+        return result;
+    }
+
+    public async Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(string workItemId, CancellationToken ct = default)
+        => await _server.ListEditProposalsAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, ct);
+
+    public async Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(RemoteEditProposalQuery query, CancellationToken ct = default)
+        => await _server.QueryEditProposalsAsync(await _options.ResolveForRepositoryAsync(null, ct), query, ct);
+
+    public async Task<EditProposalDecisionResult> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default)
+    {
+        var result = await _server.ApproveEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, proposalId, ct);
+        // An applied proposal is an edit like any other, so the board hears of it
+        // the way UpdateAsync announces one.
+        if (result is { Outcome: EditProposalDecisionOutcome.Applied, WorkItem: { } updated })
+            await _notifier.WorkItemStateChangedAsync(updated.Id, updated.Status, updated.Status);
+        if (result.Outcome is EditProposalDecisionOutcome.Applied or EditProposalDecisionOutcome.Stale)
+            await _notifier.WorkItemEditProposalsChangedAsync(workItemId);
+        return result;
+    }
+
+    public async Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
+    {
+        var result = await _server.RejectEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, proposalId, reason, ct);
+        if (result.Outcome == EditProposalDecisionOutcome.Rejected)
+            await _notifier.WorkItemEditProposalsChangedAsync(workItemId);
+        return result;
+    }
+
+    public async Task MarkEditProposalDecisionsDeliveredAsync(IReadOnlyList<Guid> proposalIds, CancellationToken ct = default)
+        => await _server.MarkEditProposalDecisionsDeliveredAsync(await _options.ResolveForRepositoryAsync(null, ct), proposalIds, ct);
 
     // ──────────────────────────────────────────────────────────────────
     // Mapping helpers
