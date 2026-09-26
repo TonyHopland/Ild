@@ -12,7 +12,8 @@ namespace ILD.Tests;
 /// list with each tool's input schema (pinned in
 /// <c>Fixtures/mcp-tool-input-schemas.json</c>, captured from the server), and
 /// the content a tools/call returns for an answer and for a refusal from the
-/// ILD API, which a loopback stand-in plays here.
+/// ILD API, which a loopback stand-in plays here. A version the server does not
+/// know is refused with the versions the client can retry with.
 /// </summary>
 public sealed class McpServerStdioCompatibilityTests : IDisposable
 {
@@ -104,6 +105,29 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
         Assert.Contains($"{ApiUrl}/api/v1/agent/current-loop", refusalText);
     }
 
+    [Fact]
+    public async Task A_client_on_an_unknown_protocol_version_is_refused_with_the_versions_it_can_retry_with()
+    {
+        var ct = _cts.Token;
+        StartServer();
+
+        var reply = await ExchangeAsync("initialize", new JsonObject
+        {
+            ["protocolVersion"] = "2099-01-01",
+            ["capabilities"] = new JsonObject(),
+            ["clientInfo"] = new JsonObject { ["name"] = "ild-tests", ["version"] = "1.0.0" },
+        }, ct);
+
+        Assert.Null(reply["result"]);
+        var error = reply["error"];
+        Assert.NotNull(error);
+        Assert.Equal(-32022, (int?)error["code"]);
+        Assert.Equal("2099-01-01", (string?)error["data"]?["requested"]);
+        Assert.Equal(
+            ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"],
+            error["data"]?["supported"]?.AsArray().Select(v => (string?)v).OrderBy(v => v, StringComparer.Ordinal));
+    }
+
     private string ApiUrl => $"http://127.0.0.1:{((IPEndPoint)_api.LocalEndpoint).Port}";
 
     private void StartServer()
@@ -152,6 +176,13 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
 
     private async Task<JsonObject> RequestAsync(string method, JsonObject parameters, CancellationToken ct)
     {
+        var message = await ExchangeAsync(method, parameters, ct);
+        Assert.True(message["error"] is null, $"{method} failed: {message["error"]?.ToJsonString()}");
+        return message["result"]!.AsObject();
+    }
+
+    private async Task<JsonObject> ExchangeAsync(string method, JsonObject parameters, CancellationToken ct)
+    {
         var id = ++_nextId;
         await SendAsync(new JsonObject
         {
@@ -171,8 +202,7 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
             if (message["id"] is null || message["method"] is not null || (int)message["id"]! != id)
                 continue;
 
-            Assert.True(message["error"] is null, $"{method} failed: {message["error"]?.ToJsonString()}");
-            return message["result"]!.AsObject();
+            return message;
         }
     }
 
