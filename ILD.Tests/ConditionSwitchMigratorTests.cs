@@ -37,12 +37,12 @@ public class ConditionSwitchMigratorTests
         using var db = new TestDb();
         var condId = SeedCondition(db, "{\"variant\":\"TextMatches\",\"pattern\":\"approve\",\"output\":\"{{Node.Input}}\"}");
 
-        var migrated = await ConditionSwitchMigrator.MigrateAsync(db.Context);
+        var migrated = await ConditionSwitchMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, migrated);
 
         var fresh = db.Fresh();
-        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == condId);
+        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == condId, TestContext.Current.CancellationToken);
         using var doc = JsonDocument.Parse(node.Config!);
         var root = doc.RootElement;
 
@@ -65,9 +65,9 @@ public class ConditionSwitchMigratorTests
         using var db = new TestDb();
         SeedCondition(db, "{\"variant\":\"PrExists\"}");
 
-        Assert.Equal(1, await ConditionSwitchMigrator.MigrateAsync(db.Context));
+        Assert.Equal(1, await ConditionSwitchMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken));
         // Second run sees the switch shape already in place and changes nothing.
-        Assert.Equal(0, await ConditionSwitchMigrator.MigrateAsync(db.Context));
+        Assert.Equal(0, await ConditionSwitchMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -79,11 +79,11 @@ public class ConditionSwitchMigratorTests
         using var db = new TestDb();
         var condId = SeedCondition(db, "{\"variant\":\"TextMatches\",\"pattern\":\"edge cases\"}");
 
-        var migrated = await ConditionSwitchMigrator.MigrateAsync(db.Context);
+        var migrated = await ConditionSwitchMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, migrated);
         var fresh = db.Fresh();
-        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == condId);
+        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == condId, TestContext.Current.CancellationToken);
         using var doc = JsonDocument.Parse(node.Config!);
         var c = Assert.Single(doc.RootElement.GetProperty("cases").EnumerateArray());
         Assert.Equal("edge cases", c.GetProperty("pattern").GetString());
@@ -97,11 +97,11 @@ public class ConditionSwitchMigratorTests
         var switchConfig = "{\"cases\":[{\"variant\":\"HasTag\",\"tag\":\"urgent\",\"edgeName\":\"urgent\"}],\"defaultEdge\":\"otherwise\"}";
         var condId = SeedCondition(db, switchConfig);
 
-        var migrated = await ConditionSwitchMigrator.MigrateAsync(db.Context);
+        var migrated = await ConditionSwitchMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, migrated);
         var fresh = db.Fresh();
-        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == condId);
+        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == condId, TestContext.Current.CancellationToken);
         Assert.Equal(switchConfig, node.Config);
     }
 }

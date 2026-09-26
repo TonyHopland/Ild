@@ -80,7 +80,7 @@ public class WorktreePreviewServiceLogTests : IDisposable
         var started = await service.StartAsync(_worktree, cancellationToken: CancellationToken.None);
         Assert.Equal("running", started.State);
 
-        var log = await service.GetServiceLogAsync(_worktree, "web");
+        var log = await service.GetServiceLogAsync(_worktree, "web", cancellationToken: TestContext.Current.CancellationToken);
 
         // StartServiceAsync echoes the resolved command into the log before the
         // process runs, so the captured log always contains that command line.
@@ -124,7 +124,7 @@ public class WorktreePreviewServiceLogTests : IDisposable
                 StringComparison.Ordinal),
             "service logs must not live in the state directory the agent can write");
 
-        Assert.NotNull(await service.GetServiceLogAsync(_worktree, "web"));
+        Assert.NotNull(await service.GetServiceLogAsync(_worktree, "web", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public class WorktreePreviewServiceLogTests : IDisposable
         WriteConfig(FindFreePort());
         var service = BuildService();
 
-        var log = await service.GetServiceLogAsync(_worktree, "web");
+        var log = await service.GetServiceLogAsync(_worktree, "web", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(log);
     }
@@ -147,7 +147,7 @@ public class WorktreePreviewServiceLogTests : IDisposable
         // arbitrary file outside the preview state directory.
         var service = BuildService();
 
-        var log = await service.GetServiceLogAsync(_worktree, "../secret");
+        var log = await service.GetServiceLogAsync(_worktree, "../secret", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(log);
     }

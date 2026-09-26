@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
@@ -21,6 +22,7 @@ internal static class UnixOwnership
         | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
         | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
 
+    [UnsupportedOSPlatform("windows")]
     public static UnixFileMode PermissionsOf(string path) => File.GetUnixFileMode(path) & Permissions;
 
     public static string OwnerOf(string path) => Stat(path, "%U");

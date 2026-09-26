@@ -137,7 +137,7 @@ public sealed class ChatTurnLifecycleTests
         var chatId = Guid.NewGuid();
 
         await runner.SubmitAsync(chatId, "hello");
-        await notifier.CompletedAtLeast(1).WaitAsync(Patience);
+        await notifier.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var started = Assert.Single(notifier.Started);
         var completed = Assert.Single(notifier.Completed);
@@ -163,9 +163,9 @@ public sealed class ChatTurnLifecycleTests
         var chatId = Guid.NewGuid();
 
         await runner.SubmitAsync(chatId, "long one");
-        await running.Task.WaitAsync(Patience);
-        await runner.InterruptAsync(chatId).WaitAsync(Patience);
-        await notifier.CompletedAtLeast(1).WaitAsync(Patience);
+        await running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await notifier.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var started = Assert.Single(notifier.Started);
         var completed = Assert.Single(notifier.Completed);
@@ -183,7 +183,7 @@ public sealed class ChatTurnLifecycleTests
             new ScriptedChatService((_, _, _) => throw new InvalidOperationException("boom")), notifier);
 
         await runner.SubmitAsync(Guid.NewGuid(), "hello");
-        await notifier.CompletedAtLeast(1).WaitAsync(Patience);
+        await notifier.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var started = Assert.Single(notifier.Started);
         var completed = Assert.Single(notifier.Completed);
@@ -208,7 +208,7 @@ public sealed class ChatTurnLifecycleTests
         var runner = NewRunner(chat, notifier);
 
         await runner.SubmitAsync(Guid.NewGuid(), "hello");
-        await notifier.CompletedAtLeast(1).WaitAsync(Patience);
+        await notifier.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         // The service had nothing to say about a chat that is not there — which is
         // exactly why the turn's own completion cannot be left to it.
@@ -234,12 +234,12 @@ public sealed class ChatTurnLifecycleTests
         Assert.Null(runner.ActiveTurnId(chatId));
 
         await runner.SubmitAsync(chatId, "go");
-        await running.Task.WaitAsync(Patience);
+        await running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Equal(Assert.Single(notifier.Started).TurnId, runner.ActiveTurnId(chatId));
 
         release.SetResult();
-        await notifier.CompletedAtLeast(1).WaitAsync(Patience);
+        await notifier.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
         // A turn retires before it announces that it finished, so by then the chat
         // already reads as idle.
         Assert.Null(runner.ActiveTurnId(chatId));
@@ -273,7 +273,7 @@ public sealed class ChatTurnLifecycleTests
         var chatId = Guid.NewGuid();
 
         await runner.SubmitAsync(chatId, "one");
-        await firstRunning.Task.WaitAsync(Patience);
+        await firstRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         var firstTurn = runner.ActiveTurnId(chatId);
         Assert.NotNull(firstTurn);
 
@@ -281,14 +281,14 @@ public sealed class ChatTurnLifecycleTests
         // above and starts its replacement.
         var interruptingSend = runner.SubmitAsync(chatId, "two");
 
-        await firstCancelled.Task.WaitAsync(Patience);
+        await firstCancelled.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         // The window the bug lives in: the outgoing turn is cancelled and still
         // finalizing, and the client is about to be told it ended.
         Assert.NotNull(runner.ActiveTurnId(chatId));
 
         releaseFirst.SetResult();
-        await interruptingSend.WaitAsync(Patience);
-        await secondRunning.Task.WaitAsync(Patience);
+        await interruptingSend.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await secondRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var secondTurn = runner.ActiveTurnId(chatId);
         Assert.NotNull(secondTurn);
@@ -302,7 +302,7 @@ public sealed class ChatTurnLifecycleTests
         Assert.True(completed.Interrupted);
 
         releaseSecond.SetResult();
-        await notifier.CompletedAtLeast(2).WaitAsync(Patience);
+        await notifier.CompletedAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Equal(secondTurn, notifier.Completed[1].TurnId);
         Assert.False(notifier.Completed[1].Interrupted);
     }

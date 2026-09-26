@@ -310,11 +310,11 @@ public sealed class PiMcpBridgeTests : IDisposable
     private static JsonObject Call(string tool, JsonObject? parameters = null)
         => new() { ["tool"] = tool, ["params"] = parameters ?? new JsonObject() };
 
-    private JsonArray CallOne(string tool, JsonObject? parameters = null)
+    private IReadOnlyList<JsonObject> CallOne(string tool, JsonObject? parameters = null)
     {
         var call = Calls(Run(FakeServer("normal", calls: new JsonArray(Call(tool, parameters))))).Single();
         Assert.True(call["content"] is JsonArray, $"{tool} failed: {call["error"]}");
-        return call["content"]!.AsArray();
+        return call["content"]!.AsArray().Select(c => c!.AsObject()).ToArray();
     }
 
     private static IReadOnlyList<JsonObject> Calls(BridgeRun run)

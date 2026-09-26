@@ -78,7 +78,7 @@ public class PrStatusPollServiceTests
     public async Task Persists_snapshot_and_pushes_gui_update_every_tick()
     {
         var h = new Harness(Snapshot(ci: RemotePrCiStatus.Pending), baseline: null);
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(h.Run.Id), Times.Once);
@@ -93,7 +93,7 @@ public class PrStatusPollServiceTests
         // blob is round-tripped verbatim into the API response, so it must carry
         // the enum's string name.
         var h = new Harness(Snapshot(ci: RemotePrCiStatus.Passed), baseline: null);
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(h.Run.PrSnapshot);
         Assert.Contains("\"ci\":\"Passed\"", h.Run.PrSnapshot);
@@ -107,7 +107,7 @@ public class PrStatusPollServiceTests
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed) });
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
             It.Is<NodeSignal>(sig => sig.EdgeName == PrNodeEdges.OnCiFailed)), Times.Once);
@@ -124,7 +124,7 @@ public class PrStatusPollServiceTests
             failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
             baseline: null);
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         var parsed = PrSnapshotJson.TryParse(h.Run.PrSnapshot);
         Assert.Equal(RemotePrCiStatus.Failed, parsed!.Ci);
@@ -144,7 +144,7 @@ public class PrStatusPollServiceTests
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed) });
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
             It.Is<NodeSignal>(sig => sig.EdgeName == PrNodeEdges.OnCiFailed
@@ -165,7 +165,7 @@ public class PrStatusPollServiceTests
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnMerged) });
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
             It.Is<NodeSignal>(sig => !string.IsNullOrWhiteSpace(sig.Output))), Times.Once);
@@ -175,7 +175,7 @@ public class PrStatusPollServiceTests
     public async Task Does_not_fire_when_edge_unconnected_but_still_persists()
     {
         var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrPolledEdgeStates!.Contains(PrNodeEdges.OnCiFailed))), Times.Once);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
@@ -194,7 +194,7 @@ public class PrStatusPollServiceTests
                 CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnRejected),
             });
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
             It.Is<NodeSignal>(sig => sig.EdgeName == PrNodeEdges.OnRejected)), Times.Once);
@@ -209,7 +209,7 @@ public class PrStatusPollServiceTests
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed) });
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }

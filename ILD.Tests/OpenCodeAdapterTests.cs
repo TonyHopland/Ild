@@ -848,7 +848,7 @@ public class OpenCodeAdapterTests
             Assert.Equal("managed-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "managed-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "managed-session", TestContext.Current.CancellationToken);
             Assert.NotNull(snapshot);
             Assert.Equal("{\"id\":\"managed-session\",\"messages\":[1]}", snapshot!.SessionJson);
 
@@ -932,7 +932,7 @@ public class OpenCodeAdapterTests
             Assert.Equal("large-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "large-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "large-session", TestContext.Current.CancellationToken);
             Assert.NotNull(snapshot);
             Assert.Equal(exportJson, snapshot!.SessionJson);
             Assert.Equal(exportJson.Length, snapshot.SessionJson.Length);
@@ -996,7 +996,7 @@ public class OpenCodeAdapterTests
             Assert.Equal("managed-session", result.SessionId);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "managed-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "managed-session", TestContext.Current.CancellationToken);
             Assert.Null(snapshot);
         }
         finally
@@ -1072,7 +1072,7 @@ public class OpenCodeAdapterTests
             Assert.Contains("export resume-session", log);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "resume-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "resume-session", TestContext.Current.CancellationToken);
             Assert.Equal("{\"id\":\"resume-session\",\"messages\":[2]}", snapshot!.SessionJson);
         }
         finally
@@ -1146,7 +1146,7 @@ public class OpenCodeAdapterTests
             Assert.Contains("export fresh-session", log);
 
             await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "fresh-session");
+            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "fresh-session", TestContext.Current.CancellationToken);
             Assert.Equal("{\"id\":\"fresh-session\",\"messages\":[1]}", snapshot!.SessionJson);
         }
         finally
@@ -1247,11 +1247,11 @@ public class OpenCodeAdapterTests
 
             await using var verifyDb = harness.CreateDbContext();
             // Source session is byte-for-byte unchanged after the fork.
-            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "source-sess");
+            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "source-sess", TestContext.Current.CancellationToken);
             Assert.NotNull(source);
             Assert.Equal(sourceJson, source!.SessionJson);
             // A copy now exists under the fork's id, retargeted to that id.
-            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "fork-dest");
+            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "fork-dest", TestContext.Current.CancellationToken);
             Assert.NotNull(fork);
             Assert.Contains("fork-dest", fork!.SessionJson);
             Assert.DoesNotContain("source-sess", fork.SessionJson);

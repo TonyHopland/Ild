@@ -39,7 +39,7 @@ public class ConnectionTesterMalformedInputTests
             {
                 using var client = await listener.AcceptTcpClientAsync();
                 var stream = client.GetStream();
-                await stream.ReadAsync(new byte[8192]);
+                await stream.ReadAtLeastAsync(new byte[8192], 1, throwOnEndOfStream: false);
                 await stream.WriteAsync(Encoding.ASCII.GetBytes(response));
             }
         });

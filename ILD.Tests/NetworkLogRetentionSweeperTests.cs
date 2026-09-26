@@ -22,7 +22,7 @@ public class NetworkLogRetentionSweeperTests
         var notifier = new Mock<INetworkNotifier>();
         await InvokeSweepOnceAsync(BuildSweeper(db, notifier.Object, retentionDays: 30));
 
-        var remaining = await db.Network.GetLogAsync(100);
+        var remaining = await db.Network.GetLogAsync(100, TestContext.Current.CancellationToken);
         Assert.Equal(new[] { recent }, remaining.Select(l => l.Id));
         Assert.DoesNotContain(stale, remaining.Select(l => l.Id));
     }
@@ -35,7 +35,7 @@ public class NetworkLogRetentionSweeperTests
 
         await InvokeSweepOnceAsync(BuildSweeper(db, new Mock<INetworkNotifier>().Object, retentionDays: 30));
 
-        Assert.Equal(new[] { edge }, (await db.Network.GetLogAsync(100)).Select(l => l.Id));
+        Assert.Equal(new[] { edge }, (await db.Network.GetLogAsync(100, TestContext.Current.CancellationToken)).Select(l => l.Id));
     }
 
     [Fact]
@@ -47,7 +47,7 @@ public class NetworkLogRetentionSweeperTests
         var notifier = new Mock<INetworkNotifier>();
         await InvokeSweepOnceAsync(BuildSweeper(db, notifier.Object, retentionDays: 0));
 
-        Assert.Equal(new[] { ancient }, (await db.Network.GetLogAsync(100)).Select(l => l.Id));
+        Assert.Equal(new[] { ancient }, (await db.Network.GetLogAsync(100, TestContext.Current.CancellationToken)).Select(l => l.Id));
         notifier.Verify(n => n.LogClearedAsync(), Times.Never);
     }
 
@@ -73,13 +73,13 @@ public class NetworkLogRetentionSweeperTests
         // Only reachable by editing the row directly; the API refuses it. Left
         // unbounded it makes the cutoff subtraction throw, which the sweeper
         // swallows — the log would then never be pruned again.
-        await db.Settings.UpsertAsync(AppSettingKeys.NetworkLogRetentionDays, "999999999");
+        await db.Settings.UpsertAsync(AppSettingKeys.NetworkLogRetentionDays, "999999999", TestContext.Current.CancellationToken);
         var beyondCeiling = SeedLine(db, "ancient.example", DateTime.UtcNow.AddDays(-4000));
         var withinCeiling = SeedLine(db, "old.example", DateTime.UtcNow.AddDays(-3000));
 
         await InvokeSweepOnceAsync(BuildSweeper(db, new Mock<INetworkNotifier>().Object, new SchedulerSettingsService(db.Settings)));
 
-        var remaining = (await db.Network.GetLogAsync(100)).Select(l => l.Id).ToList();
+        var remaining = (await db.Network.GetLogAsync(100, TestContext.Current.CancellationToken)).Select(l => l.Id).ToList();
         Assert.Equal(new[] { withinCeiling }, remaining);
         Assert.DoesNotContain(beyondCeiling, remaining);
     }

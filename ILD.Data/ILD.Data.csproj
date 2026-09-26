@@ -8,13 +8,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Npgsql.EntityFrameworkCore.PostgreSQL 10.0.1 is the latest stable and
-         transitively pulls in EF Core 10.0.4. Keeping all EF Core packages at
-         10.0.4 avoids MSB3277 assembly version conflicts (mixing 10.0.4 and
-         10.0.7 resolves to 10.0.4 as primary, producing warnings). -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.4" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
+    <!-- Npgsql.EntityFrameworkCore.PostgreSQL only floors EF Core Relational at
+         10.0.4, so without a direct reference Relational resolves older than the
+         other EF Core packages and MSBuild reports MSB3277 assembly version
+         conflicts. Keep every EF Core package on the same version. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.12" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.Versioning;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -149,6 +150,7 @@ public class ManagedAgentServiceTests : IDisposable
     /// skipped — their mode is always 0777 and cannot be changed) that is still
     /// writable by the shared group or by others.
     /// </summary>
+    [UnsupportedOSPlatform("windows")]
     private static List<string> AgentWritableEntries(string root)
     {
         var offenders = new List<string>();
@@ -201,7 +203,7 @@ public class ManagedAgentServiceTests : IDisposable
         foreach (var path in new[] { preAgentRoot, preVersions })
             File.SetUnixFileMode(path, File.GetUnixFileMode(path) | UnixFileMode.GroupWrite);
 
-        await service.UpdateAsync(_agent.Key);
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         var agentRoot = ManagedAgentInstall.AgentRoot(_dataRoot, _agent);
         Assert.True(Directory.Exists(agentRoot));
@@ -221,6 +223,7 @@ public class ManagedAgentServiceTests : IDisposable
     /// Symlinks are skipped exactly as the entrypoint skips them (mode 0777 always,
     /// and chmod cannot change it).
     /// </summary>
+    [UnsupportedOSPlatform("windows")]
     private static List<string> SharedReadOnlyDriftEntries(string root)
     {
         var drift = new List<string>();
@@ -275,7 +278,7 @@ public class ManagedAgentServiceTests : IDisposable
         foreach (var seed in new[] { ManagedAgentInstall.AgentRoot(_dataRoot, _agent), versions })
             File.SetUnixFileMode(seed, File.GetUnixFileMode(seed) | UnixFileMode.SetGroup);
 
-        await service.UpdateAsync(_agent.Key);
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         var during = runner.PrefixModeDuringInstall;
         Assert.NotNull(during);
@@ -328,7 +331,7 @@ public class ManagedAgentServiceTests : IDisposable
         Directory.CreateDirectory(preVersions);
         File.SetUnixFileMode(preVersions, File.GetUnixFileMode(preVersions) | UnixFileMode.GroupWrite);
 
-        await service.UpdateAsync(_agent.Key);
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         var stillWritable = AgentWritableEntries(ManagedAgentInstall.AgentRoot(_dataRoot, _agent));
         Assert.NotEmpty(stillWritable);
@@ -341,7 +344,7 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
-        var status = await service.GetStatusAsync(_agent);
+        var status = await service.GetStatusAsync(_agent, TestContext.Current.CancellationToken);
 
         Assert.Equal("0.80.1", status.InstalledVersion);
         Assert.Equal("0.80.2", status.LatestVersion);
@@ -356,7 +359,7 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
-        var status = await service.GetStatusAsync(_agent);
+        var status = await service.GetStatusAsync(_agent, TestContext.Current.CancellationToken);
 
         Assert.False(status.UpdateAvailable);
     }
@@ -368,7 +371,7 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Status = HttpStatusCode.ServiceUnavailable };
         var service = CreateService(runner, handler);
 
-        var status = await service.GetStatusAsync(_agent);
+        var status = await service.GetStatusAsync(_agent, TestContext.Current.CancellationToken);
 
         Assert.Null(status.LatestVersion);
         Assert.False(status.UpdateAvailable);
@@ -384,7 +387,7 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
-        var status = await service.GetStatusAsync(_agent);
+        var status = await service.GetStatusAsync(_agent, TestContext.Current.CancellationToken);
 
         Assert.Null(status.InstalledVersion);
         Assert.Equal("0.80.2", status.LatestVersion);
@@ -398,7 +401,7 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Status = HttpStatusCode.ServiceUnavailable };
         var service = CreateService(runner, handler);
 
-        var status = await service.GetStatusAsync(_agent);
+        var status = await service.GetStatusAsync(_agent, TestContext.Current.CancellationToken);
 
         Assert.Null(status.InstalledVersion);
         Assert.Null(status.LatestVersion);
@@ -413,7 +416,7 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
-        var status = await service.UpdateAsync(_agent.Key);
+        var status = await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         var active = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
         Assert.NotNull(active);
@@ -432,13 +435,13 @@ public class ManagedAgentServiceTests : IDisposable
         var service = CreateService(runner, handler);
         var versionsRoot = ManagedAgentInstall.VersionsRoot(_dataRoot, _agent);
 
-        await service.UpdateAsync(_agent.Key); // v1 (no previous)
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken); // v1 (no previous)
         Assert.Single(Directory.GetDirectories(versionsRoot));
 
-        await service.UpdateAsync(_agent.Key); // v2 keeps v1 as previous
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken); // v2 keeps v1 as previous
         Assert.Equal(2, Directory.GetDirectories(versionsRoot).Length);
 
-        await service.UpdateAsync(_agent.Key); // v3 keeps v2; v1 pruned
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken); // v3 keeps v2; v1 pruned
         Assert.Equal(2, Directory.GetDirectories(versionsRoot).Length);
     }
 
@@ -449,11 +452,11 @@ public class ManagedAgentServiceTests : IDisposable
         var handler = new RegistryHandler { Version = "0.80.2" };
         var service = CreateService(runner, handler);
 
-        await service.UpdateAsync(_agent.Key);
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
         var previousBinary = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
         Assert.NotNull(previousBinary);
 
-        await service.UpdateAsync(_agent.Key);
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         // The new version is active, but the version a run was launched against
         // before the swap is still on disk, so that run can keep require()-ing.
@@ -471,14 +474,14 @@ public class ManagedAgentServiceTests : IDisposable
         var service = CreateService(runner, handler);
 
         // First update succeeds and becomes the live version.
-        await service.UpdateAsync(_agent.Key);
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
         var liveBefore = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
         var pointerBefore = File.ReadAllText(ManagedAgentInstall.PointerFile(_dataRoot, _agent));
 
         // Second update fails mid-install.
         runner.InstallSucceeds = false;
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.UpdateAsync(_agent.Key));
+            () => service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken));
 
         // The previously-active version is untouched, and the failed staging dir is gone.
         Assert.Equal(liveBefore, ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent));
@@ -495,7 +498,7 @@ public class ManagedAgentServiceTests : IDisposable
         var service = CreateService(runner, handler);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.UpdateAsync(_agent.Key));
+            () => service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken));
 
         Assert.False(Directory.Exists(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent))
             && Directory.GetDirectories(ManagedAgentInstall.VersionsRoot(_dataRoot, _agent)).Length > 0);
@@ -506,7 +509,7 @@ public class ManagedAgentServiceTests : IDisposable
     {
         var service = CreateService(new FakeRunner(), new RegistryHandler());
         await Assert.ThrowsAsync<KeyNotFoundException>(
-            () => service.UpdateAsync("does-not-exist"));
+            () => service.UpdateAsync("does-not-exist", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -522,16 +525,16 @@ public class ManagedAgentServiceTests : IDisposable
         var serviceA = CreateService(runnerA, new RegistryHandler { Version = "0.80.2" });
         var serviceB = CreateService(runnerB, new RegistryHandler { Version = "0.80.2" });
 
-        var taskA = serviceA.UpdateAsync(_agent.Key);
-        var taskB = serviceB.UpdateAsync(_agent.Key);
+        var taskA = serviceA.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
+        var taskB = serviceB.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         // A is inside its install (holding the shared lock).
-        await runnerA.InstallEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await runnerA.InstallEntered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         // B must not have started installing — it is parked on the lock.
         Assert.False(runnerB.InstallEntered.Task.IsCompleted);
 
         gateA.SetResult();
-        await Task.WhenAll(taskA, taskB).WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.WhenAll(taskA, taskB).WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(runnerB.InstallEntered.Task.IsCompleted);
         // Serialized, not interleaved: B installed after A, so the end state is
@@ -547,7 +550,7 @@ public class ManagedAgentServiceTests : IDisposable
         var runner = new FakeRunner { InstalledVersion = null, VersionAfterInstall = "0.80.2" };
         var service = CreateService(runner, new RegistryHandler { Version = "0.80.2" });
 
-        var status = await service.EnsureInstalledAsync(_agent.Key);
+        var status = await service.EnsureInstalledAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         var active = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, _agent);
         Assert.NotNull(active);
@@ -564,7 +567,7 @@ public class ManagedAgentServiceTests : IDisposable
         var runner = new FakeRunner { InstalledVersion = "0.80.1" };
         var service = CreateService(runner, new RegistryHandler { Version = "0.80.2" });
 
-        var status = await service.EnsureInstalledAsync(_agent.Key);
+        var status = await service.EnsureInstalledAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         Assert.Equal("0.80.1", status.InstalledVersion);
         Assert.True(status.UpdateAvailable); // surfaced, but not acted on
@@ -577,7 +580,7 @@ public class ManagedAgentServiceTests : IDisposable
     {
         var service = CreateService(new FakeRunner(), new RegistryHandler());
         await Assert.ThrowsAsync<KeyNotFoundException>(
-            () => service.EnsureInstalledAsync("does-not-exist"));
+            () => service.EnsureInstalledAsync("does-not-exist", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -621,7 +624,7 @@ public class ManagedAgentServiceTests : IDisposable
         var runner = new FakeRunner { InstalledVersion = "1.0.0" };
         var service = CreateService(runner, new RegistryHandler { Version = "1.0.0" });
 
-        var statuses = await service.GetStatusesAsync();
+        var statuses = await service.GetStatusesAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(
             ManagedAgentCatalog.All.Select(a => a.Key).OrderBy(k => k).ToArray(),
@@ -635,7 +638,7 @@ public class ManagedAgentServiceTests : IDisposable
         var runner = new FakeRunner { BinaryName = claude.BinaryName, InstalledVersion = "2.1.187" };
         var service = CreateService(runner, new RegistryHandler { Version = "2.1.187" });
 
-        await service.UpdateAsync(claude.Key);
+        await service.UpdateAsync(claude.Key, TestContext.Current.CancellationToken);
 
         var active = ManagedAgentInstall.CurrentBinaryPath(_dataRoot, claude);
         Assert.NotNull(active);
@@ -653,7 +656,7 @@ public class ManagedAgentServiceTests : IDisposable
         // No /data install yet → resolves to the bare command on PATH.
         Assert.Equal(_agent.Command, ManagedAgentInstall.ResolveCommand(_agent, _dataRoot));
 
-        await service.UpdateAsync(_agent.Key);
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         // After install → resolves to the /data binary.
         var resolved = ManagedAgentInstall.ResolveCommand(_agent, _dataRoot);

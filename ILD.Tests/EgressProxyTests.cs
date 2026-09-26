@@ -44,7 +44,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
         _policy = new EgressPolicy(_services.GetRequiredService<IServiceScopeFactory>(), _clock);
     }
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _upstream = new TcpListener(IPAddress.Loopback, 0);
         _upstream.Start();
@@ -56,7 +56,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
         _proxyPort = await _proxy.BoundPort.WaitAsync(Timeout);
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_proxy is not null) await _proxy.StopAsync(CancellationToken.None);
         _upstream?.Stop();
@@ -312,10 +312,10 @@ public sealed class EgressProxyTests : IAsyncLifetime
         await ListAsync("localhost", NetworkListKind.Whitelist);
 
         using var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, _proxyPort);
+        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
         var stream = client.GetStream();
         await stream.WriteAsync(Encoding.ASCII.GetBytes(
-            $"GET http://localhost:{_upstreamPort}/things?x=1 HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\nProxy-Connection: keep-alive\r\n\r\n"));
+            $"GET http://localhost:{_upstreamPort}/things?x=1 HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\nProxy-Connection: keep-alive\r\n\r\n"), TestContext.Current.CancellationToken);
         var response = await ReadToEndAsync(stream);
 
         Assert.StartsWith("HTTP/1.1 200", response);
@@ -331,9 +331,9 @@ public sealed class EgressProxyTests : IAsyncLifetime
         await ListAsync("localhost", NetworkListKind.Blacklist);
 
         using var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, _proxyPort);
+        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
         var stream = client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes($"GET http://localhost:{_upstreamPort}/ HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\n\r\n"));
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"GET http://localhost:{_upstreamPort}/ HTTP/1.1\r\nHost: localhost:{_upstreamPort}\r\n\r\n"), TestContext.Current.CancellationToken);
 
         Assert.StartsWith("HTTP/1.1 403", await ReadToEndAsync(stream));
     }
@@ -345,9 +345,9 @@ public sealed class EgressProxyTests : IAsyncLifetime
         await ListAsync(".blocked.example", NetworkListKind.Blacklist);
 
         using var client = new TcpClient();
-        await client.ConnectAsync(IPAddress.Loopback, _proxyPort);
+        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
         var stream = client.GetStream();
-        await stream.WriteAsync(TlsClientHelloTests.Build("api.blocked.example"));
+        await stream.WriteAsync(TlsClientHelloTests.Build("api.blocked.example"), TestContext.Current.CancellationToken);
 
         using var cts = new CancellationTokenSource(Timeout);
         using var ms = new MemoryStream();
@@ -365,7 +365,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
         {
             Assert.StartsWith("HTTP/1.1 200", status);
             var stream = client.GetStream();
-            await stream.WriteAsync(Encoding.ASCII.GetBytes("last words"));
+            await stream.WriteAsync(Encoding.ASCII.GetBytes("last words"), TestContext.Current.CancellationToken);
             client.Client.Shutdown(SocketShutdown.Send);
 
             // The upstream echo answers after it sees our EOF; the relay must still carry it back.
@@ -378,14 +378,14 @@ public sealed class EgressProxyTests : IAsyncLifetime
     public async Task The_cached_policy_expires_on_its_own_after_the_ttl()
     {
         await SetModeAsync(NetworkMode.Blacklist);
-        Assert.Equal(NetworkMode.Blacklist, (await _policy.GetAsync()).Mode);
+        Assert.Equal(NetworkMode.Blacklist, (await _policy.GetAsync(TestContext.Current.CancellationToken)).Mode);
 
         // Written behind the cache's back: no Invalidate this time.
-        await _db.Settings.UpsertAsync(AppSettingKeys.NetworkMode, "whitelist");
-        Assert.Equal(NetworkMode.Blacklist, (await _policy.GetAsync()).Mode);
+        await _db.Settings.UpsertAsync(AppSettingKeys.NetworkMode, "whitelist", TestContext.Current.CancellationToken);
+        Assert.Equal(NetworkMode.Blacklist, (await _policy.GetAsync(TestContext.Current.CancellationToken)).Mode);
 
         _clock.Advance(EgressPolicy.CacheTtl + TimeSpan.FromMilliseconds(1));
-        Assert.Equal(NetworkMode.Whitelist, (await _policy.GetAsync()).Mode);
+        Assert.Equal(NetworkMode.Whitelist, (await _policy.GetAsync(TestContext.Current.CancellationToken)).Mode);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
@@ -449,10 +449,10 @@ public sealed class NetworkLogRecorderTests : IDisposable
         recorder.Record("api.anthropic.com", 443, NetworkDecision.Allowed, providerId);
         recorder.Record("evil.example", 80, NetworkDecision.Blocked, null);
 
-        await notifier.TwoAppended.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await notifier.TwoAppended.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await recorder.StopAsync(CancellationToken.None);
 
-        var log = await _db.Network.GetLogAsync(10);
+        var log = await _db.Network.GetLogAsync(10, TestContext.Current.CancellationToken);
         Assert.Equal(2, log.Count);
         var anthropic = Assert.Single(log, l => l.Host == "api.anthropic.com");
         Assert.Equal(443, anthropic.Port);
@@ -500,20 +500,20 @@ public sealed class EgressPolicyInvalidationTests
         var policy = new EgressPolicy(provider.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
 
         store.Entries = new[] { Entry("old.example") };
-        var firstLoad = policy.GetAsync().AsTask();
-        await store.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var firstLoad = policy.GetAsync(TestContext.Current.CancellationToken).AsTask();
+        await store.Started.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         // The edit lands while the first read is still in flight.
         store.Entries = new[] { Entry("new.example") };
         policy.Invalidate();
         store.Release();
 
-        var snapshot = await firstLoad.WaitAsync(TimeSpan.FromSeconds(10));
+        var snapshot = await firstLoad.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
         Assert.Equal("new.example", Assert.Single(snapshot.Entries).Host);
         Assert.Equal(2, store.Reads);
         Assert.Equal(NetworkDecision.Blocked, snapshot.Decide("new.example", null));
-        Assert.Equal("new.example", Assert.Single((await policy.GetAsync()).Entries).Host);
+        Assert.Equal("new.example", Assert.Single((await policy.GetAsync(TestContext.Current.CancellationToken)).Entries).Host);
         Assert.Equal(2, store.Reads);
     }
 
@@ -579,7 +579,7 @@ public sealed class EgressProxyParseTests
         var head = Forwarded("GET http://api.example.com:8080/v1/things?x=1 HTTP/1.1\r\nAccept: */*\r\n\r\n");
 
         Assert.StartsWith("GET /v1/things?x=1 HTTP/1.1\r\nHost: api.example.com:8080\r\n", head);
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: ").Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: "));
         Assert.EndsWith("Connection: close\r\n\r\n", head);
     }
 
@@ -594,7 +594,7 @@ public sealed class EgressProxyParseTests
     {
         var head = Forwarded("GET http://api.example.com/ HTTP/1.1\r\nHost: api.example.com\r\nProxy-Connection: keep-alive\r\n\r\n");
 
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: ").Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(head, "(?m)^Host: "));
         Assert.DoesNotContain("Proxy-Connection", head);
     }
 

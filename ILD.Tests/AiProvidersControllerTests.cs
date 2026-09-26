@@ -70,7 +70,7 @@ public class AiProvidersControllerTests : IDisposable
             ApiKey = "sk-secret",
             Config = "{\"apiKey\":\"sk-secret\",\"model\":\"gpt-4\"}",
         });
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var controller = CreateController();
         var result = await controller.GetAll() as OkObjectResult;
@@ -96,7 +96,7 @@ public class AiProvidersControllerTests : IDisposable
             ApiKey = "sk-leaked",
             Config = "{\"apiKey\":\"sk-leaked\"}",
         });
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var controller = CreateController();
         var result = await controller.GetById(id.ToString()) as OkObjectResult;
@@ -120,7 +120,7 @@ public class AiProvidersControllerTests : IDisposable
                 Model = "m",
             });
         }
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var controller = CreateController();
         var result = await controller.GetAll(skip: 0, take: 10000) as OkObjectResult;
@@ -141,7 +141,7 @@ public class AiProvidersControllerTests : IDisposable
             BaseUrl = "https://x",
             Model = "m",
         });
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var controller = CreateController();
         var result = await controller.GetAll() as OkObjectResult;
@@ -255,7 +255,7 @@ public class AiProvidersControllerTests : IDisposable
             Model = "sonnet",
         });
 
-        Assert.Equal("sonnet", (await _db.AiProviders.FindAsync(id))!.Model);
+        Assert.Equal("sonnet", (await _db.AiProviders.FindAsync([id], TestContext.Current.CancellationToken))!.Model);
     }
 
     [Fact]
@@ -299,15 +299,15 @@ public class AiProvidersControllerTests : IDisposable
             Model = "m",
             IsDefault = false,
         });
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var controller = CreateController();
         var result = await controller.SetDefault(secondId.ToString()) as OkObjectResult;
 
         Assert.NotNull(result);
         _db.ChangeTracker.Clear();
-        var reloadedFirst = await _db.AiProviders.FindAsync(firstId);
-        var reloadedSecond = await _db.AiProviders.FindAsync(secondId);
+        var reloadedFirst = await _db.AiProviders.FindAsync([firstId], TestContext.Current.CancellationToken);
+        var reloadedSecond = await _db.AiProviders.FindAsync([secondId], TestContext.Current.CancellationToken);
         Assert.False(reloadedFirst!.IsDefault);
         Assert.True(reloadedSecond!.IsDefault);
     }
@@ -340,7 +340,7 @@ public class AiProvidersControllerTests : IDisposable
             BaseUrl = "https://x",
             Model = "m",
         });
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var controller = CreateController();
 
@@ -479,7 +479,7 @@ public class AiProvidersControllerTests : IDisposable
         if (named is not null) Assert.Contains(named, error);
         Assert.Equal(["keep"], await StoredTagsAsync(id));
         _db.ChangeTracker.Clear();
-        Assert.Equal("before", (await _db.AiProviders.FindAsync(id))!.Name);
+        Assert.Equal("before", (await _db.AiProviders.FindAsync([id], TestContext.Current.CancellationToken))!.Name);
     }
 
     [Fact]

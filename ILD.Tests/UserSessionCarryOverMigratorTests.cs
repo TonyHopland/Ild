@@ -19,9 +19,9 @@ public class UserSessionCarryOverMigratorTests
         using var db = new TestDb();
         var user = await SeedLegacyUserAsync(db, "legacy-token-from-the-old-column");
 
-        var carried = await UserSessionCarryOverMigrator.CaptureAsync(db.Context);
+        var carried = await UserSessionCarryOverMigrator.CaptureAsync(db.Context, TestContext.Current.CancellationToken);
         var created = await UserSessionCarryOverMigrator.ApplyAsync(
-            db.Context, carried, DateTime.UtcNow.AddDays(90));
+            db.Context, carried, DateTime.UtcNow.AddDays(90), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, created);
 
@@ -36,10 +36,10 @@ public class UserSessionCarryOverMigratorTests
         using var db = new TestDb();
         await SeedLegacyUserAsync(db, "legacy-token");
 
-        var carried = await UserSessionCarryOverMigrator.CaptureAsync(db.Context);
-        await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null);
+        var carried = await UserSessionCarryOverMigrator.CaptureAsync(db.Context, TestContext.Current.CancellationToken);
+        await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null, TestContext.Current.CancellationToken);
 
-        var session = await db.Context.UserSessions.SingleAsync();
+        var session = await db.Context.UserSessions.SingleAsync(TestContext.Current.CancellationToken);
         Assert.Equal(SessionTokenHasher.Hash("legacy-token"), session.TokenHash);
         Assert.DoesNotContain("legacy-token", session.TokenHash, StringComparison.Ordinal);
     }
@@ -50,10 +50,10 @@ public class UserSessionCarryOverMigratorTests
         using var db = new TestDb();
         await SeedLegacyUserAsync(db, "legacy-token");
 
-        var carried = await UserSessionCarryOverMigrator.CaptureAsync(db.Context);
-        Assert.Equal(1, await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null));
-        Assert.Equal(0, await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null));
-        Assert.Equal(1, await db.Context.UserSessions.CountAsync());
+        var carried = await UserSessionCarryOverMigrator.CaptureAsync(db.Context, TestContext.Current.CancellationToken);
+        Assert.Equal(1, await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null, TestContext.Current.CancellationToken));
+        Assert.Equal(0, await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null, TestContext.Current.CancellationToken));
+        Assert.Equal(1, await db.Context.UserSessions.CountAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -68,7 +68,7 @@ public class UserSessionCarryOverMigratorTests
             CreatedAt = DateTime.UtcNow,
         });
 
-        Assert.Empty(await UserSessionCarryOverMigrator.CaptureAsync(db.Context));
+        Assert.Empty(await UserSessionCarryOverMigrator.CaptureAsync(db.Context, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -77,10 +77,10 @@ public class UserSessionCarryOverMigratorTests
         using var db = new TestDb();
         await SeedLegacyUserAsync(db, sessionToken: null);
 
-        var carried = await UserSessionCarryOverMigrator.CaptureAsync(db.Context);
+        var carried = await UserSessionCarryOverMigrator.CaptureAsync(db.Context, TestContext.Current.CancellationToken);
 
         Assert.Empty(carried);
-        Assert.Equal(0, await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null));
+        Assert.Equal(0, await UserSessionCarryOverMigrator.ApplyAsync(db.Context, carried, null, TestContext.Current.CancellationToken));
     }
 
     /// <summary>

@@ -51,7 +51,7 @@ public class AIProviderServiceTests
             WorktreePath = worktreePath,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
         });
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(m => m.GetWorkItemAsync(wiId))

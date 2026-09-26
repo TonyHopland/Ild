@@ -411,7 +411,7 @@ public class RemotePrReviewLedgerPagingTests
             .ReplyToReviewThreadAsync(repo, "5", "901", "That compiles.");
 
         Assert.True(result.Ok);
-        var posted = Assert.Single(handler.Bodies.Where(b => b.Url.EndsWith("/pulls/5/reviews", StringComparison.Ordinal)));
+        var posted = Assert.Single(handler.Bodies, b => b.Url.EndsWith("/pulls/5/reviews", StringComparison.Ordinal));
         Assert.Contains("\"path\":\"src/A.cs\"", posted.Body, StringComparison.Ordinal);
         Assert.Contains("That compiles.", posted.Body, StringComparison.Ordinal);
         Assert.Contains("COMMENT", posted.Body, StringComparison.Ordinal);
@@ -671,7 +671,7 @@ public class RemotePrReviewLedgerPagingTests
 
         Assert.True(result.Ok);
         Assert.Equal("77-9", result.Id);
-        var posted = Assert.Single(handler.Bodies.Where(b => b.Url.Contains("/threads/77/comments", StringComparison.Ordinal)));
+        var posted = Assert.Single(handler.Bodies, b => b.Url.Contains("/threads/77/comments", StringComparison.Ordinal));
         Assert.Contains("\"parentCommentId\":1", posted.Body, StringComparison.Ordinal);
         Assert.Contains("That compiles.", posted.Body, StringComparison.Ordinal);
     }
@@ -687,7 +687,7 @@ public class RemotePrReviewLedgerPagingTests
             .ResolveReviewThreadAsync(AzureRepo, "7", "77");
 
         Assert.True(result.Ok);
-        var patched = Assert.Single(handler.Bodies.Where(b => b.Method == HttpMethod.Patch));
+        var patched = Assert.Single(handler.Bodies, b => b.Method == HttpMethod.Patch);
         Assert.Contains("fixed", patched.Body, StringComparison.Ordinal);
     }
 

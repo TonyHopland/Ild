@@ -53,14 +53,14 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var controller = Build();
 
-        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = " *.GitHub.com ", ListKind = NetworkListKind.Whitelist }, default);
+        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = " *.GitHub.com ", ListKind = NetworkListKind.Whitelist }, TestContext.Current.CancellationToken);
 
         var created = Assert.IsType<CreatedAtActionResult>(result);
         var view = Body<EntryView>(created);
         Assert.Equal(".github.com", view.Host);
         Assert.Equal(NetworkListKind.Whitelist, view.ListKind);
         Assert.Null(view.AiProviderId);
-        Assert.Equal(".github.com", Assert.Single(await _db.Network.GetEntriesAsync()).Host);
+        Assert.Equal(".github.com", Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken)).Host);
         _policy.Verify(p => p.Invalidate(), Times.Once);
         _notifier.Verify(n => n.PolicyChangedAsync(), Times.Once);
     }
@@ -70,13 +70,13 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var controller = Build();
         var first = Body<EntryView>(Assert.IsType<CreatedAtActionResult>(
-            await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "api.example.com", ListKind = NetworkListKind.Blacklist }, default)));
+            await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "api.example.com", ListKind = NetworkListKind.Blacklist }, TestContext.Current.CancellationToken)));
 
         var again = Body<EntryView>(Assert.IsType<OkObjectResult>(
-            await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "API.example.com." , ListKind = NetworkListKind.Blacklist }, default)));
+            await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "API.example.com." , ListKind = NetworkListKind.Blacklist }, TestContext.Current.CancellationToken)));
 
         Assert.Equal(first.Id, again.Id);
-        Assert.Single(await _db.Network.GetEntriesAsync());
+        Assert.Single(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
         _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 
@@ -85,10 +85,10 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var provider = new AiProvider { Id = Guid.NewGuid(), Name = "claude", Type = "claude-code", BaseUrl = "", Model = "" };
         await _db.Providers.CreateAiProviderAsync(provider);
-        await _db.Network.AddEntryAsync(new NetworkPolicyEntry { Host = "api.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = provider.Id });
+        await _db.Network.AddEntryAsync(new NetworkPolicyEntry { Host = "api.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = provider.Id }, TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<DbUpdateException>(() => _db.Network.AddEntryAsync(
-            new NetworkPolicyEntry { Host = "api.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = provider.Id }));
+            new NetworkPolicyEntry { Host = "api.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = provider.Id }, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -96,10 +96,10 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var controller = Build();
 
-        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "api.example.com", ListKind = (NetworkListKind)7 }, default);
+        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "api.example.com", ListKind = (NetworkListKind)7 }, TestContext.Current.CancellationToken);
 
         Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Empty(await _db.Network.GetEntriesAsync());
+        Assert.Empty(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
         _policy.Verify(p => p.Invalidate(), Times.Never);
     }
 
@@ -108,10 +108,10 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var controller = Build();
 
-        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "https://github.com", ListKind = NetworkListKind.Blacklist }, default);
+        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "https://github.com", ListKind = NetworkListKind.Blacklist }, TestContext.Current.CancellationToken);
 
         Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Empty(await _db.Network.GetEntriesAsync());
+        Assert.Empty(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
         _policy.Verify(p => p.Invalidate(), Times.Never);
     }
 
@@ -120,7 +120,7 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var controller = Build();
 
-        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "api.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = Guid.NewGuid() }, default);
+        var result = await controller.AddEntry(new NetworkController.AddEntryRequest { Host = "api.example.com", ListKind = NetworkListKind.Whitelist, AiProviderId = Guid.NewGuid() }, TestContext.Current.CancellationToken);
 
         Assert.IsType<BadRequestObjectResult>(result);
     }
@@ -129,13 +129,13 @@ public sealed class NetworkControllerTests : IDisposable
     public async Task Deleting_an_entry_invalidates_the_proxy()
     {
         var entry = new NetworkPolicyEntry { Host = "api.example.com", ListKind = NetworkListKind.Blacklist };
-        await _db.Network.AddEntryAsync(entry);
+        await _db.Network.AddEntryAsync(entry, TestContext.Current.CancellationToken);
         var controller = Build();
 
-        Assert.IsType<NoContentResult>(await controller.DeleteEntry(entry.Id, default));
-        Assert.IsType<NotFoundResult>(await controller.DeleteEntry(entry.Id, default));
+        Assert.IsType<NoContentResult>(await controller.DeleteEntry(entry.Id, TestContext.Current.CancellationToken));
+        Assert.IsType<NotFoundResult>(await controller.DeleteEntry(entry.Id, TestContext.Current.CancellationToken));
 
-        Assert.Empty(await _db.Network.GetEntriesAsync());
+        Assert.Empty(await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken));
         _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 
@@ -145,21 +145,21 @@ public sealed class NetworkControllerTests : IDisposable
         var provider = new AiProvider { Id = Guid.NewGuid(), Name = "claude", Type = "claude-code", BaseUrl = "", Model = "" };
         await _db.Providers.CreateAiProviderAsync(provider);
         var logged = new NetworkLogEntry { Host = "registry.npmjs.org", Port = 443, Timestamp = DateTime.UtcNow, Decision = NetworkDecision.Blocked, AiProviderId = provider.Id };
-        await _db.Network.AppendLogAsync(new[] { logged });
+        await _db.Network.AppendLogAsync(new[] { logged }, TestContext.Current.CancellationToken);
         var controller = Build();
 
-        var global = Body<EntryView>(Assert.IsType<CreatedAtActionResult>(await controller.WhitelistFromLog(logged.Id, null, default)));
+        var global = Body<EntryView>(Assert.IsType<CreatedAtActionResult>(await controller.WhitelistFromLog(logged.Id, null, TestContext.Current.CancellationToken)));
         var scoped = Body<EntryView>(Assert.IsType<CreatedAtActionResult>(
-            await controller.BlacklistFromLog(logged.Id, new NetworkController.AddFromLogRequest { ScopeToProvider = true }, default)));
+            await controller.BlacklistFromLog(logged.Id, new NetworkController.AddFromLogRequest { ScopeToProvider = true }, TestContext.Current.CancellationToken)));
 
         Assert.Equal(("registry.npmjs.org", NetworkListKind.Whitelist, (Guid?)null), (global.Host, global.ListKind, global.AiProviderId));
         Assert.Equal(("registry.npmjs.org", NetworkListKind.Blacklist, (Guid?)provider.Id), (scoped.Host, scoped.ListKind, scoped.AiProviderId));
 
         // Promoting the same line twice does not duplicate the entry.
-        Assert.IsType<OkObjectResult>(await controller.WhitelistFromLog(logged.Id, null, default));
-        Assert.Equal(2, (await _db.Network.GetEntriesAsync()).Count);
+        Assert.IsType<OkObjectResult>(await controller.WhitelistFromLog(logged.Id, null, TestContext.Current.CancellationToken));
+        Assert.Equal(2, (await _db.Network.GetEntriesAsync(TestContext.Current.CancellationToken)).Count);
 
-        Assert.IsType<NotFoundResult>(await controller.WhitelistFromLog(Guid.NewGuid(), null, default));
+        Assert.IsType<NotFoundResult>(await controller.WhitelistFromLog(Guid.NewGuid(), null, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -169,12 +169,12 @@ public sealed class NetworkControllerTests : IDisposable
         {
             new NetworkLogEntry { Host = "a.example", Port = 443, Timestamp = DateTime.UtcNow, Decision = NetworkDecision.Advisory },
             new NetworkLogEntry { Host = "b.example", Port = 80, Timestamp = DateTime.UtcNow, Decision = NetworkDecision.Advisory },
-        });
+        }, TestContext.Current.CancellationToken);
         var controller = Build();
 
-        Assert.Equal(2, Body<Dictionary<string, int>>(await controller.ClearLog(default))["removed"]);
+        Assert.Equal(2, Body<Dictionary<string, int>>(await controller.ClearLog(TestContext.Current.CancellationToken))["removed"]);
 
-        Assert.Empty(await _db.Network.GetLogAsync(10));
+        Assert.Empty(await _db.Network.GetLogAsync(10, TestContext.Current.CancellationToken));
         _notifier.Verify(n => n.LogClearedAsync(), Times.Once);
     }
 
@@ -185,10 +185,10 @@ public sealed class NetworkControllerTests : IDisposable
         await _db.Network.AppendLogAsync(Enumerable.Range(0, 5).Select(i => new NetworkLogEntry
         {
             Host = $"h{i}.example", Port = 443, Timestamp = now.AddSeconds(i), Decision = NetworkDecision.Allowed,
-        }).ToList());
+        }).ToList(), TestContext.Current.CancellationToken);
         var controller = Build();
 
-        var page = Body<List<Dictionary<string, object>>>(await controller.GetLog(take: 2, ct: default));
+        var page = Body<List<Dictionary<string, object>>>(await controller.GetLog(take: 2, ct: TestContext.Current.CancellationToken));
 
         Assert.Equal(new[] { "h4.example", "h3.example" }, page.Select(e => e["host"].ToString()));
     }
@@ -206,7 +206,7 @@ public sealed class NetworkControllerTests : IDisposable
         var controller = Build();
 
         var created = Assert.IsType<CreatedAtActionResult>(
-            await controller.AddForward(Forward(name: " postgres ", host: " POSTGRES. "), default));
+            await controller.AddForward(Forward(name: " postgres ", host: " POSTGRES. "), TestContext.Current.CancellationToken));
 
         var view = Body<ForwardView>(created);
         Assert.Equal(("postgres", "postgres", 5432, 15432), (view.Name, view.Host, view.Port, view.LocalPort));
@@ -223,10 +223,10 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var controller = Build();
 
-        var result = await controller.AddForward(Forward(host: host), default);
+        var result = await controller.AddForward(Forward(host: host), TestContext.Current.CancellationToken);
 
         Assert.Contains("not a pattern", Body<Dictionary<string, string>>(result)["error"]);
-        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync());
+        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
         _policy.Verify(p => p.Invalidate(), Times.Never);
     }
 
@@ -242,9 +242,9 @@ public sealed class NetworkControllerTests : IDisposable
     {
         var controller = Build();
 
-        Assert.IsType<BadRequestObjectResult>(await controller.AddForward(Forward(name, host, port, localPort), default));
+        Assert.IsType<BadRequestObjectResult>(await controller.AddForward(Forward(name, host, port, localPort), TestContext.Current.CancellationToken));
 
-        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync());
+        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
         _policy.Verify(p => p.Invalidate(), Times.Never);
     }
 
@@ -252,32 +252,32 @@ public sealed class NetworkControllerTests : IDisposable
     public async Task A_local_port_already_forwarded_is_refused_with_what_holds_it()
     {
         var controller = Build();
-        await controller.AddForward(Forward(), default);
+        await controller.AddForward(Forward(), TestContext.Current.CancellationToken);
 
-        var result = await controller.AddForward(Forward(name: "redis", host: "cache", port: 6379), default);
+        var result = await controller.AddForward(Forward(name: "redis", host: "cache", port: 6379), TestContext.Current.CancellationToken);
 
         Assert.Contains("postgres:5432", Body<Dictionary<string, string>>(result)["error"]);
-        Assert.Single(await _db.NetworkForwards.GetForwardsAsync());
+        Assert.Single(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task The_unique_index_refuses_a_second_forward_on_a_local_port_behind_the_controllers_back()
     {
-        await _db.NetworkForwards.AddForwardAsync(new NetworkForwardEntry { Name = "a", Host = "a.example", Port = 1, LocalPort = 15432 });
+        await _db.NetworkForwards.AddForwardAsync(new NetworkForwardEntry { Name = "a", Host = "a.example", Port = 1, LocalPort = 15432 }, TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<DbUpdateException>(() => _db.NetworkForwards.AddForwardAsync(
-            new NetworkForwardEntry { Name = "b", Host = "b.example", Port = 2, LocalPort = 15432 }));
+            new NetworkForwardEntry { Name = "b", Host = "b.example", Port = 2, LocalPort = 15432 }, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task A_forward_reads_back_with_the_current_verdict_on_its_host_and_its_listener_state()
     {
         var controller = Build();
-        var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(await controller.AddForward(Forward(), default)));
+        var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(await controller.AddForward(Forward(), TestContext.Current.CancellationToken)));
         _forwarder.Errors[created.Id] = "Local port 15432 is already in use by something else";
         _snapshot = new EgressPolicySnapshot(NetworkMode.Whitelist, Array.Empty<NetworkPolicyEntry>());
 
-        var blocked = Assert.Single(Body<List<ForwardView>>(await controller.GetForwards(default)));
+        var blocked = Assert.Single(Body<List<ForwardView>>(await controller.GetForwards(TestContext.Current.CancellationToken)));
         Assert.Equal(NetworkDecision.Blocked, blocked.Decision);
         Assert.Contains("already in use", blocked.ListenError);
 
@@ -286,20 +286,20 @@ public sealed class NetworkControllerTests : IDisposable
             new NetworkPolicyEntry { Host = "postgres", ListKind = NetworkListKind.Whitelist },
         });
 
-        Assert.Equal(NetworkDecision.Allowed, Assert.Single(Body<List<ForwardView>>(await controller.GetForwards(default))).Decision);
+        Assert.Equal(NetworkDecision.Allowed, Assert.Single(Body<List<ForwardView>>(await controller.GetForwards(TestContext.Current.CancellationToken))).Decision);
     }
 
     [Fact]
     public async Task Deleting_a_forward_invalidates_the_policy()
     {
         var controller = Build();
-        var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(await controller.AddForward(Forward(), default)));
+        var created = Body<ForwardView>(Assert.IsType<CreatedAtActionResult>(await controller.AddForward(Forward(), TestContext.Current.CancellationToken)));
         _policy.Invocations.Clear();
 
-        Assert.IsType<NoContentResult>(await controller.DeleteForward(created.Id, default));
-        Assert.IsType<NotFoundResult>(await controller.DeleteForward(created.Id, default));
+        Assert.IsType<NoContentResult>(await controller.DeleteForward(created.Id, TestContext.Current.CancellationToken));
+        Assert.IsType<NotFoundResult>(await controller.DeleteForward(created.Id, TestContext.Current.CancellationToken));
 
-        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync());
+        Assert.Empty(await _db.NetworkForwards.GetForwardsAsync(TestContext.Current.CancellationToken));
         _policy.Verify(p => p.Invalidate(), Times.Once);
     }
 

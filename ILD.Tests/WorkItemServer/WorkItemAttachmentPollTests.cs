@@ -22,7 +22,7 @@ public class WorkItemAttachmentPollTests : IAsyncLifetime
     private WorkItemServerDbContext _db = null!;
     private WorkItemService _service = null!;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _connection = new SqliteConnection("DataSource=:memory:");
         await _connection.OpenAsync();
@@ -36,7 +36,7 @@ public class WorkItemAttachmentPollTests : IAsyncLifetime
         _service = new WorkItemService(_db, TimeProvider.System);
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await _db.DisposeAsync();
         await _connection.DisposeAsync();
@@ -67,10 +67,10 @@ public class WorkItemAttachmentPollTests : IAsyncLifetime
         var ready = await SeedItemWithAttachmentAsync(WorkItemStatus.Ready);
 
         _commands.Clear();
-        var poll = await _service.PollAsync(new[] { active.Id });
+        var poll = await _service.PollAsync(new[] { active.Id }, TestContext.Current.CancellationToken);
 
-        Assert.Empty(Assert.Single(poll.ActiveItems.Where(i => i.Id == active.Id)).Attachments);
-        Assert.Empty(Assert.Single(poll.ReadyItems.Where(i => i.Id == ready.Id)).Attachments);
+        Assert.Empty(Assert.Single(poll.ActiveItems, i => i.Id == active.Id).Attachments);
+        Assert.Empty(Assert.Single(poll.ReadyItems, i => i.Id == ready.Id).Attachments);
         Assert.DoesNotContain(_commands.Executed, sql => sql.Contains("Attachment", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -79,7 +79,7 @@ public class WorkItemAttachmentPollTests : IAsyncLifetime
     {
         var item = await SeedItemWithAttachmentAsync(WorkItemStatus.Running);
 
-        var fetched = await _service.GetAsync(item.Id);
+        var fetched = await _service.GetAsync(item.Id, TestContext.Current.CancellationToken);
 
         var attachment = Assert.Single(fetched!.Attachments);
         Assert.Equal("sketch.png", attachment.FileName);

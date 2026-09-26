@@ -141,7 +141,7 @@ public class StuckRunWatchdogTests
         // Running run, so an ExecuteUpdate reproduces the already-stuck row.
         var completedAt = DateTime.UtcNow.AddMinutes(-9);
         await db.Fresh().LoopRuns.Where(r => r.Id == run.Id)
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, completedAt));
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, completedAt), TestContext.Current.CancellationToken);
 
         var engine = EngineWithActiveRuns(/* none */);
         var recovery = RecoveryReturning(true);
@@ -181,7 +181,7 @@ public class StuckRunWatchdogTests
         var stuck = SeedRun(db, version.Id, LoopRunStatus.Running,
             updatedAt: DateTime.UtcNow.AddMinutes(-10));
         await db.Fresh().LoopRuns.Where(r => r.Id == stuck.Id)
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, DateTime.UtcNow.AddMinutes(-9)));
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, DateTime.UtcNow.AddMinutes(-9)), TestContext.Current.CancellationToken);
 
         // A healthy orphan that must still be recovered.
         var orphan = SeedRun(db, version.Id, LoopRunStatus.Running,
@@ -263,7 +263,7 @@ public class StuckRunWatchdogTests
             isHalted: true, haltReason: HaltReason.Shutdown);
         var completedAt = DateTime.UtcNow.AddMinutes(-9);
         await db.Fresh().LoopRuns.Where(r => r.Id == run.Id)
-            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, completedAt));
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, completedAt), TestContext.Current.CancellationToken);
 
         var engine = EngineWithActiveRuns(/* none */);
         var recovery = RecoveryReturning(true);

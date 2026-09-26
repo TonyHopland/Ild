@@ -37,7 +37,7 @@ public class AiProvidersControllerPagingTests
                 Type = "claude-code",
                 Model = "m",
             });
-            await db.Context.SaveChangesAsync();
+            await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
         var controller = Controller(db);
 
@@ -49,7 +49,7 @@ public class AiProvidersControllerPagingTests
                 .Select(p => (Guid)p.GetType().GetProperty("id")!.GetValue(p)!));
         }
 
-        var byId = await db.Context.AiProviders.OrderBy(p => p.Id).Select(p => p.Id).ToListAsync();
+        var byId = await db.Context.AiProviders.OrderBy(p => p.Id).Select(p => p.Id).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal(byId, paged);
     }
 }

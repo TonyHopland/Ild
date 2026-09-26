@@ -147,7 +147,7 @@ public class AgentControllerPreviewTests
             RemoteProviderId = provider.Id,
             PreviewEnv = "API_TOKEN=from-repo",
         });
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         WorktreePreviewStartOptions? captured = null;
         var preview = new Mock<IWorktreePreviewService>();

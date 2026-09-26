@@ -162,7 +162,7 @@ public class LoopRunVariableStoreTests
         using var db = new TestDb();
         var run = await SeedRunAsync(db);
         db.Context.LoopRunVariables.Add(new LoopRunVariable { LoopRunId = run.Id, Name = "handoff", Value = "old" });
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "new");
 
@@ -243,7 +243,7 @@ public class LoopRunVariableStoreTests
         using var db = new TestDb();
         var run = await SeedRunAsync(db);
         db.Context.LoopRunVariables.Add(new LoopRunVariable { LoopRunId = run.Id, Name = "handoff", Value = "old" });
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
         await NextTurnAsync(db, run);
 
         await new LoopRunStore(db.Fresh()).SetVariableAsync(run.Id, "handoff", "new");
@@ -260,7 +260,7 @@ public class LoopRunVariableStoreTests
         var retry = await SeedRunAsync(db);
         retry.WorkItemId = first.WorkItemId;
         var other = await SeedRunAsync(db);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
         var store = new LoopRunStore(db.Fresh());
         var firstTurn = await NextTurnAsync(db, first);
         await store.SetVariableAsync(first.Id, "handoff", "from first");
@@ -289,7 +289,7 @@ public class LoopRunVariableStoreTests
         using (var ctx = db.Fresh())
         {
             await ctx.LoopRunNodes.Where(rn => rn.Id == turn)
-                .ExecuteUpdateAsync(s => s.SetProperty(rn => rn.Status, LoopRunNodeStatus.Succeeded));
+                .ExecuteUpdateAsync(s => s.SetProperty(rn => rn.Status, LoopRunNodeStatus.Succeeded), TestContext.Current.CancellationToken);
         }
         await store.SetVariableAsync(run.Id, "handoff", "b");
 
@@ -368,7 +368,7 @@ public class LoopRunVariableStoreTests
         Assert.True(deleted);
 
         using var verify = db.Fresh();
-        Assert.Equal(0, await verify.LoopRunVariables.Where(v => v.LoopRunId == run.Id).CountAsync());
-        Assert.Equal(0, await verify.LoopRunVariableWrites.Where(w => w.LoopRunId == run.Id).CountAsync());
+        Assert.Equal(0, await verify.LoopRunVariables.Where(v => v.LoopRunId == run.Id).CountAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(0, await verify.LoopRunVariableWrites.Where(w => w.LoopRunId == run.Id).CountAsync(TestContext.Current.CancellationToken));
     }
 }

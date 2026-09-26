@@ -8,16 +8,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.7" />
-    <!-- Pin the transitive Microsoft.OpenApi off the vulnerable 2.0.0 pulled by
-         Microsoft.AspNetCore.OpenApi 10.0.7 (GHSA-v5pm-xwqc-g5wc; fixed in 2.7.5). -->
-    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
-    <PackageReference Include="Porta.Pty" Version="1.0.7" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+    <!-- Pin the transitive Microsoft.OpenApi to the latest 2.x: versions before 2.7.5
+         carry GHSA-v5pm-xwqc-g5wc, and Microsoft.AspNetCore.OpenApi 10 requires
+         [2.12.0, 3.0.0), which rules out 3.x. -->
+    <PackageReference Include="Microsoft.OpenApi" Version="2.12.2" />
+    <PackageReference Include="Porta.Pty" Version="2.2.2" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.12">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Serilog" Version="4.3.1" />
+    <PackageReference Include="Serilog" Version="4.4.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
     <PackageReference Include="Yarp.ReverseProxy" Version="2.3.0" />

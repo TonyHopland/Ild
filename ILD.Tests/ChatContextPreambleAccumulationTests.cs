@@ -7,7 +7,6 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using Moq;
-using Xunit.Abstractions;
 
 namespace ILD.Tests;
 
@@ -88,7 +87,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         using var cli = new PromptCapturingCli();
         var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
         var svc = NewService(new ClaudeCodeAdapter());
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         for (var i = 1; i <= turns; i++)
             await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), $"turn {i}", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
@@ -162,7 +161,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         using var cli = new PromptCapturingCli();
         var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
         var svc = NewService(new ClaudeCodeAdapter());
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         // A representative conversation: the editor stays open throughout (the
         // situation the guide exists to serve) and the human types short asks.
@@ -255,7 +254,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "help me wire up a deploy loop", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "now add a PR node", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
@@ -295,7 +294,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", OpenLoopDocument, CancellationToken.None);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", OpenLoopDocument, CancellationToken.None);
@@ -320,7 +319,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" }, TestContext.Current.CancellationToken);
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-99", OpenLoopDocument, CancellationToken.None);
@@ -345,7 +344,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", openLoopDocument: null, CancellationToken.None);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", openLoopDocument: null, CancellationToken.None);
@@ -369,7 +368,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", OpenLoopDocument, CancellationToken.None);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", openLoopDocument: null, CancellationToken.None);
@@ -394,7 +393,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", "wi-11", OpenLoopDocument, CancellationToken.None);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", "wi-11", openLoopDocument: null, CancellationToken.None);
@@ -426,7 +425,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "one", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "two", openWorkItemId: null, OpenLoopDocument, CancellationToken.None);
@@ -466,7 +465,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         // Turn 1 binds a session, with no editor open — so nothing is briefed yet
         // and the session id is already there to be wrongly recorded against.
@@ -563,7 +562,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var provider = await SeedProviderAsync();
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" }, TestContext.Current.CancellationToken);
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
         // Everything the Chat Context can carry at once: an open work item, its

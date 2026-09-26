@@ -32,7 +32,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
     private string SessionPath => ClaudeCodeAdapter.GetSessionFilePath(
         _worktree, SessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, _environment)!;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _environment.Set("HOME", _home);
 
@@ -60,7 +60,7 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         await db.SaveChangesAsync();
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await _services.DisposeAsync();
         await _connection.DisposeAsync();

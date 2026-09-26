@@ -23,7 +23,7 @@ public sealed class WorkItemAttachmentStoredSizeTests : IAsyncLifetime
     private WorkItemServerDbContext _db = null!;
     private string _workItemId = null!;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _connection = new SqliteConnection("DataSource=:memory:");
         await _connection.OpenAsync();
@@ -34,7 +34,7 @@ public sealed class WorkItemAttachmentStoredSizeTests : IAsyncLifetime
             .CreateAsync(new CreateWorkItemRequest { Title = "declared sizes" })).Id;
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await _db.DisposeAsync();
         await _connection.DisposeAsync();
@@ -53,12 +53,12 @@ public sealed class WorkItemAttachmentStoredSizeTests : IAsyncLifetime
     [InlineData(16, 8)]
     public async Task A_reader_that_hands_over_a_different_size_than_it_declared_is_refused(long declared, int actual)
     {
-        var result = await Service(8 * Kilobyte).AddAsync(_workItemId, new[] { File(declared, actual) });
+        var result = await Service(8 * Kilobyte).AddAsync(_workItemId, new[] { File(declared, actual) }, TestContext.Current.CancellationToken);
 
         Assert.Equal(AddAttachmentsOutcome.SizeMismatch, result.Outcome);
         Assert.Contains(actual.ToString(), result.Error!, StringComparison.Ordinal);
         Assert.Empty(result.Created);
-        Assert.Empty(await _db.Set<WorkItemAttachment>().ToListAsync());
+        Assert.Empty(await _db.Set<WorkItemAttachment>().ToListAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -66,20 +66,20 @@ public sealed class WorkItemAttachmentStoredSizeTests : IAsyncLifetime
     {
         // Declared within the limit, read well past it: the answer names the
         // limit that was broken rather than the declaration that lied.
-        var result = await Service(Kilobyte).AddAsync(_workItemId, new[] { File(declared: Kilobyte, actual: 4096) });
+        var result = await Service(Kilobyte).AddAsync(_workItemId, new[] { File(declared: Kilobyte, actual: 4096) }, TestContext.Current.CancellationToken);
 
         Assert.Equal(AddAttachmentsOutcome.FileTooLarge, result.Outcome);
         Assert.Contains("per file", result.Error!, StringComparison.Ordinal);
-        Assert.Empty(await _db.Set<WorkItemAttachment>().ToListAsync());
+        Assert.Empty(await _db.Set<WorkItemAttachment>().ToListAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task A_reader_that_keeps_its_word_is_stored_with_the_size_it_was_read_at()
     {
-        var result = await Service(8 * Kilobyte).AddAsync(_workItemId, new[] { File(declared: 512, actual: 512) });
+        var result = await Service(8 * Kilobyte).AddAsync(_workItemId, new[] { File(declared: 512, actual: 512) }, TestContext.Current.CancellationToken);
 
         Assert.Equal(AddAttachmentsOutcome.Created, result.Outcome);
         Assert.Equal(512, Assert.Single(result.Created).SizeBytes);
-        Assert.Equal(512, Assert.Single(await _db.Set<WorkItemAttachment>().ToListAsync()).Content.Length);
+        Assert.Equal(512, Assert.Single(await _db.Set<WorkItemAttachment>().ToListAsync(TestContext.Current.CancellationToken)).Content.Length);
     }
 }

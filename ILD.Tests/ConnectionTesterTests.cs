@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.Versioning;
 using System.Text;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.RemoteProviders;
@@ -531,7 +532,7 @@ public class ConnectionTesterTests : IDisposable
         var tester = new ConnectionTester(Adapters(), mgr, new HttpClient(ScriptedHandler.Answer(HttpStatusCode.OK)));
 
         await tester.TestRepositoryAsync(Repo(cloneUrl, "main", provider.Id), provider, CancellationToken.None);
-        await mgr.FetchAsync(_tmp, auth: new GitAuthOptions(cloneUrl, Key, "Forgejo"));
+        await mgr.FetchAsync(_tmp, auth: new GitAuthOptions(cloneUrl, Key, "Forgejo"), cancellationToken: TestContext.Current.CancellationToken);
 
         var probe = runner.Calls[0];
         var fetch = runner.Calls[1];
@@ -646,6 +647,7 @@ public class ConnectionTesterTests : IDisposable
     /// <paramref name="dir"/>: it grants group or other write, and every ancestor
     /// lets group or other traverse to it.
     /// </summary>
+    [UnsupportedOSPlatform("windows")]
     private static bool OthersCanWriteInto(string dir)
     {
         const UnixFileMode othersWrite = UnixFileMode.GroupWrite | UnixFileMode.OtherWrite;

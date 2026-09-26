@@ -48,7 +48,7 @@ public sealed class AgentWritableFilesTests : IDisposable
     {
         var path = Path.Combine(_dir, "a", "b");
 
-        await AgentWritableFiles.CreateDirectoryAsync(path);
+        await AgentWritableFiles.CreateDirectoryAsync(path, TestContext.Current.CancellationToken);
 
         Assert.True(Directory.Exists(path));
     }
@@ -61,7 +61,7 @@ public sealed class AgentWritableFilesTests : IDisposable
         var path = Path.Combine(_dir, "models.json");
         File.CreateSymbolicLink(path, victim);
 
-        await AgentWritableFiles.WriteFileAsync(path, "ours");
+        await AgentWritableFiles.WriteFileAsync(path, "ours", TestContext.Current.CancellationToken);
 
         Assert.Equal("victim", File.ReadAllText(victim));
         Assert.Null(new FileInfo(path).LinkTarget);
@@ -74,7 +74,7 @@ public sealed class AgentWritableFilesTests : IDisposable
         var path = Path.Combine(_dir, "models.json");
         PlantReadOnlyFolder(path);
 
-        await AgentWritableFiles.WriteFileAsync(path, "ours");
+        await AgentWritableFiles.WriteFileAsync(path, "ours", TestContext.Current.CancellationToken);
 
         Assert.Equal("ours", File.ReadAllText(path));
     }
@@ -89,9 +89,9 @@ public sealed class AgentWritableFilesTests : IDisposable
         var fileOnTheWay = Path.Combine(_dir, "file-on-the-way");
         File.WriteAllText(fileOnTheWay, "x");
 
-        await AgentWritableFiles.CreateDirectoryAsync(fileAtPath);
-        await AgentWritableFiles.CreateDirectoryAsync(linkAtPath);
-        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(fileOnTheWay, "run"));
+        await AgentWritableFiles.CreateDirectoryAsync(fileAtPath, TestContext.Current.CancellationToken);
+        await AgentWritableFiles.CreateDirectoryAsync(linkAtPath, TestContext.Current.CancellationToken);
+        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(fileOnTheWay, "run"), TestContext.Current.CancellationToken);
 
         Assert.True(Directory.Exists(fileAtPath));
         Assert.Null(new DirectoryInfo(linkAtPath).LinkTarget);
@@ -110,8 +110,8 @@ public sealed class AgentWritableFilesTests : IDisposable
         var onTheWay = Path.Combine(_dir, "ild-pi-sessions");
         Directory.CreateSymbolicLink(onTheWay, "/usr");
 
-        await AgentWritableFiles.CreateDirectoryAsync(atPath);
-        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(onTheWay, "run"));
+        await AgentWritableFiles.CreateDirectoryAsync(atPath, TestContext.Current.CancellationToken);
+        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(onTheWay, "run"), TestContext.Current.CancellationToken);
 
         Assert.Null(new DirectoryInfo(atPath).LinkTarget);
         Assert.True(Directory.Exists(atPath));
@@ -129,7 +129,7 @@ public sealed class AgentWritableFilesTests : IDisposable
         File.WriteAllText(Path.Combine(outside, "ild.ts"), "not ours");
         Directory.CreateSymbolicLink(Path.Combine(root, "linked"), Path.GetDirectoryName(outside)!);
 
-        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(root, "extensions/ild.ts"));
+        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(root, "extensions/ild.ts", TestContext.Current.CancellationToken));
 
         Assert.False(File.Exists(Path.Combine(real, "ild.ts")));
         Assert.True(File.Exists(Path.Combine(outside, "ild.ts")), "the sweep built a path through a linked subdirectory");
@@ -143,7 +143,7 @@ public sealed class AgentWritableFilesTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         Directory.CreateSymbolicLink(target, otherRun);
 
-        await AgentWritableFiles.CreateDirectoryAsync(target);
+        await AgentWritableFiles.CreateDirectoryAsync(target, TestContext.Current.CancellationToken);
 
         Assert.Null(new DirectoryInfo(target).LinkTarget);
         Assert.True(Directory.Exists(target));
@@ -157,7 +157,7 @@ public sealed class AgentWritableFilesTests : IDisposable
         var link = Path.Combine(_dir, ".claude");
         Directory.CreateSymbolicLink(link, real);
 
-        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(link, "projects", "wt"));
+        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(link, "projects", "wt"), TestContext.Current.CancellationToken);
 
         Assert.Equal(real, new DirectoryInfo(link).LinkTarget);
         Assert.True(Directory.Exists(Path.Combine(real, "projects", "wt")));
@@ -173,8 +173,8 @@ public sealed class AgentWritableFilesTests : IDisposable
         File.SetUnixFileMode(existing, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         File.SetUnixFileMode(parent, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
-        await AgentWritableFiles.CreateDirectoryAsync(existing);
-        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(parent, "run-2"));
+        await AgentWritableFiles.CreateDirectoryAsync(existing, TestContext.Current.CancellationToken);
+        await AgentWritableFiles.CreateDirectoryAsync(Path.Combine(parent, "run-2"), TestContext.Current.CancellationToken);
 
         Assert.True(File.GetUnixFileMode(existing).HasFlag(UnixFileMode.UserWrite));
         Assert.True(Directory.Exists(Path.Combine(parent, "run-2")));
@@ -189,10 +189,10 @@ public sealed class AgentWritableFilesTests : IDisposable
         File.CreateSymbolicLink(link, file);
         var directory = Directory.CreateDirectory(Path.Combine(_dir, "folder.jsonl")).FullName;
 
-        Assert.True(await AgentWritableFiles.FileExistsAsync(file));
-        Assert.False(await AgentWritableFiles.FileExistsAsync(link));
-        Assert.False(await AgentWritableFiles.FileExistsAsync(directory));
-        Assert.False(await AgentWritableFiles.FileExistsAsync(Path.Combine(_dir, "missing.jsonl")));
+        Assert.True(await AgentWritableFiles.FileExistsAsync(file, TestContext.Current.CancellationToken));
+        Assert.False(await AgentWritableFiles.FileExistsAsync(link, TestContext.Current.CancellationToken));
+        Assert.False(await AgentWritableFiles.FileExistsAsync(directory, TestContext.Current.CancellationToken));
+        Assert.False(await AgentWritableFiles.FileExistsAsync(Path.Combine(_dir, "missing.jsonl"), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -203,9 +203,9 @@ public sealed class AgentWritableFilesTests : IDisposable
         var link = Path.Combine(_dir, "other.jsonl");
         File.CreateSymbolicLink(link, file);
 
-        Assert.Equal("{\"type\":\"session\"}\n", await AgentWritableFiles.ReadFileAsync(file));
-        Assert.Null(await AgentWritableFiles.ReadFileAsync(link));
-        Assert.Null(await AgentWritableFiles.ReadFileAsync(Path.Combine(_dir, "missing.jsonl")));
+        Assert.Equal("{\"type\":\"session\"}\n", await AgentWritableFiles.ReadFileAsync(file, TestContext.Current.CancellationToken));
+        Assert.Null(await AgentWritableFiles.ReadFileAsync(link, TestContext.Current.CancellationToken));
+        Assert.Null(await AgentWritableFiles.ReadFileAsync(Path.Combine(_dir, "missing.jsonl"), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -217,12 +217,12 @@ public sealed class AgentWritableFilesTests : IDisposable
         File.WriteAllText(Path.Combine(_dir, "c.txt"), "not a match\n");
         File.CreateSymbolicLink(Path.Combine(_dir, "link.jsonl"), Path.Combine(_dir, "a.jsonl"));
 
-        var files = await AgentWritableFiles.ListFilesAsync(_dir, "*.jsonl");
+        var files = await AgentWritableFiles.ListFilesAsync(_dir, "*.jsonl", TestContext.Current.CancellationToken);
 
         Assert.Equal(
             new[] { (Path.Combine(_dir, "a.jsonl"), "first a"), (Path.Combine(nested, "b.jsonl"), "first b") },
             files.OrderBy(f => f.Path, StringComparer.Ordinal));
-        Assert.Empty(await AgentWritableFiles.ListFilesAsync(Path.Combine(_dir, "missing"), "*.jsonl"));
+        Assert.Empty(await AgentWritableFiles.ListFilesAsync(Path.Combine(_dir, "missing"), "*.jsonl", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -235,7 +235,7 @@ public sealed class AgentWritableFilesTests : IDisposable
         var link = Path.Combine(_dir, "session-dir");
         Directory.CreateSymbolicLink(link, victim);
 
-        Assert.True(await AgentWritableFiles.DeleteAsync([tree, link, Path.Combine(_dir, "missing")]));
+        Assert.True(await AgentWritableFiles.DeleteAsync([tree, link, Path.Combine(_dir, "missing")], TestContext.Current.CancellationToken));
 
         Assert.False(Directory.Exists(tree));
         Assert.False(Path.Exists(link));
@@ -252,7 +252,7 @@ public sealed class AgentWritableFilesTests : IDisposable
         File.WriteAllText(Path.Combine(first, "models.json"), "{}");
         PlantReadOnlyFolder(Path.Combine(second, "extensions", "ild.ts"));
 
-        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(_dir, "extensions/ild.ts"));
+        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(_dir, "extensions/ild.ts", TestContext.Current.CancellationToken));
 
         Assert.False(Path.Exists(Path.Combine(first, "extensions", "ild.ts")));
         Assert.False(Path.Exists(Path.Combine(second, "extensions", "ild.ts")));
@@ -262,8 +262,8 @@ public sealed class AgentWritableFilesTests : IDisposable
     [Fact]
     public async Task DeleteInSubdirectoriesAsync_is_fine_with_a_missing_or_empty_directory()
     {
-        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(Path.Combine(_dir, "missing"), "extensions/ild.ts"));
-        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(_dir, "extensions/ild.ts"));
+        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(Path.Combine(_dir, "missing"), "extensions/ild.ts", TestContext.Current.CancellationToken));
+        Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(_dir, "extensions/ild.ts", TestContext.Current.CancellationToken));
     }
 
     /// <summary>A directory at <paramref name="path"/> with a read-only folder inside, as an agent could leave.</summary>

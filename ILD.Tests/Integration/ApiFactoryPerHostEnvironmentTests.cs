@@ -64,8 +64,8 @@ public class ApiFactoryPerHostEnvironmentTests
         Assert.Equal(HttpStatusCode.Created, await UploadAsync(roomyClient, roomyItem, "first.bin", 600 * Kilobyte));
         Assert.Equal(HttpStatusCode.Created, await UploadAsync(roomyClient, roomyItem, "second.bin", 600 * Kilobyte));
 
-        var tightLimits = await tightClient.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments");
-        var roomyLimits = await roomyClient.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments");
+        var tightLimits = await tightClient.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments", TestContext.Current.CancellationToken);
+        var roomyLimits = await roomyClient.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments", TestContext.Current.CancellationToken);
         Assert.Equal(1L * Megabyte, tightLimits.GetProperty("maxBytesPerFile").GetInt64());
         Assert.Equal(1L * Megabyte, tightLimits.GetProperty("maxTotalBytesPerWorkItem").GetInt64());
         Assert.Equal(25L * Megabyte, roomyLimits.GetProperty("maxBytesPerFile").GetInt64());

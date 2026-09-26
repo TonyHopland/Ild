@@ -32,10 +32,10 @@ public class AgentApiIntegrationTests
             title = "Agent-created",
             description = "from MCP",
             repositoryId = repoId.ToString(),
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
 
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.Equal("Backlog", doc.RootElement.GetProperty("status").GetString());
     }
 
@@ -53,10 +53,10 @@ public class AgentApiIntegrationTests
         };
         req.Headers.Add("X-ILD-Run-Id", runId.ToString());
 
-        var resp = await client.SendAsync(req);
+        var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
 
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.Equal(runId.ToString(), doc.RootElement.GetProperty("createdByLoopRunId").GetString());
     }
 
@@ -74,10 +74,10 @@ public class AgentApiIntegrationTests
         };
         req.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
 
-        var resp = await client.SendAsync(req);
+        var resp = await client.SendAsync(req, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
 
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         // Chat-created items carry the chat stamp (not a run stamp) and still land in Backlog.
         Assert.Equal(chatSessionId.ToString(), doc.RootElement.GetProperty("createdByChatSessionId").GetString());
         Assert.Equal("Backlog", doc.RootElement.GetProperty("status").GetString());
@@ -97,9 +97,9 @@ public class AgentApiIntegrationTests
         await CreateAsync(client, "from A 2", runA, repoId);
         await CreateAsync(client, "from B",   runB, repoId);
 
-        var resp = await client.GetAsync($"/api/v1/agent/workitems?createdByLoopRunId={runA}");
+        var resp = await client.GetAsync($"/api/v1/agent/workitems?createdByLoopRunId={runA}", TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
-        var arr = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var arr = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal(2, arr.GetArrayLength());
     }
 
@@ -118,10 +118,10 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { title = "edited", description = "new body" }),
         };
         put.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal("edited", doc.GetProperty("title").GetString());
         Assert.Equal("new body", doc.GetProperty("description").GetString());
     }
@@ -142,11 +142,11 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { title = "hijacked", description = "" }),
         };
         put.Headers.Add("X-ILD-Run-Id", otherRun.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
 
         // The item is untouched.
-        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
         Assert.Equal("owned by A", detail.GetProperty("title").GetString());
     }
 
@@ -162,7 +162,7 @@ public class AgentApiIntegrationTests
 
         var resp = await client.PutAsJsonAsync(
             $"/api/v1/agent/workitems/{itemId}",
-            new { title = "anon edit", description = "" });
+            new { title = "anon edit", description = "" }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
     }
 
@@ -189,7 +189,7 @@ public class AgentApiIntegrationTests
             description = "",
             repositoryId = repoId.ToString(),
             branchNameOverride = branchName,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
@@ -207,12 +207,12 @@ public class AgentApiIntegrationTests
             description = "",
             repositoryId = repoId.ToString(),
             branchNameOverride = "  feature/foo  ",
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
-        var itemId = JsonDocument.Parse(await resp.Content.ReadAsStringAsync())
+        var itemId = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
             .RootElement.GetProperty("id").GetString();
 
-        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
         Assert.Equal("feature/foo", detail.GetProperty("branchNameOverride").GetString());
     }
 
@@ -230,10 +230,10 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { title = "edited", description = "", branchNameOverride = "feature foo" }),
         };
         put.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
         Assert.Equal("feature/foo", detail.GetProperty("branchNameOverride").GetString());
         Assert.Equal("owned", detail.GetProperty("title").GetString());
     }
@@ -258,7 +258,7 @@ public class AgentApiIntegrationTests
         var cleared = await PutAsync(client, itemId, runId, new { title = "renamed", description = "", branchNameOverride = "" });
         Assert.Equal(JsonValueKind.Null, cleared.GetProperty("branchNameOverride").ValueKind);
 
-        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
         Assert.Equal(JsonValueKind.Null, detail.GetProperty("branchNameOverride").ValueKind);
     }
 
@@ -277,7 +277,7 @@ public class AgentApiIntegrationTests
             description = "",
             repositoryId = repoId.ToString(),
             baseBranchOverride = baseBranch,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
@@ -300,13 +300,13 @@ public class AgentApiIntegrationTests
                 baseBranchOverride = "  release/1.0  ",
             }),
             Headers = { { "X-ILD-Run-Id", runId.ToString() } },
-        });
+        }, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, createResp.StatusCode);
-        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync())
+        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
             .RootElement.GetProperty("id").GetString();
 
         // An agent that may set the base has to be able to read back what stuck.
-        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}");
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
         Assert.Equal("release/1.0", detail.GetProperty("baseBranchOverride").GetString());
 
         var moved = await PutAsync(client, itemId!, runId, new { title = "owned", description = "", baseBranchOverride = "release/2.0" });
@@ -344,7 +344,7 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { title = "ghost", description = "" }),
         };
         put.Headers.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
@@ -360,10 +360,10 @@ public class AgentApiIntegrationTests
 
         var del = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
         del.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var resp = await client.SendAsync(del);
+        var resp = await client.SendAsync(del, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, resp.StatusCode);
 
-        var detail = await client.GetAsync($"/api/v1/agent/workitems/{itemId}");
+        var detail = await client.GetAsync($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, detail.StatusCode);
     }
 
@@ -380,11 +380,11 @@ public class AgentApiIntegrationTests
 
         var del = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
         del.Headers.Add("X-ILD-Run-Id", otherRun.ToString());
-        var resp = await client.SendAsync(del);
+        var resp = await client.SendAsync(del, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, resp.StatusCode);
 
         // Still there.
-        var detail = await client.GetAsync($"/api/v1/agent/workitems/{itemId}");
+        var detail = await client.GetAsync($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
     }
 
@@ -402,20 +402,20 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { title = "from chat", description = "", repositoryId = repoId.ToString() }),
         };
         create.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var createResp = await client.SendAsync(create);
+        var createResp = await client.SendAsync(create, TestContext.Current.CancellationToken);
         createResp.EnsureSuccessStatusCode();
-        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync())
+        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
             .RootElement.GetProperty("id").GetString();
 
         // A different chat session may not delete it.
         var forbidden = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
         forbidden.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(forbidden)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(forbidden, TestContext.Current.CancellationToken)).StatusCode);
 
         // The creating chat session may.
         var allowed = new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/agent/workitems/{itemId}");
         allowed.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(allowed)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(allowed, TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]
@@ -432,9 +432,9 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { title = "chat original", description = "", repositoryId = repoId.ToString() }),
         };
         create.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var createResp = await client.SendAsync(create);
+        var createResp = await client.SendAsync(create, TestContext.Current.CancellationToken);
         createResp.EnsureSuccessStatusCode();
-        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync())
+        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
             .RootElement.GetProperty("id").GetString();
 
         // A different chat session may not edit it.
@@ -443,7 +443,7 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { title = "hijacked", description = "" }),
         };
         forbidden.Headers.Add("X-ILD-Chat-Session-Id", Guid.NewGuid().ToString());
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(forbidden)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(forbidden, TestContext.Current.CancellationToken)).StatusCode);
 
         // The creating chat session may.
         var allowed = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
@@ -451,9 +451,9 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { title = "chat edited", description = "by chat" }),
         };
         allowed.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(allowed);
+        var resp = await client.SendAsync(allowed, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal("chat edited", doc.GetProperty("title").GetString());
     }
 
@@ -470,7 +470,7 @@ public class AgentApiIntegrationTests
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = new[] { Guid.NewGuid().ToString() },
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
@@ -488,14 +488,14 @@ public class AgentApiIntegrationTests
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = new[] { depId.ToString() },
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
 
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         var newId = doc.RootElement.GetProperty("id").GetString();
         Assert.False(string.IsNullOrWhiteSpace(newId));
 
-        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{newId}");
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{newId}", TestContext.Current.CancellationToken);
         Assert.Equal(1, detail.GetProperty("dependencies").GetArrayLength());
     }
 
@@ -511,12 +511,12 @@ public class AgentApiIntegrationTests
         // path but accepts only GET/HEAD, so an unrouted POST is 405 rather than 404.
         var notRouted = new[] { HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed };
 
-        var startResp = await client.PostAsync("/api/v1/agent/workitems/" + Guid.NewGuid() + "/start", null);
+        var startResp = await client.PostAsync("/api/v1/agent/workitems/" + Guid.NewGuid() + "/start", null, TestContext.Current.CancellationToken);
         Assert.Contains(startResp.StatusCode, notRouted);
 
         var trResp = await client.PostAsJsonAsync(
             "/api/v1/agent/workitems/" + Guid.NewGuid() + "/transition",
-            new { targetStatus = "Ready" });
+            new { targetStatus = "Ready" }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(trResp.StatusCode, notRouted);
     }
 
@@ -532,15 +532,15 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { value = "ready for review" }),
         };
         put.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var putResp = await client.SendAsync(put);
+        var putResp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, putResp.StatusCode);
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/variables");
         get.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var getResp = await client.SendAsync(get);
+        var getResp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         getResp.EnsureSuccessStatusCode();
 
-        var arr = JsonDocument.Parse(await getResp.Content.ReadAsStringAsync()).RootElement;
+        var arr = JsonDocument.Parse(await getResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal(1, arr.GetArrayLength());
         Assert.Equal("handoff", arr[0].GetProperty("name").GetString());
         Assert.Equal("ready for review", arr[0].GetProperty("value").GetString());
@@ -558,7 +558,7 @@ public class AgentApiIntegrationTests
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/variables");
         get.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var arr = JsonDocument.Parse(await (await client.SendAsync(get)).Content.ReadAsStringAsync()).RootElement;
+        var arr = JsonDocument.Parse(await (await client.SendAsync(get, TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal(1, arr.GetArrayLength());
         Assert.Equal("final", arr[0].GetProperty("value").GetString());
     }
@@ -575,7 +575,7 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { value = "x" }),
         };
         put.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
@@ -594,7 +594,7 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { value = "x" }),
         };
         put.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
@@ -609,7 +609,7 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { value = "x" }),
         };
         put.Headers.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
@@ -619,7 +619,7 @@ public class AgentApiIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var resp = await client.GetAsync("/api/v1/agent/variables");
+        var resp = await client.GetAsync("/api/v1/agent/variables", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
@@ -629,7 +629,7 @@ public class AgentApiIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var resp = await client.GetAsync($"/api/v1/agent/workitems/{Guid.NewGuid()}/preview");
+        var resp = await client.GetAsync($"/api/v1/agent/workitems/{Guid.NewGuid()}/preview", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
 
@@ -644,7 +644,7 @@ public class AgentApiIntegrationTests
         // so the preview surface refuses it the same way the human controller does.
         var itemId = await CreateAsync(client, "no worktree", null, repoId);
 
-        var resp = await client.GetAsync($"/api/v1/agent/workitems/{itemId}/preview");
+        var resp = await client.GetAsync($"/api/v1/agent/workitems/{itemId}/preview", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
@@ -656,9 +656,9 @@ public class AgentApiIntegrationTests
 
         var (runId, workItemId) = await SeedRunWithUsageAsync(factory);
 
-        var resp = await client.GetAsync($"/api/v1/agent/loop-runs?workItemId={workItemId}");
+        var resp = await client.GetAsync($"/api/v1/agent/loop-runs?workItemId={workItemId}", TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
-        var arr = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var arr = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
 
         Assert.Equal(1, arr.GetArrayLength());
         var run = arr[0];
@@ -681,10 +681,10 @@ public class AgentApiIntegrationTests
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
         get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(get);
+        var resp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal("ild-loop-template/v1", doc.GetProperty("$schema").GetString());
         Assert.Equal("Live Loop", doc.GetProperty("name").GetString());
     }
@@ -698,10 +698,10 @@ public class AgentApiIntegrationTests
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
         get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(get);
+        var resp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.False(doc.GetProperty("loopEditorOpen").GetBoolean());
     }
 
@@ -711,7 +711,7 @@ public class AgentApiIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var resp = await client.GetAsync("/api/v1/agent/current-loop");
+        var resp = await client.GetAsync("/api/v1/agent/current-loop", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
@@ -725,14 +725,14 @@ public class AgentApiIntegrationTests
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
         get.Headers.Add("X-ILD-Chat-Session-Id", unknown);
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(get)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(get, TestContext.Current.CancellationToken)).StatusCode);
 
         var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/current-loop")
         {
             Content = JsonContent.Create(new { document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"x\",\"nodes\":[]}" }),
         };
         put.Headers.Add("X-ILD-Chat-Session-Id", unknown);
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(put)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(put, TestContext.Current.CancellationToken)).StatusCode);
     }
 
     // A valid ild-loop-template/v1 with Start → AI → Cleanup. Used by the scoped-edit
@@ -759,10 +759,10 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { document = ValidLoopDocument }),
         };
         put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.True(ack.GetProperty("applied").GetBoolean());
         Assert.Empty(ack.GetProperty("validationErrors").EnumerateArray());
         // The applied document is stashed so later scoped edits build on it.
@@ -786,10 +786,10 @@ public class AgentApiIntegrationTests
             }),
         };
         put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.False(ack.GetProperty("applied").GetBoolean());
         Assert.NotEmpty(ack.GetProperty("validationErrors").EnumerateArray());
         // Canvas/scratchpad left as it was.
@@ -809,10 +809,10 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { field = "prompt", oldString = "Review the code.", newString = "Review the code thoroughly." }),
         };
         post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(post);
+        var resp = await client.SendAsync(post, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.True(ack.GetProperty("applied").GetBoolean());
         Assert.Equal(1, ack.GetProperty("matchCount").GetInt32());
 
@@ -835,10 +835,10 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { field = "prompt", oldString = "nowhere in the prompt", newString = "x" }),
         };
         post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(post);
+        var resp = await client.SendAsync(post, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.False(ack.GetProperty("applied").GetBoolean());
         Assert.Equal(0, ack.GetProperty("matchCount").GetInt32());
         Assert.Equal(ValidLoopDocument, factory.Services.GetRequiredService<IChatLoopScratchpad>().Get(chatSessionId));
@@ -854,10 +854,10 @@ public class AgentApiIntegrationTests
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop/nodes/ai");
         get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(get);
+        var resp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var node = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var node = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal("AI", node.GetProperty("type").GetString());
         Assert.Equal("Review the code.", node.GetProperty("config").GetProperty("prompt").GetString());
     }
@@ -871,10 +871,10 @@ public class AgentApiIntegrationTests
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop/nodes/ai");
         get.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(get);
+        var resp = await client.SendAsync(get, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.False(doc.GetProperty("loopEditorOpen").GetBoolean());
     }
 
@@ -891,10 +891,10 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { oldString = "\"targetNodeId\":\"ai\"", newString = "\"targetNodeId\":\"nowhere\"" }),
         };
         post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(post);
+        var resp = await client.SendAsync(post, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.False(ack.GetProperty("applied").GetBoolean());
         Assert.NotEmpty(ack.GetProperty("validationErrors").EnumerateArray());
         Assert.Equal(ValidLoopDocument, factory.Services.GetRequiredService<IChatLoopScratchpad>().Get(chatSessionId));
@@ -912,10 +912,10 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { field = "prompt", oldString = "a", newString = "b" }),
         };
         post.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(post);
+        var resp = await client.SendAsync(post, TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
 
-        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var ack = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.False(ack.GetProperty("applied").GetBoolean());
         Assert.Contains("No loop is open", ack.GetProperty("error").GetString());
     }
@@ -932,7 +932,7 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { document = "" }),
         };
         put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
@@ -950,7 +950,7 @@ public class AgentApiIntegrationTests
             Content = JsonContent.Create(new { document = huge }),
         };
         put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());
-        var resp = await client.SendAsync(put);
+        var resp = await client.SendAsync(put, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
@@ -968,10 +968,10 @@ public class AgentApiIntegrationTests
             description = longBody,
             repositoryId = repoId.ToString(),
             tags = new[] { "backend-loop" },
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         create.EnsureSuccessStatusCode();
 
-        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems")).Content.ReadAsStringAsync()).RootElement;
+        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         var row = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
 
         // No full body by default; a single-line, truncated preview stands in for it.
@@ -989,7 +989,7 @@ public class AgentApiIntegrationTests
         Assert.True(row.GetProperty("actionable").GetBoolean());
 
         // Opt back in to the full body for backward compatibility.
-        var withBody = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems?includeDescription=true")).Content.ReadAsStringAsync()).RootElement;
+        var withBody = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems?includeDescription=true", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         var full = withBody.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
         Assert.Equal(longBody, full.GetProperty("description").GetString());
     }
@@ -1008,10 +1008,10 @@ public class AgentApiIntegrationTests
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = new[] { depId.ToString() },
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         create.EnsureSuccessStatusCode();
 
-        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems")).Content.ReadAsStringAsync()).RootElement;
+        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         var child = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "child");
         var dep = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "dep");
 
@@ -1040,10 +1040,10 @@ public class AgentApiIntegrationTests
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = depIds,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         create.EnsureSuccessStatusCode();
 
-        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems")).Content.ReadAsStringAsync()).RootElement;
+        var arr = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         var hub = arr.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "hub");
 
         Assert.Equal(depCount, hub.GetProperty("blockedByCount").GetInt32());
@@ -1064,23 +1064,23 @@ public class AgentApiIntegrationTests
             description = "",
             repositoryId = repoId.ToString(),
             dependencies = new[] { depId.ToString() },
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         create.EnsureSuccessStatusCode();
-        var childId = JsonDocument.Parse(await create.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetString();
+        var childId = JsonDocument.Parse(await create.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("id").GetString();
 
         // The dependency's record surfaces the reverse "blocks" edge to its child.
-        var dep = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{depId}");
+        var dep = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{depId}", TestContext.Current.CancellationToken);
         var blocks = dep.GetProperty("blocks");
         Assert.Equal(1, blocks.GetArrayLength());
         Assert.Equal(childId, blocks[0].GetProperty("id").GetString());
 
         // The child's forward dependency is still resolved to {id,title,status}.
-        var childDetail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{childId}");
+        var childDetail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{childId}", TestContext.Current.CancellationToken);
         Assert.Equal(depId, childDetail.GetProperty("dependencies")[0].GetProperty("id").GetString());
 
         // Conversation is excluded by default and present only when requested.
         Assert.Equal(JsonValueKind.Null, dep.GetProperty("conversation").ValueKind);
-        var withConv = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{depId}?includeConversation=true");
+        var withConv = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{depId}?includeConversation=true", TestContext.Current.CancellationToken);
         Assert.Equal(JsonValueKind.Array, withConv.GetProperty("conversation").ValueKind);
     }
 
@@ -1094,7 +1094,7 @@ public class AgentApiIntegrationTests
         await CreateAsync(client, "one", null, repoId);
         await CreateAsync(client, "two", null, repoId);
 
-        var summary = await client.GetFromJsonAsync<JsonElement>("/api/v1/agent/workitems/summary");
+        var summary = await client.GetFromJsonAsync<JsonElement>("/api/v1/agent/workitems/summary", TestContext.Current.CancellationToken);
 
         Assert.Equal(2, summary.GetProperty("total").GetInt32());
         Assert.Equal(2, summary.GetProperty("countsByStatus").GetProperty("Backlog").GetInt32());
@@ -1265,12 +1265,12 @@ public class AgentApiIntegrationTests
                 PreviewEnv = secret,
                 CreatedAt = DateTime.UtcNow,
             });
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
-        var resp = await client.GetAsync("/api/v1/agent/repositories");
+        var resp = await client.GetAsync("/api/v1/agent/repositories", TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
-        var body = await resp.Content.ReadAsStringAsync();
+        var body = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain("super-secret-value", body);
         Assert.DoesNotContain("previewEnv", body, StringComparison.OrdinalIgnoreCase);

@@ -75,7 +75,7 @@ public class LoopTemplateArchiveTests
         var id = await mgr.CreateLoopTemplateAsync("t", "", MinimalGraph());
         await mgr.ArchiveLoopTemplateAsync(id);
 
-        var template = await db.Context.LoopTemplates.FindAsync(id);
+        var template = await db.Context.LoopTemplates.FindAsync([id], TestContext.Current.CancellationToken);
         Assert.NotNull(template);
         Assert.True(template!.IsArchived);
     }
@@ -90,7 +90,7 @@ public class LoopTemplateArchiveTests
         await mgr.ArchiveLoopTemplateAsync(id);
         await mgr.UnarchiveLoopTemplateAsync(id);
 
-        var template = await db.Context.LoopTemplates.FindAsync(id);
+        var template = await db.Context.LoopTemplates.FindAsync([id], TestContext.Current.CancellationToken);
         Assert.NotNull(template);
         Assert.False(template!.IsArchived);
     }

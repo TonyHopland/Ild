@@ -16,7 +16,7 @@ public class RepositoriesIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/repositories");
+        var response = await client.GetAsync("/api/v1/repositories", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
@@ -25,9 +25,9 @@ public class RepositoriesIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/repositories");
+        var response = await client.GetAsync("/api/v1/repositories", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var items = await response.Content.ReadFromJsonAsync<object[]>();
+        var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
         Assert.Empty(items!);
     }
 
@@ -68,18 +68,18 @@ public class RepositoriesIntegrationTests
         var providerId = await SeedProviderAsync(factory);
 
         const string env = "API_TOKEN=secret-abc\nFOO=bar";
-        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, env));
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, env), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
 
-        var created = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var created = await createResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         var id = created.GetProperty("id").GetString()!;
         // Masked: the plaintext is never returned, only whether one is set.
         Assert.True(created.GetProperty("hasPreviewEnv").GetBoolean());
         Assert.False(created.TryGetProperty("previewEnv", out _));
 
         // GET is masked the same way, but the value is persisted in the store.
-        var getResponse = await client.GetAsync($"/api/v1/repositories/{id}");
-        var fetched = await getResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var getResponse = await client.GetAsync($"/api/v1/repositories/{id}", TestContext.Current.CancellationToken);
+        var fetched = await getResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.True(fetched.GetProperty("hasPreviewEnv").GetBoolean());
         Assert.False(fetched.TryGetProperty("previewEnv", out _));
         Assert.Equal(env, await ReadStoredPreviewEnvAsync(factory, id));
@@ -93,14 +93,14 @@ public class RepositoriesIntegrationTests
         var providerId = await SeedProviderAsync(factory);
 
         const string env = "API_TOKEN=keep-me";
-        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, env));
-        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, env), cancellationToken: TestContext.Current.CancellationToken);
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
         // A normal edit that leaves the .env textarea blank must not wipe the secret
         // (mirrors the provider API-key masking).
-        var updateResponse = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", NewRepoPayload(providerId, previewEnv: null));
+        var updateResponse = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", NewRepoPayload(providerId, previewEnv: null), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
-        var updated = await updateResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var updated = await updateResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.True(updated.GetProperty("hasPreviewEnv").GetBoolean());
         Assert.Equal(env, await ReadStoredPreviewEnvAsync(factory, id));
     }
@@ -123,12 +123,12 @@ public class RepositoriesIntegrationTests
         var providerId = await SeedProviderAsync(factory);
 
         const string env = "API_TOKEN=secret-abc\nFOO=bar";
-        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, env));
-        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, env), cancellationToken: TestContext.Current.CancellationToken);
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
-        var response = await client.GetAsync($"/api/v1/repositories/{id}/preview-env");
+        var response = await client.GetAsync($"/api/v1/repositories/{id}/preview-env", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.Equal(env, body.GetProperty("previewEnv").GetString());
     }
 
@@ -139,16 +139,16 @@ public class RepositoriesIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
-        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, "API_TOKEN=secret-abc"));
-        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, "API_TOKEN=secret-abc"), cancellationToken: TestContext.Current.CancellationToken);
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
         var agent = CreateAgentClient(factory);
-        var read = await agent.GetAsync($"/api/v1/repositories/{id}/preview-env");
+        var read = await agent.GetAsync($"/api/v1/repositories/{id}/preview-env", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, read.StatusCode);
-        Assert.DoesNotContain("secret-abc", await read.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("secret-abc", await read.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
 
         // The agent must not be able to destroy it either.
-        var cleared = await agent.DeleteAsync($"/api/v1/repositories/{id}/preview-env");
+        var cleared = await agent.DeleteAsync($"/api/v1/repositories/{id}/preview-env", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, cleared.StatusCode);
         Assert.Equal("API_TOKEN=secret-abc", await ReadStoredPreviewEnvAsync(factory, id));
     }
@@ -160,12 +160,12 @@ public class RepositoriesIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
-        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, "GOING=away"));
-        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, "GOING=away"), cancellationToken: TestContext.Current.CancellationToken);
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
-        var response = await client.DeleteAsync($"/api/v1/repositories/{id}/preview-env");
+        var response = await client.DeleteAsync($"/api/v1/repositories/{id}/preview-env", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.False((await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("hasPreviewEnv").GetBoolean());
+        Assert.False((await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("hasPreviewEnv").GetBoolean());
         Assert.Null(await ReadStoredPreviewEnvAsync(factory, id));
     }
 
@@ -176,11 +176,11 @@ public class RepositoriesIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var providerId = await SeedProviderAsync(factory);
 
-        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, "OLD=1"));
-        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var createResponse = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId, "OLD=1"), cancellationToken: TestContext.Current.CancellationToken);
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
         const string newEnv = "NEW=2\nEXTRA=3";
-        var updateResponse = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", NewRepoPayload(providerId, newEnv));
+        var updateResponse = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", NewRepoPayload(providerId, newEnv), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
         Assert.Equal(newEnv, await ReadStoredPreviewEnvAsync(factory, id));
     }
@@ -205,10 +205,10 @@ public class RepositoriesIntegrationTests
         // A blank clone URL answers without running git.
         var (id, _) = await SeedRepositoryAsync(factory, cloneUrl: "");
 
-        var response = await client.PostAsync($"/api/v1/repositories/{id}/test", null);
+        var response = await client.PostAsync($"/api/v1/repositories/{id}/test", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.False(body.GetProperty("ok").GetBoolean());
         Assert.Equal("Misconfigured", body.GetProperty("outcome").GetString());
         Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("message").GetString()));
@@ -241,7 +241,7 @@ public class RepositoriesIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var (id, providerId) = await SeedRepositoryAsync(factory, "https://git.example.com/team/app.git", providerApiKey: "stored-key-1");
 
-        var response = await client.PostAsync($"/api/v1/repositories/{id}/test", null);
+        var response = await client.PostAsync($"/api/v1/repositories/{id}/test", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var (repo, provider) = Assert.Single(tester.RepositoryCalls);
@@ -258,8 +258,8 @@ public class RepositoriesIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var malformed = await client.PostAsync("/api/v1/repositories/not-a-guid/test", null);
-        var unknown = await client.PostAsync($"/api/v1/repositories/{Guid.NewGuid()}/test", null);
+        var malformed = await client.PostAsync("/api/v1/repositories/not-a-guid/test", null, TestContext.Current.CancellationToken);
+        var unknown = await client.PostAsync($"/api/v1/repositories/{Guid.NewGuid()}/test", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
@@ -271,8 +271,8 @@ public class RepositoriesIntegrationTests
         await using var factory = new ApiFactory();
         var (id, _) = await SeedRepositoryAsync(factory, cloneUrl: "");
 
-        var anonymous = await factory.CreateClient().PostAsync($"/api/v1/repositories/{id}/test", null);
-        var agent = await CreateAgentClient(factory).PostAsync($"/api/v1/repositories/{id}/test", null);
+        var anonymous = await factory.CreateClient().PostAsync($"/api/v1/repositories/{id}/test", null, TestContext.Current.CancellationToken);
+        var agent = await CreateAgentClient(factory).PostAsync($"/api/v1/repositories/{id}/test", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, agent.StatusCode);
@@ -298,7 +298,7 @@ public class RepositoriesIntegrationTests
         await using var factory = new ApiFactory();
         var agent = CreateAgentClient(factory);
 
-        var response = await agent.GetAsync(path);
+        var response = await agent.GetAsync(path, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }

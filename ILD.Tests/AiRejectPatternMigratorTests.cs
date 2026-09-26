@@ -45,7 +45,7 @@ public class AiRejectPatternMigratorTests
         using var db = new TestDb();
         var (aiId, _, retryId) = SeedLegacyAiNode(db, "Reject");
 
-        var migrated = await AiRejectPatternMigrator.MigrateAsync(db.Context);
+        var migrated = await AiRejectPatternMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, migrated);
 
@@ -54,12 +54,12 @@ public class AiRejectPatternMigratorTests
         // A Custom "Reject" edge now carries the old reject routing to the same
         // node the OnFailure edge targeted (the retry node).
         var rejectEdge = await fresh.LoopNodeEdges
-            .SingleAsync(e => e.SourceNodeId == aiId && e.EdgeType == EdgeType.Custom && e.Name == "Reject");
+            .SingleAsync(e => e.SourceNodeId == aiId && e.EdgeType == EdgeType.Custom && e.Name == "Reject", TestContext.Current.CancellationToken);
         Assert.Equal(retryId, rejectEdge.TargetNodeId);
 
         // The config drops rejectPattern and gains a matching match rule whose
         // edge name resolves to that Custom edge.
-        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == aiId);
+        var node = await fresh.LoopNodes.SingleAsync(n => n.Id == aiId, TestContext.Current.CancellationToken);
         using var doc = JsonDocument.Parse(node.Config!);
         Assert.False(doc.RootElement.TryGetProperty("rejectPattern", out _));
         var rule = Assert.Single(doc.RootElement.GetProperty("matchRules").EnumerateArray());
@@ -73,13 +73,13 @@ public class AiRejectPatternMigratorTests
         using var db = new TestDb();
         var (aiId, _, _) = SeedLegacyAiNode(db, "Reject");
 
-        Assert.Equal(1, await AiRejectPatternMigrator.MigrateAsync(db.Context));
+        Assert.Equal(1, await AiRejectPatternMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken));
         // Second run sees no rejectPattern left and changes nothing.
-        Assert.Equal(0, await AiRejectPatternMigrator.MigrateAsync(db.Context));
+        Assert.Equal(0, await AiRejectPatternMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken));
 
         var fresh = db.Fresh();
         var rejectEdges = await fresh.LoopNodeEdges
-            .CountAsync(e => e.SourceNodeId == aiId && e.EdgeType == EdgeType.Custom && e.Name == "Reject");
+            .CountAsync(e => e.SourceNodeId == aiId && e.EdgeType == EdgeType.Custom && e.Name == "Reject", TestContext.Current.CancellationToken);
         Assert.Equal(1, rejectEdges);
     }
 }

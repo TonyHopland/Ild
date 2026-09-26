@@ -149,15 +149,18 @@ describe("the overview's attachment list", () => {
     const download = vi
       .spyOn(authServices.workItemService, "downloadAttachment")
       .mockResolvedValue(blob);
-    const createObjectURL = vi.spyOn(URL, "createObjectURL");
-    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL");
+    // jsdom only turns its own Blob implementation into an object URL, so the
+    // URL is stubbed: what is under test is that the saved link carries it.
+    const objectUrl = "blob:http://localhost/attachment";
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue(objectUrl);
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const clicks: { download: string; href: string }[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
-      function (this: HTMLAnchorElement) {
-        clicks.push({ download: this.download, href: this.href });
-      },
-    );
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicks.push({ download: this.download, href: this.href });
+    });
     await renderDialog(makeWorkItem());
 
     await click(screen.getByRole("button", { name: "Download shot.png" }));
@@ -169,7 +172,8 @@ describe("the overview's attachment list", () => {
     expect(createObjectURL).toHaveBeenCalledWith(blob);
     expect(clicks[0].download).toBe("shot.png");
     expect(clicks[0].href.startsWith("blob:")).toBe(true);
-    expect(revokeObjectURL).toHaveBeenCalled();
+    expect(clicks[0].href).toBe(objectUrl);
+    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
     expect(open).not.toHaveBeenCalled();
   });
 

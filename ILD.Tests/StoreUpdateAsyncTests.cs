@@ -20,12 +20,12 @@ public class StoreUpdateAsyncTests
             ApiKey = "k",
             WebhookSecret = "s",
         });
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         RemoteProvider loaded;
         using (var ctx = db.Fresh())
         {
-            loaded = (await ctx.RemoteProviders.FindAsync(id))!;
+            loaded = (await ctx.RemoteProviders.FindAsync([id], TestContext.Current.CancellationToken))!;
         }
         loaded.Name = "new";
 
@@ -36,7 +36,7 @@ public class StoreUpdateAsyncTests
         }
 
         using var verify = db.Fresh();
-        var reloaded = await verify.RemoteProviders.FindAsync(id);
+        var reloaded = await verify.RemoteProviders.FindAsync([id], TestContext.Current.CancellationToken);
         Assert.Equal("new", reloaded!.Name);
     }
 }

@@ -11,7 +11,7 @@ public class WebhooksIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { });
+        var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
@@ -21,7 +21,7 @@ public class WebhooksIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         // No RemoteProvider.WebhookSecret configured -> verifier rejects with 401.
-        var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { });
+        var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
@@ -38,12 +38,12 @@ public class WebhooksIntegrationTests
         var agentToken = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", agentToken);
 
-        var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { });
+        var response = await client.PostAsJsonAsync("/api/v1/webhooks/forgejo", new { }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         // The controller's own 401, not the authentication scheme's: the request
         // was let through and then refused by the signature check.
-        Assert.DoesNotContain("No authentication token provided", await response.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("No authentication token provided", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public class WebhooksIntegrationTests
         request.Headers.Add("X-GitHub-Event", "pull_request");
         request.Headers.Add("X-Hub-Signature-256", "sha256=deadbeef");
 
-        var response = await client.SendAsync(request);
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }

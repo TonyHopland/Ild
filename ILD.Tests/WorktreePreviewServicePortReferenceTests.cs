@@ -143,11 +143,11 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
         WriteCrossReferencingConfig(FindFreePort());
         var service = BuildService();
 
-        var first = await service.StartAsync(_worktree);
+        var first = await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var firstDepPort = DepPort(first);
         Assert.Equal($"http://127.0.0.1:{firstDepPort}", await ReadObservedDepUrlAsync());
 
-        await service.StopAsync(_worktree);
+        await service.StopAsync(_worktree, TestContext.Current.CancellationToken);
 
         // Nothing from the first run may still be holding dep's port: a survivor would
         // both keep serving the dead link and make the assertions below meaningless.
@@ -162,7 +162,7 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
         // Clear the first run's record so what is read back can only be the second run's.
         File.Delete(ObservedDepUrlPath);
 
-        var second = await service.StartAsync(_worktree);
+        var second = await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var secondDepPort = DepPort(second);
         Assert.NotEqual(firstDepPort, secondDepPort);
 
@@ -185,11 +185,11 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
         WriteCrossReferencingConfig(FindFreePort());
         var service = BuildService();
 
-        var first = await service.StartAsync(_worktree);
+        var first = await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var firstDepPort = DepPort(first);
 
-        await service.StopServiceAsync(_worktree, "dep");
-        var restarted = await service.StartServiceAsync(_worktree, "dep");
+        await service.StopServiceAsync(_worktree, "dep", TestContext.Current.CancellationToken);
+        var restarted = await service.StartServiceAsync(_worktree, "dep", cancellationToken: TestContext.Current.CancellationToken);
         var restartedDepPort = DepPort(restarted);
 
         // The consumer was never restarted, so its environment still says firstDepPort —
@@ -198,9 +198,9 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
         Assert.Equal($"http://127.0.0.1:{restartedDepPort}", await ReadObservedDepUrlAsync());
 
         // And a consumer relaunched afterwards is handed the same live port.
-        await service.StopServiceAsync(_worktree, "consumer");
+        await service.StopServiceAsync(_worktree, "consumer", TestContext.Current.CancellationToken);
         File.Delete(ObservedDepUrlPath);
-        await service.StartServiceAsync(_worktree, "consumer");
+        await service.StartServiceAsync(_worktree, "consumer", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal($"http://127.0.0.1:{restartedDepPort}", await ReadObservedDepUrlAsync());
     }
@@ -228,7 +228,7 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
 
         // dep is never started, so its alias has an allocation but no listener behind it.
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.StartServiceAsync(_worktree, "consumer"));
+            () => service.StartServiceAsync(_worktree, "consumer", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains("dep", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -296,7 +296,7 @@ public class WorktreePreviewServicePortReferenceTests : IDisposable
         WriteConfigWithAnUnlaunchableSecondService(firstPort);
         var service = BuildService();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(_worktree));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken));
 
         // 'second' is rejected while its step is being resolved, so the throw can come back
         // before 'first' has bound its port — a free port alone would not show it was

@@ -41,7 +41,7 @@ public sealed class WorkItemAttachmentClientTests
         var bytes = Encoding.UTF8.GetBytes("a sketch, pretend");
 
         var upload = await client.UploadAttachmentsAsync(opts, id,
-            new[] { new RemoteAttachmentUpload("sketch.png", "image/png", bytes) });
+            new[] { new RemoteAttachmentUpload("sketch.png", "image/png", bytes) }, TestContext.Current.CancellationToken);
 
         Assert.Equal("Created", upload.Outcome.ToString());
         var created = Assert.Single(upload.Created);
@@ -49,17 +49,17 @@ public sealed class WorkItemAttachmentClientTests
         Assert.Equal("image/png", created.ContentType);
         Assert.Equal(bytes.Length, created.SizeBytes);
 
-        var listed = await client.ListAttachmentsAsync(opts, id);
+        var listed = await client.ListAttachmentsAsync(opts, id, TestContext.Current.CancellationToken);
         Assert.Equal(created.Id, Assert.Single(listed!).Id);
 
-        var content = await client.GetAttachmentAsync(opts, id, created.Id);
+        var content = await client.GetAttachmentAsync(opts, id, created.Id, TestContext.Current.CancellationToken);
         Assert.NotNull(content);
         Assert.Equal(bytes, content!.Value.Content);
         Assert.Equal("image/png", content.Value.ContentType);
         Assert.Equal("sketch.png", content.Value.FileName);
 
-        Assert.True(await client.DeleteAttachmentAsync(opts, id, created.Id));
-        Assert.Empty((await client.ListAttachmentsAsync(opts, id))!);
+        Assert.True(await client.DeleteAttachmentAsync(opts, id, created.Id, TestContext.Current.CancellationToken));
+        Assert.Empty((await client.ListAttachmentsAsync(opts, id, TestContext.Current.CancellationToken))!);
     }
 
     [Fact]
@@ -71,7 +71,7 @@ public sealed class WorkItemAttachmentClientTests
         var id = await CreateWorkItemAsync(http);
 
         var upload = await client.UploadAttachmentsAsync(opts, id,
-            new[] { new RemoteAttachmentUpload("big.bin", "application/octet-stream", AttachmentUpload.Bytes(2 * 1024 * 1024)) });
+            new[] { new RemoteAttachmentUpload("big.bin", "application/octet-stream", AttachmentUpload.Bytes(2 * 1024 * 1024)) }, TestContext.Current.CancellationToken);
 
         Assert.NotEqual("Created", upload.Outcome.ToString());
         Assert.False(string.IsNullOrWhiteSpace(upload.Error));
@@ -86,11 +86,11 @@ public sealed class WorkItemAttachmentClientTests
         using var _ = http;
 
         var upload = await client.UploadAttachmentsAsync(opts, "999999",
-            new[] { new RemoteAttachmentUpload("x.txt", "text/plain", Encoding.UTF8.GetBytes("x")) });
+            new[] { new RemoteAttachmentUpload("x.txt", "text/plain", Encoding.UTF8.GetBytes("x")) }, TestContext.Current.CancellationToken);
 
         Assert.Equal("NotFound", upload.Outcome.ToString());
-        Assert.Null(await client.ListAttachmentsAsync(opts, "999999"));
-        Assert.Null(await client.GetAttachmentAsync(opts, "999999", Guid.NewGuid()));
-        Assert.False(await client.DeleteAttachmentAsync(opts, "999999", Guid.NewGuid()));
+        Assert.Null(await client.ListAttachmentsAsync(opts, "999999", TestContext.Current.CancellationToken));
+        Assert.Null(await client.GetAttachmentAsync(opts, "999999", Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.False(await client.DeleteAttachmentAsync(opts, "999999", Guid.NewGuid(), TestContext.Current.CancellationToken));
     }
 }

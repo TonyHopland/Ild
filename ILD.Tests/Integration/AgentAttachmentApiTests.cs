@@ -74,9 +74,9 @@ public class AgentAttachmentApiTests
         var bytes = Encoding.UTF8.GetBytes("a sketch of the layout");
         var attachmentId = await UploadAsync(client, id, "sketch.png", "image/png", bytes);
 
-        var resp = await client.GetAsync($"/api/v1/agent/workitems/{id}");
+        var resp = await client.GetAsync($"/api/v1/agent/workitems/{id}", TestContext.Current.CancellationToken);
         resp.EnsureSuccessStatusCode();
-        var raw = await resp.Content.ReadAsStringAsync();
+        var raw = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         var item = JsonDocument.Parse(raw).RootElement;
 
         var attachment = Assert.Single(item.GetProperty("attachments").EnumerateArray().ToList());
@@ -94,7 +94,7 @@ public class AgentAttachmentApiTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
 
-        var item = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{id}");
+        var item = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{id}", TestContext.Current.CancellationToken);
 
         Assert.True(item.TryGetProperty("attachments", out var attachments));
         Assert.Equal(JsonValueKind.Array, attachments.ValueKind);
@@ -110,10 +110,10 @@ public class AgentAttachmentApiTests
         var bytes = AttachmentUpload.Bytes(512);
         var attachmentId = await UploadAsync(client, id, "diagram.png", "image/png", bytes);
 
-        var download = await client.GetAsync($"/api/v1/agent/workitems/{id}/attachments/{attachmentId}");
+        var download = await client.GetAsync($"/api/v1/agent/workitems/{id}/attachments/{attachmentId}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, download.StatusCode);
-        Assert.Equal(bytes, await download.Content.ReadAsByteArrayAsync());
+        Assert.Equal(bytes, await download.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken));
         Assert.Equal("image/png", download.Content.Headers.ContentType?.MediaType);
         Assert.Equal("attachment", download.Content.Headers.ContentDisposition?.DispositionType);
         Assert.Equal("nosniff", Assert.Single(download.Headers.GetValues("X-Content-Type-Options")));
@@ -128,9 +128,9 @@ public class AgentAttachmentApiTests
         var real = await UploadAsync(client, id, "real.png", "image/png", AttachmentUpload.Bytes(8));
 
         // A route that exists, so a 404 cannot merely mean "no such route".
-        var served = await client.GetAsync($"/api/v1/agent/workitems/{id}/attachments/{real}");
-        var unknownItem = await client.GetAsync($"/api/v1/agent/workitems/999999/attachments/{Guid.NewGuid()}");
-        var unknownAttachment = await client.GetAsync($"/api/v1/agent/workitems/{id}/attachments/{Guid.NewGuid()}");
+        var served = await client.GetAsync($"/api/v1/agent/workitems/{id}/attachments/{real}", TestContext.Current.CancellationToken);
+        var unknownItem = await client.GetAsync($"/api/v1/agent/workitems/999999/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
+        var unknownAttachment = await client.GetAsync($"/api/v1/agent/workitems/{id}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, served.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, unknownItem.StatusCode);

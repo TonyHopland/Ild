@@ -25,19 +25,19 @@ public sealed class WorkItemAttachmentClientFileNameTests
         var client = new WorkItemServerClient(http);
         var options = new WorkItemServerOptions { BaseUrl = "http://localhost", ApiKey = AttachmentServerFactory.ApiKey };
 
-        var created = await http.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "awkward names" });
+        var created = await http.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "awkward names" }, cancellationToken: TestContext.Current.CancellationToken);
         created.EnsureSuccessStatusCode();
-        var id = (await created.Content.ReadFromJsonAsync<WorkItemDto>())!.Id;
+        var id = (await created.Content.ReadFromJsonAsync<WorkItemDto>(TestContext.Current.CancellationToken))!.Id;
         var bytes = Encoding.UTF8.GetBytes("the file itself is fine");
 
         var upload = await client.UploadAttachmentsAsync(
-            options, id, new[] { new RemoteAttachmentUpload(sent, "image/png", bytes) });
+            options, id, new[] { new RemoteAttachmentUpload(sent, "image/png", bytes) }, TestContext.Current.CancellationToken);
 
         Assert.Equal("Created", upload.Outcome.ToString());
         Assert.Equal(stored, Assert.Single(upload.Created).FileName);
 
         // The name is the only thing that changed: the file comes back whole.
-        var content = await client.GetAttachmentAsync(options, id, upload.Created[0].Id);
+        var content = await client.GetAttachmentAsync(options, id, upload.Created[0].Id, TestContext.Current.CancellationToken);
         Assert.Equal(bytes, content!.Value.Content);
     }
 }

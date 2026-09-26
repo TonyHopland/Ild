@@ -132,7 +132,7 @@ public class PrStatusPollServiceOnCommentTests
     {
         var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), PrNodeEdges.OnComment).CaptureSignal();
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(h.Fired);
         Assert.Equal(PrNodeEdges.OnComment, h.Fired!.EdgeName);
@@ -150,7 +150,7 @@ public class PrStatusPollServiceOnCommentTests
             WatchedSince(),
             PrNodeEdges.OnComment).CaptureSignal();
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(h.Fired);
         var output = h.Fired!.Output!;
@@ -183,7 +183,7 @@ public class PrStatusPollServiceOnCommentTests
             WatchedSince(),
             PrNodeEdges.OnComment).CaptureSignal();
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Once);
         Assert.NotNull(h.Fired);
@@ -197,7 +197,7 @@ public class PrStatusPollServiceOnCommentTests
         var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), PrNodeEdges.OnComment).CaptureSignal();
         var service = h.Build();
 
-        await service.PollOnceAsync();
+        await service.PollOnceAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(h.Fired);
 
         // What the first tick recorded is what the second starts from: the
@@ -205,7 +205,7 @@ public class PrStatusPollServiceOnCommentTests
         Assert.Equal(h.LedgerWrites.Last(), h.Run.PrCommentLedger);
         h.Engine.Invocations.Clear();
 
-        await service.PollOnceAsync();
+        await service.PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
@@ -215,7 +215,7 @@ public class PrStatusPollServiceOnCommentTests
     {
         var h = new Harness(Snapshot(), Ledger(Inline("11"), Issue("12", "an old note")), runLedger: null, PrNodeEdges.OnComment);
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
         var seeded = Assert.Single(h.LedgerWrites);
@@ -232,7 +232,7 @@ public class PrStatusPollServiceOnCommentTests
         // snapshot and its GUI push behave exactly as before.
         var h = new Harness(Snapshot(), ledger: null, runLedger: null, PrNodeEdges.OnMerged);
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Remote.Verify(r => r.GetPullRequestReviewLedgerAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         h.Runs.Verify(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
@@ -252,7 +252,7 @@ public class PrStatusPollServiceOnCommentTests
             WatchedSince(),
             PrNodeEdges.OnCiFailed, PrNodeEdges.OnComment).CaptureSignal();
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(h.Fired);
         Assert.Equal(PrNodeEdges.OnCiFailed, h.Fired!.EdgeName);
@@ -265,7 +265,7 @@ public class PrStatusPollServiceOnCommentTests
         var reply = PrCommentMarker.Stamp("Answered: the build is green.", Guid.NewGuid());
         var h = new Harness(Snapshot(), Ledger(Issue("500", reply)), WatchedSince(), PrNodeEdges.OnComment);
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
@@ -279,7 +279,7 @@ public class PrStatusPollServiceOnCommentTests
             WatchedSince(),
             PrNodeEdges.OnComment);
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
@@ -289,7 +289,7 @@ public class PrStatusPollServiceOnCommentTests
     {
         var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), PrNodeEdges.OnComment);
 
-        await h.Build().PollOnceAsync();
+        await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrSnapshot != null)), Times.Once);
         h.Notifier.Verify(n => n.PrSnapshotChangedAsync(h.Run.Id), Times.Once);

@@ -32,7 +32,7 @@ public class RepositoryPreviewEnvEncryptionTests
 
             // A fresh context decrypts transparently through the value converter.
             using var fresh = db.Fresh();
-            var loaded = await fresh.Repositories.FindAsync(id);
+            var loaded = await fresh.Repositories.FindAsync([id], TestContext.Current.CancellationToken);
             Assert.Equal(EnvText, loaded!.PreviewEnv);
         }
         finally { SecretProtector.Configure(null); }

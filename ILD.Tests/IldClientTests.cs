@@ -31,7 +31,7 @@ public class IldClientTests
         });
 
         var ex = await Assert.ThrowsAsync<McpException>(
-            () => client.GetRawAsync("api/v1/agent/workitems"));
+            () => client.GetRawAsync("api/v1/agent/workitems", TestContext.Current.CancellationToken));
 
         Assert.Contains("401", ex.Message);
         Assert.Contains("Invalid or expired session", ex.Message);
@@ -44,7 +44,7 @@ public class IldClientTests
         var client = Client(_ => throw new HttpRequestException("Connection refused (ild-host:8080)"));
 
         var ex = await Assert.ThrowsAsync<McpException>(
-            () => client.PostJsonAsync("api/v1/agent/workitems", new { title = "x" }));
+            () => client.PostJsonAsync("api/v1/agent/workitems", new { title = "x" }, TestContext.Current.CancellationToken));
 
         Assert.Contains($"{BaseAddress}api/v1/agent/workitems", ex.Message);
         Assert.Contains($"ILD_API_URL={BaseAddress.TrimEnd('/')}", ex.Message);
@@ -68,7 +68,7 @@ public class IldClientTests
         const string payload = """[{"id":"1"}]""";
         var client = Client(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(payload) });
 
-        Assert.Equal(payload, await client.GetRawAsync("api/v1/agent/workitems"));
+        Assert.Equal(payload, await client.GetRawAsync("api/v1/agent/workitems", TestContext.Current.CancellationToken));
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

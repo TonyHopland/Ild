@@ -27,11 +27,11 @@ public class LoopTemplateManagerTests
 
         var id = await mgr.CreateLoopTemplateAsync("seed", "desc", MinimalGraph());
 
-        var versions = await db.Context.LoopTemplateVersions.Where(v => v.LoopTemplateId == id).ToListAsync();
+        var versions = await db.Context.LoopTemplateVersions.Where(v => v.LoopTemplateId == id).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Single(versions);
         Assert.Equal(1, versions[0].VersionNumber);
-        Assert.Equal(3, (await db.Context.LoopNodes.CountAsync()));
-        Assert.Equal(2, (await db.Context.LoopNodeEdges.CountAsync()));
+        Assert.Equal(3, (await db.Context.LoopNodes.CountAsync(TestContext.Current.CancellationToken)));
+        Assert.Equal(2, (await db.Context.LoopNodeEdges.CountAsync(TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class LoopTemplateManagerTests
         var id = await mgr.CreateLoopTemplateAsync("custom-edge-test", "", graph);
 
         // The custom edge keeps its role and name in the DB, not corrupted to OnSuccess.
-        var edges = await db.Context.LoopNodeEdges.ToListAsync();
+        var edges = await db.Context.LoopNodeEdges.ToListAsync(TestContext.Current.CancellationToken);
         var customEdge = edges.FirstOrDefault(e => e.EdgeType == EdgeType.Custom);
         Assert.NotNull(customEdge);
         Assert.Equal("Respond", customEdge!.Name);

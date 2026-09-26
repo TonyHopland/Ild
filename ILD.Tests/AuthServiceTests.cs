@@ -135,7 +135,7 @@ public class AuthServiceTests
     public async Task Idle_expiry_honours_the_configured_setting()
     {
         using var db = new TestDb();
-        await db.Settings.UpsertAsync(AppSettingKeys.SessionIdleDays, "90");
+        await db.Settings.UpsertAsync(AppSettingKeys.SessionIdleDays, "90", TestContext.Current.CancellationToken);
         var svc = Make(db);
         var token = await LoginAsync(svc);
 
@@ -148,7 +148,7 @@ public class AuthServiceTests
     public async Task A_zero_max_days_setting_creates_a_session_with_no_absolute_expiry()
     {
         using var db = new TestDb();
-        await db.Settings.UpsertAsync(AppSettingKeys.SessionMaxDays, "0");
+        await db.Settings.UpsertAsync(AppSettingKeys.SessionMaxDays, "0", TestContext.Current.CancellationToken);
         var svc = Make(db);
 
         var result = await svc.LoginAsync("admin", "secret");

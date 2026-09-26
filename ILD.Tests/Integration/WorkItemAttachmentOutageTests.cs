@@ -50,7 +50,7 @@ public class WorkItemAttachmentOutageTests
         await using var factory = UnreachableWorkItemServer();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        await AssertReportsTheOutageAsync(await client.GetAsync($"/api/v1/workitems/{WorkItemId}/attachments"));
+        await AssertReportsTheOutageAsync(await client.GetAsync($"/api/v1/workitems/{WorkItemId}/attachments", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public class WorkItemAttachmentOutageTests
         var client = await factory.CreateAuthenticatedClientAsync();
 
         using var body = AttachmentUpload.Of("sketch.png", "image/png", Encoding.UTF8.GetBytes("a sketch"));
-        await AssertReportsTheOutageAsync(await client.PostAsync($"/api/v1/workitems/{WorkItemId}/attachments", body));
+        await AssertReportsTheOutageAsync(await client.PostAsync($"/api/v1/workitems/{WorkItemId}/attachments", body, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class WorkItemAttachmentOutageTests
         var client = await factory.CreateAuthenticatedClientAsync();
 
         await AssertReportsTheOutageAsync(
-            await client.GetAsync($"/api/v1/workitems/{WorkItemId}/attachments/{Guid.NewGuid()}"));
+            await client.GetAsync($"/api/v1/workitems/{WorkItemId}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -79,7 +79,7 @@ public class WorkItemAttachmentOutageTests
         await using var factory = UnreachableWorkItemServer();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var resp = await client.DeleteAsync($"/api/v1/workitems/{WorkItemId}/attachments/{Guid.NewGuid()}");
+        var resp = await client.DeleteAsync($"/api/v1/workitems/{WorkItemId}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
 
         Assert.NotEqual(HttpStatusCode.NotFound, resp.StatusCode);
         await AssertReportsTheOutageAsync(resp);
@@ -92,6 +92,6 @@ public class WorkItemAttachmentOutageTests
         var client = await factory.CreateAuthenticatedClientAsync();
 
         await AssertReportsTheOutageAsync(
-            await client.GetAsync($"/api/v1/agent/workitems/{WorkItemId}/attachments/{Guid.NewGuid()}"));
+            await client.GetAsync($"/api/v1/agent/workitems/{WorkItemId}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken));
     }
 }

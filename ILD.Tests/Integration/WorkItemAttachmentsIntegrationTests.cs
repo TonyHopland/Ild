@@ -73,27 +73,27 @@ public class WorkItemAttachmentsIntegrationTests
         var upload = await UploadAsync(client, id, ("screenshot.png", "image/png", bytes));
         Assert.Equal(HttpStatusCode.Created, upload.StatusCode);
         var created = Assert.Single(
-            JsonDocument.Parse(await upload.Content.ReadAsStringAsync()).RootElement.EnumerateArray().ToList());
+            JsonDocument.Parse(await upload.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.EnumerateArray().ToList());
         var attachmentId = created.GetProperty("id").GetGuid();
         Assert.Equal("screenshot.png", created.GetProperty("fileName").GetString());
 
-        var list = await client.GetAsync($"/api/v1/workitems/{id}/attachments");
+        var list = await client.GetAsync($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         list.EnsureSuccessStatusCode();
-        var listedRaw = await list.Content.ReadAsStringAsync();
+        var listedRaw = await list.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         var listed = Assert.Single(JsonDocument.Parse(listedRaw).RootElement.EnumerateArray().ToList());
         Assert.Equal(attachmentId, listed.GetProperty("id").GetGuid());
         Assert.Equal(bytes.Length, listed.GetProperty("sizeBytes").GetInt64());
         Assert.DoesNotContain(Convert.ToBase64String(bytes), listedRaw, StringComparison.Ordinal);
 
-        var download = await client.GetAsync($"/api/v1/workitems/{id}/attachments/{attachmentId}");
+        var download = await client.GetAsync($"/api/v1/workitems/{id}/attachments/{attachmentId}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, download.StatusCode);
-        Assert.Equal(bytes, await download.Content.ReadAsByteArrayAsync());
+        Assert.Equal(bytes, await download.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken));
         Assert.Equal("image/png", download.Content.Headers.ContentType?.MediaType);
 
-        var deleted = await client.DeleteAsync($"/api/v1/workitems/{id}/attachments/{attachmentId}");
+        var deleted = await client.DeleteAsync($"/api/v1/workitems/{id}/attachments/{attachmentId}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
 
-        var empty = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workitems/{id}/attachments");
+        var empty = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Empty(empty.EnumerateArray().ToList());
     }
 
@@ -106,10 +106,10 @@ public class WorkItemAttachmentsIntegrationTests
         var page = Encoding.UTF8.GetBytes("<html><script>alert(document.cookie)</script></html>");
 
         var upload = await UploadAsync(client, id, ("evil.html", "text/html", page));
-        var attachmentId = JsonDocument.Parse(await upload.Content.ReadAsStringAsync())
+        var attachmentId = JsonDocument.Parse(await upload.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
             .RootElement[0].GetProperty("id").GetGuid();
 
-        var download = await client.GetAsync($"/api/v1/workitems/{id}/attachments/{attachmentId}");
+        var download = await client.GetAsync($"/api/v1/workitems/{id}/attachments/{attachmentId}", TestContext.Current.CancellationToken);
 
         // Uploaded markup must not be able to run on the ILD origin.
         Assert.Equal("attachment", download.Content.Headers.ContentDisposition?.DispositionType);
@@ -125,14 +125,14 @@ public class WorkItemAttachmentsIntegrationTests
         var anonymous = factory.CreateClient();
         // A route that exists, so a 401 cannot merely mean "no such route".
         var id = await CreateWorkItemAsync(factory, signedIn);
-        Assert.Equal(HttpStatusCode.OK, (await signedIn.GetAsync($"/api/v1/workitems/{id}/attachments")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await signedIn.GetAsync($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken)).StatusCode);
 
         using var body = AttachmentUpload.Of("x.txt", "text/plain", Encoding.UTF8.GetBytes("x"));
-        var upload = await anonymous.PostAsync($"/api/v1/workitems/{id}/attachments", body);
-        var list = await anonymous.GetAsync($"/api/v1/workitems/{id}/attachments");
-        var download = await anonymous.GetAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}");
-        var delete = await anonymous.DeleteAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}");
-        var settings = await anonymous.GetAsync("/api/v1/settings/attachments");
+        var upload = await anonymous.PostAsync($"/api/v1/workitems/{id}/attachments", body, TestContext.Current.CancellationToken);
+        var list = await anonymous.GetAsync($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken);
+        var download = await anonymous.GetAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
+        var delete = await anonymous.DeleteAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
+        var settings = await anonymous.GetAsync("/api/v1/settings/attachments", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, upload.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, list.StatusCode);
@@ -149,12 +149,12 @@ public class WorkItemAttachmentsIntegrationTests
         var unknown = "999999";
         // A route that exists, so a 404 cannot merely mean "no such route".
         var known = await CreateWorkItemAsync(factory, client);
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/v1/workitems/{known}/attachments")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/v1/workitems/{known}/attachments", TestContext.Current.CancellationToken)).StatusCode);
 
         var upload = await UploadAsync(client, unknown, ("x.txt", "text/plain", Encoding.UTF8.GetBytes("x")));
-        var list = await client.GetAsync($"/api/v1/workitems/{unknown}/attachments");
-        var download = await client.GetAsync($"/api/v1/workitems/{unknown}/attachments/{Guid.NewGuid()}");
-        var delete = await client.DeleteAsync($"/api/v1/workitems/{unknown}/attachments/{Guid.NewGuid()}");
+        var list = await client.GetAsync($"/api/v1/workitems/{unknown}/attachments", TestContext.Current.CancellationToken);
+        var download = await client.GetAsync($"/api/v1/workitems/{unknown}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
+        var delete = await client.DeleteAsync($"/api/v1/workitems/{unknown}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, upload.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, list.StatusCode);
@@ -169,11 +169,11 @@ public class WorkItemAttachmentsIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var id = await CreateWorkItemAsync(factory, client);
         var upload = await UploadAsync(client, id, ("real.bin", "application/octet-stream", AttachmentUpload.Bytes(8)));
-        var real = JsonDocument.Parse(await upload.Content.ReadAsStringAsync()).RootElement[0].GetProperty("id").GetGuid();
+        var real = JsonDocument.Parse(await upload.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement[0].GetProperty("id").GetGuid();
 
-        var served = await client.GetAsync($"/api/v1/workitems/{id}/attachments/{real}");
-        var download = await client.GetAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}");
-        var delete = await client.DeleteAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}");
+        var served = await client.GetAsync($"/api/v1/workitems/{id}/attachments/{real}", TestContext.Current.CancellationToken);
+        var download = await client.GetAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
+        var delete = await client.DeleteAsync($"/api/v1/workitems/{id}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, served.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, download.StatusCode);
@@ -186,7 +186,7 @@ public class WorkItemAttachmentsIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var limits = await client.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments");
+        var limits = await client.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments", TestContext.Current.CancellationToken);
 
         Assert.Equal(25L * Megabyte, limits.GetProperty("maxBytesPerFile").GetInt64());
         Assert.Equal(10, limits.GetProperty("maxFilesPerRequest").GetInt32());
@@ -203,7 +203,7 @@ public class WorkItemAttachmentsIntegrationTests
         });
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var limits = await client.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments");
+        var limits = await client.GetFromJsonAsync<JsonElement>("/api/v1/settings/attachments", TestContext.Current.CancellationToken);
 
         Assert.Equal(3L * Megabyte, limits.GetProperty("maxBytesPerFile").GetInt64());
         Assert.Equal(9L * Megabyte, limits.GetProperty("maxTotalBytesPerWorkItem").GetInt64());
@@ -222,10 +222,10 @@ public class WorkItemAttachmentsIntegrationTests
         var resp = await UploadAsync(client, id, ("big.bin", "application/octet-stream", AttachmentUpload.Bytes(2 * Megabyte)));
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        var error = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement.GetProperty("error").GetString();
+        var error = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("error").GetString();
         Assert.False(string.IsNullOrWhiteSpace(error));
 
-        var listed = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workitems/{id}/attachments");
+        var listed = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Empty(listed.EnumerateArray().ToList());
     }
 
@@ -242,10 +242,10 @@ public class WorkItemAttachmentsIntegrationTests
         var resp = await UploadAsync(client, id, files);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        var error = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement.GetProperty("error").GetString();
+        var error = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("error").GetString();
         Assert.Contains("10", error!, StringComparison.Ordinal);
 
-        var listed = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workitems/{id}/attachments");
+        var listed = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Empty(listed.EnumerateArray().ToList());
     }
 
@@ -314,10 +314,10 @@ public class WorkItemAttachmentsIntegrationTests
 
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, second.StatusCode);
-        var error = JsonDocument.Parse(await second.Content.ReadAsStringAsync()).RootElement.GetProperty("error").GetString();
+        var error = JsonDocument.Parse(await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("error").GetString();
         Assert.Contains("total", error!, StringComparison.OrdinalIgnoreCase);
 
-        var listed = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workitems/{id}/attachments");
+        var listed = await client.GetFromJsonAsync<JsonElement>($"/api/v1/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Equal("first.bin", Assert.Single(listed.EnumerateArray().ToList()).GetProperty("fileName").GetString());
     }
 }

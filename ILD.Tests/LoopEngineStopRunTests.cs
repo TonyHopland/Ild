@@ -140,7 +140,7 @@ public class LoopEngineStopRunTests
             StartedAt = DateTime.UtcNow,
         };
         db.Context.LoopRuns.Add(run);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var services = new ServiceCollection();
         // One context per scope, as the API host registers it — this is what

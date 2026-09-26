@@ -41,7 +41,7 @@ public class ThrottledRunResumeSweeperTests
     {
         using var db = new TestDb();
         SeedThrottleParkedRun(db, parkedAt: DateTime.UtcNow - PastTheDelay);
-        await db.Settings.UpsertAsync(AppSettingKeys.ThrottleAutoResume, "false");
+        await db.Settings.UpsertAsync(AppSettingKeys.ThrottleAutoResume, "false", TestContext.Current.CancellationToken);
         var engine = new Mock<ILoopEngine>();
 
         await SweepAsync(db, engine.Object);

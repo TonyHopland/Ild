@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
@@ -154,6 +155,7 @@ public class AiFailureClassifierTests
 
     [Theory]
     [MemberData(nameof(ThrottlingAdapters))]
+    [UnsupportedOSPlatform("windows")]
     public async Task Every_adapter_reports_a_throttle_as_output_the_classifier_recognises(
         string providerType, IAgentAdapter adapter)
     {
@@ -163,7 +165,7 @@ public class AiFailureClassifierTests
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-throttle-{providerType}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "throttle.sh");
-        await File.WriteAllTextAsync(scriptPath, $"#!/bin/sh\necho \"{SessionLimitNotice}\"\nexit 1\n");
+        await File.WriteAllTextAsync(scriptPath, $"#!/bin/sh\necho \"{SessionLimitNotice}\"\nexit 1\n", TestContext.Current.CancellationToken);
         File.SetUnixFileMode(scriptPath,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
             | UnixFileMode.GroupRead | UnixFileMode.GroupExecute

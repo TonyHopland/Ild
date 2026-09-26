@@ -166,7 +166,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())));
 
-        var view = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
+        var view = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" }, TestContext.Current.CancellationToken);
 
         Assert.Equal(provider.Id, view.AiProviderId);
         Assert.Contains("ild", view.Tools);
@@ -181,7 +181,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync("copilot");
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())));
 
-        var view = await svc.StartAsync("alice", provider.Id, null);
+        var view = await svc.StartAsync("alice", provider.Id, null, TestContext.Current.CancellationToken);
 
         Assert.Equal(new[] { "ild" }, view.Tools);
         Assert.Equal("ild", _db.Context.ChatSessions.Single().ToolAllowlistCsv);
@@ -194,7 +194,7 @@ public sealed class ChatServiceTests : IDisposable
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
 
-        var view = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var view = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         await svc.ExecuteTurnAsync(view.Id, Guid.NewGuid(), "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
 
         Assert.Equal(new[] { "ild" }, view.Tools);
@@ -208,7 +208,7 @@ public sealed class ChatServiceTests : IDisposable
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
 
-        var view = await svc.StartAsync("alice", provider.Id, Array.Empty<string>());
+        var view = await svc.StartAsync("alice", provider.Id, Array.Empty<string>(), TestContext.Current.CancellationToken);
         await svc.ExecuteTurnAsync(view.Id, Guid.NewGuid(), "hi", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
 
         Assert.Empty(view.Tools);
@@ -224,8 +224,8 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())));
 
-        var first = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
-        var second = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var first = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var second = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         Assert.NotEqual(first.Id, second.Id);
         Assert.Equal(2, _db.Context.ChatSessions.Count(c => c.UserId == "alice"));
@@ -242,7 +242,7 @@ public sealed class ChatServiceTests : IDisposable
             return NodeExecutionResult.Ok("hello world", sessionId: "sess-1");
         });
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         var turnId = Guid.NewGuid();
         await svc.ExecuteTurnAsync(started.Id, turnId, "hi there", CancellationToken.None);
@@ -292,7 +292,7 @@ public sealed class ChatServiceTests : IDisposable
         var adapter = new FakeAdapter(ctx =>
             Task.FromResult(NodeExecutionResult.Ok("ok", sessionId: "sess-1")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "first", CancellationToken.None);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "second", CancellationToken.None);
@@ -315,7 +315,7 @@ public sealed class ChatServiceTests : IDisposable
             return NodeExecutionResult.Fail("interrupted");
         });
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "go", cts.Token);
 
@@ -334,7 +334,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "plain message", openWorkItemId: null, openLoopDocument: null, CancellationToken.None);
 
@@ -349,7 +349,7 @@ public sealed class ChatServiceTests : IDisposable
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
         // No filesystem grant and no active run: id-only context, scratch alone.
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "what is open?", "wi-42", openLoopDocument: null, CancellationToken.None);
 
@@ -373,7 +373,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "write" }, TestContext.Current.CancellationToken);
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
@@ -391,7 +391,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         // Only the `ild` tool — no read/write/execute, so the worktree stays hidden
         // even though the open item has an active run.
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         var worktreePath = await SeedActiveRunAsync("wi-99");
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "edit it", "wi-99", openLoopDocument: null, CancellationToken.None);
@@ -406,7 +406,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" }, TestContext.Current.CancellationToken);
         // A completed run keeps its worktree on disk (ADR-0008) but is not active,
         // so the chat must not expose it (ADR-0011 active-run-only).
         await SeedActiveRunAsync("wi-7", LoopRunStatus.Completed);
@@ -422,7 +422,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"My Loop\",\"nodes\":[]}";
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "tidy this loop", openWorkItemId: null, document, CancellationToken.None);
@@ -447,7 +447,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"L\",\"nodes\":[]}";
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "help me wire this up", openWorkItemId: null, document, CancellationToken.None);
@@ -476,7 +476,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "what is open?", "wi-42", openLoopDocument: null, CancellationToken.None);
 
@@ -498,7 +498,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi", CancellationToken.None);
 
@@ -517,7 +517,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
         var adapter = new RecordingAdapter(new ClaudeCodeAdapter());
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"L\",\"nodes\":[]}";
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "how do loop variables work?", openWorkItemId: null, document, CancellationToken.None);
@@ -542,7 +542,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
         var adapter = new RecordingAdapter(new ClaudeCodeAdapter());
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         // The reported symptom: a human asking about the syntax had their own
         // question rewritten before the agent ever saw it. The angle-bracket
@@ -561,7 +561,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync(config: cli.ProviderConfigJson);
         var adapter = new RecordingAdapter(new ClaudeCodeAdapter());
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild", "read" }, TestContext.Current.CancellationToken);
 
         var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
         File.WriteAllText(Path.Combine(scratchPath, "notes.txt"), "INLINED-FILE-BODY");
@@ -581,7 +581,7 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
         var svc = NewService(adapter);
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         const string first = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"v1\",\"nodes\":[]}";
         const string second = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"v2\",\"nodes\":[]}";
@@ -605,7 +605,7 @@ public sealed class ChatServiceTests : IDisposable
     {
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         Assert.Null(started.Name);
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "Help me wire up a deploy loop", CancellationToken.None);
@@ -621,7 +621,7 @@ public sealed class ChatServiceTests : IDisposable
     {
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
         var longMessage = new string('a', 200);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), longMessage, CancellationToken.None);
@@ -637,21 +637,21 @@ public sealed class ChatServiceTests : IDisposable
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
 
-        var older = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var older = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         await svc.ExecuteTurnAsync(older.Id, Guid.NewGuid(), "first chat", CancellationToken.None);
-        var newer = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var newer = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         await svc.ExecuteTurnAsync(newer.Id, Guid.NewGuid(), "second chat", CancellationToken.None);
         // A different user's chat must never leak into alice's history.
-        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" });
+        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         await svc.ExecuteTurnAsync(bobs.Id, Guid.NewGuid(), "bob chat", CancellationToken.None);
 
         // Force the newer chat to have the most recent activity timestamp.
         await _db.Context.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE \"ChatSessions\" SET \"UpdatedAt\" = {DateTime.UtcNow.AddMinutes(-10)} WHERE \"Id\" = {older.Id}");
+            $"UPDATE \"ChatSessions\" SET \"UpdatedAt\" = {DateTime.UtcNow.AddMinutes(-10)} WHERE \"Id\" = {older.Id}", TestContext.Current.CancellationToken);
         await _db.Context.Database.ExecuteSqlInterpolatedAsync(
-            $"UPDATE \"ChatSessions\" SET \"UpdatedAt\" = {DateTime.UtcNow} WHERE \"Id\" = {newer.Id}");
+            $"UPDATE \"ChatSessions\" SET \"UpdatedAt\" = {DateTime.UtcNow} WHERE \"Id\" = {newer.Id}", TestContext.Current.CancellationToken);
 
-        var history = await svc.ListForUserAsync("alice");
+        var history = await svc.ListForUserAsync("alice", TestContext.Current.CancellationToken);
 
         Assert.Equal(2, history.Count);
         Assert.Equal(newer.Id, history[0].Id);
@@ -664,15 +664,15 @@ public sealed class ChatServiceTests : IDisposable
     {
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi there", CancellationToken.None);
 
-        var owner = await svc.GetByIdAsync("alice", started.Id);
+        var owner = await svc.GetByIdAsync("alice", started.Id, TestContext.Current.CancellationToken);
         Assert.NotNull(owner);
         Assert.Equal(2, owner!.Messages.Count);
 
         // Another user may not resume alice's chat.
-        Assert.Null(await svc.GetByIdAsync("bob", started.Id));
+        Assert.Null(await svc.GetByIdAsync("bob", started.Id, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -680,12 +680,12 @@ public sealed class ChatServiceTests : IDisposable
     {
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
-        Assert.True(await svc.ExistsForUserAsync("alice", started.Id));
+        Assert.True(await svc.ExistsForUserAsync("alice", started.Id, TestContext.Current.CancellationToken));
         // A different user, and a missing id, are both unauthorized/absent.
-        Assert.False(await svc.ExistsForUserAsync("bob", started.Id));
-        Assert.False(await svc.ExistsForUserAsync("alice", Guid.NewGuid()));
+        Assert.False(await svc.ExistsForUserAsync("bob", started.Id, TestContext.Current.CancellationToken));
+        Assert.False(await svc.ExistsForUserAsync("alice", Guid.NewGuid(), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -693,20 +693,20 @@ public sealed class ChatServiceTests : IDisposable
     {
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("x"))));
-        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi", CancellationToken.None);
 
         // Bind a snapshot to the chat session so we can prove the cascade.
         var snapshots = new AdapterSessionSnapshotStore(_db.Context);
-        await snapshots.UpsertForChatAsync(started.Id, "fake", "sess-1", "{\"events\":[]}");
+        await snapshots.UpsertForChatAsync(started.Id, "fake", "sess-1", "{\"events\":[]}", TestContext.Current.CancellationToken);
         var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
         Assert.True(Directory.Exists(scratchPath));
 
         // A non-owner cannot delete it.
-        Assert.False(await svc.DeleteAsync("bob", started.Id));
+        Assert.False(await svc.DeleteAsync("bob", started.Id, TestContext.Current.CancellationToken));
         Assert.Single(_db.Context.ChatSessions);
 
-        var deleted = await svc.DeleteAsync("alice", started.Id);
+        var deleted = await svc.DeleteAsync("alice", started.Id, TestContext.Current.CancellationToken);
 
         Assert.True(deleted);
         Assert.Empty(_db.Context.ChatSessions);
@@ -720,12 +720,12 @@ public sealed class ChatServiceTests : IDisposable
     {
         var provider = await SeedProviderAsync();
         var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var a1 = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
-        var a2 = await svc.StartAsync("alice", provider.Id, new[] { "ild" });
-        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" });
+        var a1 = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var a2 = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
         var a1Scratch = _db.Context.ChatSessions.Single(c => c.Id == a1.Id).ScratchPath;
 
-        var removed = await svc.DeleteAllForUserAsync("alice");
+        var removed = await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken);
 
         Assert.Equal(2, removed);
         Assert.False(Directory.Exists(a1Scratch), "scratch directories should be removed");

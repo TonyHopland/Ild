@@ -28,7 +28,7 @@ public class LoopRunStoreGetByIdTests
         };
         db.Context.LoopTemplateVersions.Add(ltv);
         var wi = Guid.NewGuid().ToString();
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var run = new LoopRun
         {
@@ -69,7 +69,7 @@ public class LoopRunStoreGetByIdTests
         db.Context.LoopNodes.Add(ln);
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = wi, LoopTemplateVersionId = ltv.Id, Status = LoopRunStatus.Running, RecoveryPolicy = RecoveryPolicy.AutoResume };
         db.Context.LoopRuns.Add(run);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var n1 = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = ln.Id, CreatedAt = DateTime.UtcNow.AddMinutes(-2) };
         var n2 = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = run.Id, LoopNodeId = ln.Id, CreatedAt = DateTime.UtcNow.AddMinutes(-1) };
@@ -78,7 +78,7 @@ public class LoopRunStoreGetByIdTests
         db.Context.LoopRunNodes.Add(n2);
         db.Context.LoopRunNodes.Add(n1);
         db.Context.LoopRunNodes.Add(n3);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var freshStore = new LoopRunStore(db.Fresh());
         var result = await freshStore.GetRunNodesAsync(run.Id);
@@ -127,7 +127,7 @@ public class LoopRunStoreGetByIdTests
             Timestamp = DateTime.UtcNow,
             Data = "done",
         });
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var freshStore = new LoopRunStore(db.Fresh());
         var deleted = await freshStore.DeleteAsync(run.Id);
@@ -135,7 +135,7 @@ public class LoopRunStoreGetByIdTests
         Assert.True(deleted);
 
         using var verify = db.Fresh();
-        Assert.Null((await verify.LoopRuns.FindAsync(run.Id)));
-        Assert.Equal(0, (await verify.EventLogs.Where(e => e.LoopRunId == run.Id).CountAsync()));
+        Assert.Null((await verify.LoopRuns.FindAsync([run.Id], TestContext.Current.CancellationToken)));
+        Assert.Equal(0, (await verify.EventLogs.Where(e => e.LoopRunId == run.Id).CountAsync(TestContext.Current.CancellationToken)));
     }
 }

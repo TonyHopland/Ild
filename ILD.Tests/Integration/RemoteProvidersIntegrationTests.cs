@@ -13,7 +13,7 @@ public class RemoteProvidersIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/remoteproviders");
+        var response = await client.GetAsync("/api/v1/remoteproviders", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
@@ -22,9 +22,9 @@ public class RemoteProvidersIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/remoteproviders");
+        var response = await client.GetAsync("/api/v1/remoteproviders", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var items = await response.Content.ReadFromJsonAsync<object[]>();
+        var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
         Assert.Empty(items!);
     }
 
@@ -34,10 +34,10 @@ public class RemoteProvidersIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var response = await client.GetAsync("/api/v1/remoteproviders/types");
+        var response = await client.GetAsync("/api/v1/remoteproviders/types", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var items = await response.Content.ReadFromJsonAsync<RemoteProviderTypeResponse[]>();
+        var items = await response.Content.ReadFromJsonAsync<RemoteProviderTypeResponse[]>(TestContext.Current.CancellationToken);
         Assert.NotNull(items);
         Assert.Equal(new[] { "AzureDevOps", "Forgejo", "GitHub" }, items!.Select(i => i.Type).OrderBy(t => t).ToArray());
     }
@@ -68,10 +68,10 @@ public class RemoteProvidersIntegrationTests
         // Not an absolute URL, so the test answers without leaving the process.
         var id = await SeedProviderAsync(factory, "Forgejo", "not a url");
 
-        var response = await client.PostAsync($"/api/v1/remoteproviders/{id}/test", null);
+        var response = await client.PostAsync($"/api/v1/remoteproviders/{id}/test", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.False(body.GetProperty("ok").GetBoolean());
         Assert.Equal("Misconfigured", body.GetProperty("outcome").GetString());
         Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("message").GetString()));
@@ -84,8 +84,8 @@ public class RemoteProvidersIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var malformed = await client.PostAsync("/api/v1/remoteproviders/not-a-guid/test", null);
-        var unknown = await client.PostAsync($"/api/v1/remoteproviders/{Guid.NewGuid()}/test", null);
+        var malformed = await client.PostAsync("/api/v1/remoteproviders/not-a-guid/test", null, TestContext.Current.CancellationToken);
+        var unknown = await client.PostAsync($"/api/v1/remoteproviders/{Guid.NewGuid()}/test", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
@@ -97,8 +97,8 @@ public class RemoteProvidersIntegrationTests
         await using var factory = new ApiFactory();
         var id = await SeedProviderAsync(factory, "Forgejo", "not a url");
 
-        var anonymous = await factory.CreateClient().PostAsync($"/api/v1/remoteproviders/{id}/test", null);
-        var agent = await CreateAgentClient(factory).PostAsync($"/api/v1/remoteproviders/{id}/test", null);
+        var anonymous = await factory.CreateClient().PostAsync($"/api/v1/remoteproviders/{id}/test", null, TestContext.Current.CancellationToken);
+        var agent = await CreateAgentClient(factory).PostAsync($"/api/v1/remoteproviders/{id}/test", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, agent.StatusCode);

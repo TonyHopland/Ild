@@ -20,14 +20,14 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
     private AttachmentServerFactory _factory = null!;
     private HttpClient _client = null!;
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _factory = new AttachmentServerFactory();
         _client = _factory.AuthedClient();
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         _client.Dispose();
         await _factory.DisposeAsync();
@@ -74,8 +74,8 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         Assert.NotEqual(Guid.Empty, attachmentId);
 
         await using var db = _factory.NewDbContext();
-        var row = await db.Set<WorkItemAttachment>().SingleAsync(a => a.Id == attachmentId);
-        var owner = await db.WorkItems.SingleAsync(w => w.Id == id);
+        var row = await db.Set<WorkItemAttachment>().SingleAsync(a => a.Id == attachmentId, TestContext.Current.CancellationToken);
+        var owner = await db.WorkItems.SingleAsync(w => w.Id == id, TestContext.Current.CancellationToken);
         Assert.Equal(owner.InternalId, row.WorkItemId);
         Assert.Equal(bytes, row.Content);
         Assert.Equal(bytes.Length, row.SizeBytes);
@@ -88,8 +88,8 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         var bytes = Encoding.UTF8.GetBytes("the quick brown fox");
         await UploadAsync(id, AttachmentUpload.Of("notes.txt", "text/plain", bytes));
 
-        var resp = await _client.GetAsync($"/workitems/{id}/attachments");
-        var raw = await resp.Content.ReadAsStringAsync();
+        var resp = await _client.GetAsync($"/workitems/{id}/attachments", TestContext.Current.CancellationToken);
+        var raw = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         var listed = Assert.Single(JsonDocument.Parse(raw).RootElement.EnumerateArray().ToList());
 
         Assert.Equal("notes.txt", listed.GetProperty("fileName").GetString());
@@ -109,10 +109,10 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         var created = await UploadAsync(id, AttachmentUpload.Of("page.html", "text/html", bytes));
         var attachmentId = created[0].GetProperty("id").GetGuid();
 
-        var resp = await _client.GetAsync($"/workitems/{id}/attachments/{attachmentId}");
+        var resp = await _client.GetAsync($"/workitems/{id}/attachments/{attachmentId}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        Assert.Equal(bytes, await resp.Content.ReadAsByteArrayAsync());
+        Assert.Equal(bytes, await resp.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken));
         Assert.Equal("text/html", resp.Content.Headers.ContentType?.MediaType);
         // Without both of these an uploaded page executes on the server's origin.
         Assert.Equal("attachment", resp.Content.Headers.ContentDisposition?.DispositionType);
@@ -127,12 +127,12 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         var created = await UploadAsync(id, AttachmentUpload.Of("gone.bin", "application/octet-stream", AttachmentUpload.Bytes(32)));
         var attachmentId = created[0].GetProperty("id").GetGuid();
 
-        var deleted = await _client.DeleteAsync($"/workitems/{id}/attachments/{attachmentId}");
+        var deleted = await _client.DeleteAsync($"/workitems/{id}/attachments/{attachmentId}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
         Assert.Empty((await ListAsync(id)).EnumerateArray().ToList());
         await using var db = _factory.NewDbContext();
-        Assert.False(await db.Set<WorkItemAttachment>().AnyAsync(a => a.Id == attachmentId));
+        Assert.False(await db.Set<WorkItemAttachment>().AnyAsync(a => a.Id == attachmentId, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -144,14 +144,14 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         // A real item first, so "404" cannot simply mean "no such route".
         var known = await CreateWorkItemAsync();
         var real = await UploadAsync(known, AttachmentUpload.Of("real.bin", "application/octet-stream", AttachmentUpload.Bytes(8)));
-        var served = await _client.GetAsync($"/workitems/{known}/attachments/{real[0].GetProperty("id").GetGuid()}");
+        var served = await _client.GetAsync($"/workitems/{known}/attachments/{real[0].GetProperty("id").GetGuid()}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, served.StatusCode);
 
-        var list = await _client.GetAsync($"/workitems/{unknownItem}/attachments");
-        var download = await _client.GetAsync($"/workitems/{unknownItem}/attachments/{unknownAttachment}");
-        var delete = await _client.DeleteAsync($"/workitems/{unknownItem}/attachments/{unknownAttachment}");
+        var list = await _client.GetAsync($"/workitems/{unknownItem}/attachments", TestContext.Current.CancellationToken);
+        var download = await _client.GetAsync($"/workitems/{unknownItem}/attachments/{unknownAttachment}", TestContext.Current.CancellationToken);
+        var delete = await _client.DeleteAsync($"/workitems/{unknownItem}/attachments/{unknownAttachment}", TestContext.Current.CancellationToken);
         using var body = AttachmentUpload.Of("x.txt", "text/plain", AttachmentUpload.Bytes(8));
-        var upload = await _client.PostAsync($"/workitems/{unknownItem}/attachments", body);
+        var upload = await _client.PostAsync($"/workitems/{unknownItem}/attachments", body, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, list.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, download.StatusCode);
@@ -167,9 +167,9 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         var created = await UploadAsync(other, AttachmentUpload.Of("theirs.bin", "application/octet-stream", AttachmentUpload.Bytes(16)));
         var someoneElses = created[0].GetProperty("id").GetGuid();
 
-        var missing = await _client.GetAsync($"/workitems/{id}/attachments/{Guid.NewGuid()}");
-        var wrongItem = await _client.GetAsync($"/workitems/{id}/attachments/{someoneElses}");
-        var deleteWrongItem = await _client.DeleteAsync($"/workitems/{id}/attachments/{someoneElses}");
+        var missing = await _client.GetAsync($"/workitems/{id}/attachments/{Guid.NewGuid()}", TestContext.Current.CancellationToken);
+        var wrongItem = await _client.GetAsync($"/workitems/{id}/attachments/{someoneElses}", TestContext.Current.CancellationToken);
+        var deleteWrongItem = await _client.DeleteAsync($"/workitems/{id}/attachments/{someoneElses}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, wrongItem.StatusCode);
@@ -185,15 +185,15 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         await UploadAsync(doomed, AttachmentUpload.Of("b.bin", "application/octet-stream", AttachmentUpload.Bytes(64, seed: 9)));
         await UploadAsync(survivor, AttachmentUpload.Of("keep.bin", "application/octet-stream", AttachmentUpload.Bytes(64)));
 
-        var deleted = await _client.DeleteAsync($"/workitems/{doomed}");
+        var deleted = await _client.DeleteAsync($"/workitems/{doomed}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, deleted.StatusCode);
 
         await using var db = _factory.NewDbContext();
-        var doomedKey = await db.WorkItems.Where(w => w.Id == doomed).Select(w => (int?)w.InternalId).FirstOrDefaultAsync();
+        var doomedKey = await db.WorkItems.Where(w => w.Id == doomed).Select(w => (int?)w.InternalId).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         Assert.Null(doomedKey);
 
-        var remaining = await db.Set<WorkItemAttachment>().ToListAsync();
-        var liveKeys = await db.WorkItems.Select(w => w.InternalId).ToListAsync();
+        var remaining = await db.Set<WorkItemAttachment>().ToListAsync(TestContext.Current.CancellationToken);
+        var liveKeys = await db.WorkItems.Select(w => w.InternalId).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal("keep.bin", Assert.Single(remaining).FileName);
         Assert.All(remaining, a => Assert.Contains(a.WorkItemId, liveKeys));
     }
@@ -206,7 +206,7 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
 
         Assert.Equal("application/octet-stream", created[0].GetProperty("contentType").GetString());
 
-        var download = await _client.GetAsync($"/workitems/{id}/attachments/{created[0].GetProperty("id").GetGuid()}");
+        var download = await _client.GetAsync($"/workitems/{id}/attachments/{created[0].GetProperty("id").GetGuid()}", TestContext.Current.CancellationToken);
         Assert.Equal("application/octet-stream", download.Content.Headers.ContentType?.MediaType);
     }
 
@@ -219,7 +219,7 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
 
         await using (var seed = _factory.NewDbContext())
         {
-            var owner = await seed.WorkItems.SingleAsync(w => w.Id == id);
+            var owner = await seed.WorkItems.SingleAsync(w => w.Id == id, TestContext.Current.CancellationToken);
             seed.Set<WorkItemAttachment>().Add(new WorkItemAttachment
             {
                 Id = attachmentId,
@@ -230,10 +230,10 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
                 Content = bytes,
                 CreatedAt = DateTime.UtcNow,
             });
-            await seed.SaveChangesAsync();
+            await seed.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
-        var download = await _client.GetAsync($"/workitems/{id}/attachments/{attachmentId}");
+        var download = await _client.GetAsync($"/workitems/{id}/attachments/{attachmentId}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, download.StatusCode);
         Assert.Equal("application/octet-stream", download.Content.Headers.ContentType?.MediaType);
@@ -249,7 +249,7 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
         Assert.Equal("application/json", created[0].GetProperty("contentType").GetString());
         Assert.Equal("application/json", (await ListAsync(id))[0].GetProperty("contentType").GetString());
 
-        var download = await _client.GetAsync($"/workitems/{id}/attachments/{created[0].GetProperty("id").GetGuid()}");
+        var download = await _client.GetAsync($"/workitems/{id}/attachments/{created[0].GetProperty("id").GetGuid()}", TestContext.Current.CancellationToken);
         Assert.Equal("application/json", download.Content.Headers.ContentType?.MediaType);
     }
 
@@ -262,10 +262,10 @@ public sealed class WorkItemAttachmentsApiTests : IAsyncLifetime
             .ToArray();
 
         using var body = AttachmentUpload.Of(files);
-        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body);
+        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        var error = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement.GetProperty("error").GetString();
+        var error = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement.GetProperty("error").GetString();
         Assert.False(string.IsNullOrWhiteSpace(error));
         Assert.Contains("10", error!, StringComparison.Ordinal);
         Assert.Empty((await ListAsync(id)).EnumerateArray().ToList());

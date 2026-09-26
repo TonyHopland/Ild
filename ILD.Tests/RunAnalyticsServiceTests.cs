@@ -39,7 +39,7 @@ public class RunAnalyticsServiceTests
 
         db.Context.SaveChanges();
 
-        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery());
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
 
         var t = Assert.Single(overview.Templates);
         Assert.Equal("coder", t.TemplateName);
@@ -78,7 +78,7 @@ public class RunAnalyticsServiceTests
         AddRun(db, version.Id, LoopRunStatus.Running, new DateTime(2026, 6, 2, 0, 0, 0, DateTimeKind.Utc));
         db.Context.SaveChanges();
 
-        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery());
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
 
         var t = Assert.Single(overview.Templates);
         Assert.Equal(1, t.TotalRuns);
@@ -110,7 +110,7 @@ public class RunAnalyticsServiceTests
         Assert.True(await db.LoopRuns.DeleteAsync(run.Id));
         Assert.Empty(db.Fresh().LoopRunNodes.ToList());
 
-        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery());
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
 
         // The figures persist from the archived bucket even though the run is gone.
         Assert.Equal(1, overview.TotalRuns);
@@ -142,7 +142,7 @@ public class RunAnalyticsServiceTests
 
         await db.LoopRuns.DeleteAsync(deleted.Id);
 
-        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery());
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
 
         Assert.Equal(2, overview.TotalRuns); // archived + live, counted once each
         Assert.Equal(300, overview.TotalInputTokens);
@@ -169,7 +169,7 @@ public class RunAnalyticsServiceTests
         var service = new RunAnalyticsService(db.Fresh());
 
         // Provider filter keeps only the claude run.
-        var claudeOnly = await service.GetOverviewAsync(new AnalyticsQuery(Provider: "claude"));
+        var claudeOnly = await service.GetOverviewAsync(new AnalyticsQuery(Provider: "claude"), TestContext.Current.CancellationToken);
         Assert.Equal(1, claudeOnly.TotalRuns);
         Assert.Equal(0.10m, claudeOnly.TotalCostUsd);
         // The unfiltered provider list still offers both for the dropdown.
@@ -180,20 +180,20 @@ public class RunAnalyticsServiceTests
         var service2 = new RunAnalyticsService(db.Fresh());
         var week2 = await service2.GetOverviewAsync(new AnalyticsQuery(
             From: new DateOnly(2026, 6, 5),
-            To: new DateOnly(2026, 6, 10)));
+            To: new DateOnly(2026, 6, 10)), TestContext.Current.CancellationToken);
         Assert.Equal(1, week2.TotalRuns);
         Assert.Equal(0.20m, week2.TotalCostUsd);
 
         // Weekly granularity buckets the two runs into two ISO weeks.
         var service3 = new RunAnalyticsService(db.Fresh());
-        var weekly = await service3.GetOverviewAsync(new AnalyticsQuery(Granularity: AnalyticsGranularity.Week));
+        var weekly = await service3.GetOverviewAsync(new AnalyticsQuery(Granularity: AnalyticsGranularity.Week), TestContext.Current.CancellationToken);
         Assert.Equal(AnalyticsGranularity.Week, weekly.Granularity);
         Assert.Equal(2, weekly.Series.Count);
         Assert.All(weekly.Series, p => Assert.Equal(DayOfWeek.Monday, p.PeriodStart.DayOfWeek));
 
         // Monthly granularity collapses them into one June bucket.
         var service4 = new RunAnalyticsService(db.Fresh());
-        var monthly = await service4.GetOverviewAsync(new AnalyticsQuery(Granularity: AnalyticsGranularity.Month));
+        var monthly = await service4.GetOverviewAsync(new AnalyticsQuery(Granularity: AnalyticsGranularity.Month), TestContext.Current.CancellationToken);
         var point = Assert.Single(monthly.Series);
         Assert.Equal(new DateOnly(2026, 6, 1), point.PeriodStart);
         Assert.Equal(2, point.Runs);

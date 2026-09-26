@@ -11,14 +11,14 @@ public class AppDbContextUpdatedAtTests
         using var db = new TestDb();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
         db.Context.LoopTemplates.Add(template);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         // Initial UpdatedAt should be null (only set on modify, not on insert).
         Assert.Null(template.UpdatedAt);
 
         var before = DateTime.UtcNow;
         template.Name = "renamed";
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var reloaded = db.Fresh().LoopTemplates.First(t => t.Id == template.Id);
         Assert.NotNull(reloaded.UpdatedAt);

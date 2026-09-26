@@ -12,7 +12,7 @@ public class EventLogPayloadInliningMigratorTests
         using var db = new TestDb();
         var file = Path.Combine(Directory.CreateTempSubdirectory("ild-inline-test-").FullName, "1.json");
         var payload = new string('x', 20_000);
-        await File.WriteAllTextAsync(file, payload);
+        await File.WriteAllTextAsync(file, payload, TestContext.Current.CancellationToken);
 
         var id = Guid.NewGuid();
         db.Context.EventLogs.Add(new EventLog
@@ -28,7 +28,7 @@ public class EventLogPayloadInliningMigratorTests
 
         try
         {
-            var migrated = await EventLogPayloadInliningMigrator.MigrateAsync(db.Context);
+            var migrated = await EventLogPayloadInliningMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
             Assert.Equal(1, migrated);
 
             var row = db.Fresh().EventLogs.Single(e => e.Id == id);
@@ -36,7 +36,7 @@ public class EventLogPayloadInliningMigratorTests
             Assert.Null(row.PayloadPath);
 
             // Idempotent: a second pass finds nothing left to inline.
-            Assert.Equal(0, await EventLogPayloadInliningMigrator.MigrateAsync(db.Fresh()));
+            Assert.Equal(0, await EventLogPayloadInliningMigrator.MigrateAsync(db.Fresh(), TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -72,7 +72,7 @@ public class EventLogPayloadInliningMigratorTests
         });
         db.Context.SaveChanges();
 
-        var migrated = await EventLogPayloadInliningMigrator.MigrateAsync(db.Context);
+        var migrated = await EventLogPayloadInliningMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
         Assert.Equal(1, migrated);
 
         var fresh = db.Fresh();

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ILD.Api.Configuration;
@@ -57,6 +58,7 @@ public sealed class McpConfigWriteFailureTests : IDisposable
     }
 
     // root can write into a read-only directory, so the failure cannot be staged there.
+    [SupportedOSPlatformGuard("linux")]
     private static bool CanStageWriteFailure => OperatingSystem.IsLinux() && Environment.UserName != "root";
 
     [Theory]
@@ -274,12 +276,14 @@ public sealed class McpConfigWriteFailureTests : IDisposable
             : ClaudeCodeAdapter.TryWriteIldMcpConfig(provider, runContext, allowlist, logger: logger, environment: _environment);
     }
 
+    [UnsupportedOSPlatform("windows")]
     private void StageUnwritableConfigDirectory()
     {
         Directory.CreateDirectory(_configDir);
         File.SetUnixFileMode(_configDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
     }
 
+    [UnsupportedOSPlatform("windows")]
     private void StageGroupWritableConfigDirectory()
     {
         Directory.CreateDirectory(_configDir);

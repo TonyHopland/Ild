@@ -1,0 +1,818 @@
+{
+  "close_pr_review_item": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID.",
+        "type": "string"
+      },
+      "commentId": {
+        "description": "What you are closing, from get_pr_review: items[].commentId, or items[].reviewId for a body item.",
+        "type": "string"
+      },
+      "resolve": {
+        "description": "Also close its thread on the forge, where it has one and the provider can.",
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "required": [
+      "workItemId",
+      "commentId"
+    ]
+  },
+  "comment_on_pr": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID.",
+        "type": "string"
+      },
+      "body": {
+        "description": "What to say about this round. ILD stamps it, so it never comes back at the loop as a new comment.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "body"
+    ]
+  },
+  "create_workitem": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "description": "Title (1..512 chars).",
+        "type": "string"
+      },
+      "repositoryId": {
+        "description": "Required Repository GUID. Use list_repositories to discover ids.",
+        "type": "string"
+      },
+      "description": {
+        "description": "Description (markdown).",
+        "type": "string",
+        "default": ""
+      },
+      "dependencies": {
+        "description": "Optional list of WorkItem GUIDs this item depends on.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": null
+      },
+      "createdByLoopRunId": {
+        "description": "Optional originating LoopRun GUID. Defaults to the ILD_LOOP_RUN_ID env var.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "tags": {
+        "description": "Optional list of tags. Each tag determines which loop template executes the work item — a tag must match a loop template name on the ILD instance.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": null
+      },
+      "branchNameOverride": {
+        "description": "Optional custom branch name used verbatim by every run of the item, instead of the generated ild/wi-<id>-run-<n> name. Must be a valid git branch name. Omit for the default.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "baseBranchOverride": {
+        "description": "Optional branch every run of the item starts from and opens its PR against, instead of the repository's default branch. Must exist on the remote when the run starts. Omit for the default.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "title",
+      "repositoryId"
+    ]
+  },
+  "delete_workitem": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "Work item GUID. Must have been created by this session.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id"
+    ]
+  },
+  "edit_loop_file": {
+    "type": "object",
+    "properties": {
+      "oldString": {
+        "description": "The raw-JSON text to find. Must occur exactly once in the document.",
+        "type": "string"
+      },
+      "newString": {
+        "description": "The raw-JSON replacement text.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "oldString",
+      "newString"
+    ]
+  },
+  "edit_loop_node_field": {
+    "type": "object",
+    "properties": {
+      "nodeId": {
+        "description": "The id of the node to edit.",
+        "type": "string"
+      },
+      "field": {
+        "description": "The config field to edit, e.g. 'prompt', 'command', 'prDescriptionTemplate', 'output'.",
+        "type": "string"
+      },
+      "oldString": {
+        "description": "The decoded text to find. Must occur exactly once in the field.",
+        "type": "string"
+      },
+      "newString": {
+        "description": "The decoded replacement text.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "nodeId",
+      "field",
+      "oldString",
+      "newString"
+    ]
+  },
+  "get_backlog_summary": {
+    "type": "object",
+    "properties": {
+      "repositoryId": {
+        "description": "Optional repository GUID to scope the summary to.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    }
+  },
+  "get_ci_log": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context, or the CI failure reason).",
+        "type": "string"
+      },
+      "checkId": {
+        "description": "Id of the failing check, as named in the CI failure reason.",
+        "type": "string"
+      },
+      "tailLines": {
+        "description": "How many lines to return, counting back from the end (default 200, max 2000).",
+        "type": "integer",
+        "default": 200
+      },
+      "offset": {
+        "description": "Lines to skip from the end before taking the window — raise it to walk backwards through the log (default 0).",
+        "type": "integer",
+        "default": 0
+      }
+    },
+    "required": [
+      "workItemId",
+      "checkId"
+    ]
+  },
+  "get_current_loop": {
+    "type": "object",
+    "properties": {}
+  },
+  "get_loop_authoring_guide": {
+    "type": "object",
+    "properties": {}
+  },
+  "get_loop_file": {
+    "type": "object",
+    "properties": {}
+  },
+  "get_loop_node": {
+    "type": "object",
+    "properties": {
+      "nodeId": {
+        "description": "The id of the node to read (from get_current_loop).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "nodeId"
+    ]
+  },
+  "get_loop_variables": {
+    "type": "object",
+    "properties": {}
+  },
+  "get_pr_review": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context, or the reason text that pointed here).",
+        "type": "string"
+      },
+      "sinceCommit": {
+        "description": "Optional commit sha you have already dealt with; items written against it are left out.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
+  "get_preview": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
+  "get_preview_config_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "get_preview_logs": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "service": {
+        "description": "Service name as declared in ild.config.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "service"
+    ]
+  },
+  "get_preview_service_config": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "service": {
+        "description": "Service name as declared in ild.config.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "service"
+    ]
+  },
+  "get_workitem": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "Work item GUID.",
+        "type": "string"
+      },
+      "includeConversation": {
+        "description": "Include the conversation thread (large; default false).",
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "required": [
+      "id"
+    ]
+  },
+  "get_workitem_attachment": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item id, as it appears on get_workitem.",
+        "type": "string"
+      },
+      "attachmentId": {
+        "description": "Attachment id, from the attachments array on get_workitem.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "attachmentId"
+    ]
+  },
+  "list_loop_runs": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Optional WorkItem GUID to scope by.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "skip": {
+        "description": "Pagination skip (default 0).",
+        "type": "integer",
+        "default": 0
+      },
+      "take": {
+        "description": "Pagination take (default 100, max 500).",
+        "type": "integer",
+        "default": 100
+      }
+    }
+  },
+  "list_loop_templates": {
+    "type": "object",
+    "properties": {
+      "skip": {
+        "description": "Pagination skip (default 0).",
+        "type": "integer",
+        "default": 0
+      },
+      "take": {
+        "description": "Pagination take (default 100, max 500).",
+        "type": "integer",
+        "default": 100
+      },
+      "includeArchived": {
+        "description": "Include archived templates (default false).",
+        "type": "boolean",
+        "default": false
+      }
+    }
+  },
+  "list_repositories": {
+    "type": "object",
+    "properties": {
+      "skip": {
+        "description": "Pagination skip (default 0).",
+        "type": "integer",
+        "default": 0
+      },
+      "take": {
+        "description": "Pagination take (default 100, max 500).",
+        "type": "integer",
+        "default": 100
+      }
+    }
+  },
+  "list_workitem_edit_proposals": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "Work item GUID.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id"
+    ]
+  },
+  "list_workitems": {
+    "type": "object",
+    "properties": {
+      "status": {
+        "description": "Optional status filter: Backlog, WorkQueue, Ready, Running, HumanFeedback, Done.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "repositoryId": {
+        "description": "Optional repository GUID to filter by.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "createdByLoopRunId": {
+        "description": "Optional originating LoopRun GUID to filter by.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "priority": {
+        "description": "Optional priority filter: Low, Medium, High, Critical.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "tags": {
+        "description": "Optional tags to filter by; an item matches if it carries any of them.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": null
+      },
+      "orderBy": {
+        "description": "Sort order: updatedAt (default), createdAt, or priority (highest first). Timestamp orders are most-recent first.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "actionableOnly": {
+        "description": "When true, return only items whose dependencies are all Done (actionable now).",
+        "type": "boolean",
+        "default": false
+      },
+      "includeDescription": {
+        "description": "When true, also include each item's full description body (off by default to keep the list lightweight).",
+        "type": "boolean",
+        "default": false
+      },
+      "skip": {
+        "description": "Pagination skip (default 0).",
+        "type": "integer",
+        "default": 0
+      },
+      "take": {
+        "description": "Pagination take (default 100, max 500).",
+        "type": "integer",
+        "default": 100
+      }
+    }
+  },
+  "propose_workitem_edit": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "Work item GUID. Any work item.",
+        "type": "string"
+      },
+      "title": {
+        "description": "Proposed title (1..512 chars). Omit to leave the title out of the proposal.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "description": {
+        "description": "Proposed description (markdown). Omit to leave the description out of the proposal.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "tags": {
+        "description": "Proposed replacement list of tags. Tags that name a loop template select the loop that runs the item; other tags are labels loops may read (HIL, for one). Omit to leave tags out of the proposal.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": null
+      },
+      "branchNameOverride": {
+        "description": "Proposed custom branch name used verbatim by every run of the item. Must be a valid git branch name. Pass an empty string to propose going back to the generated per-run branch name; omit to leave it out of the proposal.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "baseBranchOverride": {
+        "description": "Proposed base branch the item's runs start from and open PRs against. Pass an empty string to propose going back to the repository's default branch; omit to leave it out of the proposal.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "rationale": {
+        "description": "Optional short reason for the edit (up to 2000 chars), shown to the human deciding.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "id"
+    ]
+  },
+  "pull_branch": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
+  "reply_to_pr_review_comment": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID.",
+        "type": "string"
+      },
+      "commentId": {
+        "description": "What to answer, from get_pr_review: items[].commentId for a comment, or items[].reviewId for a body item.",
+        "type": "string"
+      },
+      "body": {
+        "description": "What to say. Keep it to the point the reviewer raised.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "commentId",
+      "body"
+    ]
+  },
+  "resolve_pr_review_thread": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID.",
+        "type": "string"
+      },
+      "threadId": {
+        "description": "Id of the review thread to close, from get_pr_review's items[].threadId.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "threadId"
+    ]
+  },
+  "set_loop_node_field": {
+    "type": "object",
+    "properties": {
+      "nodeId": {
+        "description": "The id of the node to edit.",
+        "type": "string"
+      },
+      "field": {
+        "description": "The config field to overwrite, e.g. 'prompt', 'command'.",
+        "type": "string"
+      },
+      "value": {
+        "description": "The new value stored as the field's text.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "nodeId",
+      "field",
+      "value"
+    ]
+  },
+  "set_loop_variable": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "description": "Variable name: starts with a letter, then letters/digits/underscores (e.g. handoff, pr_summary).",
+        "type": "string"
+      },
+      "value": {
+        "description": "Value to store (up to 8192 chars).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "value"
+    ]
+  },
+  "start_preview": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "profileName": {
+        "description": "Optional profile name; defaults to the config's default profile.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "skipInstall": {
+        "description": "Skip the install steps (default false).",
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
+  "start_preview_service": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "service": {
+        "description": "Service name as declared in ild.config.json.",
+        "type": "string"
+      },
+      "profileName": {
+        "description": "Optional profile name; defaults to the config's default profile.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "skipInstall": {
+        "description": "Skip the install steps (default false).",
+        "type": "boolean",
+        "default": false
+      }
+    },
+    "required": [
+      "workItemId",
+      "service"
+    ]
+  },
+  "stop_preview": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
+  "stop_preview_service": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "service": {
+        "description": "Service name as declared in ild.config.json.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "service"
+    ]
+  },
+  "update_current_loop": {
+    "type": "object",
+    "properties": {
+      "document": {
+        "description": "A complete ild-loop-template/v1 document as JSON (with $schema, name, description, recoveryPolicy, nodes, edges).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "document"
+    ]
+  },
+  "update_preview_service_config": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID (from the Chat Context).",
+        "type": "string"
+      },
+      "service": {
+        "description": "Service name as declared in ild.config.json.",
+        "type": "string"
+      },
+      "config": {
+        "description": "The full service object as JSON.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "service",
+      "config"
+    ]
+  },
+  "update_workitem": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "Work item GUID. Must have been created by this session.",
+        "type": "string"
+      },
+      "title": {
+        "description": "New title (1..512 chars).",
+        "type": "string"
+      },
+      "description": {
+        "description": "New description (markdown).",
+        "type": "string",
+        "default": ""
+      },
+      "tags": {
+        "description": "Optional replacement list of tags. Omit to leave tags unchanged.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": null
+      },
+      "branchNameOverride": {
+        "description": "Optional replacement custom branch name. Omit to leave it unchanged; pass an empty string to go back to the generated per-run branch name. Only the item's next run is affected.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "baseBranchOverride": {
+        "description": "Optional replacement base branch the item's runs start from and open PRs against. Omit to leave it unchanged; pass an empty string to go back to the repository's default branch. Only the item's next run is affected.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "id",
+      "title"
+    ]
+  }
+}

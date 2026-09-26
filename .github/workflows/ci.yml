@@ -56,7 +56,7 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Backend tests
-        run: dotnet test ILD.Tests/ILD.Tests.csproj --no-build --configuration Release --nologo
+        run: dotnet test --project ILD.Tests/ILD.Tests.csproj --no-build --configuration Release
 
   # The Dockerfiles are otherwise only exercised at release time by publish.yml,
   # so a broken one fails the tag rather than the PR that broke it. Build here

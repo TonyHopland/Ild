@@ -113,7 +113,8 @@ public sealed class PiMcpBridgeProtocolTests : IDisposable
         // handed the notice alone, which tells it nothing about what it asked for.
         var (result, _) = Run(new JsonObject { ["tool"] = "one_long_line", ["pad"] = pad });
 
-        var text = (string?)Assert.Single(result["content"]!.AsArray())!["text"]!;
+        var text = (string?)Assert.Single(result["content"]!.AsArray())!["text"];
+        Assert.NotNull(text);
         var kept = text.Split("\n\n[Output truncated")[0];
         Assert.StartsWith("[{\"name\":\"" + new string('x', pad) + "𝄞", kept);
         Assert.DoesNotContain('�', kept); // never cut a character in two

@@ -13,7 +13,7 @@ public class AiProvidersIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/aiproviders");
+        var response = await client.GetAsync("/api/v1/aiproviders", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
@@ -22,9 +22,9 @@ public class AiProvidersIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/aiproviders");
+        var response = await client.GetAsync("/api/v1/aiproviders", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var items = await response.Content.ReadFromJsonAsync<object[]>();
+        var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
         Assert.Empty(items!);
     }
 
@@ -41,7 +41,7 @@ public class AiProvidersIntegrationTests
             baseUrl = "https://api.example.com",
             model = "gpt-4",
             isDefault = false,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -59,9 +59,9 @@ public class AiProvidersIntegrationTests
             baseUrl = "https://a.example.com",
             model = "gpt-4",
             isDefault = true,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, aResponse.StatusCode);
-        var a = (await aResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var a = (await aResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
         var bResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
         {
@@ -70,9 +70,9 @@ public class AiProvidersIntegrationTests
             baseUrl = "https://b.example.com",
             model = "gpt-4",
             isDefault = false,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, bResponse.StatusCode);
-        var b = (await bResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var b = (await bResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
         var promoteResponse = await client.PutAsJsonAsync($"/api/v1/aiproviders/{b}", new
         {
@@ -81,11 +81,11 @@ public class AiProvidersIntegrationTests
             baseUrl = "https://b.example.com",
             model = "gpt-4",
             isDefault = true,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, promoteResponse.StatusCode);
 
-        var listResponse = await client.GetAsync("/api/v1/aiproviders");
-        var items = await listResponse.Content.ReadFromJsonAsync<JsonElement[]>();
+        var listResponse = await client.GetAsync("/api/v1/aiproviders", TestContext.Current.CancellationToken);
+        var items = await listResponse.Content.ReadFromJsonAsync<JsonElement[]>(TestContext.Current.CancellationToken);
         Assert.NotNull(items);
 
         var byId = items!.ToDictionary(i => i.GetProperty("id").GetString()!);
@@ -107,9 +107,9 @@ public class AiProvidersIntegrationTests
             baseUrl = "https://a.example.com",
             model = "gpt-4",
             isDefault = true,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, aResponse.StatusCode);
-        var a = (await aResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var a = (await aResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
         var bResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
         {
@@ -118,15 +118,15 @@ public class AiProvidersIntegrationTests
             baseUrl = "https://b.example.com",
             model = "gpt-4",
             isDefault = false,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, bResponse.StatusCode);
-        var b = (await bResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var b = (await bResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString()!;
 
-        var promoteResponse = await client.PostAsync($"/api/v1/aiproviders/{b}/set-default", null);
+        var promoteResponse = await client.PostAsync($"/api/v1/aiproviders/{b}/set-default", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, promoteResponse.StatusCode);
 
-        var listResponse = await client.GetAsync("/api/v1/aiproviders");
-        var items = await listResponse.Content.ReadFromJsonAsync<JsonElement[]>();
+        var listResponse = await client.GetAsync("/api/v1/aiproviders", TestContext.Current.CancellationToken);
+        var items = await listResponse.Content.ReadFromJsonAsync<JsonElement[]>(TestContext.Current.CancellationToken);
         Assert.NotNull(items);
 
         var byId = items!.ToDictionary(i => i.GetProperty("id").GetString()!);
@@ -148,7 +148,7 @@ public class AiProvidersIntegrationTests
             baseUrl = "https://first.example.com",
             model = "gpt-4",
             isDefault = true,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
 
         var secondResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
@@ -158,12 +158,12 @@ public class AiProvidersIntegrationTests
             baseUrl = "https://second.example.com",
             model = "gpt-4",
             isDefault = true,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, secondResponse.StatusCode);
 
-        var listResponse = await client.GetAsync("/api/v1/aiproviders");
+        var listResponse = await client.GetAsync("/api/v1/aiproviders", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
-        var items = await listResponse.Content.ReadFromJsonAsync<JsonElement[]>();
+        var items = await listResponse.Content.ReadFromJsonAsync<JsonElement[]>(TestContext.Current.CancellationToken);
         Assert.NotNull(items);
         Assert.Equal(2, items!.Length);
 
@@ -189,19 +189,19 @@ public class AiProvidersIntegrationTests
             model = "gpt-4",
             isDefault = false,
             customMcpServersJson = servers,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
 
         // The create response echoes the value (never the whole config blob).
-        var created = await createResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var created = await createResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         var id = created.GetProperty("id").GetString()!;
         Assert.Equal(servers, created.GetProperty("customMcpServersJson").GetString());
         Assert.True(created.GetProperty("hasConfig").GetBoolean());
         Assert.False(created.TryGetProperty("config", out _));
 
         // GET also returns it, so reopening the edit modal round-trips the value.
-        var getResponse = await client.GetAsync($"/api/v1/aiproviders/{id}");
-        var fetched = await getResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var getResponse = await client.GetAsync($"/api/v1/aiproviders/{id}", TestContext.Current.CancellationToken);
+        var fetched = await getResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.Equal(servers, fetched.GetProperty("customMcpServersJson").GetString());
 
         // Updating with a new value persists and is echoed back.
@@ -214,9 +214,9 @@ public class AiProvidersIntegrationTests
             model = "gpt-4",
             isDefault = false,
             customMcpServersJson = newServers,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
-        var updated = await updateResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var updated = await updateResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.Equal(newServers, updated.GetProperty("customMcpServersJson").GetString());
     }
 
@@ -237,9 +237,9 @@ public class AiProvidersIntegrationTests
             model = "gpt-4",
             isDefault = false,
             config,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
-        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>())
+        var id = (await createResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken))
             .GetProperty("id").GetString()!;
 
         // A normal UI edit sends only the MCP value (no raw config).
@@ -252,9 +252,9 @@ public class AiProvidersIntegrationTests
             model = "gpt-4",
             isDefault = false,
             customMcpServersJson = newServers,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
-        var updated = await updateResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var updated = await updateResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         // The MCP value changed…
         Assert.Equal(newServers, updated.GetProperty("customMcpServersJson").GetString());
 

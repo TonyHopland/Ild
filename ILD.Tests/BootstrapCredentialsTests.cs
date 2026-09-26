@@ -66,6 +66,6 @@ public class BootstrapCredentialsTests
 
         Assert.False((await svc.LoginAsync("tony", password ?? "")).Success);
         Assert.False((await svc.LoginAsync("admin", password ?? "")).Success);
-        Assert.Empty(await db.Context.Users.ToListAsync());
+        Assert.Empty(await db.Context.Users.ToListAsync(TestContext.Current.CancellationToken));
     }
 }

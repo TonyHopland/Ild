@@ -25,7 +25,7 @@ public class ProviderStoreTagTests
         var a = MakeProvider("a");
         var b = MakeProvider("b");
         db.Context.AiProviders.AddRange(a, b);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         // Straight past the store: the invariant has to hold for any writer.
         await using var raw = db.Fresh();
@@ -33,13 +33,13 @@ public class ProviderStoreTagTests
         {
             Id = Guid.NewGuid(), AiProviderId = a.Id, Name = "qa", NormalizedName = "QA", CreatedAt = DateTime.UtcNow,
         });
-        await raw.SaveChangesAsync();
+        await raw.SaveChangesAsync(TestContext.Current.CancellationToken);
         raw.Set<AiProviderTag>().Add(new AiProviderTag
         {
             Id = Guid.NewGuid(), AiProviderId = b.Id, Name = "QA", NormalizedName = "QA", CreatedAt = DateTime.UtcNow,
         });
 
-        await Assert.ThrowsAsync<DbUpdateException>(() => raw.SaveChangesAsync());
+        await Assert.ThrowsAsync<DbUpdateException>(() => raw.SaveChangesAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]

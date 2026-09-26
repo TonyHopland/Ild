@@ -129,7 +129,7 @@ public class AIProviderServiceShellToolTests : IDisposable
     [Fact]
     public async Task Shell_exec_runs_in_the_worktree()
     {
-        await File.WriteAllTextAsync(Path.Combine(_tmp, "marker.txt"), "here");
+        await File.WriteAllTextAsync(Path.Combine(_tmp, "marker.txt"), "here", TestContext.Current.CancellationToken);
 
         var result = await Service().ExecuteToolAsync("shell.exec", "cat marker.txt", _tmp);
 
@@ -167,7 +167,7 @@ public class AIProviderServiceShellToolTests : IDisposable
     public async Task File_read_rejects_a_sibling_whose_name_extends_the_root()
     {
         var (root, evil) = RootWithEvilSibling();
-        await File.WriteAllTextAsync(Path.Combine(evil, "f"), "sibling secret");
+        await File.WriteAllTextAsync(Path.Combine(evil, "f"), "sibling secret", TestContext.Current.CancellationToken);
 
         var result = await Service().ExecuteToolAsync("file.read", "../x-evil/f", root);
 
@@ -193,7 +193,7 @@ public class AIProviderServiceShellToolTests : IDisposable
     public async Task File_tools_still_reject_a_parent_escape()
     {
         var (root, _) = RootWithEvilSibling();
-        await File.WriteAllTextAsync(Path.Combine(_tmp, "outside"), "outside secret");
+        await File.WriteAllTextAsync(Path.Combine(_tmp, "outside"), "outside secret", TestContext.Current.CancellationToken);
 
         var read = await Service().ExecuteToolAsync("file.read", "../outside", root);
         var write = await Service().ExecuteToolAsync("file.write",
@@ -220,7 +220,7 @@ public class AIProviderServiceShellToolTests : IDisposable
         var topRead = await svc.ExecuteToolAsync("file.read", "top.txt", root);
 
         Assert.True(write.Success, write.Error);
-        Assert.Equal("nested", await File.ReadAllTextAsync(Path.Combine(root, "a", "b", "c.txt")));
+        Assert.Equal("nested", await File.ReadAllTextAsync(Path.Combine(root, "a", "b", "c.txt"), TestContext.Current.CancellationToken));
         Assert.True(read.Success, read.Error);
         Assert.Equal("nested", read.Output);
         Assert.True(topWrite.Success, topWrite.Error);

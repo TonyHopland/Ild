@@ -29,9 +29,9 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
     {
         var adapter = new RecordingChatAdapter();
         var svc = NewService(adapter, NewWorkItemManager(_db.ServerOptions));
-        var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" })).Id;
+        var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" }, TestContext.Current.CancellationToken)).Id;
         var otherChat = Guid.NewGuid();
-        var opts = await _db.ServerOptions.ResolveForRepositoryAsync(null);
+        var opts = await _db.ServerOptions.ResolveForRepositoryAsync(null, TestContext.Current.CancellationToken);
 
         var approvedItem = await CreateItemAsync("Approved item");
         var rejectedItem = await CreateItemAsync("Rejected item");
@@ -46,9 +46,9 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "turn one", CancellationToken.None);
         Assert.False(Mentions(adapter.Prompts[0], approved));
 
-        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _db.ServerClient.ApproveEditProposalAsync(opts, approvedItem, approved)).Outcome);
-        Assert.Equal(EditProposalDecisionOutcome.Rejected, (await _db.ServerClient.RejectEditProposalAsync(opts, rejectedItem, rejected, "Too vague, name the failing test.")).Outcome);
-        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _db.ServerClient.ApproveEditProposalAsync(opts, staleItem, otherChats)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _db.ServerClient.ApproveEditProposalAsync(opts, approvedItem, approved, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.Rejected, (await _db.ServerClient.RejectEditProposalAsync(opts, rejectedItem, rejected, "Too vague, name the failing test.", TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _db.ServerClient.ApproveEditProposalAsync(opts, staleItem, otherChats, TestContext.Current.CancellationToken)).Outcome);
 
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "turn two", CancellationToken.None);
         var notice = adapter.Prompts[1];
@@ -77,12 +77,12 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
     {
         var adapter = new RecordingChatAdapter();
         var svc = NewService(adapter, NewWorkItemManager(_db.ServerOptions));
-        var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" })).Id;
-        var opts = await _db.ServerOptions.ResolveForRepositoryAsync(null);
+        var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" }, TestContext.Current.CancellationToken)).Id;
+        var opts = await _db.ServerOptions.ResolveForRepositoryAsync(null, TestContext.Current.CancellationToken);
         var item = await CreateItemAsync("Some item");
         var proposal = await ProposeAsync(item, chat);
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "turn one", CancellationToken.None);
-        await _db.ServerClient.RejectEditProposalAsync(opts, item, proposal, "Not now.");
+        await _db.ServerClient.RejectEditProposalAsync(opts, item, proposal, "Not now.", TestContext.Current.CancellationToken);
 
         adapter.FailNextTurnBeforeLaunch = true;
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "turn two", CancellationToken.None);
@@ -103,7 +103,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
             Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns,
             new WorkItemServerClient(new HttpClient(new RefusingHandler())), _db.ServerOptions);
         var svc = NewService(adapter, unreachable);
-        var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" })).Id;
+        var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" }, TestContext.Current.CancellationToken)).Id;
 
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "hello", CancellationToken.None);
 

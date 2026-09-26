@@ -37,7 +37,7 @@ public class AppDbContextNullScrubTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopRunNodes.Add(node);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var fresh = new LoopRunStore(db.Fresh());
         var reloaded = await fresh.GetRunNodeByIdAsync(node.Id);
@@ -55,10 +55,10 @@ public class AppDbContextNullScrubTests
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "clean name" };
         db.Context.LoopTemplates.Add(lt);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var fresh = db.Fresh();
-        var reloaded = await fresh.LoopTemplates.FindAsync(lt.Id);
+        var reloaded = await fresh.LoopTemplates.FindAsync([lt.Id], TestContext.Current.CancellationToken);
 
         Assert.NotNull(reloaded);
         Assert.Equal("clean name", reloaded!.Name);

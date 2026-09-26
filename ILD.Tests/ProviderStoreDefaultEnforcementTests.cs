@@ -29,8 +29,8 @@ public class ProviderStoreDefaultEnforcementTests
         await store.CreateAiProviderAsync(second);
 
         using var verify = db.Fresh();
-        var firstReloaded = await verify.AiProviders.FindAsync(first.Id);
-        var secondReloaded = await verify.AiProviders.FindAsync(second.Id);
+        var firstReloaded = await verify.AiProviders.FindAsync([first.Id], TestContext.Current.CancellationToken);
+        var secondReloaded = await verify.AiProviders.FindAsync([second.Id], TestContext.Current.CancellationToken);
         Assert.False(firstReloaded!.IsDefault);
         Assert.True(secondReloaded!.IsDefault);
     }
@@ -48,8 +48,8 @@ public class ProviderStoreDefaultEnforcementTests
         await store.CreateAiProviderAsync(second);
 
         using var verify = db.Fresh();
-        var firstReloaded = await verify.AiProviders.FindAsync(first.Id);
-        var secondReloaded = await verify.AiProviders.FindAsync(second.Id);
+        var firstReloaded = await verify.AiProviders.FindAsync([first.Id], TestContext.Current.CancellationToken);
+        var secondReloaded = await verify.AiProviders.FindAsync([second.Id], TestContext.Current.CancellationToken);
         Assert.True(firstReloaded!.IsDefault);
         Assert.False(secondReloaded!.IsDefault);
     }
@@ -71,8 +71,8 @@ public class ProviderStoreDefaultEnforcementTests
         await store.UpdateAiProviderAsync(loaded);
 
         using var verify = db.Fresh();
-        var firstReloaded = await verify.AiProviders.FindAsync(first.Id);
-        var secondReloaded = await verify.AiProviders.FindAsync(second.Id);
+        var firstReloaded = await verify.AiProviders.FindAsync([first.Id], TestContext.Current.CancellationToken);
+        var secondReloaded = await verify.AiProviders.FindAsync([second.Id], TestContext.Current.CancellationToken);
         Assert.False(firstReloaded!.IsDefault);
         Assert.True(secondReloaded!.IsDefault);
         Assert.Single(verify.AiProviders.Where(p => p.IsDefault));
@@ -98,7 +98,7 @@ public class ProviderStoreDefaultEnforcementTests
         await Assert.ThrowsAnyAsync<Exception>(() => store.CreateAiProviderAsync(collision));
 
         using var verify = db.Fresh();
-        var reloaded = await verify.AiProviders.FindAsync(currentDefault.Id);
+        var reloaded = await verify.AiProviders.FindAsync([currentDefault.Id], TestContext.Current.CancellationToken);
         Assert.True(reloaded!.IsDefault);
         Assert.Single(verify.AiProviders.Where(p => p.IsDefault));
     }
