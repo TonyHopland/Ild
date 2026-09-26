@@ -52,7 +52,7 @@ public sealed class WorkItemAttachmentLimitTests
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         Assert.False(string.IsNullOrWhiteSpace(await ErrorAsync(resp)));
 
-        var listed = await client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments");
+        var listed = await client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Empty(listed.EnumerateArray().ToList());
     }
 
@@ -93,7 +93,7 @@ public sealed class WorkItemAttachmentLimitTests
         var error = await ErrorAsync(second);
         Assert.Contains("total", error!, StringComparison.OrdinalIgnoreCase);
 
-        var listed = await client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments");
+        var listed = await client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Equal("first.bin", Assert.Single(listed.EnumerateArray().ToList()).GetProperty("fileName").GetString());
     }
 
@@ -109,7 +109,7 @@ public sealed class WorkItemAttachmentLimitTests
             ("huge.bin", "application/octet-stream", AttachmentUpload.Bytes(2 * Megabyte)));
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        var listed = await client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments");
+        var listed = await client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Empty(listed.EnumerateArray().ToList());
     }
 

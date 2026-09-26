@@ -66,7 +66,7 @@ public class CmdNodeExecutorTests : IDisposable
     [InlineData("echo hi \\", "hi \\")]
     public async Task A_command_is_interpreted_by_the_shell_verbatim(string command, string expected)
     {
-        var outcomes = await RunAsync(Context(command));
+        var outcomes = await RunAsync(Context(command, TestContext.Current.CancellationToken));
 
         var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success));
         Assert.Equal(expected, success.Output?.TrimEnd('\n'));
@@ -75,7 +75,7 @@ public class CmdNodeExecutorTests : IDisposable
     [Fact]
     public async Task A_failing_command_fails_the_node_with_its_output()
     {
-        var outcomes = await RunAsync(Context("echo nope; echo bad >&2; exit 3"));
+        var outcomes = await RunAsync(Context("echo nope; echo bad >&2; exit 3", TestContext.Current.CancellationToken));
 
         var fail = Assert.IsType<NodeOutcome.Fail>(Assert.Single(outcomes, o => o is NodeOutcome.Fail));
         Assert.Equal("exit code 3", fail.Reason);
@@ -107,11 +107,11 @@ public class CmdNodeExecutorTests : IDisposable
             });
 
         var run = RunAsync(ctx);
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         var grandchild = int.Parse(File.ReadAllText(pidFile).Trim());
         cancel.Cancel();
 
-        var outcomes = await run.WaitAsync(TimeSpan.FromSeconds(30));
+        var outcomes = await run.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
         var fail = Assert.IsType<NodeOutcome.Fail>(Assert.Single(outcomes, o => o is NodeOutcome.Fail));
 
         // The node does not report finished until the shell has actually exited,
@@ -226,7 +226,7 @@ public class CmdNodeExecutorTests : IDisposable
         var inherited = Environment.GetEnvironmentVariable(AgentIsolation.PrivateRootEnvVar);
         Assert.False(string.IsNullOrEmpty(inherited), "the probe variable must be set for this test to mean anything");
 
-        var outcomes = await RunAsync(Context("env"));
+        var outcomes = await RunAsync(Context("env", TestContext.Current.CancellationToken));
 
         var success = Assert.IsType<NodeOutcome.Success>(Assert.Single(outcomes, o => o is NodeOutcome.Success));
         Assert.Contains("PATH=", success.Output);
@@ -245,8 +245,8 @@ public class CmdNodeExecutorTests : IDisposable
         Assert.Equal("/usr/bin/setpriv", psi.FileName);
 
         using var p = Process.Start(psi)!;
-        var printed = (await p.StandardOutput.ReadToEndAsync()).Trim();
-        await p.WaitForExitAsync();
+        var printed = (await p.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken)).Trim();
+        await p.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, p.ExitCode);
         Assert.Equal(p.Id.ToString(), printed);

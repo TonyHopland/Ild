@@ -532,7 +532,7 @@ public class ConnectionTesterTests : IDisposable
         var tester = new ConnectionTester(Adapters(), mgr, new HttpClient(ScriptedHandler.Answer(HttpStatusCode.OK)));
 
         await tester.TestRepositoryAsync(Repo(cloneUrl, "main", provider.Id), provider, CancellationToken.None);
-        await mgr.FetchAsync(_tmp, auth: new GitAuthOptions(cloneUrl, Key, "Forgejo"));
+        await mgr.FetchAsync(_tmp, auth: new GitAuthOptions(cloneUrl, Key, "Forgejo"), cancellationToken: TestContext.Current.CancellationToken);
 
         var probe = runner.Calls[0];
         var fetch = runner.Calls[1];

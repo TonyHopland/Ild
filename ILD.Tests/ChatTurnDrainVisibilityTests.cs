@@ -158,13 +158,13 @@ public sealed class ChatTurnDrainVisibilityTests
         var h = NewRunner((_, _, ct) => turn.RunAsync(ct));
         var chatId = Guid.NewGuid();
 
-        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience);
-        await turn.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await turn.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         var live = h.Runner.ActiveTurnId(chatId);
         Assert.NotNull(live);
 
         var stop = h.Runner.InterruptAsync(chatId);
-        await turn.Finalizing.Task.WaitAsync(Patience);
+        await turn.Finalizing.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         // Cancelled, and still the chat's turn: the interrupted reply is not written
         // yet and no completion has been announced.
@@ -172,7 +172,7 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.Empty(h.Completed);
 
         turn.Release.TrySetResult();
-        await stop.WaitAsync(Patience);
+        await stop.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         // And quiet again only once it has reported itself finished.
         Assert.Null(h.Runner.ActiveTurnId(chatId));
@@ -204,12 +204,12 @@ public sealed class ChatTurnDrainVisibilityTests
         });
         var chatId = Guid.NewGuid();
 
-        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience);
-        await first.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await first.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         var firstTurn = h.Runner.ActiveTurnId(chatId);
 
         var stop = h.Runner.InterruptAsync(chatId);
-        await first.Finalizing.Task.WaitAsync(Patience);
+        await first.Finalizing.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var send = h.Runner.SubmitAsync(chatId, "two");
         // The gate is held by the stop, so the send cannot have run yet — and the
@@ -219,14 +219,14 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.Equal(firstTurn, h.Runner.ActiveTurnId(chatId));
 
         first.Release.TrySetResult();
-        await stop.WaitAsync(Patience);
-        await send.WaitAsync(Patience);
-        await secondRan.Task.WaitAsync(Patience);
+        await stop.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await send.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await secondRan.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.True(Volatile.Read(ref firstHadFinished), "the replacement ran before the stopped turn had finished");
         Assert.Equal(2, h.Started.Distinct().Count());
         Assert.Contains(h.Completed, c => c.TurnId == firstTurn && c.Interrupted);
-        await h.CompletedAtLeast(2).WaitAsync(Patience);
+        await h.CompletedAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Equal(2, h.Completed.Count);
         Assert.Empty(h.Log.Entries);
     }
@@ -239,11 +239,11 @@ public sealed class ChatTurnDrainVisibilityTests
         var chatId = Guid.NewGuid();
         var deleted = false;
 
-        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience);
-        await turn.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await turn.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var stop = h.Runner.InterruptAsync(chatId);
-        await turn.Finalizing.Task.WaitAsync(Patience);
+        await turn.Finalizing.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var delete = h.Runner.DeleteAsync(chatId, () =>
         {
@@ -254,8 +254,8 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.False(deleted, "the chat should not be deleted under a turn that is still finalizing");
 
         turn.Release.TrySetResult();
-        await stop.WaitAsync(Patience);
-        await delete.WaitAsync(Patience);
+        await stop.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await delete.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.True(deleted);
         Assert.Single(h.Completed);
@@ -270,16 +270,16 @@ public sealed class ChatTurnDrainVisibilityTests
         var h = NewRunner((_, _, ct) => turn.RunAsync(ct));
         var chatId = Guid.NewGuid();
 
-        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience);
-        await turn.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await turn.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var first = h.Runner.InterruptAsync(chatId);
-        await turn.Finalizing.Task.WaitAsync(Patience);
+        await turn.Finalizing.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         var second = h.Runner.InterruptAsync(chatId);
 
         turn.Release.TrySetResult();
-        await first.WaitAsync(Patience);
-        await second.WaitAsync(Patience);
+        await first.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await second.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Single(h.Completed);
         Assert.Null(h.Runner.ActiveTurnId(chatId));
@@ -321,17 +321,17 @@ public sealed class ChatTurnDrainVisibilityTests
 
         var closing = Guid.NewGuid();
         stopWhileClosing = closing;
-        await h.Runner.SubmitAsync(closing, "stopped while closing").WaitAsync(Patience);
-        await h.CompletedAtLeast(1).WaitAsync(Patience);
-        await stopInTheGap!.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(closing, "stopped while closing").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await stopInTheGap!.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(tokens["stopped while closing"].IsCancellationRequested, "the stop should have landed while the turn was still live");
         Assert.Null(h.Runner.ActiveTurnId(closing));
 
         stopWhileClosing = null;
         var retired = Guid.NewGuid();
-        await h.Runner.SubmitAsync(retired, "ended first").WaitAsync(Patience);
-        await h.CompletedAtLeast(2).WaitAsync(Patience);
-        await h.Runner.InterruptAsync(retired).WaitAsync(Patience);
+        await h.Runner.SubmitAsync(retired, "ended first").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.CompletedAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await h.Runner.InterruptAsync(retired).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Null(h.Runner.ActiveTurnId(retired));
 
         Assert.Equal(rounds, h.Completed.Count);
@@ -357,12 +357,12 @@ public sealed class ChatTurnDrainVisibilityTests
         runner = h.Runner;
         var chatId = Guid.NewGuid();
 
-        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience);
-        await turn.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "one").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await turn.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         var stop = h.Runner.InterruptAsync(chatId);
-        await turn.Finalizing.Task.WaitAsync(Patience);
+        await turn.Finalizing.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         turn.Release.TrySetResult();
-        await stop.WaitAsync(Patience);
+        await stop.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Single(h.Completed);
         Assert.Null(reportedWhileCompleting);
@@ -414,8 +414,8 @@ public sealed class ChatTurnDrainVisibilityTests
                 await firstRetired.Task.WaitAsync(Patience);
             });
 
-        await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience);
-        await firstRunning.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await firstRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         firstTurnId = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
 
         string? violation = null;
@@ -431,12 +431,12 @@ public sealed class ChatTurnDrainVisibilityTests
                 else if (now == alreadyAnnounced)
                     violation ??= $"read turn {now} after its completion was announced";
             }
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience);
-        await second.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await second.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Volatile.Write(ref reading, false);
-        await reader.WaitAsync(Patience);
+        await reader.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(violation is null, violation);
 
         // Exactly the branch this test exists for, so it cannot quietly stop covering
@@ -457,7 +457,7 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.Equal(new[] { false }, h.Completed.Select(c => c.Interrupted));
 
         second.Release.TrySetResult();
-        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Null(h.Runner.ActiveTurnId(chatId));
         Assert.Equal(new[] { firstTurnId, secondTurnId }, h.Completed.Select(c => c.TurnId));
         Assert.Empty(h.Log.Entries);
@@ -499,15 +499,15 @@ public sealed class ChatTurnDrainVisibilityTests
         runner = h.Runner;
         completed = h.Completed;
 
-        await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience);
-        await first.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await first.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         firstTurnId = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
 
         // The outgoing turn stays in finalization for a moment after it is cancelled,
         // as a real one does while it persists its interrupted reply.
         first.Release.TrySetResult();
-        await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience);
-        await second.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await second.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         var secondTurnId = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
 
         Assert.NotEqual(firstTurnId, secondTurnId);
@@ -523,7 +523,7 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.Equal(new[] { firstTurnId, secondTurnId }, h.Started);
 
         second.Release.TrySetResult();
-        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Null(h.Runner.ActiveTurnId(chatId));
         Assert.Empty(h.Log.Entries);
     }
@@ -539,16 +539,16 @@ public sealed class ChatTurnDrainVisibilityTests
         var second = new BlockingTurn();
         var h = NewRunner((_, message, ct) => (message == "first" ? first : second).RunAsync(ct));
 
-        var firstTurn = await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience);
-        await first.Running.Task.WaitAsync(Patience);
+        var firstTurn = await h.Runner.SubmitAsync(chatId, "first").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await first.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Equal(firstTurn, h.Runner.ActiveTurnId(chatId));
         Assert.Equal(new[] { firstTurn }, h.Started);
 
         // The interrupting send answers with the replacement, not with the turn it
         // displaced, and that is the turn the chat then has.
         first.Release.TrySetResult();
-        var secondTurn = await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience);
-        await second.Running.Task.WaitAsync(Patience);
+        var secondTurn = await h.Runner.SubmitAsync(chatId, "second").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await second.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.NotEqual(firstTurn, secondTurn);
         Assert.Equal(secondTurn, h.Runner.ActiveTurnId(chatId));
@@ -556,7 +556,7 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.Equal(new[] { firstTurn }, h.Completed.Select(c => c.TurnId));
 
         second.Release.TrySetResult();
-        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Null(h.Runner.ActiveTurnId(chatId));
         Assert.Equal(new[] { firstTurn, secondTurn }, h.Completed.Select(c => c.TurnId));
         Assert.Empty(h.Log.Entries);
@@ -586,8 +586,8 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.False(turn.Running.Task.IsCompleted);
 
         failStart = false;
-        await h.Runner.SubmitAsync(chatId, "two").WaitAsync(Patience);
-        await turn.Running.Task.WaitAsync(Patience);
+        await h.Runner.SubmitAsync(chatId, "two").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await turn.Running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         var live = Assert.IsType<Guid>(h.Runner.ActiveTurnId(chatId));
 
         // Into a busy chat: the turn it would have replaced is neither cancelled nor
@@ -598,7 +598,7 @@ public sealed class ChatTurnDrainVisibilityTests
         Assert.False(turn.Finalizing.Task.IsCompleted);
 
         turn.Release.TrySetResult();
-        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience);
+        await h.Runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Null(h.Runner.ActiveTurnId(chatId));
         Assert.Equal(0, h.Runner.ActiveTurnCount);
         Assert.Equal(0, h.Runner.GateCount);

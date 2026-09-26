@@ -10,7 +10,7 @@ public class LoopTemplatesIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/looptemplates");
+        var response = await client.GetAsync("/api/v1/looptemplates", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
@@ -19,10 +19,10 @@ public class LoopTemplatesIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/looptemplates");
+        var response = await client.GetAsync("/api/v1/looptemplates", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         // TemplateSeeder runs on startup; the seeded list may be empty or non-empty.
-        var items = await response.Content.ReadFromJsonAsync<object[]>();
+        var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
         Assert.NotNull(items);
     }
 }

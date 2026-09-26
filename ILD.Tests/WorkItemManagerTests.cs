@@ -133,9 +133,9 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var repo = await db.Context.Repositories.FindAsync(repoId);
+        var repo = await db.Context.Repositories.FindAsync([repoId], TestContext.Current.CancellationToken);
         repo!.DefaultIntakeStatus = WorkItemStatus.WorkQueue;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
 
@@ -149,9 +149,9 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var repo = await db.Context.Repositories.FindAsync(repoId);
+        var repo = await db.Context.Repositories.FindAsync([repoId], TestContext.Current.CancellationToken);
         repo!.DefaultIntakeStatus = WorkItemStatus.Backlog;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
 
@@ -283,9 +283,9 @@ public class WorkItemManagerTests
         await mgr.AddDependencyAsync(child, dep);
 
         var depRunId = SeedLoopRun(db, dep);
-        var depRun = await db.Context.LoopRuns.FindAsync(depRunId);
+        var depRun = await db.Context.LoopRuns.FindAsync([depRunId], TestContext.Current.CancellationToken);
         depRun!.Status = LoopRunStatus.Failed;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await mgr.CleanupToDoneAsync(dep);
 
@@ -420,9 +420,9 @@ public class WorkItemManagerTests
             NodeLabel = "implement-change",
             Status = LoopRunNodeStatus.Running,
         });
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.CurrentNodeId = nodeId;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal("implement-change", wi!.CurrentNodeLabel);
@@ -454,9 +454,9 @@ public class WorkItemManagerTests
             NodeLabel = null,
             Status = LoopRunNodeStatus.Running,
         });
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.CurrentNodeId = nodeId;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal("review", wi!.CurrentNodeLabel);
@@ -471,10 +471,10 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = SeedLoopRun(db, id);
         var started = DateTime.UtcNow;
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.Status = LoopRunStatus.Running;
         run.StartedAt = started;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(started, wi!.StartedAt);
@@ -493,11 +493,11 @@ public class WorkItemManagerTests
         var completed = DateTime.UtcNow;
         // A successfully finished run is Completed, which the current-run
         // selection deliberately excludes — its timestamps must still surface.
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.Status = LoopRunStatus.Completed;
         run.StartedAt = started;
         run.CompletedAt = completed;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(started, wi!.StartedAt);
@@ -539,7 +539,7 @@ public class WorkItemManagerTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
@@ -557,7 +557,7 @@ public class WorkItemManagerTests
             HumanFeedbackReason = "Node Failed",
         };
         db.Context.LoopRuns.Add(run);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await mgr.CleanupToDoneAsync(id);
 
@@ -590,7 +590,7 @@ public class WorkItemManagerTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
 
@@ -610,7 +610,7 @@ public class WorkItemManagerTests
         run.WorktreePath = "/tmp/worktrees/test-wi";
         run.BranchName = "ild/wi-x-run-1";
         run.HumanFeedbackReason = "Node Failed";
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await mgr.CleanupToBacklogAsync(id);
 
@@ -641,11 +641,11 @@ public class WorkItemManagerTests
         {
             var id = await mgr.CreateWorkItemAsync("Keep my work", "", repoId);
             var runId = SeedLoopRun(db, id);
-            var run = await db.Context.LoopRuns.FindAsync(runId);
+            var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
             run!.WorktreePath = worktree;
             run.BranchName = "ild/wi-x-run-1";
             run.RepositoryId = repoId;
-            await db.Context.SaveChangesAsync();
+            await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
             repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync("diff --git a b");
             repoMgr.Setup(r => r.CommitAsync(worktree, "Keep my work")).ReturnsAsync(true);
@@ -678,11 +678,11 @@ public class WorkItemManagerTests
         {
             var id = await mgr.CreateWorkItemAsync("a", "", repoId);
             var runId = SeedLoopRun(db, id);
-            var run = await db.Context.LoopRuns.FindAsync(runId);
+            var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
             run!.WorktreePath = worktree;
             run.BranchName = "ild/wi-x-run-1";
             run.RepositoryId = repoId;
-            await db.Context.SaveChangesAsync();
+            await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
             // No diff — nothing to commit, but the branch should still be pushed.
             repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
@@ -730,11 +730,11 @@ public class WorkItemManagerTests
         {
             var id = await mgr.CreateWorkItemAsync("a", "", repoId);
             var runId = SeedLoopRun(db, id);
-            var run = await db.Context.LoopRuns.FindAsync(runId);
+            var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
             run!.WorktreePath = worktree;
             run.BranchName = "ild/wi-x-run-1";
             run.RepositoryId = repoId;
-            await db.Context.SaveChangesAsync();
+            await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
             repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
             repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
@@ -808,7 +808,7 @@ public class WorkItemManagerTests
             repoMgr.Setup(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
 
-            var result = await mgr.PullBranchAsync(id);
+            var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
 
             Assert.Equal(PullBranchOutcome.Updated, result.Outcome);
             Assert.True(result.Success);
@@ -839,7 +839,7 @@ public class WorkItemManagerTests
         {
             SetupPullable(repoMgr, worktree, behind: 0);
 
-            var result = await mgr.PullBranchAsync(id);
+            var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
 
             Assert.Equal(PullBranchOutcome.AlreadyUpToDate, result.Outcome);
             Assert.True(result.Success);
@@ -862,7 +862,7 @@ public class WorkItemManagerTests
             SetupPullable(repoMgr, worktree, behind: 0);
             repoMgr.Setup(r => r.RemoteBranchExistsAsync(worktree, PullBranchName)).ReturnsAsync(false);
 
-            var result = await mgr.PullBranchAsync(id);
+            var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
 
             // Nothing to pull is not a failure — the branch simply has no remote
             // counterpart yet.
@@ -889,7 +889,7 @@ public class WorkItemManagerTests
             repoMgr.Setup(r => r.GetUncommittedFilesAsync(worktree))
                 .ReturnsAsync(new[] { "src/App.tsx", "README.md" });
 
-            var result = await mgr.PullBranchAsync(id);
+            var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
 
             Assert.Equal(PullBranchOutcome.DirtyWorktree, result.Outcome);
             Assert.False(result.Success);
@@ -919,7 +919,7 @@ public class WorkItemManagerTests
             repoMgr.Setup(r => r.RebaseAsync(worktree, PullUpstream, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new RebaseResult(false, new[] { "src/App.tsx" }, "CONFLICT (content)"));
 
-            var result = await mgr.PullBranchAsync(id);
+            var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
 
             Assert.Equal(PullBranchOutcome.Conflict, result.Outcome);
             Assert.False(result.Success);
@@ -948,7 +948,7 @@ public class WorkItemManagerTests
                 .ReturnsAsync(new RebaseResult(false, Array.Empty<string>(),
                     "error: untracked working tree files would be overwritten"));
 
-            var result = await mgr.PullBranchAsync(id);
+            var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
 
             Assert.Equal(PullBranchOutcome.RebaseRefused, result.Outcome);
             Assert.False(result.Success);
@@ -973,7 +973,7 @@ public class WorkItemManagerTests
             repoMgr.Setup(r => r.FetchAsync(worktree, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
                 .ReturnsAsync(false);
 
-            var result = await mgr.PullBranchAsync(id);
+            var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
 
             Assert.Equal(PullBranchOutcome.Failed, result.Outcome);
             Assert.False(result.Success);
@@ -1000,7 +1000,7 @@ public class WorkItemManagerTests
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         SeedLoopRun(db, id); // run has no WorktreePath
 
-        var result = await mgr.PullBranchAsync(id);
+        var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
 
         Assert.Equal(PullBranchOutcome.Failed, result.Outcome);
         Assert.Null(result.Branch);
@@ -1024,7 +1024,7 @@ public class WorkItemManagerTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
@@ -1057,7 +1057,7 @@ public class WorkItemManagerTests
 
         await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
         run.CurrentNodeId = humanNodeId;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await mgr.SubmitHumanFeedbackInputAsync(id, "ship it");
 
@@ -1082,7 +1082,7 @@ public class WorkItemManagerTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
@@ -1111,7 +1111,7 @@ public class WorkItemManagerTests
             Status = LoopRunNodeStatus.WaitingHuman,
         });
         await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         // Should not throw even without engine wired up
         var result = await mgr.SubmitHumanFeedbackInputAsync(id, "proceed");
@@ -1192,7 +1192,7 @@ public class WorkItemManagerTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
@@ -1227,7 +1227,7 @@ public class WorkItemManagerTests
         db.Context.LoopRunNodes.Add(runNode);
 
         await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await mgr.RejectHumanFeedbackAsync(id);
 
@@ -1252,7 +1252,7 @@ public class WorkItemManagerTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
@@ -1286,7 +1286,7 @@ public class WorkItemManagerTests
         db.Context.LoopRunNodes.Add(runNode);
 
         await mgr.TransitionToHumanFeedbackAsync(id, ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await mgr.RejectHumanFeedbackAsync(id, "looks wrong, try again with smaller scope");
 
@@ -1314,7 +1314,7 @@ public class WorkItemManagerTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = Guid.NewGuid();
@@ -1348,7 +1348,7 @@ public class WorkItemManagerTests
         db.Context.LoopRunNodes.Add(runNode);
 
         await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await mgr.SubmitHumanFeedbackRespondAsync(id, "please revise the approach");
 
@@ -1633,9 +1633,9 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = SeedLoopRun(db, id);
-        var parked = await db.Context.LoopRuns.FindAsync(runId);
+        var parked = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         parked!.Status = LoopRunStatus.WaitingHuman;
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         await mgr.TransitionToDoneAsync(id);
 
@@ -1663,9 +1663,9 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = SeedLoopRun(db, id);
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.WorktreePath = "/tmp/worktrees/done-wi";
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         preview.Setup(p => p.IsPreviewRunning("/tmp/worktrees/done-wi")).Returns(true);
 
@@ -1683,9 +1683,9 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = SeedLoopRun(db, id);
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.WorktreePath = "/tmp/worktrees/done-wi";
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns(false);
 
@@ -1703,9 +1703,9 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var runId = SeedLoopRun(db, id);
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.WorktreePath = "/tmp/worktrees/running-wi";
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns(true);
 
@@ -1731,7 +1731,7 @@ public class WorkItemManagerTests
             CreatedAt = DateTime.UtcNow,
         };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var run = new LoopRun
@@ -1745,7 +1745,7 @@ public class WorkItemManagerTests
             WorktreePath = "/tmp/worktrees/cleanup-wi",
         };
         db.Context.LoopRuns.Add(run);
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         preview.Setup(p => p.IsPreviewRunning("/tmp/worktrees/cleanup-wi")).Returns(true);
 
@@ -1805,7 +1805,7 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var (runId, _) = SeedRunWithVersion(db, id);
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.PrSnapshot = SerializePrSnapshot(new RemotePrSnapshot(
             Title: "Add feature",
             Body: "body",
@@ -1819,7 +1819,7 @@ public class WorkItemManagerTests
             ChangesRequested: true,
             Conversation: Array.Empty<RemotePrConversationEntry>(),
             FetchedAt: DateTime.UtcNow));
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         // Only the badge-relevant fields are projected — title/body/conversation
         // are intentionally dropped so the board card stays lightweight.
@@ -1842,9 +1842,9 @@ public class WorkItemManagerTests
 
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
         var (runId, _) = SeedRunWithVersion(db, id);
-        var run = await db.Context.LoopRuns.FindAsync(runId);
+        var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.PrSnapshot = "{ not valid json";
-        await db.Context.SaveChangesAsync();
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Null(wi!.PrStatus);
@@ -2203,13 +2203,13 @@ public class WorkItemManagerTests
         // The upsert never writes a URL twice, but data that predates it — or
         // that someone edited by hand — can. Reading the work item is not the
         // place to find out: it would take the whole taskboard down with it.
-        var row = await db.Server.ServerDb.WorkItems.FirstAsync(w => w.Id == id);
+        var row = await db.Server.ServerDb.WorkItems.FirstAsync(w => w.Id == id, TestContext.Current.CancellationToken);
         row.PullRequestsJson =
             """
             [{"url":"https://forgejo/repo/pulls/5","loopRunId":null,"merged":false,"createdAt":"2026-04-01T00:00:00Z"},
              {"url":"https://forgejo/repo/pulls/5","loopRunId":null,"merged":true,"createdAt":"2026-04-01T00:00:00Z"}]
             """;
-        await db.Server.ServerDb.SaveChangesAsync();
+        await db.Server.ServerDb.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var pr = Assert.Single((await mgr.GetWorkItemAsync(id))!.PullRequests);
         Assert.Equal("https://forgejo/repo/pulls/5", pr.Url);
@@ -2229,14 +2229,14 @@ public class WorkItemManagerTests
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/99", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
 
         await mgr.GetWorkItemAsync(id);
-        var afterFirstRead = (await db.Server.Service.GetAsync(id))!.UpdatedAt;
+        var afterFirstRead = (await db.Server.Service.GetAsync(id, TestContext.Current.CancellationToken))!.UpdatedAt;
         await mgr.GetWorkItemAsync(id);
         await mgr.ListAsync(null, null, null, 0, 100);
 
         // Reads reconcile what the runs still carry, but a PR the item already
         // records is left alone — the taskboard polls this path continuously.
-        var pr = Assert.Single((await db.Server.Service.GetAsync(id))!.PullRequests);
+        var pr = Assert.Single((await db.Server.Service.GetAsync(id, TestContext.Current.CancellationToken))!.PullRequests);
         Assert.Equal("https://forgejo/repo/pulls/99", pr.Url);
-        Assert.Equal(afterFirstRead, (await db.Server.Service.GetAsync(id))!.UpdatedAt);
+        Assert.Equal(afterFirstRead, (await db.Server.Service.GetAsync(id, TestContext.Current.CancellationToken))!.UpdatedAt);
     }
 }

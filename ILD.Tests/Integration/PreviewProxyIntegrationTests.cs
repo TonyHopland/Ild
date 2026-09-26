@@ -36,7 +36,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     /// <summary>Resolution the stubbed preview service returns; swapped per test.</summary>
     private Func<string, PreviewTarget> _resolve = null!;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _backend = await PreviewBackend.StartAsync();
         _resolve = _ => PreviewTarget.Resolved(_backend.Port, "app", rewriteHost: true);
@@ -85,7 +85,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         await StartProxyAsync(proxyBase);
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         _client.Dispose();
         await _proxy.StopAsync();
@@ -113,19 +113,19 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     [InlineData("not" + BaseHost)]      // suffix match without the dot separator
     public async Task Requests_that_are_not_preview_hostnames_travel_the_normal_pipeline(string host)
     {
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/api/v1/health", host));
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/api/v1/health", host), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("apex-pipeline", await response.Content.ReadAsStringAsync());
+        Assert.Equal("apex-pipeline", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task Static_content_is_forwarded_verbatim()
     {
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/assets/app.js"));
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/assets/app.js"), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(PreviewBackend.ScriptBody, await response.Content.ReadAsStringAsync());
+        Assert.Equal(PreviewBackend.ScriptBody, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.Equal("text/javascript", response.Content.Headers.ContentType?.MediaType);
     }
 
@@ -159,8 +159,8 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         request.Headers.TryAddWithoutValidation("X-Forwarded-Host", "evil.example.com");
         request.Headers.TryAddWithoutValidation("X-Forwarded-For", "10.0.0.1");
 
-        using var response = await _client.SendAsync(request);
-        var headers = ParseHeaders(await response.Content.ReadAsStringAsync());
+        using var response = await _client.SendAsync(request, TestContext.Current.CancellationToken);
+        var headers = ParseHeaders(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal("http", headers["x-forwarded-proto"]);
         Assert.Equal($"wi-7.{BaseHost}", headers["x-forwarded-host"]);
@@ -177,7 +177,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Redirects_and_cookies_are_rewritten_onto_the_preview_hostname()
     {
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect"));
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect"), TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Found, response.StatusCode);
         // The backend redirected to its own loopback authority — unreachable from a
@@ -207,7 +207,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         var headers = await GetEchoedHeadersAsync();
         Assert.Equal("https", headers["x-forwarded-proto"]);
 
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect"));
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect"), TestContext.Current.CancellationToken);
         Assert.Equal($"https://wi-7.{BaseHost}/landed", response.Headers.Location?.ToString());
     }
 
@@ -216,7 +216,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     {
         await UseProxyBaseAsync($"https://{BaseHost}");
 
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect"));
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect"), TestContext.Current.CancellationToken);
         var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"));
 
         // The browser did receive this over TLS, so stripping Secure — as judging by
@@ -229,7 +229,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Absolute_redirects_to_somewhere_else_are_left_alone()
     {
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect-external"));
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/redirect-external"), TestContext.Current.CancellationToken);
 
         Assert.Equal("https://accounts.example.com/authorize", response.Headers.Location?.ToString());
     }
@@ -244,9 +244,9 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         var request = Request(new HttpMethod(method), "/method");
         request.Content = new StringContent("x");
 
-        using var response = await _client.SendAsync(request);
+        using var response = await _client.SendAsync(request, TestContext.Current.CancellationToken);
 
-        Assert.Equal(method, await response.Content.ReadAsStringAsync());
+        Assert.Equal(method, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -256,10 +256,10 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         var request = Request(HttpMethod.Post, "/echo");
         request.Content = new StringContent(payload, Encoding.UTF8, "text/plain");
 
-        using var response = await _client.SendAsync(request);
+        using var response = await _client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(payload, await response.Content.ReadAsStringAsync());
+        Assert.Equal(payload, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -267,20 +267,20 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
     {
         using var response = await _client.SendAsync(
             Request(HttpMethod.Get, "/stream"),
-            HttpCompletionOption.ResponseHeadersRead);
+            HttpCompletionOption.ResponseHeadersRead, TestContext.Current.CancellationToken);
 
-        await using var stream = await response.Content.ReadAsStreamAsync();
+        await using var stream = await response.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken);
         using var reader = new StreamReader(stream);
 
         // The backend is still parked on its gate. If anything buffered the
         // response, this read would block until the request completed.
-        var first = await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        var first = await reader.ReadLineAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal("data: first", first);
 
         _backend.ReleaseStream();
 
-        Assert.Equal("", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)));
-        Assert.Equal("data: second", await reader.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal("", await reader.ReadLineAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        Assert.Equal("data: second", await reader.ReadLineAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -314,8 +314,8 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         // services. It belongs in ILD's log, not in a response anyone can ask for.
         _resolve = _ => PreviewTarget.Failed(outcome, "work item 12 is running api, frontend");
 
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/"));
-        var body = await response.Content.ReadAsStringAsync();
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/"), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
@@ -332,8 +332,8 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         // preview exists, which is exactly what the 404 is there to avoid.
         _resolve = _ => PreviewTarget.Resolved(_backend.ClosedPort, "app", rewriteHost: true);
 
-        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/"));
-        var body = await response.Content.ReadAsStringAsync();
+        using var response = await _client.SendAsync(Request(HttpMethod.Get, "/"), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.DoesNotContain("app", body);

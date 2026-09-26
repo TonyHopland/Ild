@@ -14,7 +14,7 @@ public class EventLogIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid() + "/events");
+        var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid() + "/events", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
@@ -23,7 +23,7 @@ public class EventLogIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid() + "/events");
+        var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid() + "/events", TestContext.Current.CancellationToken);
         // Controller returns either 404 (no run) or 200 with empty page.
         Assert.Contains(response.StatusCode, new[] { HttpStatusCode.OK, HttpStatusCode.NotFound });
     }

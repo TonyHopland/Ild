@@ -35,7 +35,7 @@ public class BranchNameOverrideServiceTests : IDisposable
     {
         var (svc, _, _, _) = Setup();
 
-        var verdict = await svc.InspectAsync("feature foo", null, "WI-1");
+        var verdict = await svc.InspectAsync("feature foo", null, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.NotNull(verdict.ValidationError);
         Assert.Null(verdict.Conflict);
@@ -50,7 +50,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(false);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.True(verdict.IsUsable);
         _ = db;
@@ -62,7 +62,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, db, repoId, git) = Setup();
         var run = SeedRun(db, "WI-1", "feature/foo", LoopRunStatus.Completed);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.Null(verdict.ValidationError);
         Assert.Contains("`feature/foo`", verdict.Conflict);
@@ -86,7 +86,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, db, repoId, _) = Setup();
         SeedRun(db, "WI-1", "feature/foo", status);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.Contains("still active", verdict.Conflict);
         Assert.Contains("cancel it", verdict.Conflict);
@@ -101,7 +101,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, db, repoId, _) = Setup();
         SeedRun(db, "WI-1", "feature/foo", status);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.Contains("Clean up that run", verdict.Conflict);
         Assert.Contains("keeping its history", verdict.Conflict);
@@ -114,7 +114,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, db, repoId, _) = Setup();
         SeedRun(db, "WI-9", "feature/foo", LoopRunStatus.Running);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.Contains("work item WI-9", verdict.Conflict);
     }
@@ -125,7 +125,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, _, repoId, git) = Setup(baseRepoOnDisk: true);
         git.Setup(g => g.LocalBranchExistsAsync(It.IsAny<string>(), "feature/foo")).ReturnsAsync(true);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.Contains("already exists locally", verdict.Conflict);
     }
@@ -138,7 +138,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync("https://example/repo.git", "feature/foo", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.Contains("`feature/foo` already exists on origin", verdict.Conflict);
     }
@@ -154,7 +154,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((bool?)null);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1");
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.True(verdict.IsUsable);
     }

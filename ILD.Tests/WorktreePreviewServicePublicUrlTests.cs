@@ -96,7 +96,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         var response = await service.StartAsync(
             _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"));
+            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
 
         var app = response.Services.Single(s => s.Name == "app");
         Assert.Equal($"http://127.0.0.1:{app.Port}", app.PublicUrl);
@@ -110,7 +110,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         var response = await service.StartAsync(
             _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"));
+            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
 
         Assert.Equal("http://wi-7.ild.example:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
     }
@@ -123,7 +123,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         var response = await service.StartAsync(
             _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"));
+            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
 
         Assert.Equal("https://wi-7.ild.example.com", response.Services.Single(s => s.Name == "app").PublicUrl);
     }
@@ -136,7 +136,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         var response = await service.StartAsync(
             _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"));
+            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
 
         Assert.Equal("https://preview.example.test/app", response.Services.Single(s => s.Name == "app").PublicUrl);
     }
@@ -149,7 +149,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         var response = await service.StartAsync(
             _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"));
+            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
 
         // The bare wi-7 names one service, so neither may claim it — handing both the
         // same URL would send one of them to the wrong application.
@@ -167,7 +167,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         var response = await service.StartAsync(
             _worktree,
-            new WorktreePreviewStartOptions(WorkItemId: "7"));
+            new WorktreePreviewStartOptions(WorkItemId: "7"), TestContext.Current.CancellationToken);
 
         var docs = response.Services.Single(s => s.Name == "docs_site");
         Assert.Equal($"http://127.0.0.1:{docs.Port}", docs.PublicUrl);
@@ -182,7 +182,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         // Every API path that starts a preview knows the work item; a caller that
         // does not still gets a usable (if loopback-only) URL rather than a wrong one.
-        var response = await service.StartAsync(_worktree);
+        var response = await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
         var app = response.Services.Single(s => s.Name == "app");
         Assert.Equal($"http://127.0.0.1:{app.Port}", app.PublicUrl);

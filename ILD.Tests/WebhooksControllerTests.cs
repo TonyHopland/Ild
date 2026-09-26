@@ -69,7 +69,7 @@ public class WebhooksControllerTests : IDisposable
     public async Task Forgejo_returns_unauthorized_when_signature_missing()
     {
         _db.RemoteProviders.Add(new RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "x", WebhookSecret = "topsecret" });
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var payload = new WebhookPayload("pull_request.merged", "r1", "1", "https://x/pr/1", null, "merged");
         var (c, prSync, _) = BuildRequest(_db, new Dictionary<string, string?>(), JsonSerializer.Serialize(payload));
@@ -83,7 +83,7 @@ public class WebhooksControllerTests : IDisposable
     public async Task Forgejo_returns_unauthorized_when_signature_wrong()
     {
         _db.RemoteProviders.Add(new RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "x", WebhookSecret = "topsecret" });
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var payload = new WebhookPayload("pull_request.merged", "r1", "1", "https://x/pr/1", null, "merged");
         var (c, prSync, _) = BuildRequest(_db, new Dictionary<string, string?>
@@ -101,7 +101,7 @@ public class WebhooksControllerTests : IDisposable
     {
         const string secret = "topsecret";
         _db.RemoteProviders.Add(new RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "x", WebhookSecret = secret });
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var payload = new WebhookPayload("pull_request.merged", "r1", "1", "https://x/pr/1", null, "merged");
         var bodyJson = JsonSerializer.Serialize(payload);
@@ -122,7 +122,7 @@ public class WebhooksControllerTests : IDisposable
         {
                 const string secret = "github-secret";
                 _db.RemoteProviders.Add(new RemoteProvider { Id = Guid.NewGuid(), Name = "gh", Type = "GitHub", Url = "https://github.com", WebhookSecret = secret });
-                await _db.SaveChangesAsync();
+                await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
                 var body = """
                 {
@@ -157,7 +157,7 @@ public class WebhooksControllerTests : IDisposable
         {
                 const string secret = "github-secret";
                 _db.RemoteProviders.Add(new RemoteProvider { Id = Guid.NewGuid(), Name = "gh", Type = "GitHub", Url = "https://github.com", WebhookSecret = secret });
-                await _db.SaveChangesAsync();
+                await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
                 var body = """
                 {
@@ -219,7 +219,7 @@ public class WebhooksControllerTests : IDisposable
     {
         const string secret = "azure-secret";
         AddAzureProvider(secret);
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var (c, prSync, _) = BuildRequest(_db, new Dictionary<string, string?>
         {
@@ -247,7 +247,7 @@ public class WebhooksControllerTests : IDisposable
     public async Task AzureDevOps_returns_unauthorized_without_the_registered_basic_credential(string? authorization)
     {
         AddAzureProvider("azure-secret");
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var headers = new Dictionary<string, string?>();
         if (authorization != null)
@@ -270,7 +270,7 @@ public class WebhooksControllerTests : IDisposable
             Id = Guid.NewGuid(), Name = "gh", Type = "GitHub", Url = "https://github.com", WebhookSecret = "github-secret",
         });
         AddAzureProvider("azure-secret");
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var (c, prSync, _) = BuildRequest(_db, new Dictionary<string, string?>
         {
@@ -286,7 +286,7 @@ public class WebhooksControllerTests : IDisposable
     {
         const string secret = "azure-secret";
         AddAzureProvider(secret);
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var body = """
         {
@@ -314,7 +314,7 @@ public class WebhooksControllerTests : IDisposable
     {
         const string secret = "azure-secret";
         AddAzureProvider(secret);
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var body = """
         {
@@ -345,7 +345,7 @@ public class WebhooksControllerTests : IDisposable
     {
         const string secret = "azure-secret";
         AddAzureProvider(secret);
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var body = """
         {

@@ -43,7 +43,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         _policy = new EgressPolicy(_services.GetRequiredService<IServiceScopeFactory>(), TimeProvider.System);
     }
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _upstream = new TcpListener(IPAddress.Loopback, 0);
         _upstream.Start();
@@ -59,7 +59,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         await _forwarder.StartAsync(CancellationToken.None);
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (_forwarder is not null) await _forwarder.StopAsync(CancellationToken.None);
         _upstream?.Stop();
@@ -255,8 +255,8 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         Assert.Contains(bound.Values, socket => ((IPEndPoint)socket.LocalEndPoint!).Port == forward.LocalPort);
         Assert.All(bound.Values, socket => Assert.False(socket.SafeHandle.IsClosed));
 
-        Assert.True(await _db.NetworkForwards.DeleteForwardAsync(forward.Id));
-        await _forwarder.ReconcileAsync(default);
+        Assert.True(await _db.NetworkForwards.DeleteForwardAsync(forward.Id, TestContext.Current.CancellationToken));
+        await _forwarder.ReconcileAsync(TestContext.Current.CancellationToken);
         Assert.DoesNotContain(forward.LocalPort, _forwarder.ListeningPorts);
 
         Assert.All(bound.Values, socket => Assert.True(socket.SafeHandle.IsClosed));
@@ -276,7 +276,7 @@ public sealed class EgressForwarderTests : IAsyncLifetime
                 Port = _upstreamPort,
                 LocalPort = ((IPEndPoint)squatter.LocalEndpoint).Port,
             };
-            await _db.NetworkForwards.AddForwardAsync(contested);
+            await _db.NetworkForwards.AddForwardAsync(contested, TestContext.Current.CancellationToken);
             var healthy = await DeclareAsync(name: "healthy");
 
             Assert.Contains("already in use", _forwarder!.ListenErrorFor(contested.Id));
@@ -345,8 +345,8 @@ public sealed class EgressForwarderTests : IAsyncLifetime
         using (var client = await DialAsync(localPort))
             Assert.Equal("round trip", await EchoAsync(client, "round trip"));
 
-        Assert.True(await _db.NetworkForwards.DeleteForwardAsync(first.Id));
-        await _forwarder!.ReconcileAsync(default);
+        Assert.True(await _db.NetworkForwards.DeleteForwardAsync(first.Id, TestContext.Current.CancellationToken));
+        await _forwarder!.ReconcileAsync(TestContext.Current.CancellationToken);
         Assert.DoesNotContain(localPort, _forwarder.ListeningPorts);
 
         await DeclareAsync(name: "again", localPort: localPort);

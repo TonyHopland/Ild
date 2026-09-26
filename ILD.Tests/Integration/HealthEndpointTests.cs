@@ -19,9 +19,9 @@ public sealed class HealthEndpointTests
         using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
-        var resp = await client.GetAsync("/api/v1/health");
+        var resp = await client.GetAsync("/api/v1/health", TestContext.Current.CancellationToken);
         var body = await resp.Content.ReadFromJsonAsync<HealthResponse>(
-            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, TestContext.Current.CancellationToken);
 
         var expected = typeof(HealthController).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;

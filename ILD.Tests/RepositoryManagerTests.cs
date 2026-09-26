@@ -282,7 +282,7 @@ public class RepositoryManagerTests : IDisposable
         await mgr.CloneAsync(
             "https://gitlab.example.com/group/repo.git",
             targetPath,
-            auth: new GitAuthOptions("https://gitlab.example.com/group/repo.git", "token-123", "GitLab"));
+            auth: new GitAuthOptions("https://gitlab.example.com/group/repo.git", "token-123", "GitLab"), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Single(runner.Calls);
         Assert.NotNull(runner.Calls[0].Environment);
@@ -300,7 +300,7 @@ public class RepositoryManagerTests : IDisposable
         await mgr.PushAsync(
             _repo,
             "ild/wi-17",
-            auth: new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo"));
+            auth: new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo"), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Single(runner.Calls);
         Assert.NotNull(runner.Calls[0].Environment);
@@ -317,7 +317,7 @@ public class RepositoryManagerTests : IDisposable
         await mgr.PushAsync(
             _repo,
             "ild/wi-18",
-            auth: new GitAuthOptions("https://dev.azure.com/contoso/widgets/_git/app", "pat-123", "AzureDevOps"));
+            auth: new GitAuthOptions("https://dev.azure.com/contoso/widgets/_git/app", "pat-123", "AzureDevOps"), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Single(runner.Calls);
         Assert.Equal("pat", runner.Calls[0].Environment!["ILD_GIT_USERNAME"]);
@@ -370,7 +370,7 @@ public class RepositoryManagerTests : IDisposable
         var runner = new RecordingRunner();
         var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
 
-        var success = await mgr.ResetHardAsync(_repo, "origin/main");
+        var success = await mgr.ResetHardAsync(_repo, "origin/main", TestContext.Current.CancellationToken);
         Assert.True(success);
 
         Assert.Single(runner.Calls);
@@ -397,7 +397,7 @@ public class RepositoryManagerTests : IDisposable
         Git(_repo, "commit", "-m", "add file-b");
 
         // Reset back to first commit
-        var success = await mgr.ResetHardAsync(_repo, commitA);
+        var success = await mgr.ResetHardAsync(_repo, commitA, TestContext.Current.CancellationToken);
         Assert.True(success);
 
         // file-b.txt should be gone after reset --hard
@@ -541,7 +541,7 @@ public class RepositoryManagerTests : IDisposable
         Git(origin, "commit", "-m", "seed");
 
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
-        var info = await mgr.InspectRemoteAsync(origin);
+        var info = await mgr.InspectRemoteAsync(origin, TestContext.Current.CancellationToken);
 
         Assert.NotNull(info);
         Assert.Equal("develop", info!.DefaultBranch);
@@ -554,7 +554,7 @@ public class RepositoryManagerTests : IDisposable
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt"));
         var missing = Path.Combine(_tmp, "does-not-exist-" + Guid.NewGuid().ToString("N"));
 
-        Assert.Null(await mgr.InspectRemoteAsync(missing));
+        Assert.Null(await mgr.InspectRemoteAsync(missing, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -646,7 +646,7 @@ public class RepositoryManagerTests : IDisposable
 
         Assert.Equal(WorktreeFileWriteOutcome.Saved, saved.Outcome);
         Assert.NotNull(saved.File);
-        Assert.Equal("edited\n", await File.ReadAllTextAsync(Path.Combine(wt, "mod.txt")));
+        Assert.Equal("edited\n", await File.ReadAllTextAsync(Path.Combine(wt, "mod.txt"), TestContext.Current.CancellationToken));
         // The answer is read back off disk, so it already knows the file changed.
         Assert.Equal("modified", saved.File!.ChangeStatus);
         Assert.Equal("edited\n", saved.File.Content);
@@ -662,12 +662,12 @@ public class RepositoryManagerTests : IDisposable
         var (work, mgr) = CloneWithOrigin();
         var wt = await mgr.CreateWorktreeAsync(work, "feature-write-escape");
         var outside = Path.Combine(Directory.GetParent(wt)!.FullName, "outside.txt");
-        await File.WriteAllTextAsync(outside, "untouched\n");
+        await File.WriteAllTextAsync(outside, "untouched\n", TestContext.Current.CancellationToken);
 
         // Out of the worktree names nothing in it, which is what the read side
         // says about the same path too.
         Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "../outside.txt"));
-        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
+        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside, TestContext.Current.CancellationToken));
 
         // Neither does the write invent a file the read side would not serve:
         // it opens what is there rather than creating what is not, so a path
@@ -685,7 +685,7 @@ public class RepositoryManagerTests : IDisposable
         // text — and the caller is told which of the two it hit.
         File.WriteAllBytes(Path.Combine(wt, "blob.bin"), new byte[] { 1, 2, 0, 3, 4 });
         Assert.Equal(WorktreeFileWriteOutcome.NotText, await OutcomeAsync(mgr, wt, "blob.bin"));
-        Assert.Equal(new byte[] { 1, 2, 0, 3, 4 }, await File.ReadAllBytesAsync(Path.Combine(wt, "blob.bin")));
+        Assert.Equal(new byte[] { 1, 2, 0, 3, 4 }, await File.ReadAllBytesAsync(Path.Combine(wt, "blob.bin"), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -697,12 +697,12 @@ public class RepositoryManagerTests : IDisposable
 
         // Longer than the sniff reads, so the write has to truncate rather than
         // overwrite in place, and non-ASCII so the encoding is not incidental.
-        await File.WriteAllTextAsync(target, new string('x', 9000));
+        await File.WriteAllTextAsync(target, new string('x', 9000), TestContext.Current.CancellationToken);
         await mgr.WriteWorktreeFileAsync(wt, "mod.txt", "aå\n");
 
         // Byte for byte: UTF-8, no byte order mark, nothing of the old contents
         // left past the end of the new ones.
-        Assert.Equal(new byte[] { 0x61, 0xC3, 0xA5, 0x0A }, await File.ReadAllBytesAsync(target));
+        Assert.Equal(new byte[] { 0x61, 0xC3, 0xA5, 0x0A }, await File.ReadAllBytesAsync(target, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -711,7 +711,7 @@ public class RepositoryManagerTests : IDisposable
         var (work, mgr) = CloneWithOrigin();
         var wt = await mgr.CreateWorktreeAsync(work, "feature-write-link");
         var outside = Path.Combine(Directory.GetParent(wt)!.FullName, "outside.txt");
-        await File.WriteAllTextAsync(outside, "untouched\n");
+        await File.WriteAllTextAsync(outside, "untouched\n", TestContext.Current.CancellationToken);
 
         // Spelled entirely inside the worktree, both of these lead out of it —
         // the file link directly, the directory link one segment at a time.
@@ -720,7 +720,7 @@ public class RepositoryManagerTests : IDisposable
 
         Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "escape.txt"));
         Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "out/outside.txt"));
-        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
+        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside, TestContext.Current.CancellationToken));
 
         // The boundary is the same one the read side draws, so neither hands the
         // file back either.
@@ -734,7 +734,7 @@ public class RepositoryManagerTests : IDisposable
         var (work, mgr) = CloneWithOrigin();
         var wt = await mgr.CreateWorktreeAsync(work, "feature-write-chain");
         var outside = Path.Combine(Directory.GetParent(wt)!.FullName, "outside.txt");
-        await File.WriteAllTextAsync(outside, "untouched\n");
+        await File.WriteAllTextAsync(outside, "untouched\n", TestContext.Current.CancellationToken);
 
         // Every hop but the last sits inside the worktree, and only the far end
         // leads out. A guard that gives up part way through the chain stops on
@@ -746,7 +746,7 @@ public class RepositoryManagerTests : IDisposable
 
         Assert.Equal(WorktreeFileWriteOutcome.NotFound, await OutcomeAsync(mgr, wt, "hop-48.txt"));
         Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "hop-48.txt"));
-        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside));
+        Assert.Equal("untouched\n", await File.ReadAllTextAsync(outside, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -755,19 +755,19 @@ public class RepositoryManagerTests : IDisposable
         var (work, mgr) = CloneWithOrigin();
         var wt = await mgr.CreateWorktreeAsync(work, "feature-write-inner-link");
         var target = Path.Combine(wt, "inner.txt");
-        await File.WriteAllTextAsync(target, "before\n");
+        await File.WriteAllTextAsync(target, "before\n", TestContext.Current.CancellationToken);
         File.CreateSymbolicLink(Path.Combine(wt, "alias.txt"), target);
 
         // Following links is not the same as refusing them: one that stays
         // inside the worktree lands inside it, which is all the guard asks.
         Assert.Equal(WorktreeFileWriteOutcome.Saved, await OutcomeAsync(mgr, wt, "alias.txt", "after\n"));
-        Assert.Equal("after\n", await File.ReadAllTextAsync(target));
+        Assert.Equal("after\n", await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken));
 
         // Short chains are followed the whole way; only exhausting the budget
         // above refuses.
         File.CreateSymbolicLink(Path.Combine(wt, "alias-to-alias.txt"), Path.Combine(wt, "alias.txt"));
         Assert.Equal(WorktreeFileWriteOutcome.Saved, await OutcomeAsync(mgr, wt, "alias-to-alias.txt", "again\n"));
-        Assert.Equal("again\n", await File.ReadAllTextAsync(target));
+        Assert.Equal("again\n", await File.ReadAllTextAsync(target, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -778,7 +778,7 @@ public class RepositoryManagerTests : IDisposable
         // may name a directory git no longer knows about.
         var plainDir = Path.Combine(_tmp, "not-a-worktree-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(plainDir);
-        await File.WriteAllTextAsync(Path.Combine(plainDir, "file.txt"), "before\n");
+        await File.WriteAllTextAsync(Path.Combine(plainDir, "file.txt"), "before\n", TestContext.Current.CancellationToken);
 
         // None of these is a missing file — the worktree itself is the problem,
         // and the refusal says so rather than blaming the path.
@@ -787,7 +787,7 @@ public class RepositoryManagerTests : IDisposable
             WorktreeFileWriteOutcome.WorktreeUnavailable,
             await OutcomeAsync(mgr, Path.Combine(_tmp, "gone-" + Guid.NewGuid().ToString("N")), "file.txt"));
         Assert.Equal(WorktreeFileWriteOutcome.WorktreeUnavailable, await OutcomeAsync(mgr, plainDir, "file.txt"));
-        Assert.Equal("before\n", await File.ReadAllTextAsync(Path.Combine(plainDir, "file.txt")));
+        Assert.Equal("before\n", await File.ReadAllTextAsync(Path.Combine(plainDir, "file.txt"), TestContext.Current.CancellationToken));
     }
 
     /// <summary>A real 1x1 PNG — has the NUL bytes that make it read as binary.</summary>
@@ -828,10 +828,10 @@ public class RepositoryManagerTests : IDisposable
         var (origin, wt, mgr) = await PushedRunBranchAsync("ild/wi-1-run-1");
         CommitOnOrigin(origin, "ild/wi-1-run-1", "mod.txt", "pushed by a human\n");
 
-        Assert.True(await mgr.FetchAsync(wt));
+        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken));
         Assert.Equal(1, await mgr.GetCommitsBehindCountAsync(wt, "origin/ild/wi-1-run-1"));
 
-        var rebase = await mgr.RebaseAsync(wt, "origin/ild/wi-1-run-1");
+        var rebase = await mgr.RebaseAsync(wt, "origin/ild/wi-1-run-1", TestContext.Current.CancellationToken);
 
         Assert.True(rebase.Success);
         Assert.Empty(rebase.ConflictedFiles);
@@ -850,9 +850,9 @@ public class RepositoryManagerTests : IDisposable
         Git(wt, "commit", "-m", "agent work");
         var localHead = GitOutput(wt, "rev-parse", "HEAD").Trim();
         CommitOnOrigin(origin, "ild/wi-2-run-1", "mod.txt", "written by a human\n");
-        Assert.True(await mgr.FetchAsync(wt));
+        Assert.True(await mgr.FetchAsync(wt, TestContext.Current.CancellationToken));
 
-        var rebase = await mgr.RebaseAsync(wt, "origin/ild/wi-2-run-1");
+        var rebase = await mgr.RebaseAsync(wt, "origin/ild/wi-2-run-1", TestContext.Current.CancellationToken);
 
         Assert.False(rebase.Success);
         Assert.Contains("mod.txt", rebase.ConflictedFiles);
@@ -910,8 +910,8 @@ public class RepositoryManagerTests : IDisposable
         var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
         var auth = new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo");
 
-        await mgr.FetchAsync(_repo, auth: auth);
-        await mgr.RebaseAsync(_repo, "origin/ild/wi-3-run-1");
+        await mgr.FetchAsync(_repo, auth: auth, cancellationToken: TestContext.Current.CancellationToken);
+        await mgr.RebaseAsync(_repo, "origin/ild/wi-3-run-1", TestContext.Current.CancellationToken);
 
         // The fetch is the only half of a pull that talks to the remote.
         Assert.Equal("token-123", runner.Calls[0].Environment!["ILD_GIT_PASSWORD"]);
@@ -964,11 +964,11 @@ public class RepositoryManagerTests : IDisposable
 
         var remoteUrl = GitOut(work, "remote", "get-url", "origin");
 
-        Assert.True(await mgr.RemoteHasBranchAsync(remoteUrl, "feature/published"));
-        Assert.False(await mgr.RemoteHasBranchAsync(remoteUrl, "feature/never-pushed"));
+        Assert.True(await mgr.RemoteHasBranchAsync(remoteUrl, "feature/published", TestContext.Current.CancellationToken));
+        Assert.False(await mgr.RemoteHasBranchAsync(remoteUrl, "feature/never-pushed", TestContext.Current.CancellationToken));
         // A remote we cannot reach is unanswered, not "absent" — the caller must
         // be able to tell those apart.
-        Assert.Null(await mgr.RemoteHasBranchAsync(Path.Combine(_tmp, "no-such-remote"), "feature/published"));
+        Assert.Null(await mgr.RemoteHasBranchAsync(Path.Combine(_tmp, "no-such-remote"), "feature/published", TestContext.Current.CancellationToken));
     }
 
     /// <summary>
@@ -989,7 +989,7 @@ public class RepositoryManagerTests : IDisposable
         // that is the direction the conflict check must never fail in.
         var mgr = new RepositoryManager(new SilentSuccessRunner(), worktreesRoot: Path.Combine(_tmp, "wt"));
 
-        Assert.True(await mgr.RemoteHasBranchAsync("https://example.invalid/repo.git", "feature/foo"));
+        Assert.True(await mgr.RemoteHasBranchAsync("https://example.invalid/repo.git", "feature/foo", TestContext.Current.CancellationToken));
     }
 
     private static async Task<WorktreeFileWriteOutcome> OutcomeAsync(

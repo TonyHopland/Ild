@@ -27,7 +27,7 @@ public class AuthorizationPolicyTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync(path);
+        var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -40,7 +40,7 @@ public class AuthorizationPolicyTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync(path);
+        var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -59,10 +59,10 @@ public class AuthorizationPolicyTests
         var client = factory.CreateClient();
         var token = await factory.GetAdminTokenAsync();
 
-        var anonymous = await client.GetAsync(path);
+        var anonymous = await client.GetAsync(path, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
 
-        var authenticated = await client.GetAsync($"{path}?access_token={token}");
+        var authenticated = await client.GetAsync($"{path}?access_token={token}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.BadRequest, authenticated.StatusCode);
     }
 
@@ -78,12 +78,12 @@ public class AuthorizationPolicyTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
-        var anonymous = await client.GetAsync(path);
+        var anonymous = await client.GetAsync(path, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
 
-        var authenticated = await (await factory.CreateAuthenticatedClientAsync()).GetAsync(path);
+        var authenticated = await (await factory.CreateAuthenticatedClientAsync()).GetAsync(path, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, authenticated.StatusCode);
-        Assert.DoesNotContain("ILD-UI-SPA-MARKER", await authenticated.Content.ReadAsStringAsync());
+        Assert.DoesNotContain("ILD-UI-SPA-MARKER", await authenticated.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -92,20 +92,20 @@ public class AuthorizationPolicyTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
-        var missing = await client.GetAsync("/api/v1/repositories");
+        var missing = await client.GetAsync("/api/v1/repositories", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, missing.StatusCode);
         Assert.Equal("application/json", missing.Content.Headers.ContentType?.MediaType);
-        var body = await missing.Content.ReadFromJsonAsync<JsonElement>();
+        var body = await missing.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         Assert.Equal("Unauthorized", body.GetProperty("error").GetString());
         Assert.Equal("No authentication token provided", body.GetProperty("message").GetString());
 
         var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/repositories");
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "not-a-session");
-        var rejected = await client.SendAsync(request);
+        var rejected = await client.SendAsync(request, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, rejected.StatusCode);
         Assert.Equal(
             "Invalid or expired session",
-            (await rejected.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("message").GetString());
+            (await rejected.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("message").GetString());
     }
 
     [Fact]
@@ -118,12 +118,12 @@ public class AuthorizationPolicyTests
         var token = await factory.GetAdminTokenAsync();
         var client = factory.CreateClient();
 
-        var anonymous = await client.PostAsync("/hubs/loop-run/negotiate?negotiateVersion=1", null);
+        var anonymous = await client.PostAsync("/hubs/loop-run/negotiate?negotiateVersion=1", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
 
-        var negotiate = await client.PostAsync($"/hubs/loop-run/negotiate?negotiateVersion=1&access_token={token}", null);
+        var negotiate = await client.PostAsync($"/hubs/loop-run/negotiate?negotiateVersion=1&access_token={token}", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, negotiate.StatusCode);
-        var connectionToken = (await negotiate.Content.ReadFromJsonAsync<JsonElement>())
+        var connectionToken = (await negotiate.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken))
             .GetProperty("connectionToken").GetString();
 
         var sockets = factory.Server.CreateWebSocketClient();
@@ -155,16 +155,16 @@ public class AuthorizationPolicyTests
 
         // Authenticated but not a user, so it is a 403 and not a 401: the token is
         // recognised, the role is what stops it.
-        var negotiate = await client.PostAsync($"{path}/negotiate?negotiateVersion=1&access_token={agentToken}", null);
+        var negotiate = await client.PostAsync($"{path}/negotiate?negotiateVersion=1&access_token={agentToken}", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, negotiate.StatusCode);
 
         // The socket leg authorizes independently of negotiate, so it has to be
         // checked on its own — borrow a connection token from a legitimate user
         // negotiate and present the agent token on the upgrade.
         var userToken = await factory.GetAdminTokenAsync();
-        var userNegotiate = await client.PostAsync($"{path}/negotiate?negotiateVersion=1&access_token={userToken}", null);
+        var userNegotiate = await client.PostAsync($"{path}/negotiate?negotiateVersion=1&access_token={userToken}", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, userNegotiate.StatusCode);
-        var connectionToken = (await userNegotiate.Content.ReadFromJsonAsync<JsonElement>())
+        var connectionToken = (await userNegotiate.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken))
             .GetProperty("connectionToken").GetString();
 
         var sockets = factory.Server.CreateWebSocketClient();
@@ -193,7 +193,7 @@ public class AuthorizationPolicyTests
         client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
         client.DefaultRequestHeaders.Add("X-ILD-Run-Id", Guid.NewGuid().ToString());
 
-        var response = await client.GetAsync(path);
+        var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -220,7 +220,7 @@ public class AuthorizationPolicyTests
                 Url = "https://dev.azure.com/contoso",
                 WebhookSecret = webhookSecret,
             });
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         var token = await factory.GetAdminTokenAsync();
@@ -242,10 +242,10 @@ public class AuthorizationPolicyTests
             return request;
         }
 
-        var withoutToken = await client.SendAsync(Hook("/api/v1/webhooks/azuredevops"));
+        var withoutToken = await client.SendAsync(Hook("/api/v1/webhooks/azuredevops"), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, withoutToken.StatusCode);
 
-        var withToken = await client.SendAsync(Hook($"/api/v1/webhooks/azuredevops?access_token={token}"));
+        var withToken = await client.SendAsync(Hook($"/api/v1/webhooks/azuredevops?access_token={token}"), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, withToken.StatusCode);
     }
 
@@ -262,11 +262,11 @@ public class AuthorizationPolicyTests
         await using var factory = new ApiFactory();
         var anonymous = factory.CreateClient();
 
-        Assert.Equal(HttpStatusCode.OK, (await anonymous.GetAsync("/api/v1/logging/level")).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/v1/logging/entries")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await anonymous.GetAsync("/api/v1/logging/level", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/v1/logging/entries", TestContext.Current.CancellationToken)).StatusCode);
 
         var signedIn = await factory.CreateAuthenticatedClientAsync();
-        var entries = await signedIn.GetAsync("/api/v1/logging/entries?take=5");
+        var entries = await signedIn.GetAsync("/api/v1/logging/entries?take=5", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, entries.StatusCode);
     }

@@ -111,10 +111,10 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig();
         var service = BuildService();
-        var started = await service.StartAsync(_worktree);
+        var started = await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var appPort = started.Services.Single(s => s.Name == "app").Port;
 
-        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree());
+        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewTargetOutcome.Resolved, target.Outcome);
         Assert.True(target.IsResolved);
@@ -130,10 +130,10 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig();
         var service = BuildService();
-        var started = await service.StartAsync(_worktree);
+        var started = await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var apiPort = started.Services.Single(s => s.Name == "api").Port;
 
-        var target = await service.ResolvePreviewTargetAsync("wi-7-api", WorkItemsPointingAtThisWorktree());
+        var target = await service.ResolvePreviewTargetAsync("wi-7-api", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewTargetOutcome.Resolved, target.Outcome);
         Assert.Equal(apiPort, target.Port);
@@ -145,10 +145,10 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig();
         var service = BuildService();
-        var started = await service.StartAsync(_worktree);
+        var started = await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var expected = started.Services.Single(s => s.Name == "work-item-server").Port;
 
-        var target = await service.ResolvePreviewTargetAsync("wi-7-work-item-server", WorkItemsPointingAtThisWorktree());
+        var target = await service.ResolvePreviewTargetAsync("wi-7-work-item-server", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewTargetOutcome.Resolved, target.Outcome);
         Assert.Equal(expected, target.Port);
@@ -160,9 +160,9 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig(rewriteHostOnApp: false);
         var service = BuildService();
-        await service.StartAsync(_worktree);
+        await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
-        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree());
+        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
 
         Assert.True(target.IsResolved);
         Assert.False(target.RewriteHost);
@@ -179,7 +179,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         var service = BuildService();
         var workItems = new Mock<IWorkItemManager>(MockBehavior.Strict);
 
-        var target = await service.ResolvePreviewTargetAsync(label, workItems.Object);
+        var target = await service.ResolvePreviewTargetAsync(label, workItems.Object, TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewTargetOutcome.NotAPreviewHost, target.Outcome);
         Assert.False(target.IsResolved);
@@ -192,7 +192,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         var service = BuildService();
 
-        var target = await service.ResolvePreviewTargetAsync("wi-404", WorkItemsReturning(null));
+        var target = await service.ResolvePreviewTargetAsync("wi-404", WorkItemsReturning(null), TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewTargetOutcome.UnknownWorkItem, target.Outcome);
         Assert.Contains("404", target.Message);
@@ -204,7 +204,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         var service = BuildService();
         var workItems = WorkItemsReturning(new WorkItemView { Id = "7", WorktreePath = null });
 
-        var target = await service.ResolvePreviewTargetAsync("wi-7", workItems);
+        var target = await service.ResolvePreviewTargetAsync("wi-7", workItems, TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewTargetOutcome.NoWorktree, target.Outcome);
     }
@@ -216,7 +216,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         var service = BuildService();
 
         // Configured, never started: the runtime dictionary has no entry.
-        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree());
+        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewTargetOutcome.PreviewNotRunning, target.Outcome);
     }
@@ -226,15 +226,15 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig();
         var service = BuildService();
-        await service.StartServiceAsync(_worktree, "app");
+        await service.StartServiceAsync(_worktree, "app", cancellationToken: TestContext.Current.CancellationToken);
 
         // The preview is up, but only 'app' is; 'api' is configured and stopped.
-        var stopped = await service.ResolvePreviewTargetAsync("wi-7-api", WorkItemsPointingAtThisWorktree());
+        var stopped = await service.ResolvePreviewTargetAsync("wi-7-api", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
         Assert.Equal(PreviewTargetOutcome.ServiceNotRunning, stopped.Outcome);
         Assert.Contains("api", stopped.Message);
 
         // ...as is a name that does not exist in the profile at all.
-        var unknown = await service.ResolvePreviewTargetAsync("wi-7-nope", WorkItemsPointingAtThisWorktree());
+        var unknown = await service.ResolvePreviewTargetAsync("wi-7-nope", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
         Assert.Equal(PreviewTargetOutcome.ServiceNotRunning, unknown.Outcome);
     }
 
@@ -243,9 +243,9 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig(alsoPublic: "api");
         var service = BuildService();
-        await service.StartAsync(_worktree);
+        await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
-        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree());
+        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
 
         // Serving whichever came first would put one application behind a hostname
         // that describes the other just as well.
@@ -254,7 +254,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         Assert.Contains("wi-7-api", target.Message);
 
         // Naming one is unambiguous and still works.
-        var named = await service.ResolvePreviewTargetAsync("wi-7-api", WorkItemsPointingAtThisWorktree());
+        var named = await service.ResolvePreviewTargetAsync("wi-7-api", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
         Assert.True(named.IsResolved);
         Assert.Equal("api", named.ServiceName);
     }
@@ -264,9 +264,9 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig(alsoPublic: "api");
         var service = BuildService();
-        var started = await service.StartServiceAsync(_worktree, "app");
+        var started = await service.StartServiceAsync(_worktree, "app", cancellationToken: TestContext.Current.CancellationToken);
 
-        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree());
+        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
 
         Assert.True(target.IsResolved);
         Assert.Equal("app", target.ServiceName);
@@ -278,9 +278,9 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig();
         var service = BuildService();
-        await service.StartServiceAsync(_worktree, "api");
+        await service.StartServiceAsync(_worktree, "api", cancellationToken: TestContext.Current.CancellationToken);
 
-        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree());
+        var target = await service.ResolvePreviewTargetAsync("wi-7", WorkItemsPointingAtThisWorktree(), TestContext.Current.CancellationToken);
 
         Assert.Equal(PreviewTargetOutcome.ServiceNotRunning, target.Outcome);
         Assert.Contains("public", target.Message);
@@ -303,7 +303,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
     {
         WriteConfig();
         var service = BuildService();
-        await service.StartAsync(_worktree);
+        await service.StartAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
         var workItems = WorkItemsPointingAtThisWorktree();
 
         var runtimes = (System.Collections.IDictionary)typeof(WorktreePreviewService)
@@ -313,14 +313,14 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
         var held = (System.Collections.IEnumerable)runtime.GetType().GetProperty("Processes")!.GetValue(runtime)!;
         var before = held.Cast<object>().ToArray();
 
-        await service.StopServiceAsync(_worktree, "api");
-        await service.StartServiceAsync(_worktree, "api");
+        await service.StopServiceAsync(_worktree, "api", TestContext.Current.CancellationToken);
+        await service.StartServiceAsync(_worktree, "api", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(before, held.Cast<object>().ToArray());
 
         // Both forms: one filters the collection, the other scans it.
-        Assert.Equal(PreviewTargetOutcome.Resolved, (await service.ResolvePreviewTargetAsync("wi-7", workItems)).Outcome);
-        Assert.Equal(PreviewTargetOutcome.Resolved, (await service.ResolvePreviewTargetAsync("wi-7-api", workItems)).Outcome);
+        Assert.Equal(PreviewTargetOutcome.Resolved, (await service.ResolvePreviewTargetAsync("wi-7", workItems, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(PreviewTargetOutcome.Resolved, (await service.ResolvePreviewTargetAsync("wi-7-api", workItems, TestContext.Current.CancellationToken)).Outcome);
     }
 
     private static int FindFreePort()

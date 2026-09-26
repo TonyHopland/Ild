@@ -188,7 +188,7 @@ public class PrCommentLedgerDurabilityTests
         var service = new PrStatusPollService(
             new LoopRunStore(db.Fresh()), remote.Object, engine.Object, Mock.Of<IRunNotifier>(),
             NullLogger<PrStatusPollService>.Instance);
-        await service.PollOnceAsync();
+        await service.PollOnceAsync(TestContext.Current.CancellationToken);
 
         engine.Verify(e => e.SignalNodeResultAsync(seeded.Run.Id, seeded.RunNode.Id,
             It.Is<NodeSignal>(s => s.EdgeName == PrNodeEdges.OnComment)), Times.Once);
@@ -214,7 +214,7 @@ public class PrCommentLedgerDurabilityTests
 
         await new PrStatusPollService(
             new LoopRunStore(db.Fresh()), remote.Object, engine.Object, Mock.Of<IRunNotifier>(),
-            NullLogger<PrStatusPollService>.Instance).PollOnceAsync();
+            NullLogger<PrStatusPollService>.Instance).PollOnceAsync(TestContext.Current.CancellationToken);
 
         engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
         var reread = await RereadAsync(db, seeded.Run.Id);

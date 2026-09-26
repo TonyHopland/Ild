@@ -20,14 +20,14 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
     private AttachmentServerFactory _factory = null!;
     private HttpClient _client = null!;
 
-    public Task InitializeAsync()
+    public ValueTask InitializeAsync()
     {
         _factory = new AttachmentServerFactory();
         _client = _factory.AuthedClient();
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         _client.Dispose();
         await _factory.DisposeAsync();
@@ -51,7 +51,7 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
         // A well-formed form that simply has no file in it — the shape a client
         // sends when it posts the surrounding fields and forgets the files.
         using var fieldsOnly = new MultipartFormDataContent { { new StringContent("a note"), "note" } };
-        var resp = await _client.PostAsync($"/workitems/{id}/attachments", fieldsOnly);
+        var resp = await _client.PostAsync($"/workitems/{id}/attachments", fieldsOnly, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         Assert.False(string.IsNullOrWhiteSpace(await ErrorAsync(resp)));
@@ -62,7 +62,7 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
     {
         var id = await CreateWorkItemAsync();
 
-        var resp = await _client.PostAsJsonAsync($"/workitems/{id}/attachments", new { files = "not a file" });
+        var resp = await _client.PostAsJsonAsync($"/workitems/{id}/attachments", new { files = "not a file" }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         Assert.Contains("files", (await ErrorAsync(resp))!, StringComparison.Ordinal);
@@ -82,12 +82,12 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
             .ToArray();
 
         using var body = AttachmentUpload.Of(files);
-        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body);
+        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        Assert.Contains("form", await resp.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("form", await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.OrdinalIgnoreCase);
 
-        var listed = await _client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments");
+        var listed = await _client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Empty(listed.EnumerateArray().ToList());
     }
 
@@ -123,10 +123,10 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
         var id = await CreateWorkItemAsync();
 
         using var body = AttachmentUpload.Of(sent, "text/plain", Encoding.UTF8.GetBytes("root"));
-        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body);
+        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
-        var created = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement[0];
+        var created = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement[0];
         Assert.Equal(stored, created.GetProperty("fileName").GetString());
     }
 
@@ -136,12 +136,12 @@ public sealed class WorkItemAttachmentRequestTests : IAsyncLifetime
         var id = await CreateWorkItemAsync();
 
         using var body = AttachmentUpload.Of(new string('a', 300) + ".png", "image/png", AttachmentUpload.Bytes(16));
-        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body);
+        var resp = await _client.PostAsync($"/workitems/{id}/attachments", body, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         Assert.False(string.IsNullOrWhiteSpace(await ErrorAsync(resp)));
 
-        var listed = await _client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments");
+        var listed = await _client.GetFromJsonAsync<JsonElement>($"/workitems/{id}/attachments", TestContext.Current.CancellationToken);
         Assert.Empty(listed.EnumerateArray().ToList());
     }
 }

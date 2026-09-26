@@ -17,12 +17,12 @@ public class LoopRunsIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
-        var response = await client.GetAsync("/api/v1/looprins");
+        var response = await client.GetAsync("/api/v1/looprins", TestContext.Current.CancellationToken);
         // Path is /api/v1/[controller] -> /api/v1/loopruns
         // Use the correct route below
         Assert.Contains(response.StatusCode, new[] { HttpStatusCode.NotFound, HttpStatusCode.Unauthorized });
 
-        var actual = await client.GetAsync("/api/v1/loopruns");
+        var actual = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, actual.StatusCode);
     }
 
@@ -31,9 +31,9 @@ public class LoopRunsIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/loopruns");
+        var response = await client.GetAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var items = await response.Content.ReadFromJsonAsync<object[]>();
+        var items = await response.Content.ReadFromJsonAsync<object[]>(TestContext.Current.CancellationToken);
         Assert.NotNull(items);
         Assert.Empty(items!);
     }
@@ -43,7 +43,7 @@ public class LoopRunsIntegrationTests
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid());
+        var response = await client.GetAsync("/api/v1/loopruns/" + Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
@@ -62,7 +62,7 @@ public class LoopRunsIntegrationTests
 
         Assert.Contains("already used locally", await BranchWarningAsync(client, "feature/reclaim-me"));
 
-        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null);
+        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
         Assert.Equal([runId], reclaimer.Reclaimed);
@@ -81,7 +81,7 @@ public class LoopRunsIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Running, branch: "feature/live");
 
-        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null);
+        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Empty(reclaimer.Reclaimed);
@@ -96,7 +96,7 @@ public class LoopRunsIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Failed, branch: "feature/stuck");
 
-        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null);
+        var response = await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null, TestContext.Current.CancellationToken);
 
         // Clearing the pointers on a reclaim that did not happen would hide a
         // worktree and branch that are still on disk from every later sweep.
@@ -111,7 +111,7 @@ public class LoopRunsIntegrationTests
     {
         await using var factory = NewFactory(new StubRunReclaimer(succeeds: true));
         var client = await factory.CreateAuthenticatedClientAsync();
-        var response = await client.PostAsync($"/api/v1/loopruns/{Guid.NewGuid()}/cleanup", null);
+        var response = await client.PostAsync($"/api/v1/loopruns/{Guid.NewGuid()}/cleanup", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
@@ -127,7 +127,7 @@ public class LoopRunsIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/listed");
 
-        var listed = await client.GetStringAsync("/api/v1/loopruns");
+        var listed = await client.GetStringAsync("/api/v1/loopruns", TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain("worktreePath", listed, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("/tmp/ild-test-worktree", listed, StringComparison.Ordinal);
@@ -136,9 +136,9 @@ public class LoopRunsIntegrationTests
         Assert.True(row.GetProperty("hasLocalGitState").GetBoolean());
 
         Assert.Equal(HttpStatusCode.NoContent,
-            (await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null)).StatusCode);
+            (await client.PostAsync($"/api/v1/loopruns/{runId}/cleanup", null, TestContext.Current.CancellationToken)).StatusCode);
 
-        using var after = JsonDocument.Parse(await client.GetStringAsync("/api/v1/loopruns"));
+        using var after = JsonDocument.Parse(await client.GetStringAsync("/api/v1/loopruns", TestContext.Current.CancellationToken));
         Assert.False(after.RootElement.EnumerateArray()
             .Single(r => r.GetProperty("id").GetGuid() == runId)
             .GetProperty("hasLocalGitState").GetBoolean());

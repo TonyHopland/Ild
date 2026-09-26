@@ -45,8 +45,8 @@ public class PreviewProxyPipelineTests
 
         // No bearer token: were the proxy behind authentication this would be a 401,
         // and were it behind the static files it would be ILD's own SPA.
-        using var response = await client.SendAsync(Request(path, PreviewHost));
-        var body = await response.Content.ReadAsStringAsync();
+        using var response = await client.SendAsync(Request(path, PreviewHost), TestContext.Current.CancellationToken);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         // No preview is running, so the proxy's own 404 — not the SPA, and not a 401.
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -62,7 +62,7 @@ public class PreviewProxyPipelineTests
         using var factory = FactoryWithProxyBase();
         using var client = factory.CreateClient();
 
-        using var response = await client.SendAsync(Request("/", PreviewHost));
+        using var response = await client.SendAsync(Request("/", PreviewHost), TestContext.Current.CancellationToken);
 
         // The UI's CSP is deliberately `default-src 'self'`, which is right for ILD
         // and wrong for somebody else's application — a preview that loads a font or
@@ -77,14 +77,14 @@ public class PreviewProxyPipelineTests
         using var factory = FactoryWithProxyBase();
         using var client = factory.CreateClient();
 
-        using var spa = await client.SendAsync(Request("/", BaseHost));
+        using var spa = await client.SendAsync(Request("/", BaseHost), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, spa.StatusCode);
-        Assert.Contains("ILD-UI-SPA-MARKER", await spa.Content.ReadAsStringAsync());
+        Assert.Contains("ILD-UI-SPA-MARKER", await spa.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         Assert.True(spa.Headers.Contains("Content-Security-Policy"));
 
-        using var bundle = await client.SendAsync(Request("/assets/app.js", BaseHost));
+        using var bundle = await client.SendAsync(Request("/assets/app.js", BaseHost), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, bundle.StatusCode);
-        Assert.Contains("ILD-UI-BUNDLE-MARKER", await bundle.Content.ReadAsStringAsync());
+        Assert.Contains("ILD-UI-BUNDLE-MARKER", await bundle.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -93,11 +93,11 @@ public class PreviewProxyPipelineTests
         using var factory = FactoryWithProxyBase();
         using var client = factory.CreateClient();
 
-        using var anonymous = await client.SendAsync(Request("/api/v1/loopruns", BaseHost));
+        using var anonymous = await client.SendAsync(Request("/api/v1/loopruns", BaseHost), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
 
         using var authenticatedClient = await factory.CreateAuthenticatedClientAsync();
-        using var authenticated = await authenticatedClient.SendAsync(Request("/api/v1/loopruns", BaseHost));
+        using var authenticated = await authenticatedClient.SendAsync(Request("/api/v1/loopruns", BaseHost), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
     }
 
@@ -109,11 +109,11 @@ public class PreviewProxyPipelineTests
         using var factory = new ApiFactory();
         using var client = factory.CreateClient();
 
-        using var api = await client.SendAsync(Request("/api/v1/loopruns", PreviewHost));
+        using var api = await client.SendAsync(Request("/api/v1/loopruns", PreviewHost), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, api.StatusCode);
 
-        using var spa = await client.SendAsync(Request("/", PreviewHost));
+        using var spa = await client.SendAsync(Request("/", PreviewHost), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, spa.StatusCode);
-        Assert.Contains("ILD-UI-SPA-MARKER", await spa.Content.ReadAsStringAsync());
+        Assert.Contains("ILD-UI-SPA-MARKER", await spa.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
     }
 }

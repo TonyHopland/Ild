@@ -28,10 +28,10 @@ public class WorkItemEditProposalOutageTests
         await using var factory = ServerWith(client);
         var human = await factory.CreateAuthenticatedClientAsync();
 
-        var resp = await human.GetAsync($"/api/v1/workitems/{WorkItemId}/edit-proposals");
+        var resp = await human.GetAsync($"/api/v1/workitems/{WorkItemId}/edit-proposals", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
-        var body = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var body = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal("WorkItemServer unreachable", body.GetProperty("error").GetString());
     }
 
@@ -56,10 +56,10 @@ public class WorkItemEditProposalOutageTests
         await using var factory = ServerWith(client);
         var human = await factory.CreateAuthenticatedClientAsync();
 
-        var resp = await human.PostAsync($"/api/v1/workitems/{WorkItemId}/edit-proposals/{proposal.Id}/approve", null);
+        var resp = await human.PostAsync($"/api/v1/workitems/{WorkItemId}/edit-proposals/{proposal.Id}/approve", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        var body = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+        var body = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         Assert.Equal("Approved", body.GetProperty("proposal").GetProperty("status").GetString());
         Assert.Equal("Applied", body.GetProperty("workItem").GetProperty("title").GetString());
     }

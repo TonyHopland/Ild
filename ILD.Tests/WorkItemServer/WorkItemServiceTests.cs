@@ -16,7 +16,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     private WorkItemService _svc = null!;
     private DbContextOptions<WorkItemServerDbContext> _options = null!;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _conn = new SqliteConnection("DataSource=:memory:");
         await _conn.OpenAsync();
@@ -30,7 +30,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         _svc = new WorkItemService(_db, _clock);
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await _db.DisposeAsync();
         await _conn.DisposeAsync();
@@ -46,7 +46,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Create_defaults_to_Backlog_and_persists_tags_and_dependencies()
     {
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
@@ -54,7 +54,7 @@ public class WorkItemServiceTests : IAsyncLifetime
             Priority = WorkItemPriority.High,
             Tags = new[] { "bug-fix" },
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal(WorkItemStatus.Backlog, dto.Status);
         Assert.Equal("bug-fix", Assert.Single(dto.Tags));
@@ -82,16 +82,16 @@ public class WorkItemServiceTests : IAsyncLifetime
         {
             Title = "big",
             Description = description,
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(created.Id);
+        var fresh = await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken);
         Assert.Equal(description, fresh!.Description);
     }
 
     [Fact]
     public async Task Create_defaults_AiProviderOverride_to_None()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
         Assert.Equal(AiProviderOverrideMode.None, dto.AiProviderOverride);
         Assert.Null(dto.AiProviderOverrideId);
@@ -100,20 +100,20 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Update_round_trips_AiProviderOverride_mode_and_target()
     {
-        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
         var target = Guid.NewGuid();
 
         var updated = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
         {
             AiProviderOverride = AiProviderOverrideMode.OverrideAll,
             AiProviderOverrideId = target,
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal(AiProviderOverrideMode.OverrideAll, updated!.AiProviderOverride);
         Assert.Equal(target, updated.AiProviderOverrideId);
 
         // Persisted, not just echoed back.
-        var fresh = await _svc.GetAsync(created.Id);
+        var fresh = await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken);
         Assert.Equal(AiProviderOverrideMode.OverrideAll, fresh!.AiProviderOverride);
         Assert.Equal(target, fresh.AiProviderOverrideId);
     }
@@ -121,18 +121,18 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Update_clearing_override_back_to_None_drops_the_target()
     {
-        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
         await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
         {
             AiProviderOverride = AiProviderOverrideMode.OverrideDefault,
             AiProviderOverrideId = Guid.NewGuid(),
-        });
+        }, TestContext.Current.CancellationToken);
 
         var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
         {
             AiProviderOverride = AiProviderOverrideMode.None,
             AiProviderOverrideId = null,
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal(AiProviderOverrideMode.None, cleared!.AiProviderOverride);
         Assert.Null(cleared.AiProviderOverrideId);
@@ -141,19 +141,19 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Update_without_override_fields_leaves_existing_override_intact()
     {
-        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
         var target = Guid.NewGuid();
         await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
         {
             AiProviderOverride = AiProviderOverrideMode.OverrideAll,
             AiProviderOverrideId = target,
-        });
+        }, TestContext.Current.CancellationToken);
 
         // A title-only edit (override fields null) must not disturb the override.
         var afterTitleEdit = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
         {
             Title = "renamed",
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("renamed", afterTitleEdit!.Title);
         Assert.Equal(AiProviderOverrideMode.OverrideAll, afterTitleEdit.AiProviderOverride);
@@ -167,28 +167,28 @@ public class WorkItemServiceTests : IAsyncLifetime
     [InlineData("  feature/foo  ", "feature/foo")]
     public async Task Create_stores_the_custom_branch_name_trimmed_with_blank_meaning_none(string? sent, string? expected)
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", BranchNameOverride = sent });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", BranchNameOverride = sent }, TestContext.Current.CancellationToken);
 
         Assert.Equal(expected, dto.BranchNameOverride);
-        Assert.Equal(expected, (await _svc.GetAsync(dto.Id))!.BranchNameOverride);
+        Assert.Equal(expected, (await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken))!.BranchNameOverride);
     }
 
     [Fact]
     public async Task Update_sets_clears_and_leaves_the_custom_branch_name_alone()
     {
-        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
-        var set = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "feature/foo" });
+        var set = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "feature/foo" }, TestContext.Current.CancellationToken);
         Assert.Equal("feature/foo", set!.BranchNameOverride);
 
         // Null means "not part of this edit" — a title-only save must not drop it.
-        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" });
+        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" }, TestContext.Current.CancellationToken);
         Assert.Equal("feature/foo", titleOnly!.BranchNameOverride);
 
         // Blank is a deliberate "go back to generated per-run naming".
-        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "" });
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "" }, TestContext.Current.CancellationToken);
         Assert.Null(cleared!.BranchNameOverride);
-        Assert.Null((await _svc.GetAsync(created.Id))!.BranchNameOverride);
+        Assert.Null((await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken))!.BranchNameOverride);
     }
 
     [Theory]
@@ -198,28 +198,28 @@ public class WorkItemServiceTests : IAsyncLifetime
     [InlineData("  release/1.0  ", "release/1.0")]
     public async Task Create_stores_the_base_branch_trimmed_with_blank_meaning_none(string? sent, string? expected)
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", BaseBranchOverride = sent });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", BaseBranchOverride = sent }, TestContext.Current.CancellationToken);
 
         Assert.Equal(expected, dto.BaseBranchOverride);
-        Assert.Equal(expected, (await _svc.GetAsync(dto.Id))!.BaseBranchOverride);
+        Assert.Equal(expected, (await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken))!.BaseBranchOverride);
     }
 
     [Fact]
     public async Task Update_sets_clears_and_leaves_the_base_branch_alone()
     {
-        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
-        var set = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BaseBranchOverride = "release/1.0" });
+        var set = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BaseBranchOverride = "release/1.0" }, TestContext.Current.CancellationToken);
         Assert.Equal("release/1.0", set!.BaseBranchOverride);
 
         // Null means "not part of this edit" — a title-only save must not drop it.
-        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" });
+        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" }, TestContext.Current.CancellationToken);
         Assert.Equal("release/1.0", titleOnly!.BaseBranchOverride);
 
         // Blank is a deliberate "go back to the repository's default branch".
-        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BaseBranchOverride = "" });
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BaseBranchOverride = "" }, TestContext.Current.CancellationToken);
         Assert.Null(cleared!.BaseBranchOverride);
-        Assert.Null((await _svc.GetAsync(created.Id))!.BaseBranchOverride);
+        Assert.Null((await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken))!.BaseBranchOverride);
     }
 
     [Fact]
@@ -232,9 +232,9 @@ public class WorkItemServiceTests : IAsyncLifetime
             Title = "x",
             BranchNameOverride = "feature/foo",
             BaseBranchOverride = "release/1.0",
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "" });
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { BranchNameOverride = "" }, TestContext.Current.CancellationToken);
 
         Assert.Null(cleared!.BranchNameOverride);
         Assert.Equal("release/1.0", cleared.BaseBranchOverride);
@@ -247,7 +247,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         {
             Title = "x",
             ForceStatus = WorkItemStatus.Ready,
-        });
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal(WorkItemStatus.Ready, dto.Status);
     }
@@ -255,9 +255,9 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Transition_to_Running_succeeds_when_no_dependencies()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
-        var resp = await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var resp = await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
         Assert.True(resp.Success);
         Assert.Equal(WorkItemStatus.Running, resp.ActualStatus);
@@ -266,10 +266,10 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Transition_to_Running_fails_when_already_Running()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
-        var second = await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var second = await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
         Assert.False(second.Success);
         Assert.Equal(WorkItemStatus.Running, second.ActualStatus);
@@ -283,7 +283,7 @@ public class WorkItemServiceTests : IAsyncLifetime
         {
             Title = "x",
             ForceStatus = WorkItemStatus.Ready,
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Two independent clients, each its own context over the same database.
         // Both load the item while it is still Ready and hold that snapshot —
@@ -294,13 +294,13 @@ public class WorkItemServiceTests : IAsyncLifetime
         var clientB = NewContext();
         await using var _a = clientA;
         await using var _b = clientB;
-        await clientA.WorkItems.FirstAsync(w => w.Id == dto.Id);
-        await clientB.WorkItems.FirstAsync(w => w.Id == dto.Id);
+        await clientA.WorkItems.FirstAsync(w => w.Id == dto.Id, TestContext.Current.CancellationToken);
+        await clientB.WorkItems.FirstAsync(w => w.Id == dto.Id, TestContext.Current.CancellationToken);
 
         var first = await new WorkItemService(clientA, _clock)
-            .TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+            .TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
         var second = await new WorkItemService(clientB, _clock)
-            .TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+            .TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
         // Exactly one wins; the loser is rejected as already claimed.
         Assert.True(first.Success);
@@ -316,14 +316,14 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Transition_to_Running_fails_when_dependency_not_done()
     {
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var resp = await _svc.TransitionAsync(child.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var resp = await _svc.TransitionAsync(child.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
         Assert.False(resp.Success);
         Assert.Equal("Dependencies not satisfied", resp.Reason);
@@ -332,15 +332,15 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Transition_to_Running_succeeds_after_dependency_done()
     {
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
-        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
+        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var resp = await _svc.TransitionAsync(child.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var resp = await _svc.TransitionAsync(child.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
         Assert.True(resp.Success);
     }
@@ -348,76 +348,76 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Transition_dependency_to_Done_promotes_waiting_WorkQueue_item_to_Ready()
     {
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             ForceStatus = WorkItemStatus.WorkQueue,
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(child.Id);
+        var fresh = await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.Ready, fresh!.Status);
     }
 
     [Fact]
     public async Task Transition_dependency_to_Done_leaves_item_with_unfinished_deps_in_WorkQueue()
     {
-        var dep1 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep1" });
-        var dep2 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep2" });
+        var dep1 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep1" }, TestContext.Current.CancellationToken);
+        var dep2 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep2" }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             ForceStatus = WorkItemStatus.WorkQueue,
             Dependencies = new[] { dep1.Id, dep2.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
         // Only one of the two dependencies is finished.
-        await _svc.TransitionAsync(dep1.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+        await _svc.TransitionAsync(dep1.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(child.Id);
+        var fresh = await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.WorkQueue, fresh!.Status);
 
         // Finishing the last dependency promotes it.
-        await _svc.TransitionAsync(dep2.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+        await _svc.TransitionAsync(dep2.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, TestContext.Current.CancellationToken);
 
-        var promoted = await _svc.GetAsync(child.Id);
+        var promoted = await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.Ready, promoted!.Status);
     }
 
     [Fact]
     public async Task Transition_dependency_to_Done_does_not_promote_Backlog_dependents()
     {
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
         // Backlog items still require human approval to enter the work queue.
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             ForceStatus = WorkItemStatus.Backlog,
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(child.Id);
+        var fresh = await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.Backlog, fresh!.Status);
     }
 
     [Fact]
     public async Task Transition_to_HumanFeedback_appends_AI_conversation_entry_with_reason()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.HumanFeedback,
             Reason = "Need approval",
             Actions = "[\"approve\",\"reject\"]",
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.HumanFeedback, fresh!.Status);
         Assert.Single(fresh.Conversation);
         Assert.Equal("ai", fresh.Conversation[0].Role);
@@ -428,16 +428,16 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Transition_with_Name_records_author_on_conversation_entry()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.HumanFeedback,
             Reason = "Need approval",
             Name = "Code Review",
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Single(fresh!.Conversation);
         Assert.Equal("ai", fresh.Conversation[0].Role);
         Assert.Equal("Code Review", fresh.Conversation[0].Name);
@@ -446,15 +446,15 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Transition_to_Done_with_reason_is_recorded_as_ai_role()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.Done,
             Reason = "All checks passed",
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Single(fresh!.Conversation);
         // Done is a system/AI-authored event, not a human turn.
         Assert.Equal("ai", fresh.Conversation[0].Role);
@@ -464,13 +464,13 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task AppendConversation_adds_named_ai_turn_without_changing_status()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
-        var ok = await _svc.AppendConversationAsync(dto.Id, "ai", "Implemented the feature", "AI Coder");
+        var ok = await _svc.AppendConversationAsync(dto.Id, "ai", "Implemented the feature", "AI Coder", ct: TestContext.Current.CancellationToken);
 
         Assert.True(ok);
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         // Status is untouched — an AI turn is dialogue, not a lifecycle change.
         Assert.Equal(WorkItemStatus.Running, fresh!.Status);
         Assert.Single(fresh.Conversation);
@@ -482,59 +482,59 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Conversation_entries_keep_the_node_execution_they_came_from()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
         var coderRun = Guid.NewGuid();
         var reviewRun = Guid.NewGuid();
 
-        await _svc.AppendConversationAsync(dto.Id, "ai", "Implemented the feature", "AI Coder", coderRun);
+        await _svc.AppendConversationAsync(dto.Id, "ai", "Implemented the feature", "AI Coder", coderRun, TestContext.Current.CancellationToken);
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.HumanFeedback,
             Reason = "Need approval",
             Name = "Code Review",
             RunNodeId = reviewRun,
-        });
-        await _svc.AppendConversationAsync(dto.Id, "ai", "No link", "AI Coder");
+        }, TestContext.Current.CancellationToken);
+        await _svc.AppendConversationAsync(dto.Id, "ai", "No link", "AI Coder", ct: TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Equal(new Guid?[] { coderRun, reviewRun, null }, fresh!.Conversation.Select(m => m.RunNodeId));
     }
 
     [Fact]
     public async Task AppendConversation_returns_false_for_missing_work_item()
     {
-        var ok = await _svc.AppendConversationAsync("does-not-exist", "ai", "hi", "AI Coder");
+        var ok = await _svc.AppendConversationAsync("does-not-exist", "ai", "hi", "AI Coder", ct: TestContext.Current.CancellationToken);
         Assert.False(ok);
     }
 
     [Fact]
     public async Task Transition_to_non_response_state_does_not_append_conversation()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.Ready,
             Reason = "ignored",
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Empty(fresh!.Conversation);
     }
 
     [Fact]
     public async Task Feedback_appends_human_message_and_moves_to_WaitingForIld()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.HumanFeedback,
             Reason = "Need approval",
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await _svc.AppendFeedbackAsync(dto.Id, "approve please");
+        await _svc.AppendFeedbackAsync(dto.Id, "approve please", TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.WaitingForIld, fresh!.Status);
         Assert.Equal(2, fresh.Conversation.Count());
         Assert.Equal("human", fresh.Conversation[1].Role);
@@ -548,88 +548,88 @@ public class WorkItemServiceTests : IAsyncLifetime
         {
             Title = "ready",
             ForceStatus = WorkItemStatus.Ready,
-        });
-        var running = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "running" });
-        await _svc.TransitionAsync(running.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        }, TestContext.Current.CancellationToken);
+        var running = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "running" }, TestContext.Current.CancellationToken);
+        await _svc.TransitionAsync(running.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
         // advance time to verify heartbeat is updated
         _clock.Now = _clock.Now.AddMinutes(5);
-        var resp = await _svc.PollAsync(new[] { running.Id });
+        var resp = await _svc.PollAsync(new[] { running.Id }, TestContext.Current.CancellationToken);
 
         Assert.Equal(running.Id, Assert.Single(resp.ActiveItems).Id);
         Assert.Equal(ready.Id, Assert.Single(resp.ReadyItems).Id);
 
-        var raw = await _db.WorkItems.AsNoTracking().FirstAsync(w => w.Id == running.Id);
+        var raw = await _db.WorkItems.AsNoTracking().FirstAsync(w => w.Id == running.Id, TestContext.Current.CancellationToken);
         Assert.Equal(_clock.Now, raw.LastHeartbeatAt);
     }
 
     [Fact]
     public async Task ReclaimStale_moves_unheartbeated_running_items_back_to_Ready()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
         // advance time past timeout
         _clock.Now = _clock.Now.AddMinutes(20);
-        var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15));
+        var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, n);
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.Ready, fresh!.Status);
     }
 
     [Fact]
     public async Task ReclaimStale_does_not_touch_recently_heartbeated_items()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
 
         _clock.Now = _clock.Now.AddMinutes(5);
-        await _svc.PollAsync(new[] { dto.Id });
+        await _svc.PollAsync(new[] { dto.Id }, TestContext.Current.CancellationToken);
 
         _clock.Now = _clock.Now.AddMinutes(5);
-        var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15));
+        var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, n);
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.Running, fresh!.Status);
     }
 
     [Fact]
     public async Task ReclaimStale_never_reclaims_HumanFeedback_items_to_Ready()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" });
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running });
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
+        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.HumanFeedback,
             Reason = "Need approval",
-        });
+        }, TestContext.Current.CancellationToken);
 
         // advance time far past timeout
         _clock.Now = _clock.Now.AddMinutes(30);
-        var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15));
+        var n = await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, n);
-        var fresh = await _svc.GetAsync(dto.Id);
+        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.HumanFeedback, fresh!.Status);
     }
 
     [Fact]
     public async Task AddDependency_rejects_self_reference_and_unknown_targets()
     {
-        var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
 
-        Assert.False((await _svc.AddDependencyAsync(a.Id, a.Id)));
-        Assert.False((await _svc.AddDependencyAsync(a.Id, Guid.NewGuid().ToString())));
+        Assert.False((await _svc.AddDependencyAsync(a.Id, a.Id, TestContext.Current.CancellationToken)));
+        Assert.False((await _svc.AddDependencyAsync(a.Id, Guid.NewGuid().ToString(), TestContext.Current.CancellationToken)));
     }
 
     [Fact]
     public async Task RemoveDependency_returns_false_when_dependency_not_present()
     {
-        var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
 
-        Assert.False((await _svc.RemoveDependencyAsync(a.Id, Guid.NewGuid().ToString())));
+        Assert.False((await _svc.RemoveDependencyAsync(a.Id, Guid.NewGuid().ToString(), TestContext.Current.CancellationToken)));
     }
 
     [Fact]
@@ -637,21 +637,21 @@ public class WorkItemServiceTests : IAsyncLifetime
     {
         // #1: an item lands in WorkQueue with its dependency already complete.
         // No future Done transition will fire, so only the reconciler can rescue it.
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
-        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
+        await _svc.TransitionAsync(dep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             ForceStatus = WorkItemStatus.WorkQueue,
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id))!.Status);
+        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken))!.Status);
 
-        var n = await _svc.ReconcileWorkQueueAsync();
+        var n = await _svc.ReconcileWorkQueueAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, n);
-        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id))!.Status);
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken))!.Status);
     }
 
     [Fact]
@@ -664,29 +664,29 @@ public class WorkItemServiceTests : IAsyncLifetime
         {
             Title = "x",
             ForceStatus = WorkItemStatus.WorkQueue,
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var n = await _svc.ReconcileWorkQueueAsync();
+        var n = await _svc.ReconcileWorkQueueAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, n);
-        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(item.Id))!.Status);
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(item.Id, TestContext.Current.CancellationToken))!.Status);
     }
 
     [Fact]
     public async Task Reconcile_leaves_WorkQueue_item_with_unfinished_deps_untouched()
     {
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             ForceStatus = WorkItemStatus.WorkQueue,
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var n = await _svc.ReconcileWorkQueueAsync();
+        var n = await _svc.ReconcileWorkQueueAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, n);
-        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id))!.Status);
+        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken))!.Status);
     }
 
     [Fact]
@@ -696,24 +696,24 @@ public class WorkItemServiceTests : IAsyncLifetime
         // commit and the promotion write by marking the dependency Done directly
         // on the database, bypassing TransitionAsync's promotion side effect.
         // The dependent is left stuck in WorkQueue with no retrigger.
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             ForceStatus = WorkItemStatus.WorkQueue,
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var depRow = await _db.WorkItems.FirstAsync(w => w.Id == dep.Id);
+        var depRow = await _db.WorkItems.FirstAsync(w => w.Id == dep.Id, TestContext.Current.CancellationToken);
         depRow.Status = WorkItemStatus.Done;
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id))!.Status);
+        Assert.Equal(WorkItemStatus.WorkQueue, (await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken))!.Status);
 
-        var n = await _svc.ReconcileWorkQueueAsync();
+        var n = await _svc.ReconcileWorkQueueAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, n);
-        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id))!.Status);
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken))!.Status);
     }
 
     [Fact]
@@ -722,18 +722,18 @@ public class WorkItemServiceTests : IAsyncLifetime
         // #2: deleting a dependency must not leave a dangling reference that
         // blocks the dependent forever. The id is scrubbed and the dependent,
         // whose only blocker is gone, is promoted to Ready.
-        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" });
+        var dep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep" }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             ForceStatus = WorkItemStatus.WorkQueue,
             Dependencies = new[] { dep.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var deleted = await _svc.DeleteAsync(dep.Id);
+        var deleted = await _svc.DeleteAsync(dep.Id, TestContext.Current.CancellationToken);
 
         Assert.True(deleted);
-        var fresh = await _svc.GetAsync(child.Id);
+        var fresh = await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken);
         Assert.Empty(fresh!.Dependencies);
         Assert.Equal(WorkItemStatus.Ready, fresh.Status);
     }
@@ -743,25 +743,25 @@ public class WorkItemServiceTests : IAsyncLifetime
     {
         // Deleting one of two dependencies removes the dangling reference but
         // leaves the dependent in WorkQueue while its other dependency is open.
-        var dep1 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep1" });
-        var dep2 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep2" });
+        var dep1 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep1" }, TestContext.Current.CancellationToken);
+        var dep2 = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep2" }, TestContext.Current.CancellationToken);
         var child = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = "child",
             ForceStatus = WorkItemStatus.WorkQueue,
             Dependencies = new[] { dep1.Id, dep2.Id },
-        });
+        }, TestContext.Current.CancellationToken);
 
-        await _svc.DeleteAsync(dep1.Id);
+        await _svc.DeleteAsync(dep1.Id, TestContext.Current.CancellationToken);
 
-        var fresh = await _svc.GetAsync(child.Id);
+        var fresh = await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken);
         Assert.Equal(dep2.Id, Assert.Single(fresh!.Dependencies));
         Assert.Equal(WorkItemStatus.WorkQueue, fresh.Status);
 
         // Finishing the remaining dependency now promotes it — no dangling ref
         // left behind to block the claim.
-        await _svc.TransitionAsync(dep2.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done });
-        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id))!.Status);
+        await _svc.TransitionAsync(dep2.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, TestContext.Current.CancellationToken);
+        Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(child.Id, TestContext.Current.CancellationToken))!.Status);
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -773,7 +773,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task RecordPullRequest_puts_the_PR_on_the_work_item()
     {
-        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
         var runId = Guid.NewGuid();
 
         Assert.Equal(RecordPullRequestOutcome.Recorded, await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest
@@ -781,37 +781,37 @@ public class WorkItemServiceTests : IAsyncLifetime
             Url = "https://forgejo/repo/pulls/1",
             LoopRunId = runId,
             CreatedAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc),
-        }));
+        }, TestContext.Current.CancellationToken));
 
-        var pr = Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests);
+        var pr = Assert.Single((await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken))!.PullRequests);
         Assert.Equal("https://forgejo/repo/pulls/1", pr.Url);
         Assert.Equal(runId, pr.LoopRunId);
         Assert.False(pr.Merged);
         Assert.Equal(new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc), pr.CreatedAt);
         // Recording a PR is not a lifecycle event.
-        Assert.Equal(WorkItemStatus.Backlog, (await _svc.GetAsync(wi.Id))!.Status);
+        Assert.Equal(WorkItemStatus.Backlog, (await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken))!.Status);
     }
 
     [Fact]
     public async Task RecordPullRequest_is_keyed_on_the_url_and_never_unmerges()
     {
-        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
         const string url = "https://forgejo/repo/pulls/1";
         var opened = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
 
         // Opened, then reported merged, then re-reported by a later run that
         // has no idea it was merged (a retry pointed back at the same PR).
-        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = url, CreatedAt = opened });
-        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = url, Merged = true, CreatedAt = opened });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = url, CreatedAt = opened }, TestContext.Current.CancellationToken);
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = url, Merged = true, CreatedAt = opened }, TestContext.Current.CancellationToken);
         var laterRun = Guid.NewGuid();
         await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest
         {
             Url = url,
             LoopRunId = laterRun,
             CreatedAt = opened.AddHours(2),
-        });
+        }, TestContext.Current.CancellationToken);
 
-        var pr = Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests);
+        var pr = Assert.Single((await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken))!.PullRequests);
         Assert.True(pr.Merged);
         Assert.Equal(laterRun, pr.LoopRunId);
         // The item has had this PR since the first run opened it.
@@ -821,99 +821,99 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Pull_requests_come_back_newest_first_whatever_order_they_arrive_in()
     {
-        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
         var day = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
 
-        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(2) });
-        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day.AddHours(1) });
-        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/3", CreatedAt = day.AddHours(3) });
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(2) }, TestContext.Current.CancellationToken);
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day.AddHours(1) }, TestContext.Current.CancellationToken);
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/3", CreatedAt = day.AddHours(3) }, TestContext.Current.CancellationToken);
 
         Assert.Equal(
             new[] { "pulls/3", "pulls/2", "pulls/1" },
-            (await _svc.GetAsync(wi.Id))!.PullRequests.Select(p => p.Url));
+            (await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken))!.PullRequests.Select(p => p.Url));
     }
 
     [Fact]
     public async Task RecordPullRequest_does_not_lose_a_PR_a_competing_writer_recorded()
     {
-        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
         var day = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc);
         // This scope has read the item, so it holds a copy of the list from
         // before anyone else touched it.
-        await _svc.GetAsync(wi.Id);
+        await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken);
 
         // Another writer — a second request, or another ILD instance
         // reconciling the same item — records a PR this one has never seen.
         await using var otherDb = new WorkItemServerDbContext(_options);
         var other = new WorkItemService(otherDb, _clock);
-        Assert.Equal(RecordPullRequestOutcome.Recorded, await other.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day }));
+        Assert.Equal(RecordPullRequestOutcome.Recorded, await other.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day }, TestContext.Current.CancellationToken));
 
-        Assert.Equal(RecordPullRequestOutcome.Recorded, await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(1) }));
+        Assert.Equal(RecordPullRequestOutcome.Recorded, await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/2", CreatedAt = day.AddHours(1) }, TestContext.Current.CancellationToken));
 
         // Both survive: recording a PR reads the list as it stands and writes
         // against that snapshot, rather than overwriting it from a stale copy.
         Assert.Equal(
             new[] { "pulls/2", "pulls/1" },
-            (await other.GetAsync(wi.Id))!.PullRequests.Select(p => p.Url));
+            (await other.GetAsync(wi.Id, TestContext.Current.CancellationToken))!.PullRequests.Select(p => p.Url));
         // ...and this scope's own view of the item agrees.
-        Assert.Equal(2, (await _svc.GetAsync(wi.Id))!.PullRequests.Count);
+        Assert.Equal(2, (await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken))!.PullRequests.Count);
     }
 
     [Fact]
     public async Task An_unreadable_pull_request_list_reads_as_empty_and_can_be_rebuilt()
     {
-        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
-        var row = await _db.WorkItems.FirstAsync(x => x.Id == wi.Id);
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
+        var row = await _db.WorkItems.FirstAsync(x => x.Id == wi.Id, TestContext.Current.CancellationToken);
         row.PullRequestsJson = "{ this is not the list";
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         // Every read of the work item goes through this list, so an unreadable
         // one must not take the item — or the board listing it — down.
-        Assert.Empty((await _svc.GetAsync(wi.Id))!.PullRequests);
-        Assert.Empty(Assert.Single(await _svc.ListAsync(null, null)).PullRequests);
+        Assert.Empty((await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken))!.PullRequests);
+        Assert.Empty(Assert.Single(await _svc.ListAsync(null, null, TestContext.Current.CancellationToken)).PullRequests);
 
         // And a reporter that still has the PR puts it back.
         Assert.Equal(
             RecordPullRequestOutcome.Recorded,
-            await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1" }));
-        Assert.Equal("pulls/1", Assert.Single((await _svc.GetAsync(wi.Id))!.PullRequests).Url);
+            await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1" }, TestContext.Current.CancellationToken));
+        Assert.Equal("pulls/1", Assert.Single((await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken))!.PullRequests).Url);
     }
 
     [Fact]
     public async Task RecordPullRequest_tells_a_missing_item_apart_from_a_bad_report()
     {
-        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
 
         // The two are different answers to the caller: one says stop asking,
         // the other says fix the request. Neither may be reported as the other
         // (the endpoint maps them to 404 and 400).
         Assert.Equal(
             RecordPullRequestOutcome.NotFound,
-            await _svc.RecordPullRequestAsync("WI-nope", new RecordPullRequestRequest { Url = "pulls/1" }));
+            await _svc.RecordPullRequestAsync("WI-nope", new RecordPullRequestRequest { Url = "pulls/1" }, TestContext.Current.CancellationToken));
         Assert.Equal(
             RecordPullRequestOutcome.InvalidRequest,
-            await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "  " }));
+            await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "  " }, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task Deleting_a_work_item_takes_its_pull_requests_with_it()
     {
-        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" });
-        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1" });
+        var wi = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
+        await _svc.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1" }, TestContext.Current.CancellationToken);
 
-        Assert.True(await _svc.DeleteAsync(wi.Id));
+        Assert.True(await _svc.DeleteAsync(wi.Id, TestContext.Current.CancellationToken));
 
-        Assert.Null(await _svc.GetAsync(wi.Id));
+        Assert.Null(await _svc.GetAsync(wi.Id, TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task ListAsync_filters_by_status_and_tags()
     {
-        await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a", Tags = new[] { "feature" }, ForceStatus = WorkItemStatus.Ready });
-        await _svc.CreateAsync(new CreateWorkItemRequest { Title = "b", Tags = new[] { "bug-fix" }, ForceStatus = WorkItemStatus.Ready });
-        await _svc.CreateAsync(new CreateWorkItemRequest { Title = "c", Tags = new[] { "feature" }, ForceStatus = WorkItemStatus.Backlog });
+        await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a", Tags = new[] { "feature" }, ForceStatus = WorkItemStatus.Ready }, TestContext.Current.CancellationToken);
+        await _svc.CreateAsync(new CreateWorkItemRequest { Title = "b", Tags = new[] { "bug-fix" }, ForceStatus = WorkItemStatus.Ready }, TestContext.Current.CancellationToken);
+        await _svc.CreateAsync(new CreateWorkItemRequest { Title = "c", Tags = new[] { "feature" }, ForceStatus = WorkItemStatus.Backlog }, TestContext.Current.CancellationToken);
 
-        var list = await _svc.ListAsync(WorkItemStatus.Ready, new[] { "feature" });
+        var list = await _svc.ListAsync(WorkItemStatus.Ready, new[] { "feature" }, TestContext.Current.CancellationToken);
 
         Assert.Equal("a", Assert.Single(list).Title);
     }

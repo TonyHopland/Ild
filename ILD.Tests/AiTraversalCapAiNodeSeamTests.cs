@@ -100,7 +100,7 @@ public class AiTraversalCapAiNodeSeamTests
     {
         var adapter = new CapturingAdapter(reportSessionId: "sess-from-the-previous-step");
         using var h = Harness(adapter);
-        await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "1");
+        await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "1", TestContext.Current.CancellationToken);
         h.AddNode("a", NodeType.AI);
         h.AddEdge("a", "a", EdgeType.OnSuccess);
         h.NodesById["a"].Config = "{\"useSession\":false,\"prompt\":\"Work on {{WorkItem.Title}}\"}";
@@ -138,7 +138,7 @@ public class AiTraversalCapAiNodeSeamTests
     {
         var adapter = new CapturingAdapter(reportSessionId: null);
         using var h = Harness(adapter, new AlwaysFullTracker());
-        await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "2");
+        await h.Db.Settings.UpsertAsync(AppSettingKeys.MaxAiTraversals, "2", TestContext.Current.CancellationToken);
         h.AddNode("a", NodeType.AI);
         h.AddEdge("a", "a", EdgeType.OnSuccess);
         h.NodesById["a"].Config = "{\"prompt\":\"go\"}";

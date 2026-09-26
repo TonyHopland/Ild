@@ -60,7 +60,7 @@ public class WorkItemSchedulerPauseTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await scheduler.StartAsync(cts.Token);
 
-        try { await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
+        try { await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken); }
         finally { await scheduler.StopAsync(CancellationToken.None); }
 
         Assert.All(claimReadyValues, v => Assert.False(v));
@@ -110,7 +110,7 @@ public class WorkItemSchedulerPauseTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await scheduler.StartAsync(cts.Token);
-        try { await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3)); }
+        try { await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken); }
         finally { await scheduler.StopAsync(CancellationToken.None); }
 
         Assert.Contains(log.Messages, m =>

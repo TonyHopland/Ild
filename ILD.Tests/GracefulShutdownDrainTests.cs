@@ -247,7 +247,7 @@ public class GracefulShutdownDrainTests
             stopping);
 
         await scheduler.StartAsync(CancellationToken.None);
-        try { await polled.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+        try { await polled.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken); }
         finally { await scheduler.StopAsync(CancellationToken.None); }
 
         Assert.NotEmpty(claimReadyValues);

@@ -105,14 +105,14 @@ public sealed class ChatTurnHandoverTests
 
         for (var i = 0; i < sends; i++)
         {
-            await runner.SubmitAsync(chatId, $"message {i}").WaitAsync(Patience);
-            Assert.True(await running.WaitAsync(Patience), $"turn {i} never started");
+            await runner.SubmitAsync(chatId, $"message {i}").WaitAsync(Patience, TestContext.Current.CancellationToken);
+            Assert.True(await running.WaitAsync(Patience, TestContext.Current.CancellationToken), $"turn {i} never started");
             Assert.NotNull(runner.ActiveTurnId(chatId));
         }
 
-        await runner.InterruptAsync(chatId).WaitAsync(Patience);
+        await runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
-        await log.CompletedAtLeast(sends).WaitAsync(Patience);
+        await log.CompletedAtLeast(sends).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.Equal(sends, log.Completed.Count);
         Assert.Equal(sends, log.Started.Count);
         Assert.Equal(sends, log.Started.Distinct().Count());
@@ -155,17 +155,17 @@ public sealed class ChatTurnHandoverTests
         var chatId = Guid.NewGuid();
 
         await runner.SubmitAsync(chatId, "one");
-        await firstRunning.Task.WaitAsync(Patience);
+        await firstRunning.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         var send = runner.SubmitAsync(chatId, "two");
-        await firstCancelled.Task.WaitAsync(Patience);
+        await firstCancelled.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.False(send.IsCompleted, "the send finished while the turn it interrupted was still finalizing");
         Assert.False(secondStarted.Task.IsCompleted, "the replacement started while the turn it interrupted was still finalizing");
 
         releaseFirst.SetResult();
-        await send.WaitAsync(Patience);
-        await log.CompletedAtLeast(2).WaitAsync(Patience);
+        await send.WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await log.CompletedAtLeast(2).WaitAsync(Patience, TestContext.Current.CancellationToken);
         Assert.True(secondSawTheFirstEnd, "the replacement turn started before the one it interrupted had finished");
         Assert.Equal(2, log.Started.Distinct().Count());
     }
@@ -178,11 +178,11 @@ public sealed class ChatTurnHandoverTests
         var chatId = Guid.NewGuid();
 
         await runner.SubmitAsync(chatId, "quick one");
-        await log.CompletedAtLeast(1).WaitAsync(Patience);
+        await log.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         // Stopping an idle chat is a no-op; a second completion here would clear the
         // indicator of whichever turn is running by the time it lands.
-        await runner.InterruptAsync(chatId).WaitAsync(Patience);
+        await runner.InterruptAsync(chatId).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.Single(log.Started);
         Assert.Single(log.Completed);
@@ -241,9 +241,9 @@ public sealed class ChatTurnHandoverTests
             turnToken.WaitHandle.WaitOne(Patience);
         };
 
-        await runner.SubmitAsync(chatId, "one").WaitAsync(Patience);
-        await log.CompletedAtLeast(1).WaitAsync(Patience);
-        await (stop ?? Task.CompletedTask).WaitAsync(Patience);
+        await runner.SubmitAsync(chatId, "one").WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await log.CompletedAtLeast(1).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        await (stop ?? Task.CompletedTask).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
         Assert.False(persistedInterrupted, "the reply was persisted before the stop, so it is not interrupted");
         Assert.True(turnToken.IsCancellationRequested, "the stop should have landed while the turn was ending");

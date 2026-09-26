@@ -44,7 +44,7 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
         var chatId = await StartChatAsync(svc);
         var (extension, agentDir, sessionDir) = WritePiFiles(chatId);
 
-        Assert.True(await svc.DeleteAsync("alice", chatId));
+        Assert.True(await svc.DeleteAsync("alice", chatId, TestContext.Current.CancellationToken));
 
         Assert.False(Directory.Exists(extension), "the chat's ild.ts, which holds the API token, was left behind");
         Assert.False(Directory.Exists(agentDir));
@@ -63,7 +63,7 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
         var (extension, _, _) = WritePiFiles(chatId);
         LockFolderIn(extension);
 
-        var error = await Record.ExceptionAsync(() => svc.DeleteAsync("alice", chatId));
+        var error = await Record.ExceptionAsync(() => svc.DeleteAsync("alice", chatId, TestContext.Current.CancellationToken));
 
         Assert.True(error is IOException or UnauthorizedAccessException, $"unexpected {error?.GetType().Name ?? "success"}");
         Assert.Single(_db.Context.ChatSessions);
@@ -80,7 +80,7 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
         LockFolderIn(firstFiles.AgentDir);
         LockFolderIn(secondFiles.SessionDir);
 
-        Assert.Equal(2, await svc.DeleteAllForUserAsync("alice"));
+        Assert.Equal(2, await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken));
 
         Assert.Empty(_db.Context.ChatSessions);
         Assert.False(Directory.Exists(firstFiles.AgentDir));
@@ -98,7 +98,7 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
         File.WriteAllText(Path.Combine(outside, "keep"), "x");
         Directory.CreateSymbolicLink(Path.Combine(scratch, "link"), outside);
 
-        Assert.True(await svc.DeleteAsync("alice", chatId));
+        Assert.True(await svc.DeleteAsync("alice", chatId, TestContext.Current.CancellationToken));
 
         Assert.False(Directory.Exists(scratch), "a read-only folder the agent left kept the chat's scratch folder");
         Assert.True(File.Exists(Path.Combine(outside, "keep")), "the delete followed a link out of the scratch folder");

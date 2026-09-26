@@ -43,7 +43,7 @@ public class ManagedAgentProvisionerTests
         using var sp = (ServiceProvider)BuildProvider(svc.Object);
         Create(sp).EnsureInstalledForProviderType("pi");
 
-        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Equal(["pi"], ensured.ToArray());
     }
 
@@ -95,7 +95,7 @@ public class ManagedAgentProvisionerTests
         using var sp = (ServiceProvider)BuildProvider(svc.Object, store.Object);
         await Create(sp).StartAsync(CancellationToken.None);
 
-        await bothSeen.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await bothSeen.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Equal(["opencode", "pi"], ensured.OrderBy(k => k).ToArray());
     }
 }

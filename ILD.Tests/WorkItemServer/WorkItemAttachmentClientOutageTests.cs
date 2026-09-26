@@ -26,7 +26,7 @@ public sealed class WorkItemAttachmentClientOutageTests
         var (client, options) = Answering(status);
 
         await Assert.ThrowsAsync<HttpRequestException>(
-            () => client.DeleteAttachmentAsync(options, "42", AttachmentId));
+            () => client.DeleteAttachmentAsync(options, "42", AttachmentId, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -34,7 +34,7 @@ public sealed class WorkItemAttachmentClientOutageTests
     {
         var (client, options) = Answering(HttpStatusCode.NotFound);
 
-        Assert.False(await client.DeleteAttachmentAsync(options, "42", AttachmentId));
+        Assert.False(await client.DeleteAttachmentAsync(options, "42", AttachmentId, TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -44,8 +44,8 @@ public sealed class WorkItemAttachmentClientOutageTests
     {
         var (client, options) = Answering(status);
 
-        await Assert.ThrowsAsync<HttpRequestException>(() => client.ListAttachmentsAsync(options, "42"));
-        await Assert.ThrowsAsync<HttpRequestException>(() => client.GetAttachmentAsync(options, "42", AttachmentId));
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.ListAttachmentsAsync(options, "42", TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<HttpRequestException>(() => client.GetAttachmentAsync(options, "42", AttachmentId, TestContext.Current.CancellationToken));
     }
 
     private sealed class FixedResponseHandler(HttpStatusCode status) : HttpMessageHandler

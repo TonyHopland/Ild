@@ -81,7 +81,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     public async Task Health_endpoint_is_reachable_without_auth()
     {
         var c = _factory.CreateClient();
-        var resp = await c.GetAsync("/health");
+        var resp = await c.GetAsync("/health", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 
@@ -89,7 +89,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     public async Task Health_endpoint_reports_the_stamped_version()
     {
         var c = _factory.CreateClient();
-        var body = await c.GetFromJsonAsync<HealthBody>("/health");
+        var body = await c.GetFromJsonAsync<HealthBody>("/health", TestContext.Current.CancellationToken);
 
         var expected = typeof(WorkItemServerProgram).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion;
@@ -108,7 +108,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     public async Task Unauthenticated_requests_return_401()
     {
         var c = _factory.CreateClient();
-        var resp = await c.GetAsync("/workitems");
+        var resp = await c.GetAsync("/workitems", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
 
@@ -117,7 +117,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     {
         var c = _factory.CreateClient();
         c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "wrong");
-        var resp = await c.GetAsync("/workitems");
+        var resp = await c.GetAsync("/workitems", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
     }
 
@@ -129,12 +129,12 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
         {
             Title = "round trip",
             Tags = new[] { "feature" },
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
-        var dto = await create.Content.ReadFromJsonAsync<WorkItemDto>();
+        var dto = await create.Content.ReadFromJsonAsync<WorkItemDto>(TestContext.Current.CancellationToken);
         Assert.NotNull(dto);
 
-        var fetched = await c.GetFromJsonAsync<WorkItemDto>($"/workitems/{dto!.Id}");
+        var fetched = await c.GetFromJsonAsync<WorkItemDto>($"/workitems/{dto!.Id}", TestContext.Current.CancellationToken);
         Assert.Equal("round trip", fetched!.Title);
         Assert.Equal("feature", Assert.Single(fetched.Tags));
     }
@@ -143,18 +143,18 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     public async Task Pull_requests_round_trip_on_the_work_item()
     {
         var c = AuthedClient();
-        var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "with a PR" });
-        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>())!;
+        var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "with a PR" }, cancellationToken: TestContext.Current.CancellationToken);
+        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>(TestContext.Current.CancellationToken))!;
 
         var recorded = await c.PostAsJsonAsync($"/workitems/{dto.Id}/pull-requests", new RecordPullRequestRequest
         {
             Url = "https://forgejo/repo/pulls/1",
             LoopRunId = Guid.NewGuid(),
             CreatedAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc),
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, recorded.StatusCode);
 
-        var fetched = await c.GetFromJsonAsync<WorkItemDto>($"/workitems/{dto.Id}");
+        var fetched = await c.GetFromJsonAsync<WorkItemDto>($"/workitems/{dto.Id}", TestContext.Current.CancellationToken);
         Assert.Equal("https://forgejo/repo/pulls/1", Assert.Single(fetched!.PullRequests).Url);
     }
 
@@ -162,13 +162,13 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     public async Task Recording_a_PR_answers_a_missing_item_and_a_bad_report_differently()
     {
         var c = AuthedClient();
-        var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "x" });
-        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>())!;
+        var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "x" }, cancellationToken: TestContext.Current.CancellationToken);
+        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>(TestContext.Current.CancellationToken))!;
 
         var missing = await c.PostAsJsonAsync("/workitems/WI-nope/pull-requests",
-            new RecordPullRequestRequest { Url = "https://forgejo/repo/pulls/1" });
+            new RecordPullRequestRequest { Url = "https://forgejo/repo/pulls/1" }, cancellationToken: TestContext.Current.CancellationToken);
         var bad = await c.PostAsJsonAsync($"/workitems/{dto.Id}/pull-requests",
-            new RecordPullRequestRequest { Url = "" });
+            new RecordPullRequestRequest { Url = "" }, cancellationToken: TestContext.Current.CancellationToken);
 
         // Only a genuinely absent work item may answer 404 — a client that is
         // told that stops asking, and the PR link it was reporting is lost.
@@ -180,15 +180,15 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     public async Task Transition_to_Running_via_api_returns_success_response()
     {
         var c = AuthedClient();
-        var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "x" });
-        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>())!;
+        var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "x" }, cancellationToken: TestContext.Current.CancellationToken);
+        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>(TestContext.Current.CancellationToken))!;
 
         var resp = await c.PostAsJsonAsync($"/workitems/{dto.Id}/transition", new TransitionRequest
         {
             TargetStatus = WorkItemStatus.Running,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-        var body = (await resp.Content.ReadFromJsonAsync<TransitionResponse>())!;
+        var body = (await resp.Content.ReadFromJsonAsync<TransitionResponse>(TestContext.Current.CancellationToken))!;
         Assert.True(body.Success);
         Assert.Equal(WorkItemStatus.Running, body.ActualStatus);
     }
@@ -201,10 +201,10 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
         {
             Title = "ready",
             ForceStatus = WorkItemStatus.Ready,
-        });
-        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>())!;
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        var dto = (await create.Content.ReadFromJsonAsync<WorkItemDto>(TestContext.Current.CancellationToken))!;
 
-        var resp = await c.GetFromJsonAsync<PollResponse>("/workitems/poll");
+        var resp = await c.GetFromJsonAsync<PollResponse>("/workitems/poll", TestContext.Current.CancellationToken);
         Assert.NotNull(resp);
         Assert.Contains(resp!.ReadyItems, r => r.Id == dto.Id);
     }

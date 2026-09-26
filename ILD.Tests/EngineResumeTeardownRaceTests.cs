@@ -74,7 +74,7 @@ public class EngineResumeTeardownRaceTests
             // on re-parking, is held by the gate after using the shared connection.
             await h.Engine.SignalNodeResultAsync(h.RunId, firstWaiting.Id,
                 NodeSignal.Custom("Respond", "user-text"));
-            await gate.DriveBusyOnConnection.Task.WaitAsync(Patience);
+            await gate.DriveBusyOnConnection.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
 
             // The re-park is observable and the drive is still live: the drain must not be done.
             var idle = h.WaitUntilIdleAsync();
@@ -82,7 +82,7 @@ public class EngineResumeTeardownRaceTests
             Assert.False(idle.IsCompleted, "the drain finished while the resume drive was still live");
 
             gate.Release.TrySetResult();
-            await idle.WaitAsync(Patience);
+            await idle.WaitAsync(Patience, TestContext.Current.CancellationToken);
         }
         finally
         {

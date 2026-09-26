@@ -65,7 +65,7 @@ public class EngineFeedbackResumeTransitionTests
             h.Db.LoopRuns, remote.Object, h.Engine, new Mock<IRunNotifier>().Object,
             NullLogger<PrStatusPollService>.Instance);
 
-        await poller.PollOnceAsync();
+        await poller.PollOnceAsync(TestContext.Current.CancellationToken);
 
         // Let the resumed run drive to completion so no transition is in flight
         // while we assert.

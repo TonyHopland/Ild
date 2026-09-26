@@ -15,10 +15,10 @@ public class AuthIntegrationTests
         {
             username = "admin",
             password = factory.AdminPassword,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<LoginResponseBody>(CaseInsensitive);
+        var body = await response.Content.ReadFromJsonAsync<LoginResponseBody>(CaseInsensitive, TestContext.Current.CancellationToken);
         Assert.False(string.IsNullOrWhiteSpace(body!.Token));
         Assert.Equal("admin", body.Username);
     }
@@ -33,7 +33,7 @@ public class AuthIntegrationTests
         {
             username = "admin",
             password = "definitely-wrong",
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -44,7 +44,7 @@ public class AuthIntegrationTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/api/v1/auth/me");
+        var response = await client.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -55,7 +55,7 @@ public class AuthIntegrationTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var response = await client.GetAsync("/api/v1/auth/me");
+        var response = await client.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -70,9 +70,9 @@ public class AuthIntegrationTests
         {
             username = "admin",
             password = factory.AdminPassword,
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
 
-        var body = await response.Content.ReadFromJsonAsync<LoginResponseBody>(CaseInsensitive);
+        var body = await response.Content.ReadFromJsonAsync<LoginResponseBody>(CaseInsensitive, TestContext.Current.CancellationToken);
         Assert.NotNull(body!.ExpiresAt);
         Assert.True(body.ExpiresAt > DateTime.UtcNow.AddDays(89));
     }
@@ -86,7 +86,7 @@ public class AuthIntegrationTests
         // The headline bug: this used to overwrite the one session column.
         _ = await factory.CreateAuthenticatedClientAsync();
 
-        Assert.Equal(HttpStatusCode.OK, (await phone.GetAsync("/api/v1/auth/me")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await phone.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]
@@ -96,10 +96,10 @@ public class AuthIntegrationTests
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktop = await factory.CreateAuthenticatedClientAsync();
 
-        (await desktop.PostAsync("/api/v1/auth/logout", null)).EnsureSuccessStatusCode();
+        (await desktop.PostAsync("/api/v1/auth/logout", null, TestContext.Current.CancellationToken)).EnsureSuccessStatusCode();
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await desktop.GetAsync("/api/v1/auth/me")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await phone.GetAsync("/api/v1/auth/me")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await desktop.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await phone.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]
@@ -109,14 +109,14 @@ public class AuthIntegrationTests
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktopToken = await factory.GetAdminTokenAsync();
 
-        var response = await phone.GetAsync("/api/v1/auth/sessions");
+        var response = await phone.GetAsync("/api/v1/auth/sessions", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var raw = await response.Content.ReadAsStringAsync();
+        var raw = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.DoesNotContain(desktopToken, raw, StringComparison.Ordinal);
         Assert.DoesNotContain("tokenHash", raw, StringComparison.OrdinalIgnoreCase);
 
-        var sessions = await response.Content.ReadFromJsonAsync<SessionBody[]>(CaseInsensitive);
+        var sessions = await response.Content.ReadFromJsonAsync<SessionBody[]>(CaseInsensitive, TestContext.Current.CancellationToken);
         Assert.Equal(2, sessions!.Length);
         Assert.Single(sessions, s => s.IsCurrent);
     }
@@ -128,14 +128,14 @@ public class AuthIntegrationTests
         var phone = await factory.CreateAuthenticatedClientAsync();
         var desktop = await factory.CreateAuthenticatedClientAsync();
 
-        var sessions = await phone.GetFromJsonAsync<SessionBody[]>("/api/v1/auth/sessions", CaseInsensitive);
+        var sessions = await phone.GetFromJsonAsync<SessionBody[]>("/api/v1/auth/sessions", CaseInsensitive, TestContext.Current.CancellationToken);
         var other = sessions!.Single(s => !s.IsCurrent);
 
-        var revoke = await phone.DeleteAsync($"/api/v1/auth/sessions/{other.Id}");
+        var revoke = await phone.DeleteAsync($"/api/v1/auth/sessions/{other.Id}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await desktop.GetAsync("/api/v1/auth/me")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await phone.GetAsync("/api/v1/auth/me")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await desktop.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await phone.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]
@@ -146,13 +146,13 @@ public class AuthIntegrationTests
         var desktop = await factory.CreateAuthenticatedClientAsync();
         var tablet = await factory.CreateAuthenticatedClientAsync();
 
-        var response = await phone.PostAsync("/api/v1/auth/sessions/revoke-others", null);
+        var response = await phone.PostAsync("/api/v1/auth/sessions/revoke-others", null, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(2, (await response.Content.ReadFromJsonAsync<RevokedBody>(CaseInsensitive))!.Revoked);
+        Assert.Equal(2, (await response.Content.ReadFromJsonAsync<RevokedBody>(CaseInsensitive, TestContext.Current.CancellationToken))!.Revoked);
 
-        Assert.Equal(HttpStatusCode.OK, (await phone.GetAsync("/api/v1/auth/me")).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await desktop.GetAsync("/api/v1/auth/me")).StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await tablet.GetAsync("/api/v1/auth/me")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await phone.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await desktop.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await tablet.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]
@@ -161,7 +161,7 @@ public class AuthIntegrationTests
         await using var factory = new ApiFactory();
         var client = factory.CreateClient();
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/v1/auth/sessions")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/v1/auth/sessions", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     private static readonly System.Text.Json.JsonSerializerOptions CaseInsensitive =

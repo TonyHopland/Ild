@@ -73,7 +73,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         WriteConfig("API_TOKEN");
         var service = BuildService();
 
-        await service.InstallAsync(_worktree, customEnv: "API_TOKEN=s3cr3t\n# a comment\nOTHER=x");
+        await service.InstallAsync(_worktree, customEnv: "API_TOKEN=s3cr3t\n# a comment\nOTHER=x", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("s3cr3t", ReadMarker());
     }
@@ -85,7 +85,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         WriteConfig("NPM_CONFIG_CACHE");
         var service = BuildService();
 
-        await service.InstallAsync(_worktree, customEnv: "NPM_CONFIG_CACHE=/tmp/from-dotenv-cache");
+        await service.InstallAsync(_worktree, customEnv: "NPM_CONFIG_CACHE=/tmp/from-dotenv-cache", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("/tmp/from-dotenv-cache", ReadMarker());
     }
@@ -98,7 +98,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         WriteConfig("FOO", stepEnvJson: "{ \"FOO\": \"from-config\" }");
         var service = BuildService();
 
-        await service.InstallAsync(_worktree, customEnv: "FOO=from-dotenv");
+        await service.InstallAsync(_worktree, customEnv: "FOO=from-dotenv", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("from-dotenv", ReadMarker());
     }
@@ -113,7 +113,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         WriteConfig("DB_PASSWORD", stepEnvJson: "{ \"DB_PASSWORD\": \"from-config\" }");
         var service = BuildService();
 
-        await service.InstallAsync(_worktree, customEnv: $"DB_PASSWORD={password}");
+        await service.InstallAsync(_worktree, customEnv: $"DB_PASSWORD={password}", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(password, ReadMarker());
     }
@@ -124,7 +124,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         WriteConfig("API_TOKEN");
         var service = BuildService();
 
-        await service.InstallAsync(_worktree, customEnv: null);
+        await service.InstallAsync(_worktree, customEnv: null, cancellationToken: TestContext.Current.CancellationToken);
 
         // The variable was never set, so the marker is empty.
         Assert.Equal(string.Empty, ReadMarker());
@@ -148,7 +148,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         File.WriteAllText(Path.Combine(_worktree, "ild.config.json"), config);
         var service = BuildService();
 
-        await service.InstallAsync(_worktree, customEnv: "API_TOKEN=s3cr3t\nDB_PASSWORD=hunter2");
+        await service.InstallAsync(_worktree, customEnv: "API_TOKEN=s3cr3t\nDB_PASSWORD=hunter2", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(File.Exists(Path.Combine(_worktree, ".env")), ".env must not be written to the worktree");
         Assert.False(File.Exists(Path.Combine(_worktree, ".ild.env")), ".ild.env must not be written to the worktree");

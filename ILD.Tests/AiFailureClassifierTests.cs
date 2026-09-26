@@ -165,7 +165,7 @@ public class AiFailureClassifierTests
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-throttle-{providerType}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "throttle.sh");
-        await File.WriteAllTextAsync(scriptPath, $"#!/bin/sh\necho \"{SessionLimitNotice}\"\nexit 1\n");
+        await File.WriteAllTextAsync(scriptPath, $"#!/bin/sh\necho \"{SessionLimitNotice}\"\nexit 1\n", TestContext.Current.CancellationToken);
         File.SetUnixFileMode(scriptPath,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
             | UnixFileMode.GroupRead | UnixFileMode.GroupExecute

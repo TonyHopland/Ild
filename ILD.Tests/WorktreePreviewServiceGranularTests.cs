@@ -87,7 +87,7 @@ public class WorktreePreviewServiceGranularTests : IDisposable
         WriteTwoServiceConfig(FindFreePort(), FindFreePort());
         var service = BuildService();
 
-        var response = await service.StartServiceAsync(_worktree, "web");
+        var response = await service.StartServiceAsync(_worktree, "web", cancellationToken: TestContext.Current.CancellationToken);
 
         // Both services are listed (so the tab can start the other one too), but only
         // the requested one is running — the overall state reflects that mix.
@@ -102,17 +102,17 @@ public class WorktreePreviewServiceGranularTests : IDisposable
         WriteTwoServiceConfig(FindFreePort(), FindFreePort());
         var service = BuildService();
 
-        await service.StartServiceAsync(_worktree, "web");
-        await service.StartServiceAsync(_worktree, "api");
+        await service.StartServiceAsync(_worktree, "web", cancellationToken: TestContext.Current.CancellationToken);
+        await service.StartServiceAsync(_worktree, "api", cancellationToken: TestContext.Current.CancellationToken);
 
-        var afterStop = await service.StopServiceAsync(_worktree, "web");
+        var afterStop = await service.StopServiceAsync(_worktree, "web", TestContext.Current.CancellationToken);
 
         Assert.Equal("stopped", afterStop.Services.Single(s => s.Name == "web").Status);
         Assert.Equal("running", afterStop.Services.Single(s => s.Name == "api").Status);
 
         // The runtime survives because a service is still up; stopping the last one
         // tears it down and the whole preview reports stopped.
-        var afterStopAll = await service.StopServiceAsync(_worktree, "api");
+        var afterStopAll = await service.StopServiceAsync(_worktree, "api", TestContext.Current.CancellationToken);
         Assert.Equal("stopped", afterStopAll.State);
         Assert.All(afterStopAll.Services, s => Assert.Equal("stopped", s.Status));
     }
@@ -124,7 +124,7 @@ public class WorktreePreviewServiceGranularTests : IDisposable
         var service = BuildService();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.StartServiceAsync(_worktree, "does-not-exist"));
+            () => service.StartServiceAsync(_worktree, "does-not-exist", cancellationToken: TestContext.Current.CancellationToken));
         Assert.Contains("does-not-exist", ex.Message);
     }
 
@@ -134,7 +134,7 @@ public class WorktreePreviewServiceGranularTests : IDisposable
         WriteTwoServiceConfig(4101, 4102);
         var service = BuildService();
 
-        var json = await service.GetServiceConfigAsync(_worktree, "api");
+        var json = await service.GetServiceConfigAsync(_worktree, "api", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(json);
         using var doc = JsonDocument.Parse(json!);
@@ -157,14 +157,14 @@ public class WorktreePreviewServiceGranularTests : IDisposable
           "healthUrl": "http://127.0.0.1:${PORT}/"
         }
         """;
-        await service.UpdateServiceConfigAsync(_worktree, "web", edited);
+        await service.UpdateServiceConfigAsync(_worktree, "web", edited, cancellationToken: TestContext.Current.CancellationToken);
 
-        var webJson = await service.GetServiceConfigAsync(_worktree, "web");
+        var webJson = await service.GetServiceConfigAsync(_worktree, "web", cancellationToken: TestContext.Current.CancellationToken);
         using var web = JsonDocument.Parse(webJson!);
         Assert.Equal(4999, web.RootElement.GetProperty("suggestedPort").GetInt32());
 
         // The sibling service's entry is left exactly as it was.
-        var apiJson = await service.GetServiceConfigAsync(_worktree, "api");
+        var apiJson = await service.GetServiceConfigAsync(_worktree, "api", cancellationToken: TestContext.Current.CancellationToken);
         using var api = JsonDocument.Parse(apiJson!);
         Assert.Equal(4202, api.RootElement.GetProperty("suggestedPort").GetInt32());
     }
@@ -176,7 +176,7 @@ public class WorktreePreviewServiceGranularTests : IDisposable
         var service = BuildService();
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.UpdateServiceConfigAsync(_worktree, "web", "{ not valid json "));
+            () => service.UpdateServiceConfigAsync(_worktree, "web", "{ not valid json ", cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -195,7 +195,7 @@ public class WorktreePreviewServiceGranularTests : IDisposable
         }
         """;
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.UpdateServiceConfigAsync(_worktree, "web", renamed));
+            () => service.UpdateServiceConfigAsync(_worktree, "web", renamed, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Contains("must match", ex.Message);
     }
 
@@ -215,7 +215,7 @@ public class WorktreePreviewServiceGranularTests : IDisposable
         }
         """;
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => service.UpdateServiceConfigAsync(_worktree, "web", invalid));
+            () => service.UpdateServiceConfigAsync(_worktree, "web", invalid, cancellationToken: TestContext.Current.CancellationToken));
     }
 
     private static int FindFreePort()

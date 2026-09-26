@@ -320,7 +320,7 @@ public class PiAdapterTests
             Assert.True(result.Success);
             var restoredSessionPath = Path.Combine(Path.GetTempPath(), "ild-pi-sessions", runId.ToString("N"), "pi-session-restore.jsonl");
             Assert.True(File.Exists(restoredSessionPath));
-            Assert.Contains("pi-session-restore", (await File.ReadAllTextAsync(restoredSessionPath)));
+            Assert.Contains("pi-session-restore", (await File.ReadAllTextAsync(restoredSessionPath, TestContext.Current.CancellationToken)));
         }
         finally
         {
@@ -360,11 +360,11 @@ public class PiAdapterTests
 
             await using var verifyDb = harness.CreateDbContext();
             // Source session is byte-for-byte unchanged after the fork.
-            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "Pi" && s.SessionId == "source-sess");
+            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "Pi" && s.SessionId == "source-sess", TestContext.Current.CancellationToken);
             Assert.NotNull(source);
             Assert.Equal(sourceJson, source!.SessionJson);
             // A copy now exists under the fork's id, retargeted to that id.
-            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "Pi" && s.SessionId == "fork-dest");
+            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "Pi" && s.SessionId == "fork-dest", TestContext.Current.CancellationToken);
             Assert.NotNull(fork);
             Assert.Contains("fork-dest", fork!.SessionJson);
             Assert.DoesNotContain("source-sess", fork.SessionJson);
@@ -387,7 +387,7 @@ public class PiAdapterTests
         var actualSessionPath = Path.Combine(sessionDir, $"{DateTime.UtcNow:yyyyMMddHHmmss}_abcdef12.jsonl");
         await File.WriteAllTextAsync(
             actualSessionPath,
-            "{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-header-match\",\"cwd\":\"/tmp/worktree\"}\n");
+            "{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-header-match\",\"cwd\":\"/tmp/worktree\"}\n", TestContext.Current.CancellationToken);
 
         var scriptPath = Path.Combine(worktreeDir, "args.sh");
         File.WriteAllText(scriptPath,
@@ -708,7 +708,7 @@ public class PiAdapterTests
             var modelsJsonPath = Path.Combine(
                 Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"), "models.json");
             Assert.True(File.Exists(modelsJsonPath));
-            var modelsJson = await File.ReadAllTextAsync(modelsJsonPath);
+            var modelsJson = await File.ReadAllTextAsync(modelsJsonPath, TestContext.Current.CancellationToken);
 
             // Pi interpolates env vars only when the value is "$"-prefixed; a bare
             // uppercase name is treated as a literal key and would 401 against vLLM.

@@ -196,7 +196,7 @@ public class WorkItemEditProposalApiTests
             title = "Agent's own item",
             description = "",
             repositoryId = host.RepositoryId.ToString(),
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         created.EnsureSuccessStatusCode();
         var itemId = (await ReadJsonAsync(created)).GetProperty("id").GetString()!;
 
@@ -338,7 +338,7 @@ public class WorkItemEditProposalApiTests
             description = "Edited by a human.",
             repositoryId = host.RepositoryId.ToString(),
             tags = new[] { "legacy-tag" },
-        });
+        }, cancellationToken: TestContext.Current.CancellationToken);
         edit.EnsureSuccessStatusCode();
 
         var resp = await ApproveAsync(host.Human, itemId, proposalId);
@@ -393,7 +393,7 @@ public class WorkItemEditProposalApiTests
         host.WorkItemNotifier.Verify(n => n.WorkItemEditProposalsChangedAsync(itemId), Times.AtLeastOnce);
         host.ChatNotifier.Verify(n => n.EditProposalsChangedAsync(chatId), Times.AtLeastOnce);
 
-        var agentRead = await agent.GetAsync($"/api/v1/agent/workitems/{itemId}/edit-proposals");
+        var agentRead = await agent.GetAsync($"/api/v1/agent/workitems/{itemId}/edit-proposals", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, agentRead.StatusCode);
         var seen = Assert.Single((await ReadJsonAsync(agentRead)).EnumerateArray());
         Assert.Equal(proposalId, seen.GetProperty("id").GetString());
@@ -458,12 +458,12 @@ public class WorkItemEditProposalApiTests
         var decided = await ProposeOkAsync(host.Agent(chatSessionId: chatId), itemB, new { description = "Decided" });
         Assert.Equal(HttpStatusCode.OK, (await RejectAsync(host.Human, itemB, decided, null)).StatusCode);
 
-        var pending = await host.Human.GetAsync("/api/v1/workitems/edit-proposals?status=Pending");
+        var pending = await host.Human.GetAsync("/api/v1/workitems/edit-proposals?status=Pending", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, pending.StatusCode);
         Assert.Equal(new[] { fromChat, fromRun }.Order(),
             (await ReadJsonAsync(pending)).EnumerateArray().Select(p => p.GetProperty("id").GetString()!).Order());
 
-        var chats = await host.Human.GetAsync($"/api/v1/workitems/edit-proposals?chatSessionId={chatId}");
+        var chats = await host.Human.GetAsync($"/api/v1/workitems/edit-proposals?chatSessionId={chatId}", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, chats.StatusCode);
         Assert.Equal(new[] { fromChat, decided }.Order(),
             (await ReadJsonAsync(chats)).EnumerateArray().Select(p => p.GetProperty("id").GetString()!).Order());
@@ -480,8 +480,8 @@ public class WorkItemEditProposalApiTests
 
         Assert.Equal(HttpStatusCode.Forbidden, (await ApproveAsync(agent, itemId, proposalId)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await RejectAsync(agent, itemId, proposalId, null)).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await agent.GetAsync($"/api/v1/workitems/{itemId}/edit-proposals")).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await agent.GetAsync("/api/v1/workitems/edit-proposals?status=Pending")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.GetAsync($"/api/v1/workitems/{itemId}/edit-proposals", TestContext.Current.CancellationToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.GetAsync("/api/v1/workitems/edit-proposals?status=Pending", TestContext.Current.CancellationToken)).StatusCode);
 
         foreach (var path in new[]
         {
@@ -491,7 +491,7 @@ public class WorkItemEditProposalApiTests
             $"/api/v1/agent/edit-proposals/{proposalId}/reject",
         })
         {
-            var resp = await agent.PostAsJsonAsync(path, new { reason = "self-approved" });
+            var resp = await agent.PostAsJsonAsync(path, new { reason = "self-approved" }, cancellationToken: TestContext.Current.CancellationToken);
             Assert.False(resp.IsSuccessStatusCode, $"{path} answered {(int)resp.StatusCode}");
         }
 
@@ -506,8 +506,8 @@ public class WorkItemEditProposalApiTests
         var itemId = await CreateHumanItemAsync(host);
         var agent = host.Agent(await SeedRunAsync(host.Factory));
 
-        var update = await agent.PutAsJsonAsync($"/api/v1/agent/workitems/{itemId}", new { title = "Direct edit", description = "" });
-        var delete = await agent.DeleteAsync($"/api/v1/agent/workitems/{itemId}");
+        var update = await agent.PutAsJsonAsync($"/api/v1/agent/workitems/{itemId}", new { title = "Direct edit", description = "" }, cancellationToken: TestContext.Current.CancellationToken);
+        var delete = await agent.DeleteAsync($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, update.StatusCode);
         Assert.Contains("propose_workitem_edit", (await ReadJsonAsync(update)).GetProperty("error").GetString());

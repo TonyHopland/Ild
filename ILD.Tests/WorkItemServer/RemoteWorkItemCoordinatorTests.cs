@@ -49,7 +49,7 @@ public sealed class RemoteWorkItemCoordinatorTests
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Claimed);
         // The claim's whole point is the local run behind it — that run is what
@@ -76,7 +76,7 @@ public sealed class RemoteWorkItemCoordinatorTests
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.None, null, Array.Empty<string>()));
 
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.EscalatedToHumanFeedback);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
@@ -102,7 +102,7 @@ public sealed class RemoteWorkItemCoordinatorTests
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Ambiguous, null, new[] { "build", "deploy" }));
 
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.EscalatedToHumanFeedback);
         Assert.Contains("Multiple loop templates", captured!.Reason);
@@ -124,7 +124,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Resumed);
     }
@@ -147,7 +147,7 @@ public sealed class RemoteWorkItemCoordinatorTests
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Claimed);
         engine.Verify(e => e.StartRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
@@ -170,7 +170,7 @@ public sealed class RemoteWorkItemCoordinatorTests
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Empty(result.Claimed);
         engine.Verify(e => e.StartRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -191,9 +191,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         activeRuns.Add(done.Id);
         var sut = Coordinator(client, RunStoreWithActive(activeRuns));
 
-        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
         activeRuns.Clear(); // the run completed
-        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(new[] { done.Id }, heartbeats[0]);
         Assert.Empty(heartbeats[1]);
@@ -211,7 +211,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.HasActiveHumanFeedback);
     }
@@ -237,7 +237,7 @@ public sealed class RemoteWorkItemCoordinatorTests
             client.Object, resolver.Object, engine.Object, NoLiveRuns(),
             workItemNotifier: notifier.Object);
 
-        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         notifier.Verify(n => n.WorkItemStateChangedAsync(
             ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Running), Times.Once);
@@ -264,7 +264,7 @@ public sealed class RemoteWorkItemCoordinatorTests
             client.Object, resolver.Object, engine.Object, NoLiveRuns(),
             workItemNotifier: notifier.Object);
 
-        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         notifier.Verify(n => n.WorkItemStateChangedAsync(
             waiting.Id, RemoteWorkItemStatus.WaitingForIld, RemoteWorkItemStatus.Running), Times.Once);
@@ -285,7 +285,7 @@ public sealed class RemoteWorkItemCoordinatorTests
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false, ct: TestContext.Current.CancellationToken);
 
         Assert.Empty(result.Claimed);
         // Nothing should have been transitioned (no claim, no escalation) and no
@@ -324,7 +324,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var engine = new Mock<ILoopEngine>();
 
         var result = await Coordinator(client, runStore, engine)
-            .RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false);
+            .RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Resumed);
         Assert.Empty(result.Claimed);
@@ -360,7 +360,7 @@ public sealed class RemoteWorkItemCoordinatorTests
             client.Object, resolver.Object, engine.Object, NoLiveRuns(),
             workItemNotifier: notifier.Object);
 
-        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         notifier.Verify(n => n.WorkItemStateChangedAsync(
             It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
@@ -471,8 +471,8 @@ public sealed class RemoteWorkItemCoordinatorTests
         // again before the second, so the store never reports one as active.
         var sut = Coordinator(client, RunStoreWithActive(NoActiveRuns()));
 
-        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
-        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
+        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         // The five claims land in one pass, so the cap has to count claims
         // made during the pass, not just the set it started with.
@@ -501,8 +501,8 @@ public sealed class RemoteWorkItemCoordinatorTests
         // The run created by the first pass is terminal before the second.
         var sut = Coordinator(client, RunStoreWithActive(NoActiveRuns()));
 
-        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
-        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
+        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(first.Claimed);
         Assert.Single(second.Claimed);
@@ -544,13 +544,13 @@ public sealed class RemoteWorkItemCoordinatorTests
         var activeRuns = NoActiveRuns();
         var sut = Coordinator(client, RunStoreWithActive(activeRuns));
 
-        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 2);
+        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 2, ct: TestContext.Current.CancellationToken);
 
         // Both claims produced a run, and both parked at their human gate.
         activeRuns.Add(parked);
         activeRuns.Add(waiting);
 
-        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 2);
+        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 2, ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, first.Claimed.Count);
         Assert.Empty(second.Claimed);
@@ -582,11 +582,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         var activeRuns = NoActiveRuns();
         var sut = Coordinator(client, RunStoreWithActive(activeRuns));
 
-        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var first = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
         // The claim started a run, and it is still going.
         activeRuns.Add(busy);
 
-        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var second = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         // The first pass had room, so it was not blocked by anything.
         Assert.False(first.BlockedByCap);
@@ -621,7 +621,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var engine = new Mock<ILoopEngine>();
 
-        var result = await Coordinator(client, runStore, engine).RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var result = await Coordinator(client, runStore, engine).RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         // Its slot came back inside the same pass, so the Ready item got in.
         Assert.False(result.BlockedByCap);
@@ -658,7 +658,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         engine.Setup(e => e.StopRunAsync(liveRun.Id, It.IsAny<string>()))
               .ThrowsAsync(new InvalidOperationException("database unavailable"));
 
-        var result = await Coordinator(client, runStore, engine).RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var result = await Coordinator(client, runStore, engine).RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         Assert.Contains(finished, result.SlotHolders);
         Assert.Empty(result.Claimed);
@@ -682,7 +682,7 @@ public sealed class RemoteWorkItemCoordinatorTests
               .ThrowsAsync(new InvalidOperationException("no start node"));
 
         var sut = Coordinator(client, RunStoreWithActive(NoActiveRuns()), engine: engine);
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(doomed.Id, Assert.Single(result.EscalatedToHumanFeedback).Id);
         Assert.Contains(next.Id, result.Claimed.Select(c => c.Id));
@@ -710,7 +710,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         activeRuns.Add(busy);
 
         var result = await Coordinator(client, RunStoreWithActive(activeRuns))
-            .RunPollCycleAsync(Opts, maxConcurrent: 1);
+            .RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         Assert.False(result.BlockedByCap);
         // The slot is still held, though — the ledger is reported either way.
@@ -798,14 +798,14 @@ public sealed class RemoteWorkItemCoordinatorTests
         var targetFull = new AiProviderConcurrencyTracker();
         Assert.True(targetFull.TryEnter(target.Id, target.Parallelism));
         var (blocked, _) = BuildResumeGate(config, mode, overrideId, targetFull, db.Providers);
-        Assert.Empty((await blocked.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
+        Assert.Empty((await blocked.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken)).Resumed);
 
         // Every other provider is full but that one is idle: the run resumes.
         var othersFull = new AiProviderConcurrencyTracker();
         foreach (var other in seeded.All.Where(p => p.Id != target.Id))
             Assert.True(othersFull.TryEnter(other.Id, other.Parallelism));
         var (free, _) = BuildResumeGate(config, mode, overrideId, othersFull, db.Providers);
-        Assert.Single((await free.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
+        Assert.Single((await free.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken)).Resumed);
     }
 
     [Theory]
@@ -821,13 +821,13 @@ public sealed class RemoteWorkItemCoordinatorTests
         var targetFull = new AiProviderConcurrencyTracker();
         Assert.True(targetFull.TryEnter(target.Id, target.Parallelism));
         var (blocked, _) = BuildResumeGate(nodeConfig, mode, overrideId, targetFull, db.Providers);
-        Assert.Empty((await blocked.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
+        Assert.Empty((await blocked.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken)).Resumed);
 
         var othersFull = new AiProviderConcurrencyTracker();
         foreach (var other in seeded.All.Where(p => p.Id != target.Id))
             Assert.True(othersFull.TryEnter(other.Id, other.Parallelism));
         var (free, _) = BuildResumeGate(nodeConfig, mode, overrideId, othersFull, db.Providers);
-        Assert.Single((await free.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
+        Assert.Single((await free.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken)).Resumed);
     }
 
     [Fact]
@@ -842,7 +842,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var (sut, _) = BuildResumeGate(
             @"{""aiProviderTag"":""Nightly""}", RemoteAiProviderOverrideMode.None, null, allFull, db.Providers);
 
-        Assert.Single((await sut.RunPollCycleAsync(Opts, maxConcurrent: 5)).Resumed);
+        Assert.Single((await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken)).Resumed);
     }
 
     [Fact]
@@ -864,7 +864,7 @@ public sealed class RemoteWorkItemCoordinatorTests
             RemoteAiProviderOverrideMode.OverrideAll, unlimited.Id,
             tracker, db.Providers);
 
-        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Resumed);
     }

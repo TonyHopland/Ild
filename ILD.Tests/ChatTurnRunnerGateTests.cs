@@ -50,15 +50,15 @@ public sealed class ChatTurnRunnerGateTests
         // Stopped while its turn is still running.
         var busy = Guid.NewGuid();
         await runner.SubmitAsync(busy, "long one");
-        await running.Task.WaitAsync(Patience);
+        await running.Task.WaitAsync(Patience, TestContext.Current.CancellationToken);
         await runner.InterruptAsync(busy);
         await runner.DeleteAsync(busy, () => Task.CompletedTask);
-        Assert.True(await completions.WaitAsync(Patience), "a turn never reported finished");
+        Assert.True(await completions.WaitAsync(Patience, TestContext.Current.CancellationToken), "a turn never reported finished");
 
         // Stopped after its turn had already reported itself finished.
         var finished = Guid.NewGuid();
         await runner.SubmitAsync(finished, "hello");
-        Assert.True(await completions.WaitAsync(Patience), "a turn never reported finished");
+        Assert.True(await completions.WaitAsync(Patience, TestContext.Current.CancellationToken), "a turn never reported finished");
         await runner.InterruptAsync(finished);
         await runner.DeleteAsync(finished, () => Task.CompletedTask);
 
@@ -78,7 +78,7 @@ public sealed class ChatTurnRunnerGateTests
         // A turn retires before it announces that it finished, so once all three
         // have announced there is nothing left to wait for.
         for (var i = 0; i < 3; i++)
-            Assert.True(await completions.WaitAsync(Patience), "a turn never reported finished");
+            Assert.True(await completions.WaitAsync(Patience, TestContext.Current.CancellationToken), "a turn never reported finished");
 
         Assert.Equal(0, runner.ActiveTurnCount);
         Assert.Equal(0, runner.GateCount);

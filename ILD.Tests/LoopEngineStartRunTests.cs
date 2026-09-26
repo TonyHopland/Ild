@@ -19,7 +19,7 @@ public class LoopEngineStartRunTests
         var workItemId = $"WI-{Guid.NewGuid():N}";
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.NeedsReview, seedVersionAndStartNode: true);
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
@@ -35,7 +35,7 @@ public class LoopEngineStartRunTests
         var workItemId = $"WI-{Guid.NewGuid():N}";
         var (engine, workItems) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: false);
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
         workItems.Verify(w => w.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback,
@@ -55,7 +55,7 @@ public class LoopEngineStartRunTests
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true);
         var existing = SeedRun(db, workItemId, existingStatus);
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         var run = Assert.Single(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
@@ -72,7 +72,7 @@ public class LoopEngineStartRunTests
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true);
         var completed = SeedRun(db, workItemId, LoopRunStatus.Completed);
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         var runs = db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId).ToList();
@@ -90,7 +90,7 @@ public class LoopEngineStartRunTests
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
             branchNameOverride: "   ");
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
@@ -105,7 +105,7 @@ public class LoopEngineStartRunTests
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
             branchNameOverride: "feature/foo");
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
@@ -125,7 +125,7 @@ public class LoopEngineStartRunTests
             branchNameOverride: "feature/foo",
             verdict: new BranchNameVerdict(null, conflict));
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
@@ -144,7 +144,7 @@ public class LoopEngineStartRunTests
             branchNameOverride: "feature foo",
             verdict: new BranchNameVerdict("Branch name cannot contain spaces.", null));
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
@@ -163,7 +163,7 @@ public class LoopEngineStartRunTests
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
             workItemView: wi);
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         wi.BranchNameOverride = "feature/renamed";
@@ -181,7 +181,7 @@ public class LoopEngineStartRunTests
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
             workItemView: wi);
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
@@ -199,7 +199,7 @@ public class LoopEngineStartRunTests
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
             workItemView: wi);
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
@@ -218,7 +218,7 @@ public class LoopEngineStartRunTests
         var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
             workItemView: wi);
 
-        await engine.StartRunAsync(workItemId);
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
         await DrainAsync(engine);
 
         wi.BaseBranchOverride = "release/2.0";

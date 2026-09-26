@@ -30,7 +30,7 @@ public sealed class WorkItemAttachmentConcurrencyTests : IAsyncLifetime
     private string _connectionString = null!;
     private WorkItemServerDbContext _db = null!;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _directory = Directory.CreateTempSubdirectory("ild-attachment-concurrency-").FullName;
         _connectionString = $"Data Source={Path.Combine(_directory, "workitems.db")}";
@@ -38,7 +38,7 @@ public sealed class WorkItemAttachmentConcurrencyTests : IAsyncLifetime
         await _db.Database.EnsureCreatedAsync();
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await _db.DisposeAsync();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
@@ -58,7 +58,7 @@ public sealed class WorkItemAttachmentConcurrencyTests : IAsyncLifetime
     public async Task Two_uploads_racing_for_the_last_of_a_work_items_total_cannot_both_win()
     {
         var item = await new WorkItemService(_db, TimeProvider.System)
-            .CreateAsync(new CreateWorkItemRequest { Title = "raced for" });
+            .CreateAsync(new CreateWorkItemRequest { Title = "raced for" }, TestContext.Current.CancellationToken);
 
         // Either alone fits the 1 MB total; together they do not.
         await using var firstContext = NewContext();
@@ -74,7 +74,7 @@ public sealed class WorkItemAttachmentConcurrencyTests : IAsyncLifetime
         Assert.Equal(1, results.Count(r => r.Outcome == AddAttachmentsOutcome.TotalExceeded));
 
         await using var reader = NewContext();
-        var stored = await reader.Set<WorkItemAttachment>().ToListAsync();
+        var stored = await reader.Set<WorkItemAttachment>().ToListAsync(TestContext.Current.CancellationToken);
         Assert.True(
             stored.Sum(a => a.SizeBytes) <= Limits.MaxTotalBytesPerWorkItem,
             $"the work item holds {stored.Sum(a => a.SizeBytes)} bytes, over its {Limits.MaxTotalBytesPerWorkItem} limit");

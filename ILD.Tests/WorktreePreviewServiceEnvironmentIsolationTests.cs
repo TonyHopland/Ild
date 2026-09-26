@@ -139,7 +139,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
         var seeded = SeedOrchestratorEnvironment();
         WriteInstallConfig();
 
-        await BuildService().InstallAsync(_worktree);
+        await BuildService().InstallAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
         var child = ReadChildEnvironment("install-env.marker");
         Assert.Equal(Array.Empty<string>(), seeded.Where(child.ContainsKey).ToArray());
@@ -168,7 +168,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
         SeedOrchestratorEnvironment();
         WriteInstallConfig(stepEnvJson: $$"""{ "{{SeededSecret}}": "Host=preview-db" }""");
 
-        await BuildService().InstallAsync(_worktree);
+        await BuildService().InstallAsync(_worktree, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("Host=preview-db", ReadChildEnvironment("install-env.marker")[SeededSecret]);
     }
@@ -182,7 +182,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
         SeedOrchestratorEnvironment();
         WriteInstallConfig();
 
-        await BuildService().InstallAsync(_worktree, customEnv: $"{SeededSecret}=Host=repo-db");
+        await BuildService().InstallAsync(_worktree, customEnv: $"{SeededSecret}=Host=repo-db", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("Host=repo-db", ReadChildEnvironment("install-env.marker")[SeededSecret]);
     }
@@ -199,7 +199,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
         var pids = new[] { ReadPid("web"), ReadPid("web2") };
         Assert.All(pids, pid => Assert.True(IsAlive(pid), $"service pid {pid} should be running before stop"));
 
-        var stopped = await service.StopAsync(_worktree);
+        var stopped = await service.StopAsync(_worktree, TestContext.Current.CancellationToken);
         Assert.Equal("stopped", stopped.State);
 
         // Kill(entireProcessTree) has to reach the node process behind the shell,

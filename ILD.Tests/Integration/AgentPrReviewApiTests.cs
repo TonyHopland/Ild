@@ -136,14 +136,14 @@ public class AgentPrReviewApiTests
         var request = new HttpRequestMessage(HttpMethod.Get,
             $"/api/v1/agent/workitems/{workItemId}/pr-review?sinceCommit=7e932b3d");
         request.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var response = await client.SendAsync(request);
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(workItemId, stub.WorkItemId);
         Assert.Equal("7e932b3d", stub.SinceCommit);
         Assert.Equal(runId, stub.CallerRunId);
 
-        var body = await response.Content.ReadAsStringAsync();
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("4049159495", body, StringComparison.Ordinal);
         Assert.Contains("PRRT_thread_1", body, StringComparison.Ordinal);
         Assert.Contains("src/A.cs", body, StringComparison.Ordinal);
@@ -158,7 +158,7 @@ public class AgentPrReviewApiTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var workItemId = await SeedWorkItemAsync(factory, client);
 
-        var response = await client.GetAsync($"/api/v1/agent/workitems/{workItemId}/pr-review");
+        var response = await client.GetAsync($"/api/v1/agent/workitems/{workItemId}/pr-review", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Null(stub.CallerRunId);
@@ -172,7 +172,7 @@ public class AgentPrReviewApiTests
         await using var factory = FactoryWith(stub);
         var client = await factory.CreateAuthenticatedClientAsync();
 
-        var response = await client.GetAsync($"/api/v1/agent/workitems/{Guid.NewGuid()}/pr-review");
+        var response = await client.GetAsync($"/api/v1/agent/workitems/{Guid.NewGuid()}/pr-review", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         Assert.Equal(0, stub.Reads);
@@ -192,7 +192,7 @@ public class AgentPrReviewApiTests
             Content = JsonContent.Create(new { commentId = "4049159495", body = "That compiles — C# allows a long array length." }),
         };
         request.Headers.Add("X-ILD-Run-Id", runId.ToString());
-        var response = await client.SendAsync(request);
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("4049159495", stub.CommentId);
@@ -209,7 +209,7 @@ public class AgentPrReviewApiTests
         var workItemId = await SeedWorkItemAsync(factory, client);
 
         var response = await client.PostAsJsonAsync(
-            $"/api/v1/agent/workitems/{workItemId}/pr-review/reply", new { commentId = "", body = "" });
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/reply", new { commentId = "", body = "" }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Null(stub.CommentId);
@@ -225,11 +225,11 @@ public class AgentPrReviewApiTests
         var workItemId = await SeedWorkItemAsync(factory, client);
 
         var response = await client.PostAsJsonAsync(
-            $"/api/v1/agent/workitems/{workItemId}/pr-review/resolve", new { threadId = "PRRT_thread_1" });
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/resolve", new { threadId = "PRRT_thread_1" }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("PRRT_thread_1", stub.ThreadId);
-        Assert.Contains("not supported", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Contains("not supported", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -246,7 +246,7 @@ public class AgentPrReviewApiTests
         foreach (var verb in new[] { "approve", "merge", "dismiss", "abandon" })
         {
             var response = await client.PostAsJsonAsync(
-                $"/api/v1/agent/workitems/{workItemId}/pr-review/{verb}", new { threadId = "PRRT_thread_1" });
+                $"/api/v1/agent/workitems/{workItemId}/pr-review/{verb}", new { threadId = "PRRT_thread_1" }, cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         }
     }
@@ -263,7 +263,7 @@ public class AgentPrReviewApiTests
 
         var response = await client.PostAsJsonAsync(
             $"/api/v1/agent/workitems/{workItemId}/pr-review/comment",
-            new { body = "Rebased onto main and re-ran the gate." });
+            new { body = "Rebased onto main and re-ran the gate." }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("Rebased onto main and re-ran the gate.", stub.Body);
@@ -278,7 +278,7 @@ public class AgentPrReviewApiTests
         var workItemId = await SeedWorkItemAsync(factory, client);
 
         var response = await client.PostAsJsonAsync(
-            $"/api/v1/agent/workitems/{workItemId}/pr-review/comment", new { body = "" });
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/comment", new { body = "" }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Null(stub.Body);
@@ -294,7 +294,7 @@ public class AgentPrReviewApiTests
 
         var response = await client.PostAsJsonAsync(
             $"/api/v1/agent/workitems/{workItemId}/pr-review/close",
-            new { commentId = "4049159495", resolve = true });
+            new { commentId = "4049159495", resolve = true }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("4049159495", stub.CommentId);
@@ -310,7 +310,7 @@ public class AgentPrReviewApiTests
         var workItemId = await SeedWorkItemAsync(factory, client);
 
         var response = await client.PostAsJsonAsync(
-            $"/api/v1/agent/workitems/{workItemId}/pr-review/close", new { resolve = true });
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/close", new { resolve = true }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Null(stub.CommentId);
