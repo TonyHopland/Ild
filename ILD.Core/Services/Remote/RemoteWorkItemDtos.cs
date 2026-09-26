@@ -163,6 +163,9 @@ public sealed class RemoteUpdateWorkItemRequest
     /// </summary>
     public string? BaseBranchOverride { get; set; }
 
+    /// <summary>Replaces the repository the item's next run works in; null leaves it untouched.</summary>
+    public Guid? RepositoryId { get; set; }
+
     /// <summary>
     /// When supplied, replaces the work item's AI provider override. Mode and
     /// target travel as a unit — see the server's UpdateWorkItemRequest.

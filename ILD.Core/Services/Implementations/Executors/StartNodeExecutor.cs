@@ -19,7 +19,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
         var wi = await workItems.GetWorkItemAsync(ctx.Run.WorkItemId);
-        if (wi is null || wi.RepositoryId is null)
+        if (wi is null || wi.RunRepositoryId is null)
         {
             yield return new NodeOutcome.NodeStarting("{\"nodeType\":\"Start\"}");
             yield return new NodeOutcome.Fail(EdgeType.OnFailure,
@@ -27,7 +27,7 @@ public sealed class StartNodeExecutor : INodeExecutor
             yield break;
         }
 
-        var repo = await providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value);
+        var repo = await providerStore.GetRepositoryByIdAsync(wi.RunRepositoryId.Value);
         if (repo is null)
         {
             yield return new NodeOutcome.NodeStarting("{\"nodeType\":\"Start\"}");

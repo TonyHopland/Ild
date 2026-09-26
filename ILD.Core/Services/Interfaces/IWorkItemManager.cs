@@ -12,9 +12,10 @@ public interface IWorkItemManager
     /// and <paramref name="baseBranchOverride"/> follow the server's convention:
     /// null leaves the stored value alone, blank clears it back to the default
     /// (generated per-run naming, and the repository's default branch
-    /// respectively). Either way they only affect the item's next run.
+    /// respectively). Either way they only affect the item's next run, as does
+    /// <paramref name="repositoryId"/>, which null leaves alone.
     /// </summary>
-    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null, string? branchNameOverride = null, string? baseBranchOverride = null);
+    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null, string? branchNameOverride = null, string? baseBranchOverride = null, Guid? repositoryId = null);
     Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 
     /// <summary>

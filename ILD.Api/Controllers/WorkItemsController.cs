@@ -63,8 +63,8 @@ public class WorkItemsController : ControllerBase
             if (!string.IsNullOrWhiteSpace(run?.BaseBranchOverride))
                 return run!.BaseBranchOverride;
         }
-        if (workItem.RepositoryId is null) return null;
-        var repo = await _providerStore.GetRepositoryByIdAsync(workItem.RepositoryId.Value);
+        if (workItem.RunRepositoryId is null) return null;
+        var repo = await _providerStore.GetRepositoryByIdAsync(workItem.RunRepositoryId.Value);
         return repo?.DefaultBranch;
     }
 
@@ -214,9 +214,21 @@ public class WorkItemsController : ControllerBase
             && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
 
+        // A blank repository leaves the stored one alone, so agent edits and
+        // older clients that never send it keep working. The WorkItemServer has
+        // no repository table to check against, so an unknown id is refused here.
+        Guid? repositoryId = null;
+        if (!string.IsNullOrWhiteSpace(request.RepositoryId))
+        {
+            if (!Guid.TryParse(request.RepositoryId, out var parsedRepositoryId)
+                || await _providerStore.GetRepositoryByIdAsync(parsedRepositoryId) is null)
+                return BadRequest(new { error = "repositoryId does not name a known repository." });
+            repositoryId = parsedRepositoryId;
+        }
+
         var ok = await _workItemManager.UpdateAsync(
             id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId,
-            request.BranchNameOverride, request.BaseBranchOverride);
+            request.BranchNameOverride, request.BaseBranchOverride, repositoryId);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
@@ -273,7 +285,7 @@ public class WorkItemsController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId),
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RunRepositoryId),
                     workItem!.Id));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
@@ -319,7 +331,7 @@ public class WorkItemsController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId),
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RunRepositoryId),
                     workItem!.Id));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);

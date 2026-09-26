@@ -100,6 +100,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Tags = req.Tags?.ToList(),
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
+            RepositoryId = req.RepositoryId,
         }, ct);
         return dto == null ? null : ToRemote(dto);
     }

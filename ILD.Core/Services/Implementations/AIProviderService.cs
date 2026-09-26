@@ -292,7 +292,7 @@ public class AIProviderService : IAIProviderService
         var run = await _loopRuns.GetByWorktreePathAsync(worktreePath);
         if (run is null || string.IsNullOrEmpty(run.WorkItemId)) return (null, null);
         var workItem = await _workItemManager.GetWorkItemAsync(run.WorkItemId);
-        return (run.WorkItemId, await _providerStore.GetRepositoryPreviewEnvAsync(workItem?.RepositoryId));
+        return (run.WorkItemId, await _providerStore.GetRepositoryPreviewEnvAsync(workItem?.RunRepositoryId));
     }
 
     private async Task<ToolExecutionResult> GetPreviewStatusAsync(string worktreePath)

@@ -171,6 +171,8 @@ public sealed class WorkItemService : IWorkItemService
         // redirects the item's next run.
         if (req.BaseBranchOverride != null)
             w.BaseBranchOverride = WorkItemMapper.NormalizeBranchRef(req.BaseBranchOverride);
+        // Not retroactive either: a run pins the repository it was created on.
+        if (req.RepositoryId != null) w.RepositoryId = req.RepositoryId;
         w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         await _db.SaveChangesAsync(ct);
         return (await WithDetailsAsync(new[] { w }, ct))[0];
