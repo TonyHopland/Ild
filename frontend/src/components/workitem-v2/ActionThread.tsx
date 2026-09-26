@@ -245,7 +245,6 @@ export default function ActionThread({
     !detail.shouldStream &&
     !awaitingHuman &&
     !hasPrDetails(workItem, detail) &&
-    afterTurn.size === 0 &&
     live.length === 0 &&
     end.length === 0;
 
