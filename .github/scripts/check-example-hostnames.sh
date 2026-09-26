@@ -55,7 +55,13 @@ EXCLUDED_FILES='
 .github/scripts/example-hostnames.test.sh
 '
 
-root="${1:-$(git rev-parse --show-toplevel)}"
+# A guard that cannot read the tree must not report it clean.
+die() { echo "check-example-hostnames: $*" >&2; exit 2; }
+
+root="${1:-}"
+if [[ -z "$root" ]]; then
+  root="$(git rev-parse --show-toplevel)" || die "not inside a git repository"
+fi
 
 is_allowed_name() { # <lowercase host>
   case "$1" in
@@ -132,8 +138,12 @@ consider() { # <kind> <path> <line> <match>
 
 files=()
 while IFS= read -r -d '' file; do
-  grep -qxF -- "$file" <<<"$EXCLUDED_FILES" || files+=("$file")
+  grep -qxF -- "$file" <<<"$EXCLUDED_FILES" && continue
+  # Submodules and symlinks are not file content, and a tracked file deleted
+  # from the work tree has none left to read.
+  [[ -f "$root/$file" && ! -L "$root/$file" ]] && files+=("$file")
 done < <(git -C "$root" ls-files -z)
+wait $! || die "cannot list the tracked files of $root"
 
 scan() { # <kind> <grep flags> <extended regex>
   local kind="$1" flags="$2" regex="$3" path rest
@@ -141,7 +151,9 @@ scan() { # <kind> <grep flags> <extended regex>
   while IFS= read -r -d '' path && IFS= read -r rest; do
     consider "$kind" "$path" "${rest%%:*}" "${rest#*:}"
   done < <(cd "$root" && printf '%s\0' "${files[@]}" |
-    xargs -0 grep -HnoIsZ "$flags" -e "$regex" --)
+    xargs -0 sh -c 'grep "$@"; [ $? -le 1 ]' grep -HnoIZ "$flags" -e "$regex" --)
+  # grep exits 1 when nothing matched; above that it failed to read a file.
+  wait $! || die "grep failed while scanning $root"
 }
 
 scan url -E '[A-Za-z][A-Za-z0-9+.-]*://([^/@[:space:]]*@)?[A-Za-z0-9._{}$%-]+'
