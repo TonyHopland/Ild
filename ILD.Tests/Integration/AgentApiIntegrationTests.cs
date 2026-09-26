@@ -334,6 +334,56 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task GetWorkItem_reports_the_runs_repository_apart_from_the_items_edited_one()
+    {
+        // An agent working in a run's worktree must still see which repository
+        // that run belongs to after a human re-points the item for its next run.
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runRepoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var editedRepoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var itemId = await CreateAsync(client, "repointed", runId: null, runRepoId);
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"repoint-{Guid.NewGuid():N}" };
+            var version = new LoopTemplateVersion
+            {
+                Id = Guid.NewGuid(),
+                LoopTemplateId = template.Id,
+                VersionNumber = 1,
+                CreatedAt = DateTime.UtcNow,
+            };
+            db.LoopTemplates.Add(template);
+            db.LoopTemplateVersions.Add(version);
+            db.LoopRuns.Add(new LoopRun
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = itemId,
+                LoopTemplateVersionId = version.Id,
+                Status = LoopRunStatus.Running,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+                StartedAt = DateTime.UtcNow,
+                RepositoryId = runRepoId,
+            });
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var put = await client.PutAsJsonAsync($"/api/v1/workitems/{itemId}", new
+        {
+            title = "repointed",
+            description = "",
+            repositoryId = editedRepoId.ToString(),
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
+        Assert.Equal(editedRepoId.ToString(), detail.GetProperty("repositoryId").GetString());
+        Assert.Equal(runRepoId.ToString(), detail.GetProperty("runRepositoryId").GetString());
+    }
+
+    [Fact]
     public async Task UpdateWorkItem_for_unknown_item_returns_not_found()
     {
         await using var factory = new ApiFactory();

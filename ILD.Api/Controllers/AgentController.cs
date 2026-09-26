@@ -260,6 +260,9 @@ public class AgentController : ControllerBase
             priority = wi.Priority.ToString(),
             tags = wi.Tags,
             repositoryId = wi.RepositoryId == Guid.Empty ? null : (Guid?)wi.RepositoryId,
+            // The repository the current run's worktree and branch belong to,
+            // which re-pointing the item for its next run does not move.
+            runRepositoryId = wi.RunRepositoryId == Guid.Empty ? null : wi.RunRepositoryId,
                 loopTemplateVersionId = (Guid?)null,
             createdByLoopRunId = wi.CreatedByLoopRunId,
             createdByChatSessionId = wi.CreatedByChatSessionId,
