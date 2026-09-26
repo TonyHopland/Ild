@@ -73,6 +73,12 @@ export interface WorkItem {
   loopTemplateVersion?: string;
   repositoryId: string;
   /**
+   * Repository the current run was created on, which an edit to
+   * {@link repositoryId} never moves. The item's own repository when there is
+   * no current run. Anything acting on the run's worktree or preview uses this.
+   */
+  runRepositoryId?: string | null;
+  /**
    * AI provider override for this item's AI nodes. Defaults to
    * {@link AiProviderOverrideMode.None}. {@link aiProviderOverrideId} names the
    * provider the override targets.

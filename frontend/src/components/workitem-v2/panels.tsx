@@ -799,7 +799,9 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
         ) : null}
       </div>
       <RepoEnvEditor
-        repository={detail.repositories.find((r) => r.id === workItem.repositoryId)}
+        repository={detail.repositories.find(
+          (r) => r.id === (workItem.runRepositoryId ?? workItem.repositoryId),
+        )}
         onSaved={() => void detail.reloadRepositories()}
       />
     </div>

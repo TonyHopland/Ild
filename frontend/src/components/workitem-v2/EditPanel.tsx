@@ -244,6 +244,7 @@ export default function EditPanel({
             id="wiv2-repository"
             value={repositoryId}
             onChange={(e) => setRepositoryId(e.target.value)}
+            aria-describedby={workItem ? "wiv2-repository-hint" : undefined}
             required
           >
             <option value="">Select repository...</option>
@@ -253,6 +254,11 @@ export default function EditPanel({
               </option>
             ))}
           </select>
+          {workItem && (
+            <small id="wiv2-repository-hint" className="form-hint">
+              Only the next run is affected.
+            </small>
+          )}
         </div>
         <div className="form-group">
           <label htmlFor="wiv2-status">Status</label>
