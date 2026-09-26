@@ -8,6 +8,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -513,6 +514,185 @@ public class WorkItemEditProposalApiTests
         Assert.Contains("propose_workitem_edit", (await ReadJsonAsync(update)).GetProperty("error").GetString());
         Assert.Equal(HttpStatusCode.Forbidden, delete.StatusCode);
         AssertUnchanged(await GetItemAsync(host, itemId));
+    }
+
+    /// <summary>What an agent might try to smuggle in to place its card somewhere else.</summary>
+    private static object ForgedAnchorBody(string title) => new
+    {
+        title,
+        createdByRunNodeId = Guid.NewGuid(),
+        chatReplySequence = 99,
+        createdByLoopRunId = Guid.NewGuid(),
+        createdByChatSessionId = Guid.NewGuid(),
+    };
+
+    private static Guid? GuidOrNull(JsonElement obj, string property)
+        => IsNullOrAbsent(obj, property) ? null : Guid.Parse(obj.GetProperty(property).GetString()!);
+
+    private static int? IntOrNull(JsonElement obj, string property)
+        => IsNullOrAbsent(obj, property) ? null : obj.GetProperty(property).GetInt32();
+
+    public enum RunStep { OneRunning, NoneRunning, OneRunningAndAChatHeaderToo }
+
+    [Theory]
+    [InlineData(RunStep.OneRunning)]
+    [InlineData(RunStep.NoneRunning)]
+    [InlineData(RunStep.OneRunningAndAChatHeaderToo)]
+    public async Task A_loop_proposal_records_the_step_that_was_running_when_it_was_made(RunStep step)
+    {
+        await using var host = await StartHostAsync();
+        var itemId = await CreateHumanItemAsync(host);
+        var (runId, runningNodeId) = await SeedRunWithStepsAsync(host.Factory, running: step != RunStep.NoneRunning);
+        await SeedRunWithStepsAsync(host.Factory, running: true);
+        Guid? chatId = null;
+        if (step == RunStep.OneRunningAndAChatHeaderToo)
+        {
+            chatId = await SeedChatSessionAsync(host.Factory);
+            await SeedChatMessagesAsync(host.Factory, chatId.Value, "user", "assistant");
+        }
+
+        var proposalId = await ProposeOkAsync(host.Agent(runId, chatId), itemId, ForgedAnchorBody("Renamed"));
+
+        var proposal = await ReadProposalAsync(host, itemId, proposalId);
+        Assert.Equal(runId, GuidOrNull(proposal, "createdByLoopRunId"));
+        Assert.Equal(runningNodeId, GuidOrNull(proposal, "createdByRunNodeId"));
+        Assert.Null(IntOrNull(proposal, "chatReplySequence"));
+    }
+
+    public static TheoryData<string, string[], int?> ChatTranscripts => new()
+    {
+        { "an empty chat", Array.Empty<string>(), null },
+        { "the first turn in flight", new[] { "user" }, 1 },
+        { "after a finished turn", new[] { "user", "assistant" }, 1 },
+        { "the second turn in flight", new[] { "user", "assistant", "user" }, 3 },
+        { "after two finished turns", new[] { "user", "assistant", "user", "assistant" }, 3 },
+    };
+
+    [Theory]
+    [MemberData(nameof(ChatTranscripts))]
+    public async Task A_chat_proposal_records_the_reply_it_follows(string _, string[] roles, int? expected)
+    {
+        await using var host = await StartHostAsync();
+        var itemId = await CreateHumanItemAsync(host);
+        var chatId = await SeedChatSessionAsync(host.Factory);
+        await SeedChatMessagesAsync(host.Factory, chatId, roles);
+        var otherChat = await SeedChatSessionAsync(host.Factory);
+        await SeedChatMessagesAsync(host.Factory, otherChat, Enumerable.Repeat("assistant", 12).Prepend("user").ToArray());
+
+        var proposalId = await ProposeOkAsync(host.Agent(chatSessionId: chatId), itemId, ForgedAnchorBody("Renamed"));
+
+        var proposal = await ReadProposalAsync(host, itemId, proposalId);
+        Assert.Equal(chatId, GuidOrNull(proposal, "createdByChatSessionId"));
+        Assert.Equal(expected, IntOrNull(proposal, "chatReplySequence"));
+        Assert.Null(GuidOrNull(proposal, "createdByRunNodeId"));
+    }
+
+    [Fact]
+    public async Task Anchors_come_back_unchanged_from_every_listing_and_decision()
+    {
+        await using var host = await StartHostAsync();
+        var itemId = await CreateHumanItemAsync(host);
+        var chatId = await SeedChatSessionAsync(host.Factory);
+        var chat = host.Agent(chatSessionId: chatId);
+        await SeedChatMessagesAsync(host.Factory, chatId, "user", "assistant");
+        var first = await ProposeOkAsync(chat, itemId, new { title = "First title" });
+        await SeedChatMessagesAsync(host.Factory, chatId, startAt: 2, "user");
+        var second = await ProposeOkAsync(chat, itemId, new { description = "Second description." });
+
+        var approve = await ApproveAsync(host.Human, itemId, first);
+
+        Assert.Equal(HttpStatusCode.OK, approve.StatusCode);
+        var approved = (await ReadJsonAsync(approve)).GetProperty("proposal");
+        Assert.Equal(1, IntOrNull(approved, "chatReplySequence"));
+        Assert.Null(GuidOrNull(approved, "createdByRunNodeId"));
+        var stale = await ReadProposalAsync(host, itemId, second);
+        Assert.Equal("Stale", stale.GetProperty("status").GetString());
+        Assert.Equal(3, IntOrNull(stale, "chatReplySequence"));
+        var chatList = await host.Human.GetAsync($"/api/v1/workitems/edit-proposals?chatSessionId={chatId}", TestContext.Current.CancellationToken);
+        Assert.Equal(new Dictionary<string, int?> { [first] = 1, [second] = 3 },
+            (await ReadJsonAsync(chatList)).EnumerateArray()
+                .ToDictionary(p => p.GetProperty("id").GetString()!, p => IntOrNull(p, "chatReplySequence")));
+
+        var (runId, nodeId) = await SeedRunWithStepsAsync(host.Factory, running: true);
+        var fromRun = await ProposeOkAsync(host.Agent(runId), itemId, new { title = "Loop title" });
+        var reject = await RejectAsync(host.Human, itemId, fromRun, "No.");
+
+        Assert.Equal(HttpStatusCode.OK, reject.StatusCode);
+        var rejected = await ReadJsonAsync(reject);
+        Assert.Equal(nodeId, GuidOrNull(rejected, "createdByRunNodeId"));
+        Assert.Null(IntOrNull(rejected, "chatReplySequence"));
+        Assert.Equal(nodeId, GuidOrNull(await ReadProposalAsync(host, itemId, fromRun), "createdByRunNodeId"));
+    }
+
+    private static Task SeedChatMessagesAsync(ApiFactory factory, Guid chatId, params string[] roles)
+        => SeedChatMessagesAsync(factory, chatId, startAt: 0, roles);
+
+    /// <summary>
+    /// Appends messages with consecutive sequences from <paramref name="startAt"/>,
+    /// inserted newest first so that insertion order is not sequence order.
+    /// </summary>
+    private static async Task SeedChatMessagesAsync(ApiFactory factory, Guid chatId, int startAt, params string[] roles)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        for (var i = roles.Length - 1; i >= 0; i--)
+        {
+            db.ChatMessages.Add(new ChatMessage
+            {
+                Id = Guid.NewGuid(),
+                ChatSessionId = chatId,
+                Role = roles[i],
+                Content = $"message {startAt + i}",
+                Sequence = startAt + i,
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+        }
+    }
+
+    /// <summary>
+    /// A running run with a finished step that started after the one still
+    /// running, so only the status tells them apart. Returns the running step,
+    /// or null when <paramref name="running"/> is false.
+    /// </summary>
+    private static async Task<(Guid RunId, Guid? RunningNodeId)> SeedRunWithStepsAsync(ApiFactory factory, bool running)
+    {
+        var runId = await SeedRunAsync(factory);
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var versionId = await db.LoopRuns.Where(r => r.Id == runId).Select(r => r.LoopTemplateVersionId).SingleAsync();
+        var node = new LoopNode
+        {
+            Id = Guid.NewGuid(),
+            LoopTemplateVersionId = versionId,
+            NodeType = NodeType.AI,
+            Label = "ai",
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.LoopNodes.Add(node);
+        var now = DateTime.UtcNow;
+        var step = new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = node.Id,
+            Status = running ? LoopRunNodeStatus.Running : LoopRunNodeStatus.Succeeded,
+            StartedAt = now.AddMinutes(-2),
+            CreatedAt = now.AddMinutes(-2),
+        };
+        db.LoopRunNodes.Add(step);
+        db.LoopRunNodes.Add(new LoopRunNode
+        {
+            Id = Guid.NewGuid(),
+            LoopRunId = runId,
+            LoopNodeId = node.Id,
+            Status = LoopRunNodeStatus.Succeeded,
+            StartedAt = now.AddMinutes(-1),
+            CompletedAt = now,
+            CreatedAt = now.AddMinutes(-1),
+        });
+        await db.SaveChangesAsync();
+        return (runId, running ? step.Id : null);
     }
 
     private static async Task<Guid> SeedChatSessionAsync(ApiFactory factory)
