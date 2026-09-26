@@ -180,9 +180,13 @@ public class WorkItemManager : IWorkItemManager
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var remote = await _server.GetAsync(opts, workItemId);
-        if (remote == null) return null;
+        return remote == null ? null : await ViewOfAsync(opts, remote);
+    }
 
-        var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
+    /// <summary>A work item the server has just returned, joined with its runs.</summary>
+    private async Task<WorkItemView> ViewOfAsync(WorkItemServerOptions opts, RemoteWorkItem remote)
+    {
+        var runs = await _loopRunStore.GetAllByWorkItemAsync(remote.Id);
         await RecordUnreportedPullRequestsAsync(opts, remote, runs);
         var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                        ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.WaitingHuman)
@@ -1352,16 +1356,21 @@ public class WorkItemManager : IWorkItemManager
     public async Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(RemoteEditProposalQuery query, CancellationToken ct = default)
         => await _server.QueryEditProposalsAsync(await _options.ResolveForRepositoryAsync(null, ct), query, ct);
 
-    public async Task<EditProposalDecisionResult> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default)
+    public async Task<EditProposalApproval> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default)
     {
-        var result = await _server.ApproveEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, proposalId, ct);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId, ct);
+        var result = await _server.ApproveEditProposalAsync(opts, workItemId, proposalId, ct);
+        WorkItemView? updatedView = null;
         // An applied proposal is an edit like any other, so the board hears of it
         // the way UpdateAsync announces one.
         if (result is { Outcome: EditProposalDecisionOutcome.Applied, WorkItem: { } updated })
+        {
             await _notifier.WorkItemStateChangedAsync(updated.Id, updated.Status, updated.Status);
+            updatedView = await ViewOfAsync(opts, updated);
+        }
         if (result.Outcome is EditProposalDecisionOutcome.Applied or EditProposalDecisionOutcome.Stale)
             await _notifier.WorkItemEditProposalsChangedAsync(workItemId);
-        return result;
+        return new EditProposalApproval(result.Outcome, result.Proposal, updatedView);
     }
 
     public async Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)

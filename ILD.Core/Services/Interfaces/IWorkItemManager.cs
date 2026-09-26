@@ -194,13 +194,26 @@ public interface IWorkItemManager
     /// editable fields still equal the proposal's snapshot, atomically on the
     /// WorkItem server; otherwise the proposal goes Stale and nothing changes.
     /// </summary>
-    Task<EditProposalDecisionResult> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default);
+    Task<EditProposalApproval> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default);
 
     Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default);
 
     /// <summary>Record that the proposing chat has been told these decisions.</summary>
     Task MarkEditProposalDecisionsDeliveredAsync(IReadOnlyList<Guid> proposalIds, CancellationToken ct = default);
 }
+
+/// <summary>
+/// Outcome of <see cref="IWorkItemManager.ApproveEditProposalAsync"/>. An applied
+/// approve carries the updated item as a work item read shows it, built from what
+/// the approve itself returned: the edit has landed by then, so no further read of
+/// the WorkItem server may turn it into a reported failure.
+/// </summary>
+/// <param name="Proposal">The proposal as it now stands; null only for <see cref="EditProposalDecisionOutcome.NotFound"/>.</param>
+/// <param name="WorkItem">The updated item, for <see cref="EditProposalDecisionOutcome.Applied"/> only.</param>
+public sealed record EditProposalApproval(
+    EditProposalDecisionOutcome Outcome,
+    RemoteWorkItemEditProposal? Proposal,
+    WorkItemView? WorkItem);
 
 /// <summary>
 /// Outcome of a <see cref="IWorkItemManager.MergePullRequestAsync"/> call.

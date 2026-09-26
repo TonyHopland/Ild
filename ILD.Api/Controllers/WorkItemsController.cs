@@ -658,7 +658,7 @@ public class WorkItemsController : ControllerBase
             {
                 case EditProposalDecisionOutcome.Applied:
                     await HintProposingChatsAsync(id, chatNotifier, cancellationToken);
-                    return Ok(new { proposal = result.Proposal, workItem = await _workItemManager.GetWorkItemAsync(id) });
+                    return Ok(new { proposal = result.Proposal, workItem = result.WorkItem });
                 case EditProposalDecisionOutcome.Stale:
                     await HintProposingChatsAsync(id, chatNotifier, cancellationToken);
                     return Conflict(new
@@ -667,7 +667,7 @@ public class WorkItemsController : ControllerBase
                         proposal = result.Proposal,
                     });
                 default:
-                    return DecisionRefused(result);
+                    return DecisionRefused(result.Outcome, result.Proposal);
             }
         });
 
@@ -679,14 +679,14 @@ public class WorkItemsController : ControllerBase
         {
             var result = await _workItemManager.RejectEditProposalAsync(id, proposalId, request.Reason, cancellationToken);
             if (result.Outcome != EditProposalDecisionOutcome.Rejected)
-                return DecisionRefused(result);
+                return DecisionRefused(result.Outcome, result.Proposal);
             await HintProposingChatsAsync(id, chatNotifier, cancellationToken);
             return Ok(result.Proposal);
         });
 
-    private IActionResult DecisionRefused(EditProposalDecisionResult result)
-        => result.Outcome == EditProposalDecisionOutcome.NotPending
-            ? Conflict(new { error = $"This proposal was already decided ({result.Proposal?.Status}).", proposal = result.Proposal })
+    private IActionResult DecisionRefused(EditProposalDecisionOutcome outcome, RemoteWorkItemEditProposal? proposal)
+        => outcome == EditProposalDecisionOutcome.NotPending
+            ? Conflict(new { error = $"This proposal was already decided ({proposal?.Status}).", proposal })
             : NotFound();
 
     /// <summary>

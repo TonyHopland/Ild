@@ -36,7 +36,7 @@ public class WorkItemEditProposalOutageTests
     }
 
     [Fact]
-    public async Task An_applied_approve_is_reported_applied_even_when_the_chats_to_hint_cannot_be_read()
+    public async Task An_applied_approve_is_reported_applied_with_its_item_even_when_no_read_after_it_can_be_made()
     {
         var proposal = new RemoteWorkItemEditProposal
         {
@@ -50,7 +50,7 @@ public class WorkItemEditProposalOutageTests
             .ReturnsAsync(new EditProposalDecisionResult(
                 EditProposalDecisionOutcome.Applied, proposal, new RemoteWorkItem { Id = WorkItemId, Title = "Applied" }));
         client.Setup(c => c.GetAsync(It.IsAny<WorkItemServerOptions>(), WorkItemId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new RemoteWorkItem { Id = WorkItemId, Title = "Applied" });
+            .ThrowsAsync(Outage);
         client.Setup(c => c.ListEditProposalsAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(Outage);
         await using var factory = ServerWith(client);
@@ -61,5 +61,6 @@ public class WorkItemEditProposalOutageTests
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var body = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
         Assert.Equal("Approved", body.GetProperty("proposal").GetProperty("status").GetString());
+        Assert.Equal("Applied", body.GetProperty("workItem").GetProperty("title").GetString());
     }
 }
