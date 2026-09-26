@@ -381,6 +381,103 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Anchors_are_stored_as_given_and_survive_approve_reject_and_stale()
+    {
+        var item = await CreateItemAsync();
+        var run = Guid.NewGuid();
+        var step = Guid.NewGuid();
+        var chat = Guid.NewGuid();
+        var fromLoop = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest
+        {
+            Title = "Loop title", CreatedByLoopRunId = run, CreatedByRunNodeId = step,
+        });
+        var fromChat = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest
+        {
+            Description = "Chat description.", CreatedByChatSessionId = chat, ChatReplySequence = 0,
+        });
+        var rejected = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest
+        {
+            Tags = new[] { "chat-tag" }, CreatedByChatSessionId = chat, ChatReplySequence = 7,
+        });
+        var unanchored = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest
+        {
+            BranchNameOverride = "feature/unanchored", CreatedByLoopRunId = run,
+        });
+        Assert.Equal((step, (int?)null), (fromLoop.CreatedByRunNodeId, fromLoop.ChatReplySequence));
+        Assert.Equal(((Guid?)null, (int?)0), (fromChat.CreatedByRunNodeId, fromChat.ChatReplySequence));
+
+        var reject = await _client.RejectEditProposalAsync(_opts, item.Id, rejected.Id, "No.", TestContext.Current.CancellationToken);
+        var approve = await _client.ApproveEditProposalAsync(_opts, item.Id, fromLoop.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(((Guid?)null, (int?)7), (reject.Proposal!.CreatedByRunNodeId, reject.Proposal.ChatReplySequence));
+        Assert.Equal((step, (int?)null), (approve.Proposal!.CreatedByRunNodeId, approve.Proposal.ChatReplySequence));
+        var listed = (await _client.ListEditProposalsAsync(_opts, item.Id, TestContext.Current.CancellationToken))!
+            .ToDictionary(p => p.Id, p => (p.Status, p.CreatedByRunNodeId, p.ChatReplySequence));
+        Assert.Equal(new Dictionary<Guid, (RemoteEditProposalStatus, Guid?, int?)>
+        {
+            [fromLoop.Id] = (RemoteEditProposalStatus.Approved, step, null),
+            [fromChat.Id] = (RemoteEditProposalStatus.Stale, null, 0),
+            [rejected.Id] = (RemoteEditProposalStatus.Rejected, null, 7),
+            [unanchored.Id] = (RemoteEditProposalStatus.Stale, null, null),
+        }, listed);
+        var chats = await _client.QueryEditProposalsAsync(_opts,
+            new RemoteEditProposalQuery { CreatedByChatSessionId = chat }, TestContext.Current.CancellationToken);
+        Assert.Equal(new Dictionary<Guid, int?> { [fromChat.Id] = 0, [rejected.Id] = 7 },
+            chats.ToDictionary(p => p.Id, p => p.ChatReplySequence));
+    }
+
+    public enum BadAnchor { StepWithoutRun, StepOnAChatProposal, ReplyWithoutChat, ReplyOnALoopProposal, NegativeReply }
+
+    [Theory]
+    [InlineData(BadAnchor.StepWithoutRun)]
+    [InlineData(BadAnchor.StepOnAChatProposal)]
+    [InlineData(BadAnchor.ReplyWithoutChat)]
+    [InlineData(BadAnchor.ReplyOnALoopProposal)]
+    [InlineData(BadAnchor.NegativeReply)]
+    public async Task An_anchor_that_does_not_match_its_origin_is_refused_and_stores_nothing(BadAnchor bad)
+    {
+        var item = await CreateItemAsync();
+        var request = new RemoteCreateEditProposalRequest { Title = "Agent title" };
+        switch (bad)
+        {
+            case BadAnchor.StepWithoutRun:
+                request.CreatedByRunNodeId = Guid.NewGuid();
+                break;
+            case BadAnchor.StepOnAChatProposal:
+                request.CreatedByChatSessionId = Guid.NewGuid();
+                request.CreatedByRunNodeId = Guid.NewGuid();
+                break;
+            case BadAnchor.ReplyWithoutChat:
+                request.ChatReplySequence = 3;
+                break;
+            case BadAnchor.ReplyOnALoopProposal:
+                request.CreatedByLoopRunId = Guid.NewGuid();
+                request.ChatReplySequence = 3;
+                break;
+            case BadAnchor.NegativeReply:
+                request.CreatedByChatSessionId = Guid.NewGuid();
+                request.ChatReplySequence = -1;
+                break;
+        }
+
+        var result = await _client.CreateEditProposalAsync(_opts, item.Id, request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(EditProposalCreateOutcome.Invalid, result.Outcome);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+        Assert.Empty((await _client.ListEditProposalsAsync(_opts, item.Id, TestContext.Current.CancellationToken))!);
+    }
+
+    [Fact]
+    public void The_servers_model_has_no_change_that_lacks_a_scaffolded_migration()
+    {
+        // The tests run the server on SQLite through EnsureCreated, so only this
+        // sees a model change that production's Migrate() would never apply.
+        using var db = new DesignTimeDbContextFactory().CreateDbContext([]);
+
+        Assert.False(db.Database.HasPendingModelChanges());
+    }
+
+    [Fact]
     public async Task Deleting_a_work_item_removes_its_proposals()
     {
         var item = await CreateItemAsync();

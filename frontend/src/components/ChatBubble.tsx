@@ -27,8 +27,7 @@ import {
   type Point,
   type Size,
 } from "./chatPlacement";
-import MarkdownRenderer from "./MarkdownRenderer";
-import ChatEditProposals from "./ChatEditProposals";
+import ChatTranscript from "./ChatTranscript";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
 import { setCurrentChatSessionId } from "../services/chatSessionStore";
 import "./ChatBubble.css";
@@ -915,18 +914,12 @@ export default function ChatBubble() {
       ) : (
         <>
           <div className="chat-panel-body" ref={scrollRef}>
-            {messages.map((m) => (
-              <div key={m.id} className={`chat-msg chat-msg-${m.role}`}>
-                <MarkdownRenderer content={m.content} className="chat-msg-content" />
-                {m.interrupted && <span className="chat-interrupted">interrupted</span>}
-              </div>
-            ))}
-            {session && <ChatEditProposals key={session.id} chatSessionId={session.id} />}
-            {streaming && (
-              <div className="chat-msg chat-msg-assistant chat-msg-streaming">
-                <MarkdownRenderer content={streaming} className="chat-msg-content" />
-              </div>
-            )}
+            <ChatTranscript
+              key={session.id}
+              chatSessionId={session.id}
+              messages={messages}
+              streaming={streaming}
+            />
             {/* Visible for the whole turn — including while text streams — so it
                 is clear the agent is still working rather than done. */}
             {busy && (

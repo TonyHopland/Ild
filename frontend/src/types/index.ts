@@ -161,6 +161,10 @@ export interface WorkItemEditProposal {
   rejectionReason: string | null;
   createdByLoopRunId: string | null;
   createdByChatSessionId: string | null;
+  /** The loop run step that was running when it was proposed; places its card in the Action tab. */
+  createdByRunNodeId?: string | null;
+  /** The sequence of the chat reply its card follows. */
+  chatReplySequence?: number | null;
   createdAt: string;
   decidedAt: string | null;
 }

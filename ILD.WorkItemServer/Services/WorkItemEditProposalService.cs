@@ -119,6 +119,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Rationale = string.IsNullOrWhiteSpace(req.Rationale) ? null : req.Rationale.Trim(),
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
+            CreatedByRunNodeId = req.CreatedByRunNodeId,
+            ChatReplySequence = req.ChatReplySequence,
             Status = WorkItemEditProposalStatus.Pending,
             CreatedAt = _clock.GetUtcNow().UtcDateTime,
         };
@@ -146,6 +148,12 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             return $"A rationale may be at most {MaxRationaleLength} characters.";
         if (req.CreatedByLoopRunId is not null && req.CreatedByChatSessionId is not null)
             return "A proposal comes from a loop run or a chat session, never both.";
+        if (req.CreatedByRunNodeId is not null && req.CreatedByLoopRunId is null)
+            return "Only a proposal from a loop run can name the run step that made it.";
+        if (req.ChatReplySequence is not null && req.CreatedByChatSessionId is null)
+            return "Only a proposal from a chat session can name the chat reply it follows.";
+        if (req.ChatReplySequence < 0)
+            return "A chat reply sequence cannot be negative.";
         return null;
     }
 
@@ -329,6 +337,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
         Rationale = p.Rationale,
         CreatedByLoopRunId = p.CreatedByLoopRunId,
         CreatedByChatSessionId = p.CreatedByChatSessionId,
+        CreatedByRunNodeId = p.CreatedByRunNodeId,
+        ChatReplySequence = p.ChatReplySequence,
         RejectionReason = p.RejectionReason,
         CreatedAt = p.CreatedAt,
         DecidedAt = p.DecidedAt,

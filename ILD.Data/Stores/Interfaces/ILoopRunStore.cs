@@ -127,6 +127,12 @@ public interface ILoopRunStore
     Task SetVariableAsync(Guid runId, string name, string value);
 
     /// <summary>
+    /// The node execution of the run that is running now, the most recently
+    /// started when several are. Null when none is.
+    /// </summary>
+    Task<Guid?> GetRunningNodeIdAsync(Guid runId);
+
+    /// <summary>
     /// What each node execution of the work item's runs did to each variable it
     /// wrote: one entry per execution and variable, not per write.
     /// </summary>

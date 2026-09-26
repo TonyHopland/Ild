@@ -235,6 +235,13 @@ public sealed class RemoteWorkItemEditProposal
     public string? Rationale { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+
+    /// <summary>The loop run's step that was running when it was proposed; places its card in the Action tab.</summary>
+    public Guid? CreatedByRunNodeId { get; set; }
+
+    /// <summary>The sequence of the chat reply its card follows.</summary>
+    public int? ChatReplySequence { get; set; }
+
     public string? RejectionReason { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? DecidedAt { get; set; }
@@ -250,6 +257,8 @@ public sealed class RemoteCreateEditProposalRequest
     public string? Rationale { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
+    public Guid? CreatedByRunNodeId { get; set; }
+    public int? ChatReplySequence { get; set; }
 }
 
 /// <summary>
