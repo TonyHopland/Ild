@@ -24,6 +24,30 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
+    rolldownOptions: {
+      output: {
+        // Third-party code in its own chunks, so the app chunk stays small and a
+        // release that only changes app code leaves the vendor chunks cached.
+        // entriesAware keeps a library that only a lazy page imports in that
+        // page's chunk rather than in the ones every page loads.
+        codeSplitting: {
+          groups: [
+            {
+              name: "react",
+              test: /node_modules[\\/](react|react-dom|scheduler|react-router)[\\/]/,
+              entriesAware: true,
+            },
+            {
+              name: "markdown",
+              test: /node_modules[\\/](react-markdown|remark-[^\\/]+|mdast-[^\\/]+|micromark[^\\/]*|unified|hast-[^\\/]+|highlight\.js|lowlight|vfile[^\\/]*|unist-[^\\/]+)[\\/]/,
+              entriesAware: true,
+            },
+            { name: "xterm", test: /node_modules[\\/]@xterm[\\/]/, entriesAware: true },
+            { name: "vendor", test: /node_modules[\\/]/, entriesAware: true },
+          ],
+        },
+      },
+    },
   },
   test: {
     environment: "jsdom",
