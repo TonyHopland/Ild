@@ -49,6 +49,7 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
     [InlineData("2024-11-05")]
     [InlineData("2025-03-26")]
     [InlineData("2025-06-18")]
+    [InlineData("2025-11-25")]
     public async Task A_client_on_this_protocol_version_gets_the_same_tools_and_answers(string protocolVersion)
     {
         var ct = _cts.Token;
