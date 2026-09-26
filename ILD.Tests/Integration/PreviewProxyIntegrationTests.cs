@@ -157,7 +157,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         var request = Request(HttpMethod.Get, "/echo-headers");
         request.Headers.TryAddWithoutValidation("X-Forwarded-Proto", "https");
         request.Headers.TryAddWithoutValidation("X-Forwarded-Host", "evil.example.com");
-        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "192.0.2.1");
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "10.0.0.1");
 
         using var response = await _client.SendAsync(request);
         var headers = ParseHeaders(await response.Content.ReadAsStringAsync());
@@ -167,10 +167,10 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
 
         // X-Forwarded-For is replaced outright rather than appended to. This hop is
         // directly reachable and unauthenticated, so an inbound value is a string the
-        // caller chose — and preserving it would leave 192.0.2.1 leftmost, which is
+        // caller chose — and preserving it would leave 10.0.0.1 leftmost, which is
         // where an app behind a proxy reads the client IP from and what an allowlist
         // or per-IP rate limiter would go on to trust.
-        Assert.DoesNotContain("192.0.2.1", headers["x-forwarded-for"]);
+        Assert.DoesNotContain("10.0.0.1", headers["x-forwarded-for"]);
         Assert.Equal("127.0.0.1", headers["x-forwarded-for"]);
     }
 

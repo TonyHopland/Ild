@@ -448,7 +448,7 @@ real destination, and a loopback port for it to answer on.
 
 ```
 postgres   postgres:5432        →  127.0.0.1:15432
-redis      cache.example:6379   →  127.0.0.1:16379
+redis      cache.internal:6379  →  127.0.0.1:16379
 ```
 
 Then point the preview's `.env` at the loopback side:

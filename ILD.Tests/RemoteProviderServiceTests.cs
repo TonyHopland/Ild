@@ -376,11 +376,11 @@ public class RemoteProviderServiceTests
         using var db = new TestDb();
         AddGitHub(db);
 
-        var window = await CreateService(db, new ThrowingHandler("connect to 198.51.100.3:443 failed"))
+        var window = await CreateService(db, new ThrowingHandler("connect to 10.1.2.3:443 failed"))
             .GetCheckLogAsync("https://github.com/team/repo", "67890", tailLines: 10, offset: 0);
 
         Assert.False(window.Available);
-        Assert.DoesNotContain("198.51.100.3", window.Message);
+        Assert.DoesNotContain("10.1.2.3", window.Message);
     }
 
     private sealed class ThrowingHandler(string message) : HttpMessageHandler
@@ -1151,14 +1151,14 @@ public class RemoteProviderServiceTests
     [Theory]
     // Server, with a virtual directory in front of the collection.
     [InlineData(
-        "https://tfs.example.com/tfs",
-        "https://tfs.example.com/tfs/DefaultCollection/widgets/_git/app",
-        "https://tfs.example.com/tfs/DefaultCollection/widgets/_apis/git/repositories/app/pullrequests?api-version=7.1")]
+        "https://tfs.contoso.com/tfs",
+        "https://tfs.contoso.com/tfs/DefaultCollection/widgets/_git/app",
+        "https://tfs.contoso.com/tfs/DefaultCollection/widgets/_apis/git/repositories/app/pullrequests?api-version=7.1")]
     // Server, collection straight off the host root.
     [InlineData(
-        "https://tfs.example.com",
-        "https://tfs.example.com/DefaultCollection/widgets/_git/app",
-        "https://tfs.example.com/DefaultCollection/widgets/_apis/git/repositories/app/pullrequests?api-version=7.1")]
+        "https://tfs.contoso.com",
+        "https://tfs.contoso.com/DefaultCollection/widgets/_git/app",
+        "https://tfs.contoso.com/DefaultCollection/widgets/_apis/git/repositories/app/pullrequests?api-version=7.1")]
     // Legacy host with a collection above the project.
     [InlineData(
         "https://contoso.visualstudio.com",
@@ -1189,7 +1189,7 @@ public class RemoteProviderServiceTests
             Id = Guid.NewGuid(),
             Name = "azure",
             Type = "AzureDevOps",
-            Url = "https://tfs.example.com/tfs",
+            Url = "https://tfs.contoso.com/tfs",
             ApiKey = "pat-token",
             WebhookSecret = "hook-secret",
         });
@@ -1201,11 +1201,11 @@ public class RemoteProviderServiceTests
             .On(_ => true, "{}");
 
         await CreateService(db, handler).RegisterWebhookAsync(
-            "https://tfs.example.com/tfs/DefaultCollection/widgets/_git/app", "https://ild.example/hook");
+            "https://tfs.contoso.com/tfs/DefaultCollection/widgets/_git/app", "https://ild.example/hook");
 
         Assert.All(
             handler.Calls.Where(c => c.Url.Contains("/hooks/subscriptions")),
-            s => Assert.StartsWith("https://tfs.example.com/tfs/DefaultCollection/_apis/hooks/subscriptions", s.Url));
+            s => Assert.StartsWith("https://tfs.contoso.com/tfs/DefaultCollection/_apis/hooks/subscriptions", s.Url));
     }
 
     [Fact]

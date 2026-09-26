@@ -125,7 +125,7 @@ public static class EgressRules
         var raw = (input ?? string.Empty).Trim();
         if (raw.Length == 0)
         {
-            error = "Enter the destination host, e.g. postgres or db.example";
+            error = "Enter the destination host, e.g. postgres or db.internal";
             return false;
         }
         if (raw.Contains("://", StringComparison.Ordinal) || raw.Contains('/'))
@@ -142,7 +142,7 @@ public static class EgressRules
         var canonical = NormalizeHost(raw);
         if (canonical.Length == 0)
         {
-            error = "Enter the destination host, e.g. postgres or db.example";
+            error = "Enter the destination host, e.g. postgres or db.internal";
             return false;
         }
         if (canonical.Length > MaxHostLength)

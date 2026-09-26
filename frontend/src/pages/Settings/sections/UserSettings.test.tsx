@@ -28,7 +28,7 @@ describe("User settings signed-in devices", () => {
     createdAt: "2026-08-01T10:00:00Z",
     lastSeenAt: "2026-08-07T10:00:00Z",
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120.0",
-    createdFromIp: "192.0.2.2",
+    createdFromIp: "10.0.0.2",
     isCurrent: true,
   };
   const otherDevice = {
@@ -36,7 +36,7 @@ describe("User settings signed-in devices", () => {
     createdAt: "2026-08-02T10:00:00Z",
     lastSeenAt: "2026-08-06T10:00:00Z",
     userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/605.1",
-    createdFromIp: "192.0.2.3",
+    createdFromIp: "10.0.0.3",
     isCurrent: false,
   };
 

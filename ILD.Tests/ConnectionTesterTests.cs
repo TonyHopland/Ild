@@ -377,7 +377,7 @@ public class ConnectionTesterTests : IDisposable
         Git(origin, "init", "-b", branch);
         File.WriteAllText(Path.Combine(origin, "README.md"), "hi\n");
         Git(origin, "add", "-A");
-        Git(origin, "-c", "user.email=t@example.com", "-c", "user.name=Tester", "commit", "-m", "init");
+        Git(origin, "-c", "user.email=t@t.io", "-c", "user.name=Tester", "commit", "-m", "init");
         return origin;
     }
 

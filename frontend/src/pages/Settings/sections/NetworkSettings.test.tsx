@@ -538,7 +538,7 @@ describe("Network settings", () => {
     await forwardRow("postgres");
 
     vi.spyOn(services.networkService, "getForwards").mockResolvedValue([
-      { ...postgres, id: "f3", name: "smtp", host: "mail.example", port: 25, localPort: 10025 },
+      { ...postgres, id: "f3", name: "smtp", host: "mail.internal", port: 25, localPort: 10025 },
     ]);
     emit("NetworkPolicyChanged", {});
 
