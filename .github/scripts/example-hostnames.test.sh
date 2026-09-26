@@ -67,7 +67,7 @@ expect_accept() {
 fixture_count=0
 allowed_preamble='// Clone from https://git.example.com/team/repo.git or http://ild.example:8080'
 
-expect_reject "non-reserved URL host" "docs/setup.md" 2 "build.acme-corp.io" \
+expect_reject "non-reserved URL host" "src/BuildLinks.cs" 2 "build.acme-corp.io" \
   "$allowed_preamble
 See http://build.acme-corp.io/x for the build."
 
@@ -88,7 +88,7 @@ expect_reject "bare private IP 192.168/16" "frontend/src/a.test.tsx" 2 "192.168.
   "$allowed_preamble
 const addr = '192.168.1.20';"
 
-expect_reject "private IP 10/8 as a URL host" "docs/configuration.md" 2 "10.1.2.3" \
+expect_reject "private IP 10/8 as a URL host" "config/appsettings.json" 2 "10.1.2.3" \
   "$allowed_preamble
 Point it at http://10.1.2.3:8080/api."
 
