@@ -9,7 +9,7 @@
 # example or as test data says what that network is called and how it is laid
 # out, and no example needs one. Allowed:
 #   - example.com/.net/.org and their subdomains, *.example, *.test, *.invalid,
-#     localhost and *.localhost (RFC 2606, RFC 6761);
+#     localhost and *.localhost (RFC 2606, RFC 6761), and *.local (RFC 6762);
 #   - loopback 127/8, 0.0.0.0, and the documentation ranges 192.0.2/24,
 #     198.51.100/24 and 203.0.113/24 (RFC 5737);
 #   - the public services in ALLOWED_HOSTS below.
@@ -65,7 +65,7 @@ fi
 
 is_allowed_name() { # <lowercase host>
   case "$1" in
-    localhost | *.localhost | *.example | *.test | *.invalid) return 0 ;;
+    localhost | *.localhost | *.local | *.example | *.test | *.invalid) return 0 ;;
     example.com | *.example.com | example.net | *.example.net | example.org | *.example.org) return 0 ;;
   esac
   local entry
@@ -158,7 +158,7 @@ scan() { # <kind> <grep flags> <extended regex>
 
 scan url -E '[A-Za-z][A-Za-z0-9+.-]*://([^/@[:space:]]*@)?[A-Za-z0-9._{}$%-]+'
 scan email -E '[A-Za-z0-9._%+-]@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b'
-scan suffix -iE '\b[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.(kube|lan|local|internal|home|corp|intranet|private|localdomain|arpa)\b'
+scan suffix -iE '\b[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.(kube|lan|internal|home|corp|intranet|private|localdomain|arpa)\b'
 scan ipv4 -E '\.?[0-9]+(\.[0-9]+){3,}'
 
 if ((${#offenders[@]})); then
