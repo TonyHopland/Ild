@@ -11,6 +11,7 @@ import RunsPanel from "./RunsPanel";
 import ActionThread from "./ActionThread";
 import EditPanel from "./EditPanel";
 import FilesPanel from "./FilesPanel";
+import EditProposalsPanel from "./EditProposalsPanel";
 
 type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal";
 
@@ -274,6 +275,7 @@ export default function WorkItemModalV2({
       >
         <div className="wiv2-overview wiv2-overview-cols">
           <div className="wiv2-overview-main">
+            <EditProposalsPanel key={workItem.id} workItemId={workItem.id} />
             <span className="detail-label">Description</span>
             <DescriptionPanel workItem={workItem} />
           </div>

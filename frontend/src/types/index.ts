@@ -128,6 +128,41 @@ export interface WorkItem {
    * the bytes are only ever fetched one attachment at a time.
    */
   attachments?: WorkItemAttachment[] | null;
+  /** Agent-proposed edits to this item still waiting for a human decision. */
+  pendingEditProposalCount?: number;
+}
+
+export type WorkItemEditProposalStatus = "Pending" | "Approved" | "Rejected" | "Stale";
+
+/**
+ * An agent's proposed edit to a work item, applied only when a human approves it.
+ * In `proposed`, null or absent means the field is not part of the proposal and a
+ * blank override clears it. `snapshot` holds the item's values when it was proposed.
+ */
+export interface WorkItemEditProposal {
+  id: string;
+  workItemId: string;
+  status: WorkItemEditProposalStatus;
+  proposed: {
+    title?: string | null;
+    description?: string | null;
+    tags?: string[] | null;
+    branchNameOverride?: string | null;
+    baseBranchOverride?: string | null;
+  };
+  snapshot: {
+    title: string | null;
+    description: string | null;
+    tags: string[] | null;
+    branchNameOverride: string | null;
+    baseBranchOverride: string | null;
+  };
+  rationale: string | null;
+  rejectionReason: string | null;
+  createdByLoopRunId: string | null;
+  createdByChatSessionId: string | null;
+  createdAt: string;
+  decidedAt: string | null;
 }
 
 /** One file attached to a {@link WorkItem} — its metadata, never its bytes. */
@@ -764,6 +799,14 @@ export interface WorkItemStateChangedPayload {
   workItemId: string;
   oldStatus: WorkItemStatus;
   newStatus: WorkItemStatus;
+}
+
+export interface WorkItemEditProposalsChangedPayload {
+  workItemId: string;
+}
+
+export interface ChatEditProposalsChangedPayload {
+  chatSessionId: string;
 }
 
 export interface DependencyResolvedPayload {

@@ -14,6 +14,7 @@ const {
   invoke,
   chatService,
   aiProviderService,
+  workItemService,
   getOpenLoopDocument,
   setCurrentChatSessionId,
 } = vi.hoisted(() => ({
@@ -40,6 +41,7 @@ const {
   aiProviderService: {
     getAll: vi.fn(),
   },
+  workItemService: { listEditProposalsFor: vi.fn(() => Promise.resolve([])) },
   getOpenLoopDocument: vi.fn(),
   setCurrentChatSessionId: vi.fn(),
 }));
@@ -57,7 +59,7 @@ vi.mock("../hooks/useSignalR", () => ({
   }),
 }));
 
-vi.mock("../services/auth", () => ({ chatService, aiProviderService }));
+vi.mock("../services/auth", () => ({ chatService, aiProviderService, workItemService }));
 vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
