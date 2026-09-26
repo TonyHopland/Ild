@@ -133,6 +133,42 @@ describe("workItemService URL contract", () => {
   });
 });
 
+describe("workItemService edit proposal URL contract", () => {
+  test("listEditProposals calls GET /api/v1/workitems/:id/edit-proposals", async () => {
+    await workItemService.listEditProposals("wi-1");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/workitems/wi-1/edit-proposals");
+    expect(init?.method).toBe("GET");
+  });
+
+  test("listEditProposalsFor filters by status and chat session in the query", async () => {
+    await workItemService.listEditProposalsFor({ status: "Pending", chatSessionId: "chat-1" });
+    const [url, init] = fetchSpy.mock.calls[0];
+    const parsed = new URL(url as string, "http://ild");
+    expect(parsed.pathname).toBe("/api/v1/workitems/edit-proposals");
+    expect(parsed.searchParams.get("status")).toBe("Pending");
+    expect(parsed.searchParams.get("chatSessionId")).toBe("chat-1");
+    expect(init?.method).toBe("GET");
+  });
+
+  test("approveEditProposal calls POST /api/v1/workitems/:id/edit-proposals/:pid/approve", async () => {
+    fetchSpy.mockResolvedValue(okJsonResponse({}));
+    await workItemService.approveEditProposal("wi-1", "p-1");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/workitems/wi-1/edit-proposals/p-1/approve");
+    expect(init?.method).toBe("POST");
+  });
+
+  test("rejectEditProposal POSTs the reason to /api/v1/workitems/:id/edit-proposals/:pid/reject", async () => {
+    fetchSpy.mockResolvedValue(okJsonResponse({}));
+    await workItemService.rejectEditProposal("wi-1", "p-1", "Too vague.");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/workitems/wi-1/edit-proposals/p-1/reject");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ reason: "Too vague." });
+  });
+});
+
 describe("authService.onTokenChange", () => {
   afterEach(() => {
     localStorage.clear();
