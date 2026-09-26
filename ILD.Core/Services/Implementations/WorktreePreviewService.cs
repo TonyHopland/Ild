@@ -1835,7 +1835,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         /// Whether the preview proxy replaces the <c>Host</c> header with the
         /// loopback authority it forwards to. Defaults to true because dev servers
         /// that validate the host (Vite, webpack-dev-server, Rails, Django) reject a
-        /// request arriving as <c>wi-12.ild.kube</c> outright. Set false for a
+        /// request arriving as <c>wi-12.ild.example</c> outright. Set false for a
         /// service that needs to see the real browser-facing host — one that builds
         /// absolute links or issues host-bound redirects — and add the preview
         /// wildcard to that service's own allowed-hosts list instead.

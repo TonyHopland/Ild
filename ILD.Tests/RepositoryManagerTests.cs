@@ -31,7 +31,7 @@ public class RepositoryManagerTests : IDisposable
         Directory.CreateDirectory(_repo);
 
         Git(_repo, "init", "-b", "main");
-        Git(_repo, "config", "user.email", "t@t.io");
+        Git(_repo, "config", "user.email", "t@example.com");
         Git(_repo, "config", "user.name", "Tester");
         File.WriteAllText(Path.Combine(_repo, "README.md"), "hello\n");
         Git(_repo, "add", "-A");
@@ -120,7 +120,7 @@ public class RepositoryManagerTests : IDisposable
     {
         // The exclude only affects untracked paths, so a repo that intentionally
         // tracks its own .env keeps working — its edits still commit normally.
-        Git(_repo, "config", "user.email", "t@t.io");
+        Git(_repo, "config", "user.email", "t@example.com");
         File.WriteAllText(Path.Combine(_repo, ".env"), "PUBLIC=1\n");
         Git(_repo, "add", "-f", ".env");
         Git(_repo, "commit", "-m", "track env");
@@ -300,7 +300,7 @@ public class RepositoryManagerTests : IDisposable
         await mgr.PushAsync(
             _repo,
             "ild/wi-17",
-            auth: new GitAuthOptions("https://git.kube/team/repo.git", "token-123", "Forgejo"));
+            auth: new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo"));
 
         Assert.Single(runner.Calls);
         Assert.NotNull(runner.Calls[0].Environment);
@@ -534,7 +534,7 @@ public class RepositoryManagerTests : IDisposable
         var origin = Path.Combine(dir, "inspect-proj.git");
         Directory.CreateDirectory(origin);
         Git(origin, "init", "-b", "develop");
-        Git(origin, "config", "user.email", "t@t.io");
+        Git(origin, "config", "user.email", "t@example.com");
         Git(origin, "config", "user.name", "Tester");
         File.WriteAllText(Path.Combine(origin, "README.md"), "x\n");
         Git(origin, "add", "-A");
@@ -908,7 +908,7 @@ public class RepositoryManagerTests : IDisposable
     {
         var runner = new RecordingRunner();
         var mgr = new RepositoryManager(runner, worktreesRoot: Path.Combine(_tmp, "wt"));
-        var auth = new GitAuthOptions("https://git.kube/team/repo.git", "token-123", "Forgejo");
+        var auth = new GitAuthOptions("https://git.example.com/team/repo.git", "token-123", "Forgejo");
 
         await mgr.FetchAsync(_repo, auth: auth);
         await mgr.RebaseAsync(_repo, "origin/ild/wi-3-run-1");
@@ -1001,7 +1001,7 @@ public class RepositoryManagerTests : IDisposable
         var origin = Path.Combine(_tmp, "origin-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(origin);
         Git(origin, "init", "-b", "main");
-        Git(origin, "config", "user.email", "t@t.io");
+        Git(origin, "config", "user.email", "t@example.com");
         Git(origin, "config", "user.name", "Tester");
         File.WriteAllText(Path.Combine(origin, "keep.txt"), "keep\n");
         File.WriteAllText(Path.Combine(origin, "mod.txt"), "original\n");
@@ -1011,7 +1011,7 @@ public class RepositoryManagerTests : IDisposable
 
         var work = Path.Combine(_tmp, "work-" + Guid.NewGuid().ToString("N"));
         Git(_tmp, "clone", origin, work);
-        Git(work, "config", "user.email", "t@t.io");
+        Git(work, "config", "user.email", "t@example.com");
         Git(work, "config", "user.name", "Tester");
 
         var mgr = new RepositoryManager(worktreesRoot: Path.Combine(_tmp, "wt-" + Guid.NewGuid().ToString("N")));

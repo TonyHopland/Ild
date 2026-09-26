@@ -9,8 +9,8 @@ namespace ILD.Api.Middleware;
 
 /// <summary>
 /// Serves worktree previews on wildcard subdomains of
-/// <c>ILD_PREVIEW_PROXY_BASE</c> — <c>wi-12.ild.kube</c> reaches work item 12's
-/// public preview service, <c>wi-12-api.ild.kube</c> reaches its <c>api</c>
+/// <c>ILD_PREVIEW_PROXY_BASE</c> — <c>wi-12.ild.example</c> reaches work item 12's
+/// public preview service, <c>wi-12-api.ild.example</c> reaches its <c>api</c>
 /// service — by forwarding to the loopback port the preview runtime allocated.
 /// This exists because ILD in a cluster owns exactly one published port: a
 /// preview's port is picked at runtime inside the container and nothing outside

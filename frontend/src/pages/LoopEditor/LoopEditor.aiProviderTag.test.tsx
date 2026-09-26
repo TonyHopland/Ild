@@ -39,7 +39,7 @@ const alpha: AiProvider = {
   id: "p-alpha",
   name: "Alpha",
   type: "pi",
-  baseUrl: "https://alpha.local",
+  baseUrl: "https://alpha.example",
   apiKey: "",
   model: "m",
   isDefault: true,

@@ -106,13 +106,13 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
     public async Task With_a_proxy_base_the_public_url_becomes_the_work_items_preview_hostname()
     {
         WriteConfig();
-        var service = BuildService("http://ild.kube:8080");
+        var service = BuildService("http://ild.example:8080");
 
         var response = await service.StartAsync(
             _worktree,
             new WorktreePreviewStartOptions(WorkItemId: "7"));
 
-        Assert.Equal("http://wi-7.ild.kube:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
+        Assert.Equal("http://wi-7.ild.example:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
     public async Task An_authored_public_url_wins_over_the_proxy_base()
     {
         WriteConfig(publicUrlTemplate: "https://preview.example.test/app");
-        var service = BuildService("http://ild.kube:8080");
+        var service = BuildService("http://ild.example:8080");
 
         var response = await service.StartAsync(
             _worktree,
@@ -145,7 +145,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
     public async Task Several_public_services_are_each_advertised_under_their_own_hostname()
     {
         WriteConfig(secondPublicServiceName: "docs");
-        var service = BuildService("http://ild.kube:8080");
+        var service = BuildService("http://ild.example:8080");
 
         var response = await service.StartAsync(
             _worktree,
@@ -153,8 +153,8 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         // The bare wi-7 names one service, so neither may claim it — handing both the
         // same URL would send one of them to the wrong application.
-        Assert.Equal("http://wi-7-app.ild.kube:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
-        Assert.Equal("http://wi-7-docs.ild.kube:8080", response.Services.Single(s => s.Name == "docs").PublicUrl);
+        Assert.Equal("http://wi-7-app.ild.example:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
+        Assert.Equal("http://wi-7-docs.ild.example:8080", response.Services.Single(s => s.Name == "docs").PublicUrl);
     }
 
     [Fact]
@@ -163,7 +163,7 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
         // ild.config.json does not constrain service names to DNS labels, and an
         // unreachable URL is worse than a loopback one.
         WriteConfig(secondPublicServiceName: "docs_site");
-        var service = BuildService("http://ild.kube:8080");
+        var service = BuildService("http://ild.example:8080");
 
         var response = await service.StartAsync(
             _worktree,
@@ -171,14 +171,14 @@ public class WorktreePreviewServicePublicUrlTests : IDisposable
 
         var docs = response.Services.Single(s => s.Name == "docs_site");
         Assert.Equal($"http://127.0.0.1:{docs.Port}", docs.PublicUrl);
-        Assert.Equal("http://wi-7-app.ild.kube:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
+        Assert.Equal("http://wi-7-app.ild.example:8080", response.Services.Single(s => s.Name == "app").PublicUrl);
     }
 
     [Fact]
     public async Task Without_a_work_item_id_the_proxy_base_cannot_name_a_hostname_and_the_url_falls_back()
     {
         WriteConfig();
-        var service = BuildService("http://ild.kube:8080");
+        var service = BuildService("http://ild.example:8080");
 
         // Every API path that starts a preview knows the work item; a caller that
         // does not still gets a usable (if loopback-only) URL rather than a wrong one.

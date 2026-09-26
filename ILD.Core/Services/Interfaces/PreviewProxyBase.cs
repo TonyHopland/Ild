@@ -22,7 +22,7 @@ namespace ILD.Core.Services.Interfaces;
 /// </para>
 /// <para>
 /// Matching deliberately requires a non-empty label followed by a dot: the apex
-/// host itself (<c>ild.kube</c>) is not a preview host, so the main UI served on
+/// host itself (<c>ild.example</c>) is not a preview host, so the main UI served on
 /// it is never routed into a worktree.
 /// </para>
 /// </summary>
@@ -54,7 +54,7 @@ public sealed class PreviewProxyBase
     /// <summary>Scheme previews are advertised on (<c>http</c> when the value omitted one).</summary>
     public string Scheme { get; }
 
-    /// <summary>Apex host previews are served under, e.g. <c>ild.kube</c>. Empty when disabled.</summary>
+    /// <summary>Apex host previews are served under, e.g. <c>ild.example</c>. Empty when disabled.</summary>
     public string Host { get; }
 
     /// <summary>Explicit port in the advertised URL, or null when the scheme's default port applies.</summary>
@@ -74,7 +74,7 @@ public sealed class PreviewProxyBase
         => Parse(configuration[ConfigurationKey]);
 
     /// <summary>
-    /// Parses the configured value. A bare authority (<c>ild.kube:8080</c>) is
+    /// Parses the configured value. A bare authority (<c>ild.example:8080</c>) is
     /// accepted and assumed to be <c>http</c>; anything unparseable yields a
     /// disabled base carrying <see cref="ConfigurationError"/> rather than
     /// throwing, so a typo degrades previews instead of failing startup.
@@ -93,7 +93,7 @@ public sealed class PreviewProxyBase
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {
             return new PreviewProxyBase(
-                $"'{value}' is not a usable preview proxy base; expected scheme://host[:port], e.g. http://ild.kube.");
+                $"'{value}' is not a usable preview proxy base; expected scheme://host[:port], e.g. http://ild.example.");
         }
 
         return new PreviewProxyBase(uri.Scheme, uri.Host, uri.IsDefaultPort ? null : uri.Port);
@@ -126,7 +126,7 @@ public sealed class PreviewProxyBase
         return true;
     }
 
-    /// <summary>Builds the advertised URL for a host label, e.g. <c>http://wi-12.ild.kube</c>.</summary>
+    /// <summary>Builds the advertised URL for a host label, e.g. <c>http://wi-12.ild.example</c>.</summary>
     public string BuildUrl(string label)
         => Port is int port
             ? $"{Scheme}://{label}.{Host}:{port}"

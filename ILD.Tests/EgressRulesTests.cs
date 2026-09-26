@@ -22,8 +22,8 @@ public class EgressRulesTests
     [InlineData(".example.com", "deep.api.example.com", true)]
     [InlineData(".example.com", "notexample.com", false)]
     [InlineData(".example.com", "example.com.evil.net", false)]
-    [InlineData("10.0.0.5", "10.0.0.5", true)]
-    [InlineData("10.0.0.5", "10.0.0.50", false)]
+    [InlineData("192.0.2.5", "192.0.2.5", true)]
+    [InlineData("192.0.2.5", "192.0.2.50", false)]
     public void An_exact_pattern_matches_one_host_and_a_dotted_one_matches_the_domain_and_beneath(string pattern, string host, bool expected)
     {
         Assert.Equal(expected, EgressRules.Matches(pattern, EgressRules.NormalizeHost(host)));
@@ -91,7 +91,7 @@ public class EgressRulesTests
     [InlineData("  API.Example.COM. ", "api.example.com")]
     [InlineData(".example.com", ".example.com")]
     [InlineData("*.example.com", ".example.com")]
-    [InlineData("10.0.0.5", "10.0.0.5")]
+    [InlineData("192.0.2.5", "192.0.2.5")]
     [InlineData("[::1]", "::1")]
     [InlineData("under_score.example.com", "under_score.example.com")]
     public void Patterns_are_canonicalised_on_the_way_in(string input, string expected)
@@ -111,7 +111,7 @@ public class EgressRulesTests
     [InlineData("-bad.example.com")]
     [InlineData("api.example.com:443")]
     [InlineData("has space.example.com")]
-    [InlineData(".10.0.0.5")]
+    [InlineData(".192.0.2.5")]
     public void Anything_that_is_not_a_host_is_refused_with_a_reason(string input)
     {
         Assert.False(EgressRules.TryNormalizePattern(input, out _, out var error));
@@ -120,8 +120,8 @@ public class EgressRulesTests
 
     [Theory]
     [InlineData("postgres", "postgres")]
-    [InlineData(" POSTGRES.internal. ", "postgres.internal")]
-    [InlineData("10.0.0.5", "10.0.0.5")]
+    [InlineData(" POSTGRES.example. ", "postgres.example")]
+    [InlineData("192.0.2.5", "192.0.2.5")]
     [InlineData("[::1]", "::1")]
     public void A_forward_destination_is_canonicalised_like_any_other_host(string input, string expected)
     {
@@ -142,7 +142,7 @@ public class EgressRulesTests
     [InlineData("https://postgres")]
     [InlineData("postgres/db")]
     [InlineData("postgres:5432")]
-    [InlineData("has space.internal")]
+    [InlineData("has space.example")]
     [InlineData("-leading.example.com")]
     public void A_forward_destination_must_be_one_concrete_host(string input)
     {

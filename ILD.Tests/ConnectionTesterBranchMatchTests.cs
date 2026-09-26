@@ -22,7 +22,7 @@ public class ConnectionTesterBranchMatchTests : IDisposable
         Git("init", "-b", "main-x");
         File.WriteAllText(Path.Combine(_origin, "README.md"), "hi\n");
         Git("add", "-A");
-        Git("-c", "user.email=t@t.io", "-c", "user.name=Tester", "commit", "-m", "init");
+        Git("-c", "user.email=t@example.com", "-c", "user.name=Tester", "commit", "-m", "init");
         Git("branch", "x/refs/heads/main");
     }
 
