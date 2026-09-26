@@ -15,13 +15,16 @@ public class AIProviderServiceTests
             => Task.FromException<HttpResponseMessage>(new HttpRequestException("upstream offline"));
     }
 
-    [Fact]
-    public async Task PreviewStart_tool_injects_repo_custom_env_resolved_via_the_run()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PreviewStart_tool_injects_repo_custom_env_resolved_via_the_run(bool itemRepointed)
     {
         // The agent tool surface only holds the worktree path, so the repo's custom
         // .env must be resolved back through the run that owns the worktree —
         // worktree → run → work item → repository — and threaded into StartAsync,
-        // matching the human WorkItems/Agent controllers.
+        // matching the human WorkItems/Agent controllers. A work item re-pointed at
+        // another repository since keeps the env of the one its run was created on.
         using var db = new TestDb();
 
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "https://e" };
@@ -34,6 +37,15 @@ public class AIProviderServiceTests
             CloneUrl = "https://e/r.git",
             RemoteProviderId = remote.Id,
             PreviewEnv = "API_TOKEN=from-repo",
+        });
+        var editedRepoId = Guid.NewGuid();
+        db.Context.Repositories.Add(new Repository
+        {
+            Id = editedRepoId,
+            Name = "b",
+            CloneUrl = "https://e/b.git",
+            RemoteProviderId = remote.Id,
+            PreviewEnv = "API_TOKEN=from-edited-repo",
         });
 
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
@@ -50,12 +62,15 @@ public class AIProviderServiceTests
             LoopTemplateVersionId = ltv.Id,
             WorktreePath = worktreePath,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
+            RepositoryId = repoId,
         });
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(m => m.GetWorkItemAsync(wiId))
-            .ReturnsAsync(new WorkItemView { Id = wiId, RepositoryId = repoId });
+            .ReturnsAsync(itemRepointed
+                ? new WorkItemView { Id = wiId, RepositoryId = editedRepoId, RunRepositoryId = repoId }
+                : new WorkItemView { Id = wiId, RepositoryId = repoId });
 
         WorktreePreviewStartOptions? captured = null;
         var preview = new Mock<IWorktreePreviewService>();

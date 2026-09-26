@@ -37,10 +37,13 @@ public class StartNodeExecutorTests : IDisposable
         Mock<IRepositoryManager> repoManager,
         Mock<IWorktreePreviewService>? preview = null,
         string? previewEnv = null,
-        string? worktreesPath = null)
+        string? worktreesPath = null,
+        Repository? itemRepointedTo = null)
     {
         var repoId = Guid.NewGuid();
-        var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
+        var workItem = itemRepointedTo is null
+            ? new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId }
+            : new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = itemRepointedTo.Id, RunRepositoryId = repoId };
         var repo = new Repository
         {
             Id = repoId,
@@ -57,6 +60,8 @@ public class StartNodeExecutorTests : IDisposable
         workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
         var providerStore = new Mock<IProviderStore>();
         providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        if (itemRepointedTo is not null)
+            providerStore.Setup(s => s.GetRepositoryByIdAsync(itemRepointedTo.Id)).ReturnsAsync(itemRepointedTo);
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
 
         var services = new ServiceCollection();
@@ -71,7 +76,7 @@ public class StartNodeExecutorTests : IDisposable
         var sp = services.BuildServiceProvider();
 
         var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Start, Config = "{}" };
-        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", RepositoryId = repoId };
         return (repoManager, sp, run, node);
     }
 
@@ -124,6 +129,36 @@ public class StartNodeExecutorTests : IDisposable
         // The base repo must be fetched before it is reset to the latest origin tip.
         mgr.Verify(m => m.FetchAsync(_baseRepo, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Once);
         mgr.Verify(m => m.ResetHardAsync(_baseRepo, "origin/main", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_run_resumed_after_the_item_was_repointed_builds_its_worktree_in_the_runs_repository()
+    {
+        // An edit to the item's repository is never retroactive: a run that
+        // re-enters Start keeps working in the repository it was created on.
+        var editedRepoPath = Path.Combine(_baseRepo, "edited-repo");
+        Directory.CreateDirectory(Path.Combine(editedRepoPath, ".git"));
+        var editedRepo = new Repository
+        {
+            Id = Guid.NewGuid(),
+            Name = "b",
+            CloneUrl = "https://example.com/o/b.git",
+            DefaultBranch = "main",
+            WorktreesPath = editedRepoPath,
+            RemoteProviderId = Guid.NewGuid(),
+        };
+
+        var (mgr, sp, run, node) = BuildContext(HappyRepoManager(), itemRepointedTo: editedRepo);
+
+        var executor = new StartNodeExecutor();
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.WorktreeReady);
+        mgr.Verify(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()), Times.Once);
+        mgr.Verify(m => m.FetchAsync(editedRepoPath, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+        mgr.Verify(m => m.CreateWorktreeAsync(editedRepoPath, It.IsAny<string>()), Times.Never);
     }
 
     /// <summary>A repo manager that prepares a worktree at <c>/tmp/worktree</c> on the happy path.</summary>

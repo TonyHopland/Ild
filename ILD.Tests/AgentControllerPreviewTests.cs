@@ -129,8 +129,10 @@ public class AgentControllerPreviewTests
         notifier.Verify(n => n.PreviewStateChangedAsync(It.IsAny<string>()), Times.Never);
     }
 
-    [Fact]
-    public async Task StartPreview_threads_the_repository_custom_env_into_start_options()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartPreview_threads_the_repository_custom_env_into_start_options(bool itemRepointed)
     {
         using var db = new TestDb();
         var id = Guid.NewGuid().ToString();
@@ -147,6 +149,16 @@ public class AgentControllerPreviewTests
             RemoteProviderId = provider.Id,
             PreviewEnv = "API_TOKEN=from-repo",
         });
+        // Re-pointing the item since must not reach the run it already has.
+        var editedRepoId = Guid.NewGuid();
+        db.Context.Repositories.Add(new ILD.Data.Entities.Repository
+        {
+            Id = editedRepoId,
+            Name = "b",
+            CloneUrl = "https://e/b.git",
+            RemoteProviderId = provider.Id,
+            PreviewEnv = "API_TOKEN=from-edited-repo",
+        });
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         WorktreePreviewStartOptions? captured = null;
@@ -155,7 +167,9 @@ public class AgentControllerPreviewTests
             .Callback<string, WorktreePreviewStartOptions?, CancellationToken>((_, o, _) => captured = o)
             .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
         var notifier = new Mock<IWorkItemNotifier>();
-        var workItem = new WorkItemView { Id = id, WorktreePath = WorktreePath, RepositoryId = repoId };
+        var workItem = itemRepointed
+            ? new WorkItemView { Id = id, WorktreePath = WorktreePath, RepositoryId = editedRepoId, RunRepositoryId = repoId }
+            : new WorkItemView { Id = id, WorktreePath = WorktreePath, RepositoryId = repoId };
         var controller = BuildController(workItem, preview, notifier, db);
 
         var result = await controller.StartPreview(id, new WorktreePreviewStartRequest());

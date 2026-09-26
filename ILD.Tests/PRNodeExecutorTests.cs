@@ -242,6 +242,52 @@ public class PRNodeExecutorTests
     }
 
     [Fact]
+    public async Task PR_is_opened_on_the_runs_repository_after_the_item_was_repointed()
+    {
+        // An edit to the item's repository is never retroactive: this run's
+        // branch lives in the repository the run was created on.
+        var runRepoId = Guid.NewGuid();
+        var editedRepoId = Guid.NewGuid();
+        var workItem = new WorkItemView
+        {
+            Id = "WI-1", Title = "T", Description = "D",
+            RepositoryId = editedRepoId,
+            RunRepositoryId = runRepoId,
+        };
+        var runRepo = new Repository { Id = runRepoId, Name = "a", CloneUrl = "https://example.com/o/a.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+        var editedRepo = new Repository { Id = editedRepoId, Name = "b", CloneUrl = "https://example.com/o/b.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(runRepoId)).ReturnsAsync(runRepo);
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(editedRepoId)).ReturnsAsync(editedRepo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/a/pull/42", RemotePrStatus.Open, null));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        var sp = services.BuildServiceProvider();
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", RepositoryId = runRepoId };
+
+        var executor = new PRNodeExecutor();
+        await foreach (var _ in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None))) { }
+
+        remote.Verify(r => r.CreatePullRequestAsync(
+            runRepo.CloneUrl, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Once);
+        remote.Verify(r => r.CreatePullRequestAsync(
+            editedRepo.CloneUrl, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
     public async Task The_commits_ahead_guard_measures_against_the_run_base_branch()
     {
         // The guard exists to stop an empty PR. Measured against origin/main it
