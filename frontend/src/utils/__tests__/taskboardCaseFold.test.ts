@@ -19,6 +19,30 @@ describe("the board folds case one character at a time, as the server's OrdinalI
     expect(["SS", "ß", "ss"].sort(compareTags)).toEqual(["SS", "ss", "ß"]);
   });
 
+  test("dotless ı and long ſ keep their own case, as .NET keeps them", () => {
+    expect(sameTag("ı", "I")).toBe(false);
+    expect(sameTag("ſ", "S")).toBe(false);
+    expect(sameTag("ı", "ı")).toBe(true);
+    expect(
+      matchesTaskboardFilter(item({ title: "ıZMAT" }), { ...EMPTY_TASKBOARD_FILTER, search: "I" }),
+    ).toBe(false);
+    expect(
+      matchesTaskboardFilter(item({ tags: ["ſ"] }), { ...EMPTY_TASKBOARD_FILTER, tags: ["S"] }),
+    ).toBe(false);
+  });
+
+  test("a Greek letter with iota subscript is its titlecase partner", () => {
+    expect(sameTag("ᾀ", "ᾈ")).toBe(true);
+    expect(sameTag("ᾳ", "ᾼ")).toBe(true);
+    expect(sameTag("ᾀ", "ἈΙ")).toBe(false);
+    expect(
+      matchesTaskboardFilter(item({ title: "ᾠδή" }), { ...EMPTY_TASKBOARD_FILTER, search: "ᾨ" }),
+    ).toBe(true);
+    expect(
+      matchesTaskboardFilter(item({ tags: ["ῳ"] }), { ...EMPTY_TASKBOARD_FILTER, tags: ["ῼ"] }),
+    ).toBe(true);
+  });
+
   test("a card carrying ß does not match a filter for SS", () => {
     expect(
       matchesTaskboardFilter(item({ tags: ["ß"] }), { ...EMPTY_TASKBOARD_FILTER, tags: ["SS"] }),
