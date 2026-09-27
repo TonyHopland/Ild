@@ -1388,7 +1388,11 @@ describe("Taskboard live changes keep server order", () => {
     await waitFor(() => expect(cardTitles("Backlog")).toEqual(["keep", "moves-repo"]));
 
     server.items.find((wi) => wi.id === "moves-repo")!.repositoryId = "repo-2";
-    await hub.emit("WorkItemRunProgressed", { workItemId: "moves-repo" });
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "moves-repo",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
     await waitFor(() => expect(cardTitles("Backlog")).toEqual(["keep"]));
     await waitFor(() => expect(badge("Backlog")).toBe("1"));
 
@@ -1441,15 +1445,28 @@ describe("Taskboard live changes keep server order", () => {
     armed = true;
     const countsBefore = server.getCounts.mock.calls.length;
 
-    // Deleted by someone else, with no event for it: only a count can tell.
+    // Deleted by someone else, with no event for it: only the count the next
+    // edit asks for can tell.
     server.items.splice(
       server.items.findIndex((wi) => wi.id === "b0"),
       1,
     );
-    await hub.emit("WorkItemRunProgressed", { workItemId: "b1" });
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "b1",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
     await waitFor(() => expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1));
-    await hub.emit("WorkItemRunProgressed", { workItemId: "b2" });
-    await hub.emit("WorkItemRunProgressed", { workItemId: "b3" });
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "b2",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "b3",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
     await settle();
     expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1);
 
@@ -1482,7 +1499,11 @@ describe("Taskboard live changes keep server order", () => {
     renderTaskboard();
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(5));
     armed = true;
-    await hub.emit("WorkItemRunProgressed", { workItemId: "b1" });
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "b1",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
     await waitFor(() => expect(armed).toBe(false));
 
     fireEvent.change(screen.getByLabelText("Filter by repository"), {
