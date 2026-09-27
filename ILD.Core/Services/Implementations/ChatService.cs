@@ -73,9 +73,34 @@ public sealed class ChatService : IChatService
         return await _db.ChatSessions.AsNoTracking()
             .Where(c => c.UserId == userId)
             .OrderByDescending(c => c.UpdatedAt ?? c.CreatedAt)
-            .Select(c => new ChatSessionSummaryView(c.Id, c.Name, c.CreatedAt, c.UpdatedAt))
+            .Select(c => new ChatSessionSummaryView(
+                c.Id,
+                c.Name,
+                c.CreatedAt,
+                c.UpdatedAt,
+                c.LastReadSequence != null && _db.ChatMessages.Any(m =>
+                    m.ChatSessionId == c.Id && m.Role == "assistant" && m.Sequence > c.LastReadSequence)))
             .ToListAsync(ct);
     }
+
+    public async Task<bool> MarkReadAsync(string userId, Guid sessionId, int sequence, CancellationToken ct = default)
+    {
+        if (!await RaiseReadMarkerAsync(userId, sessionId, sequence, ct)) return false;
+        await _notifier.UnreadChangedAsync(userId, sessionId);
+        return true;
+    }
+
+    /// <summary>
+    /// Raise the user's read marker on the chat to <paramref name="sequence"/>, never
+    /// lowering it, straight in the database so no tracked copy of the session can
+    /// write an older value back over a concurrent raise. Returns whether it moved.
+    /// </summary>
+    private async Task<bool> RaiseReadMarkerAsync(string userId, Guid sessionId, int sequence, CancellationToken ct)
+        => await _db.ChatSessions
+            .Where(c => c.Id == sessionId
+                && c.UserId == userId
+                && (c.LastReadSequence == null || c.LastReadSequence < sequence))
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastReadSequence, sequence), ct) > 0;
 
     public async Task<ChatSessionView?> GetByIdAsync(string userId, Guid sessionId, CancellationToken ct = default)
     {
@@ -152,6 +177,12 @@ public sealed class ChatService : IChatService
         // stays in the agent's history for the rest of that session. That is why the
         // static half is delivered once per session and not per turn (#27).
         var userEntry = await AppendMessageAsync(chatSessionId, "user", userMessage, interrupted: false, nextSeq, ct);
+
+        // Whoever sends has seen the chat up to their own message, so only a reply
+        // landing after it can make the chat unread. That can clear a dot another of
+        // the owner's windows is showing, so a raise hints like a mark-read does.
+        if (await RaiseReadMarkerAsync(session.UserId, chatSessionId, userEntry.Sequence, ct))
+            await _notifier.UnreadChangedAsync(session.UserId, chatSessionId);
         await _notifier.MessageAppendedAsync(chatSessionId, turnId, ToView(userEntry));
 
         var provider = await _providers.GetAiProviderByIdAsync(session.AiProviderId);
@@ -530,6 +561,9 @@ public sealed class ChatService : IChatService
         _db.ChatSessions.Remove(session);
         await _db.SaveChangesAsync(ct);
 
+        // An unread chat takes its dot with it, in every window of the owner's.
+        await _notifier.UnreadChangedAsync(session.UserId, session.Id);
+
         // Best-effort scratch-dir removal: nothing chat-local should remain, but a
         // leftover directory must never fail the hard-delete. The agent writes the
         // scratch dir, so it is cleared as the agent: a link it planted is unlinked,
@@ -568,6 +602,7 @@ public sealed class ChatService : IChatService
         // runner can name the turn, and only it sees a turn that ends without this
         // method running at all (a chat deleted while its turn was streaming).
         await _notifier.MessageAppendedAsync(session.Id, turnId, ToView(assistant));
+        await _notifier.UnreadChangedAsync(session.UserId, session.Id);
     }
 
     private async Task<ChatMessage> AppendMessageAsync(

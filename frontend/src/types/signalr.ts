@@ -34,6 +34,7 @@ import type {
   LogEntryAppendedPayload,
   WorkItemEditProposalsChangedPayload,
   ChatEditProposalsChangedPayload,
+  ChatUnreadChangedPayload,
 } from "./index";
 
 export interface SignalREventPayloads {
@@ -63,6 +64,7 @@ export interface SignalREventPayloads {
   LogEntryAppended: LogEntryAppendedPayload;
   WorkItemEditProposalsChanged: WorkItemEditProposalsChangedPayload;
   ChatEditProposalsChanged: ChatEditProposalsChangedPayload;
+  ChatUnreadChanged: ChatUnreadChangedPayload;
 }
 
 export type SignalREventName = keyof SignalREventPayloads;

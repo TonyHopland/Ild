@@ -63,6 +63,7 @@ public sealed class ChatTurnLifecycleTests
 
         public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document) => Task.CompletedTask;
         public Task EditProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
+        public Task UnreadChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
 
         // Turns run in the background, so every read is a snapshot taken under the
         // same lock the recording writes under.
@@ -107,6 +108,9 @@ public sealed class ChatTurnLifecycleTests
             => throw new NotSupportedException();
 
         public Task<bool> ExistsForUserAsync(string userId, Guid sessionId, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<bool> MarkReadAsync(string userId, Guid sessionId, int sequence, CancellationToken ct = default)
             => throw new NotSupportedException();
 
         public Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string>? tools, CancellationToken ct = default)

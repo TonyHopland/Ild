@@ -31,6 +31,14 @@ public interface IChatService
     Task<bool> ExistsForUserAsync(string userId, Guid sessionId, CancellationToken ct = default);
 
     /// <summary>
+    /// Record that the user has read their chat up to <paramref name="sequence"/>.
+    /// The marker only ever rises, so a sequence at or below the stored one changes
+    /// nothing. Returns whether it moved, and false when the chat does not exist or
+    /// belongs to another user. A raise hints the owner's inbox.
+    /// </summary>
+    Task<bool> MarkReadAsync(string userId, Guid sessionId, int sequence, CancellationToken ct = default);
+
+    /// <summary>
     /// Start a new chat session for the user. Provider + tools are fixed for its
     /// life. A user may hold many retained chats (ADR-0013), so this no longer
     /// rejects a second session. Throws <see cref="InvalidOperationException"/>

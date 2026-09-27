@@ -72,6 +72,14 @@ public class ChatSession : IHasUpdatedAt
     [MaxLength(2048)]
     public string? DeliveredBriefings { get; set; }
 
+    /// <summary>
+    /// The highest message sequence the user has seen in this chat. A reply above it
+    /// makes the chat unread; null means nothing is recorded, so the chat is never
+    /// unread. Only ever raised, and only by a conditional update: a tracked copy of
+    /// the session would write a stale value back over a concurrent raise.
+    /// </summary>
+    public int? LastReadSequence { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     /// <summary>Last-activity timestamp; shown as the history row's date-stamp.</summary>

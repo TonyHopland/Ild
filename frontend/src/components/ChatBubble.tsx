@@ -50,6 +50,11 @@ const TOOL_OPTIONS: { key: string; label: string; defaultOn: boolean }[] = [
   { key: "execute", label: "Execute", defaultOn: false },
 ];
 
+/** Marks the chat button, or a past chat, as holding a reply the user has not read. */
+function UnreadDot() {
+  return <span className="chat-unread-dot" role="img" aria-label="New messages" />;
+}
+
 /**
  * Persistent chat bubble (ADR-0010) with retained chat history (ADR-0013).
  * Mounted globally so it survives navigation; chats live server-side. The bubble
@@ -267,8 +272,24 @@ export default function ChatBubble() {
     [panelOverride, fabPos, panelSize],
   );
 
-  const refreshHistory = useCallback(async () => {
+  // History reads are ordered the same way as the chat's state reads above: an
+  // answer lands only if no newer read has landed first. On top of that, a read
+  // taken before a local change to the list — a delete, or a mark-read the server
+  // has confirmed — is a snapshot of a list that no longer exists, and would bring
+  // back the chat or the dot that change removed. So such a read is dropped, and a
+  // fresh one goes out in its place: whatever the dropped read was sent to pick
+  // up, a reply in another chat say, still arrives.
+  const historyReadRef = useRef(0);
+  const appliedHistoryReadRef = useRef(0);
+  const historyEpochRef = useRef(0);
+
+  const refreshHistory = useCallback(async function readHistory(): Promise<void> {
+    const read = ++historyReadRef.current;
+    const epoch = historyEpochRef.current;
     const chats = await chatService.listHistory();
+    if (read <= appliedHistoryReadRef.current) return;
+    if (historyEpochRef.current !== epoch) return readHistory();
+    appliedHistoryReadRef.current = read;
     setHistory(chats);
   }, []);
 
@@ -284,6 +305,60 @@ export default function ChatBubble() {
       cancelled = true;
     };
   }, [refreshHistory]);
+
+  // Join this user's inbox, which hears when any of their chats may have turned
+  // unread or read, and re-read the history once joined. On every connect: the
+  // server drops the membership with the connection, and a hint sent while it was
+  // down is lost, so only the re-read can recover it.
+  useEffect(() => {
+    if (connectionState !== "connected") return;
+    void (async () => {
+      try {
+        await invoke("SubscribeToChatInbox");
+        await refreshHistory();
+      } catch (err) {
+        console.error(err);
+      }
+    })();
+    return () => {
+      void invoke("UnsubscribeFromChatInbox")?.catch((err) => console.error(err));
+    };
+  }, [connectionState, invoke, refreshHistory]);
+
+  useEffect(() => {
+    const onUnreadChanged = () => {
+      void refreshHistory().catch((err) => console.error(err));
+    };
+    on("ChatUnreadChanged", onUnreadChanged);
+    return () => off("ChatUnreadChanged", onUnreadChanged);
+  }, [on, off, refreshHistory]);
+
+  // The newest sequence each chat has been marked read up to, or has a request
+  // out for, so every message is reported once. A request that fails gives its
+  // claim back, provided nothing newer has taken it over, and the next time the
+  // chat is on screen asks again.
+  const markedRef = useRef(new Map<string, number>());
+
+  // A chat on screen in the open panel has been read up to its newest message.
+  useEffect(() => {
+    if (!chatEnabled || !open || !session || messages.length === 0) return;
+    const id = session.id;
+    const newest = Math.max(...messages.map((m) => m.sequence));
+    if (newest <= (markedRef.current.get(id) ?? -1)) return;
+    markedRef.current.set(id, newest);
+    void (async () => {
+      try {
+        await chatService.markRead(id, newest);
+      } catch (err) {
+        // Nothing to show the user: the chat simply stays unread on the server.
+        if (markedRef.current.get(id) === newest) markedRef.current.delete(id);
+        console.error(err);
+        return;
+      }
+      historyEpochRef.current += 1;
+      await refreshHistory().catch((err) => console.error(err));
+    })();
+  }, [chatEnabled, open, session, messages, refreshHistory]);
 
   const upsertMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) =>
@@ -742,6 +817,7 @@ export default function ChatBubble() {
     } catch {
       /* even on error, drop it locally — it is gone or never existed */
     }
+    historyEpochRef.current += 1;
     setHistory((prev) => prev.filter((c) => c.id !== id));
   };
 
@@ -752,6 +828,7 @@ export default function ChatBubble() {
     } catch {
       /* even on error, clear the list — the chats are gone or never existed */
     }
+    historyEpochRef.current += 1;
     setHistory([]);
   };
 
@@ -769,7 +846,7 @@ export default function ChatBubble() {
         onPointerDown={startDrag}
         onClick={onFabClick}
       >
-        💬
+        💬{history.some((c) => c.hasUnread) && <UnreadDot />}
       </button>
     );
   }
@@ -892,7 +969,10 @@ export default function ChatBubble() {
                       className="chat-history-open"
                       onClick={() => void resumeChat(c.id)}
                     >
-                      <span className="chat-history-name">{c.name ?? "New chat"}</span>
+                      <span className="chat-history-title">
+                        <span className="chat-history-name">{c.name ?? "New chat"}</span>
+                        {c.hasUnread && <UnreadDot />}
+                      </span>
                       <span className="chat-history-date">
                         {new Date(c.updatedAt ?? c.createdAt).toLocaleString()}
                       </span>

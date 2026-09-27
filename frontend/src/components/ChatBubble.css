@@ -23,6 +23,24 @@
   cursor: grabbing;
 }
 
+.chat-unread-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #ef4444;
+}
+
+.chat-bubble-fab .chat-unread-dot {
+  position: absolute;
+  top: 0.1rem;
+  right: 0.1rem;
+  width: 0.8rem;
+  height: 0.8rem;
+  border: 2px solid #1e1e30;
+}
+
 .chat-panel {
   position: fixed;
   /* Position and size are driven by inline left/top/width/height so the panel
@@ -359,6 +377,13 @@
 
 .chat-history-open:hover {
   background: #2a2a40;
+}
+
+.chat-history-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
 .chat-history-name {
