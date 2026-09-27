@@ -3,6 +3,8 @@
 import { act, fireEvent } from "@testing-library/react";
 import { vi } from "vite-plus/test";
 import { workItemService } from "./services/auth";
+import { compareServerOrder } from "./utils/taskboardColumns";
+import { compareTags, matchesTaskboardFilter, sameTag } from "./utils/taskboardFilter";
 import { WorkItemStatus } from "./types";
 import type {
   ChatMessageAppendedPayload,
@@ -100,25 +102,13 @@ export interface FakeBoardFilter {
   tags?: string[];
 }
 
-/** Newest first by creation time, then by id (code units, descending). */
-export function compareFakeServerOrder(a: WorkItem, b: WorkItem): number {
-  const byCreated = Date.parse(b.createdAt) - Date.parse(a.createdAt);
-  if (byCreated !== 0) return byCreated;
-  if (a.id === b.id) return 0;
-  return a.id < b.id ? 1 : -1;
-}
-
+/** The board's own filter rules, with the server's tolerance of blank tags. */
 function matchesFakeFilter(item: WorkItem, filter: FakeBoardFilter): boolean {
-  if (filter.repositoryId && item.repositoryId !== filter.repositoryId) return false;
-  const wanted = (filter.tags ?? []).filter((t) => t.trim() !== "").map((t) => t.toLowerCase());
-  const carried = (item.tags ?? []).map((t) => t.toLowerCase());
-  if (!wanted.every((t) => carried.includes(t))) return false;
-  const term = (filter.search ?? "").trim().toLowerCase();
-  if (term) {
-    const fields = [item.title, item.description, item.id];
-    if (!fields.some((f) => typeof f === "string" && f.toLowerCase().includes(term))) return false;
-  }
-  return true;
+  return matchesTaskboardFilter(item, {
+    search: filter.search ?? "",
+    repositoryId: filter.repositoryId ?? "",
+    tags: (filter.tags ?? []).filter((tag) => tag.trim() !== ""),
+  });
 }
 
 /**
@@ -134,7 +124,7 @@ export function mockTaskboardServer(initial: WorkItem[]) {
   const page = (q: FakeBoardPageQuery) => {
     const matching = items
       .filter((wi) => wi.status === q.status && matchesFakeFilter(wi, q))
-      .sort(compareFakeServerOrder);
+      .sort(compareServerOrder);
     return { items: matching.slice(q.skip, q.skip + q.take), total: matching.length };
   };
   const counts = (filter: FakeBoardFilter) => {
@@ -147,9 +137,10 @@ export function mockTaskboardServer(initial: WorkItem[]) {
     return result;
   };
   const tags = () =>
-    [...new Set(items.flatMap((wi) => wi.tags ?? []))].sort((a, b) =>
-      a.toLowerCase().localeCompare(b.toLowerCase()),
-    );
+    items
+      .flatMap((wi) => wi.tags ?? [])
+      .sort(compareTags)
+      .filter((tag, i, sorted) => i === 0 || !sameTag(sorted[i - 1], tag));
   const getPage = vi
     .spyOn(workItemService, "getPage")
     .mockImplementation(async (q: FakeBoardPageQuery) => page(q));

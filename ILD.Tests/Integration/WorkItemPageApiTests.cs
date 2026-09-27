@@ -2,6 +2,9 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using ILD.Core.Services.Remote;
+using ILD.Data;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
 using ILD.WorkItemServer.Dtos;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -55,7 +58,8 @@ public class WorkItemPageApiTests
             string[]? tags = null,
             Guid? repositoryId = null,
             string? description = null,
-            string? id = null)
+            string? id = null,
+            Guid? createdByLoopRunId = null)
         {
             var dto = await Server.Service.CreateAsync(new CreateWorkItemRequest
             {
@@ -64,6 +68,7 @@ public class WorkItemPageApiTests
                 Tags = tags ?? Array.Empty<string>(),
                 ForceStatus = status,
                 RepositoryId = repositoryId,
+                CreatedByLoopRunId = createdByLoopRunId,
             }, TestContext.Current.CancellationToken);
 
             var entity = await Server.ServerDb.WorkItems.FirstAsync(w => w.Id == dto.Id, TestContext.Current.CancellationToken);
@@ -72,6 +77,27 @@ public class WorkItemPageApiTests
             if (id is not null) entity.Id = id;
             await Server.ServerDb.SaveChangesAsync(TestContext.Current.CancellationToken);
             return entity.Id;
+        }
+
+        /// <summary>A run of <paramref name="workItemId"/> that names <paramref name="createdByLoopRunId"/> as the item's creator.</summary>
+        public async Task SeedRunAsync(string workItemId, LoopRunStatus status, Guid? createdByLoopRunId)
+        {
+            using var scope = Factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"page-{Guid.NewGuid():N}" };
+            var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1, CreatedAt = Epoch };
+            db.LoopTemplates.Add(template);
+            db.LoopTemplateVersions.Add(version);
+            db.LoopRuns.Add(new LoopRun
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = workItemId,
+                LoopTemplateVersionId = version.Id,
+                Status = status,
+                StartedAt = Epoch,
+                CreatedByLoopRunId = createdByLoopRunId,
+            });
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
 
         public async ValueTask DisposeAsync()
@@ -213,7 +239,7 @@ public class WorkItemPageApiTests
     }
 
     [Fact]
-    public async Task Paging_parameters_are_clamped_and_unparseable_filters_ignored()
+    public async Task Paging_parameters_are_clamped_and_unparseable_filters_refused()
     {
         await using var host = await StartHostAsync();
         for (var i = 0; i < 499; i++)
@@ -232,8 +258,20 @@ public class WorkItemPageApiTests
         var (fromStart, _) = await GetPageAsync(host.Human, "status=Backlog&skip=0&take=3");
         Assert.Equal(fromStart, negativeSkip);
 
-        var (_, unfiltered) = await GetPageAsync(host.Human, "status=NotAStatus&repositoryId=not-a-guid&take=1");
-        Assert.Equal(501, unfiltered);
+        foreach (var refused in new[]
+        {
+            "/api/v1/workitems/page?status=NotAStatus",
+            "/api/v1/workitems/page?status=99",
+            "/api/v1/workitems/page?repositoryId=not-a-guid",
+            "/api/v1/workitems/counts?repositoryId=not-a-guid",
+        })
+        {
+            var resp = await host.Human.GetAsync(refused, TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        }
+
+        var plain = await GetJsonAsync(host.Human, "/api/v1/workitems?status=NotAStatus&repositoryId=not-a-guid&take=500");
+        Assert.Equal(500, plain.GetArrayLength());
     }
 
     [Fact]
@@ -282,6 +320,37 @@ public class WorkItemPageApiTests
     }
 
     [Fact]
+    public async Task Tags_that_differ_only_in_case_are_listed_once()
+    {
+        await using var host = await StartHostAsync();
+        await host.SeedAsync("lower", createdAt: Epoch.AddDays(1), tags: ["frontend"]);
+        await host.SeedAsync("capital", createdAt: Epoch.AddDays(2), tags: ["Frontend", "api"]);
+        await host.SeedAsync("shout", createdAt: Epoch.AddDays(3), tags: ["FRONTEND"]);
+
+        var tags = await GetJsonAsync(host.Human, "/api/v1/workitems/tags");
+
+        Assert.Equal(["api", "FRONTEND"], tags.EnumerateArray().Select(t => t.GetString()).ToArray());
+    }
+
+    [Fact]
+    public async Task The_plain_list_filters_by_the_creator_its_items_show()
+    {
+        await using var host = await StartHostAsync();
+        var creator = Guid.NewGuid();
+        var byItsRun = await host.SeedAsync("created by its run", createdAt: Epoch.AddDays(1));
+        await host.SeedRunAsync(byItsRun, LoopRunStatus.Running, creator);
+        var byItself = await host.SeedAsync("created by the item", createdAt: Epoch.AddDays(2), createdByLoopRunId: creator);
+        var overridden = await host.SeedAsync("run names another creator", createdAt: Epoch.AddDays(3), createdByLoopRunId: creator);
+        await host.SeedRunAsync(overridden, LoopRunStatus.WaitingHuman, Guid.NewGuid());
+        await host.SeedAsync("someone else's", createdAt: Epoch.AddDays(4));
+
+        var rows = await GetJsonAsync(host.Human, $"/api/v1/workitems?createdByLoopRunId={creator}");
+
+        Assert.Equal([byItself, byItsRun], rows.EnumerateArray().Select(r => r.GetProperty("id").GetString()!).ToArray());
+        Assert.All(rows.EnumerateArray(), r => Assert.Equal(creator.ToString(), r.GetProperty("createdByLoopRunId").GetString()));
+    }
+
+    [Fact]
     public async Task The_agent_listing_still_matches_any_requested_tag()
     {
         await using var host = await StartHostAsync();
@@ -295,6 +364,21 @@ public class WorkItemPageApiTests
         Assert.Equal(
             new[] { both, frontend, urgent }.OrderBy(id => id, StringComparer.Ordinal),
             rows.EnumerateArray().Select(r => r.GetProperty("id").GetString()!).OrderBy(id => id, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_column_page_asks_the_WorkItem_server_for_its_status_only()
+    {
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.ListAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<RemoteWorkItemStatus?>(), It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<RemoteWorkItem>());
+        await using var factory = new ApiFactory(configureServices: services => services.ReplaceSingleton(client.Object));
+        var human = await factory.CreateAuthenticatedClientAsync();
+
+        await GetJsonAsync(human, "/api/v1/workitems/page?status=Ready");
+
+        client.Verify(c => c.ListAsync(It.IsAny<WorkItemServerOptions>(), RemoteWorkItemStatus.Ready, It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()), Times.Once);
+        client.Verify(c => c.ListAsync(It.IsAny<WorkItemServerOptions>(), null, It.IsAny<IReadOnlyList<string>?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     public static TheoryData<string> BoardListingPaths =>
