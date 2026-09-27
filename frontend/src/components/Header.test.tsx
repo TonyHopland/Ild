@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../hooks/useAuth";
 import { NAV_ITEMS } from "../utils/constants";
@@ -64,5 +64,23 @@ describe("Header nav overflow", () => {
     expect(screen.getByText("test")).toBeTruthy();
     const user = screen.getByRole("button", { name: "Logout" }).parentElement!;
     expect(getComputedStyle(user).flexShrink).toBe("0");
+  });
+});
+
+describe("Header nav items", () => {
+  test("has no WorkItem Server link and keeps every other item in order", () => {
+    renderHeader();
+
+    const nav = within(screen.getByRole("navigation"));
+    expect(nav.getAllByRole("link").map((l) => l.textContent)).toEqual([
+      "Taskboard",
+      "Loop Editor",
+      "Loop Runs",
+      "Analytics",
+      "Settings",
+      "Repositories",
+      "Remote Providers",
+      "AI Providers",
+    ]);
   });
 });

@@ -3,6 +3,7 @@ import IldSettings from "./sections/IldSettings";
 import UserSettings from "./sections/UserSettings";
 import NetworkSettings from "./sections/NetworkSettings";
 import LoggingSettings from "./sections/LoggingSettings";
+import WorkItemServerSettings from "./sections/WorkItemServerSettings";
 import "./Settings.css";
 
 function Icon({ path }: { path: string }) {
@@ -47,6 +48,12 @@ const SECTIONS = [
     label: "Logging",
     icon: "M5 3h9l5 5v13H5V3Zm9 0v5h5M8 13h8m-8 4h5",
     Component: LoggingSettings,
+  },
+  {
+    id: "work-item-server",
+    label: "WorkItem Server",
+    icon: "M4 5h16v6H4V5Zm0 8h16v6H4v-6Zm4-5h.01M8 16h.01",
+    Component: WorkItemServerSettings,
   },
 ] as const;
 

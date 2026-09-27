@@ -14,7 +14,6 @@ import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
 import Repositories from "./pages/Repositories";
 import RemoteProviders from "./pages/RemoteProviders";
-import WorkItemServer from "./pages/WorkItemServer";
 import AiProviders from "./pages/AiProviders";
 import "./App.css";
 
@@ -182,11 +181,7 @@ function AppRoutes() {
           />
           <Route
             path="/work-item-server"
-            element={
-              <ProtectedRoute>
-                <WorkItemServer />
-              </ProtectedRoute>
-            }
+            element={<Navigate to="/settings/work-item-server" replace />}
           />
           <Route path="*" element={<Navigate to="/taskboard" replace />} />
         </Routes>

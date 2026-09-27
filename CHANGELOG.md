@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The chat button and your past chats show a red dot when a reply is waiting that you have not read.**
 
+### Changed
+
+- **WorkItem Server settings have moved from the top bar to their own page under Settings.**
+
 ### Fixed
 
 - **Changing a work item's repository now saves, and takes effect from its next run while a run already under way stays where it started.**
