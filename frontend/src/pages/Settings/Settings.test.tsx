@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import Settings from "./index";
 import * as useAuthHook from "../../hooks/useAuth";
 import * as signalRHook from "../../hooks/useSignalR";
+import * as services from "../../services/auth";
 
 function renderAt(path: string) {
   vi.spyOn(useAuthHook, "useAuth").mockReturnValue({
@@ -46,6 +47,7 @@ describe("Settings sections", () => {
       "/settings/user",
       "/settings/network",
       "/settings/logging",
+      "/settings/work-item-server",
     ]);
   });
 
@@ -78,5 +80,24 @@ describe("Settings sections", () => {
     expect(screen.getByRole("heading", { level: 2, name: "Ild" })).toBeTruthy();
     const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
     expect(nav.getByRole("link", { name: "Ild" }).getAttribute("aria-current")).toBe("page");
+  });
+
+  test("shows the WorkItem Server section at its own URL and marks only it current", async () => {
+    vi.spyOn(services.workItemServerService, "get").mockResolvedValue({
+      url: null,
+      hasApiKey: false,
+      pollIntervalSeconds: 60,
+      graceIntervalSeconds: 5,
+    });
+    renderAt("/settings/work-item-server");
+
+    expect(screen.getByRole("heading", { level: 2, name: "WorkItem Server" })).toBeTruthy();
+    const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
+    const link = nav.getByRole("link", { name: "WorkItem Server" });
+    expect(link.className).toContain("active");
+    expect(
+      nav.getAllByRole("link").filter((l) => l.getAttribute("aria-current") === "page"),
+    ).toEqual([link]);
+    await screen.findByLabelText(/url/i);
   });
 });
