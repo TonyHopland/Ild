@@ -39,16 +39,31 @@ public enum WorkItemOrderBy
 }
 
 /// <summary>
-/// Filter + sort + paging options for the agent triage listing. Mirrors the
-/// query surface of the agent <c>list_workitems</c> tool. All filters are
-/// combined with AND; <see cref="ActionableOnly"/> keeps only items whose
-/// dependencies are all <see cref="RemoteWorkItemStatus.Done"/>.
+/// How a <see cref="WorkItemListQuery.Tags"/> filter matches: items carrying
+/// <see cref="Any"/> of the requested tags, or <see cref="All"/> of them.
+/// </summary>
+public enum WorkItemTagMatch
+{
+    Any,
+    All,
+}
+
+/// <summary>
+/// Filter + sort + paging options for the work item listings: the agent
+/// <c>list_workitems</c> tool and the taskboard's paged columns. All filters
+/// are combined with AND; <see cref="ActionableOnly"/> keeps only items whose
+/// dependencies are all <see cref="RemoteWorkItemStatus.Done"/>, and
+/// <see cref="Search"/> matches the title, description or id, each on its own
+/// and case-insensitively. Every ordering ends with the id, so paging never
+/// skips or repeats items that tie.
 /// </summary>
 public sealed record WorkItemListQuery
 {
     public RemoteWorkItemStatus? Status { get; init; }
     public RemoteWorkItemPriority? Priority { get; init; }
     public IReadOnlyList<string>? Tags { get; init; }
+    public WorkItemTagMatch TagMatch { get; init; } = WorkItemTagMatch.Any;
+    public string? Search { get; init; }
     public Guid? RepositoryId { get; init; }
     public Guid? CreatedByLoopRunId { get; init; }
     public bool ActionableOnly { get; init; }
@@ -56,6 +71,12 @@ public sealed record WorkItemListQuery
     public int Skip { get; init; }
     public int Take { get; init; } = 100;
 }
+
+/// <summary>
+/// One page of a <see cref="IWorkItemManager.ListPageAsync"/> listing, with the
+/// number of items matching its filter across every page.
+/// </summary>
+public sealed record WorkItemPage(IReadOnlyList<WorkItemView> Items, int Total);
 
 /// <summary>
 /// Server-side aggregation of a backlog for agent orientation. Carries no
