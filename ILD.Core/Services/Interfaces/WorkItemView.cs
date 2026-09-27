@@ -59,7 +59,7 @@ public sealed class WorkItemView
     /// none. Whatever acts on this view's <see cref="WorktreePath"/>, branch,
     /// preview or PR reads this, so re-pointing the item never moves a run
     /// already under way. Code that holds a specific <c>LoopRun</c> reads that
-    /// run's own pin instead, since it need not be the current one.
+    /// run's pinned repository directly instead.
     /// </summary>
     public Guid? RunRepositoryId
     {

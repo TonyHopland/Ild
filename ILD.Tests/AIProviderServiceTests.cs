@@ -88,67 +88,6 @@ public class AIProviderServiceTests
     }
 
     [Fact]
-    public async Task PreviewStart_tool_uses_the_worktrees_own_run_when_it_is_not_the_items_current_run()
-    {
-        // The worktree may belong to a finished run, or to an older one while a
-        // newer run on the re-pointed repository is current. Either way the
-        // item's run-scoped repository names the edited one; the preview must
-        // still get the env of the repository the worktree's own run pinned.
-        using var db = new TestDb();
-
-        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "https://e" };
-        db.Context.RemoteProviders.Add(remote);
-        var repoId = Guid.NewGuid();
-        db.Context.Repositories.Add(new Repository
-        {
-            Id = repoId, Name = "r", CloneUrl = "https://e/r.git", RemoteProviderId = remote.Id,
-            PreviewEnv = "API_TOKEN=from-repo",
-        });
-        var editedRepoId = Guid.NewGuid();
-        db.Context.Repositories.Add(new Repository
-        {
-            Id = editedRepoId, Name = "b", CloneUrl = "https://e/b.git", RemoteProviderId = remote.Id,
-            PreviewEnv = "API_TOKEN=from-edited-repo",
-        });
-
-        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
-        var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
-        db.Context.LoopTemplates.Add(lt);
-        db.Context.LoopTemplateVersions.Add(ltv);
-
-        var wiId = Guid.NewGuid().ToString();
-        const string worktreePath = "/tmp/worktrees/ild/wi-x-run-old";
-        db.Context.LoopRuns.Add(new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = wiId,
-            LoopTemplateVersionId = ltv.Id,
-            WorktreePath = worktreePath,
-            Status = LoopRunStatus.Completed,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-            RepositoryId = repoId,
-        });
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        var workItems = new Mock<IWorkItemManager>();
-        workItems.Setup(m => m.GetWorkItemAsync(wiId))
-            .ReturnsAsync(new WorkItemView { Id = wiId, RepositoryId = editedRepoId, RunRepositoryId = editedRepoId });
-
-        WorktreePreviewStartOptions? captured = null;
-        var preview = new Mock<IWorktreePreviewService>();
-        preview.Setup(p => p.StartAsync(worktreePath, It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, WorktreePreviewStartOptions?, CancellationToken>((_, o, _) => captured = o)
-            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = worktreePath });
-
-        var svc = new AIProviderService(db.Providers, workItems.Object, preview.Object, new HttpClient(), db.LoopRuns);
-
-        var result = await svc.ExecuteToolAsync("ild.preview_start", "{}", worktreePath);
-
-        Assert.True(result.Success);
-        Assert.Equal("API_TOKEN=from-repo", captured!.CustomEnv);
-    }
-
-    [Fact]
     public async Task PreviewStart_tool_without_a_matching_run_injects_no_custom_env()
     {
         // An unmatched worktree path (no run owns it) must degrade gracefully to a

@@ -32,7 +32,8 @@ public sealed class PRNodeExecutor : INodeExecutor
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, "WorkItem not found");
             yield break;
         }
-        // The PR goes where this run's branch lives: the repository it pinned.
+        // Read the pinned repository straight off the run already in hand; the
+        // work item's is only a fallback for a run that has no pinned repository.
         var repositoryId = ctx.Run.RepositoryId ?? wi.RepositoryId;
         if (repositoryId is null)
         {

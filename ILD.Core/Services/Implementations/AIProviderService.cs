@@ -291,8 +291,8 @@ public class AIProviderService : IAIProviderService
         if (_loopRuns is null) return (null, null);
         var run = await _loopRuns.GetByWorktreePathAsync(worktreePath);
         if (run is null || string.IsNullOrEmpty(run.WorkItemId)) return (null, null);
-        // The worktree's own run, which need not be the item's current one, pinned
-        // the repository; only a run from before runs pinned one falls back to the item.
+        // Read the pinned repository straight off the run already in hand; the
+        // work item is looked up only for a run that has no pinned repository.
         var repositoryId = run.RepositoryId
             ?? (await _workItemManager.GetWorkItemAsync(run.WorkItemId))?.RepositoryId;
         return (run.WorkItemId, await _providerStore.GetRepositoryPreviewEnvAsync(repositoryId));

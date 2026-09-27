@@ -19,8 +19,8 @@ public sealed class StartNodeExecutor : INodeExecutor
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
         var wi = await workItems.GetWorkItemAsync(ctx.Run.WorkItemId);
-        // The run pinned its repository at creation; re-pointing the item since
-        // only reaches its next run. A run from before runs pinned one falls back.
+        // Read the pinned repository straight off the run already in hand; the
+        // work item's is only a fallback for a run that has no pinned repository.
         var repositoryId = ctx.Run.RepositoryId ?? wi?.RepositoryId;
         if (wi is null || repositoryId is null)
         {
