@@ -1,12 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
-import { Repository, WorkItem, WorkItemPriority, WorkItemStatus } from "../../types";
-import {
-  EMPTY_TASKBOARD_FILTER,
-  collectRepositoryOptions,
-  collectTags,
-  filterWorkItems,
-  isFilterActive,
-} from "../taskboardFilter";
+import { WorkItem, WorkItemPriority, WorkItemStatus } from "../../types";
+import { EMPTY_TASKBOARD_FILTER, filterWorkItems, isFilterActive } from "../taskboardFilter";
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -31,20 +25,6 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
   };
 }
 
-function makeRepo(overrides: Partial<Repository> = {}): Repository {
-  return {
-    id: "repo-1",
-    name: "Repo One",
-    remoteProviderId: "rp-1",
-    cloneUrl: "https://example.com/repo.git",
-    defaultBranch: "main",
-    worktreesPath: null,
-    defaultIntakeStatus: WorkItemStatus.Backlog,
-    createdAt: "2025-01-01T00:00:00Z",
-    ...overrides,
-  };
-}
-
 describe("filterWorkItems", () => {
   test("returns every item when the filter is empty", () => {
     const items = [makeItem({ id: "a" }), makeItem({ id: "b" })];
@@ -62,6 +42,11 @@ describe("filterWorkItems", () => {
     expect(result.map((i) => i.id)).toEqual(["a", "b", "login-123"]);
   });
 
+  test("matches search within one field, never across the boundary between fields", () => {
+    const items = [makeItem({ id: "a", title: "Ends in alpha", description: "beta starts here" })];
+    expect(filterWorkItems(items, { ...EMPTY_TASKBOARD_FILTER, search: "alpha beta" })).toEqual([]);
+  });
+
   test("filters by repository", () => {
     const items = [
       makeItem({ id: "a", repositoryId: "repo-1" }),
@@ -77,6 +62,15 @@ describe("filterWorkItems", () => {
       makeItem({ id: "b", tags: ["frontend"] }),
       makeItem({ id: "c", tags: ["urgent"] }),
     ];
+    const result = filterWorkItems(items, {
+      ...EMPTY_TASKBOARD_FILTER,
+      tags: ["frontend", "urgent"],
+    });
+    expect(result.map((i) => i.id)).toEqual(["a"]);
+  });
+
+  test("matches tags case-insensitively, as the server does", () => {
+    const items = [makeItem({ id: "a", tags: ["Frontend", "URGENT"] })];
     const result = filterWorkItems(items, {
       ...EMPTY_TASKBOARD_FILTER,
       tags: ["frontend", "urgent"],
@@ -116,31 +110,5 @@ describe("isFilterActive", () => {
     expect(isFilterActive({ ...EMPTY_TASKBOARD_FILTER, search: "x" })).toBe(true);
     expect(isFilterActive({ ...EMPTY_TASKBOARD_FILTER, repositoryId: "repo-1" })).toBe(true);
     expect(isFilterActive({ ...EMPTY_TASKBOARD_FILTER, tags: ["a"] })).toBe(true);
-  });
-});
-
-describe("collectTags", () => {
-  test("returns sorted, de-duplicated tags across items", () => {
-    const items = [makeItem({ tags: ["b", "a"] }), makeItem({ tags: ["a", "c"] })];
-    expect(collectTags(items)).toEqual(["a", "b", "c"]);
-  });
-});
-
-describe("collectRepositoryOptions", () => {
-  test("labels referenced repositories by name and sorts them", () => {
-    const items = [makeItem({ repositoryId: "repo-2" }), makeItem({ repositoryId: "repo-1" })];
-    const repos = [
-      makeRepo({ id: "repo-1", name: "Beta" }),
-      makeRepo({ id: "repo-2", name: "Alpha" }),
-    ];
-    expect(collectRepositoryOptions(items, repos)).toEqual([
-      { id: "repo-2", name: "Alpha" },
-      { id: "repo-1", name: "Beta" },
-    ]);
-  });
-
-  test("falls back to the id when the repository is not loaded", () => {
-    const items = [makeItem({ repositoryId: "repo-x" })];
-    expect(collectRepositoryOptions(items, [])).toEqual([{ id: "repo-x", name: "repo-x" }]);
   });
 });

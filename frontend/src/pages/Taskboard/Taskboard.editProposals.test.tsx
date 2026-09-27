@@ -5,6 +5,7 @@ import Taskboard from "./index";
 import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { mockTaskboardServer } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -59,7 +60,7 @@ describe("the board's pending edit proposal indicator", () => {
       invoke: vi.fn(),
       connectionState: "connected",
     } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+    mockTaskboardServer([
       makeItem({ pendingEditProposalCount: 2 }),
       makeItem({ id: "wi-2", title: "Untouched item", pendingEditProposalCount: 0 }),
     ]);

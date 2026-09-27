@@ -5,6 +5,7 @@ import Taskboard from "./index";
 import { WorkItem, WorkItemAttachment, WorkItemStatus, WorkItemPriority } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { mockTaskboardServer } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -55,7 +56,7 @@ function mockServices(items: WorkItem[]) {
     invoke: vi.fn(),
     connectionState: "connected",
   } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-  vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue(items);
+  mockTaskboardServer(items);
   vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   // The edit form's repository select is required, so the item's repository has
