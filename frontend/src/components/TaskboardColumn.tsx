@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import { workItemService } from "../services/auth";
 import WorkItemCard from "./WorkItemCard";
@@ -6,16 +6,19 @@ import WorkItemCard from "./WorkItemCard";
 interface TaskboardColumnProps {
   status: WorkItemStatus;
   label: string;
+  // The column's loaded cards, in server order.
   workItems: WorkItem[];
+  // How many items the column holds on the server under the board filter.
+  total: number;
   onWorkItemUpdate: (workItem: WorkItem) => void;
   onWorkItemClick?: (workItem: WorkItem) => void;
   onError?: (message: string) => void;
   onMoveWorkItem?: (workItem: WorkItem, direction: "prev" | "next") => void;
   onAddItem?: () => void;
-  // When set, the column lazily renders at most this many cards at a time and
-  // reveals the rest in further increments of this size via a "Load more"
-  // button. Omitted means every item is rendered up front.
-  pageSize?: number;
+  // Fetches the column's next page; offered while fewer cards are loaded than
+  // the total.
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
   // Loop template names, forwarded to each card so loop tags are highlighted.
   loopTemplateNames?: string[];
 }
@@ -24,26 +27,18 @@ export default function TaskboardColumn({
   status,
   label,
   workItems,
+  total,
   onWorkItemUpdate,
   onWorkItemClick,
   onError,
   onMoveWorkItem,
   onAddItem,
-  pageSize,
+  onLoadMore,
+  loadingMore = false,
   loopTemplateNames,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
-  const [visibleCount, setVisibleCount] = useState(pageSize ?? 0);
-
-  // Reset back to the first page whenever pagination is (re)configured so the
-  // column never starts wider than one page after a prop change.
-  useEffect(() => {
-    setVisibleCount(pageSize ?? 0);
-  }, [pageSize]);
-
-  const paginated = pageSize !== undefined;
-  const visibleItems = paginated ? workItems.slice(0, visibleCount) : workItems;
-  const hasMore = paginated && workItems.length > visibleItems.length;
+  const hasMore = onLoadMore !== undefined && workItems.length < total;
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -92,7 +87,7 @@ export default function TaskboardColumn({
       <div className="taskboard-column-header">
         <h3 className="taskboard-column-title">{label}</h3>
         <div className="taskboard-column-header-end">
-          <span className="taskboard-column-count">{workItems.length}</span>
+          <span className="taskboard-column-count">{total}</span>
           {onAddItem && (
             <button
               type="button"
@@ -107,7 +102,7 @@ export default function TaskboardColumn({
         </div>
       </div>
       <div className="taskboard-column-body">
-        {visibleItems.map((item) => (
+        {workItems.map((item) => (
           <WorkItemCard
             key={item.id}
             workItem={item}
@@ -120,7 +115,8 @@ export default function TaskboardColumn({
           <button
             type="button"
             className="taskboard-column-load-more"
-            onClick={() => setVisibleCount((count) => count + (pageSize ?? 0))}
+            onClick={onLoadMore}
+            disabled={loadingMore}
           >
             Load more
           </button>
@@ -213,6 +209,11 @@ export default function TaskboardColumn({
 
         .taskboard-column-load-more:hover {
           background-color: #353553;
+        }
+
+        .taskboard-column-load-more:disabled {
+          opacity: 0.6;
+          cursor: default;
         }
       `}</style>
     </div>

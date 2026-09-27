@@ -13,17 +13,18 @@ import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
-import { WORK_ITEM_STATUSES, TASKBOARD_PAGE_SIZE } from "../../utils/constants";
+import { WORK_ITEM_STATUSES } from "../../utils/constants";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
-import { makeLoopTagMatcher } from "../../utils/workItemJson";
+import { makeLoopTagMatcher, parseTags } from "../../utils/workItemJson";
 import {
   EMPTY_TASKBOARD_FILTER,
-  collectRepositoryOptions,
-  collectTags,
-  filterWorkItems,
   isFilterActive,
   type TaskboardFilter,
 } from "../../utils/taskboardFilter";
+import { findLoadedItem } from "../../utils/taskboardColumns";
+import { useTaskboardColumns } from "./useTaskboardColumns";
+
+const SEARCH_DEBOUNCE_MS = 300;
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -31,13 +32,20 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+/** Case-insensitive, then by code unit, as the server sorts the tags in use. */
+function compareTags(a: string, b: string): number {
+  const la = a.toLowerCase();
+  const lb = b.toLowerCase();
+  if (la !== lb) return la < lb ? -1 : 1;
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
 export default function Taskboard() {
   const navigate = useNavigate();
   // The id in the URL is the source of truth for which item's detail dialog is
   // open, so a work item can be linked to directly (e.g. /taskboard/<id>).
   const { workItemId: openWorkItemId } = useParams<{ workItemId?: string }>();
-  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<WorkItem | null>(null);
   const [errorText, setErrorText] = useState("");
@@ -45,7 +53,20 @@ export default function Taskboard() {
   const [pauseBusy, setPauseBusy] = useState(false);
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
+  const [tagOptions, setTagOptions] = useState<string[]>([]);
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
+  // Search reaches the server once typing pauses; the repository and tags at once.
+  const [appliedSearch, setAppliedSearch] = useState(filter.search);
+  const {
+    columns,
+    isInitialLoading,
+    reloadAll,
+    loadMore,
+    applyItem,
+    removeItem,
+    findItem,
+    requestCountsRefresh,
+  } = useTaskboardColumns({ ...filter, search: appliedSearch }, setErrorText);
   const { on, off, connectionState } = useSignalR();
   // Highest getById request ordinal issued per work item. A newly created item
   // receives a burst of hub events (create → claim → run-progressed → human),
@@ -56,14 +77,14 @@ export default function Taskboard() {
   const syncSeqRef = useRef<Map<string, number>>(new Map());
   // The work-item hub replays nothing on (re)subscribe — unlike SubscribeToRun,
   // SubscribeToWorkItems has no backlog buffer — so any events delivered while
-  // the socket was down are lost for good. We re-fetch the board on each
+  // the socket was down are lost for good. We reload the board on each
   // reconnect to re-sync; this ref skips the very first connect, whose load the
-  // mount effect below already performed.
+  // board's own first pages already performed.
   const hasConnectedRef = useRef(false);
 
   useEffect(() => {
-    void loadWorkItems();
     void loadSchedulerPaused();
+    void loadTags();
     void repositoryService
       .getAll()
       .then(setRepositories)
@@ -73,6 +94,11 @@ export default function Taskboard() {
       .then((templates) => setLoopTemplateNames(templates.map((t) => t.name)))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setAppliedSearch(filter.search), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [filter.search]);
 
   useEffect(() => {
     const delayedTimers: number[] = [];
@@ -87,24 +113,20 @@ export default function Taskboard() {
           // later request reflects a fresher server state, so honoring this one
           // would revert the card to a stale status.
           if (syncSeqRef.current.get(workItemId) !== seq) return;
-          setWorkItems((items) => {
-            const exists = items.some((item) => item.id === wi.id);
-            if (!exists) return [...items, wi];
-            return items.map((item) => (item.id === wi.id ? wi : item));
-          });
+          showLiveItem(wi, { countAsNew: false });
         })
         .catch(() => {});
     };
 
     const onHumanFeedback = async (message: TypedSignalRMessage<"HumanFeedbackRequired">) => {
       const { workItemId, reason } = message.payload;
-      setWorkItems((prev) =>
-        prev.map((item) =>
-          item.id === workItemId
-            ? { ...item, status: WorkItemStatus.HumanFeedback, humanFeedbackReason: reason }
-            : item,
-        ),
-      );
+      const loaded = findItem(workItemId);
+      if (loaded) {
+        applyItem(
+          { ...loaded, status: WorkItemStatus.HumanFeedback, humanFeedbackReason: reason },
+          { countAsNew: false },
+        );
+      }
       syncWorkItem(workItemId);
       delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));
 
@@ -123,14 +145,13 @@ export default function Taskboard() {
     const onWorkItemStateChanged = async (message: TypedSignalRMessage<"WorkItemStateChanged">) => {
       const { workItemId, newStatus } = message.payload;
       // Optimistically reflect the new status on a card already on the board; an
-      // item we have not seen yet is added by the syncWorkItem fetch below. Both
+      // item we have not seen yet is placed by the syncWorkItem fetch below. Both
       // the optimistic write and the fetch are reconciled by that fetch, so the
       // status never lingers behind the event.
-      setWorkItems((prev) =>
-        prev.map((item) =>
-          item.id === workItemId ? { ...item, status: normalizeWorkItemStatus(newStatus) } : item,
-        ),
-      );
+      const loaded = findItem(workItemId);
+      if (loaded) {
+        applyItem({ ...loaded, status: normalizeWorkItemStatus(newStatus) }, { countAsNew: false });
+      }
       syncWorkItem(workItemId);
       delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));
     };
@@ -174,43 +195,48 @@ export default function Taskboard() {
     };
   }, [on, off]);
 
-  // Re-fetch the board whenever the hub transitions back into "connected". The
-  // first connect is skipped because the mount effect already loaded the board;
-  // every later transition follows a dropout during which the work-item hub
-  // buffered nothing, so a fresh fetch is the only way to recover missed events.
-  // The scheduler paused state is re-synced for the same reason.
+  // Reload the board whenever the hub transitions back into "connected". The
+  // first connect is skipped because the board's first pages are already
+  // loading; every later transition follows a dropout during which the
+  // work-item hub buffered nothing, so reloading what each column shows is the
+  // only way to recover missed events. The scheduler paused state and the tags
+  // in use are re-synced for the same reason.
   useEffect(() => {
     if (connectionState !== "connected") return;
     if (!hasConnectedRef.current) {
       hasConnectedRef.current = true;
       return;
     }
-    void loadWorkItems();
+    reloadAll({ windowed: true });
     void loadSchedulerPaused();
+    void loadTags();
   }, [connectionState]);
 
   // Keep the open detail item in sync with the id in the URL. Resolving from
   // the loaded board keeps the dialog's data fresh; a direct link to an item
-  // not on the board is fetched on demand, and a stale/invalid id bounces back
-  // to the bare taskboard so the URL always matches what is actually open.
+  // not on the board is fetched on demand and shown in the dialog only — it
+  // joins no column, where it could sit out of order — and a stale/invalid id
+  // bounces back to the bare taskboard so the URL always matches what is open.
+  const boardItem = openWorkItemId ? findLoadedItem(columns, openWorkItemId) : undefined;
+  const editingItemId = editingItem?.id;
   useEffect(() => {
     if (!openWorkItemId) {
       setEditingItem(null);
       return;
     }
-    const found = workItems.find((item) => item.id === openWorkItemId);
-    if (found) {
-      setEditingItem(found);
+    if (boardItem) {
+      setEditingItem(boardItem);
       return;
     }
-    if (isLoading) return;
+    // Already open — fetched directly, or its card has since left the loaded
+    // columns; live updates keep it fresh.
+    if (editingItemId === openWorkItemId) return;
+    if (isInitialLoading) return;
     let cancelled = false;
     void workItemService
       .getById(openWorkItemId)
       .then((wi) => {
-        if (cancelled) return;
-        setEditingItem(wi);
-        setWorkItems((items) => (items.some((item) => item.id === wi.id) ? items : [...items, wi]));
+        if (!cancelled) setEditingItem(wi);
       })
       .catch(() => {
         if (!cancelled) void navigate("/taskboard", { replace: true });
@@ -218,18 +244,7 @@ export default function Taskboard() {
     return () => {
       cancelled = true;
     };
-  }, [openWorkItemId, workItems, isLoading, navigate]);
-
-  const loadWorkItems = async () => {
-    try {
-      const items = await workItemService.getAll();
-      setWorkItems(items);
-    } catch (error) {
-      console.error("Failed to load work items:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  }, [openWorkItemId, boardItem, editingItemId, isInitialLoading, navigate]);
 
   const loadSchedulerPaused = async () => {
     try {
@@ -240,18 +255,33 @@ export default function Taskboard() {
     }
   };
 
-  const handleWorkItemUpdate = (updated: WorkItem) => {
-    setWorkItems((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+  const loadTags = async () => {
+    try {
+      setTagOptions(await workItemService.getTags());
+    } catch {
+      // Keep the chips already shown if the fetch fails.
+    }
   };
 
-  const handleSave = (saved: WorkItem) => {
-    setWorkItems((prev) => {
-      const exists = prev.find((item) => item.id === saved.id);
-      if (exists) {
-        return prev.map((item) => (item.id === saved.id ? saved : item));
-      }
-      return [...prev, saved];
+  // A live copy of an item: placed on the board, counted, its tags offered as
+  // chips, and refreshed in the dialog when it is the one open.
+  const showLiveItem = (wi: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
+    applyItem(wi, { countAsNew });
+    requestCountsRefresh();
+    const tags = parseTags(wi);
+    setTagOptions((prev) => {
+      const added = tags.filter((tag) => !prev.includes(tag));
+      return added.length === 0 ? prev : [...prev, ...added].sort(compareTags);
     });
+    setEditingItem((open) => (open?.id === wi.id ? wi : open));
+  };
+
+  const handleWorkItemUpdate = (updated: WorkItem) => {
+    showLiveItem(updated, { countAsNew: false });
+  };
+
+  const handleCreated = (created: WorkItem) => {
+    showLiveItem(created, { countAsNew: true });
   };
 
   const openCreateModal = () => {
@@ -263,7 +293,8 @@ export default function Taskboard() {
   };
 
   const handleDeleted = (id: string) => {
-    setWorkItems((prev) => prev.filter((wi) => wi.id !== id));
+    removeItem(id);
+    requestCountsRefresh();
   };
 
   const [announcement, setAnnouncement] = useState("");
@@ -292,13 +323,11 @@ export default function Taskboard() {
     }));
   };
 
-  const repositoryOptions = collectRepositoryOptions(workItems, repositories);
-  const tagOptions = collectTags(workItems);
+  const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
-  const visibleWorkItems = filterWorkItems(workItems, filter);
   const filterActive = isFilterActive(filter);
 
-  if (isLoading) {
+  if (isInitialLoading) {
     return (
       <div className="page-container">
         <p>Loading taskboard...</p>
@@ -398,24 +427,22 @@ export default function Taskboard() {
       </div>
       <div className="taskboard">
         {WORK_ITEM_STATUSES.map((status) => {
-          const items = visibleWorkItems.filter((wi) => wi.status === status.value);
+          const column = columns[status.value as WorkItemStatus];
           return (
             <TaskboardColumn
               key={status.value}
               status={status.value as WorkItemStatus}
               label={status.label}
-              workItems={items}
+              workItems={column.items}
+              total={column.total}
               onWorkItemUpdate={handleWorkItemUpdate}
               onWorkItemClick={handleCardClick}
               onError={(msg) => setErrorText(msg)}
               onMoveWorkItem={handleMoveWorkItem}
               onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
               loopTemplateNames={loopTemplateNames}
-              pageSize={
-                status.value === "Backlog" || status.value === "Done"
-                  ? TASKBOARD_PAGE_SIZE
-                  : undefined
-              }
+              onLoadMore={() => loadMore(status.value as WorkItemStatus)}
+              loadingMore={column.loadingMore}
             />
           );
         })}
@@ -433,7 +460,7 @@ export default function Taskboard() {
           key={editingItem.id}
           workItem={editingItem}
           onClose={() => void navigate("/taskboard")}
-          onSave={handleSave}
+          onSave={handleWorkItemUpdate}
           onDelete={handleDeleted}
         />
       )}
@@ -442,7 +469,7 @@ export default function Taskboard() {
           key="new-work-item"
           workItem={null}
           onClose={() => setCreateModalOpen(false)}
-          onSave={handleSave}
+          onSave={handleCreated}
           onDelete={handleDeleted}
         />
       )}

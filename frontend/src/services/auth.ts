@@ -26,6 +26,9 @@ import {
   LoopNodeEdge,
   PullBranchResult,
   BranchNameCheck,
+  WorkItemListFilter,
+  WorkItemPage,
+  WorkItemPageQuery,
   LoopRunSessionPreview,
   WorktreePreview,
   WorktreePreviewLog,
@@ -59,6 +62,14 @@ function pageQuery(opts?: { skip?: number; take?: number }): string {
   if (opts.skip !== undefined) params.push(`skip=${opts.skip}`);
   if (opts.take !== undefined) params.push(`take=${opts.take}`);
   return params.length ? `?${params.join("&")}` : "";
+}
+
+function listFilterParams(filter: WorkItemListFilter): URLSearchParams {
+  const params = new URLSearchParams();
+  if (filter.search?.trim()) params.set("search", filter.search);
+  if (filter.repositoryId) params.set("repositoryId", filter.repositoryId);
+  for (const tag of filter.tags ?? []) params.append("tags", tag);
+  return params;
 }
 
 const tokenListeners = new Set<(token: string | null) => void>();
@@ -163,6 +174,25 @@ export const authService = {
 export const workItemService = {
   getAll: async (): Promise<WorkItem[]> => {
     return api.get<WorkItem[]>("/workitems");
+  },
+
+  /** One taskboard column: a window of the items in a status under the board filter. */
+  getPage: async (query: WorkItemPageQuery): Promise<WorkItemPage> => {
+    const params = listFilterParams(query);
+    params.set("status", query.status);
+    params.set("skip", String(query.skip));
+    params.set("take", String(query.take));
+    return api.get<WorkItemPage>(`/workitems/page?${params}`);
+  },
+
+  /** How many items each status holds under the board filter, keyed by status. */
+  getCounts: async (filter: WorkItemListFilter): Promise<Record<string, number>> => {
+    return api.get<Record<string, number>>(`/workitems/counts?${listFilterParams(filter)}`);
+  },
+
+  /** Every tag carried by any work item. */
+  getTags: async (): Promise<string[]> => {
+    return api.get<string[]>("/workitems/tags");
   },
 
   getById: async (id: string): Promise<WorkItem> => {

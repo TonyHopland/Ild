@@ -304,6 +304,27 @@ export interface PullBranchResult {
   files: string[];
 }
 
+/** The taskboard filter the server applies to a column's page and to the per-status counts. */
+export interface WorkItemListFilter {
+  search?: string;
+  repositoryId?: string;
+  /** An item must carry every one of these tags. */
+  tags?: string[];
+}
+
+/** One status column's window of the board listing. */
+export interface WorkItemPageQuery extends WorkItemListFilter {
+  status: WorkItemStatus;
+  skip: number;
+  take: number;
+}
+
+/** A page of work items, newest first, and how many match its filter across every page. */
+export interface WorkItemPage {
+  items: WorkItem[];
+  total: number;
+}
+
 /**
  * What the server makes of a custom branch name. `error` means it cannot be
  * saved at all; `warning` means it is legal but already taken, which is advice
