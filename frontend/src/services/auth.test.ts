@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { aiProviderService, authService, loopRunService, workItemService } from "./auth";
+import { WorkItemStatus } from "../types";
 
 const okJsonResponse = (body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -130,6 +131,52 @@ describe("workItemService URL contract", () => {
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe("/api/v1/workitems/wi-1/dependencies/wi-2");
     expect(init?.method).toBe("DELETE");
+  });
+});
+
+describe("workItemService taskboard listing URL contract", () => {
+  function requested(): URL {
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(init?.method).toBe("GET");
+    return new URL(url as string, "http://example.test");
+  }
+
+  test("getPage sends the column's status, the filter and the window", async () => {
+    fetchSpy.mockResolvedValue(okJsonResponse({ items: [], total: 0 }));
+
+    await workItemService.getPage({
+      status: WorkItemStatus.Backlog,
+      search: "login",
+      repositoryId: "repo-1",
+      tags: ["frontend", "urgent"],
+      skip: 20,
+      take: 20,
+    });
+
+    const url = requested();
+    expect(url.pathname).toBe("/api/v1/workitems/page");
+    expect(url.searchParams.get("status")).toBe("Backlog");
+    expect(url.searchParams.get("search")).toBe("login");
+    expect(url.searchParams.get("repositoryId")).toBe("repo-1");
+    expect(url.searchParams.getAll("tags")).toEqual(["frontend", "urgent"]);
+    expect(url.searchParams.get("skip")).toBe("20");
+    expect(url.searchParams.get("take")).toBe("20");
+  });
+
+  test("getCounts sends the filter and getTags asks for every tag", async () => {
+    fetchSpy.mockResolvedValue(okJsonResponse({}));
+    await workItemService.getCounts({ search: "a b", repositoryId: "", tags: ["x", "y"] });
+
+    const counts = requested();
+    expect(counts.pathname).toBe("/api/v1/workitems/counts");
+    expect(counts.searchParams.get("search")).toBe("a b");
+    expect(counts.searchParams.getAll("tags")).toEqual(["x", "y"]);
+    expect(counts.searchParams.get("repositoryId") ?? "").toBe("");
+
+    fetchSpy.mockClear();
+    fetchSpy.mockResolvedValue(okJsonResponse([]));
+    await workItemService.getTags();
+    expect(requested().pathname).toBe("/api/v1/workitems/tags");
   });
 });
 

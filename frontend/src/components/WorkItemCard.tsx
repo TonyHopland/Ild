@@ -163,7 +163,7 @@ export default function WorkItemCard({
           </span>
         ))}
       </div>
-      <style>{`
+      <style href="work-item-card" precedence="default">{`
         .work-item-card {
           background-color: #2a2a40;
           border-radius: 0.375rem;

@@ -38,35 +38,37 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
 }
 
 describe("TaskboardColumn", () => {
-  test("renders the label and item count", () => {
+  test("the count badge shows the server total, not the number of cards loaded", () => {
     const items = [makeItem({ id: "1" }), makeItem({ id: "2", title: "Item B" })];
-    render(
+    const { container } = render(
       <TaskboardColumn
         status={WorkItemStatus.Backlog}
         label="Backlog"
         workItems={items}
+        total={57}
         onWorkItemUpdate={() => {}}
       />,
     );
 
     expect(screen.getByText("Backlog")).toBeTruthy();
-    expect(screen.getByText("2")).toBeTruthy();
+    expect(container.querySelector(".taskboard-column-count")?.textContent).toBe("57");
     expect(screen.getByText("Item A")).toBeTruthy();
     expect(screen.getByText("Item B")).toBeTruthy();
   });
 
   test("renders zero count when there are no items", () => {
-    render(
+    const { container } = render(
       <TaskboardColumn
         status={WorkItemStatus.Done}
         label="Done"
         workItems={[]}
+        total={0}
         onWorkItemUpdate={() => {}}
       />,
     );
 
     expect(screen.getByText("Done")).toBeTruthy();
-    expect(screen.getByText("0")).toBeTruthy();
+    expect(container.querySelector(".taskboard-column-count")?.textContent).toBe("0");
   });
 
   // WI-203 "PR disappears" is observed on the Done column: an item that had a
@@ -88,6 +90,7 @@ describe("TaskboardColumn", () => {
             ],
           }),
         ]}
+        total={1}
         onWorkItemUpdate={() => {}}
       />,
     );
@@ -95,8 +98,8 @@ describe("TaskboardColumn", () => {
     expect(container.querySelector(".work-item-pr-history")?.textContent).toContain("2");
   });
 
-  test("renders every item when pageSize is not set", () => {
-    const items = Array.from({ length: 8 }, (_, i) =>
+  test("renders every card it is given, with no paging of its own", () => {
+    const items = Array.from({ length: 21 }, (_, i) =>
       makeItem({ id: String(i), title: `Item ${i}` }),
     );
     render(
@@ -104,65 +107,59 @@ describe("TaskboardColumn", () => {
         status={WorkItemStatus.Done}
         label="Done"
         workItems={items}
+        total={30}
         onWorkItemUpdate={() => {}}
+        onLoadMore={() => {}}
       />,
     );
 
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 21; i++) {
       expect(screen.getByText(`Item ${i}`)).toBeTruthy();
     }
-    expect(screen.queryByRole("button", { name: "Load more" })).toBeFalsy();
   });
 
-  test("paginates to pageSize and reveals more on each Load more click", () => {
-    const items = Array.from({ length: 12 }, (_, i) =>
+  test("offers Load more while fewer cards are loaded than the total and asks for the next page", () => {
+    const items = Array.from({ length: 20 }, (_, i) =>
       makeItem({ id: String(i), title: `Item ${i}` }),
     );
+    const onLoadMore = vi.fn();
     render(
       <TaskboardColumn
         status={WorkItemStatus.Backlog}
         label="Backlog"
         workItems={items}
+        total={21}
         onWorkItemUpdate={() => {}}
-        pageSize={5}
+        onLoadMore={onLoadMore}
       />,
     );
 
-    // First page: only the first 5 cards are rendered.
-    expect(screen.getByText("Item 0")).toBeTruthy();
-    expect(screen.getByText("Item 4")).toBeTruthy();
-    expect(screen.queryByText("Item 5")).toBeFalsy();
-
-    const loadMore = screen.getByRole("button", { name: "Load more" });
-    fireEvent.click(loadMore);
-
-    // Second page reveals the next 5.
-    expect(screen.getByText("Item 9")).toBeTruthy();
-    expect(screen.queryByText("Item 10")).toBeFalsy();
-    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
-
-    // Final click reveals the remainder and hides the button.
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
-    expect(screen.getByText("Item 11")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Load more" })).toBeFalsy();
+
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
 
-  test("hides Load more when item count is at or below pageSize", () => {
-    const items = Array.from({ length: 5 }, (_, i) =>
+  test("disables Load more while a page is being fetched", () => {
+    const items = Array.from({ length: 20 }, (_, i) =>
       makeItem({ id: String(i), title: `Item ${i}` }),
     );
+    const onLoadMore = vi.fn();
     render(
       <TaskboardColumn
-        status={WorkItemStatus.Done}
-        label="Done"
+        status={WorkItemStatus.Backlog}
+        label="Backlog"
         workItems={items}
+        total={45}
         onWorkItemUpdate={() => {}}
-        pageSize={5}
+        onLoadMore={onLoadMore}
+        loadingMore
       />,
     );
 
-    expect(screen.getByText("Item 4")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Load more" })).toBeFalsy();
+    const loadMore = screen.getByRole("button", { name: /load/i }) as HTMLButtonElement;
+    expect(loadMore.disabled).toBe(true);
+    fireEvent.click(loadMore);
+    expect(onLoadMore).not.toHaveBeenCalled();
   });
 
   // Moving a Ready item that never started back to Backlog is a legal reset for
@@ -185,6 +182,7 @@ describe("TaskboardColumn", () => {
         status={WorkItemStatus.Backlog}
         label="Backlog"
         workItems={[]}
+        total={0}
         onWorkItemUpdate={onWorkItemUpdate}
         onError={onError}
       />,
@@ -211,6 +209,7 @@ describe("TaskboardColumn", () => {
         status={WorkItemStatus.Backlog}
         label="Backlog"
         workItems={[item]}
+        total={1}
         onWorkItemUpdate={() => {}}
       />,
     );

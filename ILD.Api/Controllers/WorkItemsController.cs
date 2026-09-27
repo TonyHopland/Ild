@@ -96,38 +96,123 @@ public class WorkItemsController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] string? status = null, [FromQuery] string? createdByLoopRunId = null, [FromQuery] string? repositoryId = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
+    public Task<IActionResult> GetAll([FromQuery] string? status = null, [FromQuery] string? createdByLoopRunId = null, [FromQuery] string? repositoryId = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        RemoteWorkItemStatus? statusFilter = null;
-        if (!string.IsNullOrEmpty(status) && Enum.TryParse<RemoteWorkItemStatus>(status, true, out var s))
-            statusFilter = s;
         Guid? runFilter = null;
         if (!string.IsNullOrEmpty(createdByLoopRunId) && Guid.TryParse(createdByLoopRunId, out var runGuid))
             runFilter = runGuid;
-        Guid? repoFilter = null;
-        if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
-            repoFilter = repoGuid;
 
+        return ListFromServerAsync(nameof(IWorkItemManager.ListAsync), async () =>
+            await _workItemManager.ListAsync(ParseStatus(status), runFilter, ParseGuid(repositoryId), skip, take));
+    }
+
+    /// <summary>
+    /// One taskboard column: a page of the items in <paramref name="status"/>
+    /// newest first, carrying every requested tag, with the total across pages.
+    /// A status or repository that does not parse is refused rather than
+    /// widened to every item.
+    /// </summary>
+    [HttpGet("page")]
+    public async Task<IActionResult> GetPage([FromQuery] string? status = null, [FromQuery] string? repositoryId = null, [FromQuery] string? search = null, [FromQuery] string[]? tags = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
+    {
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+
+        if (!TryParseBoardStatus(status, out var statusFilter))
+            return BadRequest(new { error = $"status must be one of {string.Join(", ", Enum.GetNames<RemoteWorkItemStatus>())}." });
+        if (!TryBoardQuery(repositoryId, search, tags, out var filter))
+            return BadRequest(new { error = "repositoryId must be a GUID." });
+
+        var query = filter with
+        {
+            Status = statusFilter,
+            OrderBy = WorkItemOrderBy.CreatedAt,
+            Skip = skip,
+            Take = take,
+        };
+        return await ListFromServerAsync(nameof(IWorkItemManager.ListPageAsync), async () =>
+        {
+            var page = await _workItemManager.ListPageAsync(query);
+            return new { items = page.Items, total = page.Total };
+        });
+    }
+
+    /// <summary>The taskboard's per-status totals under the same filter as <see cref="GetPage"/>.</summary>
+    [HttpGet("counts")]
+    public async Task<IActionResult> GetCounts([FromQuery] string? repositoryId = null, [FromQuery] string? search = null, [FromQuery] string[]? tags = null)
+    {
+        if (!TryBoardQuery(repositoryId, search, tags, out var filter))
+            return BadRequest(new { error = "repositoryId must be a GUID." });
+
+        return await ListFromServerAsync(nameof(IWorkItemManager.CountByStatusAsync), async () =>
+            (await _workItemManager.CountByStatusAsync(filter)).ToDictionary(c => c.Key.ToString(), c => c.Value));
+    }
+
+    [HttpGet("tags")]
+    public Task<IActionResult> GetTags()
+        => ListFromServerAsync(nameof(IWorkItemManager.ListTagsAsync), async () => await _workItemManager.ListTagsAsync());
+
+    private static bool TryBoardQuery(string? repositoryId, string? search, string[]? tags, out WorkItemListQuery query)
+    {
+        Guid? repository = null;
+        if (!string.IsNullOrEmpty(repositoryId))
+        {
+            if (!Guid.TryParse(repositoryId, out var parsed))
+            {
+                query = new WorkItemListQuery();
+                return false;
+            }
+            repository = parsed;
+        }
+        query = new WorkItemListQuery
+        {
+            RepositoryId = repository,
+            Search = search,
+            Tags = tags,
+            TagMatch = WorkItemTagMatch.All,
+        };
+        return true;
+    }
+
+    private static bool TryParseBoardStatus(string? value, out RemoteWorkItemStatus? status)
+    {
+        status = null;
+        if (string.IsNullOrEmpty(value)) return true;
+        var name = Enum.GetNames<RemoteWorkItemStatus>()
+            .FirstOrDefault(n => string.Equals(n, value, StringComparison.OrdinalIgnoreCase));
+        if (name is null) return false;
+        status = Enum.Parse<RemoteWorkItemStatus>(name);
+        return true;
+    }
+
+    private static RemoteWorkItemStatus? ParseStatus(string? status)
+        => !string.IsNullOrEmpty(status) && Enum.TryParse<RemoteWorkItemStatus>(status, true, out var s) ? s : null;
+
+    private static Guid? ParseGuid(string? value)
+        => !string.IsNullOrEmpty(value) && Guid.TryParse(value, out var g) ? g : null;
+
+    private async Task<IActionResult> ListFromServerAsync(string operation, Func<Task<object>> list)
+    {
         try
         {
-            var items = await _workItemManager.ListAsync(statusFilter, runFilter, repoFilter, skip, take);
-            return Ok(items);
+            return Ok(await list());
         }
         catch (InvalidOperationException ex)
         {
             // No remote provider configured.
-            _logger.LogWarning(ex, "ListAsync rejected: {Message}", ex.Message);
+            _logger.LogWarning(ex, "{Operation} rejected: {Message}", operation, ex.Message);
             return StatusCode(503, new { error = ex.Message });
         }
         catch (HttpRequestException ex)
         {
             // Remote unreachable. Hard cut: do not silently fall back to
             // the local cache; the UI must reflect the outage.
-            _logger.LogWarning(ex, "WorkItemServer unreachable for ListAsync");
+            _logger.LogWarning(ex, "WorkItemServer unreachable for {Operation}", operation);
             return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
         }
     }

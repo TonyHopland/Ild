@@ -1,11 +1,17 @@
 // Shared helpers for tests. Not a test file itself, so it is outside the
 // `src/**/*.test.{ts,tsx}` include and never collected as a suite.
 import { act, fireEvent } from "@testing-library/react";
+import { vi } from "vite-plus/test";
+import { workItemService } from "./services/auth";
+import { compareServerOrder } from "./utils/taskboardColumns";
+import { compareTags, matchesTaskboardFilter, sameTag } from "./utils/taskboardFilter";
+import { WorkItemStatus } from "./types";
 import type {
   ChatMessageAppendedPayload,
   ChatTurnCompletedPayload,
   ChatTurnProgressPayload,
   ChatTurnStartedPayload,
+  WorkItem,
 } from "./types";
 
 /** Presses before the loop gives up and reports the caller's own assertion. */
@@ -77,4 +83,71 @@ export interface ChatHubEvents {
   ChatTurnProgress: ChatTurnProgressPayload;
   ChatMessageAppended: ChatMessageAppendedPayload;
   ChatTurnCompleted: ChatTurnCompletedPayload;
+}
+
+/** A board page request, as the Taskboard sends it for one status column. */
+export interface FakeBoardPageQuery {
+  status: string;
+  search?: string;
+  repositoryId?: string;
+  tags?: string[];
+  skip: number;
+  take: number;
+}
+
+/** The board filter the per-status counts are taken under. */
+export interface FakeBoardFilter {
+  search?: string;
+  repositoryId?: string;
+  tags?: string[];
+}
+
+/** The board's own filter rules, with the server's tolerance of blank tags. */
+function matchesFakeFilter(item: WorkItem, filter: FakeBoardFilter): boolean {
+  return matchesTaskboardFilter(item, {
+    search: filter.search ?? "",
+    repositoryId: filter.repositoryId ?? "",
+    tags: (filter.tags ?? []).filter((tag) => tag.trim() !== ""),
+  });
+}
+
+/**
+ * An in-memory stand-in for the board's listing endpoints (`/workitems/page`,
+ * `/workitems/counts`, `/workitems/tags`) with the server's semantics: status,
+ * repository, case-insensitive per-field search and every-tag filtering, newest
+ * first with the id as tiebreaker, and totals that ignore skip/take. `items` is
+ * the server's state; a test changes it to model changes made elsewhere.
+ * `getAll` is stubbed too, because the detail dialog's dependency picker uses it.
+ */
+export function mockTaskboardServer(initial: WorkItem[]) {
+  const items = [...initial];
+  const page = (q: FakeBoardPageQuery) => {
+    const matching = items
+      .filter((wi) => wi.status === q.status && matchesFakeFilter(wi, q))
+      .sort(compareServerOrder);
+    return { items: matching.slice(q.skip, q.skip + q.take), total: matching.length };
+  };
+  const counts = (filter: FakeBoardFilter) => {
+    const result: Record<string, number> = {};
+    for (const status of Object.values(WorkItemStatus)) {
+      result[status] = items.filter(
+        (wi) => wi.status === status && matchesFakeFilter(wi, filter),
+      ).length;
+    }
+    return result;
+  };
+  const tags = () =>
+    items
+      .flatMap((wi) => wi.tags ?? [])
+      .sort(compareTags)
+      .filter((tag, i, sorted) => i === 0 || !sameTag(sorted[i - 1], tag));
+  const getPage = vi
+    .spyOn(workItemService, "getPage")
+    .mockImplementation(async (q: FakeBoardPageQuery) => page(q));
+  const getCounts = vi
+    .spyOn(workItemService, "getCounts")
+    .mockImplementation(async (filter: FakeBoardFilter) => counts(filter));
+  const getTags = vi.spyOn(workItemService, "getTags").mockImplementation(async () => tags());
+  const getAll = vi.spyOn(workItemService, "getAll").mockResolvedValue([]);
+  return { items, page, counts, tags, getPage, getCounts, getTags, getAll };
 }
