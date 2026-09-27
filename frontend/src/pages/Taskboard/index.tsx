@@ -15,7 +15,7 @@ import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
-import { makeLoopTagMatcher, parseTags } from "../../utils/workItemJson";
+import { makeLoopTagMatcher } from "../../utils/workItemJson";
 import {
   EMPTY_TASKBOARD_FILTER,
   isFilterActive,
@@ -54,6 +54,7 @@ export default function Taskboard() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [tagOptions, setTagOptions] = useState<string[]>([]);
+  const tagsRefreshRef = useRef({ inFlight: false, dirty: false });
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
   // Search reaches the server once typing pauses; the repository and tags at once.
   const [appliedSearch, setAppliedSearch] = useState(filter.search);
@@ -84,13 +85,13 @@ export default function Taskboard() {
 
   useEffect(() => {
     void loadSchedulerPaused();
-    void loadTags();
+    requestTagsRefresh();
     void repositoryService
-      .getAll()
+      .getEvery()
       .then(setRepositories)
       .catch(() => {});
     void loopTemplateService
-      .getAll()
+      .getEvery()
       .then((templates) => setLoopTemplateNames(templates.map((t) => t.name)))
       .catch(() => {});
   }, []);
@@ -209,7 +210,7 @@ export default function Taskboard() {
     }
     reloadAll({ windowed: true });
     void loadSchedulerPaused();
-    void loadTags();
+    requestTagsRefresh();
   }, [connectionState]);
 
   // Keep the open detail item in sync with the id in the URL. Resolving from
@@ -255,24 +256,37 @@ export default function Taskboard() {
     }
   };
 
-  const loadTags = async () => {
-    try {
-      setTagOptions(await workItemService.getTags());
-    } catch {
-      // Keep the chips already shown if the fetch fails.
+  // The tags in use, re-read from the server after every change that may add or
+  // drop one: at most one read in flight, and one more if asked meanwhile, so
+  // the last answer always postdates the last change.
+  const requestTagsRefresh = () => {
+    const refresh = tagsRefreshRef.current;
+    if (refresh.inFlight) {
+      refresh.dirty = true;
+      return;
     }
+    refresh.inFlight = true;
+    void workItemService
+      .getTags()
+      .then(setTagOptions)
+      .catch(() => {
+        // Keep the chips already shown if the fetch fails.
+      })
+      .finally(() => {
+        refresh.inFlight = false;
+        if (refresh.dirty) {
+          refresh.dirty = false;
+          requestTagsRefresh();
+        }
+      });
   };
 
-  // A live copy of an item: placed on the board, counted, its tags offered as
-  // chips, and refreshed in the dialog when it is the one open.
+  // A live copy of an item: placed on the board, counted, its tags reconciled
+  // with the chips, and refreshed in the dialog when it is the one open.
   const showLiveItem = (wi: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
     applyItem(wi, { countAsNew });
     requestCountsRefresh();
-    const tags = parseTags(wi);
-    setTagOptions((prev) => {
-      const added = tags.filter((tag) => !prev.includes(tag));
-      return added.length === 0 ? prev : [...prev, ...added].sort(compareTags);
-    });
+    requestTagsRefresh();
     setEditingItem((open) => (open?.id === wi.id ? wi : open));
   };
 
@@ -295,6 +309,7 @@ export default function Taskboard() {
   const handleDeleted = (id: string) => {
     removeItem(id);
     requestCountsRefresh();
+    requestTagsRefresh();
   };
 
   const [announcement, setAnnouncement] = useState("");
@@ -324,6 +339,10 @@ export default function Taskboard() {
   };
 
   const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
+  // A selected tag keeps its chip after its last use is gone, so it can still be unselected.
+  const tagChips = [...tagOptions, ...filter.tags.filter((tag) => !tagOptions.includes(tag))].sort(
+    compareTags,
+  );
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const filterActive = isFilterActive(filter);
 
@@ -361,9 +380,9 @@ export default function Taskboard() {
               </option>
             ))}
           </select>
-          {tagOptions.length > 0 && (
+          {tagChips.length > 0 && (
             <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
-              {tagOptions.map((tag) => {
+              {tagChips.map((tag) => {
                 const active = filter.tags.includes(tag);
                 const loop = isLoopTag(tag);
                 return (
