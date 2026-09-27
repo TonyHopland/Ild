@@ -158,7 +158,7 @@ public class CmdNodeExecutorTests : IDisposable
     [Theory]
     [InlineData("agent")]
     // Single-uid mode keeps the orchestrator uid but still sheds what the command
-    // has no use for, as the AI provider's shell tool does.
+    // has no use for.
     [InlineData(null)]
     public void The_command_inherits_none_of_the_orchestrators_secrets_or_topology(string? agentUser)
     {

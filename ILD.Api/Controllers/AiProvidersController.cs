@@ -16,7 +16,6 @@ namespace ILD.Api.Controllers;
 [Route("api/v1/[controller]")]
 public class AiProvidersController : ControllerBase
 {
-    private readonly IAIProviderService _aiProviderService;
     private readonly IAgentAdapterRegistry _adapterRegistry;
     private readonly HashSet<string> _supportedProviderTypes;
     private readonly AppDbContext _db;
@@ -25,14 +24,12 @@ public class AiProvidersController : ControllerBase
     private readonly IManagedAgentProvisioner _agentProvisioner;
 
     public AiProvidersController(
-        IAIProviderService aiProviderService,
         IAgentAdapterRegistry adapterRegistry,
         AppDbContext db,
         IProviderStore providerStore,
         InteractiveProviderSessionService interactiveSessions,
         IManagedAgentProvisioner agentProvisioner)
     {
-        _aiProviderService = aiProviderService;
         _adapterRegistry = adapterRegistry;
         _supportedProviderTypes = adapterRegistry.GetAllSupportedProviderTypes()
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

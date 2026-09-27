@@ -8,10 +8,9 @@ namespace ILD.Core.Services.Implementations;
 ///
 /// This module owns the regex, the set of known names, and the special-prefix
 /// rules (<c>WorkTree.File:&lt;rel&gt;</c>). Previously the regex and the set
-/// were copied across <see cref="PromptTemplateResolver"/>,
-/// <see cref="LoopTemplateValidator"/>, and <see cref="AIProviderService"/>;
-/// adding a placeholder meant updating three places and silently drifting if
-/// any were missed.
+/// were copied into each consumer, such as <see cref="PromptTemplateResolver"/>
+/// and <see cref="LoopTemplateValidator"/>; adding a placeholder meant updating
+/// every copy and silently drifting if any were missed.
 /// </summary>
 public static class PromptPlaceholderRegistry
 {

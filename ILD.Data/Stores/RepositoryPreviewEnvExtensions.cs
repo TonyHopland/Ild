@@ -4,9 +4,9 @@ namespace ILD.Data.Stores;
 
 /// <summary>
 /// Single shared resolver for a work item's repository custom preview <c>.env</c>
-/// (see <c>Repository.PreviewEnv</c>), so every preview start path — the human
-/// <c>WorkItemsController</c>/<c>AgentController</c> and the agent-tool
-/// <c>AIProviderService</c> — injects the same value through one code path instead
+/// (see <c>Repository.PreviewEnv</c>), so both preview start paths — the UI's
+/// <c>WorkItemsController</c> and the ILD MCP <c>start_preview</c> tool's
+/// <c>AgentController</c> — inject the same value through one code path instead
 /// of each re-deriving it.
 /// </summary>
 public static class RepositoryPreviewEnvExtensions

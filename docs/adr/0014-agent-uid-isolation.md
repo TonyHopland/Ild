@@ -97,12 +97,12 @@ ambient`) is empty (a non-root→non-root setuid does not auto-clear caps, so th
   `CliAgentAdapterBase.StartAgentProcess`, which applies
   `AgentIsolation.Route(ProcessStartInfo)` and starts the process — so "a CLI
   launch crosses to the agent uid" is owned in one place rather than remembered at
-  each of the adapters' call sites. The built-in provider's shell tool is not a
-  CLI launch and calls `Route` directly, through `AIProviderService.IsolateShell`.
+  each of the adapters' call sites. The Cmd node executor is not a CLI launch and
+  calls `Route` directly, through `CmdNodeExecutor.IsolateCommand`.
   `Route` itself is a no-op unless `ILD_AGENT_USER` is set, so CLI launches in
   local development, unit tests and single-uid deployments keep the pre-isolation
-  behavior; the container image sets the variable. The shell tool still has the
-  orchestrator environment stripped in single-uid mode (see the shell-tool
+  behavior; the container image sets the variable. A Cmd node's command still has
+  the orchestrator environment stripped in single-uid mode (see the capability
   paragraph below).
   `ProcessRunner` (git, npm) is deliberately **not** routed — those are
   orchestrator operations and must keep running as `ild`.
@@ -265,11 +265,10 @@ rules.
   input therefore goes through `AgentIsolation.DropInheritedCapabilities` —
   `ProcessRunner` (git, npm) — which wraps it in
   `setpriv --inh-caps=-all --ambient-caps=-all` (no uid change, needs no
-  privilege). The built-in provider's shell tool runs a model-authored command,
-  and a Cmd node's command runs in a worktree the agent has just written — its
-  builds, test suites and scripts — so both go further. They always lose the
-  orchestrator's secrets and topology (`StripOrchestratorEnvironment`), and they
-  run as the agent via `AgentIsolation.Route`, with the agent's `HOME` and egress
+  privilege). A Cmd node's command runs in a worktree the agent has just written —
+  its builds, test suites and scripts — so it goes further. It always loses the
+  orchestrator's secrets and topology (`StripOrchestratorEnvironment`), and it
+  runs as the agent via `AgentIsolation.Route`, with the agent's `HOME` and egress
   rules. There is deliberately no switch to run a Cmd node as the orchestrator:
   work that needs orchestrator-only access belongs in a dedicated executor, not
   a shell. In single-uid mode the strip is not a full boundary: the same uid can

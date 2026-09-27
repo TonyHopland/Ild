@@ -17,7 +17,6 @@ namespace ILD.Tests;
 public class AiProvidersControllerPagingTests
 {
     private static AiProvidersController Controller(TestDb db) => new(
-        Mock.Of<IAIProviderService>(),
         Mock.Of<IAgentAdapterRegistry>(),
         db.Context,
         new ProviderStore(db.Context),

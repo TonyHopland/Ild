@@ -25,7 +25,6 @@ public class AiProvidersControllerTagConflictTests
         registry.Setup(r => r.GetModelSupport(It.IsAny<string>()))
             .Returns((string type) => DeclaredModelSupport.For(type));
         return new AiProvidersController(
-            Mock.Of<IAIProviderService>(),
             registry.Object,
             db.Context,
             store,

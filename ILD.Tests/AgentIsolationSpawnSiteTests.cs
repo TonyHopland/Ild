@@ -42,8 +42,7 @@ public class AgentIsolationSpawnSiteTests
 
     // A launcher must HAND BACK the wrapped spawn, so its return type carries the
     // whole restriction. Without it, every method that merely contains a wrapped
-    // spawn — ProcessRunner.RunAsync, AIProviderService.RunShellAsync,
-    // CmdNodeExecutor.RunProcessAsync — reads as a launcher, and a later spawn
+    // spawn — ProcessRunner.RunAsync, CmdNodeExecutor.RunProcessAsync — reads as a launcher, and a later spawn
     // statement passes by naming one of them: the drift this test exists to catch.
     private const string Returns =
         @"\b(?:(?:Task|ValueTask)\s*<\s*Process(?:StartInfo)?\??\s*>|Process(?:StartInfo)?\??)\s+";
@@ -78,7 +77,7 @@ public class AgentIsolationSpawnSiteTests
     }
 
     [Theory]
-    // Inline, as ProcessRunner and AIProviderService do it.
+    // Inline, as ProcessRunner does it.
     [InlineData("Process.Start(AgentIsolation.DropInheritedCapabilities(psi));", true)]
     // Through an object initializer, as the Cmd node executor does it.
     [InlineData("using var p = new Process { StartInfo = AgentIsolation.Route(psi), EnableRaisingEvents = true };", true)]
