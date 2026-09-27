@@ -701,6 +701,11 @@ export const chatService = {
     await api.post<void>(`/chat/${sessionId}/interrupt`, {});
   },
 
+  /** Record that the chat has been read up to `sequence`. The server never lowers it. */
+  markRead: async (id: string, sequence: number): Promise<void> => {
+    await api.post<void>(`/chat/${id}/read`, { sequence });
+  },
+
   /** Hard-delete one retained chat. */
   deleteOne: async (id: string): Promise<void> => {
     await api.delete<void>(`/chat/${id}`);

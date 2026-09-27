@@ -269,6 +269,7 @@ Both emit messages of shape `{ type: string; payload: T; timestamp: string }`. A
 - `NodeProgress` — real-time progress lines during node execution, consumed by the LiveStream component
 - `WorkItemEditProposalsChanged` — `{ workItemId }` on `/hubs/work-item`: a Work Item Edit Proposal on that item was made or decided; the board card and an open detail view re-read
 - `ChatEditProposalsChanged` — `{ chatSessionId }` on `/hubs/chat`, to that chat's group only: a proposal the chat made was made or decided; its inline proposal cards re-read
+- `ChatUnreadChanged` — `{ chatSessionId }` on `/hubs/chat`, to the owner's inbox group only (joined with `SubscribeToChatInbox`): a reply in that chat was stored or its read marker rose; the chat bubble re-reads its history
 
 The frontend hook `useSignalR.on<E>(eventType, handler)` resolves the payload type from the map; unknown event names fall through to `unknown` so the call site is forced to narrow before use.
 

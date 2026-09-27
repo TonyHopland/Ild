@@ -819,6 +819,10 @@ export interface ChatEditProposalsChangedPayload {
   chatSessionId: string;
 }
 
+export interface ChatUnreadChangedPayload {
+  chatSessionId: string;
+}
+
 export interface DependencyResolvedPayload {
   workItemId: string;
 }
@@ -899,6 +903,8 @@ export interface ChatSessionSummary {
   name: string | null;
   createdAt: string;
   updatedAt: string | null;
+  /** Whether it holds a reply the user has not read. */
+  hasUnread?: boolean;
 }
 
 export interface ChatMessageAppendedPayload {

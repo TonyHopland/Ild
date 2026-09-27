@@ -177,11 +177,11 @@ public sealed class ChatService : IChatService
         // stays in the agent's history for the rest of that session. That is why the
         // static half is delivered once per session and not per turn (#27).
         var userEntry = await AppendMessageAsync(chatSessionId, "user", userMessage, interrupted: false, nextSeq, ct);
-        await _notifier.MessageAppendedAsync(chatSessionId, turnId, ToView(userEntry));
 
         // Whoever sends has seen the chat up to their own message, so only a reply
         // landing after it can make the chat unread.
         await RaiseReadMarkerAsync(session.UserId, chatSessionId, userEntry.Sequence, ct);
+        await _notifier.MessageAppendedAsync(chatSessionId, turnId, ToView(userEntry));
 
         var provider = await _providers.GetAiProviderByIdAsync(session.AiProviderId);
         if (provider is null)
