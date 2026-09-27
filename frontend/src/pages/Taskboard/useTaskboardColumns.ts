@@ -64,8 +64,9 @@ interface ColumnFetch {
  * item is recorded, held by a column or not, with its live copy or its removal.
  * A read that lands after one no longer speaks for that item: it takes the
  * live copy while that still belongs in this column, and otherwise leaves the
- * item out. A window of any size is read in pages the server allows, so a
- * reload never drops a loaded card.
+ * item out, and out of its total; the totals are then asked for again. A
+ * window of any size is read in pages the server allows, so a reload never
+ * drops a loaded card.
  */
 export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: string) => void) {
   const [columns, setColumns] = useState<TaskboardColumns>(emptyColumns);
@@ -133,6 +134,45 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
     [],
   );
 
+  const requestCountsRefresh = useCallback(
+    function requestCountsRefresh() {
+      const counts = countsRef.current;
+      if (counts.inFlight) {
+        counts.dirty = true;
+        return;
+      }
+      counts.inFlight = true;
+      const generation = generationRef.current;
+      workItemService
+        .getCounts(listFilter(filterRef.current))
+        .then((totals) => {
+          if (generation !== generationRef.current) return;
+          const board = boardRef.current;
+          const next = { ...board };
+          for (const status of STATUSES) {
+            const total = totals[status];
+            if (typeof total === "number" && total !== board[status].total) {
+              next[status] = { ...board[status], total };
+            }
+          }
+          show(STATUSES.some((s) => next[s] !== board[s]) ? next : board);
+        })
+        .catch(() => {
+          // Best effort: the totals keep their optimistic values until the next
+          // live change or reload asks again.
+        })
+        .finally(() => {
+          if (generation !== generationRef.current) return;
+          counts.inFlight = false;
+          if (counts.dirty) {
+            counts.dirty = false;
+            requestCountsRefresh();
+          }
+        });
+    },
+    [show],
+  );
+
   const fetchColumn = useCallback(
     function fetchColumn(status: WorkItemStatus, request: ColumnFetch) {
       const generation = generationRef.current;
@@ -167,12 +207,14 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
             ...board,
             [status]: {
               items: request.append ? appendPage(column.items, fresh) : fresh,
-              total: page.total,
+              total: Math.max(0, page.total - (page.items.length - fresh.length)),
               loaded: true,
               loadingMore: request.loadMore ? false : column.loadingMore,
             },
           });
           settle(status);
+          // The read's total predates the live changes since it was issued.
+          if (clockRef.current > issuedAt) requestCountsRefresh();
         })
         .catch((error: unknown) => {
           if (stale()) return;
@@ -184,7 +226,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           onErrorRef.current(errorMessage(error, "Failed to load work items."));
         });
     },
-    [readWindow, show, settle],
+    [readWindow, show, settle, requestCountsRefresh],
   );
 
   const reloadAll = useCallback(
@@ -223,45 +265,6 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
       });
     },
     [show, fetchColumn],
-  );
-
-  const requestCountsRefresh = useCallback(
-    function requestCountsRefresh() {
-      const counts = countsRef.current;
-      if (counts.inFlight) {
-        counts.dirty = true;
-        return;
-      }
-      counts.inFlight = true;
-      const generation = generationRef.current;
-      workItemService
-        .getCounts(listFilter(filterRef.current))
-        .then((totals) => {
-          if (generation !== generationRef.current) return;
-          const board = boardRef.current;
-          const next = { ...board };
-          for (const status of STATUSES) {
-            const total = totals[status];
-            if (typeof total === "number" && total !== board[status].total) {
-              next[status] = { ...board[status], total };
-            }
-          }
-          show(STATUSES.some((s) => next[s] !== board[s]) ? next : board);
-        })
-        .catch(() => {
-          // Best effort: the totals keep their optimistic values until the next
-          // live change or reload asks again.
-        })
-        .finally(() => {
-          if (generation !== generationRef.current) return;
-          counts.inFlight = false;
-          if (counts.dirty) {
-            counts.dirty = false;
-            requestCountsRefresh();
-          }
-        });
-    },
-    [show],
   );
 
   const applyItem = useCallback(

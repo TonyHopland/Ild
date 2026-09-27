@@ -63,6 +63,15 @@ function holdNextRead(server: ReturnType<typeof mockTaskboardServer>, status: Wo
   return () => act(async () => held.resolve());
 }
 
+/**
+ * Leaves every counts request unanswered, so the totals a test reads are the
+ * board's own; returns how many were asked for so far.
+ */
+function holdCounts(server: ReturnType<typeof mockTaskboardServer>) {
+  server.getCounts.mockImplementation(() => new Promise(() => {}));
+  return server.getCounts.mock.calls.length;
+}
+
 function ids(result: { current: ReturnType<typeof useTaskboardColumns> }, status: WorkItemStatus) {
   return result.current.columns[status].items.map((item) => `${item.id}:${item.status}`);
 }
@@ -138,6 +147,7 @@ describe("useTaskboardColumns", () => {
     const moving = itemIn(WorkItemStatus.Ready, 1);
     server.items.unshift(moving);
     const release = holdNextRead(server, WorkItemStatus.Ready);
+    const countsBefore = holdCounts(server);
 
     await act(async () => result.current.reloadAll({ windowed: true }));
     server.items[0] = { ...moving, status: WorkItemStatus.Running };
@@ -152,6 +162,8 @@ describe("useTaskboardColumns", () => {
       ]),
     );
     expect(ids(result, WorkItemStatus.Ready)).toEqual([]);
+    expect(result.current.columns[WorkItemStatus.Ready].total).toBe(0);
+    expect(server.getCounts.mock.calls.length).toBeGreaterThan(countsBefore);
   });
 
   test("an item deleted while a Load more that holds it is out does not come back", async () => {
@@ -160,6 +172,7 @@ describe("useTaskboardColumns", () => {
     await waitFor(() => expect(backlog(result).items).toHaveLength(20));
     const deleted = server.items[0];
     const release = holdNextRead(server, WorkItemStatus.Backlog);
+    const countsBefore = holdCounts(server);
 
     act(() => result.current.loadMore(WorkItemStatus.Backlog));
     server.items.splice(0, 1);
@@ -169,6 +182,8 @@ describe("useTaskboardColumns", () => {
     await waitFor(() => expect(backlog(result).loadingMore).toBe(false));
     expect(backlog(result).items).toHaveLength(24);
     expect(ids(result, WorkItemStatus.Backlog)).not.toContain(`${deleted.id}:Backlog`);
+    expect(backlog(result).total).toBe(24);
+    expect(server.getCounts.mock.calls.length).toBeGreaterThan(countsBefore);
   });
 
   test("an unloaded item moved past its new column's loaded page leaves the old column's read", async () => {
@@ -182,6 +197,7 @@ describe("useTaskboardColumns", () => {
     );
     const moving = server.items[0];
     const release = holdNextRead(server, WorkItemStatus.Ready);
+    const countsBefore = holdCounts(server);
 
     act(() => result.current.loadMore(WorkItemStatus.Ready));
     server.items[0] = { ...moving, status: WorkItemStatus.Running };
@@ -193,6 +209,8 @@ describe("useTaskboardColumns", () => {
     );
     expect(ids(result, WorkItemStatus.Ready)).toHaveLength(24);
     expect(ids(result, WorkItemStatus.Ready).some((id) => id.startsWith(moving.id))).toBe(false);
+    expect(result.current.columns[WorkItemStatus.Ready].total).toBe(24);
+    expect(server.getCounts.mock.calls.length).toBeGreaterThan(countsBefore);
     expect(ids(result, WorkItemStatus.Running)).toHaveLength(20);
   });
 });
