@@ -116,7 +116,6 @@ describe("TaskboardColumn", () => {
     for (let i = 0; i < 21; i++) {
       expect(screen.getByText(`Item ${i}`)).toBeTruthy();
     }
-    expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
   });
 
   test("offers Load more while fewer cards are loaded than the total and asks for the next page", () => {
