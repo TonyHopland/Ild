@@ -32,10 +32,8 @@ export function isFilterActive(filter: TaskboardFilter): boolean {
  */
 export function matchesTaskboardFilter(item: WorkItem, filter: TaskboardFilter): boolean {
   if (filter.repositoryId && item.repositoryId !== filter.repositoryId) return false;
-  if (filter.tags.length > 0) {
-    const itemTags = parseTags(item).map((tag) => tag.toLowerCase());
-    if (!filter.tags.every((tag) => itemTags.includes(tag.toLowerCase()))) return false;
-  }
+  const itemTags = parseTags(item);
+  if (!filter.tags.every((tag) => itemTags.some((carried) => sameTag(carried, tag)))) return false;
   const query = filter.search.trim().toLowerCase();
   if (query) {
     const fields = [item.title, item.description, item.id];
@@ -45,7 +43,16 @@ export function matchesTaskboardFilter(item: WorkItem, filter: TaskboardFilter):
   return true;
 }
 
-/** The items that match the filter, in their original order. */
-export function filterWorkItems(items: WorkItem[], filter: TaskboardFilter): WorkItem[] {
-  return items.filter((item) => matchesTaskboardFilter(item, filter));
+/** Whether two tag names are one tag: tags match case-insensitively. */
+export function sameTag(a: string, b: string): boolean {
+  return a.toUpperCase() === b.toUpperCase();
+}
+
+/** Case-insensitively, then by code unit: the order the server lists the tags in use. */
+export function compareTags(a: string, b: string): number {
+  const ua = a.toUpperCase();
+  const ub = b.toUpperCase();
+  if (ua !== ub) return ua < ub ? -1 : 1;
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }

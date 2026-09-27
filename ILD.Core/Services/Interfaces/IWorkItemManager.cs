@@ -42,7 +42,9 @@ public interface IWorkItemManager
     /// <summary>
     /// One page of full work items filtered, ordered and paged per
     /// <paramref name="query"/>, with the total matching the filter across
-    /// every page. Engine-only fields are merged for the returned page only.
+    /// every page. Engine-only fields are merged for the returned page only, and a
+    /// creator filter matches the creator the view shows: its current run's,
+    /// else the item's own.
     /// </summary>
     Task<WorkItemPage> ListPageAsync(WorkItemListQuery query);
 

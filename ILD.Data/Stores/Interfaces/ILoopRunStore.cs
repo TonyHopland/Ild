@@ -29,6 +29,12 @@ public interface ILoopRunStore
 
     Task<LoopRun?> GetByWorkItemAsync(string workItemId);
     Task<IReadOnlyList<LoopRun>> GetAllByWorkItemAsync(string workItemId);
+
+    /// <summary>
+    /// Every run of each of <paramref name="workItemIds"/>, newest first, as
+    /// <see cref="GetAllByWorkItemAsync"/> returns them for one work item.
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetAllByWorkItemsAsync(IReadOnlyCollection<string> workItemIds);
     Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take);
     Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId);
 

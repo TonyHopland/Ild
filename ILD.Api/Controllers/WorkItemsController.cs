@@ -113,22 +113,29 @@ public class WorkItemsController : ControllerBase
     /// <summary>
     /// One taskboard column: a page of the items in <paramref name="status"/>
     /// newest first, carrying every requested tag, with the total across pages.
+    /// A status or repository that does not parse is refused rather than
+    /// widened to every item.
     /// </summary>
     [HttpGet("page")]
-    public Task<IActionResult> GetPage([FromQuery] string? status = null, [FromQuery] string? repositoryId = null, [FromQuery] string? search = null, [FromQuery] string[]? tags = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
+    public async Task<IActionResult> GetPage([FromQuery] string? status = null, [FromQuery] string? repositoryId = null, [FromQuery] string? search = null, [FromQuery] string[]? tags = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        var query = BoardQuery(repositoryId, search, tags) with
+        if (!TryParseBoardStatus(status, out var statusFilter))
+            return BadRequest(new { error = $"status must be one of {string.Join(", ", Enum.GetNames<RemoteWorkItemStatus>())}." });
+        if (!TryBoardQuery(repositoryId, search, tags, out var filter))
+            return BadRequest(new { error = "repositoryId must be a GUID." });
+
+        var query = filter with
         {
-            Status = ParseStatus(status),
+            Status = statusFilter,
             OrderBy = WorkItemOrderBy.CreatedAt,
             Skip = skip,
             Take = take,
         };
-        return ListFromServerAsync(nameof(IWorkItemManager.ListPageAsync), async () =>
+        return await ListFromServerAsync(nameof(IWorkItemManager.ListPageAsync), async () =>
         {
             var page = await _workItemManager.ListPageAsync(query);
             return new { items = page.Items, total = page.Total };
@@ -137,22 +144,51 @@ public class WorkItemsController : ControllerBase
 
     /// <summary>The taskboard's per-status totals under the same filter as <see cref="GetPage"/>.</summary>
     [HttpGet("counts")]
-    public Task<IActionResult> GetCounts([FromQuery] string? repositoryId = null, [FromQuery] string? search = null, [FromQuery] string[]? tags = null)
-        => ListFromServerAsync(nameof(IWorkItemManager.CountByStatusAsync), async () =>
-            (await _workItemManager.CountByStatusAsync(BoardQuery(repositoryId, search, tags)))
-                .ToDictionary(c => c.Key.ToString(), c => c.Value));
+    public async Task<IActionResult> GetCounts([FromQuery] string? repositoryId = null, [FromQuery] string? search = null, [FromQuery] string[]? tags = null)
+    {
+        if (!TryBoardQuery(repositoryId, search, tags, out var filter))
+            return BadRequest(new { error = "repositoryId must be a GUID." });
+
+        return await ListFromServerAsync(nameof(IWorkItemManager.CountByStatusAsync), async () =>
+            (await _workItemManager.CountByStatusAsync(filter)).ToDictionary(c => c.Key.ToString(), c => c.Value));
+    }
 
     [HttpGet("tags")]
     public Task<IActionResult> GetTags()
         => ListFromServerAsync(nameof(IWorkItemManager.ListTagsAsync), async () => await _workItemManager.ListTagsAsync());
 
-    private static WorkItemListQuery BoardQuery(string? repositoryId, string? search, string[]? tags) => new()
+    private static bool TryBoardQuery(string? repositoryId, string? search, string[]? tags, out WorkItemListQuery query)
     {
-        RepositoryId = ParseGuid(repositoryId),
-        Search = search,
-        Tags = tags,
-        TagMatch = WorkItemTagMatch.All,
-    };
+        Guid? repository = null;
+        if (!string.IsNullOrEmpty(repositoryId))
+        {
+            if (!Guid.TryParse(repositoryId, out var parsed))
+            {
+                query = new WorkItemListQuery();
+                return false;
+            }
+            repository = parsed;
+        }
+        query = new WorkItemListQuery
+        {
+            RepositoryId = repository,
+            Search = search,
+            Tags = tags,
+            TagMatch = WorkItemTagMatch.All,
+        };
+        return true;
+    }
+
+    private static bool TryParseBoardStatus(string? value, out RemoteWorkItemStatus? status)
+    {
+        status = null;
+        if (string.IsNullOrEmpty(value)) return true;
+        var name = Enum.GetNames<RemoteWorkItemStatus>()
+            .FirstOrDefault(n => string.Equals(n, value, StringComparison.OrdinalIgnoreCase));
+        if (name is null) return false;
+        status = Enum.Parse<RemoteWorkItemStatus>(name);
+        return true;
+    }
 
     private static RemoteWorkItemStatus? ParseStatus(string? status)
         => !string.IsNullOrEmpty(status) && Enum.TryParse<RemoteWorkItemStatus>(status, true, out var s) ? s : null;

@@ -183,19 +183,14 @@ public class WorkItemManager : IWorkItemManager
         return remote == null ? null : await ViewOfAsync(opts, remote);
     }
 
-    /// <summary>A work item the server has just returned, joined with its runs.</summary>
     private async Task<WorkItemView> ViewOfAsync(WorkItemServerOptions opts, RemoteWorkItem remote)
-    {
-        var runs = await _loopRunStore.GetAllByWorkItemAsync(remote.Id);
-        await RecordUnreportedPullRequestsAsync(opts, remote, runs);
-        var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-                       ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.WaitingHuman)
-                       ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Failed)
-                       ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Cancelled)
-                       ?? runs.Where(r => r.Status != LoopRunStatus.Completed)
-                              .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
-                              .FirstOrDefault();
+        => await ViewOfAsync(opts, remote, await _loopRunStore.GetAllByWorkItemAsync(remote.Id));
 
+    /// <summary>A work item the server has just returned, joined with its runs.</summary>
+    private async Task<WorkItemView> ViewOfAsync(WorkItemServerOptions opts, RemoteWorkItem remote, IReadOnlyList<LoopRun> runs)
+    {
+        await RecordUnreportedPullRequestsAsync(opts, remote, runs);
+        var currentRun = CurrentRun(runs);
         return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
     }
 
@@ -221,37 +216,49 @@ public class WorkItemManager : IWorkItemManager
     public async Task<WorkItemPage> ListPageAsync(WorkItemListQuery query)
     {
         var opts = await _options.ResolveForRepositoryAsync(query.RepositoryId);
-        var all = await _server.ListAsync(opts, status: null, tags: null);
+        // Actionability reads the status of every dependency, so only then is
+        // the whole list needed; otherwise the server narrows to the status.
+        var all = await _server.ListAsync(opts, query.ActionableOnly ? null : query.Status, tags: null);
         if (all.Count == 0) return new WorkItemPage(Array.Empty<WorkItemView>(), 0);
 
-        var matching = ApplyListQuery(all, query, all.ToDictionary(w => w.Id, w => w.Status)).ToList();
+        // A view's creator is its current run's, falling back to the item's own,
+        // so filtering by creator needs every candidate's runs up front.
+        IReadOnlyDictionary<string, List<LoopRun>>? candidateRuns = null;
+        Func<RemoteWorkItem, Guid?>? creatorOf = null;
+        if (query.CreatedByLoopRunId.HasValue)
+        {
+            candidateRuns = await RunsByWorkItemAsync(all.Select(w => w.Id).ToList());
+            creatorOf = w => CurrentRun(candidateRuns.GetValueOrDefault(w.Id) ?? [])?.CreatedByLoopRunId ?? w.CreatedByLoopRunId;
+        }
+
+        var matching = ApplyListQuery(all, query, all.ToDictionary(w => w.Id, w => w.Status), creatorOf).ToList();
         var page = matching.Skip(ClampSkip(query.Skip)).Take(ClampTake(query.Take)).ToList();
         if (page.Count == 0) return new WorkItemPage(Array.Empty<WorkItemView>(), matching.Count);
 
-        var allRuns = await _loopRunStore.GetAllAsync(skip: 0, take: int.MaxValue);
-        var runsByWorkItem = allRuns.GroupBy(r => r.WorkItemId).ToDictionary(g => g.Key, g => g.ToList());
-
+        var runsByWorkItem = candidateRuns ?? await RunsByWorkItemAsync(page.Select(w => w.Id).ToList());
         var views = new List<WorkItemView>(page.Count);
-        foreach (var r in page)
-        {
-            LoopRun? currentRun = null;
-            var runs = runsByWorkItem.GetValueOrDefault(r.Id) ?? new List<LoopRun>();
-            if (runs.Count > 0)
-            {
-                await RecordUnreportedPullRequestsAsync(opts, r, runs);
-                currentRun = runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Running)
-                           ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.WaitingHuman)
-                           ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Failed)
-                           ?? runs.FirstOrDefault(rn => rn.Status == LoopRunStatus.Cancelled)
-                           ?? runs.Where(rn => rn.Status != LoopRunStatus.Completed)
-                                  .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
-                                  .FirstOrDefault();
-            }
-            views.Add(BuildView(r, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
-        }
-
+        foreach (var remote in page)
+            views.Add(await ViewOfAsync(opts, remote, runsByWorkItem.GetValueOrDefault(remote.Id) ?? []));
         return new WorkItemPage(views, matching.Count);
     }
+
+    private async Task<IReadOnlyDictionary<string, List<LoopRun>>> RunsByWorkItemAsync(IReadOnlyCollection<string> workItemIds)
+        => (await _loopRunStore.GetAllByWorkItemsAsync(workItemIds))
+            .GroupBy(r => r.WorkItemId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+    /// <summary>
+    /// The run a work item's view reflects: a live one first, then one that
+    /// stopped short, then the latest that has not completed.
+    /// </summary>
+    private static LoopRun? CurrentRun(IReadOnlyList<LoopRun> runs)
+        => runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
+           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.WaitingHuman)
+           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Failed)
+           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Cancelled)
+           ?? runs.Where(r => r.Status != LoopRunStatus.Completed)
+                  .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+                  .FirstOrDefault();
 
     public async Task<IReadOnlyDictionary<RemoteWorkItemStatus, int>> CountByStatusAsync(WorkItemListQuery query)
     {
@@ -267,11 +274,13 @@ public class WorkItemManager : IWorkItemManager
     {
         var opts = await _options.ResolveForRepositoryAsync(null);
         var all = await _server.ListAsync(opts, status: null, tags: null);
+        // Tags match case-insensitively, so spellings that differ only in case
+        // are one tag, listed once under its first spelling in this order.
         return all
             .SelectMany(w => w.Tags)
-            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ThenBy(t => t, StringComparer.Ordinal)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -314,17 +323,21 @@ public class WorkItemManager : IWorkItemManager
 
     /// <summary>
     /// The filtering and ordering every listing shares, skip and take aside.
+    /// <paramref name="creatorOf"/> decides whose creator a run filter matches;
+    /// by default the item's own.
     /// </summary>
     private static IOrderedEnumerable<RemoteWorkItem> ApplyListQuery(
         IEnumerable<RemoteWorkItem> items,
         WorkItemListQuery query,
-        IReadOnlyDictionary<string, RemoteWorkItemStatus> statusById)
+        IReadOnlyDictionary<string, RemoteWorkItemStatus> statusById,
+        Func<RemoteWorkItem, Guid?>? creatorOf = null)
     {
+        creatorOf ??= w => w.CreatedByLoopRunId;
         var filtered = items;
         if (query.Status.HasValue) filtered = filtered.Where(w => w.Status == query.Status.Value);
         if (query.Priority.HasValue) filtered = filtered.Where(w => w.Priority == query.Priority.Value);
         if (query.RepositoryId.HasValue) filtered = filtered.Where(w => w.RepositoryId == query.RepositoryId.Value);
-        if (query.CreatedByLoopRunId.HasValue) filtered = filtered.Where(w => w.CreatedByLoopRunId == query.CreatedByLoopRunId.Value);
+        if (query.CreatedByLoopRunId.HasValue) filtered = filtered.Where(w => creatorOf(w) == query.CreatedByLoopRunId.Value);
         var wanted = (query.Tags ?? Array.Empty<string>())
             .Where(t => !string.IsNullOrWhiteSpace(t))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

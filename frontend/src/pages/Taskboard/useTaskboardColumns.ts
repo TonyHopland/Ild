@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { workItemService } from "../../services/auth";
-import { WorkItem, WorkItemListFilter, WorkItemStatus } from "../../types";
+import { WorkItem, WorkItemListFilter, WorkItemPage, WorkItemStatus } from "../../types";
 import { TASKBOARD_PAGE_SIZE, WORK_ITEM_STATUSES } from "../../utils/constants";
+import { errorMessage } from "../../utils/errorMessage";
 import type { TaskboardFilter } from "../../utils/taskboardFilter";
 import {
   appendPage,
   findLoadedItem,
   applyItem as applyItemTo,
   removeItem as removeItemFrom,
+  type ColumnState,
   type TaskboardColumns,
 } from "../../utils/taskboardColumns";
 
 const STATUSES = WORK_ITEM_STATUSES.map((s) => s.value as WorkItemStatus);
-const MAX_WINDOW = 500;
+/** The most one page request returns. */
+const MAX_READ = 500;
 
 function emptyColumns(): TaskboardColumns {
   const columns = {} as TaskboardColumns;
@@ -22,19 +25,22 @@ function emptyColumns(): TaskboardColumns {
   return columns;
 }
 
-/** A reload of the first `loaded` cards: at least a page, at most what the server returns. */
+/** A reload of the first `loaded` cards: at least a page, never fewer than are shown. */
 function windowSize(loaded: number): number {
-  return Math.min(MAX_WINDOW, Math.max(loaded, TASKBOARD_PAGE_SIZE));
+  return Math.max(loaded, TASKBOARD_PAGE_SIZE);
 }
 
 function listFilter(filter: TaskboardFilter): WorkItemListFilter {
   return { search: filter.search.trim(), repositoryId: filter.repositoryId, tags: filter.tags };
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string") return error;
-  return fallback;
+/** Whether two states of a column hold the same cards in the same order under the same total. */
+function sameMembership(a: ColumnState, b: ColumnState): boolean {
+  return (
+    a.total === b.total &&
+    a.items.length === b.items.length &&
+    a.items.every((item, i) => item.id === b.items[i].id)
+  );
 }
 
 interface ColumnFetch {
@@ -48,55 +54,100 @@ interface ColumnFetch {
 /**
  * The Taskboard's status columns, each paged from the server under `filter`.
  *
- * Every column request is tagged with the board generation (bumped by each
- * reload and filter change) and the column's sequence (bumped by every change
- * to the column's cards). A response from an older generation is dropped; one
- * whose column changed while it was in flight would overwrite that change, so
- * it is discarded and the column's window is fetched again instead.
+ * A column's membership (which cards, in which order, out of what total) and
+ * its cards' contents change independently. Every column read carries the
+ * board generation (bumped by each reload and filter change), the column's
+ * membership sequence (bumped by a live change to its membership) and the
+ * content clock at issue. A read from an older generation is dropped; one
+ * whose column's membership changed in flight would undo that change, so it
+ * is discarded and the column's window is read again. A live change to a
+ * card's contents alone discards nothing: the read lands, keeping the live
+ * copy of each card touched since it was issued. A window of any size is read
+ * in pages the server allows, so a reload never drops a loaded card.
  */
 export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: string) => void) {
   const [columns, setColumns] = useState<TaskboardColumns>(emptyColumns);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const boardRef = useRef(columns);
   const filterRef = useRef(filter);
+  // Read when a failure lands, so a new callback never restarts the board's reads.
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
   const generationRef = useRef(0);
   const seqRef = useRef<Record<string, number>>({});
+  // Content clock, and the clock at each card's latest live change.
+  const clockRef = useRef(0);
+  const touchedRef = useRef(new Map<string, number>());
   const settledRef = useRef(new Set<WorkItemStatus>());
   const countsRef = useRef({ inFlight: false, dirty: false });
 
-  const commit = useCallback((next: TaskboardColumns, changesCards: boolean) => {
-    const prev = boardRef.current;
-    if (next === prev) return;
-    if (changesCards) {
-      for (const status of STATUSES) {
-        if (next[status] !== prev[status])
-          seqRef.current[status] = (seqRef.current[status] ?? 0) + 1;
-      }
-    }
+  const show = useCallback((next: TaskboardColumns) => {
+    if (next === boardRef.current) return;
     boardRef.current = next;
     setColumns(next);
   }, []);
+
+  const commitLive = useCallback(
+    (next: TaskboardColumns) => {
+      const prev = boardRef.current;
+      for (const status of STATUSES) {
+        if (next[status] === prev[status]) continue;
+        if (!sameMembership(prev[status], next[status]))
+          seqRef.current[status] = (seqRef.current[status] ?? 0) + 1;
+        const before = new Map(prev[status].items.map((item) => [item.id, item]));
+        for (const item of next[status].items) {
+          if (before.get(item.id) !== item) touchedRef.current.set(item.id, ++clockRef.current);
+        }
+      }
+      show(next);
+    },
+    [show],
+  );
 
   const settle = useCallback((status: WorkItemStatus) => {
     settledRef.current.add(status);
     if (settledRef.current.size === STATUSES.length) setIsInitialLoading(false);
   }, []);
 
+  const readWindow = useCallback(
+    async (
+      status: WorkItemStatus,
+      skip: number,
+      take: number,
+      outdated: () => boolean,
+    ): Promise<WorkItemPage> => {
+      const items: WorkItem[] = [];
+      let total = 0;
+      while (items.length < take) {
+        const chunk = Math.min(MAX_READ, take - items.length);
+        const page = await workItemService.getPage({
+          ...listFilter(filterRef.current),
+          status,
+          skip: skip + items.length,
+          take: chunk,
+        });
+        items.push(...page.items);
+        total = page.total;
+        if (page.items.length < chunk || outdated()) break;
+      }
+      return { items, total };
+    },
+    [],
+  );
+
   const fetchColumn = useCallback(
     function fetchColumn(status: WorkItemStatus, request: ColumnFetch) {
       const generation = generationRef.current;
       const seq = seqRef.current[status] ?? 0;
-      workItemService
-        .getPage({
-          ...listFilter(filterRef.current),
-          status,
-          skip: request.skip,
-          take: request.take,
-        })
+      const issuedAt = clockRef.current;
+      const stale = () => generation !== generationRef.current;
+      const moved = () => (seqRef.current[status] ?? 0) !== seq;
+      readWindow(status, request.skip, request.take, () => stale() || moved())
         .then((page) => {
-          if (generation !== generationRef.current) return;
-          const column = boardRef.current[status];
-          if ((seqRef.current[status] ?? 0) !== seq) {
+          if (stale()) return;
+          const board = boardRef.current;
+          const column = board[status];
+          if (moved()) {
             const loaded = column.items.length + (request.append ? TASKBOARD_PAGE_SIZE : 0);
             fetchColumn(status, {
               skip: 0,
@@ -106,43 +157,46 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
             });
             return;
           }
-          commit(
-            {
-              ...boardRef.current,
-              [status]: {
-                items: request.append ? appendPage(column.items, page.items) : page.items,
-                total: page.total,
-                loaded: true,
-                loadingMore: request.loadMore ? false : column.loadingMore,
-              },
-            },
-            true,
+          const fresh = page.items.map((item) =>
+            (touchedRef.current.get(item.id) ?? 0) > issuedAt
+              ? (findLoadedItem(board, item.id) ?? item)
+              : item,
           );
+          show({
+            ...board,
+            [status]: {
+              items: request.append ? appendPage(column.items, fresh) : fresh,
+              total: page.total,
+              loaded: true,
+              loadingMore: request.loadMore ? false : column.loadingMore,
+            },
+          });
           settle(status);
         })
         .catch((error: unknown) => {
-          if (generation !== generationRef.current) return;
+          if (stale()) return;
           if (request.loadMore) {
             const column = boardRef.current[status];
-            commit({ ...boardRef.current, [status]: { ...column, loadingMore: false } }, false);
+            show({ ...boardRef.current, [status]: { ...column, loadingMore: false } });
           }
           settle(status);
-          onError(errorMessage(error, "Failed to load work items."));
+          onErrorRef.current(errorMessage(error, "Failed to load work items."));
         });
     },
-    [commit, settle, onError],
+    [readWindow, show, settle],
   );
 
   const reloadAll = useCallback(
     ({ windowed }: { windowed: boolean }) => {
       generationRef.current += 1;
       countsRef.current = { inFlight: false, dirty: false };
+      touchedRef.current.clear();
       const board = boardRef.current;
       const next = { ...board };
       for (const status of STATUSES) {
         if (board[status].loadingMore) next[status] = { ...board[status], loadingMore: false };
       }
-      commit(STATUSES.some((s) => next[s] !== board[s]) ? next : board, false);
+      show(STATUSES.some((s) => next[s] !== board[s]) ? next : board);
       for (const status of STATUSES) {
         fetchColumn(status, {
           skip: 0,
@@ -152,14 +206,14 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
         });
       }
     },
-    [commit, fetchColumn],
+    [show, fetchColumn],
   );
 
   const loadMore = useCallback(
     (status: WorkItemStatus) => {
       const column = boardRef.current[status];
       if (!column.loaded || column.loadingMore || column.items.length >= column.total) return;
-      commit({ ...boardRef.current, [status]: { ...column, loadingMore: true } }, false);
+      show({ ...boardRef.current, [status]: { ...column, loadingMore: true } });
       fetchColumn(status, {
         skip: column.items.length,
         take: TASKBOARD_PAGE_SIZE,
@@ -167,7 +221,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
         loadMore: true,
       });
     },
-    [commit, fetchColumn],
+    [show, fetchColumn],
   );
 
   const requestCountsRefresh = useCallback(
@@ -191,7 +245,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
               next[status] = { ...board[status], total };
             }
           }
-          commit(STATUSES.some((s) => next[s] !== board[s]) ? next : board, false);
+          show(STATUSES.some((s) => next[s] !== board[s]) ? next : board);
         })
         .catch(() => {
           // Best effort: the totals keep their optimistic values until the next
@@ -206,21 +260,21 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           }
         });
     },
-    [commit],
+    [show],
   );
 
   const applyItem = useCallback(
     (item: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
-      commit(applyItemTo(boardRef.current, item, filterRef.current, { countAsNew }), true);
+      commitLive(applyItemTo(boardRef.current, item, filterRef.current, { countAsNew }));
     },
-    [commit],
+    [commitLive],
   );
 
   const removeItem = useCallback(
     (id: string) => {
-      commit(removeItemFrom(boardRef.current, id), true);
+      commitLive(removeItemFrom(boardRef.current, id));
     },
-    [commit],
+    [commitLive],
   );
 
   const findItem = useCallback((id: string) => findLoadedItem(boardRef.current, id), []);

@@ -187,9 +187,12 @@ export const authService = {
 };
 
 export const workItemService = {
-  getAll: async (): Promise<WorkItem[]> => {
-    return api.get<WorkItem[]>("/workitems");
+  getAll: async (opts?: { skip?: number; take?: number }): Promise<WorkItem[]> => {
+    return api.get<WorkItem[]>(`/workitems${pageQuery(opts)}`);
   },
+
+  /** Every work item, newest first, read page by page past the server's per-request cap. */
+  getEvery: async (): Promise<WorkItem[]> => readEveryPage((opts) => workItemService.getAll(opts)),
 
   /** One taskboard column: a window of the items in a status under the board filter. */
   getPage: async (query: WorkItemPageQuery): Promise<WorkItemPage> => {

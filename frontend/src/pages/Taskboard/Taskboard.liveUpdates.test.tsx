@@ -109,6 +109,13 @@ function chips(): string[] {
     : [];
 }
 
+function backlogTitles(): string[] {
+  const column = screen.getByText("Backlog").closest(".taskboard-column") as HTMLElement;
+  return Array.from(column.querySelectorAll(".work-item-card")).map(
+    (card) => card.getAttribute("aria-label")!.split(", status ")[0],
+  );
+}
+
 async function settle() {
   for (let i = 0; i < 5; i++) {
     await act(async () => {
@@ -149,6 +156,23 @@ describe("Taskboard filter options", () => {
     expect(screen.getByRole("button", { name: "held" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  test("a selected tag stays one active chip when the server lists it in another case", async () => {
+    const { server, emit } = mockBoard([makeItem("a", ["frontend"])]);
+
+    renderTaskboard();
+    await waitFor(() => expect(chips()).toEqual(["frontend"]));
+    fireEvent.click(screen.getByRole("button", { name: "frontend" }));
+
+    server.items.push(makeItem("b", ["Frontend"]));
+    await emit("WorkItemStateChanged", edited("b"));
+
+    await waitFor(() => expect(chips()).toEqual(["Frontend"]));
+    const chip = screen.getByRole("button", { name: "Frontend" });
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(chip);
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+  });
+
   test("tags are re-read with one request in flight and one follow-up", async () => {
     const { server, emit } = mockBoard([makeItem("a", ["one"]), makeItem("b", ["two"])]);
     const held: ReturnType<typeof deferred<void>>[] = [];
@@ -185,7 +209,9 @@ describe("Taskboard filter options", () => {
     await act(async () => held[1].resolve());
     await waitFor(() => expect(chips()).toEqual(["two"]));
   });
+});
 
+describe("Taskboard live updates", () => {
   test("run, preview and edit-proposal events refresh the card without reconciling totals or tags", async () => {
     const { server, emit } = mockBoard([makeItem("a", ["one"])]);
 
@@ -241,6 +267,36 @@ describe("Taskboard filter options", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("a stream of run-progress events during Load more neither discards nor retries the page", async () => {
+    const { server, emit } = mockBoard(
+      Array.from({ length: 25 }, (_, n) => makeItem(`b${String(n).padStart(2, "0")}`, [])),
+    );
+    renderTaskboard();
+    await waitFor(() => expect(backlogTitles()).toHaveLength(20));
+    const nextPage = deferred<void>();
+    server.getPage.mockImplementationOnce(async (q) => {
+      const page = server.page(q);
+      await nextPage.promise;
+      return page;
+    });
+    const pagesBefore = server.getPage.mock.calls.length;
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    for (let step = 1; step <= 3; step++) {
+      server.items[10] = { ...server.items[10], title: `b10, step ${step}` };
+      await emit("WorkItemRunProgressed", { workItemId: "b10" });
+    }
+    await waitFor(() => expect(backlogTitles()).toContain("b10, step 3"));
+    await act(async () => nextPage.resolve());
+
+    await waitFor(() => expect(backlogTitles()).toHaveLength(25));
+    await settle();
+    expect(server.getPage.mock.calls.slice(pagesBefore).map(([q]) => [q.skip, q.take])).toEqual([
+      [20, 20],
+    ]);
+    expect(backlogTitles()).toContain("b10, step 3");
   });
 });
 

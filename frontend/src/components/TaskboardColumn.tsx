@@ -2,6 +2,7 @@ import { useState } from "react";
 import { WorkItem, WorkItemStatus } from "../types";
 import { workItemService } from "../services/auth";
 import WorkItemCard from "./WorkItemCard";
+import { errorMessage } from "../utils/errorMessage";
 
 interface TaskboardColumnProps {
   status: WorkItemStatus;
@@ -65,13 +66,7 @@ export default function TaskboardColumn({
       const updated = await workItemService.getById(workItemId);
       onWorkItemUpdate(updated);
     } catch (error) {
-      const fallback = "Failed to update work item status.";
-      const msg =
-        error instanceof Error && error.message
-          ? error.message
-          : typeof error === "string"
-            ? error
-            : fallback;
+      const msg = errorMessage(error, "Failed to update work item status.");
       if (onError) onError(msg);
       else console.error("Failed to update work item status:", error);
     }

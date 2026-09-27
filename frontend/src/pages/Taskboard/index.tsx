@@ -15,31 +15,19 @@ import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
+import { errorMessage } from "../../utils/errorMessage";
 import { makeLoopTagMatcher } from "../../utils/workItemJson";
 import {
   EMPTY_TASKBOARD_FILTER,
+  compareTags,
   isFilterActive,
+  sameTag,
   type TaskboardFilter,
 } from "../../utils/taskboardFilter";
 import { findLoadedItem } from "../../utils/taskboardColumns";
 import { useTaskboardColumns } from "./useTaskboardColumns";
 
 const SEARCH_DEBOUNCE_MS = 300;
-
-function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string") return error;
-  return fallback;
-}
-
-/** Case-insensitive, then by code unit, as the server sorts the tags in use. */
-function compareTags(a: string, b: string): number {
-  const la = a.toLowerCase();
-  const lb = b.toLowerCase();
-  if (la !== lb) return la < lb ? -1 : 1;
-  if (a === b) return 0;
-  return a < b ? -1 : 1;
-}
 
 export default function Taskboard() {
   const navigate = useNavigate();
@@ -348,15 +336,18 @@ export default function Taskboard() {
   const toggleTagFilter = (tag: string) => {
     setFilter((prev) => ({
       ...prev,
-      tags: prev.tags.includes(tag) ? prev.tags.filter((t) => t !== tag) : [...prev.tags, tag],
+      tags: prev.tags.some((t) => sameTag(t, tag))
+        ? prev.tags.filter((t) => !sameTag(t, tag))
+        : [...prev.tags, tag],
     }));
   };
 
   const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
   // A selected tag keeps its chip after its last use is gone, so it can still be unselected.
-  const tagChips = [...tagOptions, ...filter.tags.filter((tag) => !tagOptions.includes(tag))].sort(
-    compareTags,
-  );
+  const tagChips = [
+    ...tagOptions,
+    ...filter.tags.filter((tag) => !tagOptions.some((option) => sameTag(option, tag))),
+  ].sort(compareTags);
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const filterActive = isFilterActive(filter);
 
@@ -397,7 +388,7 @@ export default function Taskboard() {
           {tagChips.length > 0 && (
             <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
               {tagChips.map((tag) => {
-                const active = filter.tags.includes(tag);
+                const active = filter.tags.some((selected) => sameTag(selected, tag));
                 const loop = isLoopTag(tag);
                 return (
                   <button

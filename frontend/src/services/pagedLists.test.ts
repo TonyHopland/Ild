@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { loopTemplateService, repositoryService } from "./auth";
+import { loopTemplateService, repositoryService, workItemService } from "./auth";
 
 const okJsonResponse = (body: unknown): Response =>
   new Response(JSON.stringify(body), {
@@ -23,6 +23,7 @@ afterEach(() => {
 describe.each([
   ["repositoryService.getEvery", () => repositoryService.getEvery(), "/api/v1/repositories"],
   ["loopTemplateService.getEvery", () => loopTemplateService.getEvery(), "/api/v1/looptemplates"],
+  ["workItemService.getEvery", () => workItemService.getEvery(), "/api/v1/workitems"],
 ])("%s", (_, getEvery, path) => {
   test("pages past the API's per-request cap until a short page", async () => {
     fetchSpy
