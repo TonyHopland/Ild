@@ -179,8 +179,10 @@ public sealed class ChatService : IChatService
         var userEntry = await AppendMessageAsync(chatSessionId, "user", userMessage, interrupted: false, nextSeq, ct);
 
         // Whoever sends has seen the chat up to their own message, so only a reply
-        // landing after it can make the chat unread.
-        await RaiseReadMarkerAsync(session.UserId, chatSessionId, userEntry.Sequence, ct);
+        // landing after it can make the chat unread. That can clear a dot another of
+        // the owner's windows is showing, so a raise hints like a mark-read does.
+        if (await RaiseReadMarkerAsync(session.UserId, chatSessionId, userEntry.Sequence, ct))
+            await _notifier.UnreadChangedAsync(session.UserId, chatSessionId);
         await _notifier.MessageAppendedAsync(chatSessionId, turnId, ToView(userEntry));
 
         var provider = await _providers.GetAiProviderByIdAsync(session.AiProviderId);
@@ -558,6 +560,9 @@ public sealed class ChatService : IChatService
         _loopScratchpad.Clear(session.Id);
         _db.ChatSessions.Remove(session);
         await _db.SaveChangesAsync(ct);
+
+        // An unread chat takes its dot with it, in every window of the owner's.
+        await _notifier.UnreadChangedAsync(session.UserId, session.Id);
 
         // Best-effort scratch-dir removal: nothing chat-local should remain, but a
         // leftover directory must never fail the hard-delete. The agent writes the

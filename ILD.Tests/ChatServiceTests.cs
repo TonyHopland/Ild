@@ -827,6 +827,55 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_send_that_reads_an_unread_chat_hints_its_owner_before_the_reply()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("reply"))));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "first", CancellationToken.None);
+        Assert.True(await HasUnreadAsync(svc, "alice", chat.Id));
+        _notifier.UnreadChanged.Clear();
+
+        // Sent from one window while another shows the first reply as unread: the
+        // other window hears of it before the next reply is stored.
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "second", CancellationToken.None);
+
+        Assert.Equal(new[] { ("alice", chat.Id, 1), ("alice", chat.Id, 2) }, _notifier.UnreadChanged);
+
+        // A send that raises nothing, because the chat is already read beyond it,
+        // leaves only the reply's own hint.
+        Assert.True(await svc.MarkReadAsync("alice", chat.Id, 100, TestContext.Current.CancellationToken));
+        _notifier.UnreadChanged.Clear();
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "third", CancellationToken.None);
+
+        Assert.Equal(new[] { ("alice", chat.Id, 3) }, _notifier.UnreadChanged);
+    }
+
+    [Fact]
+    public async Task Deleting_a_chat_hints_its_owner_and_nobody_else()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("reply"))));
+        var one = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var two = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var three = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(one.Id, Guid.NewGuid(), "hi", CancellationToken.None);
+        _notifier.UnreadChanged.Clear();
+
+        Assert.False(await svc.DeleteAsync("bob", one.Id, TestContext.Current.CancellationToken));
+        Assert.Empty(_notifier.UnreadChanged);
+
+        Assert.True(await svc.DeleteAsync("alice", one.Id, TestContext.Current.CancellationToken));
+        Assert.Equal(new[] { ("alice", one.Id) }, _notifier.UnreadChanged.Select(u => (u.UserId, u.ChatSessionId)));
+
+        _notifier.UnreadChanged.Clear();
+        Assert.Equal(2, await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken));
+        Assert.Equal(
+            new[] { ("alice", two.Id), ("alice", three.Id) }.OrderBy(u => u.Item2),
+            _notifier.UnreadChanged.Select(u => (u.UserId, u.ChatSessionId)).OrderBy(u => u.ChatSessionId));
+    }
+
+    [Fact]
     public async Task A_mark_read_landing_while_the_reply_is_written_survives_the_turn_saving_its_session()
     {
         var provider = await SeedProviderAsync();
