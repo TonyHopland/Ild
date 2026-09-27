@@ -58,6 +58,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
+import { setChatEnabled } from "../hooks/useChatEnabled";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -416,6 +417,23 @@ describe("unread chat indicator", () => {
     await settle();
     await back();
     await waitFor(() => expect(rowDot("Alpha")).toBeNull());
+  });
+
+  test("a reply that lands while chat is hidden in settings is read only once the chat is shown again", async () => {
+    server = [summary("a", "Alpha", false)];
+    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
+    render(bubble());
+    await openPanel();
+    await resume("Alpha");
+    await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 0));
+
+    act(() => setChatEnabled(false));
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 1, "assistant") });
+    await settle();
+    expect(chatService.markRead).not.toHaveBeenCalledWith("a", 1);
+
+    act(() => setChatEnabled(true));
+    await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 1));
   });
 
   test("every (re)connect rejoins the inbox and re-reads history, recovering a hint lost while away", async () => {
