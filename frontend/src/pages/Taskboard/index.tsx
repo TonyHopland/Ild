@@ -77,8 +77,9 @@ export default function Taskboard() {
   // item, so a late, stale response is dropped instead of reverting the card.
   const syncSeqRef = useRef<Map<string, number>>(new Map());
   // Items announced as created, edited or moved whose fresh copy has not landed
-  // yet. Only those can change the tags in use, and the mark outlives any fetch
-  // a later run or preview event supersedes, so the tags are still re-read.
+  // yet. Only those can change the totals or the tags in use, and the mark
+  // outlives any fetch a later run or preview event supersedes, so both are
+  // still reconciled.
   const itemChangedRef = useRef(new Set<string>());
   // The work-item hub replays nothing on (re)subscribe — unlike SubscribeToRun,
   // SubscribeToWorkItems has no backlog buffer — so any events delivered while
@@ -119,10 +120,8 @@ export default function Taskboard() {
           // later request reflects a fresher server state, so honoring this one
           // would revert the card to a stale status.
           if (syncSeqRef.current.get(workItemId) !== seq) return;
-          showLiveItem(wi, {
-            countAsNew: false,
-            tagsMayChange: itemChangedRef.current.delete(workItemId),
-          });
+          if (itemChangedRef.current.delete(workItemId)) showLiveItem(wi, { countAsNew: false });
+          else refreshShownItem(wi);
         })
         .catch(() => {});
     };
@@ -137,7 +136,7 @@ export default function Taskboard() {
         );
       }
       syncWorkItem(workItemId, { itemChanged: true });
-      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId, { itemChanged: true }), 500));
+      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId, { itemChanged: false }), 500));
 
       const notificationsEnabled = localStorage.getItem("ild_notifications_enabled") !== "false";
       if (
@@ -162,7 +161,7 @@ export default function Taskboard() {
         applyItem({ ...loaded, status: normalizeWorkItemStatus(newStatus) }, { countAsNew: false });
       }
       syncWorkItem(workItemId, { itemChanged: true });
-      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId, { itemChanged: true }), 500));
+      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId, { itemChanged: false }), 500));
     };
 
     const onPreviewStateChanged = (message: TypedSignalRMessage<"PreviewStateChanged">) => {
@@ -289,25 +288,28 @@ export default function Taskboard() {
       });
   };
 
-  // A live copy of an item: placed on the board, counted, its tags reconciled
-  // with the chips when they may have changed, and refreshed in the dialog when
-  // it is the one open.
-  const showLiveItem = (
-    wi: WorkItem,
-    { countAsNew, tagsMayChange }: { countAsNew: boolean; tagsMayChange: boolean },
-  ) => {
+  // A created, edited or moved item: placed on the board, counted, its tags
+  // reconciled with the chips, and refreshed in the dialog when it is the one open.
+  const showLiveItem = (wi: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
     applyItem(wi, { countAsNew });
     requestCountsRefresh();
-    if (tagsMayChange) requestTagsRefresh();
+    requestTagsRefresh();
+    setEditingItem((open) => (open?.id === wi.id ? wi : open));
+  };
+
+  // A fresh copy of an item nothing announced as changed (a run step, a preview,
+  // edit proposals): it updates the card and the dialog showing it, and no more.
+  const refreshShownItem = (wi: WorkItem) => {
+    if (findItem(wi.id)) applyItem(wi, { countAsNew: false });
     setEditingItem((open) => (open?.id === wi.id ? wi : open));
   };
 
   const handleWorkItemUpdate = (updated: WorkItem) => {
-    showLiveItem(updated, { countAsNew: false, tagsMayChange: true });
+    showLiveItem(updated, { countAsNew: false });
   };
 
   const handleCreated = (created: WorkItem) => {
-    showLiveItem(created, { countAsNew: true, tagsMayChange: true });
+    showLiveItem(created, { countAsNew: true });
   };
 
   const openCreateModal = () => {

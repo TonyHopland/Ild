@@ -186,12 +186,13 @@ describe("Taskboard filter options", () => {
     await waitFor(() => expect(chips()).toEqual(["two"]));
   });
 
-  test("run, preview and edit-proposal events refresh the card without re-reading the tags", async () => {
+  test("run, preview and edit-proposal events refresh the card without reconciling totals or tags", async () => {
     const { server, emit } = mockBoard([makeItem("a", ["one"])]);
 
     renderTaskboard();
     await waitFor(() => expect(chips()).toEqual(["one"]));
     const before = server.getTags.mock.calls.length;
+    const countsBefore = server.getCounts.mock.calls.length;
 
     server.items[0] = { ...server.items[0], title: "a, next step" };
     await emit("WorkItemRunProgressed", { workItemId: "a" });
@@ -203,9 +204,17 @@ describe("Taskboard filter options", () => {
     );
     await settle();
     expect(server.getTags.mock.calls.length).toBe(before);
+    expect(server.getCounts.mock.calls.length).toBe(countsBefore);
+
+    // A run event for an item the board never placed adds no card it cannot count.
+    server.items.push({ ...makeItem("unheard", []), createdAt: "2026-02-01T00:00:00Z" });
+    await emit("WorkItemRunProgressed", { workItemId: "unheard" });
+    await settle();
+    expect(screen.queryByRole("button", { name: /^unheard,/ })).toBeNull();
+    expect(server.getCounts.mock.calls.length).toBe(countsBefore);
   });
 
-  test("an edit still re-reads the tags when a run event's fetch supersedes its own", async () => {
+  test("an edit still reconciles totals and tags when a run event's fetch supersedes its own", async () => {
     const { server, emit } = mockBoard([makeItem("a", ["one", "gone"])]);
 
     renderTaskboard();
@@ -214,6 +223,7 @@ describe("Taskboard filter options", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       server.items[0] = { ...server.items[0], tags: ["one"] };
+      const countsBefore = server.getCounts.mock.calls.length;
       const editFetch = deferred<WorkItem>();
       vi.mocked(authServices.workItemService.getById)
         .mockImplementationOnce(() => editFetch.promise)
@@ -226,6 +236,7 @@ describe("Taskboard filter options", () => {
       await settle();
 
       expect(chips()).toEqual(["one"]);
+      expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1);
       await act(async () => editFetch.resolve({ ...server.items[0] }));
     } finally {
       vi.useRealTimers();
