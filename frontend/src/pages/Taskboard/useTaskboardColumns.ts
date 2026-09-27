@@ -3,7 +3,7 @@ import { workItemService } from "../../services/auth";
 import { WorkItem, WorkItemListFilter, WorkItemPage, WorkItemStatus } from "../../types";
 import { TASKBOARD_PAGE_SIZE, WORK_ITEM_STATUSES } from "../../utils/constants";
 import { errorMessage } from "../../utils/errorMessage";
-import type { TaskboardFilter } from "../../utils/taskboardFilter";
+import { matchesTaskboardFilter, type TaskboardFilter } from "../../utils/taskboardFilter";
 import {
   appendPage,
   findLoadedItem,
@@ -60,10 +60,12 @@ interface ColumnFetch {
  * membership sequence (bumped by a live change to its membership) and the
  * content clock at issue. A read from an older generation is dropped; one
  * whose column's membership changed in flight would undo that change, so it
- * is discarded and the column's window is read again. A live change to a
- * card's contents alone discards nothing: the read lands, keeping the live
- * copy of each card touched since it was issued. A window of any size is read
- * in pages the server allows, so a reload never drops a loaded card.
+ * is discarded and the column's window is read again. Every live change to an
+ * item is recorded, held by a column or not, with its live copy or its removal.
+ * A read that lands after one no longer speaks for that item: it takes the
+ * live copy while that still belongs in this column, and otherwise leaves the
+ * item out. A window of any size is read in pages the server allows, so a
+ * reload never drops a loaded card.
  */
 export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: string) => void) {
   const [columns, setColumns] = useState<TaskboardColumns>(emptyColumns);
@@ -75,9 +77,9 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   onErrorRef.current = onError;
   const generationRef = useRef(0);
   const seqRef = useRef<Record<string, number>>({});
-  // Content clock, and the clock at each card's latest live change.
+  // Content clock, and each item's latest live change: its copy, or null once removed.
   const clockRef = useRef(0);
-  const touchedRef = useRef(new Map<string, number>());
+  const liveRef = useRef(new Map<string, { at: number; item: WorkItem | null }>());
   const settledRef = useRef(new Set<WorkItemStatus>());
   const countsRef = useRef({ inFlight: false, dirty: false });
 
@@ -88,16 +90,12 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   }, []);
 
   const commitLive = useCallback(
-    (next: TaskboardColumns) => {
+    (id: string, item: WorkItem | null, next: TaskboardColumns) => {
+      liveRef.current.set(id, { at: ++clockRef.current, item });
       const prev = boardRef.current;
       for (const status of STATUSES) {
-        if (next[status] === prev[status]) continue;
         if (!sameMembership(prev[status], next[status]))
           seqRef.current[status] = (seqRef.current[status] ?? 0) + 1;
-        const before = new Map(prev[status].items.map((item) => [item.id, item]));
-        for (const item of next[status].items) {
-          if (before.get(item.id) !== item) touchedRef.current.set(item.id, ++clockRef.current);
-        }
       }
       show(next);
     },
@@ -157,11 +155,14 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
             });
             return;
           }
-          const fresh = page.items.map((item) =>
-            (touchedRef.current.get(item.id) ?? 0) > issuedAt
-              ? (findLoadedItem(board, item.id) ?? item)
-              : item,
-          );
+          const fresh = page.items.flatMap((item) => {
+            const live = liveRef.current.get(item.id);
+            if (!live || live.at <= issuedAt) return [item];
+            const copy = live.item;
+            return copy && copy.status === status && matchesTaskboardFilter(copy, filterRef.current)
+              ? [copy]
+              : [];
+          });
           show({
             ...board,
             [status]: {
@@ -190,7 +191,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
     ({ windowed }: { windowed: boolean }) => {
       generationRef.current += 1;
       countsRef.current = { inFlight: false, dirty: false };
-      touchedRef.current.clear();
+      liveRef.current.clear();
       const board = boardRef.current;
       const next = { ...board };
       for (const status of STATUSES) {
@@ -265,14 +266,18 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
 
   const applyItem = useCallback(
     (item: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
-      commitLive(applyItemTo(boardRef.current, item, filterRef.current, { countAsNew }));
+      commitLive(
+        item.id,
+        item,
+        applyItemTo(boardRef.current, item, filterRef.current, { countAsNew }),
+      );
     },
     [commitLive],
   );
 
   const removeItem = useCallback(
     (id: string) => {
-      commitLive(removeItemFrom(boardRef.current, id));
+      commitLive(id, null, removeItemFrom(boardRef.current, id));
     },
     [commitLive],
   );
