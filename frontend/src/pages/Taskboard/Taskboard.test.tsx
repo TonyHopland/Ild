@@ -1462,10 +1462,13 @@ describe("Taskboard live changes keep server order", () => {
 
   test("a counts answer for an outdated filter is dropped", async () => {
     const hub = mockHub();
-    const server = mockBoard([
-      ...Array.from({ length: 4 }, (_, n) => boardItem(`b${n}`, n)),
-      boardItem("other", 10, WorkItemStatus.Backlog, { repositoryId: "repo-2" }),
-    ]);
+    const server = mockBoard(
+      [
+        ...Array.from({ length: 4 }, (_, n) => boardItem(`b${n}`, n)),
+        boardItem("other", 10, WorkItemStatus.Backlog, { repositoryId: "repo-2" }),
+      ],
+      [makeRepo(), makeRepo({ id: "repo-2", name: "Repo Two" })],
+    );
     const held = deferred<void>();
     let armed = false;
     server.getCounts.mockImplementation(async (filter) => {
