@@ -9,8 +9,8 @@ namespace ILD.Api.Controllers;
 /// streaming of a turn happens over the <c>/hubs/chat</c> SignalR hub; these
 /// endpoints start chats, list/resume retained history, submit messages (which
 /// interrupt any in-flight turn rather than queueing), cancel an in-flight turn
-/// on its own, and delete chats (one or all). A chat is never deleted
-/// automatically — only by an explicit delete.
+/// on its own, record how far a chat has been read, and delete chats (one or
+/// all). A chat is never deleted automatically — only by an explicit delete.
 /// </summary>
 [ApiController]
 [Route("api/v1/chat")]
@@ -101,6 +101,22 @@ public class ChatController : ControllerBase
         return Accepted();
     }
 
+    [HttpPost("{id:guid}/read")]
+    public async Task<IActionResult> MarkRead(Guid id, [FromBody] MarkChatReadRequest request, CancellationToken ct)
+    {
+        if (!TryResolveUser(out var userId, out var error)) return error;
+        if (request.Sequence is not { } sequence || sequence < 0)
+            return BadRequest(new { error = "A non-negative sequence is required." });
+
+        if (!await _chat.ExistsForUserAsync(userId, id, ct))
+            return NotFound();
+
+        // A sequence at or below the stored marker is not an error: another tab or
+        // a later send may already have read further.
+        await _chat.MarkReadAsync(userId, id, sequence, ct);
+        return NoContent();
+    }
+
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
@@ -150,6 +166,12 @@ public sealed class StartChatRequest
 {
     public string AiProviderId { get; set; } = string.Empty;
     public string[]? Tools { get; set; }
+}
+
+public sealed class MarkChatReadRequest
+{
+    /// <summary>The highest message sequence the user has seen in the chat.</summary>
+    public int? Sequence { get; set; }
 }
 
 public sealed class ChatMessageRequest

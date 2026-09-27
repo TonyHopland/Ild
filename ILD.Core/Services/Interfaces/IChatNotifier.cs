@@ -46,4 +46,13 @@ public interface IChatNotifier
     /// inline proposal cards re-read them. A hint only: it carries no state.
     /// </summary>
     Task EditProposalsChangedAsync(Guid chatSessionId);
+
+    /// <summary>
+    /// Whether the chat is unread may have changed — a reply was stored or the
+    /// read marker rose — so the owner's bubbles re-read their history. Goes to
+    /// the owner's inbox rather than the chat's group, since a chat nobody has
+    /// open is exactly the one whose reply needs flagging. A hint only: it
+    /// carries no state.
+    /// </summary>
+    Task UnreadChangedAsync(string userId, Guid chatSessionId);
 }

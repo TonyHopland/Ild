@@ -10,7 +10,10 @@ namespace ILD.Api.Hubs;
 /// group named after their chat session id; the server broadcasts message and
 /// progress events into that group from <see cref="Configuration.SignalRChatNotifier"/>.
 ///
-/// A group name is a chat session id and nothing more, so joining is the whole
+/// A connection may also join its user's <see cref="InboxGroup">inbox</see>,
+/// which hears only that a chat's unread state may have changed.
+///
+/// A chat's group name is its session id and nothing more, so joining is the whole
 /// of the authorization decision: a connection that talks its way into another
 /// user's group receives that user's transcript for as long as it stays. The
 /// realtime path therefore authorizes exactly as the REST path does — see
@@ -67,5 +70,31 @@ public class ChatHub : Hub
     public async Task UnsubscribeFromChat(Guid chatSessionId)
     {
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, chatSessionId.ToString());
+    }
+
+    /// <summary>
+    /// The group holding every connection of <paramref name="userId"/> that wants
+    /// to hear about all of that user's chats, not just the one it has open. The
+    /// prefix keeps it apart from the per-chat groups, which are bare GUIDs.
+    /// </summary>
+    public static string InboxGroup(string userId) => $"chat-inbox:{userId}";
+
+    /// <summary>
+    /// Join the caller's own inbox. The group comes from the authenticated name
+    /// alone and the method takes nothing, so no caller can name another user's.
+    /// </summary>
+    public async Task SubscribeToChatInbox()
+    {
+        var userId = Context.User?.Identity?.Name;
+        if (string.IsNullOrEmpty(userId))
+            throw new HubException("Not authenticated.");
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, InboxGroup(userId));
+    }
+
+    /// <summary>Leave the caller's inbox. Unchecked, like <see cref="UnsubscribeFromChat"/>.</summary>
+    public async Task UnsubscribeFromChatInbox()
+    {
+        await Groups.RemoveFromGroupAsync(Context.ConnectionId, InboxGroup(Context.User?.Identity?.Name ?? string.Empty));
     }
 }
