@@ -256,6 +256,11 @@
   font-size: 0.78rem;
 }
 
+.settings-success {
+  color: #4ade80;
+  font-size: 0.78rem;
+}
+
 @media (max-width: 720px) {
   .settings-page {
     grid-template-columns: minmax(0, 1fr);
