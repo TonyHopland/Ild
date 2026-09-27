@@ -39,6 +39,9 @@ public class WorkItemEditProposalApiTests
             {
                 services.ReplaceSingleton(WorkItemNotifier.Object);
                 services.ReplaceSingleton(ChatNotifier.Object);
+                var reclaimer = new Mock<IRunReclaimer>();
+                reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(true);
+                services.ReplaceSingleton(reclaimer.Object);
             });
         }
 
@@ -624,6 +627,153 @@ public class WorkItemEditProposalApiTests
         Assert.Equal(nodeId, GuidOrNull(await ReadProposalAsync(host, itemId, fromRun), "createdByRunNodeId"));
     }
 
+    private static async Task<JsonElement[]> ListRequestedAsync(Host host, string itemId)
+    {
+        var resp = await host.Human.GetAsync($"/api/v1/workitems/{itemId}/requested-edit-proposals");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        return (await ReadJsonAsync(resp)).EnumerateArray().ToArray();
+    }
+
+    private static string? RequesterOf(JsonElement proposal)
+        => IsNullOrAbsent(proposal, "requestedByWorkItemId") ? null : proposal.GetProperty("requestedByWorkItemId").GetString();
+
+    private static string[] IdsOf(IEnumerable<JsonElement> proposals)
+        => proposals.Select(p => p.GetProperty("id").GetString()!).Order().ToArray();
+
+    [Fact]
+    public async Task An_items_requested_list_holds_what_its_runs_proposed_on_any_item_and_listings_name_the_requester()
+    {
+        await using var host = await StartHostAsync();
+        var itemA = await CreateHumanItemAsync(host);
+        var itemB = await CreateHumanItemAsync(host);
+        var itemC = await CreateHumanItemAsync(host);
+        var start = DateTime.UtcNow.AddHours(-2);
+        var runsOfA = new List<Guid>();
+        for (var i = 0; i < 60; i++)
+            runsOfA.Add(await SeedRunAsync(host.Factory, itemA, start.AddMinutes(i)));
+        var runOfC = await SeedRunAsync(host.Factory, itemC);
+        var chatId = await SeedChatSessionAsync(host.Factory);
+
+        var aOnB = await ProposeOkAsync(host.Agent(runsOfA[0]), itemB, new { title = "A's title for B" });
+        var aOnItself = await ProposeOkAsync(host.Agent(runsOfA[^1]), itemA, new { title = "A's own title" });
+        var aDecidedOnB = await ProposeOkAsync(host.Agent(runsOfA[30]), itemB, new { description = "Rejected." });
+        Assert.Equal(HttpStatusCode.OK, (await RejectAsync(host.Human, itemB, aDecidedOnB, "No.")).StatusCode);
+        var cOnB = await ProposeOkAsync(host.Agent(runOfC), itemB, new { tags = new[] { "from-c" } });
+        var chatOnB = await ProposeOkAsync(host.Agent(chatSessionId: chatId), itemB, new { branchNameOverride = "feature/chat" });
+
+        var requestedByA = await ListRequestedAsync(host, itemA);
+        Assert.Equal(new[] { aOnB, aOnItself, aDecidedOnB }.Order(), IdsOf(requestedByA));
+        Assert.All(requestedByA, p => Assert.Equal(itemA, RequesterOf(p)));
+        Assert.Equal(new[] { cOnB }, IdsOf(await ListRequestedAsync(host, itemC)));
+        Assert.Empty(await ListRequestedAsync(host, itemB));
+
+        Assert.Equal(new Dictionary<string, string?>
+            {
+                [aOnB] = itemA,
+                [aDecidedOnB] = itemA,
+                [cOnB] = itemC,
+                [chatOnB] = null,
+            },
+            (await ListAsHumanAsync(host, itemB)).ToDictionary(p => p.GetProperty("id").GetString()!, RequesterOf));
+
+        await DeleteRunRowAsync(host.Factory, runOfC);
+
+        Assert.Null(RequesterOf(await ReadProposalAsync(host, itemB, cOnB)));
+        Assert.Empty(await ListRequestedAsync(host, itemC));
+    }
+
+    [Fact]
+    public async Task The_requesting_item_is_hinted_when_its_proposal_on_another_item_is_made_rejected_or_made_stale()
+    {
+        await using var host = await StartHostAsync();
+        var itemA = await CreateHumanItemAsync(host);
+        var itemB = await CreateHumanItemAsync(host);
+        var agentOfA = host.Agent(await SeedRunAsync(host.Factory, itemA));
+        var chat = host.Agent(chatSessionId: await SeedChatSessionAsync(host.Factory));
+
+        host.WorkItemNotifier.Invocations.Clear();
+        var willGoStale = await ProposeOkAsync(agentOfA, itemB, new { title = "A's title for B" });
+        host.WorkItemNotifier.Verify(n => n.WorkItemEditProposalsChangedAsync(itemB), Times.AtLeastOnce);
+        host.WorkItemNotifier.Verify(n => n.WorkItemEditProposalsChangedAsync(itemA), Times.AtLeastOnce);
+
+        var willBeRejected = await ProposeOkAsync(agentOfA, itemB, new { description = "A's description for B" });
+        host.WorkItemNotifier.Invocations.Clear();
+        Assert.Equal(HttpStatusCode.OK, (await RejectAsync(host.Human, itemB, willBeRejected, "No.")).StatusCode);
+        host.WorkItemNotifier.Verify(n => n.WorkItemEditProposalsChangedAsync(itemA), Times.AtLeastOnce);
+
+        var fromChat = await ProposeOkAsync(chat, itemB, new { tags = new[] { "from-chat" } });
+        host.WorkItemNotifier.Invocations.Clear();
+        Assert.Equal(HttpStatusCode.OK, (await ApproveAsync(host.Human, itemB, fromChat)).StatusCode);
+        Assert.Equal("Stale", (await ReadProposalAsync(host, itemB, willGoStale)).GetProperty("status").GetString());
+        host.WorkItemNotifier.Verify(n => n.WorkItemEditProposalsChangedAsync(itemA), Times.AtLeastOnce);
+    }
+
+    public enum RunDeletion { AUserDeletesTheRun, ItsWorkItemIsDeleted }
+
+    [Theory]
+    [InlineData(RunDeletion.AUserDeletesTheRun)]
+    [InlineData(RunDeletion.ItsWorkItemIsDeleted)]
+    public async Task Deleting_a_run_rejects_its_pending_proposals_and_leaves_decided_ones_and_other_runs_ones(RunDeletion deletion)
+    {
+        await using var host = await StartHostAsync();
+        var itemA = await CreateHumanItemAsync(host);
+        var itemB = await CreateHumanItemAsync(host);
+        var itemC = await CreateHumanItemAsync(host);
+        var runOfA = await SeedRunAsync(host.Factory, itemA);
+        var runOfC = await SeedRunAsync(host.Factory, itemC);
+        var agentOfA = host.Agent(runOfA);
+        var pendingOnB = await ProposeOkAsync(agentOfA, itemB, new { title = "A's title for B" });
+        var pendingOnC = await ProposeOkAsync(agentOfA, itemC, new { title = "A's title for C" });
+        var rejectedOnB = await ProposeOkAsync(agentOfA, itemB, new { description = "Rejected." });
+        Assert.Equal(HttpStatusCode.OK, (await RejectAsync(host.Human, itemB, rejectedOnB, "No.")).StatusCode);
+        var otherRunsOnB = await ProposeOkAsync(host.Agent(runOfC), itemB, new { tags = new[] { "from-c" } });
+        await SetRunStatusAsync(host.Factory, runOfA, LoopRunStatus.Completed);
+        await SetRunStatusAsync(host.Factory, runOfC, LoopRunStatus.Completed);
+
+        var resp = deletion == RunDeletion.AUserDeletesTheRun
+            ? await host.Human.DeleteAsync($"/api/v1/loopruns/{runOfA}", TestContext.Current.CancellationToken)
+            : await host.Human.DeleteAsync($"/api/v1/workitems/{itemA}", TestContext.Current.CancellationToken);
+
+        Assert.True(resp.IsSuccessStatusCode, $"delete answered {(int)resp.StatusCode}");
+        Assert.False(await RunExistsAsync(host.Factory, runOfA));
+        foreach (var (item, id) in new[] { (itemB, pendingOnB), (itemC, pendingOnC) })
+        {
+            var withdrawn = await ReadProposalAsync(host, item, id);
+            Assert.Equal("Rejected", withdrawn.GetProperty("status").GetString());
+            Assert.Contains("deleted", withdrawn.GetProperty("rejectionReason").GetString(), StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.Equal("No.", (await ReadProposalAsync(host, itemB, rejectedOnB)).GetProperty("rejectionReason").GetString());
+        Assert.Equal("Pending", (await ReadProposalAsync(host, itemB, otherRunsOnB)).GetProperty("status").GetString());
+        Assert.Equal(1, (await GetItemAsync(host, itemB)).GetProperty("pendingEditProposalCount").GetInt32());
+        Assert.Equal(0, (await GetItemAsync(host, itemC)).GetProperty("pendingEditProposalCount").GetInt32());
+        Assert.True(await RunExistsAsync(host.Factory, runOfC));
+    }
+
+    private static async Task SetRunStatusAsync(ApiFactory factory, Guid runId, LoopRunStatus status)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var run = await db.LoopRuns.SingleAsync(r => r.Id == runId);
+        run.Status = status;
+        run.CompletedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task<bool> RunExistsAsync(ApiFactory factory, Guid runId)
+    {
+        using var scope = factory.Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<AppDbContext>().LoopRuns.AnyAsync(r => r.Id == runId);
+    }
+
+    /// <summary>Removes the run row behind ILD's back, as a run deleted before withdrawal existed was.</summary>
+    private static async Task DeleteRunRowAsync(ApiFactory factory, Guid runId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        db.LoopRuns.Remove(await db.LoopRuns.SingleAsync(r => r.Id == runId));
+        await db.SaveChangesAsync();
+    }
+
     private static Task SeedChatMessagesAsync(ApiFactory factory, Guid chatId, params string[] roles)
         => SeedChatMessagesAsync(factory, chatId, startAt: 0, roles);
 
@@ -714,7 +864,7 @@ public class WorkItemEditProposalApiTests
         return session.Id;
     }
 
-    private static async Task<Guid> SeedRunAsync(ApiFactory factory)
+    private static async Task<Guid> SeedRunAsync(ApiFactory factory, string? workItemId = null, DateTime? startedAt = null)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -731,11 +881,11 @@ public class WorkItemEditProposalApiTests
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid().ToString(),
+            WorkItemId = workItemId ?? Guid.NewGuid().ToString(),
             LoopTemplateVersionId = version.Id,
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
-            StartedAt = DateTime.UtcNow,
+            StartedAt = startedAt ?? DateTime.UtcNow,
         };
         db.LoopRuns.Add(run);
         await db.SaveChangesAsync();

@@ -381,6 +381,29 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Proposals_are_listed_by_the_loop_runs_that_made_them()
+    {
+        var item = await CreateItemAsync();
+        var otherItem = await CreateItemAsync("Another item");
+        var run = Guid.NewGuid();
+        var secondRun = Guid.NewGuid();
+        var byRun = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "A", CreatedByLoopRunId = run });
+        var bySecondRun = await ProposeAsync(otherItem.Id, new RemoteCreateEditProposalRequest { Title = "B", CreatedByLoopRunId = secondRun });
+        var decided = await ProposeAsync(otherItem.Id, new RemoteCreateEditProposalRequest { Title = "C", CreatedByLoopRunId = run });
+        await _client.RejectEditProposalAsync(_opts, otherItem.Id, decided.Id, null, TestContext.Current.CancellationToken);
+        await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "D", CreatedByLoopRunId = Guid.NewGuid() });
+        await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "E", CreatedByChatSessionId = Guid.NewGuid() });
+
+        var both = await _client.QueryEditProposalsAsync(_opts,
+            new RemoteEditProposalQuery { CreatedByLoopRunIds = new[] { run, secondRun } }, TestContext.Current.CancellationToken);
+        var onePending = await _client.QueryEditProposalsAsync(_opts,
+            new RemoteEditProposalQuery { CreatedByLoopRunIds = new[] { run }, Status = RemoteEditProposalStatus.Pending }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(new[] { byRun.Id, bySecondRun.Id, decided.Id }.OrderBy(x => x), both.Select(p => p.Id).OrderBy(x => x));
+        Assert.Equal(byRun.Id, Assert.Single(onePending).Id);
+    }
+
+    [Fact]
     public async Task Anchors_are_stored_as_given_and_survive_approve_reject_and_stale()
     {
         var item = await CreateItemAsync();

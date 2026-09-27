@@ -139,6 +139,32 @@ public class WorktreeRetentionSweeperTests
         Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
     }
 
+    [Fact]
+    public async Task Sweep_keeps_run_row_when_its_pending_proposals_cannot_be_withdrawn_so_next_sweep_retries()
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var workItemId = Guid.NewGuid().ToString();
+        var run = SeedRun(db, version.Id, workItemId, LoopRunStatus.Completed,
+            completedAt: DateTime.UtcNow.AddDays(-40),
+            worktree: "/tmp/wt/proposer", branch: "ild/wi-x-run-proposer");
+
+        var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.Done);
+        workItems.Setup(x => x.WithdrawPendingProposalsOfRunAsync(run.Id, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection refused (workitem-server:8081)"));
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, ReclaimerReturning(true).Object, retentionDays: 30));
+
+        Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
+
+        workItems.Setup(x => x.WithdrawPendingProposalsOfRunAsync(run.Id, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, ReclaimerReturning(true).Object, retentionDays: 30));
+
+        Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
+        workItems.Verify(x => x.WithdrawPendingProposalsOfRunAsync(run.Id, It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
