@@ -1,4 +1,5 @@
 import type { WorkItem } from "../types";
+import { toUpperInvariant } from "./providerTags";
 import { parseTags } from "./workItemJson";
 
 /**
@@ -34,10 +35,12 @@ export function matchesTaskboardFilter(item: WorkItem, filter: TaskboardFilter):
   if (filter.repositoryId && item.repositoryId !== filter.repositoryId) return false;
   const itemTags = parseTags(item);
   if (!filter.tags.every((tag) => itemTags.some((carried) => sameTag(carried, tag)))) return false;
-  const query = filter.search.trim().toLowerCase();
+  const query = toUpperInvariant(filter.search.trim());
   if (query) {
     const fields = [item.title, item.description, item.id];
-    if (!fields.some((field) => typeof field === "string" && field.toLowerCase().includes(query)))
+    if (
+      !fields.some((field) => typeof field === "string" && toUpperInvariant(field).includes(query))
+    )
       return false;
   }
   return true;
@@ -45,13 +48,13 @@ export function matchesTaskboardFilter(item: WorkItem, filter: TaskboardFilter):
 
 /** Whether two tag names are one tag: tags match case-insensitively. */
 export function sameTag(a: string, b: string): boolean {
-  return a.toUpperCase() === b.toUpperCase();
+  return toUpperInvariant(a) === toUpperInvariant(b);
 }
 
 /** Case-insensitively, then by code unit: the order the server lists the tags in use. */
 export function compareTags(a: string, b: string): number {
-  const ua = a.toUpperCase();
-  const ub = b.toUpperCase();
+  const ua = toUpperInvariant(a);
+  const ub = toUpperInvariant(b);
   if (ua !== ub) return ua < ub ? -1 : 1;
   if (a === b) return 0;
   return a < b ? -1 : 1;

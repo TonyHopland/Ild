@@ -1,14 +1,17 @@
 import type { AiProvider } from "../types";
 
 /**
- * Upper-cases one character at a time, as the backend's ToUpperInvariant does:
- * a letter whose upper case is several characters ("ß" → "SS") stays as it is.
+ * Upper-cases one character at a time, as the backend's ToUpperInvariant and
+ * OrdinalIgnoreCase do: a letter whose upper case is several characters
+ * ("ß" → "SS") stays as it is.
  */
-const normalizeTag = (tag: string) =>
-  Array.from(tag.trim(), (char) => {
+export const toUpperInvariant = (text: string) =>
+  Array.from(text, (char) => {
     const upper = char.toUpperCase();
     return Array.from(upper).length === 1 ? upper : char;
   }).join("");
+
+const normalizeTag = (tag: string) => toUpperInvariant(tag.trim());
 
 /** Provider tags compare trimmed and case-insensitively, as the backend matches them. */
 export function sameTag(a: string, b: string): boolean {
