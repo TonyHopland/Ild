@@ -50,17 +50,17 @@ const TOOL_OPTIONS: { key: string; label: string; defaultOn: boolean }[] = [
   { key: "execute", label: "Execute", defaultOn: false },
 ];
 
+/** Marks the chat button, or a past chat, as holding a reply the user has not read. */
+function UnreadDot() {
+  return <span className="chat-unread-dot" role="img" aria-label="New messages" />;
+}
+
 /**
  * Persistent chat bubble (ADR-0010) with retained chat history (ADR-0013).
  * Mounted globally so it survives navigation; chats live server-side. The bubble
  * lists the user's past chats and resumes any of them with its full transcript;
  * chats are retained until explicitly deleted (per-chat or "delete all").
  */
-/** Marks the chat button, or a past chat, as holding a reply the user has not read. */
-function UnreadDot() {
-  return <span className="chat-unread-dot" role="img" aria-label="New messages" />;
-}
-
 export default function ChatBubble() {
   const [open, setOpen] = useState(false);
   const [session, setSession] = useState<ChatSession | null>(null);
