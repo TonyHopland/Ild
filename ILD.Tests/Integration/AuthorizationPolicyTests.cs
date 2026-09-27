@@ -270,4 +270,25 @@ public class AuthorizationPolicyTests
 
         Assert.Equal(HttpStatusCode.OK, entries.StatusCode);
     }
+
+    [Fact]
+    public async Task The_chat_mark_read_route_is_on_the_user_only_surface()
+    {
+        await using var factory = new ApiFactory();
+        var route = $"/api/v1/chat/{Guid.NewGuid()}/read";
+        var agent = factory.CreateClient();
+        agent.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token);
+        var user = await factory.CreateAuthenticatedClientAsync();
+
+        var asAgent = await agent.PostAsJsonAsync(route, new { sequence = 1 }, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Forbidden, asAgent.StatusCode);
+
+        // The same request from a user reaches the action: a bad sequence is its
+        // 400, and a chat that is not theirs its 404.
+        var negative = await user.PostAsJsonAsync(route, new { sequence = -1 }, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, negative.StatusCode);
+        var missing = await user.PostAsJsonAsync(route, new { sequence = 1 }, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
 }

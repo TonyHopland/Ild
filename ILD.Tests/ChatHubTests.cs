@@ -95,4 +95,48 @@ public class ChatHubTests
             g => g.RemoveFromGroupAsync("conn-1", alicesSession.ToString(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    /// <summary>The group a subscribe to the inbox put the caller's connection in.</summary>
+    internal static async Task<string> InboxGroupJoinedBy(string username)
+    {
+        var hub = BuildHub(username, Mock.Of<IChatService>(), out var groups);
+        string? joined = null;
+        groups.Setup(g => g.AddToGroupAsync("conn-1", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, CancellationToken>((_, group, _) => joined = group)
+            .Returns(Task.CompletedTask);
+
+        await hub.SubscribeToChatInbox();
+
+        return Assert.IsType<string>(joined);
+    }
+
+    [Fact]
+    public async Task SubscribeToChatInbox_joins_an_inbox_of_the_callers_own_and_unsubscribe_leaves_it()
+    {
+        var alices = await InboxGroupJoinedBy("alice");
+        var bobs = await InboxGroupJoinedBy("bob");
+
+        Assert.NotEqual(alices, bobs);
+        Assert.Equal(alices, await InboxGroupJoinedBy("alice"));
+
+        var hub = BuildHub("alice", Mock.Of<IChatService>(), out var groups);
+        await hub.UnsubscribeFromChatInbox();
+        groups.Verify(g => g.RemoveFromGroupAsync("conn-1", alices, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SubscribeToChatInbox_refuses_a_caller_with_no_name()
+    {
+        var groups = new Mock<IGroupManager>();
+        var context = new Mock<HubCallerContext>();
+        context.SetupGet(c => c.ConnectionId).Returns("conn-1");
+        context.SetupGet(c => c.User).Returns(new ClaimsPrincipal(new ClaimsIdentity()));
+        var hub = new ChatHub(Mock.Of<IChatService>()) { Groups = groups.Object, Context = context.Object };
+
+        await Assert.ThrowsAsync<HubException>(() => hub.SubscribeToChatInbox());
+
+        groups.Verify(
+            g => g.AddToGroupAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

@@ -100,6 +100,16 @@ public sealed class ChatServiceTests : IDisposable
         }
 
         public Task EditProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
+
+        // Each unread hint with how many replies had been announced when it went out,
+        // so a test can tell a hint sent after the reply from one sent before it.
+        public List<(string UserId, Guid ChatSessionId, int RepliesAppended)> UnreadChanged { get; } = new();
+
+        public Task UnreadChangedAsync(string userId, Guid chatSessionId)
+        {
+            UnreadChanged.Add((userId, chatSessionId, Appended.Count(a => a.Message.Role == "assistant")));
+            return Task.CompletedTask;
+        }
     }
 
     private static IAgentAdapterRegistry RegistryFor(IAgentAdapter adapter)
@@ -732,5 +742,132 @@ public sealed class ChatServiceTests : IDisposable
         Assert.DoesNotContain(_db.Context.ChatSessions, c => c.Id == a1.Id || c.Id == a2.Id);
         // Bob's chat is untouched.
         Assert.Contains(_db.Context.ChatSessions, c => c.Id == bobs.Id);
+    }
+
+    private static async Task<bool> HasUnreadAsync(ChatService svc, string userId, Guid chatSessionId)
+        => (await svc.ListForUserAsync(userId, TestContext.Current.CancellationToken))
+            .Single(c => c.Id == chatSessionId).HasUnread;
+
+    [Fact]
+    public async Task A_send_marks_the_chat_read_so_only_a_reply_arriving_after_it_makes_the_chat_unread()
+    {
+        var provider = await SeedProviderAsync();
+        ChatService? svc = null;
+        var unreadWhileWaitingForReply = new List<bool>();
+        svc = NewService(new FakeAdapter(async ctx =>
+        {
+            unreadWhileWaitingForReply.Add(await HasUnreadAsync(svc!, "alice", ctx.ChatSessionId!.Value));
+            return NodeExecutionResult.Ok("reply");
+        }));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "first", CancellationToken.None);
+        Assert.True(await HasUnreadAsync(svc, "alice", chat.Id));
+
+        // The second send covers the first reply, which the user never opened.
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "second", CancellationToken.None);
+
+        Assert.Equal(new[] { false, false }, unreadWhileWaitingForReply);
+        Assert.True(await HasUnreadAsync(svc, "alice", chat.Id));
+    }
+
+    [Fact]
+    public async Task A_chat_with_no_read_marker_is_never_unread()
+    {
+        // Every chat that predates read markers looks like this until its next send.
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var legacy = new ChatSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = "alice",
+            AiProviderId = provider.Id,
+            ProviderType = provider.Type,
+            ToolAllowlistCsv = "ild",
+            ScratchPath = Path.Combine(_scratchRoot, "legacy"),
+            CreatedAt = DateTime.UtcNow,
+        };
+        _db.Context.ChatSessions.Add(legacy);
+        _db.Context.ChatMessages.AddRange(
+            new ChatMessage { Id = Guid.NewGuid(), ChatSessionId = legacy.Id, Role = "user", Content = "hi", Sequence = 0, CreatedAt = DateTime.UtcNow },
+            new ChatMessage { Id = Guid.NewGuid(), ChatSessionId = legacy.Id, Role = "assistant", Content = "hello", Sequence = 1, CreatedAt = DateTime.UtcNow });
+        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(await HasUnreadAsync(svc, "alice", legacy.Id));
+    }
+
+    [Fact]
+    public async Task MarkReadAsync_raises_the_owners_marker_and_never_lowers_it()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("reply"))));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hi", CancellationToken.None);
+        _notifier.UnreadChanged.Clear();
+
+        // Another user cannot read alice's chat for her.
+        Assert.False(await svc.MarkReadAsync("bob", chat.Id, 1, TestContext.Current.CancellationToken));
+        Assert.True(await HasUnreadAsync(svc, "alice", chat.Id));
+        Assert.Empty(_notifier.UnreadChanged);
+
+        Assert.True(await svc.MarkReadAsync("alice", chat.Id, 1, TestContext.Current.CancellationToken));
+        Assert.False(await HasUnreadAsync(svc, "alice", chat.Id));
+        Assert.Equal(new[] { ("alice", chat.Id) }, _notifier.UnreadChanged.Select(u => (u.UserId, u.ChatSessionId)));
+
+        // A lower or equal sequence is not a raise: nothing moves and nobody is told.
+        Assert.False(await svc.MarkReadAsync("alice", chat.Id, 0, TestContext.Current.CancellationToken));
+        Assert.False(await svc.MarkReadAsync("alice", chat.Id, 1, TestContext.Current.CancellationToken));
+        Assert.Single(_notifier.UnreadChanged);
+
+        // Read ahead of the next send (from another tab, say): the send must not pull
+        // the marker back down to its own message, so the reply below it stays read.
+        Assert.True(await svc.MarkReadAsync("alice", chat.Id, 100, TestContext.Current.CancellationToken));
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "again", CancellationToken.None);
+        Assert.False(await HasUnreadAsync(svc, "alice", chat.Id));
+    }
+
+    [Fact]
+    public async Task A_mark_read_landing_while_the_reply_is_written_survives_the_turn_saving_its_session()
+    {
+        var provider = await SeedProviderAsync();
+        // A concurrent POST /read has its own request scope, so its own context.
+        using var otherContext = _db.Fresh();
+        var otherRequest = new ChatService(
+            otherContext, _db.Providers, RegistryFor(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok()))),
+            _notifier, Options, _db.LoopRuns, _loopScratchpad);
+        var svc = NewService(new FakeAdapter(async ctx =>
+        {
+            // The reply will be sequence 1; this mark-read lands before it is stored.
+            Assert.True(await otherRequest.MarkReadAsync("alice", ctx.ChatSessionId!.Value, 1, CancellationToken.None));
+            return NodeExecutionResult.Ok("reply");
+        }));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hi", CancellationToken.None);
+
+        Assert.False(await HasUnreadAsync(otherRequest, "alice", chat.Id));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_finalized_reply_hints_its_owner_once_it_is_stored(bool interrupted)
+    {
+        var provider = await SeedProviderAsync();
+        using var cts = new CancellationTokenSource();
+        var svc = NewService(new FakeAdapter(async ctx =>
+        {
+            await ctx.ProgressCallback!("partial");
+            if (!interrupted) return NodeExecutionResult.Ok("reply");
+            cts.Cancel();
+            return NodeExecutionResult.Fail("interrupted");
+        }));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hi", cts.Token);
+
+        // After the reply: a hint that beats it has the client re-read a chat that is
+        // not unread yet, and nothing tells it again.
+        Assert.Equal(("alice", chat.Id, 1), _notifier.UnreadChanged.Last());
     }
 }

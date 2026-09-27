@@ -193,4 +193,66 @@ public class ChatControllerTests
         Assert.IsType<UnauthorizedResult>(result);
         _chat.Verify(c => c.GetByIdAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    private static int? StatusOf(IActionResult result)
+        => Assert.IsAssignableFrom<Microsoft.AspNetCore.Mvc.Infrastructure.IStatusCodeActionResult>(result).StatusCode;
+
+    private void VerifyNothingMarked()
+        => _chat.Verify(
+            c => c.MarkReadAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(7)]
+    public async Task MarkRead_raises_the_marker_of_a_chat_the_caller_owns(int sequence)
+    {
+        var id = Guid.NewGuid();
+        _chat.Setup(c => c.ExistsForUserAsync("tony", id, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _chat.Setup(c => c.MarkReadAsync("tony", id, sequence, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var result = await CreateController()
+            .MarkRead(id, new MarkChatReadRequest { Sequence = sequence }, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status204NoContent, StatusOf(result));
+        _chat.Verify(c => c.MarkReadAsync("tony", id, sequence, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task MarkRead_of_a_chat_the_caller_does_not_own_or_that_does_not_exist_is_NotFound_and_marks_nothing()
+    {
+        var id = Guid.NewGuid();
+        _chat.Setup(c => c.ExistsForUserAsync("tony", id, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+
+        var result = await CreateController()
+            .MarkRead(id, new MarkChatReadRequest { Sequence = 3 }, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status404NotFound, StatusOf(result));
+        VerifyNothingMarked();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(-1)]
+    public async Task MarkRead_without_a_usable_sequence_is_BadRequest_and_marks_nothing(int? sequence)
+    {
+        var id = Guid.NewGuid();
+        _chat.Setup(c => c.ExistsForUserAsync("tony", id, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var result = await CreateController()
+            .MarkRead(id, new MarkChatReadRequest { Sequence = sequence }, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, StatusOf(result));
+        VerifyNothingMarked();
+    }
+
+    [Fact]
+    public async Task MarkRead_without_a_signed_in_user_is_Unauthorized()
+    {
+        var result = await CreateController(username: null)
+            .MarkRead(Guid.NewGuid(), new MarkChatReadRequest { Sequence = 1 }, CancellationToken.None);
+
+        Assert.IsType<UnauthorizedResult>(result);
+        VerifyNothingMarked();
+    }
 }
