@@ -76,6 +76,10 @@ export default function Taskboard() {
   // apply a fetch's result only when it is still the latest request for that
   // item, so a late, stale response is dropped instead of reverting the card.
   const syncSeqRef = useRef<Map<string, number>>(new Map());
+  // Items announced as created, edited or moved whose fresh copy has not landed
+  // yet. Only those can change the tags in use, and the mark outlives any fetch
+  // a later run or preview event supersedes, so the tags are still re-read.
+  const itemChangedRef = useRef(new Set<string>());
   // The work-item hub replays nothing on (re)subscribe — unlike SubscribeToRun,
   // SubscribeToWorkItems has no backlog buffer — so any events delivered while
   // the socket was down are lost for good. We reload the board on each
@@ -104,7 +108,8 @@ export default function Taskboard() {
   useEffect(() => {
     const delayedTimers: number[] = [];
 
-    const syncWorkItem = (workItemId: string) => {
+    const syncWorkItem = (workItemId: string, { itemChanged }: { itemChanged: boolean }) => {
+      if (itemChanged) itemChangedRef.current.add(workItemId);
       const seq = (syncSeqRef.current.get(workItemId) ?? 0) + 1;
       syncSeqRef.current.set(workItemId, seq);
       void workItemService
@@ -114,7 +119,10 @@ export default function Taskboard() {
           // later request reflects a fresher server state, so honoring this one
           // would revert the card to a stale status.
           if (syncSeqRef.current.get(workItemId) !== seq) return;
-          showLiveItem(wi, { countAsNew: false });
+          showLiveItem(wi, {
+            countAsNew: false,
+            tagsMayChange: itemChangedRef.current.delete(workItemId),
+          });
         })
         .catch(() => {});
     };
@@ -128,8 +136,8 @@ export default function Taskboard() {
           { countAsNew: false },
         );
       }
-      syncWorkItem(workItemId);
-      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));
+      syncWorkItem(workItemId, { itemChanged: true });
+      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId, { itemChanged: true }), 500));
 
       const notificationsEnabled = localStorage.getItem("ild_notifications_enabled") !== "false";
       if (
@@ -153,25 +161,25 @@ export default function Taskboard() {
       if (loaded) {
         applyItem({ ...loaded, status: normalizeWorkItemStatus(newStatus) }, { countAsNew: false });
       }
-      syncWorkItem(workItemId);
-      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId), 500));
+      syncWorkItem(workItemId, { itemChanged: true });
+      delayedTimers.push(setTimeout(() => syncWorkItem(workItemId, { itemChanged: true }), 500));
     };
 
     const onPreviewStateChanged = (message: TypedSignalRMessage<"PreviewStateChanged">) => {
-      syncWorkItem(message.payload.workItemId);
+      syncWorkItem(message.payload.workItemId, { itemChanged: false });
     };
 
     // When a running item advances to a new node, re-sync it so its card shows
     // the current step. Node transitions don't change the work item's status, so
     // this is the only signal that keeps a running card's step fresh.
     const onRunProgressed = (message: TypedSignalRMessage<"WorkItemRunProgressed">) => {
-      syncWorkItem(message.payload.workItemId);
+      syncWorkItem(message.payload.workItemId, { itemChanged: false });
     };
 
     const onEditProposalsChanged = (
       message: TypedSignalRMessage<"WorkItemEditProposalsChanged">,
     ) => {
-      syncWorkItem(message.payload.workItemId);
+      syncWorkItem(message.payload.workItemId, { itemChanged: false });
     };
 
     const onSchedulerStateChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {
@@ -282,20 +290,24 @@ export default function Taskboard() {
   };
 
   // A live copy of an item: placed on the board, counted, its tags reconciled
-  // with the chips, and refreshed in the dialog when it is the one open.
-  const showLiveItem = (wi: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
+  // with the chips when they may have changed, and refreshed in the dialog when
+  // it is the one open.
+  const showLiveItem = (
+    wi: WorkItem,
+    { countAsNew, tagsMayChange }: { countAsNew: boolean; tagsMayChange: boolean },
+  ) => {
     applyItem(wi, { countAsNew });
     requestCountsRefresh();
-    requestTagsRefresh();
+    if (tagsMayChange) requestTagsRefresh();
     setEditingItem((open) => (open?.id === wi.id ? wi : open));
   };
 
   const handleWorkItemUpdate = (updated: WorkItem) => {
-    showLiveItem(updated, { countAsNew: false });
+    showLiveItem(updated, { countAsNew: false, tagsMayChange: true });
   };
 
   const handleCreated = (created: WorkItem) => {
-    showLiveItem(created, { countAsNew: true });
+    showLiveItem(created, { countAsNew: true, tagsMayChange: true });
   };
 
   const openCreateModal = () => {

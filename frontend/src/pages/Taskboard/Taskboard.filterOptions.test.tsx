@@ -143,7 +143,7 @@ describe("Taskboard filter options", () => {
     // Another client drops the only use of "gone" and of the selected "held".
     server.items[0] = { ...server.items[0], tags: ["keep"] };
     server.items[1] = { ...server.items[1], tags: [] };
-    await emit("WorkItemRunProgressed", { workItemId: "a" });
+    await emit("WorkItemStateChanged", edited("a"));
 
     await waitFor(() => expect(chips()).toEqual(["held", "keep"]));
     expect(screen.getByRole("button", { name: "held" }).getAttribute("aria-pressed")).toBe("true");
@@ -151,12 +151,13 @@ describe("Taskboard filter options", () => {
 
   test("tags are re-read with one request in flight and one follow-up", async () => {
     const { server, emit } = mockBoard([makeItem("a", ["one"]), makeItem("b", ["two"])]);
-    const held = deferred<void>();
+    const held: ReturnType<typeof deferred<void>>[] = [];
     let armed = false;
     server.getTags.mockImplementation(async () => {
       if (armed) {
-        armed = false;
-        await held.promise;
+        const hold = deferred<void>();
+        held.push(hold);
+        await hold.promise;
       }
       return server.tags();
     });
@@ -166,19 +167,73 @@ describe("Taskboard filter options", () => {
     armed = true;
     const before = server.getTags.mock.calls.length;
 
-    await emit("WorkItemRunProgressed", { workItemId: "a" });
+    await emit("WorkItemStateChanged", edited("a"));
     await waitFor(() => expect(server.getTags.mock.calls.length).toBe(before + 1));
     // Changes land while that read is out; its answer predates them.
     server.items[0] = { ...server.items[0], tags: [] };
-    await emit("WorkItemRunProgressed", { workItemId: "a" });
-    await emit("WorkItemRunProgressed", { workItemId: "b" });
+    await emit("WorkItemStateChanged", edited("a"));
+    await emit("WorkItemStateChanged", edited("b"));
     await settle();
     expect(server.getTags.mock.calls.length).toBe(before + 1);
 
-    held.resolve();
+    await act(async () => held[0].resolve());
     await waitFor(() => expect(server.getTags.mock.calls.length).toBe(before + 2));
     await settle();
     expect(server.getTags.mock.calls.length).toBe(before + 2);
-    expect(chips()).toEqual(["two"]);
+
+    armed = false;
+    await act(async () => held[1].resolve());
+    await waitFor(() => expect(chips()).toEqual(["two"]));
+  });
+
+  test("run, preview and edit-proposal events refresh the card without re-reading the tags", async () => {
+    const { server, emit } = mockBoard([makeItem("a", ["one"])]);
+
+    renderTaskboard();
+    await waitFor(() => expect(chips()).toEqual(["one"]));
+    const before = server.getTags.mock.calls.length;
+
+    server.items[0] = { ...server.items[0], title: "a, next step" };
+    await emit("WorkItemRunProgressed", { workItemId: "a" });
+    await emit("PreviewStateChanged", { workItemId: "a" });
+    await emit("WorkItemEditProposalsChanged", { workItemId: "a" });
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^a, next step,/ })).toBeTruthy(),
+    );
+    await settle();
+    expect(server.getTags.mock.calls.length).toBe(before);
+  });
+
+  test("an edit still re-reads the tags when a run event's fetch supersedes its own", async () => {
+    const { server, emit } = mockBoard([makeItem("a", ["one", "gone"])]);
+
+    renderTaskboard();
+    await waitFor(() => expect(chips()).toEqual(["gone", "one"]));
+    // No delayed re-sync may stand in for the fetch that carries the edit.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      server.items[0] = { ...server.items[0], tags: ["one"] };
+      const editFetch = deferred<WorkItem>();
+      vi.mocked(authServices.workItemService.getById)
+        .mockImplementationOnce(() => editFetch.promise)
+        .mockImplementation(async (id: string) => ({
+          ...server.items.find((wi) => wi.id === id)!,
+        }));
+
+      await emit("WorkItemStateChanged", edited("a"));
+      await emit("WorkItemRunProgressed", { workItemId: "a" });
+      await settle();
+
+      expect(chips()).toEqual(["one"]);
+      await act(async () => editFetch.resolve({ ...server.items[0] }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
+
+/** The event an edit, or a create, of a Backlog item broadcasts. */
+function edited(workItemId: string) {
+  return { workItemId, oldStatus: "Backlog", newStatus: "Backlog" };
+}
