@@ -248,6 +248,13 @@ public sealed class RemoteWorkItemEditProposal
     public string? RejectionReason { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? DecidedAt { get; set; }
+
+    /// <summary>
+    /// The work item whose loop run made it, filled in by ILD from the run; the
+    /// WorkItem server never sends it. Null for a chat's proposal and when the
+    /// run no longer exists.
+    /// </summary>
+    public string? RequestedByWorkItemId { get; set; }
 }
 
 public sealed class RemoteCreateEditProposalRequest
@@ -315,4 +322,7 @@ public sealed class RemoteEditProposalQuery
 
     /// <summary>Only decided proposals whose decision the proposing chat has not been told.</summary>
     public bool UndeliveredOnly { get; set; }
+
+    /// <summary>Only proposals made by one of these loop runs; null does not filter, and an empty list matches nothing.</summary>
+    public IReadOnlyList<Guid>? CreatedByLoopRunIds { get; set; }
 }

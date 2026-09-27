@@ -191,6 +191,21 @@ public interface IWorkItemManager
     Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(RemoteEditProposalQuery query, CancellationToken ct = default);
 
     /// <summary>
+    /// The edit proposals the work item's loop runs made, on any work item itself
+    /// included, newest first. The work item asked for them, so their decisions
+    /// are made from its Action tab.
+    /// </summary>
+    Task<IReadOnlyList<RemoteWorkItemEditProposal>> ListRequestedEditProposalsAsync(string workItemId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Reject the loop run's still-pending edit proposals because the run is being
+    /// deleted; decided ones stay as they are. Nothing to do when no WorkItem
+    /// server is configured. Throws <see cref="HttpRequestException"/> when the
+    /// server cannot be reached, and the caller then keeps the run so it can retry.
+    /// </summary>
+    Task WithdrawPendingProposalsOfRunAsync(Guid runId, CancellationToken ct = default);
+
+    /// <summary>
     /// A human's approve: applies exactly the proposed fields if the item's
     /// editable fields still equal the proposal's snapshot, atomically on the
     /// WorkItem server; otherwise the proposal goes Stale and nothing changes.

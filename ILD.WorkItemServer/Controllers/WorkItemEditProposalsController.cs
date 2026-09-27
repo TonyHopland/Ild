@@ -42,8 +42,11 @@ public sealed class WorkItemEditProposalsController : ControllerBase
         [FromQuery] WorkItemEditProposalStatus? status,
         [FromQuery] Guid? createdByChatSessionId,
         [FromQuery] bool undelivered,
+        [FromQuery] Guid[]? createdByLoopRunId,
         CancellationToken ct)
-        => Ok(await _proposals.ListAsync(status, createdByChatSessionId, undelivered, ct));
+        // An absent parameter can bind as an empty array; absent means any run.
+        => Ok(await _proposals.ListAsync(
+            status, createdByChatSessionId, undelivered, createdByLoopRunId is { Length: > 0 } ? createdByLoopRunId : null, ct));
 
     [HttpPost("workitems/{id}/edit-proposals/{proposalId:guid}/approve")]
     public async Task<IActionResult> Approve(string id, Guid proposalId, CancellationToken ct)

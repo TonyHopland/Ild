@@ -224,6 +224,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
                 query.Status is { } status ? (WorkItemEditProposalStatus)(int)status : null,
                 query.CreatedByChatSessionId,
                 query.UndeliveredOnly,
+                query.CreatedByLoopRunIds,
                 ct))
             .Select(ToRemote).ToList();
 

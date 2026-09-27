@@ -19,6 +19,7 @@ public class LoopRunsController : ControllerBase
     private readonly IAdapterSessionSnapshotStore _sessionSnapshotStore;
     private readonly InteractiveShellSessionService _shellSessions;
     private readonly IRunReclaimer _runReclaimer;
+    private readonly IWorkItemManager _workItemManager;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
@@ -26,7 +27,8 @@ public class LoopRunsController : ControllerBase
         ILoopRunStore loopRunStore,
         IAdapterSessionSnapshotStore sessionSnapshotStore,
         InteractiveShellSessionService shellSessions,
-        IRunReclaimer runReclaimer)
+        IRunReclaimer runReclaimer,
+        IWorkItemManager workItemManager)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
@@ -34,6 +36,7 @@ public class LoopRunsController : ControllerBase
         _sessionSnapshotStore = sessionSnapshotStore;
         _shellSessions = shellSessions;
         _runReclaimer = runReclaimer;
+        _workItemManager = workItemManager;
     }
 
     /// <summary>
@@ -254,7 +257,7 @@ public class LoopRunsController : ControllerBase
     }
 
     [HttpDelete("{id}")]
-    public async Task<IActionResult> Delete(string id)
+    public async Task<IActionResult> Delete(string id, CancellationToken cancellationToken = default)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
@@ -269,6 +272,16 @@ public class LoopRunsController : ControllerBase
         // pointing at them.
         if (!await _runReclaimer.ReclaimLocalStateAsync(run))
             return Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was not deleted. Retry, or check server logs." });
+
+        // Its pending edit proposals go with it, or nothing would ever decide them.
+        try
+        {
+            await _workItemManager.WithdrawPendingProposalsOfRunAsync(guid, cancellationToken);
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(503, new { error = "WorkItemServer unreachable: the run's pending edit proposals could not be withdrawn, so the run was not deleted. Retry later.", detail = ex.Message });
+        }
 
         var deleted = await _loopRunStore.DeleteAsync(guid);
         return deleted ? NoContent() : NotFound();
