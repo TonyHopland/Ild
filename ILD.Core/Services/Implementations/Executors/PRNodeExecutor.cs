@@ -32,12 +32,15 @@ public sealed class PRNodeExecutor : INodeExecutor
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, "WorkItem not found");
             yield break;
         }
-        if (wi.RepositoryId is null)
+        // Read the pinned repository straight off the run already in hand; the
+        // work item's is only a fallback for a run that has no pinned repository.
+        var repositoryId = ctx.Run.RepositoryId ?? wi.RepositoryId;
+        if (repositoryId is null)
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, "PR node requires a repository on the work item");
             yield break;
         }
-        var repo = await providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value);
+        var repo = await providerStore.GetRepositoryByIdAsync(repositoryId.Value);
         if (repo is null)
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, "Repository not found");

@@ -385,7 +385,8 @@ public class WorkItemManager : IWorkItemManager
             AiProviderOverrideId = remote.AiProviderOverrideId,
             BranchNameOverride = remote.BranchNameOverride,
             BaseBranchOverride = remote.BaseBranchOverride,
-            RepositoryId = run?.RepositoryId ?? remote.RepositoryId,
+            RepositoryId = remote.RepositoryId,
+            RunRepositoryId = run?.RepositoryId,
             CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
             CreatedByChatSessionId = remote.CreatedByChatSessionId,
             StartedAt = timingRun?.StartedAt,
@@ -564,7 +565,8 @@ public class WorkItemManager : IWorkItemManager
         RemoteAiProviderOverrideMode? aiProviderOverride = null,
         Guid? aiProviderOverrideId = null,
         string? branchNameOverride = null,
-        string? baseBranchOverride = null)
+        string? baseBranchOverride = null,
+        Guid? repositoryId = null)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var updated = await _server.UpdateAsync(opts, workItemId, new RemoteUpdateWorkItemRequest
@@ -576,6 +578,7 @@ public class WorkItemManager : IWorkItemManager
             AiProviderOverrideId = aiProviderOverrideId,
             BranchNameOverride = branchNameOverride,
             BaseBranchOverride = baseBranchOverride,
+            RepositoryId = repositoryId,
         });
         if (updated == null) return false;
 
@@ -975,10 +978,10 @@ public class WorkItemManager : IWorkItemManager
             return (null, "Work item not found.");
         if (string.IsNullOrWhiteSpace(wi.WorktreePath) || !Directory.Exists(wi.WorktreePath))
             return (null, "Work item does not currently have an active worktree.");
-        if (wi.RepositoryId is null)
+        if (wi.RunRepositoryId is null)
             return (null, "Work item has no associated repository.");
 
-        var repo = await _providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value);
+        var repo = await _providerStore.GetRepositoryByIdAsync(wi.RunRepositoryId.Value);
         if (repo is null)
             return (null, "Repository not found.");
 
@@ -1248,10 +1251,10 @@ public class WorkItemManager : IWorkItemManager
             return new MergePullRequestResult(false, "Work item has no linked pull request.", false, null);
         if (_remoteProvider == null)
             return new MergePullRequestResult(false, "No remote provider configured.", false, null);
-        if (wi.RepositoryId == null)
+        if (wi.RunRepositoryId == null)
             return new MergePullRequestResult(false, "Work item has no repository.", false, null);
 
-        var repo = await _providerStore.GetRepositoryByIdAsync(wi.RepositoryId.Value);
+        var repo = await _providerStore.GetRepositoryByIdAsync(wi.RunRepositoryId.Value);
         if (repo == null)
             return new MergePullRequestResult(false, "Repository not found.", false, null);
 

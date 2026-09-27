@@ -105,6 +105,13 @@ public sealed class UpdateWorkItemRequest
     public string? BaseBranchOverride { get; set; }
 
     /// <summary>
+    /// Replaces the repository the item's runs work in. Null leaves it
+    /// untouched. Only the item's next run sees the change: a run already
+    /// started keeps the repository it was created with.
+    /// </summary>
+    public Guid? RepositoryId { get; set; }
+
+    /// <summary>
     /// When supplied, replaces the work item's AI provider override. The mode
     /// and target id travel as a unit — supplying the mode also authoritatively
     /// sets <see cref="AiProviderOverrideId"/> (null clears the target).

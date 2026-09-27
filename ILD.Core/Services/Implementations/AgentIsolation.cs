@@ -206,9 +206,8 @@ public static class AgentIsolation
     /// configured agent user, returning the same instance for fluent use. CLI
     /// adapters do not call this themselves — they get it through
     /// <c>CliAgentAdapterBase.StartAgentProcess</c>, so no launch site can forget
-    /// to. The built-in provider's shell tool calls it directly, through
-    /// <c>AIProviderService.IsolateShell</c>, and so does the Cmd node executor,
-    /// through <c>CmdNodeExecutor.IsolateCommand</c>.
+    /// to. The Cmd node executor calls it directly, through
+    /// <c>CmdNodeExecutor.IsolateCommand</c>.
     /// A no-op returning <paramref name="psi"/> unchanged when
     /// <c>ILD_AGENT_USER</c> is unset. Preserves the redirected streams, working
     /// directory and environment already configured on <paramref name="psi"/>;

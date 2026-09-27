@@ -32,7 +32,6 @@ internal static class TestHostServiceCollectionExtensions
     public static void GuardExternalServices(this IServiceCollection services)
     {
         services.ReplaceSingleton<IProcessRunner>(new ThrowingProcessRunner());
-        services.ReplaceSingleton<IAIProviderService>(new ThrowingAiProviderService());
         services.ReplaceSingleton<IWorktreePreviewService>(new ThrowingWorktreePreviewService());
         services.ReplaceSingleton<IRemoteProvider>(new ThrowingRemoteProvider());
         services.ReplaceSingleton<IAgentAdapterRegistry>(new ThrowingAgentAdapterRegistry());
@@ -50,24 +49,6 @@ internal static class TestHostServiceCollectionExtensions
             CancellationToken ct = default,
             IReadOnlyDictionary<string, string?>? environmentVariables = null)
             => throw Unexpected(nameof(IProcessRunner));
-    }
-
-    private sealed class ThrowingAiProviderService : IAIProviderService
-    {
-        public Task<string> CompleteAsync(string prompt, string? providerId = null, CancellationToken cancellationToken = default)
-            => throw Unexpected(nameof(IAIProviderService));
-
-        public Task<bool> ValidatePromptTemplateAsync(string template)
-            => throw Unexpected(nameof(IAIProviderService));
-
-        public Task<IEnumerable<string>> GetAvailableProvidersAsync()
-            => throw Unexpected(nameof(IAIProviderService));
-
-        public Task<IEnumerable<string>> GetAvailableToolsAsync()
-            => throw Unexpected(nameof(IAIProviderService));
-
-        public Task<ToolExecutionResult> ExecuteToolAsync(string toolName, string arguments, string worktreePath)
-            => throw Unexpected(nameof(IAIProviderService));
     }
 
     private sealed class ThrowingWorktreePreviewService : IWorktreePreviewService

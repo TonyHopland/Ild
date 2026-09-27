@@ -45,7 +45,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRemoteProviderTypeCatalog, RemoteProviderTypeCatalog>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
         services.AddScoped<IConnectionTester, ConnectionTester>();
-        services.AddHttpClient<IAIProviderService, AIProviderService>();
         services.AddHttpClient<IManagedAgentService, ManagedAgentService>();
         services.AddSingleton<ManagedAgentProvisioner>();
         services.AddSingleton<IManagedAgentProvisioner>(sp => sp.GetRequiredService<ManagedAgentProvisioner>());

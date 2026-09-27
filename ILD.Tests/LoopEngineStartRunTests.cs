@@ -80,6 +80,37 @@ public class LoopEngineStartRunTests
         Assert.Contains(runs, r => r.Id != completed.Id);
     }
 
+    [Theory]
+    [InlineData(LoopRunStatus.Failed)]
+    [InlineData(LoopRunStatus.Cancelled)]
+    public async Task StartRun_pins_the_items_edited_repository_not_the_earlier_runs(LoopRunStatus earlierStatus)
+    {
+        // The earlier run was created on the old repository and is still the
+        // item's current run; the item has since been re-pointed.
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var oldRepo = Guid.NewGuid();
+        var newRepo = Guid.NewGuid();
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: new WorkItemView
+            {
+                Id = workItemId,
+                Tags = new[] { "tag" },
+                RepositoryId = newRepo,
+                RunRepositoryId = oldRepo,
+            });
+        var earlier = SeedRun(db, workItemId, earlierStatus);
+        earlier.RepositoryId = oldRepo;
+        db.Context.SaveChanges();
+
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
+        await DrainAsync(engine);
+
+        var runs = db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId).ToList();
+        Assert.Equal(oldRepo, runs.Single(r => r.Id == earlier.Id).RepositoryId);
+        Assert.Equal(newRepo, runs.Single(r => r.Id != earlier.Id).RepositoryId);
+    }
+
     [Fact]
     public async Task StartRun_leaves_the_branch_to_the_start_node_when_there_is_no_override()
     {

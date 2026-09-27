@@ -260,6 +260,9 @@ public class AgentController : ControllerBase
             priority = wi.Priority.ToString(),
             tags = wi.Tags,
             repositoryId = wi.RepositoryId == Guid.Empty ? null : (Guid?)wi.RepositoryId,
+            // The repository the current run's worktree and branch belong to,
+            // which re-pointing the item for its next run does not move.
+            runRepositoryId = wi.RunRepositoryId == Guid.Empty ? null : wi.RunRepositoryId,
                 loopTemplateVersionId = (Guid?)null,
             createdByLoopRunId = wi.CreatedByLoopRunId,
             createdByChatSessionId = wi.CreatedByChatSessionId,
@@ -372,7 +375,7 @@ public class AgentController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId),
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RunRepositoryId),
                     workItem!.Id));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
@@ -418,7 +421,7 @@ public class AgentController : ControllerBase
                     request?.SkipInstall == true,
                     request?.PublicHost,
                     request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RepositoryId),
+                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RunRepositoryId),
                     workItem!.Id));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);

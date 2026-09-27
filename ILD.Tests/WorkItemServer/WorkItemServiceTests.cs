@@ -223,6 +223,21 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Update_replaces_the_repository_and_leaves_it_alone_when_null()
+    {
+        var repoA = Guid.NewGuid();
+        var repoB = Guid.NewGuid();
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", RepositoryId = repoA }, TestContext.Current.CancellationToken);
+
+        var moved = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { RepositoryId = repoB }, TestContext.Current.CancellationToken);
+        Assert.Equal(repoB, moved!.RepositoryId);
+
+        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" }, TestContext.Current.CancellationToken);
+        Assert.Equal(repoB, titleOnly!.RepositoryId);
+        Assert.Equal(repoB, (await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken))!.RepositoryId);
+    }
+
+    [Fact]
     public async Task The_two_branch_overrides_are_stored_independently()
     {
         // They travel the same plumbing and normalise the same way; clearing one

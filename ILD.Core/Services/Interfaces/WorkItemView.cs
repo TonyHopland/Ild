@@ -45,8 +45,29 @@ public sealed class WorkItemView
     /// </summary>
     public string? BaseBranchOverride { get; set; }
 
-    // Engine-only fields (from LoopRun)
+    /// <summary>
+    /// The repository the item's next run is created on. Editable, and like the
+    /// branch overrides never retroactive: see <see cref="RunRepositoryId"/>.
+    /// </summary>
     public Guid? RepositoryId { get; set; }
+
+    // Engine-only fields (from LoopRun)
+
+    /// <summary>
+    /// The repository the current run was pinned to at creation, or
+    /// <see cref="RepositoryId"/> when there is no current run or it pinned
+    /// none. Whatever acts on this view's <see cref="WorktreePath"/>, branch,
+    /// preview or PR reads this, so re-pointing the item never moves a run
+    /// already under way. Code that holds a specific <c>LoopRun</c> reads that
+    /// run's pinned repository directly instead.
+    /// </summary>
+    public Guid? RunRepositoryId
+    {
+        get => _runRepositoryId ?? RepositoryId;
+        set => _runRepositoryId = value;
+    }
+    private Guid? _runRepositoryId;
+
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
     public DateTime? StartedAt { get; set; }

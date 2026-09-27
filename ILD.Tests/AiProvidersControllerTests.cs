@@ -43,7 +43,6 @@ public class AiProvidersControllerTests : IDisposable
 
     private AiProvidersController CreateController()
         => new(
-            Mock.Of<IAIProviderService>(),
             _registry.Object,
             _db,
             new ProviderStore(_db),

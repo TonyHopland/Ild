@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Changing a work item's repository now saves, and takes effect from its next run while a run already under way stays where it started.**
+
 ## [0.15.0] - 2026-09-26
 
 ### Added

@@ -667,6 +667,50 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task CommitAndPushBranch_pushes_to_the_runs_repository_after_the_item_was_repointed()
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var otherRepo = new Repository
+        {
+            Id = Guid.NewGuid(), Name = "other", CloneUrl = "https://example/other.git",
+            RemoteProviderId = db.Context.RemoteProviders.Select(p => p.Id).Single(),
+        };
+        db.Context.Repositories.Add(otherRepo);
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var worktree = Path.Combine(Path.GetTempPath(), "ild-push-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(worktree);
+        try
+        {
+            var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+            var runId = SeedLoopRun(db, id);
+            var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
+            run!.WorktreePath = worktree;
+            run.BranchName = "ild/wi-x-run-1";
+            run.RepositoryId = repoId;
+            await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+            Assert.True(await mgr.UpdateAsync(id, "a", "", repositoryId: otherRepo.Id));
+            Assert.Equal(otherRepo.Id, (await mgr.GetWorkItemAsync(id))!.RepositoryId);
+
+            GitAuthOptions? pushedWith = null;
+            repoMgr.Setup(r => r.GetDiffAsync(worktree)).ReturnsAsync(string.Empty);
+            repoMgr.Setup(r => r.PushAsync(worktree, "ild/wi-x-run-1", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+                .Callback<string, string, CancellationToken, GitAuthOptions?>((_, _, _, auth) => pushedWith = auth)
+                .ReturnsAsync((true, (string?)null));
+
+            var result = await mgr.CommitAndPushBranchAsync(id);
+
+            Assert.True(result.Success);
+            Assert.Equal(MergeRepoCloneUrl, pushedWith!.RemoteUrl);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task CommitAndPushBranch_skips_commit_when_worktree_is_clean()
     {
         var (mgr, db, repoId, repoMgr, _) = Setup();
@@ -1402,6 +1446,37 @@ public class WorkItemManagerTests
         remote.Verify(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNodeId,
             It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success)), Times.Once);
+    }
+
+    [Fact]
+    public async Task MergePullRequest_merges_on_the_runs_repository_after_the_item_was_repointed()
+    {
+        // The PR belongs to the run, and the run keeps the repository it was
+        // created on: re-pointing the item only affects its next run.
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.MergePullRequestAsync(It.IsAny<string>(), "42")).ReturnsAsync(true);
+        var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
+        using var _ = db;
+        var otherRepo = new Repository
+        {
+            Id = Guid.NewGuid(), Name = "other", CloneUrl = "https://example/other.git",
+            RemoteProviderId = db.Context.RemoteProviders.Select(p => p.Id).Single(),
+        };
+        db.Context.Repositories.Add(otherRepo);
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var (id, runId, _) = SeedPrAwaitingMerge(
+            mgr, db, repoId, "https://example/repo/pulls/42", "ild/wi-x-run-4");
+        db.Context.LoopRuns.Single(r => r.Id == runId).RepositoryId = repoId;
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        Assert.True(await mgr.UpdateAsync(id, "merge me", "", repositoryId: otherRepo.Id));
+        Assert.Equal(otherRepo.Id, (await mgr.GetWorkItemAsync(id))!.RepositoryId);
+
+        var result = await mgr.MergePullRequestAsync(id, deleteBranch: false);
+
+        Assert.True(result!.Merged);
+        remote.Verify(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42"), Times.Once);
+        remote.Verify(r => r.MergePullRequestAsync(otherRepo.CloneUrl, It.IsAny<string>()), Times.Never);
     }
 
     [Fact]
