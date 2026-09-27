@@ -9,6 +9,7 @@ import { useWorkItemDetail } from "./useWorkItemDetail";
 import { PreviewPanel, MetaPanel, DescriptionPanel } from "./panels";
 import RunsPanel from "./RunsPanel";
 import ActionThread from "./ActionThread";
+import PendingEditProposals from "./PendingEditProposals";
 import EditPanel from "./EditPanel";
 import FilesPanel from "./FilesPanel";
 
@@ -276,6 +277,7 @@ export default function WorkItemModalV2({
           <div className="wiv2-overview-main">
             <span className="detail-label">Description</span>
             <DescriptionPanel workItem={workItem} />
+            <PendingEditProposals workItemId={workItem.id} />
           </div>
           <aside className="wiv2-overview-aside">
             <MetaPanel workItem={workItem} detail={detail} />

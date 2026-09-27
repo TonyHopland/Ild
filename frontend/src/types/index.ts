@@ -171,6 +171,8 @@ export interface WorkItemEditProposal {
   createdByRunNodeId?: string | null;
   /** The sequence of the chat reply its card follows. */
   chatReplySequence?: number | null;
+  /** The work item whose loop run made it; null for a chat's, and once that run no longer exists. */
+  requestedByWorkItemId?: string | null;
   createdAt: string;
   decidedAt: string | null;
 }

@@ -205,6 +205,11 @@ export const workItemService = {
     return api.get<WorkItemEditProposal[]>(`/workitems/${id}/edit-proposals`);
   },
 
+  /** What the item's loop runs proposed, on any item: the cards its Action tab decides. */
+  listRequestedEditProposals: async (id: string): Promise<WorkItemEditProposal[]> => {
+    return api.get<WorkItemEditProposal[]>(`/workitems/${id}/requested-edit-proposals`);
+  },
+
   listEditProposalsFor: async (filter: {
     status?: WorkItemEditProposalStatus;
     chatSessionId?: string;
