@@ -499,13 +499,48 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// is not going to arrive. Compare-and-set against the heartbeat, which
     /// writes this same column at the end of every tick and would otherwise
     /// silently undo this.
+    ///
+    /// Only while no write still waiting in the queue answers the same finding:
+    /// that answer IS going to arrive, and nothing marks the finding delivered
+    /// again when it does, so forgetting it would let a later review restating
+    /// it start a round that answers it twice. The queue and the ledger are two
+    /// columns with a compare-and-set each, so an answer queued between reading
+    /// the queue and forgetting would slip past a plain check. Hence the fence:
+    /// the queue is read again after forgetting, and if it moved, the finding
+    /// is remembered again and the decision retaken against the queue as it now
+    /// stands. An answer queued after the fence arrives at a finding already put
+    /// back, exactly as an answer to one never handed over does.
     /// </summary>
     private async Task PutFindingBackAsync(Guid runId, string? sourceHash)
     {
         if (string.IsNullOrEmpty(sourceHash))
             return;
 
-        await PrCommentLedgerWriter.MutateAsync(_runs, runId, state => state?.ForgetDeliveredContent(sourceHash));
+        for (var attempt = 0; attempt < QueueWriteAttempts; attempt++)
+        {
+            var queue = await _runs.GetPrCommentQueueAsync(runId);
+            if (PrCommentQueueJson.TryParse(queue).Any(q => string.Equals(q.SourceHash, sourceHash, StringComparison.Ordinal)))
+                return;
+
+            string? head = null;
+            var forgot = await PrCommentLedgerWriter.MutateAsync(_runs, runId, state =>
+            {
+                head = state?.Head;
+                return state is not null && state.DeliveredHashes.Contains(sourceHash, StringComparer.Ordinal)
+                    ? state.ForgetDeliveredContent(sourceHash)
+                    : null;
+            });
+            if (!forgot || string.Equals(await _runs.GetPrCommentQueueAsync(runId), queue, StringComparison.Ordinal))
+                return;
+
+            // Remembered only on the head it was forgotten on: hashes are per-head,
+            // and one carried onto a head the heartbeat has since moved to would
+            // suppress the same finding restated against new code.
+            await PrCommentLedgerWriter.MutateAsync(_runs, runId, state =>
+                state is null || !string.Equals(state.Head, head, StringComparison.Ordinal)
+                    ? null
+                    : state with { DeliveredHashes = PrCommentLedger.Remember(state.DeliveredHashes, sourceHash) });
+        }
     }
 
     /// <summary>Lines of the answered text quoted back before the answer.</summary>

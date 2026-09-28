@@ -158,6 +158,82 @@ public class PrWriteQueueConcurrencyTests
         Assert.Contains(left.Body, new[] { "answer A", "answer B" });
     }
 
+    /// <summary>
+    /// A service that withdraws, on the real store, with <paramref name="between"/>
+    /// run once at <paramref name="moment"/> of its putting the finding back:
+    /// after it read the ledger and before it forgets, or after it forgot and
+    /// before it looks at the queue again.
+    /// </summary>
+    private static PrReviewService WithdrawingServiceOn(TestDb db, Guid runId, string moment, Func<Task> between)
+    {
+        var real = new LoopRunStore(db.Fresh());
+        var pending = between;
+        async Task Once()
+        {
+            var once = Interlocked.Exchange(ref pending, null);
+            if (once is not null)
+                await once();
+        }
+
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetCurrentByWorkItemAsync(It.IsAny<string>()))
+            .Returns((string wi) => real.GetCurrentByWorkItemAsync(wi));
+        store.Setup(s => s.GetPrCommentQueueAsync(runId)).Returns(() => real.GetPrCommentQueueAsync(runId));
+        store.Setup(s => s.TrySetPrCommentQueueAsync(runId, It.IsAny<string?>(), It.IsAny<string?>()))
+            .Returns((Guid id, string? expected, string? json) => real.TrySetPrCommentQueueAsync(id, expected, json));
+        store.Setup(s => s.GetPrCommentLedgerAsync(runId)).Returns(async () =>
+        {
+            var read = await real.GetPrCommentLedgerAsync(runId);
+            if (moment == "before it forgets")
+                await Once();
+            return read;
+        });
+        store.Setup(s => s.TrySetPrCommentLedgerAsync(runId, It.IsAny<string?>(), It.IsAny<string?>()))
+            .Returns(async (Guid id, string? expected, string? json) =>
+            {
+                var written = await real.TrySetPrCommentLedgerAsync(id, expected, json);
+                if (written && moment == "after it forgot")
+                    await Once();
+                return written;
+            });
+        return new PrReviewService(store.Object, new Mock<IRemoteProvider>().Object);
+    }
+
+    [Theory]
+    [InlineData("before it forgets")]
+    [InlineData("after it forgot")]
+    public async Task An_answer_queued_while_another_is_withdrawn_keeps_its_finding_delivered(string moment)
+    {
+        // The finding goes back within reach because its answer is not going to
+        // arrive. A fresh answer to the same item queued mid-withdrawal IS going
+        // to arrive, and nothing marks the finding delivered again when it does,
+        // so a later review restating it would start a round that answers twice.
+        using var db = new TestDb();
+        var run = await SeedAsync(db);
+        var hash = PrCommentLedger.Fingerprint("src/A.cs", 10, "this allocation is wrong");
+        var store = new LoopRunStore(db.Fresh());
+        Assert.True(await store.TrySetPrCommentLedgerAsync(run.Id, null, PrCommentLedgerJson.Serialize(
+            PrCommentLedger.Empty with
+            {
+                Head = "c19dc2d1",
+                DeliveredIds = new[] { PrCommentLedger.KeyFor("review", "11") },
+                DeliveredHashes = new[] { hash },
+            })));
+        var taken = await AnsweringServiceOn(db, run.Id).ReplyAsync("wi-1", "11", "answer A", run.Id);
+
+        var answering = AnsweringServiceOn(db, run.Id);
+        var withdrawing = WithdrawingServiceOn(db, run.Id, moment, async () =>
+            Assert.True((await answering.ReplyAsync("wi-1", "11", "answer B", run.Id)).Ok));
+
+        Assert.True((await withdrawing.WithdrawAsync("wi-1", taken.Id!, run.Id, null)).Ok);
+
+        var after = new LoopRunStore(db.Fresh());
+        var left = Assert.Single(PrCommentQueueJson.TryParse(await after.GetPrCommentQueueAsync(run.Id)));
+        Assert.Equal("answer B", left.Body);
+        Assert.Equal(hash, left.SourceHash);
+        Assert.Contains(hash, PrCommentLedgerJson.TryParse(await after.GetPrCommentLedgerAsync(run.Id))!.DeliveredHashes);
+    }
+
     [Fact]
     public async Task A_drop_that_lost_the_race_to_an_identical_drop_reports_it_is_gone()
     {
