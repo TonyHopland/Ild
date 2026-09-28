@@ -48,4 +48,6 @@ public class Repository : IHasUpdatedAt
 
     [ForeignKey(nameof(RemoteProviderId))]
     public RemoteProvider RemoteProvider { get; set; } = null!;
+
+    public List<RepositoryPackageFeed> PackageFeeds { get; set; } = new();
 }

@@ -38,6 +38,7 @@ public sealed class TestDb : IDisposable
     public IAppSettingStore Settings { get; }
     public INetworkPolicyStore Network { get; }
     public INetworkForwardStore NetworkForwards { get; }
+    public IPackageFeedStore PackageFeeds { get; }
 
     /// <summary>
     /// Fake WorkItemServer harness backing the remote-backed
@@ -78,6 +79,7 @@ public sealed class TestDb : IDisposable
         Settings = new AppSettingStore(Context);
         Network = new NetworkPolicyStore(Context);
         NetworkForwards = new NetworkForwardStore(Context);
+        PackageFeeds = new PackageFeedStore(Context);
         _ownsServer = server is null;
         Server = server ?? new FakeWorkItemServerHarness();
     }
