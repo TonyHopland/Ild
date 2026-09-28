@@ -470,6 +470,31 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("Dependencies")).toBeTruthy();
   });
 
+  test("overview links each dependency to its work item page", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([
+      makeWorkItem({ id: "wi-2", title: "Dep item" }),
+    ]);
+    await renderDialog(makeWorkItem({ dependencyIds: ["wi-2"] }));
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    const link = await within(overview).findByRole("link", { name: "Dep item" });
+    expect(link.getAttribute("href")).toBe("/taskboard/wi-2");
+    expect(
+      within(overview).getByRole("button", { name: "Remove dependency Dep item" }),
+    ).toBeTruthy();
+  });
+
+  test("overview shows None when the item has no dependencies", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    const row = within(overview).getByText("Dependencies").closest(".wiv2-meta-row") as HTMLElement;
+    expect(await within(row).findByText("None")).toBeTruthy();
+    expect(within(row).queryByRole("link")).toBeNull();
+  });
+
   const LOOP_ROW_CASES: Array<{
     name: string;
     run: Partial<LoopRun>;

@@ -955,7 +955,7 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
           {detail.dependencies.length === 0 && <span className="detail-value">None</span>}
           {detail.dependencies.map((dep) => (
             <span key={dep.id} className="dependency-tag">
-              <Link to={`/workitems/${dep.id}`} className="dependency-link">
+              <Link to={`/taskboard/${dep.id}`} className="dependency-link">
                 {dep.title}
               </Link>
               <button

@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Clicking a dependency on a work item now opens that work item instead of the taskboard.**
+
 - **A loop's proposed edit to another work item is now approved or rejected from the work item whose loop asked for it, and the edited item lists its pending proposals on its Overview.**
 
 - **Every work item is on the taskboard again, new ones appear at the top of their column, and search and filters find items however old.**
