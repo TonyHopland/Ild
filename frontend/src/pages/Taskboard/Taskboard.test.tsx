@@ -873,6 +873,32 @@ describe("Taskboard work item URL", () => {
     expect(screen.getByTestId("location").textContent).toBe("/taskboard");
   });
 
+  test("clicking a dependency link opens that dependency's dialog", async () => {
+    mockSignalR();
+    mockModalServices();
+    const dep = makeItem({ id: "wi-2", title: "Dep item" });
+    mockTaskboardServer([makeItem({ dependencyIds: ["wi-2"] }), dep]);
+    vi.spyOn(authServices.workItemService, "getDependencies").mockImplementation(async (id) =>
+      id === "wi-1" ? [dep] : [],
+    );
+
+    renderTaskboard("/taskboard/wi-1");
+
+    const link = await within(await screen.findByRole("dialog")).findByRole("link", {
+      name: "Dep item",
+    });
+    fireEvent.click(link);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location").textContent).toBe("/taskboard/wi-2");
+    });
+    await waitFor(() => {
+      expect(
+        within(screen.getByRole("dialog")).getByRole("heading", { name: "Dep item" }),
+      ).toBeTruthy();
+    });
+  });
+
   test("redirects to the taskboard when the URL points at a missing work item", async () => {
     mockSignalR();
     mockModalServices();
