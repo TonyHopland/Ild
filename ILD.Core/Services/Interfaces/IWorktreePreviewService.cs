@@ -41,8 +41,8 @@ namespace ILD.Core.Services.Interfaces;
 /// The credentials of the package feeds the repository selected, or null for none.
 /// The runtime writes them to its own npm user config and hands every preview
 /// process <c>NPM_CONFIG_USERCONFIG</c> and <c>VSS_NUGET_EXTERNAL_FEED_ENDPOINTS</c>
-/// over everything else, <paramref name="CustomEnv"/> included; the file goes when
-/// the runtime stops or fails to start.
+/// over everything else, <paramref name="CustomEnv"/> included. The file exists only
+/// while an install step or a service of the preview is running.
 /// </param>
 public sealed record WorktreePreviewStartOptions(
     string? ProfileName = null,

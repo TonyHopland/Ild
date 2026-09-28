@@ -321,7 +321,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             if (runtime.Processes.Count == 0)
             {
                 _runtimes.TryRemove(normalized, out _);
-                runtime.Feeds.Dispose();
                 return BuildStoppedResponse(loaded, runtime.ProfileName, runtime.PublicHost, runtime.StateDirectory, loaded.ConfigPath);
             }
 
@@ -456,7 +455,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // Install needs no ports or running services — build a port-less runtime so
         // the shared install runner resolves ${WORKTREE}/${STATE_DIR} the same way
         // the preview start path does.
-        using var feeds = PackageFeedCredentialFiles.Materialize(packageFeeds ?? [], "install", _logger);
         var runtime = new PreviewRuntime(
             normalized,
             loaded.ConfigPath!,
@@ -467,7 +465,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
             new List<ManagedPreviewProcess>(),
             DotEnvParser.Parse(customEnv),
-            feeds);
+            new PackageFeedFileShare(packageFeeds ?? [], "install", _logger));
 
         await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
         return new WorktreeInstallResult(true);
@@ -786,10 +784,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// state directory, allocates every profile service's port up front (so per-service
     /// starts resolve cross-service <c>${PORT:&lt;alias&gt;}</c> references), and runs the
     /// install steps unless skipped. Does not launch any service or store the runtime —
-    /// the caller owns process startup and dictionary insertion. The runtime's package
-    /// feed credential file is this method's until it returns: a failure before then,
-    /// a failed install step included, deletes it, because no caller ever sees the
-    /// runtime to stop it.
+    /// the caller owns process startup and dictionary insertion.
     /// </summary>
     private async Task<PreviewRuntime> CreateRuntimeAsync(
         string normalized,
@@ -805,8 +800,6 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var logDirectory = BuildLogDirectory(normalized);
 
         var ports = AllocatePorts(profile, options.PortOverrides);
-        var customEnv = DotEnvParser.Parse(options.CustomEnv);
-        var feeds = PackageFeedCredentialFiles.Materialize(options.PackageFeeds ?? [], "preview", _logger);
         var runtime = new PreviewRuntime(
             normalized,
             loaded.ConfigPath!,
@@ -816,21 +809,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             publicHost,
             ports,
             new List<ManagedPreviewProcess>(),
-            customEnv,
-            feeds,
+            DotEnvParser.Parse(options.CustomEnv),
+            new PackageFeedFileShare(options.PackageFeeds ?? [], "preview", _logger),
             options.WorkItemId);
 
-        try
+        if (!options.SkipInstall)
         {
-            if (!options.SkipInstall)
-            {
-                await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
-            }
-        }
-        catch
-        {
-            feeds.Dispose();
-            throw;
+            await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
         }
 
         return runtime;
@@ -943,12 +928,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             return;
 
         var installLogPath = Path.Combine(runtime.LogDirectory, "install.log");
+        using var feeds = runtime.Feeds.Acquire();
         foreach (var step in installSteps)
         {
             if (string.IsNullOrWhiteSpace(step.Command))
                 continue;
 
-            var resolved = BuildResolvedStep(step, runtime, null);
+            var resolved = BuildResolvedStep(step, runtime, null, feeds.Environment);
             var result = await RunCommandAsync(resolved, cancellationToken);
 
             var builder = new StringBuilder();
@@ -972,16 +958,23 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task<ManagedPreviewProcess> LaunchServiceProcessAsync(PreviewServiceConfig service, PreviewRuntime runtime, CancellationToken cancellationToken)
     {
-        var resolved = BuildResolvedStep(service, runtime, service.Port);
-        var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
-        var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
-        {
-            AutoFlush = true,
-        };
-        var writeGate = new SemaphoreSlim(1, 1);
+        // The service holds the runtime's feed credentials only while it runs: its
+        // exit, however it comes, lets go, so a preview with nothing running keeps
+        // no credential file.
+        var feeds = runtime.Feeds.Acquire();
+        StreamWriter? writer = null;
+        SemaphoreSlim? writeGate = null;
 
         try
         {
+            var resolved = BuildResolvedStep(service, runtime, service.Port, feeds.Environment);
+            var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
+            writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+            {
+                AutoFlush = true,
+            };
+            writeGate = new SemaphoreSlim(1, 1);
+
             // Echo the command before spawning, not after: everything from Process.Start
             // to the return must be incapable of throwing, or a started process would be
             // lost before its caller could ever track it (see StartAsync). It also puts
@@ -992,38 +985,39 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             var process = Process.Start(BuildPreviewProcess(resolved))
                 ?? throw new InvalidOperationException($"Failed to start preview service '{service.Name}'.");
 
+            // Subscribed before the check, so an exit that has already happened and
+            // one still to come both let go (the lease ignores the second).
+            process.EnableRaisingEvents = true;
+            process.Exited += (_, _) => feeds.Dispose();
+            if (process.HasExited)
+                feeds.Dispose();
+
             var stdoutTask = PumpStreamAsync(process.StandardOutput, writer, writeGate, cancellationToken);
             var stderrTask = PumpStreamAsync(process.StandardError, writer, writeGate, cancellationToken);
 
-            return new ManagedPreviewProcess(service, process, writer, writeGate, stdoutTask, stderrTask, logPath);
+            return new ManagedPreviewProcess(service, process, writer, writeGate, stdoutTask, stderrTask, logPath, feeds);
         }
         catch
         {
             // Only reachable while the spawn itself fails, so there is no process to
-            // stop — just the log handle this method opened, which nothing else will
-            // ever hold a reference to. StopProcessAsync owns it once the returned
-            // ManagedPreviewProcess exists.
-            writer.Dispose();
-            writeGate.Dispose();
+            // stop — just the log handle and feed lease this method took, which nothing
+            // else will ever hold a reference to. StopProcessAsync owns them once the
+            // returned ManagedPreviewProcess exists.
+            writer?.Dispose();
+            writeGate?.Dispose();
+            feeds.Dispose();
             throw;
         }
     }
 
     private async Task StopRuntimeAsync(PreviewRuntime runtime, CancellationToken cancellationToken)
     {
-        try
+        foreach (var process in runtime.Processes)
         {
-            foreach (var process in runtime.Processes)
-            {
-                await StopProcessAsync(process, cancellationToken);
-            }
+            await StopProcessAsync(process, cancellationToken);
+        }
 
-            runtime.ClearProcesses();
-        }
-        finally
-        {
-            runtime.Feeds.Dispose();
-        }
+        runtime.ClearProcesses();
     }
 
     private async Task StopProcessAsync(ManagedPreviewProcess process, CancellationToken cancellationToken)
@@ -1057,6 +1051,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             // Ignore log pump failures during shutdown.
         }
+
+        // Its exit already let go of the feed credentials unless the event has yet to
+        // be delivered; a stop does not wait for that.
+        process.FeedLease.Dispose();
 
         try
         {
@@ -1344,7 +1342,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         => Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(worktreePath))).ToLowerInvariant();
 
-    private ResolvedStep BuildResolvedStep(PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias)
+    private ResolvedStep BuildResolvedStep(
+        PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias,
+        IReadOnlyDictionary<string, string> feedEnvironment)
     {
         var workingDirectory = ResolveWorkingDirectory(step.Cwd, runtime, currentPortAlias);
         var environment = BuildDefaultEnvironment(runtime.StateDirectory);
@@ -1375,8 +1375,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
 
         // Last of all: the selected package feeds' credentials name a file only this
-        // runtime's owner can put in place, so nothing typed anywhere may repoint them.
-        foreach (var entry in runtime.Feeds.Environment)
+        // runtime can put in place, so nothing typed anywhere may repoint them.
+        foreach (var entry in feedEnvironment)
         {
             environment[entry.Key] = entry.Value;
         }
@@ -1704,7 +1704,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             Dictionary<string, int> ports,
             List<ManagedPreviewProcess> processes,
             IReadOnlyDictionary<string, string> customEnv,
-            PackageFeedEnvironment feeds,
+            PackageFeedFileShare feeds,
             string? workItemId = null)
         {
             Feeds = feeds;
@@ -1772,10 +1772,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public IReadOnlyDictionary<string, string> CustomEnv { get; }
 
         /// <summary>
-        /// The selected package feeds' variables, applied over everything else, and the
-        /// credential file they point at, which goes when the runtime stops.
+        /// The selected package feeds' credentials. Their file exists only while an
+        /// install run or a service of this runtime is running; each holds a lease.
         /// </summary>
-        public PackageFeedEnvironment Feeds { get; }
+        public PackageFeedFileShare Feeds { get; }
     }
 
     private sealed class ManagedPreviewProcess
@@ -1787,8 +1787,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             SemaphoreSlim writeGate,
             Task stdOutPump,
             Task stdErrPump,
-            string logFilePath)
+            string logFilePath,
+            PackageFeedFileShare.Lease feedLease)
         {
+            FeedLease = feedLease;
             Service = service;
             Process = process;
             Writer = writer;
@@ -1805,6 +1807,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public Task StdOutPump { get; }
         public Task StdErrPump { get; }
         public string LogFilePath { get; }
+
+        /// <summary>This service's hold on the runtime's feed credential file, let go when it exits.</summary>
+        public PackageFeedFileShare.Lease FeedLease { get; }
 
         private volatile bool _stopped;
 

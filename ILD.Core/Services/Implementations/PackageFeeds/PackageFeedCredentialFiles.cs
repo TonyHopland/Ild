@@ -18,7 +18,8 @@ namespace ILD.Core.Services.Implementations.PackageFeeds;
 /// <c>AgentReadRoot/ild-package-feeds</c>: the agent can read it but cannot
 /// create, rename or delete anything there, and it is neither in the worktree nor
 /// in the agent home every repository shares. Each owner — one launch, or one
-/// preview runtime — gets its own file and deletes it when it ends;
+/// preview runtime through <see cref="PackageFeedFileShare"/> — gets its own file
+/// and deletes it when it stops running;
 /// <see cref="AgentRunFiles"/> removes what a reclaimed run or a killed process left.
 /// </para>
 /// </summary>
