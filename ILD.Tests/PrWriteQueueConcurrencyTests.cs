@@ -102,6 +102,62 @@ public class PrWriteQueueConcurrencyTests
         Assert.Equal("w3", remaining.Id);
     }
 
+    /// <summary>
+    /// A service that can answer review item 11, reading the queue as
+    /// <see cref="ServiceReadingBefore"/> does, with <paramref name="between"/>
+    /// (if any) run after its first read of the queue and before it writes.
+    /// </summary>
+    private static PrReviewService AnsweringServiceOn(TestDb db, Guid runId, Func<Task>? between = null)
+    {
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.GetPullRequestReviewLedgerAsync("https://github.com/team/repo", "7"))
+            .ReturnsAsync(new RemotePrReviewLedger(
+                Array.Empty<RemotePrReviewSummary>(),
+                new[]
+                {
+                    new RemotePrReviewItem("review", "11", "PRRT_11", "r1", "src/A.cs", 10, "this allocation is wrong",
+                        "Copilot", "c19dc2d1", new DateTime(2026, 9, 20, 12, 0, 0, DateTimeKind.Utc), false, false),
+                },
+                "c19dc2d1", null));
+
+        var real = new LoopRunStore(db.Fresh());
+        var pending = between;
+        var store = new Mock<ILoopRunStore>();
+        store.Setup(s => s.GetCurrentByWorkItemAsync(It.IsAny<string>()))
+            .Returns((string wi) => real.GetCurrentByWorkItemAsync(wi));
+        store.Setup(s => s.GetPrCommentQueueAsync(runId)).Returns(async () =>
+        {
+            var read = await real.GetPrCommentQueueAsync(runId);
+            var once = Interlocked.Exchange(ref pending, null);
+            if (once is not null)
+                await once();
+            return read;
+        });
+        store.Setup(s => s.TrySetPrCommentQueueAsync(runId, It.IsAny<string?>(), It.IsAny<string?>()))
+            .Returns((Guid id, string? expected, string? json) => real.TrySetPrCommentQueueAsync(id, expected, json));
+        return new PrReviewService(store.Object, remote.Object);
+    }
+
+    [Fact]
+    public async Task Two_answers_to_one_item_from_one_run_at_once_leave_one_write()
+    {
+        // The replace decision has to be taken against the queue as it stands
+        // when the write lands, or both answers see "nothing pending" and both
+        // are appended — the three-replies-to-one-review queue this exists to end.
+        using var db = new TestDb();
+        var run = await SeedAsync(db);
+
+        var second = AnsweringServiceOn(db, run.Id);
+        var first = AnsweringServiceOn(db, run.Id, async () =>
+            Assert.True((await second.ReplyAsync("wi-1", "11", "answer B", run.Id)).Ok));
+
+        Assert.True((await first.ReplyAsync("wi-1", "11", "answer A", run.Id)).Ok);
+
+        var left = Assert.Single(PrCommentQueueJson.TryParse(
+            await new LoopRunStore(db.Fresh()).GetPrCommentQueueAsync(run.Id)));
+        Assert.Contains(left.Body, new[] { "answer A", "answer B" });
+    }
+
     [Fact]
     public async Task A_drop_that_lost_the_race_to_an_identical_drop_reports_it_is_gone()
     {
