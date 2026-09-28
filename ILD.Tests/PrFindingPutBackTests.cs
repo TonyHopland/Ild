@@ -125,6 +125,27 @@ public class PrFindingPutBackTests
     }
 
     [Fact]
+    public async Task Taking_back_one_answer_puts_nothing_back_while_another_answer_to_it_is_still_waiting()
+    {
+        // Two answers to one finding, from two callers. Taking one back does not
+        // mean the finding goes unanswered: the other is still going out, and
+        // nothing marks the finding delivered again when it does.
+        var h = new Harness();
+        h.AfterDelivery();
+        var service = h.Build();
+        Assert.True((await service.ReplyAsync("wi-1", "11", "The round's answer.", h.Run.Id)).Ok);
+        var chat = Guid.NewGuid();
+        var chats = await service.ReplyAsync("wi-1", "11", "The chat's answer.", null, chat);
+
+        Assert.True((await service.WithdrawAsync("wi-1", chats.Id!, null, chat)).Ok);
+        Assert.Empty(h.WouldFireFor(Item("99")));
+
+        var dropped = PrCommentQueueJson.TryParse(h.Run.PrCommentQueue).Single().Id;
+        Assert.True(await service.DropQueuedAsync(h.Run.Id, dropped));
+        Assert.Single(h.WouldFireFor(Item("99")));
+    }
+
+    [Fact]
     public async Task A_finding_restated_in_different_words_was_never_suppressed_anyway()
     {
         var h = new Harness();

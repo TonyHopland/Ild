@@ -6,9 +6,10 @@ namespace ILD.Tests;
 
 /// <summary>
 /// What an agent may do to a pull request's review: read it, answer a thread,
-/// resolve that thread, say something general about the round, and close an item
-/// it read and chose not to answer. Approving, merging, closing the PULL REQUEST
-/// and dismissing a review are decisions this surface must not be able to take,
+/// resolve that thread, say something general about the round, close an item
+/// it read and chose not to answer, and see or take back what it has itself
+/// queued. Approving, merging, closing the PULL REQUEST and dismissing a review
+/// are decisions this surface must not be able to take,
 /// so the whole surface — MCP tool names and agent routes — is pinned exactly
 /// rather than the additions being checked on their own.
 ///
@@ -29,6 +30,8 @@ public class PrReviewAgentSurfaceTests
         "resolve_pr_review_thread",
         "comment_on_pr",
         "close_pr_review_item",
+        "list_queued_pr_writes",
+        "withdraw_pr_write",
     };
 
     private static readonly (string Method, string Template)[] ExpectedRoutes =
@@ -38,6 +41,8 @@ public class PrReviewAgentSurfaceTests
         ("POST", "workitems/{id}/pr-review/resolve"),
         ("POST", "workitems/{id}/pr-review/comment"),
         ("POST", "workitems/{id}/pr-review/close"),
+        ("GET", "workitems/{id}/pr-review/queue"),
+        ("DELETE", "workitems/{id}/pr-review/queue/{writeId}"),
     };
 
     private static IReadOnlyList<(string Method, string Template)> AgentRoutes()
@@ -56,7 +61,7 @@ public class PrReviewAgentSurfaceTests
             .ToArray();
 
     [Fact]
-    public void The_mcp_server_offers_exactly_these_five_things_to_do_with_a_review()
+    public void The_mcp_server_offers_exactly_these_seven_things_to_do_with_a_review()
     {
         Assert.Equal(ExpectedTools.OrderBy(n => n, StringComparer.Ordinal), PrReviewTools().OrderBy(n => n, StringComparer.Ordinal));
         // …and each of them is really registered on the server, not just on the class.
@@ -86,7 +91,7 @@ public class PrReviewAgentSurfaceTests
     }
 
     [Fact]
-    public void The_agent_api_exposes_exactly_these_five_routes_for_a_review()
+    public void The_agent_api_exposes_exactly_these_seven_routes_for_a_review()
     {
         var routes = AgentRoutes();
 

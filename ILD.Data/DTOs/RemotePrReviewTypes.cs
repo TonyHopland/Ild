@@ -131,6 +131,17 @@ public static class PrCommentMarker
 /// answers, kept so that dropping the answer — or a forge refusing it — can put
 /// that finding back within reach. Null on a queue written before this existed,
 /// and on an intent with no single finding behind it.
+///
+/// <see cref="ItemId"/> is the review item the agent answered or closed, as it
+/// named it, and <see cref="ItemKind"/> the kind of item that id turned out to
+/// name — together the key that lets answering the same item again replace the
+/// pending answer instead of joining it. The id alone is not enough: a review
+/// body is named by its review id and a comment by its comment id, and those
+/// are separate counters that can hand out the same number.
+/// <see cref="QueuedByRunId"/> and <see cref="QueuedByChatSessionId"/> are who
+/// queued it, and only that caller may replace or withdraw it. All of these are
+/// null on a queue written before they existed, which is therefore nobody's to
+/// change but a human's.
 /// </summary>
 public record PrQueuedWrite(
     string Id,
@@ -140,7 +151,11 @@ public record PrQueuedWrite(
     string? Path,
     int? Line,
     DateTime QueuedAt,
-    string? SourceHash = null
+    string? SourceHash = null,
+    string? ItemId = null,
+    Guid? QueuedByRunId = null,
+    Guid? QueuedByChatSessionId = null,
+    string? ItemKind = null
 )
 {
     public const string Reply = "reply";
@@ -155,7 +170,24 @@ public record PrQueuedWrite(
 
     /// <summary>Cap on one run's queue, so a looping agent cannot grow the column without bound.</summary>
     public const int MaxQueued = 100;
+
+    /// <summary>
+    /// Whether the caller queued this: the run when there is one, otherwise the
+    /// chat session — never both, as a work item an agent created is stamped.
+    /// A caller with neither owns nothing.
+    /// </summary>
+    public bool IsQueuedBy(Guid? runId, Guid? chatSessionId)
+        => runId is not null
+            ? QueuedByRunId == runId
+            : chatSessionId is not null && QueuedByRunId is null && QueuedByChatSessionId == chatSessionId;
 }
+
+/// <summary>
+/// The writes a caller has waiting in a work item's pull-request queue.
+/// <see cref="Message"/> says why the list is empty when there is no queue to
+/// read, as <see cref="RemotePrReviewLedger.Message"/> does for the review.
+/// </summary>
+public record PrQueuedWritesView(IReadOnlyList<PrQueuedWrite> Writes, string? Message);
 
 /// <summary>
 /// The wire form of a run's queue of intended pull-request writes, persisted on

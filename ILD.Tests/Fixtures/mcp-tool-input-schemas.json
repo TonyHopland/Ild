@@ -383,6 +383,18 @@
       }
     }
   },
+  "list_queued_pr_writes": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId"
+    ]
+  },
   "list_repositories": {
     "type": "object",
     "properties": {
@@ -813,6 +825,23 @@
     "required": [
       "id",
       "title"
+    ]
+  },
+  "withdraw_pr_write": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID.",
+        "type": "string"
+      },
+      "writeId": {
+        "description": "The id the queuing tool returned for the write, or an id from list_queued_pr_writes.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "writeId"
     ]
   }
 }

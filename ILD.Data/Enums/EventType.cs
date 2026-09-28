@@ -33,5 +33,18 @@ public enum EventType
     /// forge loses those answers, and this is what keeps them visible to a
     /// person instead of vanishing while the round looks finished.
     /// </summary>
-    PrQueuedWritesClaimed = 18
+    PrQueuedWritesClaimed = 18,
+
+    /// <summary>
+    /// An agent answered a review item again, and the new answer took the place
+    /// of the one it had queued. Records what the write said before and after,
+    /// so a person who read the old answer can see what changed under its id.
+    /// </summary>
+    PrQueuedWriteReplaced = 19,
+
+    /// <summary>
+    /// An agent took back a write it had queued, before the PR node sent it.
+    /// Records what it would have said.
+    /// </summary>
+    PrQueuedWriteWithdrawn = 20
 }

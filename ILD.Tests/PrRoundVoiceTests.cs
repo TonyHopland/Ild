@@ -160,6 +160,50 @@ public class PrRoundVoiceTests
     }
 
     [Fact]
+    public async Task A_forge_that_cannot_resolve_still_lets_a_close_take_back_the_rounds_answer()
+    {
+        // The thread staying open changes nothing about the judgement: the round
+        // closed the item, so the answer it had queued for it is not sent.
+        var h = new Harness(canResolve: false);
+        var service = h.Build();
+        await service.ReplyAsync("wi-1", "11", "an answer I no longer stand by", h.Run.Id);
+
+        var closed = await service.CloseAsync("wi-1", "11", resolve: true, h.Run.Id);
+
+        Assert.True(closed.Ok);
+        Assert.Null(closed.Id);
+        Assert.Contains("withdrawn", closed.Message!, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(h.Queue);
+    }
+
+    [Fact]
+    public async Task An_answer_to_a_review_body_is_never_replaced_by_one_to_a_comment_sharing_its_number()
+    {
+        // Review ids and comment ids are separate counters. The round answers
+        // review 11's body; a comment numbered 11 then appears, and "11" now
+        // names the comment — a different item, so its answer and its close
+        // leave the body's answer alone.
+        var h = new Harness();
+        var body = new RemotePrReviewItem("body", null, null, "11", null, null, "overall this needs another pass",
+            "Copilot", Head, new DateTime(2026, 9, 21, 12, 0, 0, DateTimeKind.Utc), false, false);
+        h.Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(Fetched(body));
+        var service = h.Build();
+        var toBody = await service.ReplyAsync("wi-1", "11", "about the review as a whole", h.Run.Id);
+
+        h.Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(Fetched(body, Inline("11")));
+        var toComment = await service.ReplyAsync("wi-1", "11", "about the line", h.Run.Id);
+
+        Assert.NotEqual(toBody.Id, toComment.Id);
+        Assert.Equal(new[] { PrQueuedWrite.Comment, PrQueuedWrite.Reply }, h.Queue.Select(w => w.Kind).ToArray());
+        Assert.Contains("about the review as a whole", h.Queue[0].Body!, StringComparison.Ordinal);
+
+        Assert.True((await service.CloseAsync("wi-1", "11", resolve: false, h.Run.Id)).Ok);
+
+        var left = Assert.Single(h.Queue);
+        Assert.Equal(toBody.Id, left.Id);
+    }
+
+    [Fact]
     public async Task A_close_whose_resolve_could_not_be_queued_is_not_recorded_as_closed()
     {
         // The record has to describe what happened. Written before the queue,

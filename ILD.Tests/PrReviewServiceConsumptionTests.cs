@@ -125,8 +125,10 @@ public class PrReviewServiceConsumptionTests
         // and the refusal has to be readable rather than a silent drop.
         var h = new Harness(Ledger(Inline("11")));
         var service = h.Build();
+        // General comments, because answering one item again replaces the
+        // pending answer rather than growing the queue.
         for (var i = 0; i < PrQueuedWrite.MaxQueued; i++)
-            Assert.True((await service.ReplyAsync("wi-1", "11", $"answer {i}", h.Run.Id)).Ok);
+            Assert.True((await service.CommentAsync("wi-1", $"note {i}", h.Run.Id)).Ok);
 
         var refused = await service.ReplyAsync("wi-1", "11", "one too many", h.Run.Id);
 

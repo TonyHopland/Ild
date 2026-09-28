@@ -14,33 +14,56 @@ namespace ILD.Core.Services.Remote;
 ///
 /// <c>callerRunId</c> is the run the call came from (the <c>X-ILD-Run-Id</c>
 /// header), which is not always the work item's own: a chat agent borrows these
-/// same tools. It decides whether a READ consumes what it returned. Reply and
-/// resolve take it only because this surface is fixed by its callers: they
-/// queue rather than write, and the marker a reply carries is stamped at drain
-/// time from the run the PR node is executing.
+/// same tools. It decides whether a READ consumes what it returned.
+///
+/// Together with <c>callerChatSessionId</c> (the <c>X-ILD-Chat-Session-Id</c>
+/// header, used only when there is no run) it also names who owns a queued
+/// write: the caller that queued it, and only that caller, may replace or
+/// withdraw it. It is not what a reply is stamped with — the marker a reply
+/// carries is stamped at drain time from the run the PR node is executing.
 /// </summary>
 public interface IPrReviewService
 {
     Task<RemotePrReviewLedger> ReadAsync(string workItemId, string? sinceCommit, Guid? callerRunId);
-    Task<RemotePrWriteResult> ReplyAsync(string workItemId, string commentId, string body, Guid? callerRunId);
-    Task<RemotePrWriteResult> ResolveAsync(string workItemId, string threadId, Guid? callerRunId);
+
+    /// <summary>Answer an item; the caller's pending answer to the same item is replaced, not joined.</summary>
+    Task<RemotePrWriteResult> ReplyAsync(
+        string workItemId, string commentId, string body, Guid? callerRunId, Guid? callerChatSessionId = null);
+
+    /// <summary>Resolve a thread; one the caller already has waiting to be resolved queues nothing more.</summary>
+    Task<RemotePrWriteResult> ResolveAsync(
+        string workItemId, string threadId, Guid? callerRunId, Guid? callerChatSessionId = null);
 
     /// <summary>
     /// The round's own account of itself, rather than an answer to something a
     /// reviewer raised. The PR node used to write this for it and could only
     /// guess when a round had anything to add; the round knows.
     /// </summary>
-    Task<RemotePrWriteResult> CommentAsync(string workItemId, string body, Guid? callerRunId);
+    Task<RemotePrWriteResult> CommentAsync(
+        string workItemId, string body, Guid? callerRunId, Guid? callerChatSessionId = null);
 
     /// <summary>An item the round read and deliberately left alone.</summary>
-    Task<RemotePrWriteResult> CloseAsync(string workItemId, string commentId, bool resolve, Guid? callerRunId);
+    Task<RemotePrWriteResult> CloseAsync(
+        string workItemId, string commentId, bool resolve, Guid? callerRunId, Guid? callerChatSessionId = null);
+
+    /// <summary>Take back a write the caller queued, before the PR node sends it.</summary>
+    Task<RemotePrWriteResult> WithdrawAsync(
+        string workItemId, string writeId, Guid? callerRunId, Guid? callerChatSessionId);
+
+    /// <summary>The writes the caller has waiting in the work item's queue.</summary>
+    Task<PrQueuedWritesView> ListQueuedAsync(string workItemId, Guid? callerRunId, Guid? callerChatSessionId);
 }
 
 /// <summary>
 /// The operator's half of the same queue: what a round intends to write on its
 /// pull request, and the power to drop any of it before the PR node sends it.
 /// Deliberately not on <see cref="IPrReviewService"/> — that is the surface an
-/// agent reaches, and an agent has no business dropping the queue.
+/// agent reaches, and an agent still has no business dropping the queue. What
+/// an agent may do there is correct itself: replace or withdraw a write it
+/// queued, identified by its own run or chat session. That reaches nothing a
+/// human, another run or another chat session wants posted, which is the
+/// whole reason this half is kept apart — a write that is not the caller's
+/// can only be dropped from here.
 /// </summary>
 public interface IPrWriteQueue
 {
@@ -70,6 +93,10 @@ public interface IPrWriteQueue
 /// and would otherwise post the moment it was asked to. Validation still happens
 /// here, at queue time, so an id this pull request does not hold is refused
 /// while the agent is still listening rather than silently failing later.
+///
+/// Until the PR node sends it, a caller can correct what it queued: answering
+/// an item again replaces its pending answer under the same id, and any write
+/// it queued can be withdrawn. Only its own — see <see cref="IPrWriteQueue"/>.
 /// </summary>
 public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 {
@@ -98,6 +125,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 
     private const string NoPullRequest =
         "This work item's current run has no pull request, so there is no review to read.";
+
+    private const string NoQueue =
+        "This work item's current run has no pull request, so nothing is waiting to be written on one.";
 
     public async Task<RemotePrReviewLedger> ReadAsync(string workItemId, string? sinceCommit, Guid? callerRunId)
     {
@@ -136,7 +166,8 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         return fetched with { Items = returned };
     }
 
-    public async Task<RemotePrWriteResult> ReplyAsync(string workItemId, string commentId, string body, Guid? callerRunId)
+    public async Task<RemotePrWriteResult> ReplyAsync(
+        string workItemId, string commentId, string body, Guid? callerRunId, Guid? callerChatSessionId = null)
     {
         var target = await ResolveAsync(workItemId);
         if (target is null)
@@ -167,11 +198,17 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             : new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, commentId, InReplyTo(comment, body), comment.Path, comment.Line, DateTime.UtcNow,
                 PrCommentLedger.Fingerprint(comment.Path, comment.Line, comment.Body));
 
-        return await QueueAsync(target.Run, write,
-            "Queued: this answer goes out when the PR node next runs, and can be dropped before then.");
+        var placed = await PlaceAsync(target.Run, Caller.Of(callerRunId, callerChatSessionId), (comment.Kind, commentId), write);
+        if (placed.Refusal is not null)
+            return placed.Refusal;
+
+        return new RemotePrWriteResult(true, placed.Id, placed.Replaced is null
+            ? "Queued: this answer goes out when the PR node next runs, and can be dropped before then."
+            : $"Replaced the {Named(placed.Replaced)} you had queued for this item, keeping its id: this answer goes out instead when the PR node next runs, and can be dropped before then.");
     }
 
-    public async Task<RemotePrWriteResult> ResolveAsync(string workItemId, string threadId, Guid? callerRunId)
+    public async Task<RemotePrWriteResult> ResolveAsync(
+        string workItemId, string threadId, Guid? callerRunId, Guid? callerChatSessionId = null)
     {
         var target = await ResolveAsync(workItemId);
         if (target is null)
@@ -193,10 +230,17 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             return new RemotePrWriteResult(false, null,
                 "Resolving review threads is not supported for this repository's provider. Reply to the thread instead.");
 
-        return await QueueAsync(target.Run,
+        // Tied to no item: a reply and a resolve of the same thread are the
+        // documented flow, not a correction, so neither replaces the other.
+        var placed = await PlaceAsync(target.Run, Caller.Of(callerRunId, callerChatSessionId), null,
             new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, threadId, null, thread.Path, thread.Line, DateTime.UtcNow,
-                PrCommentLedger.Fingerprint(thread.Path, thread.Line, thread.Body)),
-            "Queued: this thread is closed when the PR node next runs, and can be dropped before then.");
+                PrCommentLedger.Fingerprint(thread.Path, thread.Line, thread.Body)));
+        if (placed.Refusal is not null)
+            return placed.Refusal;
+
+        return new RemotePrWriteResult(true, placed.Id, placed.AlreadyQueued
+            ? "Already queued: you have this thread waiting to be closed when the PR node next runs, so nothing more was queued."
+            : "Queued: this thread is closed when the PR node next runs, and can be dropped before then.");
     }
 
     /// <summary>
@@ -228,7 +272,8 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// request carries what reviewers asked about rather than a notice per
     /// round.
     /// </summary>
-    public async Task<RemotePrWriteResult> CommentAsync(string workItemId, string body, Guid? callerRunId)
+    public async Task<RemotePrWriteResult> CommentAsync(
+        string workItemId, string body, Guid? callerRunId, Guid? callerChatSessionId = null)
     {
         if (string.IsNullOrWhiteSpace(body))
             return new RemotePrWriteResult(false, null, "A pull-request comment needs something to say.");
@@ -238,10 +283,11 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             return new RemotePrWriteResult(false, null, NoPullRequest);
 
         // No target and no source finding: it answers the round, not an item, so
-        // dropping it puts nothing back.
-        return await QueueAsync(
-            target.Run,
-            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, string.Empty, body, null, null, DateTime.UtcNow),
+        // dropping it puts nothing back — and a round may have several of these
+        // to say, so none replaces another.
+        var placed = await PlaceAsync(target.Run, Caller.Of(callerRunId, callerChatSessionId), null,
+            new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, string.Empty, body, null, null, DateTime.UtcNow));
+        return placed.Refusal ?? new RemotePrWriteResult(true, placed.Id,
             "Queued: this comment goes out when the PR node next runs, and can be dropped before then.");
     }
 
@@ -258,8 +304,14 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// when it was handed over, and that record is per-head: a reviewer
     /// restating the same point against new code still fires, which is exactly
     /// when a judgement made against old code stops being safe.
+    ///
+    /// A round either answers an item or closes it, so closing takes the place
+    /// of the caller's own pending answer to the item, and answering again takes
+    /// the place of a close. Taking an answer back here puts no finding back
+    /// within reach: the item was considered, which is what closing records.
     /// </summary>
-    public async Task<RemotePrWriteResult> CloseAsync(string workItemId, string commentId, bool resolve, Guid? callerRunId)
+    public async Task<RemotePrWriteResult> CloseAsync(
+        string workItemId, string commentId, bool resolve, Guid? callerRunId, Guid? callerChatSessionId = null)
     {
         var target = await ResolveAsync(workItemId);
         if (target is null)
@@ -274,53 +326,136 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             return new RemotePrWriteResult(false, null,
                 $"No comment with id '{commentId}' on this work item's pull request. The review ledger lists the ids that can be closed.");
 
-        // The thread first, so the record can only ever describe what happened.
+        PrQueuedWrite? closing = null;
+        var closed = "Closed: the round read this and chose not to answer it.";
+        if (resolve && item.ThreadId is not null)
+        {
+            if (await _remote.SupportsThreadResolutionAsync(target.RepoUrl))
+            {
+                closing = new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, item.ThreadId, null, item.Path, item.Line,
+                    DateTime.UtcNow, PrCommentLedger.Fingerprint(item.Path, item.Line, item.Body));
+                closed = "Closed: the round read this and chose not to answer it, and the thread is closed when the PR node next runs.";
+            }
+            else
+            {
+                closed = "Closed, but the thread was left open: resolving review threads is not supported for this repository's provider.";
+            }
+        }
+
+        // The queue first, so the record can only ever describe what happened.
         // Written before it, a queue that then refused — full, or moved under us
         // — would leave an event saying the thread was closed when nothing was
         // ever queued to close it.
-        if (resolve && item.ThreadId is not null)
-        {
-            if (!await _remote.SupportsThreadResolutionAsync(target.RepoUrl))
-            {
-                await RecordClosedAsync(target.Run, item, commentId);
-                return new RemotePrWriteResult(true, null,
-                    "Closed, but the thread was left open: resolving review threads is not supported for this repository's provider.");
-            }
-
-            var queued = await QueueAsync(
-                target.Run,
-                new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Resolve, item.ThreadId, null, item.Path, item.Line, DateTime.UtcNow,
-                    PrCommentLedger.Fingerprint(item.Path, item.Line, item.Body)),
-                "Closed: the round read this and chose not to answer it, and the thread is closed when the PR node next runs.");
-            if (!queued.Ok)
-                return queued;
-
-            await RecordClosedAsync(target.Run, item, commentId);
-            return queued;
-        }
+        var placed = await PlaceAsync(target.Run, Caller.Of(callerRunId, callerChatSessionId), (item.Kind, commentId), closing);
+        if (placed.Refusal is not null)
+            return placed.Refusal;
 
         await RecordClosedAsync(target.Run, item, commentId);
-        return new RemotePrWriteResult(true, null, "Closed: the round read this and chose not to answer it.");
+
+        if (placed.Replaced is not null)
+            closed += $" It replaced the {Named(placed.Replaced)} you had queued for this item.";
+        else if (placed.Withdrawn is not null)
+            closed += $" The {Named(placed.Withdrawn)} you had queued for this item was withdrawn.";
+        return new RemotePrWriteResult(true, placed.Id, closed);
+    }
+
+    /// <summary>
+    /// Take back a write the caller queued. Only the queue of the work item's
+    /// current run is looked at, and only a write the caller queued itself is
+    /// touched: another run's, a chat session's, or one from before owners were
+    /// recorded is refused, and stays for a human to drop. Like a human drop,
+    /// it puts the finding the write answered back within reach.
+    /// </summary>
+    public async Task<RemotePrWriteResult> WithdrawAsync(
+        string workItemId, string writeId, Guid? callerRunId, Guid? callerChatSessionId)
+    {
+        var target = await ResolveAsync(workItemId);
+        if (target is null)
+            return new RemotePrWriteResult(false, writeId, NoQueue);
+
+        var caller = Caller.Of(callerRunId, callerChatSessionId);
+        PrQueuedWrite? withdrawn = null;
+        string? refused = null;
+        var written = await MutateQueueAsync(target.Run.Id, queued =>
+        {
+            withdrawn = queued.FirstOrDefault(q => string.Equals(q.Id, writeId, StringComparison.Ordinal));
+            refused = withdrawn is null
+                ? $"No write '{writeId}' is waiting in this work item's pull-request queue: it has already been sent, was dropped, or never existed. Nothing was changed."
+                : !caller.Queued(withdrawn)
+                    ? $"Write '{writeId}' was not queued by you — another run, a chat session or an earlier round queued it — so it is not yours to take back. A human can still drop it from the run's queue."
+                    : null;
+            return refused is null
+                ? queued.Where(q => !string.Equals(q.Id, writeId, StringComparison.Ordinal)).ToList()
+                : null;
+        });
+
+        if (refused is not null)
+            return new RemotePrWriteResult(false, writeId, refused);
+        if (!written)
+            return new RemotePrWriteResult(false, writeId,
+                "The queue is being changed from somewhere else; nothing was withdrawn. Try again.");
+
+        await PutFindingBackAsync(target.Run.Id, withdrawn!.SourceHash);
+        await RecordWithdrawnAsync(target.Run.Id, caller, withdrawn);
+        return new RemotePrWriteResult(true, writeId, "Withdrawn: this write will not be sent.");
+    }
+
+    public async Task<PrQueuedWritesView> ListQueuedAsync(string workItemId, Guid? callerRunId, Guid? callerChatSessionId)
+    {
+        var target = await ResolveAsync(workItemId);
+        if (target is null)
+            return new PrQueuedWritesView(Array.Empty<PrQueuedWrite>(), NoQueue);
+
+        var caller = Caller.Of(callerRunId, callerChatSessionId);
+        var queued = PrCommentQueueJson.TryParse(await _runs.GetPrCommentQueueAsync(target.Run.Id));
+        return new PrQueuedWritesView(queued.Where(caller.Queued).ToList(), null);
     }
 
     /// <summary>
     /// The only durable trace of a judgement that writes nothing. Best-effort:
     /// a store that will not take it costs the record, not the decision.
     /// </summary>
-    private async Task RecordClosedAsync(LoopRun run, RemotePrReviewItem item, string commentId)
+    private Task RecordClosedAsync(LoopRun run, RemotePrReviewItem item, string commentId)
+    {
+        var where = item.Path is null ? "the pull request" : $"{item.Path}:{item.Line?.ToString() ?? "?"}";
+        return RecordAsync(run.Id, EventType.PrReviewItemClosed,
+            $"Closed {commentId} on {where} without answering: {Shorten(item.Body)}");
+    }
+
+    /// <summary>
+    /// What a correction changed, in full: a person may already have read the
+    /// old answer under this id, and the record is where they see what it says
+    /// now.
+    /// </summary>
+    private Task RecordReplacedAsync(Guid runId, Caller caller, PrQueuedWrite before, PrQueuedWrite after)
+        => RecordAsync(runId, EventType.PrQueuedWriteReplaced,
+            $"Queued write {before.Id} replaced by {caller.Name}.\nWas: {Said(before)}\nNow: {Said(after)}");
+
+    private Task RecordWithdrawnAsync(Guid runId, Caller caller, PrQueuedWrite withdrawn)
+        => RecordAsync(runId, EventType.PrQueuedWriteWithdrawn,
+            $"Queued write {withdrawn.Id} withdrawn by {caller.Name}: {Said(withdrawn)}");
+
+    /// <summary>What a write would say on the pull request; a resolve says nothing, so it is described.</summary>
+    private static string Said(PrQueuedWrite write)
+        => write.Kind == PrQueuedWrite.Resolve ? $"resolve thread {write.TargetId}" : write.Body ?? string.Empty;
+
+    /// <summary>
+    /// Best-effort: a store that will not take the record costs the record,
+    /// not the decision it describes.
+    /// </summary>
+    private async Task RecordAsync(Guid runId, EventType type, string data)
     {
         if (_events is null)
             return;
 
-        var where = item.Path is null ? "the pull request" : $"{item.Path}:{item.Line?.ToString() ?? "?"}";
         try
         {
             await _events.AppendAsync(new EventLog
             {
                 Id = Guid.NewGuid(),
-                LoopRunId = run.Id,
-                EventType = EventType.PrReviewItemClosed,
-                Data = $"Closed {commentId} on {where} without answering: {Shorten(item.Body)}",
+                LoopRunId = runId,
+                EventType = type,
+                Data = data,
                 Timestamp = DateTime.UtcNow,
             });
         }
@@ -364,13 +499,48 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// is not going to arrive. Compare-and-set against the heartbeat, which
     /// writes this same column at the end of every tick and would otherwise
     /// silently undo this.
+    ///
+    /// Only while no write still waiting in the queue answers the same finding:
+    /// that answer IS going to arrive, and nothing marks the finding delivered
+    /// again when it does, so forgetting it would let a later review restating
+    /// it start a round that answers it twice. The queue and the ledger are two
+    /// columns with a compare-and-set each, so an answer queued between reading
+    /// the queue and forgetting would slip past a plain check. Hence the fence:
+    /// the queue is read again after forgetting, and if it moved, the finding
+    /// is remembered again and the decision retaken against the queue as it now
+    /// stands. An answer queued after the fence arrives at a finding already put
+    /// back, exactly as an answer to one never handed over does.
     /// </summary>
     private async Task PutFindingBackAsync(Guid runId, string? sourceHash)
     {
         if (string.IsNullOrEmpty(sourceHash))
             return;
 
-        await PrCommentLedgerWriter.MutateAsync(_runs, runId, state => state?.ForgetDeliveredContent(sourceHash));
+        for (var attempt = 0; attempt < QueueWriteAttempts; attempt++)
+        {
+            var queue = await _runs.GetPrCommentQueueAsync(runId);
+            if (PrCommentQueueJson.TryParse(queue).Any(q => string.Equals(q.SourceHash, sourceHash, StringComparison.Ordinal)))
+                return;
+
+            string? head = null;
+            var forgot = await PrCommentLedgerWriter.MutateAsync(_runs, runId, state =>
+            {
+                head = state?.Head;
+                return state is not null && state.DeliveredHashes.Contains(sourceHash, StringComparer.Ordinal)
+                    ? state.ForgetDeliveredContent(sourceHash)
+                    : null;
+            });
+            if (!forgot || string.Equals(await _runs.GetPrCommentQueueAsync(runId), queue, StringComparison.Ordinal))
+                return;
+
+            // Remembered only on the head it was forgotten on: hashes are per-head,
+            // and one carried onto a head the heartbeat has since moved to would
+            // suppress the same finding restated against new code.
+            await PrCommentLedgerWriter.MutateAsync(_runs, runId, state =>
+                state is null || !string.Equals(state.Head, head, StringComparison.Ordinal)
+                    ? null
+                    : state with { DeliveredHashes = PrCommentLedger.Remember(state.DeliveredHashes, sourceHash) });
+        }
     }
 
     /// <summary>Lines of the answered text quoted back before the answer.</summary>
@@ -438,32 +608,114 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     }
 
     /// <summary>
-    /// Append an intent to the run's queue, under the same compare-and-set as a
-    /// drop so a burst of tool calls cannot lose one.
+    /// Who is queuing, as the queue records it: the run when there is one,
+    /// otherwise the chat session — never both.
     /// </summary>
-    private async Task<RemotePrWriteResult> QueueAsync(LoopRun run, PrQueuedWrite intent, string message)
+    private sealed record Caller(Guid? RunId, Guid? ChatSessionId)
     {
+        public static Caller Of(Guid? runId, Guid? chatSessionId) => new(runId, runId is null ? chatSessionId : null);
+
+        public bool Queued(PrQueuedWrite write) => write.IsQueuedBy(RunId, ChatSessionId);
+
+        /// <summary>Only ever asked of a caller that owns a write, and so has one of the two.</summary>
+        public string Name => RunId is not null ? $"run {RunId}" : $"chat session {ChatSessionId}";
+    }
+
+    /// <summary>
+    /// What <see cref="PlaceAsync"/> did. <see cref="Id"/> is the write that now
+    /// stands for the call — the one placed, or the resolve already waiting that
+    /// made it unnecessary — or null when nothing is queued for it.
+    /// <see cref="Replaced"/> and <see cref="Withdrawn"/> are the caller's own
+    /// earlier write for the item, as it was before this call took its place or
+    /// took it back.
+    /// </summary>
+    private sealed record Placement(
+        RemotePrWriteResult? Refusal,
+        string? Id = null,
+        PrQueuedWrite? Replaced = null,
+        PrQueuedWrite? Withdrawn = null,
+        bool AlreadyQueued = false);
+
+    /// <summary>
+    /// Make <paramref name="write"/> the caller's pending word on
+    /// <paramref name="item"/>: it takes the place — and the id — of whatever
+    /// the caller already has queued for that item, or is appended; a null
+    /// write takes that earlier one back. With no item it is simply appended.
+    ///
+    /// An item is its kind as well as the id the agent named it by: comment
+    /// ids and review ids are separate counters, so the same string can name a
+    /// review body when one answer is queued and a comment when the next one is
+    /// (see <see cref="Find"/>), and matching on the string alone would let an
+    /// answer to one overwrite the answer to the other.
+    /// A resolve of a thread the caller already has waiting to be resolved is
+    /// not queued twice.
+    ///
+    /// Every one of those decisions is taken inside the compare-and-set, against
+    /// the queue as it stands when the write lands. Taken outside it, two
+    /// corrections racing each other would each see nothing pending and both be
+    /// appended — the pile of stale answers to one review this exists to end —
+    /// and one the PR node claimed meanwhile would be written back.
+    /// </summary>
+    private async Task<Placement> PlaceAsync(
+        LoopRun run, Caller caller, (string Kind, string Id)? item, PrQueuedWrite? write)
+    {
+        var intent = write is null
+            ? null
+            : write with
+            {
+                ItemId = item?.Id, ItemKind = item?.Kind,
+                QueuedByRunId = caller.RunId, QueuedByChatSessionId = caller.ChatSessionId,
+            };
+        PrQueuedWrite? previous = null, waiting = null, placed = null;
         var full = false;
+        var unchanged = false;
         var written = await MutateQueueAsync(run.Id, queued =>
         {
-            if (queued.Count >= PrQueuedWrite.MaxQueued)
-            {
-                full = true;
+            previous = item is not { } answered
+                ? null
+                : queued.FirstOrDefault(q => string.Equals(q.ItemId, answered.Id, StringComparison.Ordinal)
+                    && string.Equals(q.ItemKind, answered.Kind, StringComparison.Ordinal) && caller.Queued(q));
+            waiting = intent?.Kind == PrQueuedWrite.Resolve
+                ? queued.FirstOrDefault(q => q.Kind == PrQueuedWrite.Resolve && q.Id != previous?.Id
+                    && string.Equals(q.TargetId, intent.TargetId, StringComparison.Ordinal) && caller.Queued(q))
+                : null;
+            placed = waiting is null ? intent : null;
+            full = previous is null && placed is not null && queued.Count >= PrQueuedWrite.MaxQueued;
+            unchanged = previous is null && placed is null;
+            if (full || unchanged)
                 return null;
-            }
-            full = false;
-            return queued.Append(intent).ToList();
+
+            if (previous is null)
+                return queued.Append(placed!).ToList();
+            if (placed is null)
+                return queued.Where(q => q.Id != previous.Id).ToList();
+            placed = placed with { Id = previous.Id };
+            return queued.Select(q => q.Id == previous.Id ? placed : q).ToList();
         });
 
         if (full)
-            return new RemotePrWriteResult(false, null,
-                $"This run already has {PrQueuedWrite.MaxQueued} pull-request writes waiting for the PR node; nothing more is queued until they go out.");
-        if (!written)
-            return new RemotePrWriteResult(false, null,
-                "The queue is being changed from somewhere else; nothing was queued. Try again.");
+            return new Placement(new RemotePrWriteResult(false, null,
+                $"This run already has {PrQueuedWrite.MaxQueued} pull-request writes waiting for the PR node; nothing more is queued until they go out."));
+        if (!written && !unchanged)
+            return new Placement(new RemotePrWriteResult(false, null,
+                "The queue is being changed from somewhere else; nothing in it was changed. Try again."));
 
-        return new RemotePrWriteResult(true, intent.Id, message);
+        if (previous is not null && placed is not null)
+            await RecordReplacedAsync(run.Id, caller, previous, placed);
+        else if (previous is not null)
+            await RecordWithdrawnAsync(run.Id, caller, previous);
+
+        return new Placement(
+            null,
+            placed?.Id ?? waiting?.Id,
+            Replaced: placed is null ? null : previous,
+            Withdrawn: placed is null ? previous : null,
+            AlreadyQueued: waiting is not null);
     }
+
+    /// <summary>How a tool result names the caller's earlier write for an item.</summary>
+    private static string Named(PrQueuedWrite write)
+        => write.Kind == PrQueuedWrite.Resolve ? "close" : "answer";
 
     private sealed record Target(LoopRun Run, string RepoUrl, string PrNumber);
 

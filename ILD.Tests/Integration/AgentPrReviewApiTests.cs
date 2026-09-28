@@ -23,10 +23,19 @@ public class AgentPrReviewApiTests
         public string? WorkItemId { get; private set; }
         public string? SinceCommit { get; private set; }
         public Guid? CallerRunId { get; private set; }
+        public Guid? CallerChatSessionId { get; private set; }
         public string? CommentId { get; private set; }
         public string? ThreadId { get; private set; }
         public string? Body { get; private set; }
+        public string? WriteId { get; private set; }
         public int Reads { get; private set; }
+        public int QueueCalls { get; private set; }
+
+        /// <summary>When set, what every queuing call answers instead of its default.</summary>
+        public RemotePrWriteResult? Queued { get; set; }
+
+        public RemotePrWriteResult Withdrawn { get; set; } = new(true, "5a03cb617874", "Withdrawn.");
+        public PrQueuedWritesView Listed { get; set; } = new(Array.Empty<PrQueuedWrite>(), null);
 
         public Task<RemotePrReviewLedger> ReadAsync(string workItemId, string? sinceCommit, Guid? callerRunId)
         {
@@ -49,40 +58,68 @@ public class AgentPrReviewApiTests
                 "c19dc2d1", null));
         }
 
-        public Task<RemotePrWriteResult> ReplyAsync(string workItemId, string commentId, string body, Guid? callerRunId)
+        public Task<RemotePrWriteResult> ReplyAsync(
+            string workItemId, string commentId, string body, Guid? callerRunId, Guid? callerChatSessionId = null)
         {
             WorkItemId = workItemId;
             CommentId = commentId;
             Body = body;
             CallerRunId = callerRunId;
-            return Task.FromResult(new RemotePrWriteResult(true, "4053396920", null));
+            CallerChatSessionId = callerChatSessionId;
+            return Task.FromResult(Queued ?? new RemotePrWriteResult(true, "4053396920", null));
         }
 
-        public Task<RemotePrWriteResult> ResolveAsync(string workItemId, string threadId, Guid? callerRunId)
+        public Task<RemotePrWriteResult> ResolveAsync(
+            string workItemId, string threadId, Guid? callerRunId, Guid? callerChatSessionId = null)
         {
             WorkItemId = workItemId;
             ThreadId = threadId;
             CallerRunId = callerRunId;
-            return Task.FromResult(new RemotePrWriteResult(false, null, "Resolving review threads is not supported by this provider."));
+            CallerChatSessionId = callerChatSessionId;
+            return Task.FromResult(Queued ?? new RemotePrWriteResult(false, null, "Resolving review threads is not supported by this provider."));
         }
 
-        public Task<RemotePrWriteResult> CommentAsync(string workItemId, string body, Guid? callerRunId)
+        public Task<RemotePrWriteResult> CommentAsync(
+            string workItemId, string body, Guid? callerRunId, Guid? callerChatSessionId = null)
         {
             WorkItemId = workItemId;
             Body = body;
             CallerRunId = callerRunId;
-            return Task.FromResult(new RemotePrWriteResult(true, null, "Queued."));
+            CallerChatSessionId = callerChatSessionId;
+            return Task.FromResult(Queued ?? new RemotePrWriteResult(true, null, "Queued."));
         }
 
         public bool Resolved { get; private set; }
 
-        public Task<RemotePrWriteResult> CloseAsync(string workItemId, string commentId, bool resolve, Guid? callerRunId)
+        public Task<RemotePrWriteResult> CloseAsync(
+            string workItemId, string commentId, bool resolve, Guid? callerRunId, Guid? callerChatSessionId = null)
         {
             WorkItemId = workItemId;
             CommentId = commentId;
             Resolved = resolve;
             CallerRunId = callerRunId;
-            return Task.FromResult(new RemotePrWriteResult(true, null, "Closed."));
+            CallerChatSessionId = callerChatSessionId;
+            return Task.FromResult(Queued ?? new RemotePrWriteResult(true, null, "Closed."));
+        }
+
+        public Task<RemotePrWriteResult> WithdrawAsync(
+            string workItemId, string writeId, Guid? callerRunId, Guid? callerChatSessionId)
+        {
+            WorkItemId = workItemId;
+            WriteId = writeId;
+            CallerRunId = callerRunId;
+            CallerChatSessionId = callerChatSessionId;
+            QueueCalls++;
+            return Task.FromResult(Withdrawn);
+        }
+
+        public Task<PrQueuedWritesView> ListQueuedAsync(string workItemId, Guid? callerRunId, Guid? callerChatSessionId)
+        {
+            WorkItemId = workItemId;
+            CallerRunId = callerRunId;
+            CallerChatSessionId = callerChatSessionId;
+            QueueCalls++;
+            return Task.FromResult(Listed);
         }
     }
 
@@ -314,5 +351,196 @@ public class AgentPrReviewApiTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Null(stub.CommentId);
+    }
+
+    private static async Task<JsonElement> JsonOf(HttpResponseMessage response)
+        => JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
+
+    [Theory]
+    [InlineData("reply")]
+    [InlineData("resolve")]
+    [InlineData("comment")]
+    [InlineData("close")]
+    public async Task Every_queuing_call_says_which_write_it_queued(string route)
+    {
+        // The id withdraw_pr_write takes has to come from somewhere an agent can see.
+        var stub = new StubPrReviewService { Queued = new RemotePrWriteResult(true, "5a03cb617874", "Queued.") };
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/{route}",
+            new { commentId = "4049159495", threadId = "PRRT_thread_1", body = "An answer.", resolve = true },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await JsonOf(response);
+        Assert.True(json.GetProperty("ok").GetBoolean());
+        Assert.Equal("5a03cb617874", json.GetProperty("writeId").GetString());
+        if (route == "reply")
+            Assert.Equal("5a03cb617874", json.GetProperty("commentId").GetString());
+    }
+
+    [Fact]
+    public async Task A_chat_agent_answering_is_known_by_its_chat_session()
+    {
+        // Ownership is what decides whether an answer replaces an earlier one,
+        // and a chat agent has no run to own it by.
+        var stub = new StubPrReviewService();
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+        var chat = Guid.NewGuid();
+
+        var request = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/agent/workitems/{workItemId}/pr-review/reply")
+        {
+            Content = JsonContent.Create(new { commentId = "4049159495", body = "An answer." }),
+        };
+        request.Headers.Add("X-ILD-Chat-Session-Id", chat.ToString());
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(stub.CallerRunId);
+        Assert.Equal(chat, stub.CallerChatSessionId);
+    }
+
+    [Fact]
+    public async Task Withdrawing_hands_the_write_and_the_callers_run_to_the_server_side()
+    {
+        var stub = new StubPrReviewService();
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+        var runId = Guid.NewGuid();
+
+        var request = new HttpRequestMessage(HttpMethod.Delete,
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/queue/5a03cb617874");
+        request.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(workItemId, stub.WorkItemId);
+        Assert.Equal("5a03cb617874", stub.WriteId);
+        Assert.Equal(runId, stub.CallerRunId);
+        var json = await JsonOf(response);
+        Assert.True(json.GetProperty("ok").GetBoolean());
+        Assert.Equal("5a03cb617874", json.GetProperty("writeId").GetString());
+        Assert.Equal("Withdrawn.", json.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task A_chat_agent_withdrawing_is_known_by_its_chat_session()
+    {
+        var stub = new StubPrReviewService();
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+        var chat = Guid.NewGuid();
+
+        var request = new HttpRequestMessage(HttpMethod.Delete,
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/queue/5a03cb617874");
+        request.Headers.Add("X-ILD-Chat-Session-Id", chat.ToString());
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(stub.CallerRunId);
+        Assert.Equal(chat, stub.CallerChatSessionId);
+    }
+
+    [Fact]
+    public async Task A_refused_withdrawal_is_an_answer_the_agent_can_read()
+    {
+        var stub = new StubPrReviewService
+        {
+            Withdrawn = new RemotePrWriteResult(false, "da94a98a085d", "Another run queued this; a human can still drop it."),
+        };
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+
+        var response = await client.DeleteAsync(
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/queue/da94a98a085d", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await JsonOf(response);
+        Assert.False(json.GetProperty("ok").GetBoolean());
+        Assert.Equal("da94a98a085d", json.GetProperty("writeId").GetString());
+        Assert.Equal("Another run queued this; a human can still drop it.", json.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task Listing_shows_each_pending_write_as_the_agent_needs_to_recognise_it()
+    {
+        var queuedAt = new DateTime(2026, 9, 21, 12, 0, 0, DateTimeKind.Utc);
+        var stub = new StubPrReviewService
+        {
+            Listed = new PrQueuedWritesView(
+                new[]
+                {
+                    new PrQueuedWrite("5a03cb617874", PrQueuedWrite.Reply, "4049159495", "That compiles.", "src/A.cs", 10,
+                        queuedAt, ItemId: "4049159495"),
+                },
+                null),
+        };
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+        var runId = Guid.NewGuid();
+
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/agent/workitems/{workItemId}/pr-review/queue");
+        request.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(workItemId, stub.WorkItemId);
+        Assert.Equal(runId, stub.CallerRunId);
+        var write = Assert.Single((await JsonOf(response)).GetProperty("writes").EnumerateArray().ToArray());
+        Assert.Equal("5a03cb617874", write.GetProperty("id").GetString());
+        Assert.Equal("reply", write.GetProperty("kind").GetString());
+        Assert.Equal("4049159495", write.GetProperty("targetId").GetString());
+        Assert.Equal("4049159495", write.GetProperty("itemId").GetString());
+        Assert.Equal("That compiles.", write.GetProperty("body").GetString());
+        Assert.Equal("src/A.cs", write.GetProperty("path").GetString());
+        Assert.Equal(10, write.GetProperty("line").GetInt32());
+        Assert.Equal(queuedAt, write.GetProperty("queuedAt").GetDateTime().ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task Listing_with_no_pull_request_passes_the_reason_on()
+    {
+        var stub = new StubPrReviewService
+        {
+            Listed = new PrQueuedWritesView(Array.Empty<PrQueuedWrite>(), "This work item's current run has no pull request."),
+        };
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+
+        var response = await client.GetAsync(
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/queue", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await JsonOf(response);
+        Assert.Empty(json.GetProperty("writes").EnumerateArray());
+        Assert.Equal("This work item's current run has no pull request.", json.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task The_queue_of_an_unknown_work_item_is_not_found()
+    {
+        var stub = new StubPrReviewService();
+        await using var factory = FactoryWith(stub);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var unknown = Guid.NewGuid();
+
+        var listed = await client.GetAsync(
+            $"/api/v1/agent/workitems/{unknown}/pr-review/queue", TestContext.Current.CancellationToken);
+        var withdrawn = await client.DeleteAsync(
+            $"/api/v1/agent/workitems/{unknown}/pr-review/queue/5a03cb617874", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, listed.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, withdrawn.StatusCode);
+        Assert.Equal(0, stub.QueueCalls);
     }
 }

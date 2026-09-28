@@ -622,8 +622,8 @@ public class AgentController : ControllerBase
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.ReplyAsync(id, request.CommentId, request.Body, CallerRunId());
-        return Ok(new { ok = result.Ok, commentId = result.Id, message = result.Message });
+        var result = await reviews.ReplyAsync(id, request.CommentId, request.Body, CallerRunId(), CallerChatSessionId());
+        return Ok(new { ok = result.Ok, commentId = result.Id, writeId = result.Id, message = result.Message });
     }
 
     /// <summary>Mark a review thread resolved once it has been answered or fixed.</summary>
@@ -640,8 +640,8 @@ public class AgentController : ControllerBase
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.ResolveAsync(id, request.ThreadId, CallerRunId());
-        return Ok(new { ok = result.Ok, threadId = request.ThreadId, message = result.Message });
+        var result = await reviews.ResolveAsync(id, request.ThreadId, CallerRunId(), CallerChatSessionId());
+        return Ok(new { ok = result.Ok, threadId = request.ThreadId, writeId = result.Id, message = result.Message });
     }
 
     /// <summary>
@@ -664,8 +664,8 @@ public class AgentController : ControllerBase
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.CommentAsync(id, request.Body, CallerRunId());
-        return Ok(new { ok = result.Ok, message = result.Message });
+        var result = await reviews.CommentAsync(id, request.Body, CallerRunId(), CallerChatSessionId());
+        return Ok(new { ok = result.Ok, writeId = result.Id, message = result.Message });
     }
 
     /// <summary>
@@ -688,8 +688,55 @@ public class AgentController : ControllerBase
         if (workItem == null)
             return NotFound();
 
-        var result = await reviews.CloseAsync(id, request.CommentId, request.Resolve, CallerRunId());
-        return Ok(new { ok = result.Ok, commentId = request.CommentId, message = result.Message });
+        var result = await reviews.CloseAsync(id, request.CommentId, request.Resolve, CallerRunId(), CallerChatSessionId());
+        return Ok(new { ok = result.Ok, commentId = request.CommentId, writeId = result.Id, message = result.Message });
+    }
+
+    /// <summary>
+    /// The writes the caller has waiting for the PR node on the work item's
+    /// current pull request — its own only. Read from the queue alone, so it
+    /// answers even when the forge cannot be reached.
+    /// </summary>
+    [HttpGet("workitems/{id}/pr-review/queue")]
+    public async Task<IActionResult> ListQueuedPrWrites(string id, [FromServices] IPrReviewService reviews)
+    {
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var view = await reviews.ListQueuedAsync(id, CallerRunId(), CallerChatSessionId());
+        return Ok(new
+        {
+            message = view.Message,
+            writes = view.Writes.Select(w => new
+            {
+                id = w.Id,
+                kind = w.Kind,
+                targetId = w.TargetId,
+                itemId = w.ItemId,
+                body = w.Body,
+                path = w.Path,
+                line = w.Line,
+                queuedAt = w.QueuedAt,
+            }),
+        });
+    }
+
+    /// <summary>
+    /// Take back a write the caller queued, before the PR node sends it. A
+    /// write that is not the caller's, or no longer waiting, is a refusal —
+    /// 200 with a message, as a refused reply is.
+    /// </summary>
+    [HttpDelete("workitems/{id}/pr-review/queue/{writeId}")]
+    public async Task<IActionResult> WithdrawQueuedPrWrite(
+        string id, string writeId, [FromServices] IPrReviewService reviews)
+    {
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var result = await reviews.WithdrawAsync(id, writeId, CallerRunId(), CallerChatSessionId());
+        return Ok(new { ok = result.Ok, writeId, message = result.Message });
     }
 
     [HttpGet("repositories")]
@@ -850,6 +897,12 @@ public class AgentController : ControllerBase
     /// difference decides whether a review read consumes what it returned.
     /// </summary>
     private Guid? CallerRunId() => TryResolveRunId(out var runId) ? runId : null;
+
+    /// <summary>
+    /// The chat session this call came from, or null. With <see cref="CallerRunId"/>
+    /// it names who owns a queued pull-request write; the run wins when both are sent.
+    /// </summary>
+    private Guid? CallerChatSessionId() => TryResolveChatSessionId(out var chatSessionId) ? chatSessionId : null;
 
     private bool TryResolveChatSessionId(out Guid chatSessionId)
     {

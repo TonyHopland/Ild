@@ -253,6 +253,37 @@ public class PrQueuedWriteDrainTests
     }
 
     [Fact]
+    public async Task A_round_that_corrected_itself_sends_only_its_last_answer_and_nothing_it_took_back()
+    {
+        // WI-181: corrected twice in one round, the implementer answered the
+        // same review three times, and all three were about to be posted.
+        var f = new Fixture(Array.Empty<PrQueuedWrite>());
+        f.Runs.Setup(s => s.GetCurrentByWorkItemAsync("WI-1")).ReturnsAsync(f.Run);
+        f.Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "42")).ReturnsAsync(new RemotePrReviewLedger(
+            Array.Empty<RemotePrReviewSummary>(),
+            new[]
+            {
+                new RemotePrReviewItem("review", "4049159495", "PRRT_t1", "r1", "src/A.cs", 10,
+                    "this allocation is wrong", "Copilot", Head, DateTime.UtcNow, false, false),
+            },
+            Head, null));
+        var agent = new PrReviewService(f.Runs.Object, f.Remote.Object);
+        foreach (var answer in new[] { "first answer", "second answer", "third answer" })
+            Assert.True((await agent.ReplyAsync("WI-1", "4049159495", answer, f.Run.Id)).Ok);
+        var takenBack = await agent.CommentAsync("WI-1", "a note I thought better of", f.Run.Id);
+        Assert.True((await agent.WithdrawAsync("WI-1", takenBack.Id!, f.Run.Id, null)).Ok);
+
+        await f.RunNodeAsync();
+
+        var sent = Assert.Single(f.Written);
+        Assert.Equal((PrQueuedWrite.Reply, "4049159495"), (sent.Kind, sent.Target));
+        Assert.Contains("third answer", sent.Body!, StringComparison.Ordinal);
+        Assert.DoesNotContain("first answer", sent.Body!, StringComparison.Ordinal);
+        Assert.DoesNotContain("second answer", sent.Body!, StringComparison.Ordinal);
+        Assert.Empty(f.PostedComments);
+    }
+
+    [Fact]
     public async Task The_queue_is_emptied_once_it_has_gone_out()
     {
         var f = new Fixture(new[] { Reply("w1", "4049159495", "That compiles.") });
