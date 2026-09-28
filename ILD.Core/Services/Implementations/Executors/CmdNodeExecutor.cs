@@ -54,17 +54,16 @@ public sealed class CmdNodeExecutor : INodeExecutor
         var err = new StringBuilder();
         using var feeds = PackageFeedCredentialFiles.Materialize(
             packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
-        var psi = IsolateCommand(
-            ShellStartInfo(command, workingDirectory),
-            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
-            AgentIsolation.EgressProxyUrl(aiProviderId: null));
-        foreach (var (name, value) in feeds.Environment)
-            psi.Environment[name] = value;
         using var p = new Process
         {
-            StartInfo = psi,
+            StartInfo = IsolateCommand(
+                ShellStartInfo(command, workingDirectory),
+                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
+                AgentIsolation.EgressProxyUrl(aiProviderId: null)),
             EnableRaisingEvents = true,
         };
+        foreach (var (name, value) in feeds.Environment)
+            p.StartInfo.Environment[name] = value;
         // Forward the full stdout+stderr stream verbatim (newline included, ANSI
         // preserved) so the live view captures the complete output rather than
         // newline-stripped fragments.
