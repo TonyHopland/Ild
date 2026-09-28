@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import Taskboard from "./index";
-import { pressEscapeUntil } from "../../test-support";
+import { mockTaskboardServer, pressEscapeUntil } from "../../test-support";
 import { WorkItemStatus, WorkItemPriority, WorkItem, Repository, LoopTemplate } from "../../types";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
@@ -114,6 +114,95 @@ function makeRepo(overrides: Partial<Repository> = {}): Repository {
   };
 }
 
+const ALL_STATUSES = Object.values(WorkItemStatus) as string[];
+
+/** Item `id` created `n` hours into 2026; a higher `n` is newer. The title is the id. */
+function boardItem(
+  id: string,
+  n: number,
+  status: WorkItemStatus = WorkItemStatus.Backlog,
+  overrides: Partial<WorkItem> = {},
+): WorkItem {
+  return makeItem({
+    id,
+    title: id,
+    status,
+    createdAt: new Date(Date.UTC(2026, 0, 1) + n * 3_600_000).toISOString(),
+    ...overrides,
+  });
+}
+
+function columnEl(label: string): HTMLElement {
+  const column = Array.from(document.querySelectorAll<HTMLElement>(".taskboard-column")).find(
+    (c) => c.querySelector(".taskboard-column-title")?.textContent === label,
+  );
+  if (!column) throw new Error(`no ${label} column`);
+  return column;
+}
+
+/** The card titles of a column, top to bottom. */
+function cardTitles(label: string): string[] {
+  return Array.from(columnEl(label).querySelectorAll(".work-item-card")).map(
+    (card) => card.getAttribute("aria-label")!.split(", status ")[0],
+  );
+}
+
+function badge(label: string): string | null | undefined {
+  return columnEl(label).querySelector(".taskboard-column-count")?.textContent;
+}
+
+/** A hub whose events a test fires by name. */
+function mockHub() {
+  const handlers: Record<string, ((msg: any) => void)[]> = {};
+  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+    on: vi.fn((event: string, handler: (msg: any) => void) => {
+      (handlers[event] ??= []).push(handler);
+    }),
+    off: vi.fn(),
+    invoke: vi.fn(),
+    connectionState: "connected",
+  });
+  return {
+    emit: async (event: string, payload: unknown) => {
+      await act(async () => {
+        for (const handler of handlers[event] ?? []) handler({ payload });
+      });
+    },
+  };
+}
+
+/** Board mocks around a fake server whose getById and transition read and write its items. */
+function mockBoard(items: WorkItem[], repositories: Repository[] = [makeRepo()]) {
+  const server = mockTaskboardServer(items);
+  vi.spyOn(authServices.workItemService, "getById").mockImplementation(async (id: string) => {
+    const found = server.items.find((wi) => wi.id === id);
+    if (!found) throw new Error("not found");
+    return { ...found };
+  });
+  vi.spyOn(authServices.workItemService, "transition").mockImplementation(
+    async (id: string, status: string) => {
+      const found = server.items.find((wi) => wi.id === id)!;
+      found.status = status as WorkItemStatus;
+    },
+  );
+  vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue(repositories);
+  vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
+  vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+    key: "scheduler.isPaused",
+    value: "false",
+  });
+  return server;
+}
+
+/** Lets pending promise callbacks and the renders they cause run. */
+async function settle() {
+  for (let i = 0; i < 5; i++) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+}
+
 describe("Taskboard SignalR", () => {
   test("updates work item when HumanFeedbackRequired event arrives", async () => {
     const handlers: Record<string, ((msg: any) => void)[]> = {};
@@ -129,7 +218,7 @@ describe("Taskboard SignalR", () => {
       connectionState: "connected",
     });
 
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    mockTaskboardServer([makeItem()]);
 
     renderTaskboard();
 
@@ -165,9 +254,7 @@ describe("Taskboard SignalR", () => {
       connectionState: "connected",
     });
 
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
-      makeItem({ status: WorkItemStatus.Running }),
-    ]);
+    mockTaskboardServer([makeItem({ status: WorkItemStatus.Running })]);
     const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
       makeItem({
         status: WorkItemStatus.HumanFeedback,
@@ -208,7 +295,7 @@ describe("Taskboard SignalR", () => {
     });
 
     // Board starts empty — the item was created after the page loaded.
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
+    mockTaskboardServer([]);
     const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
       makeItem({
         id: "wi-new",
@@ -251,7 +338,7 @@ describe("Taskboard SignalR", () => {
       connectionState: "connected",
     });
 
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
+    mockTaskboardServer([]);
     const getByIdSpy = vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
       makeItem({
         id: "wi-new",
@@ -296,9 +383,7 @@ describe("Taskboard SignalR", () => {
       connectionState: "connected",
     });
 
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
-      makeItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }),
-    ]);
+    mockTaskboardServer([makeItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" })]);
 
     const staleRunning = makeItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" });
     const freshHuman = makeItem({
@@ -356,7 +441,7 @@ describe("Taskboard SignalR", () => {
       connectionState: "connected",
     });
 
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+    mockTaskboardServer([
       makeItem({
         status: WorkItemStatus.Running,
         startedAt: "2025-01-01T00:00:00Z",
@@ -403,9 +488,7 @@ describe("Taskboard SignalR", () => {
       connectionState: "connected",
     });
 
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
-      makeItem({ status: WorkItemStatus.HumanFeedback }),
-    ]);
+    mockTaskboardServer([makeItem({ status: WorkItemStatus.HumanFeedback })]);
     // SignalR delivers the enum as its numeric value, and the follow-up refetch
     // is irrelevant to what the event itself writes into state — fail it so the
     // assertion observes only the normalized event payload.
@@ -455,7 +538,7 @@ describe("Taskboard SignalR", () => {
       connectionState: "connected",
     });
 
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    mockTaskboardServer([makeItem()]);
 
     renderTaskboard();
 
@@ -500,7 +583,7 @@ describe("Taskboard SignalR", () => {
       connectionState: "connected",
     });
 
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    mockTaskboardServer([makeItem()]);
 
     renderTaskboard();
 
@@ -533,7 +616,7 @@ describe("Taskboard reconnect", () => {
     );
   }
 
-  test("re-fetches the board and scheduler state when the hub reconnects", async () => {
+  test("a reconnect reloads each column's loaded window from the top, the scheduler state and the tags", async () => {
     let connectionState: "connected" | "reconnecting" | "disconnected" = "connected";
     vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({
       on: vi.fn(),
@@ -541,42 +624,47 @@ describe("Taskboard reconnect", () => {
       invoke: vi.fn(),
       connectionState,
     }));
-
-    const getAllSpy = vi
-      .spyOn(authServices.workItemService, "getAll")
-      .mockResolvedValue([makeItem()]);
+    const server = mockTaskboardServer([
+      ...Array.from({ length: 45 }, (_, n) => boardItem(`b${n}`, n)),
+      boardItem("r0", 0, WorkItemStatus.Ready),
+    ]);
     const settingsSpy = vi
       .spyOn(authServices.settingsService, "get")
       .mockResolvedValue({ key: "scheduler.isPaused", value: "false" });
 
     const { rerender } = render(taskboardTree());
 
-    await waitFor(() => {
-      expect(screen.getByText("Test Item")).toBeTruthy();
-    });
-    // The initial mount loads the board once; the first connect must not add a
-    // second load on top of it.
-    expect(getAllSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    fireEvent.click(within(columnEl("Backlog")).getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(40));
     expect(settingsSpy).toHaveBeenCalledTimes(1);
+    const pagesBefore = server.getPage.mock.calls.length;
+    const tagsBefore = server.getTags.mock.calls.length;
 
-    // The connection drops — no re-fetch while it is down.
+    // While the socket is down another client creates an item; its event is lost.
+    server.items.push(boardItem("made-during-outage", 100));
     connectionState = "reconnecting";
     await act(async () => {
       rerender(taskboardTree());
     });
-    expect(getAllSpy).toHaveBeenCalledTimes(1);
+    expect(server.getPage.mock.calls.length).toBe(pagesBefore);
 
-    // …and recovers: the board and scheduler state re-sync to catch up on
-    // anything that happened during the outage.
     connectionState = "connected";
     await act(async () => {
       rerender(taskboardTree());
     });
 
-    await waitFor(() => {
-      expect(getAllSpy).toHaveBeenCalledTimes(2);
-      expect(settingsSpy).toHaveBeenCalledTimes(2);
-    });
+    await waitFor(() => expect(cardTitles("Backlog")[0]).toBe("made-during-outage"));
+    expect(badge("Backlog")).toBe("46");
+    const reload = server.getPage.mock.calls.slice(pagesBefore).map(([q]) => q);
+    expect(reload.map((q) => q.status).sort()).toEqual([...ALL_STATUSES].sort());
+    for (const q of reload) {
+      expect(q.skip).toBe(0);
+      expect(q.take).toBe(q.status === WorkItemStatus.Backlog ? 40 : 20);
+    }
+    await waitFor(() => expect(settingsSpy).toHaveBeenCalledTimes(2));
+    expect(server.getTags.mock.calls.length).toBeGreaterThan(tagsBefore);
+    expect(server.getAll).not.toHaveBeenCalled();
   });
 
   test("does not re-fetch on the very first connect", async () => {
@@ -590,9 +678,7 @@ describe("Taskboard reconnect", () => {
       connectionState,
     }));
 
-    const getAllSpy = vi
-      .spyOn(authServices.workItemService, "getAll")
-      .mockResolvedValue([makeItem()]);
+    const server = mockTaskboardServer([makeItem()]);
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
       key: "scheduler.isPaused",
       value: "false",
@@ -610,9 +696,12 @@ describe("Taskboard reconnect", () => {
       rerender(taskboardTree());
     });
 
-    // Still a single load — the first arrival at "connected" is not a recovery.
+    // Still a single first page per column — the first arrival at "connected"
+    // is not a recovery.
     await waitFor(() => {
-      expect(getAllSpy).toHaveBeenCalledTimes(1);
+      expect(server.getPage.mock.calls.map(([q]) => q.status).sort()).toEqual(
+        [...ALL_STATUSES].sort(),
+      );
     });
   });
 });
@@ -628,9 +717,7 @@ describe("Taskboard keyboard navigation", () => {
     const transitionSpy = vi
       .spyOn(authServices.workItemService, "transition")
       .mockResolvedValue(undefined as unknown as void);
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
-      makeItem({ status: WorkItemStatus.Ready }),
-    ]);
+    mockTaskboardServer([makeItem({ status: WorkItemStatus.Ready })]);
     vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
       makeItem({ status: WorkItemStatus.Running }),
     );
@@ -668,7 +755,7 @@ describe("Taskboard editing item refetch", () => {
     });
 
     const initialItem = makeItem({ status: WorkItemStatus.Running });
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([initialItem]);
+    mockTaskboardServer([initialItem]);
     // Mock modal's internal fetches
     vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
     vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
@@ -738,7 +825,7 @@ describe("Taskboard work item URL", () => {
   test("opens the detail dialog for the work item id in the URL", async () => {
     mockSignalR();
     mockModalServices();
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    mockTaskboardServer([makeItem()]);
 
     renderTaskboard("/taskboard/wi-1");
 
@@ -755,7 +842,7 @@ describe("Taskboard work item URL", () => {
   test("clicking a card reflects the open item in the URL", async () => {
     mockSignalR();
     mockModalServices();
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    mockTaskboardServer([makeItem()]);
 
     renderTaskboard();
     expect(screen.getByTestId("location").textContent).toBe("/taskboard");
@@ -772,7 +859,7 @@ describe("Taskboard work item URL", () => {
   test("closing the dialog clears the work item from the URL", async () => {
     mockSignalR();
     mockModalServices();
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    mockTaskboardServer([makeItem()]);
 
     renderTaskboard("/taskboard/wi-1");
 
@@ -789,7 +876,7 @@ describe("Taskboard work item URL", () => {
   test("redirects to the taskboard when the URL points at a missing work item", async () => {
     mockSignalR();
     mockModalServices();
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
+    mockTaskboardServer([]);
     const getByIdSpy = vi
       .spyOn(authServices.workItemService, "getById")
       .mockRejectedValue(new Error("not found"));
@@ -819,7 +906,7 @@ describe("Taskboard toolbar", () => {
   test("drops the page heading and groups the filter with the running toggle in one toolbar", async () => {
     mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    mockTaskboardServer([makeItem()]);
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
       key: "scheduler.isPaused",
       value: "false",
@@ -844,7 +931,7 @@ describe("Taskboard toolbar", () => {
   test("the running toggle still flips the scheduler from its toolbar home", async () => {
     mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([makeItem()]);
+    mockTaskboardServer([makeItem()]);
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
       key: "scheduler.isPaused",
       value: "false",
@@ -888,7 +975,7 @@ describe("Taskboard filter", () => {
   test("search narrows the board to matching work items", async () => {
     mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue(items);
+    mockTaskboardServer(items);
 
     renderTaskboard();
 
@@ -913,7 +1000,7 @@ describe("Taskboard filter", () => {
       makeRepo({ id: "repo-1", name: "Repo One" }),
       makeRepo({ id: "repo-2", name: "Repo Two" }),
     ]);
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue(items);
+    mockTaskboardServer(items);
 
     renderTaskboard();
 
@@ -935,7 +1022,7 @@ describe("Taskboard filter", () => {
   test("marks filter chips that name a loop template, leaving free-form chips plain", async () => {
     mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+    mockTaskboardServer([
       makeItem({ id: "wi-1", title: "Loop item", tags: ["bug fix"] }),
       makeItem({ id: "wi-2", title: "Plain item", tags: ["frontend"] }),
     ]);
@@ -955,7 +1042,7 @@ describe("Taskboard filter", () => {
   test("tag chips narrow the board and clearing restores every item", async () => {
     mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue(items);
+    mockTaskboardServer(items);
 
     renderTaskboard();
 
@@ -978,5 +1065,478 @@ describe("Taskboard filter", () => {
       expect(screen.getByText("Fix logout bug")).toBeTruthy();
       expect(screen.getByText("Unrelated chore")).toBeTruthy();
     });
+  });
+});
+
+describe("Taskboard server-paged columns", () => {
+  test("each column loads its own first page and shows the server total, and Load more pages it to the end", async () => {
+    mockHub();
+    const server = mockBoard([
+      ...Array.from({ length: 45 }, (_, n) => boardItem(`b${n}`, n)),
+      ...Array.from({ length: 3 }, (_, n) => boardItem(`d${n}`, 100 + n, WorkItemStatus.Done)),
+    ]);
+
+    renderTaskboard();
+
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    const first = server.getPage.mock.calls.map(([q]) => q);
+    expect(first.map((q) => q.status).sort()).toEqual([...ALL_STATUSES].sort());
+    for (const q of first) {
+      expect(q).toMatchObject({ skip: 0, take: 20 });
+      expect(q.search ?? "").toBe("");
+      expect(q.repositoryId ?? "").toBe("");
+      expect(q.tags ?? []).toEqual([]);
+    }
+    expect(badge("Backlog")).toBe("45");
+    expect(badge("Done")).toBe("3");
+    expect(badge("Ready")).toBe("0");
+    expect(cardTitles("Backlog")[0]).toBe("b44");
+
+    const loadMore = () => within(columnEl("Backlog")).queryByRole("button", { name: "Load more" });
+    fireEvent.click(loadMore()!);
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(40));
+    fireEvent.click(loadMore()!);
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(45));
+
+    expect(loadMore()).toBeNull();
+    expect(within(columnEl("Done")).queryByRole("button", { name: "Load more" })).toBeNull();
+    expect(cardTitles("Backlog")).toEqual(Array.from({ length: 45 }, (_, n) => `b${44 - n}`));
+    const backlogSkips = server.getPage.mock.calls
+      .map(([q]) => q)
+      .filter((q) => q.status === WorkItemStatus.Backlog)
+      .map((q) => q.skip);
+    expect(backlogSkips).toEqual([0, 20, 40]);
+    expect(badge("Backlog")).toBe("45");
+    expect(server.getAll).not.toHaveBeenCalled();
+  });
+
+  test("search is debounced and finds an old item by id in its column, reloading every column from the top", async () => {
+    mockHub();
+    const server = mockBoard([
+      boardItem("wi-forgotten", 0, WorkItemStatus.Backlog, { title: "Tidy up" }),
+      ...Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, 10 + n)),
+      boardItem("done-forgotten", 5, WorkItemStatus.Done, { title: "Shipped" }),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    expect(cardTitles("Backlog")).not.toContain("Tidy up");
+    const before = server.getPage.mock.calls.length;
+
+    const search = screen.getByLabelText("Search work items");
+    fireEvent.change(search, { target: { value: "f" } });
+    fireEvent.change(search, { target: { value: "forg" } });
+    fireEvent.change(search, { target: { value: "forgotten" } });
+
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["Tidy up"]));
+    await waitFor(() => expect(cardTitles("Done")).toEqual(["Shipped"]));
+    expect(badge("Backlog")).toBe("1");
+    expect(badge("Done")).toBe("1");
+    const reload = server.getPage.mock.calls.slice(before).map(([q]) => q);
+    expect(reload.map((q) => q.status).sort()).toEqual([...ALL_STATUSES].sort());
+    for (const q of reload) {
+      expect(q.search).toBe("forgotten");
+      expect(q.skip).toBe(0);
+    }
+  });
+
+  test("a page answered for an outdated search never replaces the newer one", async () => {
+    mockHub();
+    const server = mockBoard([
+      boardItem("first-match", 1),
+      boardItem("second-match", 2),
+      boardItem("unrelated", 3),
+    ]);
+    const held = deferred<void>();
+    server.getPage.mockImplementation(async (q) => {
+      const snapshot = server.page(q);
+      if (q.search === "first") await held.promise;
+      return snapshot;
+    });
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(3));
+
+    const search = screen.getByLabelText("Search work items");
+    fireEvent.change(search, { target: { value: "first" } });
+    await waitFor(() =>
+      expect(server.getPage.mock.calls.some(([q]) => q.search === "first")).toBe(true),
+    );
+    fireEvent.change(search, { target: { value: "second" } });
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["second-match"]));
+
+    held.resolve();
+    await settle();
+
+    expect(cardTitles("Backlog")).toEqual(["second-match"]);
+    expect(badge("Backlog")).toBe("1");
+  });
+
+  test("repository and tag filters narrow every column, with options for every repository and every tag in use", async () => {
+    mockHub();
+    const server = mockBoard(
+      [
+        ...Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, 10 + n)),
+        boardItem("ancient", 0, WorkItemStatus.Backlog, {
+          repositoryId: "repo-2",
+          tags: ["ancient", "frontend"],
+        }),
+        boardItem("beta-newer", 50, WorkItemStatus.Backlog, {
+          repositoryId: "repo-2",
+          tags: ["frontend"],
+        }),
+        boardItem("beta-done", 40, WorkItemStatus.Done, {
+          repositoryId: "repo-2",
+          tags: ["frontend"],
+        }),
+      ],
+      [
+        makeRepo({ id: "repo-1", name: "Alpha" }),
+        makeRepo({ id: "repo-2", name: "Beta" }),
+        makeRepo({ id: "repo-3", name: "Gamma" }),
+      ],
+    );
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    expect(cardTitles("Backlog")).not.toContain("ancient");
+    // Options come from the server, not from the cards that happen to be loaded.
+    expect(await screen.findByRole("option", { name: "Gamma" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "ancient" })).toBeTruthy();
+
+    let before = server.getPage.mock.calls.length;
+    fireEvent.change(screen.getByLabelText("Filter by repository"), {
+      target: { value: "repo-2" },
+    });
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["beta-newer", "ancient"]));
+    await waitFor(() => expect(cardTitles("Done")).toEqual(["beta-done"]));
+    expect(badge("Backlog")).toBe("2");
+    expect(badge("Done")).toBe("1");
+    for (const [q] of server.getPage.mock.calls.slice(before)) {
+      expect(q.repositoryId).toBe("repo-2");
+      expect(q.skip).toBe(0);
+    }
+
+    before = server.getPage.mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: "ancient" }));
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["ancient"]));
+    await waitFor(() => expect(cardTitles("Done")).toEqual([]));
+    expect(badge("Backlog")).toBe("1");
+    expect(badge("Done")).toBe("0");
+    const tagged = server.getPage.mock.calls.slice(before).map(([q]) => q);
+    expect(tagged.map((q) => q.status).sort()).toEqual([...ALL_STATUSES].sort());
+    for (const q of tagged) {
+      expect(q.repositoryId).toBe("repo-2");
+      expect(q.tags).toEqual(["ancient"]);
+    }
+  });
+});
+
+describe("Taskboard live changes keep server order", () => {
+  test("creating a work item puts its card at the top of Backlog at once and counts it", async () => {
+    mockHub();
+    const server = mockBoard(Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, n)));
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
+    vi.spyOn(authServices.settingsService, "getAttachmentLimits").mockResolvedValue({
+      maxBytesPerFile: 1024 * 1024,
+      maxFilesPerRequest: 10,
+      maxTotalBytesPerWorkItem: 10 * 1024 * 1024,
+    });
+    vi.spyOn(authServices.workItemService, "create").mockImplementation(async (data) => {
+      const created = boardItem("wi-created", 1000, WorkItemStatus.Backlog, {
+        title: data.title ?? "",
+      });
+      server.items.push(created);
+      return created;
+    });
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    expect(badge("Backlog")).toBe("25");
+
+    fireEvent.click(within(columnEl("Backlog")).getByRole("button", { name: "New item" }));
+    await within(await screen.findByRole("dialog")).findByRole("option", { name: "Repo One" });
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Brand new" } });
+      fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "repo-1" } });
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(cardTitles("Backlog")[0]).toBe("Brand new"));
+    expect(cardTitles("Backlog").slice(1, 3)).toEqual(["b24", "b23"]);
+    await settle();
+    expect(badge("Backlog")).toBe("26");
+    expect(cardTitles("Backlog")[0]).toBe("Brand new");
+  });
+
+  test("an item created elsewhere lands in server order over SignalR, and one beyond the loaded page is only counted", async () => {
+    const hub = mockHub();
+    const server = mockBoard(Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, 10 + n)));
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
+    const created = (id: string, n: number) => {
+      server.items.push(boardItem(id, n));
+      return hub.emit("WorkItemStateChanged", {
+        workItemId: id,
+        oldStatus: "Backlog",
+        newStatus: "Backlog",
+      });
+    };
+
+    await created("newest", 100);
+    await waitFor(() => expect(cardTitles("Backlog")[0]).toBe("newest"));
+
+    await created("between", 30.5);
+    await waitFor(() => expect(cardTitles("Backlog")).toContain("between"));
+    const titles = cardTitles("Backlog");
+    expect(titles.slice(titles.indexOf("b21"), titles.indexOf("b21") + 3)).toEqual([
+      "b21",
+      "between",
+      "b20",
+    ]);
+
+    await created("very-old", 1);
+    await waitFor(() => expect(badge("Backlog")).toBe("28"));
+    expect(cardTitles("Backlog")).not.toContain("very-old");
+    expect(cardTitles("Backlog")).toHaveLength(22);
+  });
+
+  test("an item created while its column is reloading is not lost when the older response lands", async () => {
+    const hub = mockHub();
+    const server = mockBoard([
+      ...Array.from({ length: 5 }, (_, n) => boardItem(`a${n}`, n)),
+      boardItem("elsewhere", 50, WorkItemStatus.Backlog, { repositoryId: "repo-2" }),
+    ]);
+    const held = deferred<void>();
+    let holding = true;
+    server.getPage.mockImplementation(async (q) => {
+      const snapshot = server.page(q);
+      if (holding && q.status === WorkItemStatus.Backlog && q.repositoryId === "repo-1") {
+        holding = false;
+        await held.promise;
+      }
+      return snapshot;
+    });
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(6));
+
+    fireEvent.change(screen.getByLabelText("Filter by repository"), {
+      target: { value: "repo-1" },
+    });
+    await waitFor(() => expect(holding).toBe(false));
+
+    server.items.push(boardItem("fresh", 100));
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "fresh",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
+    await settle();
+    held.resolve();
+
+    await waitFor(() =>
+      expect(cardTitles("Backlog")).toEqual(["fresh", "a4", "a3", "a2", "a1", "a0"]),
+    );
+    await waitFor(() => expect(badge("Backlog")).toBe("6"));
+  });
+
+  test("a status change over SignalR moves the card to its sorted place and updates both totals", async () => {
+    const hub = mockHub();
+    const server = mockBoard([
+      boardItem("r7", 7, WorkItemStatus.Ready),
+      boardItem("u9", 9, WorkItemStatus.Running),
+      boardItem("u2", 2, WorkItemStatus.Running),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Running")).toEqual(["u9", "u2"]));
+
+    server.items.find((wi) => wi.id === "r7")!.status = WorkItemStatus.Running;
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "r7",
+      oldStatus: "Ready",
+      newStatus: "Running",
+    });
+
+    await waitFor(() => expect(cardTitles("Running")).toEqual(["u9", "r7", "u2"]));
+    expect(cardTitles("Ready")).toEqual([]);
+    await waitFor(() => expect(badge("Running")).toBe("3"));
+    expect(badge("Ready")).toBe("0");
+  });
+
+  test("under a filter a card edited out of it leaves and a non-matching new item never shows", async () => {
+    const hub = mockHub();
+    const server = mockBoard([
+      boardItem("keep", 3),
+      boardItem("moves-repo", 2),
+      boardItem("other-repo", 1, WorkItemStatus.Backlog, { repositoryId: "repo-2" }),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(3));
+    fireEvent.change(screen.getByLabelText("Filter by repository"), {
+      target: { value: "repo-1" },
+    });
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["keep", "moves-repo"]));
+
+    server.items.find((wi) => wi.id === "moves-repo")!.repositoryId = "repo-2";
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "moves-repo",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["keep"]));
+    await waitFor(() => expect(badge("Backlog")).toBe("1"));
+
+    server.items.push(
+      boardItem("new-elsewhere", 100, WorkItemStatus.Backlog, { repositoryId: "repo-2" }),
+    );
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "new-elsewhere",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
+    await settle();
+    expect(cardTitles("Backlog")).toEqual(["keep"]);
+    expect(badge("Backlog")).toBe("1");
+  });
+
+  test("a keyboard move takes the card from its column to the next and both totals follow", async () => {
+    mockHub();
+    mockBoard([
+      boardItem("mover", 5, WorkItemStatus.Ready),
+      boardItem("u9", 9, WorkItemStatus.Running),
+    ]);
+
+    renderTaskboard();
+    const card = await screen.findByRole("button", { name: /^mover,/ });
+    card.focus();
+    fireEvent.keyDown(card, { key: "ArrowRight" });
+
+    await waitFor(() => expect(cardTitles("Running")).toEqual(["u9", "mover"]));
+    expect(cardTitles("Ready")).toEqual([]);
+    await waitFor(() => expect(badge("Running")).toBe("2"));
+    expect(badge("Ready")).toBe("0");
+  });
+
+  test("totals reconcile from the server with one counts request in flight and one follow-up", async () => {
+    const hub = mockHub();
+    const server = mockBoard(Array.from({ length: 6 }, (_, n) => boardItem(`b${n}`, n)));
+    const held = deferred<void>();
+    let armed = false;
+    server.getCounts.mockImplementation(async (filter) => {
+      if (armed) {
+        armed = false;
+        await held.promise;
+      }
+      return server.counts(filter);
+    });
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(6));
+    armed = true;
+    const countsBefore = server.getCounts.mock.calls.length;
+
+    // Deleted by someone else, with no event for it: only the count the next
+    // edit asks for can tell.
+    server.items.splice(
+      server.items.findIndex((wi) => wi.id === "b0"),
+      1,
+    );
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "b1",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
+    await waitFor(() => expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1));
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "b2",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "b3",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
+    await settle();
+    expect(server.getCounts.mock.calls.length).toBe(countsBefore + 1);
+
+    held.resolve();
+    await waitFor(() => expect(server.getCounts.mock.calls.length).toBe(countsBefore + 2));
+    await settle();
+    expect(server.getCounts.mock.calls.length).toBe(countsBefore + 2);
+    await waitFor(() => expect(badge("Backlog")).toBe("5"));
+  });
+
+  test("a counts answer for an outdated filter is dropped", async () => {
+    const hub = mockHub();
+    const server = mockBoard(
+      [
+        ...Array.from({ length: 4 }, (_, n) => boardItem(`b${n}`, n)),
+        boardItem("other", 10, WorkItemStatus.Backlog, { repositoryId: "repo-2" }),
+      ],
+      [makeRepo(), makeRepo({ id: "repo-2", name: "Repo Two" })],
+    );
+    const held = deferred<void>();
+    let armed = false;
+    server.getCounts.mockImplementation(async (filter) => {
+      if (armed) {
+        armed = false;
+        await held.promise;
+      }
+      return server.counts(filter);
+    });
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(5));
+    armed = true;
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "b1",
+      oldStatus: "Backlog",
+      newStatus: "Backlog",
+    });
+    await waitFor(() => expect(armed).toBe(false));
+
+    fireEvent.change(screen.getByLabelText("Filter by repository"), {
+      target: { value: "repo-2" },
+    });
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["other"]));
+    held.resolve();
+    await settle();
+
+    expect(badge("Backlog")).toBe("1");
+  });
+});
+
+describe("Taskboard direct link", () => {
+  test("an item outside the loaded page opens in the dialog without joining its column", async () => {
+    mockHub();
+    mockModalServices();
+    mockBoard(Array.from({ length: 25 }, (_, n) => boardItem(`b${n}`, n)));
+    const getById = vi.mocked(authServices.workItemService.getById);
+
+    renderTaskboard("/taskboard/b0");
+
+    await waitFor(() =>
+      expect(within(screen.getByRole("dialog")).getByRole("heading", { name: "b0" })).toBeTruthy(),
+    );
+    expect(getById).toHaveBeenCalledWith("b0");
+    await settle();
+    const fetched = getById.mock.calls.filter(([id]) => id === "b0").length;
+    await settle();
+
+    expect(getById.mock.calls.filter(([id]) => id === "b0").length).toBe(fetched);
+    expect(cardTitles("Backlog")).toHaveLength(20);
+    expect(cardTitles("Backlog")).not.toContain("b0");
+    expect(badge("Backlog")).toBe("25");
   });
 });

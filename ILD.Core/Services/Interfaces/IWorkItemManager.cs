@@ -40,6 +40,25 @@ public interface IWorkItemManager
     Task<IReadOnlyList<WorkItemSummary>> ListSummariesAsync(WorkItemListQuery query);
 
     /// <summary>
+    /// One page of full work items filtered, ordered and paged per
+    /// <paramref name="query"/>, with the total matching the filter across
+    /// every page. Engine-only fields are merged for the returned page only, and a
+    /// creator filter matches the creator the view shows: its current run's,
+    /// else the item's own.
+    /// </summary>
+    Task<WorkItemPage> ListPageAsync(WorkItemListQuery query);
+
+    /// <summary>
+    /// The number of items in every status, zero included, under the
+    /// repository, search and tag filters of <paramref name="query"/>. Its
+    /// status, ordering and paging are ignored.
+    /// </summary>
+    Task<IReadOnlyDictionary<RemoteWorkItemStatus, int>> CountByStatusAsync(WorkItemListQuery query);
+
+    /// <summary>Every distinct tag carried by any work item, sorted case-insensitively.</summary>
+    Task<IReadOnlyList<string>> ListTagsAsync();
+
+    /// <summary>
     /// Aggregate the backlog (optionally scoped to <paramref name="repositoryId"/>)
     /// into status/priority counts and blocked-vs-actionable totals, with no
     /// bodies. Lets an agent orient before drilling into individual items.

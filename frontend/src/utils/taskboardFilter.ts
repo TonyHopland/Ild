@@ -1,5 +1,25 @@
-import type { Repository, WorkItem } from "../types";
+import type { WorkItem } from "../types";
 import { parseTags } from "./workItemJson";
+
+/**
+ * A character as the server's OrdinalIgnoreCase compares it: upper-cased on its
+ * own, never into several characters ("ß" stays "ß"), with the exceptions .NET
+ * makes: dotless ı and long ſ keep their own case, and a Greek letter with
+ * iota subscript folds to its titlecase partner ("ᾀ" → "ᾈ"), not to two letters.
+ */
+function ordinalUpper(char: string): string {
+  if (char === "ı" || char === "ſ") return char;
+  const cp = char.codePointAt(0)!;
+  if (cp >= 0x1f80 && cp <= 0x1faf && cp % 16 < 8) return String.fromCodePoint(cp + 8);
+  if (cp === 0x1fb3 || cp === 0x1fc3 || cp === 0x1ff3) return String.fromCodePoint(cp + 9);
+  const upper = char.toUpperCase();
+  return Array.from(upper).length === 1 ? upper : char;
+}
+
+/** Text folded as OrdinalIgnoreCase compares it, so equal folds mean equal to the server. */
+function ordinalIgnoreCaseKey(text: string): string {
+  return Array.from(text, ordinalUpper).join("");
+}
 
 /**
  * Active filter selection for the Taskboard. `search` is matched against a work
@@ -19,65 +39,44 @@ export const EMPTY_TASKBOARD_FILTER: TaskboardFilter = {
   tags: [],
 };
 
-/** A repository the board can filter by, labelled for display. */
-export interface RepositoryOption {
-  id: string;
-  name: string;
-}
-
 /** True when any of the filter dimensions would narrow the board. */
 export function isFilterActive(filter: TaskboardFilter): boolean {
   return filter.search.trim() !== "" || filter.repositoryId !== "" || filter.tags.length > 0;
 }
 
 /**
- * Apply the filter to a list of work items. Dimensions combine with AND: an
- * item is kept only when it satisfies the search text, the selected repository
- * and all selected tags.
+ * Whether an item belongs on the board under the filter, by the same rules the
+ * server lists columns with: the trimmed search found, case-insensitively, in
+ * the title, the description or the id, each on its own; the selected
+ * repository; and every selected tag, case-insensitively.
  */
-export function filterWorkItems(items: WorkItem[], filter: TaskboardFilter): WorkItem[] {
-  const query = filter.search.trim().toLowerCase();
-  return items.filter((item) => {
-    if (filter.repositoryId && item.repositoryId !== filter.repositoryId) return false;
-    if (filter.tags.length > 0) {
-      const itemTags = parseTags(item);
-      if (!filter.tags.every((tag) => itemTags.includes(tag))) return false;
-    }
-    if (query) {
-      const haystack = [item.title, item.description, item.id]
-        .filter((value): value is string => typeof value === "string")
-        .join(" ")
-        .toLowerCase();
-      if (!haystack.includes(query)) return false;
-    }
-    return true;
-  });
+export function matchesTaskboardFilter(item: WorkItem, filter: TaskboardFilter): boolean {
+  if (filter.repositoryId && item.repositoryId !== filter.repositoryId) return false;
+  const itemTags = parseTags(item);
+  if (!filter.tags.every((tag) => itemTags.some((carried) => sameTag(carried, tag)))) return false;
+  const query = ordinalIgnoreCaseKey(filter.search.trim());
+  if (query) {
+    const fields = [item.title, item.description, item.id];
+    if (
+      !fields.some(
+        (field) => typeof field === "string" && ordinalIgnoreCaseKey(field).includes(query),
+      )
+    )
+      return false;
+  }
+  return true;
 }
 
-/** The sorted, de-duplicated set of tags present across the given work items. */
-export function collectTags(items: WorkItem[]): string[] {
-  const tags = new Set<string>();
-  for (const item of items) {
-    for (const tag of parseTags(item)) tags.add(tag);
-  }
-  return [...tags].sort((a, b) => a.localeCompare(b));
+/** Whether two tag names are one tag: tags match case-insensitively. */
+export function sameTag(a: string, b: string): boolean {
+  return ordinalIgnoreCaseKey(a) === ordinalIgnoreCaseKey(b);
 }
 
-/**
- * The repositories referenced by the given work items, labelled with their name
- * from {@link repositories} (falling back to the id when the repository is not
- * loaded) and sorted for stable display.
- */
-export function collectRepositoryOptions(
-  items: WorkItem[],
-  repositories: Repository[],
-): RepositoryOption[] {
-  const names = new Map(repositories.map((repo) => [repo.id, repo.name]));
-  const ids = new Set<string>();
-  for (const item of items) {
-    if (item.repositoryId) ids.add(item.repositoryId);
-  }
-  return [...ids]
-    .map((id) => ({ id, name: names.get(id) ?? id }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+/** Case-insensitively, then by code unit: the order the server lists the tags in use. */
+export function compareTags(a: string, b: string): number {
+  const ua = ordinalIgnoreCaseKey(a);
+  const ub = ordinalIgnoreCaseKey(b);
+  if (ua !== ub) return ua < ub ? -1 : 1;
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
 }

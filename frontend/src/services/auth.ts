@@ -26,6 +26,9 @@ import {
   LoopNodeEdge,
   PullBranchResult,
   BranchNameCheck,
+  WorkItemListFilter,
+  WorkItemPage,
+  WorkItemPageQuery,
   LoopRunSessionPreview,
   WorktreePreview,
   WorktreePreviewLog,
@@ -59,6 +62,29 @@ function pageQuery(opts?: { skip?: number; take?: number }): string {
   if (opts.skip !== undefined) params.push(`skip=${opts.skip}`);
   if (opts.take !== undefined) params.push(`take=${opts.take}`);
   return params.length ? `?${params.join("&")}` : "";
+}
+
+/** The most a skip/take list endpoint returns for one request. */
+const LIST_PAGE_MAX = 500;
+
+/** Every item of a skip/take list, read page by page past the server's per-request cap. */
+async function readEveryPage<T>(
+  getPage: (opts: { skip: number; take: number }) => Promise<T[]>,
+): Promise<T[]> {
+  const all: T[] = [];
+  for (;;) {
+    const page = await getPage({ skip: all.length, take: LIST_PAGE_MAX });
+    all.push(...page);
+    if (page.length < LIST_PAGE_MAX) return all;
+  }
+}
+
+function listFilterParams(filter: WorkItemListFilter): URLSearchParams {
+  const params = new URLSearchParams();
+  if (filter.search?.trim()) params.set("search", filter.search);
+  if (filter.repositoryId) params.set("repositoryId", filter.repositoryId);
+  for (const tag of filter.tags ?? []) params.append("tags", tag);
+  return params;
 }
 
 const tokenListeners = new Set<(token: string | null) => void>();
@@ -161,8 +187,30 @@ export const authService = {
 };
 
 export const workItemService = {
-  getAll: async (): Promise<WorkItem[]> => {
-    return api.get<WorkItem[]>("/workitems");
+  getAll: async (opts?: { skip?: number; take?: number }): Promise<WorkItem[]> => {
+    return api.get<WorkItem[]>(`/workitems${pageQuery(opts)}`);
+  },
+
+  /** Every work item, newest first, read page by page past the server's per-request cap. */
+  getEvery: async (): Promise<WorkItem[]> => readEveryPage((opts) => workItemService.getAll(opts)),
+
+  /** One taskboard column: a window of the items in a status under the board filter. */
+  getPage: async (query: WorkItemPageQuery): Promise<WorkItemPage> => {
+    const params = listFilterParams(query);
+    params.set("status", query.status);
+    params.set("skip", String(query.skip));
+    params.set("take", String(query.take));
+    return api.get<WorkItemPage>(`/workitems/page?${params}`);
+  },
+
+  /** How many items each status holds under the board filter, keyed by status. */
+  getCounts: async (filter: WorkItemListFilter): Promise<Record<string, number>> => {
+    return api.get<Record<string, number>>(`/workitems/counts?${listFilterParams(filter)}`);
+  },
+
+  /** Every tag carried by any work item. */
+  getTags: async (): Promise<string[]> => {
+    return api.get<string[]>("/workitems/tags");
   },
 
   getById: async (id: string): Promise<WorkItem> => {
@@ -424,6 +472,10 @@ export const loopTemplateService = {
     return api.get<LoopTemplate[]>(`/looptemplates${qs ? "?" + qs : ""}`);
   },
 
+  /** Every live loop template, read page by page past the server's per-request cap. */
+  getEvery: async (): Promise<LoopTemplate[]> =>
+    readEveryPage((opts) => loopTemplateService.getAll(opts)),
+
   getById: async (id: string): Promise<LoopTemplate> => {
     return api.get<LoopTemplate>(`/looptemplates/${id}`);
   },
@@ -547,6 +599,10 @@ export const repositoryService = {
     return api.get<Repository[]>(`/repositories${pageQuery(opts)}`);
   },
 
+  /** Every repository, read page by page past the server's per-request cap. */
+  getEvery: async (): Promise<Repository[]> =>
+    readEveryPage((opts) => repositoryService.getAll(opts)),
+
   getById: async (id: string): Promise<Repository> => {
     return api.get<Repository>(`/repositories/${id}`);
   },
@@ -623,24 +679,13 @@ export const remoteProviderService = {
   },
 };
 
-/** The most providers the API returns for one request. */
-const AI_PROVIDER_PAGE_SIZE = 500;
-
 export const aiProviderService = {
   /**
    * Every provider. Tag holders and the default provider can be anywhere in
    * the list, so callers resolving a tag need all of it, not the first page.
    */
-  getAll: async (): Promise<AiProvider[]> => {
-    const providers: AiProvider[] = [];
-    for (;;) {
-      const page = await api.get<AiProvider[]>(
-        `/aiproviders${pageQuery({ skip: providers.length, take: AI_PROVIDER_PAGE_SIZE })}`,
-      );
-      providers.push(...page);
-      if (page.length < AI_PROVIDER_PAGE_SIZE) return providers;
-    }
-  },
+  getAll: async (): Promise<AiProvider[]> =>
+    readEveryPage((opts) => api.get<AiProvider[]>(`/aiproviders${pageQuery(opts)}`)),
 
   getById: async (id: string): Promise<AiProvider> => {
     return api.get<AiProvider>(`/aiproviders/${id}`);

@@ -1,11 +1,12 @@
 import { describe, expect, test } from "vite-plus/test";
-import { Repository, WorkItem, WorkItemPriority, WorkItemStatus } from "../../types";
+import { WorkItem, WorkItemPriority, WorkItemStatus } from "../../types";
 import {
   EMPTY_TASKBOARD_FILTER,
-  collectRepositoryOptions,
-  collectTags,
-  filterWorkItems,
+  compareTags,
   isFilterActive,
+  matchesTaskboardFilter,
+  sameTag,
+  type TaskboardFilter,
 } from "../taskboardFilter";
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
@@ -31,24 +32,15 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
   };
 }
 
-function makeRepo(overrides: Partial<Repository> = {}): Repository {
-  return {
-    id: "repo-1",
-    name: "Repo One",
-    remoteProviderId: "rp-1",
-    cloneUrl: "https://example.com/repo.git",
-    defaultBranch: "main",
-    worktreesPath: null,
-    defaultIntakeStatus: WorkItemStatus.Backlog,
-    createdAt: "2025-01-01T00:00:00Z",
-    ...overrides,
-  };
+/** The ids of the items the filter keeps. */
+function kept(items: WorkItem[], filter: TaskboardFilter): string[] {
+  return items.filter((item) => matchesTaskboardFilter(item, filter)).map((item) => item.id);
 }
 
-describe("filterWorkItems", () => {
+describe("matchesTaskboardFilter", () => {
   test("returns every item when the filter is empty", () => {
     const items = [makeItem({ id: "a" }), makeItem({ id: "b" })];
-    expect(filterWorkItems(items, EMPTY_TASKBOARD_FILTER)).toHaveLength(2);
+    expect(kept(items, EMPTY_TASKBOARD_FILTER)).toEqual(["a", "b"]);
   });
 
   test("matches search against title, description and id, case-insensitively", () => {
@@ -58,8 +50,13 @@ describe("filterWorkItems", () => {
       makeItem({ id: "login-123", title: "Unrelated" }),
       makeItem({ id: "d", title: "Nothing here" }),
     ];
-    const result = filterWorkItems(items, { ...EMPTY_TASKBOARD_FILTER, search: "login" });
-    expect(result.map((i) => i.id)).toEqual(["a", "b", "login-123"]);
+    const result = kept(items, { ...EMPTY_TASKBOARD_FILTER, search: "login" });
+    expect(result).toEqual(["a", "b", "login-123"]);
+  });
+
+  test("matches search within one field, never across the boundary between fields", () => {
+    const items = [makeItem({ id: "a", title: "Ends in alpha", description: "beta starts here" })];
+    expect(kept(items, { ...EMPTY_TASKBOARD_FILTER, search: "alpha beta" })).toEqual([]);
   });
 
   test("filters by repository", () => {
@@ -67,8 +64,8 @@ describe("filterWorkItems", () => {
       makeItem({ id: "a", repositoryId: "repo-1" }),
       makeItem({ id: "b", repositoryId: "repo-2" }),
     ];
-    const result = filterWorkItems(items, { ...EMPTY_TASKBOARD_FILTER, repositoryId: "repo-2" });
-    expect(result.map((i) => i.id)).toEqual(["b"]);
+    const result = kept(items, { ...EMPTY_TASKBOARD_FILTER, repositoryId: "repo-2" });
+    expect(result).toEqual(["b"]);
   });
 
   test("filters by tags with AND semantics", () => {
@@ -77,11 +74,20 @@ describe("filterWorkItems", () => {
       makeItem({ id: "b", tags: ["frontend"] }),
       makeItem({ id: "c", tags: ["urgent"] }),
     ];
-    const result = filterWorkItems(items, {
+    const result = kept(items, {
       ...EMPTY_TASKBOARD_FILTER,
       tags: ["frontend", "urgent"],
     });
-    expect(result.map((i) => i.id)).toEqual(["a"]);
+    expect(result).toEqual(["a"]);
+  });
+
+  test("matches tags case-insensitively, as the server does", () => {
+    const items = [makeItem({ id: "a", tags: ["Frontend", "URGENT"] })];
+    const result = kept(items, {
+      ...EMPTY_TASKBOARD_FILTER,
+      tags: ["frontend", "urgent"],
+    });
+    expect(result).toEqual(["a"]);
   });
 
   test("combines dimensions with AND", () => {
@@ -90,19 +96,17 @@ describe("filterWorkItems", () => {
       makeItem({ id: "b", title: "Login", repositoryId: "repo-2", tags: ["frontend"] }),
       makeItem({ id: "c", title: "Logout", repositoryId: "repo-1", tags: ["frontend"] }),
     ];
-    const result = filterWorkItems(items, {
+    const result = kept(items, {
       search: "login",
       repositoryId: "repo-1",
       tags: ["frontend"],
     });
-    expect(result.map((i) => i.id)).toEqual(["a"]);
+    expect(result).toEqual(["a"]);
   });
 
   test("ignores leading/trailing whitespace in the search term", () => {
     const items = [makeItem({ id: "a", title: "Login" })];
-    expect(filterWorkItems(items, { ...EMPTY_TASKBOARD_FILTER, search: "  login  " })).toHaveLength(
-      1,
-    );
+    expect(kept(items, { ...EMPTY_TASKBOARD_FILTER, search: "  login  " })).toEqual(["a"]);
   });
 });
 
@@ -119,28 +123,13 @@ describe("isFilterActive", () => {
   });
 });
 
-describe("collectTags", () => {
-  test("returns sorted, de-duplicated tags across items", () => {
-    const items = [makeItem({ tags: ["b", "a"] }), makeItem({ tags: ["a", "c"] })];
-    expect(collectTags(items)).toEqual(["a", "b", "c"]);
-  });
-});
-
-describe("collectRepositoryOptions", () => {
-  test("labels referenced repositories by name and sorts them", () => {
-    const items = [makeItem({ repositoryId: "repo-2" }), makeItem({ repositoryId: "repo-1" })];
-    const repos = [
-      makeRepo({ id: "repo-1", name: "Beta" }),
-      makeRepo({ id: "repo-2", name: "Alpha" }),
-    ];
-    expect(collectRepositoryOptions(items, repos)).toEqual([
-      { id: "repo-2", name: "Alpha" },
-      { id: "repo-1", name: "Beta" },
-    ]);
+describe("tag names", () => {
+  test("are one tag whatever their case", () => {
+    expect(sameTag("Frontend", "FRONTEND")).toBe(true);
+    expect(sameTag("frontend", "backend")).toBe(false);
   });
 
-  test("falls back to the id when the repository is not loaded", () => {
-    const items = [makeItem({ repositoryId: "repo-x" })];
-    expect(collectRepositoryOptions(items, [])).toEqual([{ id: "repo-x", name: "repo-x" }]);
+  test("sort as the server lists them: by upper case, then by code unit", () => {
+    expect(["b", "_x", "a", "B", "A"].sort(compareTags)).toEqual(["A", "a", "B", "b", "_x"]);
   });
 });

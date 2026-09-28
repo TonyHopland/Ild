@@ -77,7 +77,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   const reloadRepositories = useCallback(async () => {
     try {
-      setRepositories(await repositoryService.getAll());
+      setRepositories(await repositoryService.getEvery());
     } catch {
       /* best effort — leave the last-known list in place */
     }
@@ -86,7 +86,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   useEffect(() => {
     void reloadRepositories();
     loopTemplateService
-      .getAll()
+      .getEvery()
       .then(setTemplates)
       .catch(() => {});
     aiProviderService
@@ -111,7 +111,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       .then((d) => setDependencies(Array.isArray(d) ? d : []))
       .catch(() => {});
     workItemService
-      .getAll()
+      .getEvery()
       .then((w) => setAllWorkItems(Array.isArray(w) ? w : []))
       .catch(() => {});
   }, [workItem?.id, refreshRuns]);
