@@ -198,7 +198,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             : new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, commentId, InReplyTo(comment, body), comment.Path, comment.Line, DateTime.UtcNow,
                 PrCommentLedger.Fingerprint(comment.Path, comment.Line, comment.Body));
 
-        var placed = await PlaceAsync(target.Run, Caller.Of(callerRunId, callerChatSessionId), commentId, write);
+        var placed = await PlaceAsync(target.Run, Caller.Of(callerRunId, callerChatSessionId), (comment.Kind, commentId), write);
         if (placed.Refusal is not null)
             return placed.Refusal;
 
@@ -346,7 +346,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         // Written before it, a queue that then refused — full, or moved under us
         // — would leave an event saying the thread was closed when nothing was
         // ever queued to close it.
-        var placed = await PlaceAsync(target.Run, Caller.Of(callerRunId, callerChatSessionId), commentId, closing);
+        var placed = await PlaceAsync(target.Run, Caller.Of(callerRunId, callerChatSessionId), (item.Kind, commentId), closing);
         if (placed.Refusal is not null)
             return placed.Refusal;
 
@@ -638,9 +638,15 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 
     /// <summary>
     /// Make <paramref name="write"/> the caller's pending word on
-    /// <paramref name="itemId"/>: it takes the place — and the id — of whatever
+    /// <paramref name="item"/>: it takes the place — and the id — of whatever
     /// the caller already has queued for that item, or is appended; a null
     /// write takes that earlier one back. With no item it is simply appended.
+    ///
+    /// An item is its kind as well as the id the agent named it by: comment
+    /// ids and review ids are separate counters, so the same string can name a
+    /// review body when one answer is queued and a comment when the next one is
+    /// (see <see cref="Find"/>), and matching on the string alone would let an
+    /// answer to one overwrite the answer to the other.
     /// A resolve of a thread the caller already has waiting to be resolved is
     /// not queued twice.
     ///
@@ -650,19 +656,25 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// appended — the pile of stale answers to one review this exists to end —
     /// and one the PR node claimed meanwhile would be written back.
     /// </summary>
-    private async Task<Placement> PlaceAsync(LoopRun run, Caller caller, string? itemId, PrQueuedWrite? write)
+    private async Task<Placement> PlaceAsync(
+        LoopRun run, Caller caller, (string Kind, string Id)? item, PrQueuedWrite? write)
     {
         var intent = write is null
             ? null
-            : write with { ItemId = itemId, QueuedByRunId = caller.RunId, QueuedByChatSessionId = caller.ChatSessionId };
+            : write with
+            {
+                ItemId = item?.Id, ItemKind = item?.Kind,
+                QueuedByRunId = caller.RunId, QueuedByChatSessionId = caller.ChatSessionId,
+            };
         PrQueuedWrite? previous = null, waiting = null, placed = null;
         var full = false;
         var unchanged = false;
         var written = await MutateQueueAsync(run.Id, queued =>
         {
-            previous = itemId is null
+            previous = item is not { } answered
                 ? null
-                : queued.FirstOrDefault(q => string.Equals(q.ItemId, itemId, StringComparison.Ordinal) && caller.Queued(q));
+                : queued.FirstOrDefault(q => string.Equals(q.ItemId, answered.Id, StringComparison.Ordinal)
+                    && string.Equals(q.ItemKind, answered.Kind, StringComparison.Ordinal) && caller.Queued(q));
             waiting = intent?.Kind == PrQueuedWrite.Resolve
                 ? queued.FirstOrDefault(q => q.Kind == PrQueuedWrite.Resolve && q.Id != previous?.Id
                     && string.Equals(q.TargetId, intent.TargetId, StringComparison.Ordinal) && caller.Queued(q))

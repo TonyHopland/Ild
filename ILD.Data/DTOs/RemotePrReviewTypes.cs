@@ -133,11 +133,15 @@ public static class PrCommentMarker
 /// and on an intent with no single finding behind it.
 ///
 /// <see cref="ItemId"/> is the review item the agent answered or closed, as it
-/// named it — the key that lets answering the same item again replace the
-/// pending answer instead of joining it. <see cref="QueuedByRunId"/> and
-/// <see cref="QueuedByChatSessionId"/> are who queued it, and only that caller
-/// may replace or withdraw it. All three are null on a queue written before
-/// they existed, which is therefore nobody's to change but a human's.
+/// named it, and <see cref="ItemKind"/> the kind of item that id turned out to
+/// name — together the key that lets answering the same item again replace the
+/// pending answer instead of joining it. The id alone is not enough: a review
+/// body is named by its review id and a comment by its comment id, and those
+/// are separate counters that can hand out the same number.
+/// <see cref="QueuedByRunId"/> and <see cref="QueuedByChatSessionId"/> are who
+/// queued it, and only that caller may replace or withdraw it. All of these are
+/// null on a queue written before they existed, which is therefore nobody's to
+/// change but a human's.
 /// </summary>
 public record PrQueuedWrite(
     string Id,
@@ -150,7 +154,8 @@ public record PrQueuedWrite(
     string? SourceHash = null,
     string? ItemId = null,
     Guid? QueuedByRunId = null,
-    Guid? QueuedByChatSessionId = null
+    Guid? QueuedByChatSessionId = null,
+    string? ItemKind = null
 )
 {
     public const string Reply = "reply";
