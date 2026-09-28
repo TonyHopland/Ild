@@ -368,6 +368,139 @@ public class ConnectionTesterTests : IDisposable
         Assert.DoesNotContain(logger.Lines, line => line.Contains(Key));
     }
 
+    // ── Package feed ──────────────────────────────────────────────────────
+
+    private const string FeedPat = "feedPAT-7c2e9a41";
+
+    private static PackageFeed Feed(string feedUrl, string pat = FeedPat) => new()
+    {
+        Id = Guid.NewGuid(),
+        Name = "company",
+        FeedUrl = feedUrl,
+        Pat = pat,
+    };
+
+    [Theory]
+    [InlineData("https://pkgs.dev.azure.com/example-org/_packaging/company",
+        "https://pkgs.dev.azure.com/example-org/_packaging/company/nuget/v3/index.json")]
+    [InlineData("https://pkgs.dev.azure.com/example-org/example-project/_packaging/company",
+        "https://pkgs.dev.azure.com/example-org/example-project/_packaging/company/nuget/v3/index.json")]
+    public async Task Feed_test_asks_the_nuget_service_index_once_with_the_pat_as_basic_auth(string feedUrl, string expectedUri)
+    {
+        var handler = ScriptedHandler.Answer(HttpStatusCode.OK, "{\"version\":\"3.0.0\",\"resources\":[]}");
+
+        var result = await ProviderTester(handler).TestPackageFeedAsync(Feed(feedUrl), CancellationToken.None);
+
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal(expectedUri, request.Uri.ToString());
+        Assert.Equal("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("ild:" + FeedPat)), request.Authorization);
+        Assert.True(result.Ok);
+        Assert.False(string.IsNullOrWhiteSpace(result.Message));
+    }
+
+    public static TheoryData<HttpStatusCode, string> FeedFailures => new()
+    {
+        { HttpStatusCode.Unauthorized, "PAT rejected, probably expired or revoked. Create a new one with Packaging (Read) and paste it here." },
+        { HttpStatusCode.Forbidden, "PAT has no access to this feed. Check its scope and organization." },
+        { HttpStatusCode.NotFound, "Feed not found. Check the URL." },
+        { HttpStatusCode.InternalServerError, "Azure DevOps unreachable." },
+        { HttpStatusCode.BadGateway, "Azure DevOps unreachable." },
+        { HttpStatusCode.ServiceUnavailable, "Azure DevOps unreachable." },
+    };
+
+    [Theory]
+    [MemberData(nameof(FeedFailures))]
+    public async Task Feed_test_explains_each_failing_status(HttpStatusCode status, string message)
+    {
+        var handler = ScriptedHandler.Answer(status);
+
+        var result = await ProviderTester(handler)
+            .TestPackageFeedAsync(Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Equal(message, result.Message);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK)]
+    [InlineData(HttpStatusCode.NoContent)]
+    public async Task Feed_test_reads_any_success_status_as_ok(HttpStatusCode status)
+    {
+        var result = await ProviderTester(ScriptedHandler.Answer(status))
+            .TestPackageFeedAsync(Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
+
+        Assert.True(result.Ok);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task Feed_test_names_a_status_it_has_no_explanation_for(HttpStatusCode status)
+    {
+        var result = await ProviderTester(ScriptedHandler.Answer(status))
+            .TestPackageFeedAsync(Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Contains(((int)status).ToString(), result.Message);
+    }
+
+    [Fact]
+    public async Task Feed_that_cannot_be_reached_is_unreachable()
+    {
+        var handler = new ScriptedHandler((_, _) => throw new HttpRequestException("Name or service not known (pkgs.dev.azure.com:443)"));
+
+        var result = await ProviderTester(handler)
+            .TestPackageFeedAsync(Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Equal("Azure DevOps unreachable.", result.Message);
+    }
+
+    [Fact]
+    public async Task Feed_that_never_answers_is_unreachable_after_the_bounded_timeout()
+    {
+        var handler = new ScriptedHandler(async (_, ct) =>
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new InvalidOperationException("unreachable");
+        });
+        var tester = ProviderTester(handler);
+        tester.ProviderTimeout = TimeSpan.FromMilliseconds(1);
+
+        var result = await tester.TestPackageFeedAsync(
+            Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Equal("Azure DevOps unreachable.", result.Message);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK)]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    public async Task Feed_pat_never_appears_in_the_result_or_the_log(HttpStatusCode status)
+    {
+        // A server that echoes back everything it was sent, in every form the
+        // credential travelled in.
+        var logger = new RecordingLogger();
+        var handler = new ScriptedHandler((request, _) => Task.FromResult(new HttpResponseMessage(status)
+        {
+            Content = new StringContent(
+                $"{{\"message\":\"bad credential {request.Headers.Authorization} ({FeedPat})\"}}",
+                Encoding.UTF8, "application/json"),
+        }));
+
+        var result = await ProviderTester(handler, logger)
+            .TestPackageFeedAsync(Feed("https://pkgs.dev.azure.com/example-org/_packaging/company"), CancellationToken.None);
+
+        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes("ild:" + FeedPat));
+        Assert.DoesNotContain(FeedPat, Text(result));
+        Assert.DoesNotContain(basic, Text(result));
+        Assert.DoesNotContain(logger.Lines, line => line.Contains(FeedPat) || line.Contains(basic));
+    }
+
     // ── Repository: against real git ──────────────────────────────────────
 
     /// <summary>A local repository whose only branch (and HEAD) is <paramref name="branch"/>.</summary>
