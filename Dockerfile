@@ -204,6 +204,39 @@ RUN if [ "$WITH_CHROME" = "1" ]; then \
   esac; \
 fi
 
+# The Azure Artifacts credential provider, for repositories that restore from a
+# private NuGet feed: NuGet finds it under ~/.nuget/plugins and it answers with
+# the credentials a run hands it in VSS_NUGET_EXTERNAL_FEED_ENDPOINTS. It holds
+# no secret. Installed for both users, as Microsoft's installcredprovider.sh
+# does, each ~/.nuget owned by its user so restores can put packages beside it.
+# The self-contained build needs no separate .NET runtime. Like Chrome, an
+# architecture without a build is skipped with a message; a failed download
+# fails the build.
+ARG WITH_DOTNET_SDK
+ARG ARTIFACTS_CREDPROVIDER_VERSION=2.0.4
+RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
+  CREDPROVIDER_ARCH="$(dpkg --print-architecture)"; \
+  case "$CREDPROVIDER_ARCH" in \
+    amd64) CREDPROVIDER_RID=linux-x64 ;; \
+    arm64) CREDPROVIDER_RID=linux-arm64 ;; \
+    *) CREDPROVIDER_RID= ;; \
+  esac; \
+  if [ -z "$CREDPROVIDER_RID" ]; then \
+    echo "Skipping the Azure Artifacts credential provider: no build for $CREDPROVIDER_ARCH" >&2; \
+  else \
+    apt-get update && \
+    apt-get install -y --no-install-recommends wget ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    wget -q -O /tmp/credprovider.tar.gz "https://github.com/microsoft/artifacts-credprovider/releases/download/v${ARTIFACTS_CREDPROVIDER_VERSION}/Microsoft.${CREDPROVIDER_RID}.NuGet.CredentialProvider.tar.gz" && \
+    mkdir -p /home/agent/.nuget /home/ild/.nuget && \
+    tar -xzf /tmp/credprovider.tar.gz -C /home/agent/.nuget plugins && \
+    tar -xzf /tmp/credprovider.tar.gz -C /home/ild/.nuget plugins && \
+    chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.nuget && \
+    chown -R ${APP_UID}:${APP_GID} /home/ild/.nuget && \
+    rm -f /tmp/credprovider.tar.gz; \
+  fi; \
+fi
+
 COPY --from=build /certs /tmp/extra-certs
 RUN if [ "$WITH_CERTS" = "1" ]; then \
       copied=0; \
