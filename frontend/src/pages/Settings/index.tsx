@@ -2,6 +2,7 @@ import { Link, useParams } from "react-router";
 import IldSettings from "./sections/IldSettings";
 import UserSettings from "./sections/UserSettings";
 import NetworkSettings from "./sections/NetworkSettings";
+import PackageFeedsSettings from "./sections/PackageFeedsSettings";
 import LoggingSettings from "./sections/LoggingSettings";
 import WorkItemServerSettings from "./sections/WorkItemServerSettings";
 import "./Settings.css";
@@ -42,6 +43,12 @@ const SECTIONS = [
     label: "Network",
     icon: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 0c2.5-2.5 3.5-5.5 3.5-9S14.5 5.5 12 3m0 18c-2.5-2.5-3.5-5.5-3.5-9S9.5 5.5 12 3M3.5 9h17m-17 6h17",
     Component: NetworkSettings,
+  },
+  {
+    id: "package-feeds",
+    label: "Package feeds",
+    icon: "M21 8 12 3 3 8v8l9 5 9-5V8Zm-18 0 9 5 9-5M12 13v8",
+    Component: PackageFeedsSettings,
   },
   {
     id: "logging",

@@ -1,11 +1,19 @@
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import Repositories from "./index";
+import * as services from "../../services/auth";
+
+// The feed list is its own request, made on mount; stubbing it keeps the queued
+// fetch responses below in step with the requests they answer.
+beforeEach(() => {
+  vi.spyOn(services.packageFeedService, "list").mockResolvedValue([]);
+});
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 function mockFetch(json: unknown, status = 200) {

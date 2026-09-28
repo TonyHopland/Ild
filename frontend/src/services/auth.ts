@@ -10,6 +10,8 @@ import {
   LoopRun,
   TurnVariableChange,
   Repository,
+  RepositoryInput,
+  PackageFeed,
   RemoteProvider,
   RemoteProviderTypeOption,
   ConnectionTestResult,
@@ -607,11 +609,11 @@ export const repositoryService = {
     return api.get<Repository>(`/repositories/${id}`);
   },
 
-  create: async (data: Partial<Repository>): Promise<Repository> => {
+  create: async (data: RepositoryInput): Promise<Repository> => {
     return api.post<Repository>("/repositories", data);
   },
 
-  update: async (id: string, data: Partial<Repository>): Promise<Repository> => {
+  update: async (id: string, data: RepositoryInput): Promise<Repository> => {
     return api.put<Repository>(`/repositories/${id}`, data);
   },
 
@@ -646,6 +648,29 @@ export const repositoryService = {
       "/repositories/inspect-remote",
       { cloneUrl, remoteProviderId },
     );
+  },
+};
+
+export const packageFeedService = {
+  list: async (): Promise<PackageFeed[]> => {
+    return api.get<PackageFeed[]>("/package-feeds");
+  },
+
+  create: async (data: { name: string; feedUrl: string; pat: string }): Promise<PackageFeed> => {
+    return api.post<PackageFeed>("/package-feeds", data);
+  },
+
+  /** An empty `pat` keeps the stored one; the name cannot change. */
+  update: async (id: string, data: { feedUrl: string; pat: string }): Promise<PackageFeed> => {
+    return api.put<PackageFeed>(`/package-feeds/${id}`, data);
+  },
+
+  remove: async (id: string): Promise<void> => {
+    return api.delete<void>(`/package-feeds/${id}`);
+  },
+
+  test: async (id: string): Promise<ConnectionTestResult> => {
+    return api.post<ConnectionTestResult>(`/package-feeds/${id}/test`, {});
   },
 };
 

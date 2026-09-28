@@ -1,6 +1,12 @@
 import { useState, useEffect } from "react";
-import { Repository, RemoteProvider, WorkItemStatus } from "../../types";
-import { repositoryService, remoteProviderService } from "../../services/auth";
+import {
+  PackageFeed,
+  Repository,
+  RepositoryInput,
+  RemoteProvider,
+  WorkItemStatus,
+} from "../../types";
+import { packageFeedService, repositoryService, remoteProviderService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import ConnectionTest from "../../components/ConnectionTest";
 
@@ -20,6 +26,9 @@ export default function Repositories() {
   );
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [isInspecting, setIsInspecting] = useState(false);
+  const [packageFeeds, setPackageFeeds] = useState<PackageFeed[]>([]);
+  const [packageFeedsError, setPackageFeedsError] = useState<string | null>(null);
+  const [selectedFeeds, setSelectedFeeds] = useState<string[]>([]);
   // The .env is masked out of the repository list, so the plaintext is fetched only
   // once an edit is open — never behind the page load — and only for the repository
   // being edited: a response for a previously-edited one is dropped.
@@ -27,6 +36,13 @@ export default function Repositories() {
 
   useEffect(() => {
     void loadData();
+  }, []);
+
+  useEffect(() => {
+    packageFeedService
+      .list()
+      .then(setPackageFeeds)
+      .catch(() => setPackageFeedsError("Could not load the package feeds."));
   }, []);
 
   const loadData = async () => {
@@ -53,6 +69,7 @@ export default function Repositories() {
     setDefaultBranch(repo.defaultBranch || "main");
     setWorktreesPath(repo.worktreesPath || "");
     setDefaultIntakeStatus(repo.defaultIntakeStatus);
+    setSelectedFeeds(repo.packageFeeds?.map((f) => f.name) ?? []);
     // Every form field starts from this repository, the .env included: a session
     // that was abandoned rather than saved must not carry into the new one.
     previewEnv.reset();
@@ -67,6 +84,7 @@ export default function Repositories() {
     setDefaultBranch("main");
     setWorktreesPath("");
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
+    setSelectedFeeds([]);
     previewEnv.reset();
   };
 
@@ -91,13 +109,14 @@ export default function Repositories() {
   };
 
   const handleSave = async () => {
-    const data: Partial<Repository> = {
+    const data: RepositoryInput = {
       name,
       cloneUrl,
       remoteProviderId,
       defaultBranch,
       worktreesPath: worktreesPath || null,
       defaultIntakeStatus,
+      packageFeeds: selectedFeeds,
       // The .env rides along only when the user changed the prefilled text; emptying
       // it removes the stored value instead, which this write cannot express and the
       // commit below does.
@@ -133,6 +152,23 @@ export default function Repositories() {
     const provider = providers.find((p) => p.id === providerId);
     return provider?.name || providerId;
   };
+
+  // Feed names are matched ignoring case, as the server does.
+  const sameFeed = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+  // Every feed there is, plus any the repository selected that is not among them:
+  // a feed deleted since stays listed (and checked) until the user drops it.
+  const feedOptions = [
+    ...packageFeeds.map((f) => ({ name: f.name, missing: false })),
+    ...(editingRepo?.packageFeeds ?? []).filter(
+      (s) => !packageFeeds.some((f) => sameFeed(f.name, s.name)),
+    ),
+  ];
+
+  const toggleFeed = (name: string, checked: boolean) =>
+    setSelectedFeeds((current) =>
+      checked ? [...current, name] : current.filter((s) => !sameFeed(s, name)),
+    );
 
   if (isLoading) {
     return (
@@ -312,6 +348,36 @@ export default function Repositories() {
                   steps and services on start — never written to a file in the worktree, so it can't
                   be committed. These override the per-service ild.config.json env, so a name left
                   here wins over the committed config. Clearing the field removes the stored .env.
+                </span>
+              </div>
+              <div className="form-group">
+                <span className="repo-group-label" id="repoPackageFeeds">
+                  Package feeds
+                </span>
+                <div className="repo-feed-list" role="group" aria-labelledby="repoPackageFeeds">
+                  {feedOptions.map((option) => (
+                    <label key={option.name} className="repo-feed-option">
+                      <input
+                        type="checkbox"
+                        checked={selectedFeeds.some((s) => sameFeed(s, option.name))}
+                        onChange={(e) => toggleFeed(option.name, e.target.checked)}
+                      />
+                      {option.missing ? `${option.name} (missing)` : option.name}
+                    </label>
+                  ))}
+                </div>
+                {packageFeedsError && (
+                  <span className="repo-hint repo-hint-error" role="alert">
+                    {packageFeedsError}
+                  </span>
+                )}
+                <span className="repo-hint">
+                  {feedOptions.length === 0 && !packageFeedsError
+                    ? "No package feeds yet — add them under Settings → Package feeds. "
+                    : ""}
+                  The selected feeds&apos; credentials reach every process of this repository&apos;s
+                  runs and previews; its own .npmrc and nuget.config still decide where packages
+                  come from.
                 </span>
               </div>
               <div className="form-group">
@@ -520,9 +586,24 @@ export default function Repositories() {
           gap: 0.25rem;
         }
 
-        .modal-body label {
+        .modal-body label,
+        .repo-group-label {
           font-size: 0.75rem;
           color: #a0a0b0;
+        }
+
+        .repo-feed-list {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.25rem 1rem;
+        }
+
+        .modal-body .repo-feed-option {
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          font-size: 0.85rem;
+          color: #e0e0e0;
         }
 
         .repo-hint {
@@ -542,6 +623,10 @@ export default function Repositories() {
           border-radius: 0.375rem;
           color: #e0e0e0;
           font-size: 0.875rem;
+        }
+
+        .modal-body .repo-feed-option input {
+          padding: 0;
         }
 
         .modal-footer {

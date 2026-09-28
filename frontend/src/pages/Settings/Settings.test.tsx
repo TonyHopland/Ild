@@ -46,6 +46,7 @@ describe("Settings sections", () => {
       "/settings/ild",
       "/settings/user",
       "/settings/network",
+      "/settings/package-feeds",
       "/settings/logging",
       "/settings/work-item-server",
     ]);
