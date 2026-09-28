@@ -32,9 +32,12 @@ public interface IWorkItemEditProposalService
     /// <summary>
     /// Proposals across items, newest first. <paramref name="undeliveredOnly"/>
     /// keeps the decided ones whose decision the proposing chat has not been told.
+    /// <paramref name="createdByLoopRunIds"/> keeps those made by any of these runs:
+    /// null does not filter, and an empty set matches nothing.
     /// </summary>
     Task<IReadOnlyList<WorkItemEditProposalDto>> ListAsync(
-        WorkItemEditProposalStatus? status, Guid? createdByChatSessionId, bool undeliveredOnly, CancellationToken ct = default);
+        WorkItemEditProposalStatus? status, Guid? createdByChatSessionId, bool undeliveredOnly,
+        IReadOnlyCollection<Guid>? createdByLoopRunIds, CancellationToken ct = default);
 
     /// <summary>
     /// Apply a pending proposal if, and only if, the item's editable fields still
@@ -169,11 +172,14 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
     }
 
     public async Task<IReadOnlyList<WorkItemEditProposalDto>> ListAsync(
-        WorkItemEditProposalStatus? status, Guid? createdByChatSessionId, bool undeliveredOnly, CancellationToken ct = default)
+        WorkItemEditProposalStatus? status, Guid? createdByChatSessionId, bool undeliveredOnly,
+        IReadOnlyCollection<Guid>? createdByLoopRunIds, CancellationToken ct = default)
     {
         IQueryable<WorkItemEditProposal> q = _db.WorkItemEditProposals.AsNoTracking();
         if (status is { } s) q = q.Where(p => p.Status == s);
         if (createdByChatSessionId is { } chat) q = q.Where(p => p.CreatedByChatSessionId == chat);
+        if (createdByLoopRunIds is not null)
+            q = q.Where(p => p.CreatedByLoopRunId != null && createdByLoopRunIds.Contains(p.CreatedByLoopRunId.Value));
         if (undeliveredOnly)
             q = q.Where(p => p.Status != WorkItemEditProposalStatus.Pending && p.DecisionDeliveredAt == null);
 

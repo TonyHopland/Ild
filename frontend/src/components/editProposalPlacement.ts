@@ -78,9 +78,9 @@ export interface ActionPlacement {
 }
 
 /**
- * Where a work item's loop-made cards go in its Action thread. A card follows
- * the last turn its step wrote. A chat's cards belong to that chat and are
- * left out.
+ * Where the cards a work item's loop runs asked for, on whichever item, go in
+ * its Action thread. A card follows the last turn its step wrote. A chat's
+ * cards belong to that chat and are left out.
  */
 export function placeActionProposals(
   messages: ConversationMessage[],

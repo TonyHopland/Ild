@@ -724,6 +724,12 @@ public class WorkItemsController : ControllerBase
             return proposals == null ? NotFound() : (IActionResult)Ok(proposals);
         });
 
+    /// <summary>What the item's loop runs proposed, on whichever item: the cards its Action tab decides.</summary>
+    [HttpGet("{id}/requested-edit-proposals")]
+    public Task<IActionResult> ListRequestedEditProposals(string id, CancellationToken cancellationToken)
+        => ForwardToWorkItemServerAsync(async () =>
+            Ok(await _workItemManager.ListRequestedEditProposalsAsync(id, cancellationToken)));
+
     [HttpGet("edit-proposals")]
     public Task<IActionResult> QueryEditProposals(
         [FromQuery] string? status, [FromQuery] string? chatSessionId, CancellationToken cancellationToken)

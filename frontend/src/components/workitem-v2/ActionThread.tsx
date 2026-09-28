@@ -193,7 +193,7 @@ export default function ActionThread({
 }) {
   const messages = parseConversation(workItem);
   const turnVariables = useTurnVariables(workItem.id, messages.length);
-  const { proposals, refresh } = useEditProposals({ workItemId: workItem.id });
+  const { proposals, refresh } = useEditProposals({ requestedByWorkItemId: workItem.id });
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const savedScrollTop = useRef(0);

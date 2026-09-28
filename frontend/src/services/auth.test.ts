@@ -188,6 +188,13 @@ describe("workItemService edit proposal URL contract", () => {
     expect(init?.method).toBe("GET");
   });
 
+  test("listRequestedEditProposals calls GET /api/v1/workitems/:id/requested-edit-proposals", async () => {
+    await workItemService.listRequestedEditProposals("wi-1");
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/workitems/wi-1/requested-edit-proposals");
+    expect(init?.method).toBe("GET");
+  });
+
   test("listEditProposalsFor filters by status and chat session in the query", async () => {
     await workItemService.listEditProposalsFor({ status: "Pending", chatSessionId: "chat-1" });
     const [url, init] = fetchSpy.mock.calls[0];

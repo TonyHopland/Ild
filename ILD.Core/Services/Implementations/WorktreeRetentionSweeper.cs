@@ -113,6 +113,16 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
                 continue;
             }
 
+            try
+            {
+                await workItems.WithdrawPendingProposalsOfRunAsync(run.Id, ct);
+            }
+            catch (HttpRequestException ex)
+            {
+                _log.LogWarning(ex, "Run {RunId}'s pending edit proposals could not be withdrawn; keeping run row for retry next sweep", run.Id);
+                continue;
+            }
+
             if (await runStore.DeleteAsync(run.Id))
                 reclaimed++;
         }

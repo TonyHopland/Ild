@@ -4,26 +4,40 @@ import { workItemService } from "../services/auth";
 import type { WorkItemEditProposal } from "../types";
 import type { TypedSignalRMessage } from "../types/signalr";
 
-export type EditProposalsTarget = { workItemId: string } | { chatSessionId: string };
+export type EditProposalsTarget =
+  | { workItemId: string }
+  | { requestedByWorkItemId: string }
+  | { chatSessionId: string };
 
 interface ProposalsView {
   targetKey: string;
   proposals: WorkItemEditProposal[];
 }
 
+function modeOf(target: EditProposalsTarget) {
+  if ("workItemId" in target) return ["item", target.workItemId] as const;
+  if ("requestedByWorkItemId" in target)
+    return ["requester", target.requestedByWorkItemId] as const;
+  return ["chat", target.chatSessionId] as const;
+}
+
+function read(mode: "item" | "requester" | "chat", id: string) {
+  if (mode === "item") return workItemService.listEditProposals(id);
+  if (mode === "requester") return workItemService.listRequestedEditProposals(id);
+  return workItemService.listEditProposalsFor({ chatSessionId: id });
+}
+
 /**
- * The edit proposals for one work item, or those made by one chat, kept current
- * by snapshot reads: on every (re)connect once the hub group is joined, on a hint
- * for this target, and on {@link refresh}.
+ * The edit proposals for one work item, those its loop runs requested on any
+ * item, or those made by one chat, kept current by snapshot reads: on every
+ * (re)connect once the hub group is joined, on a hint for this target, and on
+ * {@link refresh}. A requesting item is hinted as a work item.
  */
 export function useEditProposals(target: EditProposalsTarget) {
-  const [mode, id] =
-    "workItemId" in target
-      ? (["item", target.workItemId] as const)
-      : (["chat", target.chatSessionId] as const);
+  const [mode, id] = modeOf(target);
   const targetKey = `${mode}:${id}`;
   const { connectionState, on, off, invoke } = useSignalR(
-    mode === "item" ? "/hubs/work-item" : "/hubs/chat",
+    mode === "chat" ? "/hubs/chat" : "/hubs/work-item",
   );
 
   const [view, setView] = useState<ProposalsView | null>(null);
@@ -43,10 +57,7 @@ export function useEditProposals(target: EditProposalsTarget) {
     const generation = ++generationRef.current;
     void (async () => {
       try {
-        const proposals =
-          mode === "item"
-            ? await workItemService.listEditProposals(id)
-            : await workItemService.listEditProposalsFor({ chatSessionId: id });
+        const proposals = await read(mode, id);
         if (generation !== generationRef.current || currentTargetRef.current !== targetKey) return;
         setView({ targetKey, proposals });
       } catch (err) {
@@ -77,7 +88,7 @@ export function useEditProposals(target: EditProposalsTarget) {
   }, [connectionState, mode, id, invoke, refresh]);
 
   useEffect(() => {
-    if (mode === "item") {
+    if (mode !== "chat") {
       const onChanged = (msg: TypedSignalRMessage<"WorkItemEditProposalsChanged">) => {
         if (msg.payload.workItemId === id) refresh();
       };

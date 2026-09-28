@@ -339,10 +339,12 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
 
     public async Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(WorkItemServerOptions opts, RemoteEditProposalQuery query, CancellationToken ct = default)
     {
+        if (query.CreatedByLoopRunIds is { Count: 0 }) return [];
         var qs = new List<string>();
         if (query.Status is { } status) qs.Add($"status={(int)status}");
         if (query.CreatedByChatSessionId is { } chat) qs.Add($"createdByChatSessionId={chat}");
         if (query.UndeliveredOnly) qs.Add("undelivered=true");
+        foreach (var run in query.CreatedByLoopRunIds ?? []) qs.Add($"createdByLoopRunId={run}");
         var suffix = qs.Count == 0 ? string.Empty : "?" + string.Join('&', qs);
 
         var msg = Build(opts, HttpMethod.Get, $"/edit-proposals{suffix}");

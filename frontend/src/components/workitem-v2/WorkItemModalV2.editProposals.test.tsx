@@ -127,6 +127,8 @@ function mockServices(run: LoopRun | null = null) {
     entries: [],
     nextCursor: 0,
   } as unknown as Awaited<ReturnType<typeof authServices.loopRunService.getEvents>>);
+  vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
+  vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
   vi.spyOn(authServices.settingsService, "getAttachmentLimits").mockResolvedValue({
     maxBytesPerFile: 25 * MB,
     maxFilesPerRequest: 10,
@@ -182,7 +184,7 @@ function inAction(labels: string[]): [string, Element][] {
 describe("edit proposals in the detail view", () => {
   test("the Overview shows no card, and the Action tab shows the loop's cards but not a chat's", async () => {
     mockServices();
-    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       makeProposal("Loop title", null),
       makeProposal("Chat title", null, {
         createdByLoopRunId: null,
@@ -203,7 +205,7 @@ describe("edit proposals in the detail view", () => {
 
   test("a card follows its step's last turn, sits under the live bubble while its step has none, and goes last without a step", async () => {
     mockServices(makeRun());
-    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       makeProposal("End second", null, { createdAt: "2026-09-26T09:30:00Z" }),
       makeProposal("Live card", "exec-3", { createdAt: "2026-09-26T10:40:00Z" }),
       makeProposal("Step two card", "exec-2", { createdAt: "2026-09-26T10:30:00Z" }),
@@ -248,7 +250,7 @@ describe("edit proposals in the detail view", () => {
 
   test("while the item waits on a human, a card whose step wrote no turn sits above the feedback card and one without a step below it", async () => {
     mockServices(makeRun({ status: LoopRunStatus.WaitingHuman }));
-    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       makeProposal("Loose card", null),
       makeProposal("Halted step card", "exec-9"),
       makeProposal("Step card", "exec-1"),
@@ -273,7 +275,7 @@ describe("edit proposals in the detail view", () => {
     const first = makeProposal("Agent's sharper title", "exec-1");
     const second = makeProposal("Agent's later title", "exec-2");
     const list = vi
-      .spyOn(authServices.workItemService, "listEditProposals")
+      .spyOn(authServices.workItemService, "listRequestedEditProposals")
       .mockResolvedValueOnce([second, first])
       .mockResolvedValue([
         second,
@@ -322,7 +324,7 @@ describe("edit proposals in the detail view", () => {
   test("an approve refused because the item changed shows the card stale, in place, and leaves the item as it is", async () => {
     mockServices();
     const card = makeProposal("Agent's sharper title", "exec-1");
-    vi.spyOn(authServices.workItemService, "listEditProposals")
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals")
       .mockResolvedValueOnce([card])
       .mockResolvedValue([{ ...card, status: "Stale", decidedAt: "2026-09-26T11:00:00Z" }]);
     vi.spyOn(authServices.workItemService, "approveEditProposal").mockRejectedValue({
@@ -357,7 +359,7 @@ describe("edit proposals in the detail view", () => {
     const served: Record<string, WorkItemEditProposal[]> = { "wi-1": [] };
     let answerSecondItem: (cards: WorkItemEditProposal[]) => void = () => {};
     const list = vi
-      .spyOn(authServices.workItemService, "listEditProposals")
+      .spyOn(authServices.workItemService, "listRequestedEditProposals")
       .mockImplementation((id: string) =>
         id === "wi-2"
           ? new Promise((resolve) => {
@@ -391,7 +393,7 @@ describe("edit proposals in the detail view", () => {
 
   test("a card keeps a reason being typed when its step's turn arrives and it moves under it", async () => {
     mockServices(makeRun());
-    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       makeProposal("Live card", "exec-2"),
     ]);
     const running = (conversation: ConversationMessage[]) =>
@@ -419,5 +421,183 @@ describe("edit proposals in the detail view", () => {
     expect(
       (within(action()).getByLabelText("Rejection reason (optional)") as HTMLTextAreaElement).value,
     ).toBe("Too long");
+  });
+
+  test("a card another item's run proposed for this item is not in this item's Action tab but in the requester's, and approving it there decides it on this item", async () => {
+    mockServices();
+    const forB = makeProposal("A's title for B", "exec-a", {
+      id: "p-ab",
+      workItemId: "wi-2",
+      createdByLoopRunId: "run-a",
+      requestedByWorkItemId: "wi-1",
+    });
+    let decided = false;
+    const current = () =>
+      decided ? { ...forB, status: "Approved" as const, decidedAt: "2026-09-26T11:00:00Z" } : forB;
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockImplementation((id: string) =>
+      Promise.resolve(id === "wi-2" ? [current()] : []),
+    );
+    const requested = vi
+      .spyOn(authServices.workItemService, "listRequestedEditProposals")
+      .mockImplementation((id: string) => Promise.resolve(id === "wi-1" ? [current()] : []));
+    const approve = vi
+      .spyOn(authServices.workItemService, "approveEditProposal")
+      .mockImplementation(async () => {
+        decided = true;
+        return {
+          proposal: current(),
+          workItem: makeWorkItem({
+            id: "wi-2",
+            title: "A's title for B",
+            pendingEditProposalCount: 0,
+          }),
+        };
+      });
+
+    const { rerender } = await renderDialog(
+      makeWorkItem({ id: "wi-2", title: "Item B", status: WorkItemStatus.Done }),
+    );
+    await waitFor(() =>
+      expect(authServices.workItemService.listEditProposals).toHaveBeenCalledWith("wi-2"),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+    expect(action().textContent).not.toContain("A's title for B");
+    expect(within(action()).queryByRole("button", { name: "Approve" })).toBeNull();
+
+    rerender(dialog(makeWorkItem({ id: "wi-1", title: "Item A", status: WorkItemStatus.Done })));
+    await waitFor(() => expect(action().textContent).toContain("A's title for B"));
+    fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+    const readsBefore = requested.mock.calls.filter(([id]) => id === "wi-1").length;
+
+    fireEvent.click(within(cardOf("A's title for B")).getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => expect(cardOf("A's title for B").textContent).toContain("Approved"));
+    expect(approve).toHaveBeenCalledWith("wi-2", "p-ab");
+    expect(requested.mock.calls.filter(([id]) => id === "wi-1").length).toBeGreaterThan(
+      readsBefore,
+    );
+    expect(within(action()).queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+});
+
+describe("pending proposals on the Overview", () => {
+  const heading = () => within(overview()).queryByRole("heading", { name: /propos/i });
+  const rows = () => within(overview()).queryAllByRole("listitem");
+  const rowWith = (field: string) => {
+    const matching = rows().filter((r) => r.textContent?.includes(field));
+    expect(matching).toHaveLength(1);
+    return matching[0];
+  };
+
+  const fromItemA = makeProposal("From A", null, {
+    id: "p-a",
+    workItemId: "wi-2",
+    createdByLoopRunId: "run-a",
+    requestedByWorkItemId: "wi-1",
+    proposed: { title: "From A", tags: ["x"] },
+  });
+  const fromChat = makeProposal("From chat", null, {
+    id: "p-c",
+    workItemId: "wi-2",
+    createdByLoopRunId: null,
+    createdByChatSessionId: "chat-1",
+    chatReplySequence: 1,
+    requestedByWorkItemId: null,
+    proposed: { description: "From chat" },
+  });
+  const fromGoneRun = makeProposal("Orphan", null, {
+    id: "p-o",
+    workItemId: "wi-2",
+    createdByLoopRunId: "run-gone",
+    requestedByWorkItemId: null,
+    proposed: { branchNameOverride: "feature/orphan" },
+  });
+  const decidedFromItemC = makeProposal("Decided", null, {
+    id: "p-d",
+    workItemId: "wi-2",
+    status: "Approved",
+    decidedAt: "2026-09-26T11:00:00Z",
+    createdByLoopRunId: "run-c",
+    requestedByWorkItemId: "wi-3",
+    proposed: { baseBranchOverride: "main" },
+  });
+
+  test("lists each pending proposal with its source, links a loop's to the requesting item, and offers no decision", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
+      fromItemA,
+      fromChat,
+      fromGoneRun,
+      decidedFromItemC,
+    ]);
+
+    await renderDialog(makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }));
+
+    await waitFor(() => expect(heading()).not.toBeNull());
+    expect(rows()).toHaveLength(3);
+
+    const loopRow = rowWith("Title");
+    expect(loopRow.textContent).toContain("Tags");
+    expect(within(loopRow).getByRole("link", { name: "#wi-1" }).getAttribute("href")).toBe(
+      "/taskboard/wi-1",
+    );
+
+    const chatRow = rowWith("Description");
+    expect(chatRow.textContent).toContain("Chat");
+    expect(within(chatRow).queryByRole("link")).toBeNull();
+
+    const orphanRow = rowWith("Branch");
+    expect(orphanRow.textContent).not.toContain("Chat");
+    expect(within(orphanRow).queryByRole("link")).toBeNull();
+
+    expect(rows().some((r) => r.textContent?.includes("Base branch"))).toBe(false);
+    expect(within(overview()).queryByRole("link", { name: "#wi-3" })).toBeNull();
+    expect(within(overview()).queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(within(overview()).queryByRole("button", { name: "Reject" })).toBeNull();
+  });
+
+  test("shows only while the item has a pending proposal, follows hints, and never shows the previous item's rows", async () => {
+    const { hint } = mockServices();
+    const served: Record<string, WorkItemEditProposal[]> = { "wi-2": [decidedFromItemC] };
+    let answerThirdItem: (cards: WorkItemEditProposal[]) => void = () => {};
+    const list = vi
+      .spyOn(authServices.workItemService, "listEditProposals")
+      .mockImplementation((id: string) =>
+        id === "wi-3"
+          ? new Promise((resolve) => {
+              answerThirdItem = resolve;
+            })
+          : Promise.resolve(served[id] ?? []),
+      );
+
+    const { rerender } = await renderDialog(
+      makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }),
+    );
+    await waitFor(() => expect(list).toHaveBeenCalledWith("wi-2"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(heading()).toBeNull();
+    expect(rows()).toHaveLength(0);
+
+    served["wi-2"] = [fromItemA, decidedFromItemC];
+    hint("wi-2");
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(within(overview()).getByRole("link", { name: "#wi-1" })).toBeTruthy();
+
+    rerender(dialog(makeWorkItem({ id: "wi-3", status: WorkItemStatus.Done })));
+    await waitFor(() => expect(list).toHaveBeenCalledWith("wi-3"));
+    expect(heading()).toBeNull();
+    expect(rows()).toHaveLength(0);
+
+    await act(async () => {
+      answerThirdItem([{ ...fromChat, id: "p-c3", workItemId: "wi-3" }]);
+    });
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(rowWith("Description").textContent).toContain("Chat");
+    expect(within(overview()).queryByRole("link", { name: "#wi-1" })).toBeNull();
   });
 });

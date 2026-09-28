@@ -1377,15 +1377,20 @@ public class WorkItemManager : IWorkItemManager
         // Delete all LoopRuns for this work item. Reclaim each run's local
         // git state first — once the rows are gone the retention sweeper can
         // never find the worktrees and branches again. A run whose reclaim
-        // fails keeps its row so a later sweep retries (the work item no
-        // longer exists on the server, so the sweeper's current-run guard
-        // won't protect it).
+        // fails, or whose pending edit proposals cannot be withdrawn, keeps
+        // its row so a later sweep retries (the work item no longer exists on
+        // the server, so the sweeper's current-run guard won't protect it).
         var runs = await _loopRunStore.GetAllByWorkItemAsync(workItemId);
         foreach (var run in runs)
         {
             await StopRunIfActiveAsync(run, "Work item deleted");
             if (!await _runReclaimer.ReclaimLocalStateAsync(run))
                 continue;
+            try
+            {
+                await WithdrawPendingProposalsOfRunAsync(run.Id);
+            }
+            catch (HttpRequestException) { continue; }
             await _loopRunStore.DeleteAsync(run.Id);
         }
         return true;
@@ -1411,19 +1416,44 @@ public class WorkItemManager : IWorkItemManager
     // Edit proposals
     // ──────────────────────────────────────────────────────────────────
 
+    /// <summary>Run ids per WorkItem server query, which keeps its URL bounded.</summary>
+    private const int RunIdsPerProposalQuery = 50;
+
+    private const string WithdrawnProposalReason = "The loop run that proposed this edit was deleted.";
+
     public async Task<EditProposalCreateResult> ProposeEditAsync(string workItemId, RemoteCreateEditProposalRequest request, CancellationToken ct = default)
     {
         var result = await _server.CreateEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, request, ct);
-        if (result.Outcome == EditProposalCreateOutcome.Created)
+        if (result is { Outcome: EditProposalCreateOutcome.Created, Proposal: { } created })
+        {
             await _notifier.WorkItemEditProposalsChangedAsync(workItemId);
+            await HintRequestersAsync(workItemId, await WithRequestersAsync([created]));
+        }
         return result;
     }
 
     public async Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(string workItemId, CancellationToken ct = default)
-        => await _server.ListEditProposalsAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, ct);
+    {
+        var proposals = await _server.ListEditProposalsAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, ct);
+        return proposals == null ? null : await WithRequestersAsync(proposals);
+    }
 
     public async Task<IReadOnlyList<RemoteWorkItemEditProposal>> QueryEditProposalsAsync(RemoteEditProposalQuery query, CancellationToken ct = default)
-        => await _server.QueryEditProposalsAsync(await _options.ResolveForRepositoryAsync(null, ct), query, ct);
+        => await WithRequestersAsync(await _server.QueryEditProposalsAsync(await _options.ResolveForRepositoryAsync(null, ct), query, ct));
+
+    public async Task<IReadOnlyList<RemoteWorkItemEditProposal>> ListRequestedEditProposalsAsync(string workItemId, CancellationToken ct = default)
+    {
+        var runIds = (await _loopRunStore.GetAllByWorkItemAsync(workItemId)).Select(r => r.Id).ToList();
+        if (runIds.Count == 0) return [];
+
+        var opts = await _options.ResolveForRepositoryAsync(null, ct);
+        var requested = new List<RemoteWorkItemEditProposal>();
+        foreach (var chunk in runIds.Chunk(RunIdsPerProposalQuery))
+            requested.AddRange(await _server.QueryEditProposalsAsync(opts, new RemoteEditProposalQuery { CreatedByLoopRunIds = chunk }, ct));
+        foreach (var proposal in requested)
+            proposal.RequestedByWorkItemId = workItemId;
+        return requested.OrderByDescending(p => p.CreatedAt).ToList();
+    }
 
     public async Task<EditProposalApproval> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default)
     {
@@ -1437,21 +1467,90 @@ public class WorkItemManager : IWorkItemManager
             await _notifier.WorkItemStateChangedAsync(updated.Id, updated.Status, updated.Status);
             updatedView = await ViewOfAsync(opts, updated);
         }
+        var proposal = result.Proposal is null ? null : (await WithRequestersAsync([result.Proposal]))[0];
         if (result.Outcome is EditProposalDecisionOutcome.Applied or EditProposalDecisionOutcome.Stale)
+        {
             await _notifier.WorkItemEditProposalsChangedAsync(workItemId);
-        return new EditProposalApproval(result.Outcome, result.Proposal, updatedView);
+            if (result.Outcome == EditProposalDecisionOutcome.Applied)
+                await HintRequestersOfItemsProposalsAsync(opts, workItemId, ct);
+            else if (proposal is not null)
+                await HintRequestersAsync(workItemId, [proposal]);
+        }
+        return new EditProposalApproval(result.Outcome, proposal, updatedView);
     }
 
     public async Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
     {
         var result = await _server.RejectEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, proposalId, reason, ct);
+        if (result.Proposal is null) return result;
+        var proposal = (await WithRequestersAsync([result.Proposal]))[0];
         if (result.Outcome == EditProposalDecisionOutcome.Rejected)
+        {
             await _notifier.WorkItemEditProposalsChangedAsync(workItemId);
-        return result;
+            await HintRequestersAsync(workItemId, [proposal]);
+        }
+        return result with { Proposal = proposal };
+    }
+
+    public async Task WithdrawPendingProposalsOfRunAsync(Guid runId, CancellationToken ct = default)
+    {
+        WorkItemServerOptions opts;
+        try { opts = await _options.ResolveForRepositoryAsync(null, ct); }
+        catch (InvalidOperationException) { return; /* No remote — no proposals. */ }
+
+        var pending = await _server.QueryEditProposalsAsync(opts, new RemoteEditProposalQuery
+        {
+            Status = RemoteEditProposalStatus.Pending,
+            CreatedByLoopRunIds = [runId],
+        }, ct);
+        // A proposal decided in the meantime comes back NotPending (or NotFound
+        // once its item is gone), which leaves it as it is.
+        foreach (var proposal in pending)
+            await RejectEditProposalAsync(proposal.WorkItemId, proposal.Id, WithdrawnProposalReason, ct);
     }
 
     public async Task MarkEditProposalDecisionsDeliveredAsync(IReadOnlyList<Guid> proposalIds, CancellationToken ct = default)
         => await _server.MarkEditProposalDecisionsDeliveredAsync(await _options.ResolveForRepositoryAsync(null, ct), proposalIds, ct);
+
+    /// <summary>
+    /// Names the work item whose loop run made each proposal, read from the run
+    /// itself. A run that no longer exists names nothing, and neither does a chat.
+    /// </summary>
+    private async Task<IReadOnlyList<RemoteWorkItemEditProposal>> WithRequestersAsync(IReadOnlyList<RemoteWorkItemEditProposal> proposals)
+    {
+        var requesterOfRun = new Dictionary<Guid, string?>();
+        foreach (var proposal in proposals)
+        {
+            if (proposal.CreatedByLoopRunId is not { } runId) continue;
+            if (!requesterOfRun.TryGetValue(runId, out var requester))
+                requesterOfRun[runId] = requester = (await _loopRunStore.GetByIdAsync(runId))?.WorkItemId;
+            proposal.RequestedByWorkItemId = requester;
+        }
+        return proposals;
+    }
+
+    /// <summary>The requesting items show these proposals in their Action tab, so they re-read too.</summary>
+    private async Task HintRequestersAsync(string workItemId, IEnumerable<RemoteWorkItemEditProposal> proposals)
+    {
+        foreach (var requester in proposals.Select(p => p.RequestedByWorkItemId).OfType<string>().Distinct())
+            if (requester != workItemId)
+                await _notifier.WorkItemEditProposalsChangedAsync(requester);
+    }
+
+    /// <summary>
+    /// An applied approve turns the item's other pending proposals Stale, so every
+    /// item that asked for one re-reads. The approve has already landed: failing to
+    /// read who to tell must not report it as failed, and a requester that misses
+    /// the hint re-reads on its next reconnect.
+    /// </summary>
+    private async Task HintRequestersOfItemsProposalsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct)
+    {
+        IReadOnlyList<RemoteWorkItemEditProposal>? proposals;
+        try { proposals = await _server.ListEditProposalsAsync(opts, workItemId, ct); }
+        catch (HttpRequestException) { return; }
+        if (proposals != null)
+            await HintRequestersAsync(workItemId, await WithRequestersAsync(proposals));
+    }
 
     // ──────────────────────────────────────────────────────────────────
     // Mapping helpers

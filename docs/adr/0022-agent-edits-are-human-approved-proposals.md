@@ -14,5 +14,5 @@ Proposals live on the WorkItem Server beside the items they edit ([ADR-0001](./0
 ## Consequences
 
 - A chat learns the decisions on its proposals on its next turn, in the prompt; the notice is marked delivered only once a turn reached the agent, so a turn that failed to launch announces it again. A loop run has no next turn, so it reads outcomes on demand.
-- Humans find pending proposals on the board card's count and in the work item's detail view, and a chat shows its own proposals inline.
+- A human decides a proposal where it was asked for: a loop run's in the Action tab of the work item whose run made it, whichever item it edits, and a chat's inline in that chat. The edited item shows its pending count on its board card and lists its pending proposals, each with its source, on its Overview. Deleting a loop run rejects its still-pending proposals, so none is left with nowhere to be decided.
 - Each work item holds at most 20 pending proposals, so an agent cannot flood one item.

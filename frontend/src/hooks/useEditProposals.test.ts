@@ -255,3 +255,34 @@ describe("useEditProposals for a chat", () => {
     await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1", "p-2"]));
   });
 });
+
+describe("useEditProposals for a requesting work item", () => {
+  test("reads what the item's runs proposed, joins the work-item hub first, and re-reads on a work-item hint for it only", async () => {
+    const itemHub = fakeHub("connected");
+    const chatHub = fakeHub("connected");
+    useHubs({ "/hubs/work-item": itemHub, "/hubs/chat": chatHub });
+    let onServer = [proposal("p-1", { workItemId: "wi-2", createdByLoopRunId: "run-a" })];
+    const list = vi
+      .spyOn(authServices.workItemService, "listRequestedEditProposals")
+      .mockImplementation(async () => onServer);
+    const byTarget = vi
+      .spyOn(authServices.workItemService, "listEditProposals")
+      .mockResolvedValue([]);
+
+    const { result } = renderHook(() => useEditProposals({ requestedByWorkItemId: "wi-1" }));
+
+    await waitFor(() => expect(ids(result.current.proposals)).toEqual(["p-1"]));
+    expect(list).toHaveBeenCalledWith("wi-1");
+    expect(byTarget).not.toHaveBeenCalled();
+    expect(itemHub.invoke).toHaveBeenCalledWith("SubscribeToWorkItems");
+    const readsAfterMount = list.mock.calls.length;
+
+    onServer = [proposal("p-1", { workItemId: "wi-2", status: "Stale" })];
+    emit(itemHub, "WorkItemEditProposalsChanged", { workItemId: "wi-2" });
+    emit(chatHub, "ChatEditProposalsChanged", { chatSessionId: "wi-1" });
+    expect(list).toHaveBeenCalledTimes(readsAfterMount);
+
+    emit(itemHub, "WorkItemEditProposalsChanged", { workItemId: "wi-1" });
+    await waitFor(() => expect(result.current.proposals?.[0]?.status).toBe("Stale"));
+  });
+});
