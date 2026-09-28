@@ -225,6 +225,7 @@ public class WorkItemsControllerRepositoryTests
             repoManager.Object,
             db.LoopRuns,
             db.Providers,
+            NoPackageFeeds.Resolver,
             branchNames.Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
             NullLogger<WorkItemsController>.Instance);

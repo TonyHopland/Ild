@@ -95,8 +95,18 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// The provider the launch is made for; the egress proxy applies that provider's
     /// scoped whitelist/blacklist entries to the child's connections.
     /// </param>
-    protected static Process? StartAgentProcess(ProcessStartInfo psi, Guid aiProviderId)
-        => Process.Start(AgentIsolation.Route(psi, aiProviderId));
+    /// <param name="environment">
+    /// The execution's <see cref="AgentExecutionContext.Environment"/>, set over what
+    /// <paramref name="psi"/> already carries; null for none. Required so no launch
+    /// of an execution can leave it out.
+    /// </param>
+    protected static Process? StartAgentProcess(
+        ProcessStartInfo psi, Guid aiProviderId, IReadOnlyDictionary<string, string>? environment)
+    {
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+            psi.Environment[name] = value;
+        return Process.Start(AgentIsolation.Route(psi, aiProviderId));
+    }
 
     /// <summary>
     /// Kill a process and its children. Never throws, but unlike a blind

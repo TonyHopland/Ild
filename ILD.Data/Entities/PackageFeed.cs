@@ -12,6 +12,9 @@ public class PackageFeed
 {
     public const int MaxNameLength = 128;
 
+    /// <summary>Plaintext cap, well inside the encrypted column.</summary>
+    public const int MaxPatLength = 1024;
+
     [Key]
     public Guid Id { get; set; }
 

@@ -69,6 +69,7 @@ public class WorkItemsControllerTransitionTests
             new Mock<IRepositoryManager>().Object,
             db.LoopRuns,
             db.Providers,
+            NoPackageFeeds.Resolver,
             new Mock<IBranchNameOverrideService>().Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
             NullLogger<WorkItemsController>.Instance);

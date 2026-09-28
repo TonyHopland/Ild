@@ -1,6 +1,8 @@
 using ILD.Data.Enums;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Text;
 
@@ -33,7 +35,10 @@ public sealed class CmdNodeExecutor : INodeExecutor
 
         yield return new NodeOutcome.NodeStarting(command);
 
-        var (ok, output, error) = await RunProcessAsync(command, worktree, ctx);
+        var workItem = ctx.Run.RepositoryId is null ? await workItems.GetWorkItemAsync(ctx.Run.WorkItemId) : null;
+        var feeds = await ctx.Services.GetRequiredService<IPackageFeedResolver>()
+            .ResolveAsync(RunRepository.IdOf(ctx.Run, workItem), ctx.CancellationToken);
+        var (ok, output, error) = await RunProcessAsync(command, worktree, feeds.Feeds, ctx);
         if (!ok)
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "command failed", output);
@@ -43,16 +48,21 @@ public sealed class CmdNodeExecutor : INodeExecutor
     }
 
     private static async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
-        string command, string workingDirectory, NodeExecutionContext ctx)
+        string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
         var err = new StringBuilder();
+        using var feeds = PackageFeedCredentialFiles.Materialize(
+            packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
+        var psi = IsolateCommand(
+            ShellStartInfo(command, workingDirectory),
+            AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
+            AgentIsolation.EgressProxyUrl(aiProviderId: null));
+        foreach (var (name, value) in feeds.Environment)
+            psi.Environment[name] = value;
         using var p = new Process
         {
-            StartInfo = IsolateCommand(
-                ShellStartInfo(command, workingDirectory),
-                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
-                AgentIsolation.EgressProxyUrl(aiProviderId: null)),
+            StartInfo = psi,
             EnableRaisingEvents = true,
         };
         // Forward the full stdout+stderr stream verbatim (newline included, ANSI

@@ -2,6 +2,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using Microsoft.Extensions.DependencyInjection;
@@ -151,6 +152,7 @@ public sealed class AINodeExecutor : INodeExecutor
         yield return new NodeOutcome.NodeStarting(rendered);
 
         NodeExecutionResult result;
+        var feeds = PackageFeedEnvironment.None;
         try
         {
             string? incomingSessionId = null;
@@ -185,6 +187,10 @@ public sealed class AINodeExecutor : INodeExecutor
                 ctx.Run.Id, wi.Id, wi.Title, wi.Description ?? string.Empty,
                 ctx.Run.WorktreePath ?? string.Empty, ctx.Run.BranchName ?? string.Empty,
                 new List<string>(), ctx.Run.PreviousNodeOutput);
+            var packageFeeds = await sp.GetRequiredService<IPackageFeedResolver>()
+                .ResolveAsync(RunRepository.IdOf(ctx.Run, wi), ctx.CancellationToken);
+            feeds = PackageFeedCredentialFiles.Materialize(
+                packageFeeds.Feeds, ctx.Run.Id.ToString("N"), sp.GetService<ILogger<AINodeExecutor>>());
             var runId = ctx.Run.Id;
             var agentCtx = new AgentExecutionContext(
                 provider, rendered, runContext, 0, ctx.CancellationToken,
@@ -192,7 +198,8 @@ public sealed class AINodeExecutor : INodeExecutor
                 SessionId: incomingSessionId, IncomingSessionId: incomingSessionId,
                 ManageSession: manageSession,
                 OnSessionId: scopeFactory is null ? null : sid => PersistSessionId(scopeFactory, runId, sid),
-                ForkFromSessionId: forkFromSessionId);
+                ForkFromSessionId: forkFromSessionId,
+                Environment: feeds.Environment);
             result = await adapter.ExecuteAsync(agentCtx);
         }
         catch (Exception ex)
@@ -201,6 +208,7 @@ public sealed class AINodeExecutor : INodeExecutor
         }
         finally
         {
+            feeds.Dispose();
             concurrency?.Exit(providerId);
         }
 

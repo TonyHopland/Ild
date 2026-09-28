@@ -1,3 +1,7 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using Microsoft.Extensions.Logging;
@@ -58,6 +62,65 @@ public sealed class ConnectionTester : IConnectionTester
                 hadApiKey: !string.IsNullOrWhiteSpace(provider?.ApiKey),
                 hasProvider: provider is not null));
         return Report(result, "Repository", repo.Id, provider?.ApiKey, RepositoryManager.GitBasicCredential(auth));
+    }
+
+    private const string FeedUnreachable = "Azure DevOps unreachable.";
+
+    public async Task<ConnectionTestResult> TestPackageFeedAsync(PackageFeed feed, CancellationToken ct)
+    {
+        var credential = Convert.ToBase64String(Encoding.UTF8.GetBytes($"ild:{feed.Pat}"));
+        ConnectionTestResult result;
+        if (!AzureFeedUrl.TryParse(feed.FeedUrl, out var url, out var problem))
+        {
+            result = new ConnectionTestResult(ConnectionTestOutcome.Misconfigured, problem!, null);
+        }
+        else
+        {
+            result = await WithTimeoutAsync(ProviderTimeout, ct, token => ProbeFeedAsync(url!, credential, token));
+            // A feed that never answered is as unreachable as one that refused the connection.
+            if (result.Outcome == ConnectionTestOutcome.Unreachable)
+                result = result with { Message = FeedUnreachable };
+        }
+        return Report(result, "Package feed", feed.Id, feed.Pat, credential);
+    }
+
+    /// <summary>
+    /// One authenticated GET of the feed's NuGet service index, as the credential
+    /// provider would make it: Basic auth with the PAT as the password.
+    /// </summary>
+    private async Task<ConnectionTestResult> ProbeFeedAsync(AzureFeedUrl url, string credential, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url.NuGetServiceIndex);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credential);
+        HttpStatusCode status;
+        string body;
+        try
+        {
+            using var response = await _http.SendAsync(request, ct);
+            status = response.StatusCode;
+            body = Encoding.UTF8.GetString(await response.Content.ReadAsByteArrayAsync(ct));
+        }
+        catch (HttpRequestException ex)
+        {
+            return new ConnectionTestResult(ConnectionTestOutcome.Unreachable, FeedUnreachable,
+                ex.InnerException is null ? ex.Message : $"{ex.Message} ({ex.InnerException.Message})");
+        }
+
+        var evidence = $"HTTP {(int)status} {status}\n{body}";
+        return status switch
+        {
+            _ when (int)status is >= 200 and < 300 =>
+                new ConnectionTestResult(ConnectionTestOutcome.Ok, "The PAT can read this feed.", null),
+            HttpStatusCode.Unauthorized => new ConnectionTestResult(ConnectionTestOutcome.InvalidApiKey,
+                "PAT rejected, probably expired or revoked. Create a new one with Packaging (Read) and paste it here.", evidence),
+            HttpStatusCode.Forbidden => new ConnectionTestResult(ConnectionTestOutcome.AccessDenied,
+                "PAT has no access to this feed. Check its scope and organization.", evidence),
+            HttpStatusCode.NotFound => new ConnectionTestResult(ConnectionTestOutcome.NotFound,
+                "Feed not found. Check the URL.", evidence),
+            _ when (int)status >= 500 => new ConnectionTestResult(ConnectionTestOutcome.Unreachable, FeedUnreachable, evidence),
+            _ => new ConnectionTestResult(ConnectionTestOutcome.Error,
+                $"Azure DevOps answered with HTTP {(int)status}.", evidence),
+        };
     }
 
     /// <summary>

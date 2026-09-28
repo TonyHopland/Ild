@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Interfaces;
@@ -5,13 +6,14 @@ namespace ILD.Core.Services.Interfaces;
 /// <param name="CustomEnv">
 /// Raw text of the repository's custom <c>.env</c> (see <c>Repository.PreviewEnv</c>),
 /// or null. Parsed at injection time and merged into every preview process's
-/// environment last of all, so it beats both the base defaults and the per-service
-/// <c>ild.config.json</c> env: every name in it was typed by the human who owns the
-/// repository, and one they cannot override is one they cannot correct without
-/// editing the worktree the coding agent writes. The values are injected verbatim —
-/// they are secrets, not <c>${PORT:...}</c> templates, so a <c>$</c> in them survives
-/// intact. The corollary is that a stale line here silently shadows a computed
-/// <c>${PORT:...}</c> value in a service's <c>env</c>.
+/// environment after all else but <paramref name="PackageFeeds"/>, so it beats both
+/// the base defaults and the per-service <c>ild.config.json</c> env: every name in it
+/// was typed by the human who owns the repository, and one they cannot override is
+/// one they cannot correct without editing the worktree the coding agent writes.
+/// The values are injected verbatim — they are secrets, not <c>${PORT:...}</c>
+/// templates, so a <c>$</c> in them survives intact. The corollary is that a stale
+/// line here silently shadows a computed <c>${PORT:...}</c> value in a service's
+/// <c>env</c>.
 /// <para>
 /// Security model: this text is stored encrypted at rest (via <c>SecretProtector</c>)
 /// and is injected only as <em>process environment variables</em> on the preview
@@ -35,13 +37,21 @@ namespace ILD.Core.Services.Interfaces;
 /// depends on it. Without an id (or without a proxy base) the URL falls back to
 /// the historical <c>http://{publicHost}:{port}</c> form.
 /// </param>
+/// <param name="PackageFeeds">
+/// The credentials of the package feeds the repository selected, or null for none.
+/// The runtime writes them to its own npm user config and hands every preview
+/// process <c>NPM_CONFIG_USERCONFIG</c> and <c>VSS_NUGET_EXTERNAL_FEED_ENDPOINTS</c>
+/// over everything else, <paramref name="CustomEnv"/> included; the file goes when
+/// the runtime stops or fails to start.
+/// </param>
 public sealed record WorktreePreviewStartOptions(
     string? ProfileName = null,
     bool SkipInstall = false,
     string? PublicHost = null,
     IReadOnlyDictionary<string, int>? PortOverrides = null,
     string? CustomEnv = null,
-    string? WorkItemId = null);
+    string? WorkItemId = null,
+    IReadOnlyList<PackageFeedCredential>? PackageFeeds = null);
 
 /// <summary>
 /// Why <see cref="IWorktreePreviewService.ResolvePreviewTargetAsync"/> could not
@@ -214,8 +224,11 @@ public interface IWorktreePreviewService
     /// each install step's environment with the same precedence the service-start
     /// path gives it — last, over the step's own <c>env</c> — so install scripts see
     /// the same secrets, and the same overrides, the services will.
+    /// <paramref name="packageFeeds"/> are the selected feeds' credentials, handed to
+    /// each step over <paramref name="customEnv"/>; their file is removed when the
+    /// install ends, however it ends.
     /// </summary>
-    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default);
+    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Loads and validates the worktree's <c>ild.config.json</c> preview config
@@ -278,7 +291,7 @@ public sealed class NoopPreviewService : IWorktreePreviewService
         => throw new NotImplementedException();
     public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
-    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default)
+    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();

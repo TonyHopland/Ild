@@ -1,6 +1,7 @@
 using ILD.Data.Enums;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
@@ -19,9 +20,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
         var wi = await workItems.GetWorkItemAsync(ctx.Run.WorkItemId);
-        // Read the pinned repository straight off the run already in hand; the
-        // work item's is only a fallback for a run that has no pinned repository.
-        var repositoryId = ctx.Run.RepositoryId ?? wi?.RepositoryId;
+        var repositoryId = RunRepository.IdOf(ctx.Run, wi);
         if (wi is null || repositoryId is null)
         {
             yield return new NodeOutcome.NodeStarting("{\"nodeType\":\"Start\"}");
@@ -72,7 +71,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         }
 
         var config = NodeConfig.Parse<NodeConfig.Start>(ctx.Node.Config);
-        string? installWarning = null;
+        var warnings = new List<string>();
         if (config.RunInstall == true)
         {
             var preview = sp.GetService<IWorktreePreviewService>();
@@ -83,27 +82,32 @@ public sealed class StartNodeExecutor : INodeExecutor
                 yield break;
             }
 
-            var (installError, warning) = await RunInstallAsync(preview, worktreePath, repo.PreviewEnv, ctx.CancellationToken);
+            var feeds = await sp.GetRequiredService<IPackageFeedResolver>().ResolveAsync(repo.Id, ctx.CancellationToken);
+            if (feeds.Missing.Count > 0)
+                warnings.Add($"selected package feed(s) no longer exist and were skipped: {string.Join(", ", feeds.Missing)}");
+
+            var (installError, warning) = await RunInstallAsync(preview, worktreePath, repo.PreviewEnv, feeds.Feeds, ctx.CancellationToken);
             if (installError is not null)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"ild.config install failed: {installError}");
                 yield break;
             }
-            installWarning = warning;
+            if (warning is not null)
+                warnings.Add(warning);
         }
 
-        var successOutput = installWarning is null
-            ? $"worktree={worktreePath}"
-            : $"worktree={worktreePath}; warning: {installWarning}";
+        var successOutput = string.Join("; ", warnings.Select(w => $"warning: {w}").Prepend($"worktree={worktreePath}"));
         yield return new NodeOutcome.Success(EdgeType.OnSuccess, successOutput);
     }
 
     private static async Task<(string? Error, string? Warning)> RunInstallAsync(
-        IWorktreePreviewService preview, string worktreePath, string? customEnv, CancellationToken ct)
+        IWorktreePreviewService preview, string worktreePath, string? customEnv,
+        IReadOnlyList<PackageFeedCredential> packageFeeds, CancellationToken ct)
     {
         try
         {
-            var result = await preview.InstallAsync(worktreePath, customEnv: customEnv, cancellationToken: ct);
+            var result = await preview.InstallAsync(
+                worktreePath, customEnv: customEnv, packageFeeds: packageFeeds, cancellationToken: ct);
             // A missing ild.config.json is expected for most projects — surface a
             // warning rather than failing the run on it.
             return result.Installed

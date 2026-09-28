@@ -31,6 +31,7 @@ public class CmdNodeExecutorTests : IDisposable
     {
         var services = new ServiceCollection();
         services.AddSingleton(new Mock<IWorkItemManager>().Object);
+        services.AddSingleton(NoPackageFeeds.Resolver);
         return new NodeExecutionContext(
             new LoopRun { Id = Guid.NewGuid(), WorktreePath = _worktree },
             new LoopNode

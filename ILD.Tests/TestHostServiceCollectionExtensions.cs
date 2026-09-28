@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -77,7 +78,7 @@ internal static class TestHostServiceCollectionExtensions
         public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IWorktreePreviewService));
 
-        public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default)
+        public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IWorktreePreviewService));
 
         public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)

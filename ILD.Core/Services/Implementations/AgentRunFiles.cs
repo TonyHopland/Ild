@@ -1,17 +1,22 @@
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// Every file ILD writes for an agent that carries the ILD API token, and the two
-/// moments each must go: when its run or chat is reclaimed or deleted, and at
-/// startup, for what a killed process left behind. The files are:
+/// Every file ILD writes for an agent that carries a secret — the ILD API token or
+/// a package feed PAT — and the two moments each must go: when its run or chat is
+/// reclaimed or deleted, and at startup, for what a killed process left behind.
+/// The files are:
 /// <list type="bullet">
 ///   <item>pi's ILD extension, <c>AgentReadRoot/ild-pi-ext/&lt;id&gt;/ild.ts</c>;</item>
 ///   <item>the MCP configs handed to Copilot and Claude Code,
 ///   <c>AgentReadRoot/ild-mcp-config/*-&lt;id&gt;-*.json</c>, which a turn also
 ///   deletes when its CLI exits;</item>
+///   <item>the package feed npm configs, <c>AgentReadRoot/ild-package-feeds/*.npmrc</c>,
+///   which their launch or preview also deletes when it ends; only a run's own
+///   (<c>&lt;id&gt;-*.npmrc</c>) go with the run;</item>
 ///   <item>the HTTP-calling <c>extensions/ild.ts</c> older builds left in pi's agent
 ///   directories in shared scratch, which the agent owns.</item>
 /// </list>
@@ -28,13 +33,14 @@ public static class AgentRunFiles
     public static Task<bool> DeleteAsync(Guid loopRunId, CancellationToken ct = default)
     {
         IldMcpServer.DeleteConfigFiles(loopRunId);
+        PackageFeedCredentialFiles.DeleteRunFiles(loopRunId);
         return PiAdapter.DeleteRunFilesAsync(loopRunId, ct);
     }
 
     /// <summary>
     /// Clear what a killed process left behind. Run at startup, before any run can
-    /// resume: MCP configs and pi extensions written before this process started —
-    /// the extensions also only for runs and chats not in
+    /// resume: MCP configs, package feed npm configs and pi extensions written
+    /// before this process started — the extensions also only for runs and chats not in
     /// <paramref name="activeRunAndChatIds"/> — and every legacy
     /// <c>extensions/ild.ts</c>. Each is handled on its own: one that cannot be
     /// removed is logged and the sweep carries on, so it never leaves the rest, and
@@ -54,6 +60,7 @@ public static class AgentRunFiles
         IReadOnlySet<Guid> activeRunAndChatIds, string agentReadRoot, string scratchRoot, DateTime startedUtc, ILogger logger, CancellationToken ct)
     {
         var clean = DeleteEach(() => IldMcpServer.StaleConfigFiles(agentReadRoot, startedUtc), File.Delete, logger);
+        clean &= DeleteEach(() => PackageFeedCredentialFiles.StaleFiles(agentReadRoot, startedUtc), File.Delete, logger);
         clean &= DeleteEach(() => PiAdapter.StaleExtensions(agentReadRoot, activeRunAndChatIds, startedUtc), path => Directory.Delete(path, recursive: true), logger);
 
         try
@@ -78,7 +85,7 @@ public static class AgentRunFiles
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            logger.LogWarning(ex, "Could not list the token-bearing agent files a previous process left");
+            logger.LogWarning(ex, "Could not list the secret-bearing agent files a previous process left");
             return false;
         }
 
@@ -91,7 +98,7 @@ public static class AgentRunFiles
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                logger.LogWarning(ex, "Could not remove {Path}, which carries the ILD API token; sweeping the rest", path);
+                logger.LogWarning(ex, "Could not remove {Path}, which carries a secret; sweeping the rest", path);
                 clean = false;
             }
         }

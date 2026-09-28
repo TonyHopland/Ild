@@ -115,7 +115,9 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<PackageFeed>(e =>
         {
-            e.Property(f => f.Pat).HasConversion(converter).HasMaxLength(2048).IsRequired();
+            // The converter is typed for the nullable credential columns; the PAT is
+            // required, so it goes through the untyped overload.
+            e.Property(f => f.Pat).HasConversion((ValueConverter)converter).HasMaxLength(2048);
         });
     }
 

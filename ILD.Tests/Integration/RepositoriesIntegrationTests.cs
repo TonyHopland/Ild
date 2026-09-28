@@ -227,6 +227,9 @@ public class RepositoriesIntegrationTests
             RepositoryCalls.Add((repo, provider));
             return Task.FromResult(new ConnectionTestResult(ConnectionTestOutcome.Ok, "Reached main.", null));
         }
+
+        public Task<ConnectionTestResult> TestPackageFeedAsync(PackageFeed feed, CancellationToken ct)
+            => throw new InvalidOperationException("not expected");
     }
 
     [Fact]

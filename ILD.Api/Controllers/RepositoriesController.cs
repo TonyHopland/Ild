@@ -27,7 +27,10 @@ public class RepositoriesController : ControllerBase
     // sends null/empty to keep it. The one place the plaintext is readable is the
     // dedicated GET {id}/preview-env below, which a signed-in human can call to
     // prefill the editor.
-    private static object ToResponse(Repository r) => new
+    //
+    // Package feeds are listed by name with whether the feed still exists; a feed's
+    // PAT never appears here.
+    private static object ToResponse(Repository r, IReadOnlySet<string> existingFeeds) => new
     {
         id = r.Id,
         name = r.Name,
@@ -37,6 +40,9 @@ public class RepositoriesController : ControllerBase
         worktreesPath = r.WorktreesPath,
         defaultIntakeStatus = r.DefaultIntakeStatus,
         hasPreviewEnv = !string.IsNullOrEmpty(r.PreviewEnv),
+        packageFeeds = r.PackageFeeds
+            .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(s => new { name = s.Name, missing = !existingFeeds.Contains(s.NormalizedName) }),
         createdAt = r.CreatedAt,
         updatedAt = r.UpdatedAt,
     };
@@ -47,16 +53,18 @@ public class RepositoriesController : ControllerBase
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
-        var items = await _db.Repositories.AsNoTracking().OrderBy(r => r.Name).Skip(skip).Take(take).ToListAsync();
-        return Ok(items.Select(ToResponse));
+        var items = await _db.Repositories.AsNoTracking().Include(r => r.PackageFeeds)
+            .OrderBy(r => r.Name).Skip(skip).Take(take).ToListAsync();
+        var existingFeeds = await ExistingFeedsAsync();
+        return Ok(items.Select(r => ToResponse(r, existingFeeds)));
     }
 
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(string id)
     {
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
-        var repo = await _db.Repositories.FindAsync(guid);
-        return repo == null ? NotFound() : Ok(ToResponse(repo));
+        var repo = await FindWithFeedsAsync(guid);
+        return repo == null ? NotFound() : Ok(await ResponseAsync(repo));
     }
 
     [HttpPost("inspect-remote")]
@@ -100,17 +108,21 @@ public class RepositoriesController : ControllerBase
             PreviewEnv = string.IsNullOrEmpty(request.PreviewEnv) ? null : request.PreviewEnv,
             CreatedAt = DateTime.UtcNow,
         };
+        if (await SelectFeedsAsync(repo, request.PackageFeeds) is { } feedsError)
+            return BadRequest(new { error = feedsError });
         _db.Repositories.Add(repo);
         await _db.SaveChangesAsync();
-        return CreatedAtAction(nameof(GetById), new { id = repo.Id }, ToResponse(repo));
+        return CreatedAtAction(nameof(GetById), new { id = repo.Id }, await ResponseAsync(repo));
     }
 
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] RepositoryDto request)
     {
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
-        var repo = await _db.Repositories.FindAsync(guid);
+        var repo = await FindWithFeedsAsync(guid);
         if (repo == null) return NotFound();
+        if (await SelectFeedsAsync(repo, request.PackageFeeds) is { } feedsError)
+            return BadRequest(new { error = feedsError });
         repo.Name = request.Name;
         repo.CloneUrl = request.CloneUrl;
         repo.DefaultBranch = request.DefaultBranch;
@@ -121,8 +133,47 @@ public class RepositoriesController : ControllerBase
         if (!string.IsNullOrEmpty(request.PreviewEnv)) repo.PreviewEnv = request.PreviewEnv;
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        return Ok(ToResponse(repo));
+        return Ok(await ResponseAsync(repo));
     }
+
+    /// <summary>
+    /// Replace <paramref name="repo"/>'s feed selection with <paramref name="requested"/>
+    /// (feed names, any case); null keeps it as it is. Every name must be an existing
+    /// feed, except one the repository already selects: a feed deleted since it was
+    /// selected can be kept, to resolve again if it is recreated. Returns why the
+    /// selection is refused, or null once it is staged on <paramref name="repo"/>.
+    /// </summary>
+    private async Task<string?> SelectFeedsAsync(Repository repo, List<string>? requested)
+    {
+        if (requested is null)
+            return null;
+
+        var feeds = await _db.PackageFeeds.AsNoTracking()
+            .ToDictionaryAsync(f => f.NormalizedName, f => f.Name, StringComparer.Ordinal);
+        var selection = new List<RepositoryPackageFeed>();
+        foreach (var name in requested.Select(n => (n ?? string.Empty).Trim()).Where(n => n.Length > 0))
+        {
+            var normalized = PackageFeed.Normalize(name);
+            if (selection.Any(s => s.NormalizedName == normalized))
+                continue;
+            var kept = repo.PackageFeeds.FirstOrDefault(s => s.NormalizedName == normalized);
+            if (!feeds.TryGetValue(normalized, out var feedName) && kept is null)
+                return $"There is no package feed named '{name}'";
+            selection.Add(kept ?? new RepositoryPackageFeed { RepositoryId = repo.Id, Name = feedName!, NormalizedName = normalized });
+        }
+
+        repo.PackageFeeds.RemoveAll(s => !selection.Contains(s));
+        repo.PackageFeeds.AddRange(selection.Where(s => !repo.PackageFeeds.Contains(s)));
+        return null;
+    }
+
+    private Task<Repository?> FindWithFeedsAsync(Guid id)
+        => _db.Repositories.Include(r => r.PackageFeeds).FirstOrDefaultAsync(r => r.Id == id);
+
+    private async Task<IReadOnlySet<string>> ExistingFeedsAsync()
+        => (await _db.PackageFeeds.AsNoTracking().Select(f => f.NormalizedName).ToListAsync()).ToHashSet(StringComparer.Ordinal);
+
+    private async Task<object> ResponseAsync(Repository repo) => ToResponse(repo, await ExistingFeedsAsync());
 
     // Reading and clearing the custom .env sit on their own sub-resource rather than
     // widening the repository payload: one narrow, auditable surface. Like every
@@ -145,12 +196,12 @@ public class RepositoriesController : ControllerBase
     public async Task<IActionResult> ClearPreviewEnv(string id)
     {
         if (!Guid.TryParse(id, out var guid)) return BadRequest();
-        var repo = await _db.Repositories.FindAsync(guid);
+        var repo = await FindWithFeedsAsync(guid);
         if (repo == null) return NotFound();
         repo.PreviewEnv = null;
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        return Ok(ToResponse(repo));
+        return Ok(await ResponseAsync(repo));
     }
 
     [HttpDelete("{id}")]

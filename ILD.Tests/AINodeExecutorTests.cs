@@ -49,6 +49,8 @@ public class AINodeExecutorTests
             m.GetRunNodesAsync(It.IsAny<Guid>()) == Task.FromResult<IReadOnlyList<LoopRunNode>>(Array.Empty<LoopRunNode>()));
 
         var services = new ServiceCollection();
+
+        services.AddSingleton(NoPackageFeeds.Resolver);
         services.AddSingleton(providerStore);
         services.AddSingleton(lrsMock);
         services.AddSingleton(wimMock);

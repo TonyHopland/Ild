@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Configuration;
@@ -320,6 +321,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             if (runtime.Processes.Count == 0)
             {
                 _runtimes.TryRemove(normalized, out _);
+                runtime.Feeds.Dispose();
                 return BuildStoppedResponse(loaded, runtime.ProfileName, runtime.PublicHost, runtime.StateDirectory, loaded.ConfigPath);
             }
 
@@ -424,7 +426,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return await reader.ReadToEndAsync(cancellationToken);
     }
 
-    public async Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default)
+    public async Task<WorktreeInstallResult> InstallAsync(
+        string worktreePath,
+        string? profileName = null,
+        string? customEnv = null,
+        IReadOnlyList<PackageFeedCredential>? packageFeeds = null,
+        CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeWorktreePath(worktreePath);
         var loaded = await LoadConfigAsync(normalized, cancellationToken);
@@ -449,6 +456,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // Install needs no ports or running services — build a port-less runtime so
         // the shared install runner resolves ${WORKTREE}/${STATE_DIR} the same way
         // the preview start path does.
+        using var feeds = PackageFeedCredentialFiles.Materialize(packageFeeds ?? [], "install", _logger);
         var runtime = new PreviewRuntime(
             normalized,
             loaded.ConfigPath!,
@@ -458,7 +466,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             _configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1",
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
             new List<ManagedPreviewProcess>(),
-            DotEnvParser.Parse(customEnv));
+            DotEnvParser.Parse(customEnv),
+            feeds);
 
         await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
         return new WorktreeInstallResult(true);
@@ -777,7 +786,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// state directory, allocates every profile service's port up front (so per-service
     /// starts resolve cross-service <c>${PORT:&lt;alias&gt;}</c> references), and runs the
     /// install steps unless skipped. Does not launch any service or store the runtime —
-    /// the caller owns process startup and dictionary insertion.
+    /// the caller owns process startup and dictionary insertion. The runtime's package
+    /// feed credential file is this method's until it returns: a failure before then,
+    /// a failed install step included, deletes it, because no caller ever sees the
+    /// runtime to stop it.
     /// </summary>
     private async Task<PreviewRuntime> CreateRuntimeAsync(
         string normalized,
@@ -793,6 +805,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var logDirectory = BuildLogDirectory(normalized);
 
         var ports = AllocatePorts(profile, options.PortOverrides);
+        var customEnv = DotEnvParser.Parse(options.CustomEnv);
+        var feeds = PackageFeedCredentialFiles.Materialize(options.PackageFeeds ?? [], "preview", _logger);
         var runtime = new PreviewRuntime(
             normalized,
             loaded.ConfigPath!,
@@ -802,12 +816,21 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             publicHost,
             ports,
             new List<ManagedPreviewProcess>(),
-            DotEnvParser.Parse(options.CustomEnv),
+            customEnv,
+            feeds,
             options.WorkItemId);
 
-        if (!options.SkipInstall)
+        try
         {
-            await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
+            if (!options.SkipInstall)
+            {
+                await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
+            }
+        }
+        catch
+        {
+            feeds.Dispose();
+            throw;
         }
 
         return runtime;
@@ -988,12 +1011,19 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task StopRuntimeAsync(PreviewRuntime runtime, CancellationToken cancellationToken)
     {
-        foreach (var process in runtime.Processes)
+        try
         {
-            await StopProcessAsync(process, cancellationToken);
-        }
+            foreach (var process in runtime.Processes)
+            {
+                await StopProcessAsync(process, cancellationToken);
+            }
 
-        runtime.ClearProcesses();
+            runtime.ClearProcesses();
+        }
+        finally
+        {
+            runtime.Feeds.Dispose();
+        }
     }
 
     private async Task StopProcessAsync(ManagedPreviewProcess process, CancellationToken cancellationToken)
@@ -1319,7 +1349,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var workingDirectory = ResolveWorkingDirectory(step.Cwd, runtime, currentPortAlias);
         var environment = BuildDefaultEnvironment(runtime.StateDirectory);
 
-        // Precedence: base defaults < per-service ild.config env < repo custom .env.
+        // Precedence: base defaults < per-service ild.config env < repo custom .env
+        // < package feed credentials.
         // The committed config is the profile's default; the repo's .env is what the
         // human who owns the repository typed for this deployment, so it wins — every
         // key in it was set deliberately, and a value it cannot override is a value
@@ -1339,6 +1370,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // password containing ${...} would otherwise be rewritten, or rejected
         // outright as an unsupported token, for looking like something it isn't.
         foreach (var entry in runtime.CustomEnv)
+        {
+            environment[entry.Key] = entry.Value;
+        }
+
+        // Last of all: the selected package feeds' credentials name a file only this
+        // runtime's owner can put in place, so nothing typed anywhere may repoint them.
+        foreach (var entry in runtime.Feeds.Environment)
         {
             environment[entry.Key] = entry.Value;
         }
@@ -1666,8 +1704,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             Dictionary<string, int> ports,
             List<ManagedPreviewProcess> processes,
             IReadOnlyDictionary<string, string> customEnv,
+            PackageFeedEnvironment feeds,
             string? workItemId = null)
         {
+            Feeds = feeds;
             WorkItemId = workItemId;
             WorktreePath = worktreePath;
             ConfigPath = configPath;
@@ -1730,6 +1770,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         /// <summary>Parsed repository custom <c>.env</c> (see <c>Repository.PreviewEnv</c>),
         /// injected into every step's environment. Empty when none is configured.</summary>
         public IReadOnlyDictionary<string, string> CustomEnv { get; }
+
+        /// <summary>
+        /// The selected package feeds' variables, applied over everything else, and the
+        /// credential file they point at, which goes when the runtime stops.
+        /// </summary>
+        public PackageFeedEnvironment Feeds { get; }
     }
 
     private sealed class ManagedPreviewProcess

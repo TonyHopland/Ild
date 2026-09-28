@@ -30,5 +30,9 @@ public record AgentExecutionContext(
     // the open work item's active-run worktree without relocating the agent's cwd:
     // claude maps each to an extra `--add-dir`, opencode/pi to their allowed-dir
     // config. Null/empty means scratch (cwd) only.
-    IReadOnlyList<string>? AdditionalAllowedDirectories = null
+    IReadOnlyList<string>? AdditionalAllowedDirectories = null,
+    // Set over everything else in the environment of every process the adapter
+    // starts for this execution: the run's package feed credentials. Null when
+    // there is nothing to add.
+    IReadOnlyDictionary<string, string>? Environment = null
 );

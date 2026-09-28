@@ -70,6 +70,8 @@ public class AINodeExecutorSessionPlaceholderTests
             m.GetWorkItemAsync(It.IsAny<string>()) == Task.FromResult<WorkItemView?>(wi));
 
         var services = new ServiceCollection();
+
+        services.AddSingleton(NoPackageFeeds.Resolver);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(runStore.Object);
         services.AddSingleton(workItems);
