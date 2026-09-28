@@ -560,7 +560,9 @@ version, lets you trigger an install or update manually, and reports failures
 Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, and
 `NODE_RUNTIME_VERSION`. With `WITH_DOTNET_SDK=1` the image is based on
 `mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION`, so the SDK available to agents
-tracks `DOTNET_VERSION` rather than a separate channel.
+tracks `DOTNET_VERSION` rather than a separate channel. It also carries the Azure
+Artifacts credential provider, pinned by `ARTIFACTS_CREDPROVIDER_VERSION` — see
+[Package feeds](#package-feeds).
 
 ### Agent network limits
 
@@ -610,6 +612,83 @@ granted `NET_ADMIN` — see [Deployment](deployment.md#agent-network-limits-net_
 `GET /api/v1/network/status` and a banner in Settings tell you which you have.
 Setting `ILD_NETWORK_PROXY_PORT` to an empty value turns the proxy off entirely;
 the lists are then not applied at all.
+
+## Package feeds
+
+Repositories that restore from a private Azure Artifacts feed (npm or NuGet)
+restore inside ILD the way they do in CI: ILD holds a read-only PAT for each
+feed and hands it to the package managers of each run. Nothing changes in the
+repository or its `ild.config.json`, and a local checkout keeps working as it
+does today.
+
+**Setting a feed up.** Under **Settings → Package feeds**, add a feed with:
+
+- a **name**, e.g. `company` — repositories select feeds by name, so it cannot
+  be changed later;
+- the **feed URL**, `https://pkgs.dev.azure.com/{organization}/_packaging/{feed}`
+  or, for a project-scoped feed,
+  `https://pkgs.dev.azure.com/{organization}/{project}/_packaging/{feed}`. One
+  feed serves both npm and NuGet;
+- a **PAT** with only the _Packaging (Read)_ scope, for that one organization,
+  with a short expiry. It is stored encrypted like every other secret and is
+  write-only: after saving, only a masked hint (`••••3fa9`) is shown, and an edit
+  that leaves the field empty keeps it.
+
+**Test** makes one authenticated request for the feed's NuGet service index and
+says what it found: OK; the PAT rejected (expired or revoked); no access to this
+feed (scope or organization); feed not found (the URL); or Azure DevOps
+unreachable. Nothing checks a PAT on its own — when one expires, restores fail
+and Test confirms why.
+
+Then tick the feed under **Package feeds** on the repository's edit form. A
+repository selects none by default. Selecting a feed only provides its
+credentials: which feed a package comes from is still the repository's own
+`.npmrc` / `nuget.config`, so the order does not matter. A selected feed that is
+later deleted shows as `name (missing)`, is skipped at run time with a warning
+(on the Start node's output when it runs install steps), and resolves again if a
+feed with the same name is added back.
+
+**What a run gets.** With at least one selected feed, every process of the run
+— the Start node's install steps, every preview install step and service, Cmd
+nodes and each AI node's agent CLI — gets two variables, over anything else it
+is given, the repository's custom `.env` included:
+
+- `NPM_CONFIG_USERCONFIG`, an npm user config that authenticates every selected
+  feed on both of Azure's documented registry paths (`…/npm/registry/` and
+  `…/npm/`). The repository's `.npmrc` still applies on top, so its registries
+  and scoped registries are used unchanged. ILD never sets a registry.
+- `VSS_NUGET_EXTERNAL_FEED_ENDPOINTS`, the endpoint list the Azure Artifacts
+  credential provider reads, naming each feed's service index on
+  `pkgs.dev.azure.com` and on the legacy `{organization}.pkgs.visualstudio.com`.
+
+The npm config is written for each launch (or preview) under the agent read
+directory, never inside the worktree and never in the agent's home, which every
+repository shares; it is deleted when the launch ends or the preview stops, and
+whatever a restart interrupted is removed at the next startup. With no feed
+selected, nothing is written or set.
+
+The credential provider comes with the image when it is built with
+`WITH_DOTNET_SDK=1` (version `ARTIFACTS_CREDPROVIDER_VERSION`, 2.0.4 by
+default). If you run ILD outside the image, install it for the user the agent
+runs as with Microsoft's `installcredprovider.sh`.
+
+In `whitelist` network mode, allow the feed's hosts (see
+[Agent network limits](#agent-network-limits)) or restores are blocked like
+any other destination.
+
+Known limits:
+
+- **The agent can read the PATs** while a run is active: they are in its
+  processes' environment and in a file it can read. That is why the PAT should
+  be read-only, scoped to one organization and short-lived, and why pull
+  requests of repositories that use private feeds need a human review. All runs
+  share one agent uid, so a process of one run can also read another active
+  run's feed credentials.
+- npm's legacy `{organization}.pkgs.visualstudio.com` registry URLs are not
+  authenticated; only NuGet's are.
+- `npm config set` and `npm login` fail in a process that has feeds, because the
+  npm user config it is given is read-only. The agent's own `~/.npmrc` is not
+  read in those processes.
 
 ## AI provider configuration
 

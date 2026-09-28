@@ -175,6 +175,12 @@ _Avoid_: port forward, tunnel, port mapping, NAT rule
 Whether the proxy is a boundary or advice. The container entrypoint, as root and before its privilege drop, installs nftables (or iptables) rules keyed on the agent uid — loopback and DNS accepted, everything else dropped — so a connection that skips the proxy goes nowhere; that needs `NET_ADMIN`, spent once and shed by the drop. It exports `ILD_NETWORK_ENFORCEMENT=enforced|advisory` with a reason, surfaced at `GET /api/v1/network/status` and as a banner in Settings. **Advisory** means the proxy still logs and filters every client that honours `HTTP_PROXY` but a hostile agent could bypass it: no `NET_ADMIN`, uid isolation off, or not running in the container image. Orchestrator traffic is never subject to these rules.
 _Avoid_: strict mode, hard/soft mode
 
+### Package feeds
+
+**Package Feed**:
+A `PackageFeeds` row — a name, an Azure Artifacts feed URL and an encrypted, write-only PAT (Packaging (Read)) — that a **Repository** selects **by name** (`RepositoryPackageFeeds`, no foreign key, so a deleted feed shows as missing and a feed recreated under the same name is selected again). Selecting a feed provides credentials only; where a package comes from stays the repository's own `.npmrc` / `nuget.config`. Every process of a run of that repository — Start-node install steps, Worktree Preview install steps and services, Cmd nodes, AI-node agent CLIs — gets `NPM_CONFIG_USERCONFIG` (an npm user config written per launch under the agent read root, deleted when the launch or preview ends) and `VSS_NUGET_EXTERNAL_FEED_ENDPOINTS` (read by the Azure Artifacts credential provider baked into SDK images), applied over everything else. A selected feed that no longer exists is skipped with a warning, never a failure. The agent can read the PATs while a run is active; that is an accepted risk, bounded by read-only, short-lived tokens and human review. Managed under **Settings → Package feeds** and `/api/v1/package-feeds`.
+_Avoid_: package source, registry, feed gateway
+
 ## Relationships
 
 - A **WorkItem** has zero or more **LoopRun**s, but at most one active run at a time
