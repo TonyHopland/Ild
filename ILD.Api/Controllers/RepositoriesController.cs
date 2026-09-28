@@ -149,6 +149,7 @@ public class RepositoriesController : ControllerBase
             return null;
 
         var feeds = await _db.PackageFeeds.AsNoTracking()
+            .Select(f => new { f.NormalizedName, f.Name })
             .ToDictionaryAsync(f => f.NormalizedName, f => f.Name, StringComparer.Ordinal);
         var selection = new List<RepositoryPackageFeed>();
         foreach (var name in requested.Select(n => (n ?? string.Empty).Trim()).Where(n => n.Length > 0))
