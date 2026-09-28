@@ -160,6 +160,23 @@ public class PrRoundVoiceTests
     }
 
     [Fact]
+    public async Task A_forge_that_cannot_resolve_still_lets_a_close_take_back_the_rounds_answer()
+    {
+        // The thread staying open changes nothing about the judgement: the round
+        // closed the item, so the answer it had queued for it is not sent.
+        var h = new Harness(canResolve: false);
+        var service = h.Build();
+        await service.ReplyAsync("wi-1", "11", "an answer I no longer stand by", h.Run.Id);
+
+        var closed = await service.CloseAsync("wi-1", "11", resolve: true, h.Run.Id);
+
+        Assert.True(closed.Ok);
+        Assert.Null(closed.Id);
+        Assert.Contains("withdrawn", closed.Message!, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(h.Queue);
+    }
+
+    [Fact]
     public async Task A_close_whose_resolve_could_not_be_queued_is_not_recorded_as_closed()
     {
         // The record has to describe what happened. Written before the queue,

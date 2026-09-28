@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **WorkItem Server settings have moved from the top bar to their own page under Settings.**
 
+- **An agent answering the same review comment again replaces its earlier pending answer, and can take back what it queued for the pull request before it is sent.**
+
 ### Fixed
 
 - **A loop's proposed edit to another work item is now approved or rejected from the work item whose loop asked for it, and the edited item lists its pending proposals on its Overview.**
