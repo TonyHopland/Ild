@@ -185,6 +185,13 @@ try
             if (conditionsMigrated > 0)
                 Log.Information("Migrated {Count} Condition node(s) from true/false to the switch model", conditionsMigrated);
 
+            // Declare every node's outputs in config.outputs, across every stored
+            // template version. Runs after the Condition migration, which may still
+            // be writing the case names it declares. Idempotent once migrated.
+            var outputsMigrated = await ILD.Data.Migrations.NodeOutputsMigrator.MigrateAsync(dbContext);
+            if (outputsMigrated > 0)
+                Log.Information("Migrated {Count} loop node(s) to declared outputs", outputsMigrated);
+
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also
             // clears dangling paths whose files a redeploy already wiped.

@@ -1,24 +1,21 @@
 using ILD.Core.Services.Implementations.Executors;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace ILD.Core.Services.Implementations;
 
 public static class LoopTemplateValidator
 {
-    // Every node (except the Cleanup sink) routes success and failure. Only
-    // Human, AI, PR and Condition nodes may additionally declare named custom
-    // edges (a Condition switch declares one per case plus its default edge).
-    private static readonly HashSet<string> CustomEdgeNodeTypes =
-        new(new[] { "Human", "AI", "PR", "Condition" }, StringComparer.OrdinalIgnoreCase);
-
-    private static readonly HashSet<string> NoEdgeNodeTypes =
-        new(new[] { "Cleanup" }, StringComparer.OrdinalIgnoreCase);
-
-    private static bool AllowsCustomEdges(string nodeType) => CustomEdgeNodeTypes.Contains(nodeType);
+    // Every node (except the Cleanup sink) has its fixed outputs. Only these node
+    // types may also declare named outputs of their own.
+    private static readonly HashSet<NodeType> NamedOutputNodeTypes =
+        new() { NodeType.Human, NodeType.AI, NodeType.PR, NodeType.Condition };
 
     /// <summary>
     /// Text a match-rule pattern is trial-run against to see whether it can
@@ -89,8 +86,6 @@ public static class LoopTemplateValidator
             errors.Add($"AI node {nodeId} has a match rule whose pattern '{rule.Pattern}' can match an empty string, so it would match every AI output and always win. Make it match the verdict text itself.");
     }
 
-    private static bool AllowsAnyEdges(string nodeType) => !NoEdgeNodeTypes.Contains(nodeType);
-
     public static IReadOnlyList<string> Validate(LoopTemplateGraph graph)
     {
         var errors = new List<string>();
@@ -134,22 +129,29 @@ public static class LoopTemplateValidator
                 errors.Add("No path from Start leads to a Cleanup node.");
         }
 
-        // Per-source edge rules:
-        //   • at most one OnSuccess (default) and one OnFailure (fallback)
-        //   • custom edges allowed only on Human/AI/PR, each with a non-empty,
-        //     node-unique Name
-        //   • a sink node (Cleanup) takes no outgoing edges
+        // Every node's declared outputs: the valid names in config.outputs plus
+        // the fixed outputs of its type, which it holds even when they are absent.
+        var declaredById = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var node in nodes)
+            declaredById.TryAdd(node.Id, DeclaredOutputs(node, errors));
         var nodeTypeById = nodes
             .GroupBy(n => n.Id, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First().NodeType, StringComparer.Ordinal);
 
+        // Per-source edge rules:
+        //   • at most one OnSuccess (default) and one OnFailure (fallback)
+        //   • a Custom edge connects a named output the source declares, and the
+        //     names are unique per node
+        //   • a sink node (Cleanup) takes no outgoing edges
         foreach (var src in edges.GroupBy(e => e.SourceNodeId))
         {
-            var srcType = nodeTypeById.GetValueOrDefault(src.Key) ?? string.Empty;
+            var srcTypeName = nodeTypeById.GetValueOrDefault(src.Key) ?? string.Empty;
+            var srcType = LoopTemplateManager.StoredNodeType(srcTypeName);
+            var declared = declaredById.GetValueOrDefault(src.Key) ?? new HashSet<string>(LoopOutputs.Fixed(srcType), StringComparer.Ordinal);
 
-            if (!AllowsAnyEdges(srcType))
+            if (srcType == NodeType.Cleanup)
             {
-                errors.Add($"Node {src.Key} ({srcType}) must not have outgoing edges.");
+                errors.Add($"Node {src.Key} ({srcTypeName}) must not have outgoing edges.");
                 continue;
             }
 
@@ -176,14 +178,24 @@ public static class LoopTemplateValidator
                             errors.Add($"Node {src.Key} has duplicate OnFailure edges.");
                         break;
                     case EdgeType.Custom:
-                        if (!AllowsCustomEdges(srcType))
-                        {
-                            errors.Add($"Node {src.Key} ({srcType}) may not have custom edges; only Human, AI and PR nodes can.");
-                            break;
-                        }
                         if (string.IsNullOrWhiteSpace(e.Name))
                         {
                             errors.Add($"Custom edge {e.Id} on node {src.Key} must have a Name.");
+                            break;
+                        }
+                        if (LoopOutputs.IsSuccessOrFailure(e.Name))
+                        {
+                            errors.Add($"Custom edge {e.Id} on node {src.Key} is named '{e.Name}', which is a fixed output; wire it as an {e.Name} edge instead of a Custom one.");
+                            break;
+                        }
+                        if (!NamedOutputNodeTypes.Contains(srcType))
+                        {
+                            errors.Add($"Node {src.Key} ({srcTypeName}) has a Custom edge '{e.Name}', but only Human, AI, PR and Condition nodes have named outputs; remove the edge.");
+                            break;
+                        }
+                        if (!declared.Contains(e.Name))
+                        {
+                            errors.Add($"Node {src.Key} has a Custom edge from output '{e.Name}', which is not declared in outputs; add {{ \"name\": \"{e.Name}\" }} to the node's outputs.");
                             break;
                         }
                         if (!seenCustomNames.Add(e.Name))
@@ -232,27 +244,12 @@ public static class LoopTemplateValidator
                         errors.Add($"AI node {node.Id} {field} may only use {{{{Var.<name>}}}} placeholders; '{{{{{bad}}}}}' is not one.");
                 }
 
-                // AI custom edges and match rules must stay in sync: every named
-                // custom edge must be routed to by a match rule, and every rule
-                // must point at an existing custom edge. Comparison is ordinal to
-                // mirror the engine's edge resolution (LoopEngine.ResolveNextEdgeAsync).
-                var ruleEdgeNames = (cfg.MatchRules ?? new())
-                    .Where(r => !string.IsNullOrWhiteSpace(r.EdgeName))
-                    .Select(r => r.EdgeName!)
-                    .ToHashSet(StringComparer.Ordinal);
-                var customEdgeNames = edges
-                    .Where(e => e.SourceNodeId == node.Id && !string.IsNullOrWhiteSpace(e.Name)
-                        && Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var role) && role == EdgeType.Custom)
-                    .Select(e => e.Name!)
-                    .ToHashSet(StringComparer.Ordinal);
-
-                foreach (var orphan in customEdgeNames.Except(ruleEdgeNames))
-                    errors.Add($"AI node {node.Id} has a custom edge '{orphan}' that no match rule routes to.");
-                foreach (var missing in ruleEdgeNames.Except(customEdgeNames))
-                    errors.Add($"AI node {node.Id} has a match rule routing to '{missing}' but no custom edge with that name exists.");
-
                 foreach (var rule in cfg.MatchRules ?? new())
+                {
+                    if (!string.IsNullOrWhiteSpace(rule.EdgeName))
+                        CheckOutputReference(node.Id, "AI", "matchRules", rule.EdgeName, declaredById[node.Id], errors);
                     ValidateMatchRulePattern(node.Id, rule, errors);
+                }
             }
             else if (string.Equals(node.NodeType, "Condition", StringComparison.OrdinalIgnoreCase))
             {
@@ -262,31 +259,21 @@ public static class LoopTemplateValidator
 
                 conditionTemplates = new List<string> { cfg.Output ?? ConditionNodeExecutor.DefaultTemplate };
 
-                // A Condition routes only through named custom edges — never an
-                // OnSuccess default. Collect the custom names actually wired out.
-                var wiredCustomNames = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var e in edges.Where(e => e.SourceNodeId == node.Id))
-                {
-                    if (!Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var role)) continue;
-                    if (role == EdgeType.OnSuccess)
-                        errors.Add($"Condition node {node.Id} must not have an OnSuccess edge; it routes via its cases and default edge.");
-                    else if (role == EdgeType.Custom && !string.IsNullOrWhiteSpace(e.Name))
-                        wiredCustomNames.Add(e.Name!.Trim());
-                }
+                // A Condition routes through its cases and default — never an
+                // OnSuccess default.
+                if (edges.Any(e => e.SourceNodeId == node.Id
+                        && Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var role) && role == EdgeType.OnSuccess))
+                    errors.Add($"Condition node {node.Id} must not have an OnSuccess edge; it routes via its cases and default edge.");
 
                 // A switch must name its default edge and have at least one case.
                 if (defaultEdge.Length == 0)
                     errors.Add($"Condition node {node.Id} must set a default edge.");
+                else
+                    CheckOutputReference(node.Id, "Condition", "defaultEdge", defaultEdge, declaredById[node.Id], errors);
                 if (cases.Count == 0)
                     errors.Add($"Condition node {node.Id} must have at least one case.");
 
-                // Referenced edge names = every case's edge plus the default.
-                // Every referenced name must be wired and every wired custom edge
-                // must be referenced (mirrors the AI node's match-rule/edge sync).
-                // Names are ordinal to match the engine's edge resolution.
-                var referenced = new HashSet<string>(StringComparer.Ordinal);
-                if (defaultEdge.Length > 0)
-                    referenced.Add(defaultEdge);
+                // Names are trimmed, as the executor trims them before routing.
                 for (var i = 0; i < cases.Count; i++)
                 {
                     var c = cases[i];
@@ -294,7 +281,7 @@ public static class LoopTemplateValidator
                     if (edgeName.Length == 0)
                         errors.Add($"Condition node {node.Id} case {i + 1} must set an edge name.");
                     else
-                        referenced.Add(edgeName);
+                        CheckOutputReference(node.Id, "Condition", $"case {i + 1}", edgeName, declaredById[node.Id], errors);
 
                     var variant = (c.Variant ?? string.Empty).Trim();
                     if (string.Equals(variant, "TextMatches", StringComparison.OrdinalIgnoreCase))
@@ -318,11 +305,6 @@ public static class LoopTemplateValidator
                         errors.Add($"Condition node {node.Id} case {i + 1} has an unknown variant '{c.Variant}'.");
                     }
                 }
-
-                foreach (var orphan in wiredCustomNames.Except(referenced))
-                    errors.Add($"Condition node {node.Id} has a custom edge '{orphan}' that no case or default routes to.");
-                foreach (var missing in referenced.Except(wiredCustomNames))
-                    errors.Add($"Condition node {node.Id} routes to '{missing}' but no custom edge with that name exists.");
             }
 
             var templates = new[] { aiPrompt, prTemplate, prCommentTemplate, humanPrompt, promptNodePrompt }
@@ -343,5 +325,64 @@ public static class LoopTemplateValidator
         }
 
         return errors;
+    }
+
+    /// <summary>
+    /// The names a node declares in <c>config.outputs</c>, plus the fixed outputs
+    /// of its type. Reports a malformed list, a bad or repeated name, and outputs
+    /// the node's type may not have. Names are ordinal, as the engine routes them.
+    /// </summary>
+    private static HashSet<string> DeclaredOutputs(LoopNodeDto node, List<string> errors)
+    {
+        var type = LoopTemplateManager.StoredNodeType(node.NodeType);
+        var declared = new HashSet<string>(StringComparer.Ordinal);
+        const string Example = "{ \"name\": \"approve\" }";
+
+        var outputs = (JsonSerializer.SerializeToNode(node.Config) as JsonObject)?["outputs"];
+        if (outputs is not null and not JsonArray)
+            errors.Add($"Node {node.Id} outputs must be an array of output objects, e.g. [{Example}].");
+
+        var entries = (outputs as JsonArray ?? new JsonArray()).ToList();
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i] is not JsonObject output)
+            {
+                errors.Add($"Node {node.Id} outputs entry {i + 1} must be an object with a name, e.g. {Example}.");
+                continue;
+            }
+            var name = LoopOutputs.NameOf(output);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                errors.Add($"Node {node.Id} outputs entry {i + 1} must have a non-empty string \"name\", e.g. {Example}.");
+                continue;
+            }
+            if (!declared.Add(name))
+                errors.Add($"Node {node.Id} declares output '{name}' more than once; remove the duplicate from outputs.");
+        }
+
+        if (type == NodeType.Cleanup && declared.Count > 0)
+            errors.Add($"Cleanup node {node.Id} must not declare outputs ({string.Join(", ", declared.Select(n => $"'{n}'"))}); set outputs to [].");
+        else if (type == NodeType.Condition && declared.Contains(LoopOutputs.OnSuccess))
+            errors.Add($"Condition node {node.Id} must not declare an OnSuccess output; it routes via its cases and default edge. Remove {{ \"name\": \"OnSuccess\" }} from outputs.");
+        else if (!NamedOutputNodeTypes.Contains(type))
+            foreach (var name in declared.Where(n => !LoopOutputs.IsSuccessOrFailure(n)))
+                errors.Add($"{type} node {node.Id} declares output '{name}', but only Human, AI, PR and Condition nodes can have named outputs; remove it from outputs.");
+
+        declared.UnionWith(LoopOutputs.Fixed(type));
+        return declared;
+    }
+
+    /// <summary>
+    /// A match rule, case or default names the output it routes to; that output
+    /// must be one the node declares, and never success or failure, which are
+    /// taken by the edge's own type rather than by name.
+    /// </summary>
+    private static void CheckOutputReference(
+        string nodeId, string kind, string field, string name, HashSet<string> declared, List<string> errors)
+    {
+        if (LoopOutputs.IsSuccessOrFailure(name))
+            errors.Add($"{kind} node {nodeId} {field} references '{name}', which is a fixed output and cannot be routed to by name; declare a named output in outputs and reference that instead.");
+        else if (!declared.Contains(name))
+            errors.Add($"{kind} node {nodeId} {field} references output '{name}', which is not declared in outputs; add {{ \"name\": \"{name}\" }} to outputs.");
     }
 }

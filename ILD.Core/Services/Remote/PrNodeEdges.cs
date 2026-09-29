@@ -1,23 +1,24 @@
 using System.Text;
+using ILD.Data;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Remote;
 
 /// <summary>
-/// The eight reserved custom-edge names a PR node may declare, the state each
-/// fires on, and the priority used to pick a single edge when several states
-/// newly become true in one heartbeat tick. The PR heartbeat poller emits a
-/// <c>NodeSignal.Custom</c> for the highest-priority edge that is both
-/// newly-true and actually connected; everything else only updates the
-/// persisted snapshot. Also owns the prose each edge resumes the node with
-/// (<see cref="Describe"/>) — the same vocabulary, said in words for the agent
-/// downstream. See the PR Node entry in CONTEXT.md.
+/// The eight reserved outputs every PR node holds (defined once, in
+/// <see cref="LoopOutputs"/>), the state each fires on, and the priority used to
+/// pick a single one when several states newly become true in one heartbeat
+/// tick. The PR heartbeat poller emits a <c>NodeSignal.Custom</c> for the
+/// highest-priority output that is both newly-true and actually wired;
+/// everything else only updates the persisted snapshot. Also owns the prose each
+/// output resumes the node with (<see cref="Describe"/>) — the same vocabulary,
+/// said in words for the agent downstream. See the PR Node entry in CONTEXT.md.
 /// </summary>
 public static class PrNodeEdges
 {
-    public const string OnRejected = "on_rejected";
-    public const string OnMergeConflict = "on_merge_conflict";
-    public const string OnCiFailed = "on_ci_failed";
+    public const string OnRejected = LoopOutputs.OnRejected;
+    public const string OnMergeConflict = LoopOutputs.OnMergeConflict;
+    public const string OnCiFailed = LoopOutputs.OnCiFailed;
 
     /// <summary>
     /// Review or comment items the run has not been handed yet. Unlike the other
@@ -25,24 +26,14 @@ public static class PrNodeEdges
     /// own delivery ledger (see <c>PrCommentDelivery</c>), which is what keeps a
     /// comment ILD itself posted from starting a round.
     /// </summary>
-    public const string OnComment = "on_comment";
-    public const string OnApproved = "on_approved";
-    public const string OnCiPassed = "on_ci_passed";
-    public const string OnMerged = "on_merged";
-    public const string OnAbandoned = "on_abandoned";
+    public const string OnComment = LoopOutputs.OnComment;
+    public const string OnApproved = LoopOutputs.OnApproved;
+    public const string OnCiPassed = LoopOutputs.OnCiPassed;
+    public const string OnMerged = LoopOutputs.OnMerged;
+    public const string OnAbandoned = LoopOutputs.OnAbandoned;
 
-    /// <summary>Reserved edge names in descending priority (index 0 = highest).</summary>
-    public static readonly IReadOnlyList<string> ByPriority = new[]
-    {
-        OnRejected,
-        OnMergeConflict,
-        OnCiFailed,
-        OnComment,
-        OnApproved,
-        OnCiPassed,
-        OnMerged,
-        OnAbandoned,
-    };
+    /// <summary>Reserved output names in descending priority (index 0 = highest).</summary>
+    public static readonly IReadOnlyList<string> ByPriority = LoopOutputs.ReservedPr;
 
     /// <summary>
     /// The set of edge-state names that are currently true for a snapshot. A
