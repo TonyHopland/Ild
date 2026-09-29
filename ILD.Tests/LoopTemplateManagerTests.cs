@@ -118,7 +118,7 @@ public class LoopTemplateManagerTests
     }
 
     // Start → Human → PR → {AI, Cleanup}. The Human node carries a custom edge
-    // named like a reserved PR edge, which is not one because its source is no PR node.
+    // named like a reserved PR edge, which is not one because its source is not a PR node.
     private static LoopTemplateGraph PrGraph(Dictionary<string, bool?>? userVisible = null)
     {
         LoopNodeEdgeDto Edge(string id, string src, string tgt, string type, string? name = null) => new()
