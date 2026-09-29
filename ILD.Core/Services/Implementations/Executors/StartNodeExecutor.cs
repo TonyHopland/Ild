@@ -71,7 +71,15 @@ public sealed class StartNodeExecutor : INodeExecutor
         }
 
         var config = NodeConfig.Parse<NodeConfig.Start>(ctx.Node.Config);
+        // Resolved at every run start, installing or not, so what is wrong with the
+        // repository's feeds is said once, up front, for every process that follows.
+        var feeds = await sp.GetRequiredService<IPackageFeedResolver>().ResolveAsync(repo.Id, ctx.CancellationToken);
         var warnings = new List<string>();
+        if (feeds.Missing.Count > 0)
+            warnings.Add($"selected package feed(s) no longer exist and were skipped: {string.Join(", ", feeds.Missing)}");
+        if (feeds.CredentialProviderMissing)
+            warnings.Add(NuGetCredentialProvider.MissingWarning);
+
         if (config.RunInstall == true)
         {
             var preview = sp.GetService<IWorktreePreviewService>();
@@ -81,12 +89,6 @@ public sealed class StartNodeExecutor : INodeExecutor
                     "install requested but the worktree preview service is unavailable.");
                 yield break;
             }
-
-            var feeds = await sp.GetRequiredService<IPackageFeedResolver>().ResolveAsync(repo.Id, ctx.CancellationToken);
-            if (feeds.Missing.Count > 0)
-                warnings.Add($"selected package feed(s) no longer exist and were skipped: {string.Join(", ", feeds.Missing)}");
-            if (feeds.CredentialProviderMissing)
-                warnings.Add(NuGetCredentialProvider.MissingWarning);
 
             var (installError, warning) = await RunInstallAsync(preview, worktreePath, repo.PreviewEnv, feeds.Feeds, ctx.CancellationToken);
             if (installError is not null)

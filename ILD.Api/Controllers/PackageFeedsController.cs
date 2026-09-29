@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -132,6 +133,9 @@ public class PackageFeedsController : ControllerBase
 
     private static string NameTaken(string name) => $"A feed named '{name}' already exists";
 
+    // credentialProviderMissing is instance-wide, not per feed; it rides on each feed
+    // so the list the Settings page already reads can warn that NuGet restores from
+    // any of them will fail.
     private static object View(PackageFeed f) => new
     {
         id = f.Id,
@@ -140,6 +144,7 @@ public class PackageFeedsController : ControllerBase
         patHint = PatHint(f.Pat),
         createdAt = f.CreatedAt,
         updatedAt = f.UpdatedAt,
+        credentialProviderMissing = NuGetCredentialProvider.IsMissing(ProcessEnvironment.Current),
     };
 
     // Only a PAT long enough to keep most of it hidden shows its tail.

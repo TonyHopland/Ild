@@ -226,6 +226,13 @@ export default function PackageFeedsSettings() {
         </p>
       </div>
 
+      {feeds.some((feed) => feed.credentialProviderMissing) && (
+        <div className="feed-banner" role="status">
+          <strong>NuGet restores won&apos;t be authenticated:</strong> the Azure Artifacts
+          credential provider was not found. npm feeds are unaffected.
+        </div>
+      )}
+
       <section className="settings-card">
         <div className="settings-card-header">
           <h3 className="settings-card-title">Feeds</h3>
@@ -273,6 +280,15 @@ export default function PackageFeedsSettings() {
       )}
 
       <style>{`
+        .feed-banner {
+          background-color: #3b2f12;
+          border: 1px solid #a16207;
+          border-radius: 0.375rem;
+          color: #fde68a;
+          font-size: 0.8rem;
+          padding: 0.5rem 0.75rem;
+          margin-bottom: 1rem;
+        }
         .feed-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
         .feed-table th {
           text-align: left;

@@ -639,9 +639,7 @@ does today.
 says what it found: OK; the PAT rejected (expired or revoked); no access to this
 feed (scope or organization); feed not found (the URL); or Azure DevOps
 unreachable. Nothing checks a PAT on its own — when one expires, restores fail
-and Test confirms why. An OK also says when NuGet restores will still fail
-because the credential provider (below) is not installed; runs log the same
-warning, and the Start node's output carries it.
+and Test confirms why.
 
 Then tick the feed under **Package feeds** on the repository's edit form. A
 repository selects none by default. Selecting a feed only provides its
@@ -679,11 +677,20 @@ however good the PAT is. The image carries it when it is built with
 `WITH_DOTNET_SDK=1` (version `ARTIFACTS_CREDPROVIDER_VERSION`, 2.0.4 by
 default): one read-only copy under `/usr/local/share/artifacts-credprovider`,
 which `NUGET_PLUGIN_PATHS` points NuGet at whatever `HOME` a process runs with.
-The build runs it once and fails if it cannot answer. If you run ILD outside the
-image, install it with Microsoft's `installcredprovider.sh` for the user the
-agent runs as, or point `NUGET_PLUGIN_PATHS` at it. `dotnet restore -v detailed`
+The build runs it once and fails if it cannot answer. `dotnet restore -v detailed`
 prints `Using … CredentialProvider.Microsoft.dll as a credential provider plugin`
 when NuGet has found it.
+
+Where a .NET SDK is installed but ILD cannot find a provider the run processes
+could read — looked for the way NuGet looks: the file `NUGET_PLUGIN_PATHS` names,
+else `~/.nuget/plugins` in the agent's home — Settings → Package feeds shows
+"NuGet restores won't be authenticated", Test's OK says NuGet credentials can't
+be delivered, and a run with feeds logs the warning at its start (it is also on
+the Start node's output). npm feeds are unaffected. This is the usual state of a
+**local development** setup, or of an image built without `WITH_DOTNET_SDK=1`
+and given an SDK some other way: install the provider with Microsoft's
+`installcredprovider.sh` for the user the agent runs as, or point
+`NUGET_PLUGIN_PATHS` at it.
 
 In `whitelist` network mode, allow the feed's hosts (see
 [Agent network limits](#agent-network-limits)) or restores are blocked like

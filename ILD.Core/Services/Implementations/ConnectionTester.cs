@@ -110,8 +110,8 @@ public sealed class ConnectionTester : IConnectionTester
         return status switch
         {
             _ when (int)status is >= 200 and < 300 => new ConnectionTestResult(ConnectionTestOutcome.Ok,
-                NuGetCredentialProvider.Locate(ProcessEnvironment.Current) is null
-                    ? "The PAT can read this feed, but NuGet restores will fail here: the Azure Artifacts credential provider is not installed."
+                NuGetCredentialProvider.IsMissing(ProcessEnvironment.Current)
+                    ? "The PAT can read this feed, but NuGet credentials can't be delivered here: the Azure Artifacts credential provider was not found. npm feeds are unaffected."
                     : "The PAT can read this feed.",
                 null),
             HttpStatusCode.Unauthorized => new ConnectionTestResult(ConnectionTestOutcome.InvalidApiKey,

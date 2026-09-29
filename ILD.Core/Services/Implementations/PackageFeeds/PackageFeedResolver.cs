@@ -66,7 +66,7 @@ public sealed class PackageFeedResolver : IPackageFeedResolver
                 feeds.Add(new PackageFeedCredential(selection.Feed.Name, url!, selection.Feed.Pat));
             }
         }
-        var providerMissing = feeds.Count > 0 && NuGetCredentialProvider.Locate(ProcessEnvironment.Current) is null;
+        var providerMissing = feeds.Count > 0 && NuGetCredentialProvider.IsMissing(ProcessEnvironment.Current);
         if (providerMissing)
             _logger.LogWarning("Repository {RepositoryId} selects package feeds, but {Problem}", id, NuGetCredentialProvider.MissingWarning);
         return new ResolvedPackageFeeds(feeds, missing, providerMissing);

@@ -681,6 +681,8 @@ export interface PackageFeed {
   patHint: string;
   createdAt: string;
   updatedAt: string;
+  /** Instance-wide: NuGet in run processes will not find the Azure Artifacts credential provider. */
+  credentialProviderMissing?: boolean;
 }
 
 export interface RemoteProvider {
