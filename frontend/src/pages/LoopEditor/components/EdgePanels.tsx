@@ -78,7 +78,7 @@ export function EdgePanels({
               </select>
               {customEdgeOptions.length === 0 && (
                 <small className="config-help-text">
-                  Define custom edges in the source node's settings first.
+                  Declare named outputs in the source node's settings first.
                 </small>
               )}
             </div>

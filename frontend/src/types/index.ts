@@ -381,10 +381,20 @@ export enum NodeType {
 export enum EdgeType {
   OnSuccess = "OnSuccess",
   OnFailure = "OnFailure",
-  // A named custom outlet. Only Human, AI and PR nodes may declare these, and a
-  // node may declare any number of them as long as their names are unique. The
-  // pair (edgeType, name) identifies the edge. Replaces the former OnRespond.
+  // Connects one of the source node's named outputs, by name. The pair
+  // (edgeType, name) identifies the edge. Replaces the former OnRespond.
   Custom = "Custom",
+}
+
+/**
+ * One entry of a node's `config.outputs`: every output a node has is declared
+ * once, by name. Other fields (settings such as `visible`) are carried through
+ * untouched. `reserved` marks a PR output the server always keeps.
+ */
+export interface NodeOutput {
+  name: string;
+  reserved?: boolean;
+  [key: string]: unknown;
 }
 
 export interface LoopNode {
@@ -422,13 +432,13 @@ export interface LoopTemplate {
   isArchived: boolean;
 }
 
-// Export file format (ild-loop-template/v1)
+// Export file format (ild-loop-template/v2)
 export type LoopTemplateExportNode = LoopNode;
 
 export type LoopTemplateExportEdge = LoopNodeEdge;
 
 export interface LoopTemplateExport {
-  $schema: "ild-loop-template/v1";
+  $schema: "ild-loop-template/v2";
   name: string;
   description: string;
   recoveryPolicy: RecoveryPolicy;
@@ -986,7 +996,7 @@ export interface ChatTurnCompletedPayload {
 
 export interface ChatLoopUpdatePayload {
   chatSessionId: string;
-  /** A complete `ild-loop-template/v1` document (JSON string) to apply live. */
+  /** A complete `ild-loop-template/v2` document (JSON string) to apply live. */
   document: string;
 }
 

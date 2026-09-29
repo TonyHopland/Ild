@@ -1,4 +1,5 @@
 import type { AiMatchRule, ConditionCase } from "../../types";
+import type { OutputRow } from "../../utils/nodeOutputs";
 
 /** Per-file outcome shown after a (possibly multi-file) template import. */
 export interface ImportFeedbackItem {
@@ -21,7 +22,7 @@ export interface NodeSettingsSnapshot {
   aiProviderTag: string;
   aiTools: string[];
   aiMatchRules: AiMatchRule[];
-  customEdgeNames: string[];
+  outputRows: OutputRow[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   aiForkFromPlaceholder: string;

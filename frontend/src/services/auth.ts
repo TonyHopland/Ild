@@ -7,6 +7,7 @@ import {
   WorkItemAttachment,
   AttachmentLimits,
   LoopTemplate,
+  NodeOutput,
   LoopRun,
   TurnVariableChange,
   Repository,
@@ -496,6 +497,16 @@ export const loopTemplateService = {
 
   validate: async (data: unknown): Promise<{ valid: boolean; errors: string[] }> => {
     return api.post<{ valid: boolean; errors: string[] }>("/looptemplates/validate", data);
+  },
+
+  /** The outputs each node type always holds, keyed by node type. */
+  getNodeOutputs: async (): Promise<Record<string, NodeOutput[]>> => {
+    return api.get<Record<string, NodeOutput[]>>("/looptemplates/node-outputs");
+  },
+
+  /** Upgrades an exported loop file written in an older format to the current one. */
+  upgradeDocument: async (document: string): Promise<{ document: string }> => {
+    return api.post<{ document: string }>("/looptemplates/upgrade-document", { document });
   },
 
   clone: async (id: string, newName: string): Promise<{ id: string }> => {

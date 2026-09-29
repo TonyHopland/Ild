@@ -7,10 +7,11 @@ import {
   type AiProvider,
   type AiToolDefinition,
   type ConditionCase,
+  type NodeOutput,
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
 import { resolveProviderForTag } from "../../../utils/providerTags";
-import { PR_RESERVED_EDGE_NAMES } from "../../../utils/edgeUtils";
+import type { OutputRow } from "../../../utils/nodeOutputs";
 import type { SessionPlaceholderUsage } from "../types";
 
 interface NodeSettingsModalProps {
@@ -22,7 +23,9 @@ interface NodeSettingsModalProps {
   aiProviderTag: string;
   aiTools: string[];
   aiMatchRules: AiMatchRule[];
-  customEdgeNames: string[];
+  outputRows: OutputRow[];
+  /** The fixed named outputs of the node's type (a PR node's reserved ones). */
+  fixedOutputs: NodeOutput[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   aiForkFromPlaceholder: string;
@@ -50,7 +53,7 @@ interface NodeSettingsModalProps {
   onAiProviderTagChange: (value: string) => void;
   onAiToolsChange: (value: string[]) => void;
   onAiMatchRulesChange: (value: AiMatchRule[]) => void;
-  onCustomEdgeNamesChange: (value: string[]) => void;
+  onOutputRowsChange: (value: OutputRow[]) => void;
   onAiUseSessionChange: (value: boolean) => void;
   onAiSessionPlaceholderChange: (value: string) => void;
   onAiForkFromPlaceholderChange: (value: string) => void;
@@ -76,62 +79,85 @@ function ConfigSection({ title, children }: { title: string; children: ReactNode
   );
 }
 
-/** Repeatable list of custom edge names, rendered for Human and PR nodes. */
-function CustomEdgesEditor({
-  names,
+/**
+ * A node's named outputs, rendered for Human, AI, PR and Condition nodes. Each
+ * row edits one output object, so fields the editor does not show are kept.
+ * Reserved outputs — the declared ones and the fixed ones of the node's type
+ * the config does not list yet — are shown read-only and cannot be removed.
+ */
+function OutputsEditor({
+  rows,
+  fixed,
+  nodeType,
   onChange,
-  reserved,
 }: {
-  names: string[];
-  onChange: (value: string[]) => void;
-  reserved?: readonly string[];
+  rows: OutputRow[];
+  fixed: NodeOutput[];
+  nodeType: NodeType;
+  onChange: (value: OutputRow[]) => void;
 }) {
-  const missingReserved = (reserved ?? []).filter((r) => !names.includes(r));
+  const isReserved = (row: OutputRow) =>
+    (nodeType === NodeType.PR && row.output.reserved === true) ||
+    fixed.some((output) => output.reserved === true && output.name === row.originalName);
+  const undeclaredFixed = fixed.filter(
+    (output) => !rows.some((row) => row.originalName === output.name),
+  );
   return (
     <div className="config-field">
-      <label>Custom Edges</label>
+      <label>Outputs</label>
       <small className="config-help-text">
-        Named outlets shown as buttons when this node waits for a human. Define them here, then
+        The named outlets this node can take besides success and failure. Declare them here, then
         connect each from the node's top handle.
       </small>
-      {reserved && reserved.length > 0 && (
-        <div className="pr-reserved-edges">
-          {missingReserved.map((name) => (
-            <button
-              key={name}
-              type="button"
-              className="match-rule-add"
-              aria-label={`Add reserved edge ${name}`}
-              onClick={() => onChange([...names, name])}
-            >
-              + {name}
-            </button>
-          ))}
-        </div>
-      )}
-      {names.map((name, index) => (
-        <div key={index} className="match-rule-row">
+      {rows.map((row, index) => {
+        const reserved = isReserved(row);
+        return (
+          <div key={index} className="match-rule-row">
+            <input
+              type="text"
+              aria-label={`Output name ${index + 1}`}
+              value={row.output.name}
+              readOnly={reserved}
+              onChange={(event) =>
+                onChange(
+                  rows.map((existing, i) =>
+                    i === index
+                      ? { ...existing, output: { ...existing.output, name: event.target.value } }
+                      : existing,
+                  ),
+                )
+              }
+              placeholder="Output name"
+            />
+            {!reserved && (
+              <button
+                type="button"
+                className="match-rule-remove"
+                aria-label={`Remove output ${index + 1}`}
+                onClick={() => onChange(rows.filter((_, i) => i !== index))}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        );
+      })}
+      {undeclaredFixed.map((output) => (
+        <div key={output.name} className="match-rule-row">
           <input
             type="text"
-            aria-label={`Custom edge name ${index + 1}`}
-            value={name}
-            onChange={(event) =>
-              onChange(names.map((existing, i) => (i === index ? event.target.value : existing)))
-            }
-            placeholder="Edge name"
+            aria-label={`Reserved output ${output.name}`}
+            value={output.name}
+            readOnly
           />
-          <button
-            type="button"
-            className="match-rule-remove"
-            aria-label={`Remove custom edge ${index + 1}`}
-            onClick={() => onChange(names.filter((_, i) => i !== index))}
-          >
-            ×
-          </button>
         </div>
       ))}
-      <button type="button" className="match-rule-add" onClick={() => onChange([...names, ""])}>
-        + Add edge
+      <button
+        type="button"
+        className="match-rule-add"
+        onClick={() => onChange([...rows, { output: { name: "" }, originalName: null }])}
+      >
+        + Add output
       </button>
     </div>
   );
@@ -165,8 +191,8 @@ function ConditionCasesEditor({
     <div className="config-field">
       <label>Cases</label>
       <small className="config-help-text">
-        Each case is evaluated in order; the first whose predicate holds routes to its named custom
-        edge. If none match, the default edge is taken.
+        Each case is evaluated in order; the first whose predicate holds routes to the output it
+        names. If none match, the default output is taken.
       </small>
       {cases.map((c, index) => (
         <div key={index} className="condition-case-row">
@@ -292,7 +318,8 @@ export function NodeSettingsModal({
   aiProviderTag,
   aiTools,
   aiMatchRules,
-  customEdgeNames,
+  outputRows,
+  fixedOutputs,
   aiUseSession,
   aiSessionPlaceholder,
   aiForkFromPlaceholder,
@@ -320,7 +347,7 @@ export function NodeSettingsModal({
   onAiProviderTagChange,
   onAiToolsChange,
   onAiMatchRulesChange,
-  onCustomEdgeNamesChange,
+  onOutputRowsChange,
   onAiUseSessionChange,
   onAiSessionPlaceholderChange,
   onAiForkFromPlaceholderChange,
@@ -336,6 +363,14 @@ export function NodeSettingsModal({
   onConditionOutputChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
+  const outputsEditor = (
+    <OutputsEditor
+      rows={outputRows}
+      fixed={fixedOutputs}
+      nodeType={selectedNodeType}
+      onChange={onOutputRowsChange}
+    />
+  );
 
   return (
     <div
@@ -442,12 +477,13 @@ export function NodeSettingsModal({
               </ConfigSection>
 
               <ConfigSection title="Routing">
+                {outputsEditor}
                 <div className="config-field">
                   <label>Match Rules</label>
                   <small className="config-help-text">
                     Each rule's pattern is matched case-insensitively against the AI output. The
-                    rule matching latest in the output routes to its named custom edge; no match
-                    takes the success edge.
+                    rule matching latest in the output routes to the output it names; no match takes
+                    the success edge. A name not yet in Outputs is added on save.
                   </small>
                   {aiMatchRules.map((rule, index) => (
                     <div key={index} className="match-rule-row">
@@ -546,7 +582,7 @@ export function NodeSettingsModal({
                   onChange={onHumanPromptChange}
                 />
               </div>
-              <CustomEdgesEditor names={customEdgeNames} onChange={onCustomEdgeNamesChange} />
+              {outputsEditor}
             </>
           )}
 
@@ -591,30 +627,27 @@ export function NodeSettingsModal({
                 </small>
               </div>
               <small className="config-help-text">
-                The PR heartbeat fires these reserved edges on PR state changes (in priority order):
-                on_rejected, on_merge_conflict, on_ci_failed, on_comment, on_approved, on_ci_passed,
-                on_merged, on_abandoned. Only wired edges route; there is no fallback to
-                on_success/on_failure, so wire <strong>on_merged</strong> and{" "}
+                The PR heartbeat fires the reserved outputs listed below on PR state changes; they
+                are always present and cannot be renamed or removed. Only wired outputs route; there
+                is no fallback to success/failure, so wire <strong>on_merged</strong> and{" "}
                 <strong>on_abandoned</strong> to a Cleanup path or the run parks forever once the PR
                 closes. <strong>on_comment</strong> carries review and comment items the run has not
                 been handed yet — while a review has changes requested, on_rejected outranks it
                 every tick, and that round reads the comments with the get_pr_review tool instead.
               </small>
-              <CustomEdgesEditor
-                names={customEdgeNames}
-                onChange={onCustomEdgeNamesChange}
-                reserved={PR_RESERVED_EDGE_NAMES}
-              />
+              {outputsEditor}
             </>
           )}
 
           {selectedNodeType === NodeType.Condition && (
             <>
               <small className="config-help-text">
-                A switch: each case routes to a named custom edge when its predicate holds, and the
-                default edge is taken when none match. No AI, command, or worktree access. Wire each
-                edge from the node's top handle.
+                A switch: each case routes to one of the node's outputs when its predicate holds,
+                and the default output is taken when none match. No AI, command, or worktree access.
+                Wire each output from the node's top handle.
               </small>
+
+              {outputsEditor}
 
               <ConditionCasesEditor cases={conditionCases} onChange={onConditionCasesChange} />
 

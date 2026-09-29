@@ -34,6 +34,7 @@ import {
   serializeForExport,
   downloadExport,
   parseImportFile,
+  upgradeImportText,
   exportNodesToLoopNodes,
   exportEdgesToLoopNodeEdges,
 } from "../../utils/loopTemplateExport";
@@ -41,10 +42,21 @@ import {
   checkEdgeConstraints,
   buildEdge,
   appendEdge,
-  getCustomEdgeNames,
-  getConnectedCustomEdgeNames,
+  nodeHasNamedOutputs,
+  renameOutputEdges,
   LOOP_EDGE_TYPE,
 } from "../../utils/edgeUtils";
+import {
+  fixedNamedOutputs,
+  initialOutputs,
+  mergeOutputs,
+  namedOutputNames,
+  outputRenames,
+  outputRowsOf,
+  readFixedOutputs,
+  type FixedOutputs,
+  type OutputRow,
+} from "../../utils/nodeOutputs";
 import {
   type AiMatchRule,
   type AiToolDefinition,
@@ -178,23 +190,6 @@ function readConditionDefaultEdge(config: Record<string, unknown>): string {
     : CONDITION_DEFAULT_EDGE;
 }
 
-/** Reads a Human/PR node's declared custom edge names from its config. */
-function readCustomEdges(config: Record<string, unknown>): string[] {
-  const names = config.customEdges;
-  if (!Array.isArray(names)) return [];
-  return names.filter((name): name is string => typeof name === "string");
-}
-
-/** Trims, drops blanks and dedupes a node's custom edge names for persistence. */
-function cleanCustomEdgeNames(names: string[]): string[] {
-  const seen = new Set<string>();
-  for (const name of names) {
-    const trimmed = name.trim();
-    if (trimmed) seen.add(trimmed);
-  }
-  return [...seen];
-}
-
 export default function LoopEditor() {
   const navigate = useNavigate();
   const { templateId: routeTemplateId } = useParams<{ templateId?: string }>();
@@ -221,7 +216,7 @@ export default function LoopEditor() {
   const isNewTemplateRef = useRef(false);
   const newTemplateNameRef = useRef("");
   // The last document actually persisted to the DB, as a serialized
-  // ild-loop-template/v1 string — the true baseline for the save-review diff
+  // ild-loop-template/v2 string — the true baseline for the save-review diff
   // (ADR-0011). Captured when a template/version loads and refreshed after a
   // successful save; deliberately NOT updated by applyLoopDocument, so AI edits
   // (which overwrite selectedTemplate) still show up as a pending delta at Save.
@@ -240,7 +235,7 @@ export default function LoopEditor() {
   const [aiProviderTag, setAiProviderTag] = useState("");
   const [aiTools, setAiTools] = useState<string[]>([]);
   const [aiMatchRules, setAiMatchRules] = useState<AiMatchRule[]>([]);
-  const [customEdgeNames, setCustomEdgeNames] = useState<string[]>([]);
+  const [outputRows, setOutputRows] = useState<OutputRow[]>([]);
   const [aiUseSession, setAiUseSession] = useState(false);
   const [aiSessionPlaceholder, setAiSessionPlaceholder] = useState("");
   const [aiForkFromPlaceholder, setAiForkFromPlaceholder] = useState("");
@@ -284,6 +279,7 @@ export default function LoopEditor() {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
+  const [fixedOutputs, setFixedOutputs] = useState<FixedOutputs>({});
 
   // Import state
   const [importFeedback, setImportFeedback] = useState<ImportFeedbackItem[]>([]);
@@ -324,6 +320,25 @@ export default function LoopEditor() {
   useEffect(() => {
     void loadTemplates();
     void loadAiProviders();
+  }, []);
+
+  // Without the fixed outputs the editor still works: a node lists only what it
+  // declares, and the server fills the fixed ones in on save.
+  useEffect(() => {
+    let active = true;
+    Promise.resolve()
+      .then(() => loopTemplateService.getNodeOutputs())
+      .then(
+        (outputs) => {
+          if (active) setFixedOutputs(readFixedOutputs(outputs));
+        },
+        (error) => {
+          if (active) setErrorText(loadErrorMessage(error, "Failed to load node outputs."));
+        },
+      );
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -784,7 +799,7 @@ export default function LoopEditor() {
       haltedForConflict: boolean;
     }> => {
       try {
-        const raw = await file.text();
+        const raw = await upgradeImportText(await file.text());
         const result = parseImportFile(raw);
 
         if (!result.ok) {
@@ -999,17 +1014,22 @@ export default function LoopEditor() {
         y: event.clientY - bounds.top,
       });
 
-      // A Condition node ships with a usable default switch: one TextMatches
-      // case routing to "true" and a "false" default edge, plus a pass-through
-      // Output, so its outlets work out of the box.
+      // Every node starts with the fixed outputs of its type. A Condition node
+      // ships with a usable default switch: one TextMatches case routing to a
+      // declared "true" output and a declared "false" default, plus a
+      // pass-through Output, so its outlets work out of the box.
       const initialConfig =
         nodeType === NodeType.Condition
           ? {
               cases: [{ ...CONDITION_DEFAULT_CASE }],
               defaultEdge: CONDITION_DEFAULT_EDGE,
               output: CONDITION_DEFAULT_TEMPLATE,
+              outputs: initialOutputs(nodeType, fixedOutputs, [
+                CONDITION_DEFAULT_CASE.edgeName,
+                CONDITION_DEFAULT_EDGE,
+              ]),
             }
-          : undefined;
+          : { outputs: initialOutputs(nodeType, fixedOutputs) };
 
       const newNode: Node = {
         id: `node-${Date.now()}`,
@@ -1018,13 +1038,13 @@ export default function LoopEditor() {
         data: {
           label: nodeType,
           type: nodeType,
-          ...(initialConfig ? { config: initialConfig } : {}),
+          config: initialConfig,
         },
       };
 
       setNodes((currentNodes) => currentNodes.concat(newNode));
     },
-    [setNodes, processImportFiles],
+    [setNodes, processImportFiles, fixedOutputs],
   );
 
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -1049,16 +1069,7 @@ export default function LoopEditor() {
       const nodeAiProviderTag = (config.aiProviderTag as string) || "";
       const activeProvider = resolveProviderForTag(aiProviders, nodeAiProviderTag).provider;
       const resolvedAiTools = resolveToolSelection(activeProvider, config.toolAllowlist);
-      // Human/PR nodes declare custom edges in config, but seeded and migrated
-      // templates wire the edge without that declaration — union the connected
-      // edges in so the settings panel matches what the run actually surfaces.
-      const resolvedCustomEdges =
-        data.type === NodeType.Human || data.type === NodeType.PR
-          ? cleanCustomEdgeNames([
-              ...readCustomEdges(config),
-              ...getConnectedCustomEdgeNames(node.id, edgesRef.current),
-            ])
-          : readCustomEdges(config);
+      const nodeOutputRows = outputRowsOf(data.type as NodeType, config);
 
       setNodeLabel(data.label || "");
       setCmdCommand((config.command as string) || "");
@@ -1066,7 +1077,7 @@ export default function LoopEditor() {
       setAiProviderTag(nodeAiProviderTag);
       setAiTools(resolvedAiTools);
       setAiMatchRules(readMatchRules(config));
-      setCustomEdgeNames(resolvedCustomEdges);
+      setOutputRows(nodeOutputRows);
       setAiUseSession((config.useSession as boolean | undefined) ?? false);
       setAiSessionPlaceholder((config.sessionPlaceholder as string) || "");
       setAiForkFromPlaceholder((config.forkFromPlaceholder as string) || "");
@@ -1088,7 +1099,7 @@ export default function LoopEditor() {
         aiProviderTag: nodeAiProviderTag,
         aiTools: resolvedAiTools,
         aiMatchRules: readMatchRules(config),
-        customEdgeNames: resolvedCustomEdges,
+        outputRows: nodeOutputRows,
         aiUseSession: (config.useSession as boolean | undefined) ?? false,
         aiSessionPlaceholder: (config.sessionPlaceholder as string) || "",
         aiForkFromPlaceholder: (config.forkFromPlaceholder as string) || "",
@@ -1142,6 +1153,12 @@ export default function LoopEditor() {
       }
     }
 
+    // A renamed output takes the references to it along: this node's rules,
+    // cases and default, and the Custom edges wired from it.
+    const renames = outputRenames(outputRows);
+    const renamed = (name: string) => renames.get(name.trim()) ?? name.trim();
+    let referenced: string[] = [];
+
     const config: Record<string, unknown> = {};
     if (selectedNodeType === NodeType.Cmd) {
       config.command = cmdCommand;
@@ -1153,9 +1170,10 @@ export default function LoopEditor() {
       config.toolAllowlist = aiTools;
       config.adapterConfig = undefined;
       const cleanRules = aiMatchRules
-        .map((rule) => ({ pattern: rule.pattern.trim(), edgeName: rule.edgeName.trim() }))
+        .map((rule) => ({ pattern: rule.pattern.trim(), edgeName: renamed(rule.edgeName) }))
         .filter((rule) => rule.pattern !== "" && rule.edgeName !== "");
       config.matchRules = cleanRules;
+      referenced = cleanRules.map((rule) => rule.edgeName);
       config.sessionPlaceholder = aiUseSession ? aiSessionPlaceholder.trim() : undefined;
       // A fork-from source is only meaningful with a managed session; an empty
       // value clears it so the node grows its session in place.
@@ -1167,13 +1185,11 @@ export default function LoopEditor() {
     } else if (selectedNodeType === NodeType.Human) {
       config.inputLabel = humanInputLabel;
       if (humanPrompt) config.prompt = humanPrompt;
-      config.customEdges = cleanCustomEdgeNames(customEdgeNames);
     } else if (selectedNodeType === NodeType.Prompt) {
       if (promptNodePrompt) config.prompt = promptNodePrompt;
     } else if (selectedNodeType === NodeType.PR) {
       if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
       if (prCommentTemplate) config.prCommentTemplate = prCommentTemplate;
-      config.customEdges = cleanCustomEdgeNames(customEdgeNames);
     } else if (selectedNodeType === NodeType.Condition) {
       // Persist the switch: each case keeps only the params its variant uses,
       // plus the default edge and pass-through output. Clear the legacy
@@ -1181,7 +1197,7 @@ export default function LoopEditor() {
       // variant/subject/pattern/tag behind.
       config.cases = conditionCases.map((c) => {
         const variant = c.variant.trim() || CONDITION_DEFAULT_CASE.variant;
-        const persisted: Record<string, unknown> = { variant, edgeName: c.edgeName.trim() };
+        const persisted: Record<string, unknown> = { variant, edgeName: renamed(c.edgeName) };
         // Include only the params the chosen variant uses (PrExists uses none),
         // matching the shape the backend migrator writes and the executor reads.
         if (variant === "TextMatches") {
@@ -1192,7 +1208,9 @@ export default function LoopEditor() {
         }
         return persisted;
       });
-      config.defaultEdge = conditionDefaultEdge.trim() || CONDITION_DEFAULT_EDGE;
+      const defaultEdge = renamed(conditionDefaultEdge) || CONDITION_DEFAULT_EDGE;
+      config.defaultEdge = defaultEdge;
+      referenced = [...conditionCases.map((c) => renamed(c.edgeName)), defaultEdge];
       config.output = conditionOutput.trim() || CONDITION_DEFAULT_TEMPLATE;
       config.variant = undefined;
       config.subject = undefined;
@@ -1201,22 +1219,19 @@ export default function LoopEditor() {
     }
 
     setNodes((currentNodes) =>
-      currentNodes.map((node) =>
-        node.id === selectedNode.id
-          ? {
-              ...node,
-              data: {
-                ...node.data,
-                label: nodeLabel,
-                config: {
-                  ...(node.data as { config?: Record<string, unknown> }).config,
-                  ...config,
-                },
-              },
-            }
-          : node,
-      ),
+      currentNodes.map((node) => {
+        if (node.id !== selectedNode.id) return node;
+        const current = (node.data as { config?: Record<string, unknown> }).config;
+        const outputs = nodeHasNamedOutputs(selectedNodeType as NodeType)
+          ? { outputs: mergeOutputs(current?.outputs, outputRows, referenced) }
+          : {};
+        return {
+          ...node,
+          data: { ...node.data, label: nodeLabel, config: { ...current, ...config, ...outputs } },
+        };
+      }),
     );
+    setEdges((currentEdges) => renameOutputEdges(currentEdges, selectedNode.id, renames));
 
     setSelectedNode(null);
     setShowNodeSettingsModal(false);
@@ -1226,7 +1241,7 @@ export default function LoopEditor() {
     aiProviderTag,
     aiPrompt,
     aiMatchRules,
-    customEdgeNames,
+    outputRows,
     aiSessionPlaceholder,
     aiForkFromPlaceholder,
     aiTools,
@@ -1242,6 +1257,7 @@ export default function LoopEditor() {
     conditionDefaultEdge,
     conditionOutput,
     setNodes,
+    setEdges,
     startCreateWorktree,
     startRunInstall,
   ]);
@@ -1254,7 +1270,7 @@ export default function LoopEditor() {
       setAiProviderTag(originalNodeConfig.aiProviderTag);
       setAiTools(originalNodeConfig.aiTools);
       setAiMatchRules(originalNodeConfig.aiMatchRules);
-      setCustomEdgeNames(originalNodeConfig.customEdgeNames);
+      setOutputRows(originalNodeConfig.outputRows);
       setAiUseSession(originalNodeConfig.aiUseSession);
       setAiSessionPlaceholder(originalNodeConfig.aiSessionPlaceholder);
       setAiForkFromPlaceholder(originalNodeConfig.aiForkFromPlaceholder);
@@ -1346,7 +1362,7 @@ export default function LoopEditor() {
     const trimmedName = edgeName.trim();
     if (edgeType === EdgeType.Custom) {
       if (!trimmedName) {
-        setEdgeError("Select which custom edge to connect");
+        setEdgeError("Select which output to connect");
         return;
       }
       if (
@@ -1655,7 +1671,11 @@ export default function LoopEditor() {
                       aiProviderTag={aiProviderTag}
                       aiTools={aiTools}
                       aiMatchRules={aiMatchRules}
-                      customEdgeNames={customEdgeNames}
+                      outputRows={outputRows}
+                      fixedOutputs={fixedNamedOutputs(
+                        (selectedNode.data as { type: NodeType }).type,
+                        fixedOutputs,
+                      )}
                       aiUseSession={aiUseSession}
                       aiSessionPlaceholder={aiSessionPlaceholder}
                       aiForkFromPlaceholder={aiForkFromPlaceholder}
@@ -1683,7 +1703,7 @@ export default function LoopEditor() {
                       onAiProviderTagChange={handleAiProviderTagChange}
                       onAiToolsChange={setAiTools}
                       onAiMatchRulesChange={setAiMatchRules}
-                      onCustomEdgeNamesChange={setCustomEdgeNames}
+                      onOutputRowsChange={setOutputRows}
                       onAiUseSessionChange={setAiUseSession}
                       onAiSessionPlaceholderChange={setAiSessionPlaceholder}
                       onAiForkFromPlaceholderChange={setAiForkFromPlaceholder}
@@ -1704,8 +1724,9 @@ export default function LoopEditor() {
                     pendingConnection={pendingConnection !== null}
                     edgeType={edgeType}
                     edgeName={edgeName}
-                    customEdgeOptions={getCustomEdgeNames(
+                    customEdgeOptions={namedOutputNames(
                       nodes.find((node) => node.id === pendingConnection?.source),
+                      fixedOutputs,
                     )}
                     edgeError={edgeError}
                     showEdgeDeletePanel={showEdgeDeletePanel}
