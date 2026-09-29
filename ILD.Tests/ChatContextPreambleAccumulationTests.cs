@@ -47,7 +47,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
 
     /// <summary>A representative live loop document, as the editor would post it.</summary>
     private const string OpenLoopDocument =
-        "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Deploy\",\"nodes\":[],\"edges\":[]}";
+        "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Deploy\",\"nodes\":[],\"edges\":[]}";
 
     private readonly ITestOutputHelper _out;
     private readonly TestDb _db = new();

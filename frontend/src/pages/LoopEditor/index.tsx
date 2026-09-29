@@ -34,7 +34,6 @@ import {
   serializeForExport,
   downloadExport,
   parseImportFile,
-  upgradeImportText,
   exportNodesToLoopNodes,
   exportEdgesToLoopNodeEdges,
 } from "../../utils/loopTemplateExport";
@@ -43,7 +42,7 @@ import {
   buildEdge,
   appendEdge,
   nodeHasNamedOutputs,
-  renameOutputEdges,
+  updateOutputEdges,
   LOOP_EDGE_TYPE,
 } from "../../utils/edgeUtils";
 import {
@@ -54,6 +53,7 @@ import {
   outputRenames,
   outputRowsOf,
   readFixedOutputs,
+  wiredOutputsOf,
   type FixedOutputs,
   type OutputRow,
 } from "../../utils/nodeOutputs";
@@ -279,7 +279,7 @@ export default function LoopEditor() {
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
-  const [fixedOutputs, setFixedOutputs] = useState<FixedOutputs>({});
+  const [fixedOutputs, setFixedOutputs] = useState<FixedOutputs>(new Map());
 
   // Import state
   const [importFeedback, setImportFeedback] = useState<ImportFeedbackItem[]>([]);
@@ -799,7 +799,7 @@ export default function LoopEditor() {
       haltedForConflict: boolean;
     }> => {
       try {
-        const raw = await upgradeImportText(await file.text());
+        const { document: raw } = await loopTemplateService.upgradeDocument(await file.text());
         const result = parseImportFile(raw);
 
         if (!result.ok) {
@@ -1154,8 +1154,16 @@ export default function LoopEditor() {
     }
 
     // A renamed output takes the references to it along: this node's rules,
-    // cases and default, and the Custom edges wired from it.
+    // cases and default, and the Custom edges wired from it. A deleted one
+    // takes its Custom edges with it; the dialog that confirmed the delete has
+    // already removed its rules and cases.
     const renames = outputRenames(outputRows);
+    const kept = new Set(outputRows.map((row) => row.originalName));
+    const deleted = new Set(
+      (originalNodeConfig?.outputRows ?? [])
+        .map((row) => row.originalName)
+        .filter((name): name is string => name !== null && !kept.has(name)),
+    );
     const renamed = (name: string) => renames.get(name.trim()) ?? name.trim();
     let referenced: string[] = [];
 
@@ -1208,7 +1216,7 @@ export default function LoopEditor() {
         }
         return persisted;
       });
-      const defaultEdge = renamed(conditionDefaultEdge) || CONDITION_DEFAULT_EDGE;
+      const defaultEdge = renamed(conditionDefaultEdge);
       config.defaultEdge = defaultEdge;
       referenced = [...conditionCases.map((c) => renamed(c.edgeName)), defaultEdge];
       config.output = conditionOutput.trim() || CONDITION_DEFAULT_TEMPLATE;
@@ -1231,7 +1239,7 @@ export default function LoopEditor() {
         };
       }),
     );
-    setEdges((currentEdges) => renameOutputEdges(currentEdges, selectedNode.id, renames));
+    setEdges((currentEdges) => updateOutputEdges(currentEdges, selectedNode.id, renames, deleted));
 
     setSelectedNode(null);
     setShowNodeSettingsModal(false);
@@ -1242,6 +1250,7 @@ export default function LoopEditor() {
     aiPrompt,
     aiMatchRules,
     outputRows,
+    originalNodeConfig,
     aiSessionPlaceholder,
     aiForkFromPlaceholder,
     aiTools,
@@ -1676,6 +1685,7 @@ export default function LoopEditor() {
                         (selectedNode.data as { type: NodeType }).type,
                         fixedOutputs,
                       )}
+                      wiredOutputs={wiredOutputsOf(selectedNode.id, edges, nodes)}
                       aiUseSession={aiUseSession}
                       aiSessionPlaceholder={aiSessionPlaceholder}
                       aiForkFromPlaceholder={aiForkFromPlaceholder}

@@ -9,7 +9,7 @@ namespace ILD.Core.Services.Implementations.Executors;
 
 /// <summary>
 /// A switch over run/work-item state: an ordered list of predicate cases each
-/// routing to a named custom edge, plus a default edge taken when no case
+/// routing to a named output, plus a default output taken when no case
 /// matches. It never invokes AI, runs a command, or touches the worktree. The
 /// pass-through <c>Output</c> is emitted identically on every branch; an
 /// evaluation error routes to OnFailure. Pre-switch true/false conditions are

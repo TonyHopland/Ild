@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Node } from "@xyflow/react";
 import PromptEditor from "../../../components/PromptEditor";
 import {
@@ -11,7 +11,15 @@ import {
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
 import { resolveProviderForTag } from "../../../utils/providerTags";
-import type { OutputRow } from "../../../utils/nodeOutputs";
+import ConfirmModal from "../../../components/ConfirmModal";
+import {
+  isReferenced,
+  outputReferences,
+  outputRowProblems,
+  type OutputReferences,
+  type OutputRow,
+  type WiredOutput,
+} from "../../../utils/nodeOutputs";
 import type { SessionPlaceholderUsage } from "../types";
 
 interface NodeSettingsModalProps {
@@ -26,6 +34,8 @@ interface NodeSettingsModalProps {
   outputRows: OutputRow[];
   /** The fixed named outputs of the node's type (a PR node's reserved ones). */
   fixedOutputs: NodeOutput[];
+  /** The Custom edges wired from the node, which deleting their output removes. */
+  wiredOutputs: WiredOutput[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   aiForkFromPlaceholder: string;
@@ -83,18 +93,24 @@ function ConfigSection({ title, children }: { title: string; children: ReactNode
  * A node's named outputs, rendered for Human, AI, PR and Condition nodes. Each
  * row edits one output object, so fields the editor does not show are kept.
  * Reserved outputs — the declared ones and the fixed ones of the node's type
- * the config does not list yet — are shown read-only and cannot be removed.
+ * the config does not list yet — are shown read-only and cannot be removed. A
+ * row with a blank or taken name shows why, and the settings cannot be saved
+ * until it is fixed.
  */
 function OutputsEditor({
   rows,
   fixed,
   nodeType,
+  problems,
   onChange,
+  onRemove,
 }: {
   rows: OutputRow[];
   fixed: NodeOutput[];
   nodeType: NodeType;
+  problems: (string | null)[];
   onChange: (value: OutputRow[]) => void;
+  onRemove: (row: OutputRow) => void;
 }) {
   const isReserved = (row: OutputRow) =>
     (nodeType === NodeType.PR && row.output.reserved === true) ||
@@ -111,34 +127,40 @@ function OutputsEditor({
       </small>
       {rows.map((row, index) => {
         const reserved = isReserved(row);
+        const problem = problems[index];
         return (
-          <div key={index} className="match-rule-row">
-            <input
-              type="text"
-              aria-label={`Output name ${index + 1}`}
-              value={row.output.name}
-              readOnly={reserved}
-              onChange={(event) =>
-                onChange(
-                  rows.map((existing, i) =>
-                    i === index
-                      ? { ...existing, output: { ...existing.output, name: event.target.value } }
-                      : existing,
-                  ),
-                )
-              }
-              placeholder="Output name"
-            />
-            {!reserved && (
-              <button
-                type="button"
-                className="match-rule-remove"
-                aria-label={`Remove output ${index + 1}`}
-                onClick={() => onChange(rows.filter((_, i) => i !== index))}
-              >
-                ×
-              </button>
-            )}
+          <div key={index}>
+            <div className="match-rule-row">
+              <input
+                type="text"
+                aria-label={`Output name ${index + 1}`}
+                aria-invalid={problem !== null}
+                className={problem ? "input-error" : ""}
+                value={row.output.name}
+                readOnly={reserved}
+                onChange={(event) =>
+                  onChange(
+                    rows.map((existing, i) =>
+                      i === index
+                        ? { ...existing, output: { ...existing.output, name: event.target.value } }
+                        : existing,
+                    ),
+                  )
+                }
+                placeholder="Output name"
+              />
+              {!reserved && (
+                <button
+                  type="button"
+                  className="match-rule-remove"
+                  aria-label={`Remove output ${index + 1}`}
+                  onClick={() => onRemove(row)}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            {problem && <div className="validation-error">{problem}</div>}
           </div>
         );
       })}
@@ -174,7 +196,7 @@ const EMPTY_CONDITION_CASE: ConditionCase = {
 
 /**
  * Ordered switch cases for a Condition node. Each case picks a predicate
- * (variant) and the custom edge to route to when it holds; the first matching
+ * (variant) and the output to route to when it holds; the first matching
  * case wins. Mirrors the AI node's Match Rules editor.
  */
 function ConditionCasesEditor({
@@ -320,6 +342,7 @@ export function NodeSettingsModal({
   aiMatchRules,
   outputRows,
   fixedOutputs,
+  wiredOutputs,
   aiUseSession,
   aiSessionPlaceholder,
   aiForkFromPlaceholder,
@@ -363,12 +386,58 @@ export function NodeSettingsModal({
   onConditionOutputChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
+  const rowProblems = outputRowProblems(outputRows, fixedOutputs);
+  const defaultEdgeMissing =
+    selectedNodeType === NodeType.Condition && conditionDefaultEdge.trim() === "";
+  const canSave = rowProblems.every((problem) => problem === null) && !defaultEdgeMissing;
+  const [pendingDelete, setPendingDelete] = useState<OutputRow | null>(null);
+
+  const referencesOf = (row: OutputRow): OutputReferences =>
+    outputReferences(row, outputRows, {
+      wired: wiredOutputs,
+      matchRules: selectedNodeType === NodeType.AI ? aiMatchRules : [],
+      cases: selectedNodeType === NodeType.Condition ? conditionCases : [],
+      defaultEdge: selectedNodeType === NodeType.Condition ? conditionDefaultEdge : null,
+    });
+
+  // Deleting an output takes everything that uses it along: the rules and
+  // cases routing to it here, its Custom edges when the settings are saved,
+  // and the default edge, which is left blank for the author to choose again.
+  const deleteOutput = (row: OutputRow) => {
+    const references = referencesOf(row);
+    onOutputRowsChange(outputRows.filter((existing) => existing !== row));
+    if (references.matchRules.length > 0)
+      onAiMatchRulesChange(aiMatchRules.filter((_, i) => !references.matchRules.includes(i)));
+    if (references.cases.length > 0)
+      onConditionCasesChange(conditionCases.filter((_, i) => !references.cases.includes(i)));
+    if (references.defaultEdge) onConditionDefaultEdgeChange("");
+  };
+
+  const requestDelete = (row: OutputRow) => {
+    if (isReferenced(referencesOf(row))) setPendingDelete(row);
+    else deleteOutput(row);
+  };
+
+  const pendingReferences = pendingDelete ? referencesOf(pendingDelete) : null;
+  const pendingItems = pendingReferences
+    ? [
+        ...pendingReferences.wired.map((edge) => `The edge to ${edge.targetLabel}`),
+        ...pendingReferences.matchRules.map(
+          (i) => `Match rule ${i + 1} (${aiMatchRules[i].pattern || "no pattern"})`,
+        ),
+        ...pendingReferences.cases.map((i) => `Case ${i + 1} (${conditionCases[i].variant})`),
+        ...(pendingReferences.defaultEdge ? ["The default edge (you will pick a new one)"] : []),
+      ]
+    : [];
+
   const outputsEditor = (
     <OutputsEditor
       rows={outputRows}
       fixed={fixedOutputs}
       nodeType={selectedNodeType}
+      problems={rowProblems}
       onChange={onOutputRowsChange}
+      onRemove={requestDelete}
     />
   );
 
@@ -656,10 +725,17 @@ export function NodeSettingsModal({
                 <input
                   id="condition-default-edge"
                   type="text"
+                  className={defaultEdgeMissing ? "input-error" : ""}
+                  aria-invalid={defaultEdgeMissing}
                   value={conditionDefaultEdge}
                   onChange={(event) => onConditionDefaultEdgeChange(event.target.value)}
                   placeholder="Edge name"
                 />
+                {defaultEdgeMissing && (
+                  <div className="validation-error">
+                    A default edge is required: name the output taken when no case matches.
+                  </div>
+                )}
                 <small className="config-help-text">
                   Taken when no case matches. Connect it from the node's top handle.
                 </small>
@@ -688,11 +764,23 @@ export function NodeSettingsModal({
             <button className="node-settings-btn-cancel" onClick={onClose}>
               Cancel
             </button>
-            <button className="node-settings-btn-save" onClick={onSave}>
+            <button className="node-settings-btn-save" onClick={onSave} disabled={!canSave}>
               Save
             </button>
           </div>
         </div>
+        <ConfirmModal
+          isOpen={pendingDelete !== null}
+          title="Delete output"
+          message={`Deleting the output '${pendingDelete?.output.name.trim() ?? ""}' also removes:`}
+          items={pendingItems}
+          confirmText="Delete output"
+          onConfirm={() => {
+            if (pendingDelete) deleteOutput(pendingDelete);
+            setPendingDelete(null);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
       </div>
     </div>
   );

@@ -791,7 +791,7 @@ export interface ManagedAgentStatus {
 
 /**
  * One AI output-matching rule: if {@link pattern} (a case-insensitive regex)
- * matches the AI output, the node routes to the custom edge named
+ * matches the AI output, the node routes to the output named
  * {@link edgeName}. When several rules match, the one matching latest in the
  * output wins (configured order only breaks ties).
  * Stored on an AI node's config as `matchRules`.
@@ -803,7 +803,7 @@ export interface AiMatchRule {
 
 /**
  * One case of a Condition switch: when its predicate ({@link variant} plus the
- * relevant field) holds, the node routes to the custom edge named
+ * relevant field) holds, the node routes to the output named
  * {@link edgeName}. Cases are evaluated in order and the first match wins; if
  * none match the node takes the switch's default edge. Stored on a Condition
  * node's config as `cases`.

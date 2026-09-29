@@ -1,5 +1,6 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { NodeType } from "../types";
+import { nodeHasNamedOutputs } from "../utils/edgeUtils";
 
 const nodeStyles: Record<string, { bg: string; border: string; icon: string }> = {
   [NodeType.Start]: {
@@ -56,13 +57,9 @@ export default function LoopNodeComponent({ data }: NodeProps) {
   // The top handle is the single "custom" outlet; the Custom edge of every named
   // output the node declares leaves it. Human, AI, PR and Condition nodes have
   // named outputs (a Condition switch routes its cases and default through it).
-  const hasCustomHandle =
-    nodeData.type === NodeType.Human ||
-    nodeData.type === NodeType.AI ||
-    nodeData.type === NodeType.PR ||
-    nodeData.type === NodeType.Condition;
+  const hasCustomHandle = nodeHasNamedOutputs(nodeData.type as NodeType);
   // A Condition node has no default success outlet — it routes only through its
-  // named custom edges (its cases and default edge, plus the fail handle for an
+  // named outputs (its cases and default, plus the fail handle for an
   // evaluation error).
   const isCondition = nodeData.type === NodeType.Condition;
 

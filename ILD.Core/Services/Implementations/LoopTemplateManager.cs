@@ -138,8 +138,7 @@ public class LoopTemplateManager : ILoopTemplateManager
 
     /// <summary>
     /// Brings every node config to its saved outputs shape (<see cref="LoopOutputs.NormalizeOutputs"/>)
-    /// before validation, so fixed and reserved outputs are always stored and a
-    /// leftover <c>customEdges</c> list is never stored.
+    /// before validation, so fixed and reserved outputs are always stored.
     /// </summary>
     private static void NormalizeOutputs(LoopTemplateGraph graph)
     {

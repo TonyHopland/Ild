@@ -7,10 +7,8 @@ import type {
   LoopNodeEdge,
 } from "../types";
 import { RecoveryPolicy } from "../types";
-import { loopTemplateService } from "../services/auth";
 
 const EXPORT_SCHEMA = "ild-loop-template/v2" as const;
-const LEGACY_SCHEMA = "ild-loop-template/v1";
 
 /**
  * Serialize a LoopTemplate (from the editor's current graph + template metadata)
@@ -53,27 +51,6 @@ export function downloadExport(exportData: LoopTemplateExport, filename: string)
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-}
-
-/**
- * Brings an import file written in the older format (v1, or no $schema) up to
- * the current one through the server, which owns the only upgrader. Anything
- * else — the current format, another schema, text that is not a JSON object —
- * is returned as it is, for {@link parseImportFile} to accept or explain.
- */
-export async function upgradeImportText(raw: string): Promise<string> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return raw;
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return raw;
-
-  const schema = (parsed as Record<string, unknown>)["$schema"];
-  if (schema !== undefined && schema !== LEGACY_SCHEMA) return raw;
-
-  return (await loopTemplateService.upgradeDocument(raw)).document;
 }
 
 /** Result of parsing an import file — discriminated union */

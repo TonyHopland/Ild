@@ -1,12 +1,18 @@
-import type { Node } from "@xyflow/react";
-import { EdgeType, NodeType, type NodeOutput } from "../types";
+import type { Edge, Node } from "@xyflow/react";
+import {
+  EdgeType,
+  NodeType,
+  type AiMatchRule,
+  type ConditionCase,
+  type NodeOutput,
+} from "../types";
 import { nodeHasNamedOutputs } from "./edgeUtils";
 
 /**
  * The outputs each node type always holds — success/failure, and a PR node's
  * reserved outputs — keyed by node type, as the server defines them.
  */
-export type FixedOutputs = Partial<Record<string, NodeOutput[]>>;
+export type FixedOutputs = ReadonlyMap<string, NodeOutput[]>;
 
 /**
  * One named output in the node settings Outputs list: the output as edited,
@@ -18,8 +24,22 @@ export interface OutputRow {
   originalName: string | null;
 }
 
+/** A Custom edge wired from the node being edited: the output it leaves and where it goes. */
+export interface WiredOutput {
+  name: string;
+  targetLabel: string;
+}
+
+/** Everything on a node that uses one of its outputs, as positions in the lists it came from. */
+export interface OutputReferences {
+  wired: WiredOutput[];
+  matchRules: number[];
+  cases: number[];
+  defaultEdge: boolean;
+}
+
 /** Success and failure are routed by edge type, never listed or referred to by name. */
-export function isSuccessOrFailure(name: string): boolean {
+function isSuccessOrFailure(name: string): boolean {
   return name === EdgeType.OnSuccess || name === EdgeType.OnFailure;
 }
 
@@ -30,7 +50,7 @@ function nameOf(entry: unknown): string | null {
 }
 
 /** The well-formed entries of a node config's `outputs`. */
-export function readOutputs(config: Record<string, unknown> | undefined): NodeOutput[] {
+function readOutputs(config: Record<string, unknown> | undefined): NodeOutput[] {
   const outputs = config?.outputs;
   if (!Array.isArray(outputs)) return [];
   return outputs.filter((entry): entry is NodeOutput => nameOf(entry) !== null);
@@ -38,7 +58,7 @@ export function readOutputs(config: Record<string, unknown> | undefined): NodeOu
 
 /** The fixed outputs of `type` that carry a name of their own (a PR node's reserved ones). */
 export function fixedNamedOutputs(type: NodeType, fixed: FixedOutputs): NodeOutput[] {
-  return (fixed[type] ?? []).filter((output) => !isSuccessOrFailure(output.name));
+  return (fixed.get(type) ?? []).filter((output) => !isSuccessOrFailure(output.name));
 }
 
 /** The settings rows for a node's declared named outputs. */
@@ -59,7 +79,7 @@ export function initialOutputs(
   referenced: string[] = [],
 ): NodeOutput[] {
   return [
-    ...(fixed[type] ?? []).map((output) => ({ ...output })),
+    ...(fixed.get(type) ?? []).map((output) => ({ ...output })),
     ...referenced.map((name) => ({ name })),
   ];
 }
@@ -79,12 +99,50 @@ export function namedOutputNames(node: Node | undefined, fixed: FixedOutputs): s
   return [...new Set(names.filter((name) => !isSuccessOrFailure(name)))];
 }
 
-/** Old name → new name for every loaded output the rows renamed (to a non-blank name). */
+/** The Custom edges wired from `sourceId`, each with the label of the node it leads to. */
+export function wiredOutputsOf(sourceId: string, edges: Edge[], nodes: Node[]): WiredOutput[] {
+  return edges.flatMap((edge) => {
+    const data = edge.data as { edgeType?: EdgeType; name?: string | null } | undefined;
+    if (edge.source !== sourceId || data?.edgeType !== EdgeType.Custom || !data.name) return [];
+    const target = nodes.find((node) => node.id === edge.target);
+    const label = (target?.data as { label?: string } | undefined)?.label;
+    return [{ name: data.name, targetLabel: label || edge.target }];
+  });
+}
+
+/**
+ * Why each row cannot be saved, or null when it can: a blank name, or a name
+ * the node already has — on another row, among the fixed outputs of its type,
+ * or success/failure. Names are compared trimmed, as they are saved.
+ */
+export function outputRowProblems(rows: OutputRow[], fixed: NodeOutput[]): (string | null)[] {
+  return rows.map((row, index) => {
+    const name = row.output.name.trim();
+    if (name === "") return "Give the output a name.";
+    const taken =
+      isSuccessOrFailure(name) ||
+      fixed.some(
+        (output) =>
+          output.name === name && !rows.some((other) => other.originalName === output.name),
+      ) ||
+      rows.some(
+        (other, i) =>
+          i !== index &&
+          other.output.name.trim() === name &&
+          // A row still named what it was loaded as keeps the name; the one
+          // renamed onto it is the one to fix.
+          (other.originalName === name || row.originalName !== name),
+      );
+    return taken ? `The node already has an output named '${name}'. Pick another name.` : null;
+  });
+}
+
+/** Old name → new name for every loaded output the rows renamed. */
 export function outputRenames(rows: OutputRow[]): Map<string, string> {
   const renames = new Map<string, string>();
   for (const row of rows) {
     const name = row.output.name.trim();
-    if (row.originalName !== null && name !== "" && name !== row.originalName) {
+    if (row.originalName !== null && name !== row.originalName) {
       renames.set(row.originalName, name);
     }
   }
@@ -92,10 +150,51 @@ export function outputRenames(rows: OutputRow[]): Map<string, string> {
 }
 
 /**
+ * Everything that uses `row`: the Custom edges wired from the name it was
+ * loaded under, and the match rules, cases and default whose name — once this
+ * edit's renames are applied, as they are on save — is the row's name.
+ */
+export function outputReferences(
+  row: OutputRow,
+  rows: OutputRow[],
+  node: {
+    wired: WiredOutput[];
+    matchRules: AiMatchRule[];
+    cases: ConditionCase[];
+    defaultEdge: string | null;
+  },
+): OutputReferences {
+  const renames = outputRenames(rows);
+  const name = row.output.name.trim();
+  const routesHere = (reference: string) =>
+    name !== "" && (renames.get(reference.trim()) ?? reference.trim()) === name;
+  const indexesOf = <T>(items: T[], referenceOf: (item: T) => string) =>
+    items.flatMap((item, index) => (routesHere(referenceOf(item)) ? [index] : []));
+  return {
+    wired:
+      row.originalName === null ? [] : node.wired.filter((edge) => edge.name === row.originalName),
+    matchRules: indexesOf(node.matchRules, (rule) => rule.edgeName),
+    cases: indexesOf(node.cases, (c) => c.edgeName),
+    defaultEdge: node.defaultEdge !== null && routesHere(node.defaultEdge),
+  };
+}
+
+/** Whether anything uses the output, so deleting it has to be confirmed. */
+export function isReferenced(references: OutputReferences): boolean {
+  return (
+    references.wired.length > 0 ||
+    references.matchRules.length > 0 ||
+    references.cases.length > 0 ||
+    references.defaultEdge
+  );
+}
+
+/**
  * The node's new `outputs`: every existing entry stays where it is — success
  * and failure untouched, a named one as its row now has it (renamed, with every
- * other field kept) or dropped when its row was removed — then the added rows,
- * then any name in `referenced` that is still undeclared. Entries that are not
+ * other field kept) or dropped when its row was deleted — then the added rows,
+ * then any name in `referenced` the node never declared. A name that was
+ * declared and whose row was deleted is not brought back. Entries that are not
  * well-formed are kept for the server to report.
  */
 export function mergeOutputs(
@@ -103,15 +202,15 @@ export function mergeOutputs(
   rows: OutputRow[],
   referenced: string[],
 ): unknown[] {
+  const entries = Array.isArray(previous) ? previous : [];
   const placed = new Set<OutputRow>();
   const result: unknown[] = [];
   const place = (row: OutputRow) => {
     placed.add(row);
-    const name = row.output.name.trim();
-    if (name !== "") result.push({ ...row.output, name });
+    result.push({ ...row.output, name: row.output.name.trim() });
   };
 
-  for (const entry of Array.isArray(previous) ? previous : []) {
+  for (const entry of entries) {
     const name = nameOf(entry);
     const row =
       name === null ? undefined : rows.find((r) => r.originalName === name && !placed.has(r));
@@ -122,7 +221,7 @@ export function mergeOutputs(
     if (!placed.has(row)) place(row);
   }
 
-  const declared = new Set(result.map(nameOf));
+  const declared = new Set([...result, ...entries].map(nameOf));
   for (const name of referenced) {
     if (name !== "" && !isSuccessOrFailure(name) && !declared.has(name)) {
       declared.add(name);
@@ -134,10 +233,10 @@ export function mergeOutputs(
 
 /** The server's fixed-outputs map, keeping only node types whose value is a list of outputs. */
 export function readFixedOutputs(value: unknown): FixedOutputs {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const fixed: FixedOutputs = {};
+  const fixed = new Map<string, NodeOutput[]>();
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fixed;
   for (const [type, outputs] of Object.entries(value)) {
-    if (Array.isArray(outputs)) fixed[type] = readOutputs({ outputs });
+    if (Array.isArray(outputs)) fixed.set(type, readOutputs({ outputs }));
   }
   return fixed;
 }

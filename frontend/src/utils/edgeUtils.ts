@@ -35,7 +35,7 @@ export function nodeHasNamedOutputs(nodeType: NodeType): boolean {
 
 /**
  * Validates that a node of {@link sourceNodeType} may gain an outgoing edge of
- * {@link edgeType}. Default/fallback edges are single per node; custom edges are
+ * {@link edgeType}. Default/fallback edges are single per node; Custom edges are
  * allowed in any number on nodes with named outputs (per-name uniqueness is
  * enforced at confirm time, once the user has picked an output).
  */
@@ -156,27 +156,37 @@ export function parallelLabelOffset(index: number, count: number): number {
 }
 
 /**
- * Renames the Custom edges wired from {@link sourceId}'s outputs that were
- * renamed (old name → new name), label included, leaving every other edge as is.
+ * Applies a settings edit of {@link sourceId}'s outputs to the Custom edges
+ * wired from them: an edge from a renamed output (old name → new name) is
+ * renamed, label included, and an edge from a deleted output is removed. Every
+ * other edge is left as is.
  */
-export function renameOutputEdges(
+export function updateOutputEdges(
   edges: Edge[],
   sourceId: string,
   renames: ReadonlyMap<string, string>,
+  deleted: ReadonlySet<string>,
 ): Edge[] {
-  if (renames.size === 0) return edges;
-  return edges.map((edge) => {
+  if (renames.size === 0 && deleted.size === 0) return edges;
+  const outputOf = (edge: Edge) => {
     const data = edge.data as { edgeType?: EdgeType; name?: string | null };
-    const renamed =
-      edge.source === sourceId && data?.edgeType === EdgeType.Custom && data.name
-        ? renames.get(data.name)
-        : undefined;
+    return edge.source === sourceId && data?.edgeType === EdgeType.Custom && data.name
+      ? data.name
+      : null;
+  };
+  return edges.flatMap((edge) => {
+    const output = outputOf(edge);
+    if (output === null) return [edge];
+    if (deleted.has(output)) return [];
+    const renamed = renames.get(output);
     return renamed === undefined
-      ? edge
-      : {
-          ...edge,
-          data: { ...edge.data, name: renamed },
-          label: edgeLabelFor(EdgeType.Custom, renamed),
-        };
+      ? [edge]
+      : [
+          {
+            ...edge,
+            data: { ...edge.data, name: renamed },
+            label: edgeLabelFor(EdgeType.Custom, renamed),
+          },
+        ];
   });
 }

@@ -5,12 +5,12 @@ import SaveDiffModal from "./SaveDiffModal";
 afterEach(cleanup);
 
 const saved = JSON.stringify(
-  { $schema: "ild-loop-template/v1", name: "Loop", prompt: "old" },
+  { $schema: "ild-loop-template/v2", name: "Loop", prompt: "old" },
   null,
   2,
 );
 const edited = JSON.stringify(
-  { $schema: "ild-loop-template/v1", name: "Loop", prompt: "new" },
+  { $schema: "ild-loop-template/v2", name: "Loop", prompt: "new" },
   null,
   2,
 );
@@ -74,7 +74,7 @@ describe("SaveDiffModal", () => {
     // A whole new property between unchanged lines: a pure insertion with no
     // removed counterpart, so there is nothing to emphasise within it.
     const withExtra = JSON.stringify(
-      { $schema: "ild-loop-template/v1", name: "Loop", note: "added", prompt: "old" },
+      { $schema: "ild-loop-template/v2", name: "Loop", note: "added", prompt: "old" },
       null,
       2,
     );

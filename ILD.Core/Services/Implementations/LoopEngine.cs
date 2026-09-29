@@ -819,7 +819,7 @@ public sealed class LoopEngine : ILoopEngine
                         var successEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, ok.Edge, ok.EdgeName);
                         if (successEdge is null)
                         {
-                            // A named custom edge with no matching connection is a
+                            // A named output with no edge wired from it is a
                             // template wiring error, not a graph terminus: fail the
                             // node so the human can wire it. The default OnSuccess
                             // sink still completes the run.

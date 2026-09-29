@@ -1024,7 +1024,7 @@ public class HumanFeedbackInputRequest
 public class HumanFeedbackEdgeRequest
 {
     /// <summary>
-    /// Name of the custom edge the human selected (one of the parked node's
+    /// Name of the output the human selected (one of the parked node's
     /// named buttons). Routes the node to the matching <c>Custom</c> edge.
     /// </summary>
     [System.ComponentModel.DataAnnotations.Required]
@@ -1033,7 +1033,7 @@ public class HumanFeedbackEdgeRequest
 
     /// <summary>
     /// Optional input that becomes <c>{{PreviousNode.Output}}</c> for the
-    /// custom edge's successor.
+    /// output's successor.
     /// </summary>
     [System.ComponentModel.DataAnnotations.StringLength(8192)]
     public string? Input { get; set; }

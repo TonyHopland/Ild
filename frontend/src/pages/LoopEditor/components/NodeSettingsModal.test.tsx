@@ -24,6 +24,7 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     aiMatchRules: [],
     outputRows: [],
     fixedOutputs: [],
+    wiredOutputs: [],
     aiUseSession: false,
     aiSessionPlaceholder: "",
     aiForkFromPlaceholder: "",
