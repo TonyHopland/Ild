@@ -38,6 +38,10 @@ public sealed class PackageFeedCredentialFilesTests : IDisposable
     private static PackageFeedCredential ProjectFeed(string pat = "pat-two-0002")
         => Feed("tools", "https://pkgs.dev.azure.com/other-org/web/_packaging/tools/", pat);
 
+    /// <summary>A project-scoped feed entered on the legacy host.</summary>
+    private static PackageFeedCredential LegacyFeed(string pat = "pat-three-0003")
+        => Feed("legacy", "https://third-org.pkgs.visualstudio.com/app/_packaging/legacy", pat);
+
     private static string B64(string s) => Convert.ToBase64String(Encoding.UTF8.GetBytes(s));
 
     private static string[] Lines(string path)
@@ -46,18 +50,27 @@ public sealed class PackageFeedCredentialFilesTests : IDisposable
     [Fact]
     public void The_npm_user_config_authenticates_every_feed_on_both_registry_paths_and_names_no_registry()
     {
-        using var env = PackageFeedCredentialFiles.Materialize([OrgFeed(), ProjectFeed()], "npmrc-test");
+        using var env = PackageFeedCredentialFiles.Materialize([OrgFeed(), ProjectFeed(), LegacyFeed()], "npmrc-test");
 
         var path = env.Environment[UserConfig];
         Assert.Equal(env.FilePath, path);
         var lines = Lines(path);
 
+        // Every feed on both hosts, whichever one its URL was entered on.
         foreach (var (prefix, org, pat) in new[]
         {
             ("//pkgs.dev.azure.com/example-org/_packaging/company/npm/registry/", "example-org", "pat-one-0001"),
             ("//pkgs.dev.azure.com/example-org/_packaging/company/npm/", "example-org", "pat-one-0001"),
+            ("//example-org.pkgs.visualstudio.com/_packaging/company/npm/registry/", "example-org", "pat-one-0001"),
+            ("//example-org.pkgs.visualstudio.com/_packaging/company/npm/", "example-org", "pat-one-0001"),
             ("//pkgs.dev.azure.com/other-org/web/_packaging/tools/npm/registry/", "other-org", "pat-two-0002"),
             ("//pkgs.dev.azure.com/other-org/web/_packaging/tools/npm/", "other-org", "pat-two-0002"),
+            ("//other-org.pkgs.visualstudio.com/web/_packaging/tools/npm/registry/", "other-org", "pat-two-0002"),
+            ("//other-org.pkgs.visualstudio.com/web/_packaging/tools/npm/", "other-org", "pat-two-0002"),
+            ("//pkgs.dev.azure.com/third-org/app/_packaging/legacy/npm/registry/", "third-org", "pat-three-0003"),
+            ("//pkgs.dev.azure.com/third-org/app/_packaging/legacy/npm/", "third-org", "pat-three-0003"),
+            ("//third-org.pkgs.visualstudio.com/app/_packaging/legacy/npm/registry/", "third-org", "pat-three-0003"),
+            ("//third-org.pkgs.visualstudio.com/app/_packaging/legacy/npm/", "third-org", "pat-three-0003"),
         })
         {
             Assert.Contains($"{prefix}:username={org}", lines);
@@ -75,7 +88,7 @@ public sealed class PackageFeedCredentialFilesTests : IDisposable
     public void The_nuget_endpoints_name_each_feed_on_both_hosts_with_the_pat_json_escaped()
     {
         const string trickyPat = "pa\"t\\with/é\nnewline";
-        using var env = PackageFeedCredentialFiles.Materialize([OrgFeed(trickyPat), ProjectFeed()], "nuget-test");
+        using var env = PackageFeedCredentialFiles.Materialize([OrgFeed(trickyPat), ProjectFeed(), LegacyFeed()], "nuget-test");
 
         using var doc = JsonDocument.Parse(env.Environment[NuGetEndpoints]);
         var entries = doc.RootElement.GetProperty("endpointCredentials").EnumerateArray()
@@ -92,6 +105,8 @@ public sealed class PackageFeedCredentialFilesTests : IDisposable
             ("https://other-org.pkgs.visualstudio.com/web/_packaging/tools/nuget/v3/index.json", "ild", "pat-two-0002"),
             ("https://pkgs.dev.azure.com/example-org/_packaging/company/nuget/v3/index.json", "ild", trickyPat),
             ("https://pkgs.dev.azure.com/other-org/web/_packaging/tools/nuget/v3/index.json", "ild", "pat-two-0002"),
+            ("https://third-org.pkgs.visualstudio.com/app/_packaging/legacy/nuget/v3/index.json", "ild", "pat-three-0003"),
+            ("https://pkgs.dev.azure.com/third-org/app/_packaging/legacy/nuget/v3/index.json", "ild", "pat-three-0003"),
         }.OrderBy(e => e.Item1, StringComparer.Ordinal).ToArray();
 
         Assert.Equal(expected, entries.Select(e => (e.Endpoint, e.Username, e.Password)).ToArray());

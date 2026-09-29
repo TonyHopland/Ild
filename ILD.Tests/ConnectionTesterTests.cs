@@ -385,6 +385,10 @@ public class ConnectionTesterTests : IDisposable
         "https://pkgs.dev.azure.com/example-org/_packaging/company/nuget/v3/index.json")]
     [InlineData("https://pkgs.dev.azure.com/example-org/example-project/_packaging/company",
         "https://pkgs.dev.azure.com/example-org/example-project/_packaging/company/nuget/v3/index.json")]
+    [InlineData("https://example-org.pkgs.visualstudio.com/_packaging/company",
+        "https://example-org.pkgs.visualstudio.com/_packaging/company/nuget/v3/index.json")]
+    [InlineData("https://example-org.pkgs.visualstudio.com/example-project/_packaging/company",
+        "https://example-org.pkgs.visualstudio.com/example-project/_packaging/company/nuget/v3/index.json")]
     public async Task Feed_test_asks_the_nuget_service_index_once_with_the_pat_as_basic_auth(string feedUrl, string expectedUri)
     {
         var handler = ScriptedHandler.Answer(HttpStatusCode.OK, "{\"version\":\"3.0.0\",\"resources\":[]}");

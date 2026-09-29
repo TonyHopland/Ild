@@ -190,7 +190,7 @@ public class PackageFeedsApiTests
     }
 
     [Fact]
-    public async Task Only_an_azure_artifacts_feed_url_is_accepted()
+    public async Task Only_an_azure_artifacts_feed_url_on_either_host_is_accepted()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
@@ -202,7 +202,13 @@ public class PackageFeedsApiTests
             "not a url",
             "http://pkgs.dev.azure.com/example-org/_packaging/company",
             "https://example.com/example-org/_packaging/company",
-            "https://example-org.pkgs.visualstudio.com/_packaging/company",
+            "http://example-org.pkgs.visualstudio.com/_packaging/company",
+            "https://pkgs.visualstudio.com/_packaging/company",
+            "https://team.example-org.pkgs.visualstudio.com/_packaging/company",
+            "https://example-org.pkgs.visualstudio.com/_packaging",
+            "https://example-org.pkgs.visualstudio.com/example-project/team/_packaging/company",
+            "https://example-org.pkgs.visualstudio.com/_packaging/company/nuget/v3/index.json",
+            "https://example-org.pkgs.visualstudio.com/_packaging/company?api-version=7.1",
             "https://pkgs.dev.azure.com/_packaging/company",
             "https://pkgs.dev.azure.com/example-org/_packaging",
             "https://pkgs.dev.azure.com/example-org/_packaging/",
@@ -226,6 +232,16 @@ public class PackageFeedsApiTests
 
         Assert.Equal(CompanyUrl, Assert.Single(await ListFeedsAsync(client)).GetProperty("feedUrl").GetString());
         Assert.Equal(ToolsUrl, (await CreateFeedAsync(client, "tools", ToolsUrl + "/")).GetProperty("feedUrl").GetString());
+
+        // The legacy host names the same feeds; what the admin typed is what is shown.
+        const string legacyOrg = "https://example-org.pkgs.visualstudio.com/_packaging/legacy";
+        const string legacyProject = "https://example-org.pkgs.visualstudio.com/example-project/_packaging/legacy-tools";
+        Assert.Equal(legacyOrg, (await CreateFeedAsync(client, "legacy", legacyOrg + "/")).GetProperty("feedUrl").GetString());
+        Assert.Equal(legacyProject, (await CreateFeedAsync(client, "legacy-tools", legacyProject)).GetProperty("feedUrl").GetString());
+        const string companyLegacy = "https://example-org.pkgs.visualstudio.com/_packaging/company";
+        var moved = await client.PutAsJsonAsync($"/api/v1/package-feeds/{id}", new { feedUrl = companyLegacy }, Ct);
+        Assert.True(moved.IsSuccessStatusCode, await moved.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(companyLegacy, (await Json(moved)).GetProperty("feedUrl").GetString());
     }
 
     [Fact]
