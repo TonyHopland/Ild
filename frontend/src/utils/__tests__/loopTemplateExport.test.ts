@@ -297,5 +297,62 @@ describe("loopTemplateExport", () => {
         expect(startNode?.config.__pos).toEqual({ x: 100, y: 80 });
       }
     });
+
+    test("an edge's userVisible survives export → import, and an edge without one stays without one", () => {
+      const withVisibility: LoopTemplate = {
+        ...sampleTemplate,
+        edges: [
+          { ...sampleTemplate.edges[0], id: "e-shown", userVisible: true },
+          { ...sampleTemplate.edges[0], id: "e-hidden", userVisible: false },
+          { ...sampleTemplate.edges[0], id: "e-unset" },
+        ],
+      };
+
+      const exportData = serializeForExport(withVisibility);
+      expect(exportData.edges.map((e) => e.userVisible)).toEqual([true, false, undefined]);
+
+      const result = parseImportFile(JSON.stringify(exportData));
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const loopEdges = exportEdgesToLoopNodeEdges(result.data.edges);
+        expect(loopEdges.map((e) => [e.id, e.userVisible])).toEqual([
+          ["e-shown", true],
+          ["e-hidden", false],
+          ["e-unset", undefined],
+        ]);
+      }
+    });
+
+    const importWithEdge = (edge: Record<string, unknown>) =>
+      parseImportFile(
+        JSON.stringify({
+          ...serializeForExport(sampleTemplate),
+          edges: [
+            {
+              id: "e-1",
+              sourceNodeId: "n-start",
+              targetNodeId: "n-cleanup",
+              edgeType: EdgeType.OnSuccess,
+              ...edge,
+            },
+          ],
+        }),
+      );
+
+    test.each([[{}], [{ userVisible: null }], [{ userVisible: true }], [{ userVisible: false }]])(
+      "import accepts an edge with %j",
+      (edge) => {
+        expect(importWithEdge(edge).ok).toBe(true);
+      },
+    );
+
+    test.each([[{ userVisible: "false" }], [{ userVisible: 0 }], [{ userVisible: {} }]])(
+      "import rejects an edge with %j as malformed",
+      (edge) => {
+        const result = importWithEdge(edge);
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error).toContain("edges are malformed");
+      },
+    );
   });
 });

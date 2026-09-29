@@ -10,6 +10,7 @@ import {
   parallelLabelOffset,
   PARALLEL_LABEL_STAGGER,
   LOOP_EDGE_TYPE,
+  defaultEdgeUserVisible,
 } from "./edgeUtils";
 import { EdgeType, NodeType } from "../types";
 
@@ -267,5 +268,31 @@ describe("appendEdge", () => {
     });
     expect(appendEdge(built, edges)).toEqual([built]);
     expect(edges).toHaveLength(0);
+  });
+});
+
+describe("defaultEdgeUserVisible", () => {
+  test.each([
+    "on_rejected",
+    "on_merge_conflict",
+    "on_ci_failed",
+    "on_comment",
+    "on_approved",
+    "on_ci_passed",
+    "on_merged",
+    "on_abandoned",
+  ])("a PR node's reserved %s edge starts hidden", (name) => {
+    expect(defaultEdgeUserVisible(NodeType.PR, EdgeType.Custom, name)).toBe(false);
+  });
+
+  test.each([
+    [NodeType.PR, EdgeType.OnSuccess, null],
+    [NodeType.PR, EdgeType.OnFailure, null],
+    [NodeType.PR, EdgeType.Custom, "Respond"],
+    [NodeType.Human, EdgeType.Custom, "on_merged"],
+    [NodeType.AI, EdgeType.Custom, "on_ci_failed"],
+    [NodeType.Condition, EdgeType.Custom, "on_approved"],
+  ])("a %s node's %s edge %s starts visible", (sourceType, edgeType, name) => {
+    expect(defaultEdgeUserVisible(sourceType, edgeType, name)).toBe(true);
   });
 });

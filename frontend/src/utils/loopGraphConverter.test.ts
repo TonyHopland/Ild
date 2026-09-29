@@ -134,4 +134,40 @@ describe("loopGraphConverter custom edges", () => {
     expect(result[0].name).toBe("Respond");
     expect(result[1].name).toBeNull();
   });
+
+  test("userVisible survives a load and save, and an edge without one is sent without one", () => {
+    const loaded = templateToEdges(
+      template([
+        {
+          id: "e-shown",
+          sourceNodeId: "pr",
+          targetNodeId: "b",
+          edgeType: EdgeType.Custom,
+          name: "on_merged",
+          userVisible: true,
+        },
+        {
+          id: "e-hidden",
+          sourceNodeId: "h",
+          targetNodeId: "b",
+          edgeType: EdgeType.OnSuccess,
+          userVisible: false,
+        },
+      ]),
+    );
+    const unsaved = {
+      id: "e-new",
+      source: "pr",
+      target: "b",
+      data: { edgeType: EdgeType.Custom, name: "on_ci_failed" },
+    } as Edge;
+
+    const saved = edgesToLoopNodeEdges([...loaded, unsaved]);
+
+    expect(saved.map((e) => [e.id, e.userVisible])).toEqual([
+      ["e-shown", true],
+      ["e-hidden", false],
+      ["e-new", undefined],
+    ]);
+  });
 });

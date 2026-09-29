@@ -1,5 +1,6 @@
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
+using ILD.Data.Enums;
 
 namespace ILD.Tests;
 
@@ -191,4 +192,23 @@ public class PrNodeEdgesTests
             Assert.False(char.IsHighSurrogate(c) && (i + 1 == reason.Length || !char.IsLowSurrogate(reason[i + 1])),
                 $"unpaired high surrogate at index {i}");
     }
+
+    [Theory]
+    [InlineData(NodeType.PR, EdgeType.Custom, "on_rejected", false)]
+    [InlineData(NodeType.PR, EdgeType.Custom, "on_merge_conflict", false)]
+    [InlineData(NodeType.PR, EdgeType.Custom, "on_ci_failed", false)]
+    [InlineData(NodeType.PR, EdgeType.Custom, "on_comment", false)]
+    [InlineData(NodeType.PR, EdgeType.Custom, "on_approved", false)]
+    [InlineData(NodeType.PR, EdgeType.Custom, "on_ci_passed", false)]
+    [InlineData(NodeType.PR, EdgeType.Custom, "on_merged", false)]
+    [InlineData(NodeType.PR, EdgeType.Custom, "on_abandoned", false)]
+    [InlineData(NodeType.PR, EdgeType.OnSuccess, null, true)]
+    [InlineData(NodeType.PR, EdgeType.OnFailure, null, true)]
+    [InlineData(NodeType.PR, EdgeType.Custom, "Respond", true)]
+    [InlineData(NodeType.Human, EdgeType.Custom, "on_merged", true)]
+    [InlineData(NodeType.AI, EdgeType.Custom, "on_ci_failed", true)]
+    [InlineData(NodeType.Condition, EdgeType.Custom, "on_approved", true)]
+    public void DefaultUserVisible_hides_only_a_pr_nodes_reserved_custom_edges(
+        NodeType sourceType, EdgeType edgeType, string? name, bool expected)
+        => Assert.Equal(expected, PrNodeEdges.DefaultUserVisible(sourceType, edgeType, name));
 }

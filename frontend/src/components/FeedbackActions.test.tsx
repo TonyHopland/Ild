@@ -47,6 +47,20 @@ describe("FeedbackActions", () => {
     expect(screen.getAllByRole("button")).toHaveLength(2);
   });
 
+  test("an empty action list (every edge hidden) offers no Approve, Reject or edge buttons, only Merge", () => {
+    render(
+      <FeedbackActions
+        actions=""
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        onMerge={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual(["Merge"]);
+  });
+
   test("no Merge button when onMerge is not provided", () => {
     render(
       <FeedbackActions actions={null} onApprove={vi.fn()} onReject={vi.fn()} onEdge={vi.fn()} />,
