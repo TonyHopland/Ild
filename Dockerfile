@@ -204,6 +204,47 @@ RUN if [ "$WITH_CHROME" = "1" ]; then \
   esac; \
 fi
 
+# The Azure Artifacts credential provider, for repositories that restore from a
+# private NuGet feed: it answers NuGet with the credentials a run hands it in
+# VSS_NUGET_EXTERNAL_FEED_ENDPOINTS, and holds no secret itself. Installed as the
+# .NET tool, pinned, into one root-owned directory every uid can read, and linked
+# into /usr/local/bin: NuGet (from SDK 9.0.200) finds a nuget-plugin-* command on
+# PATH, and /usr/local/bin stays on PATH whatever HOME a process has, including
+# the login shells previews run in, which reset PATH. No NUGET_PLUGIN_PATHS: set,
+# it would switch that PATH lookup and ~/.nuget/plugins off for every process.
+# The tool runs on the image's own runtime, so every architecture .NET supports
+# is covered. An SDK too old for it fails the build rather than shipping an image
+# whose NuGet feeds cannot work; so does a failed install. The smoke check runs
+# the provider by name, as the agent, from a login shell, against a made-up
+# endpoint, so the image is never built unless the agent's NuGet can find and run it.
+ARG WITH_DOTNET_SDK
+ARG DOTNET_VERSION
+ARG ARTIFACTS_CREDPROVIDER_VERSION=2.0.4
+RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
+  sdk_version="$(dotnet --version)" && \
+  if ! printf '%s\n' "$sdk_version" | awk -F. '{ exit !($1 > 9 || ($1 == 9 && ($2 > 0 || $3 + 0 >= 200))) }'; then \
+    echo "The Azure Artifacts credential provider needs .NET SDK 9.0.200 or later, but DOTNET_VERSION=${DOTNET_VERSION} gives SDK ${sdk_version}. Build with DOTNET_VERSION=9.0 or later." >&2; \
+    exit 1; \
+  fi && \
+  mkdir -p /tmp/credprovider-install && \
+  DOTNET_CLI_HOME=/tmp/credprovider-install NUGET_PACKAGES=/tmp/credprovider-install/packages \
+  DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+    dotnet tool install Microsoft.Artifacts.CredentialProvider.NuGet.Tool \
+      --version "$ARTIFACTS_CREDPROVIDER_VERSION" --tool-path /usr/local/share/artifacts-credprovider && \
+  rm -rf /tmp/credprovider-install && \
+  chmod -R a+rX,go-w /usr/local/share/artifacts-credprovider && \
+  ln -s /usr/local/share/artifacts-credprovider/nuget-plugin-microsoft-artifacts-credential-provider /usr/local/bin/ && \
+  mkdir -p /tmp/credprovider-smoke && \
+  chown ${AGENT_UID}:${AGENT_GID} /tmp/credprovider-smoke && \
+  smoke_endpoint=https://pkgs.dev.azure.com/image-build/_packaging/smoke/nuget/v3/index.json && \
+  gosu ${AGENT_UID}:${AGENT_GID} env HOME=/tmp/credprovider-smoke \
+    VSS_NUGET_EXTERNAL_FEED_ENDPOINTS="{\"endpointCredentials\":[{\"endpoint\":\"$smoke_endpoint\",\"username\":\"ild\",\"password\":\"smoke-check\"}]}" \
+    sh -lc 'nuget-plugin-microsoft-artifacts-credential-provider -U "$0" -N -C -F Json' "$smoke_endpoint" \
+    > /tmp/credprovider-smoke.json && \
+  grep -q '"Password":"smoke-check"' /tmp/credprovider-smoke.json && \
+  rm -rf /tmp/credprovider-smoke /tmp/credprovider-smoke.json; \
+fi
+
 COPY --from=build /certs /tmp/extra-certs
 RUN if [ "$WITH_CERTS" = "1" ]; then \
       copied=0; \

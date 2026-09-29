@@ -37,6 +37,8 @@ public class AppDbContext : DbContext
     public DbSet<NetworkPolicyEntry> NetworkPolicyEntries => Set<NetworkPolicyEntry>();
     public DbSet<NetworkLogEntry> NetworkLogEntries => Set<NetworkLogEntry>();
     public DbSet<NetworkForwardEntry> NetworkForwardEntries => Set<NetworkForwardEntry>();
+    public DbSet<PackageFeed> PackageFeeds => Set<PackageFeed>();
+    public DbSet<RepositoryPackageFeed> RepositoryPackageFeeds => Set<RepositoryPackageFeed>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -109,6 +111,13 @@ public class AppDbContext : DbContext
             // provider credentials. Widen well past the 16 KB plaintext cap so the
             // base64 encrypted envelope fits.
             e.Property(r => r.PreviewEnv).HasConversion(converter).HasMaxLength(24576);
+        });
+
+        modelBuilder.Entity<PackageFeed>(e =>
+        {
+            // The converter is typed for the nullable credential columns; the PAT is
+            // required, so it goes through the untyped overload.
+            e.Property(f => f.Pat).HasConversion((ValueConverter)converter).HasMaxLength(2048);
         });
     }
 
@@ -296,6 +305,18 @@ public class AppDbContext : DbContext
             // leave whichever bound second permanently unreachable.
             e.HasIndex(f => f.LocalPort).IsUnique();
         });
+
+        modelBuilder.Entity<PackageFeed>(e =>
+        {
+            // Repositories select feeds by name, so two feeds whose names differ
+            // only in case would be one selection resolving to either.
+            e.HasIndex(f => f.NormalizedName).IsUnique();
+        });
+
+        modelBuilder.Entity<RepositoryPackageFeed>(e =>
+        {
+            e.HasKey(s => new { s.RepositoryId, s.NormalizedName });
+        });
     }
 
     private void ConfigureTimestamps(ModelBuilder modelBuilder)
@@ -460,6 +481,12 @@ public class AppDbContext : DbContext
             .HasOne(p => p.AiProvider)
             .WithMany()
             .HasForeignKey(p => p.AiProviderId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<Repository>()
+            .HasMany(r => r.PackageFeeds)
+            .WithOne(s => s.Repository)
+            .HasForeignKey(s => s.RepositoryId)
             .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<AiProvider>()

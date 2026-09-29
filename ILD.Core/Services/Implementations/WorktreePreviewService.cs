@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Configuration;
@@ -424,7 +425,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return await reader.ReadToEndAsync(cancellationToken);
     }
 
-    public async Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, CancellationToken cancellationToken = default)
+    public async Task<WorktreeInstallResult> InstallAsync(
+        string worktreePath,
+        string? profileName = null,
+        string? customEnv = null,
+        IReadOnlyList<PackageFeedCredential>? packageFeeds = null,
+        CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeWorktreePath(worktreePath);
         var loaded = await LoadConfigAsync(normalized, cancellationToken);
@@ -458,7 +464,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             _configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1",
             new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
             new List<ManagedPreviewProcess>(),
-            DotEnvParser.Parse(customEnv));
+            DotEnvParser.Parse(customEnv),
+            new PackageFeedFileShare(packageFeeds ?? [], "install", _logger));
 
         await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
         return new WorktreeInstallResult(true);
@@ -803,6 +810,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             ports,
             new List<ManagedPreviewProcess>(),
             DotEnvParser.Parse(options.CustomEnv),
+            new PackageFeedFileShare(options.PackageFeeds ?? [], "preview", _logger),
             options.WorkItemId);
 
         if (!options.SkipInstall)
@@ -920,12 +928,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             return;
 
         var installLogPath = Path.Combine(runtime.LogDirectory, "install.log");
+        using var feeds = runtime.Feeds.Acquire();
         foreach (var step in installSteps)
         {
             if (string.IsNullOrWhiteSpace(step.Command))
                 continue;
 
-            var resolved = BuildResolvedStep(step, runtime, null);
+            var resolved = BuildResolvedStep(step, runtime, null, feeds.Environment);
             var result = await RunCommandAsync(resolved, cancellationToken);
 
             var builder = new StringBuilder();
@@ -949,16 +958,23 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private async Task<ManagedPreviewProcess> LaunchServiceProcessAsync(PreviewServiceConfig service, PreviewRuntime runtime, CancellationToken cancellationToken)
     {
-        var resolved = BuildResolvedStep(service, runtime, service.Port);
-        var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
-        var writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
-        {
-            AutoFlush = true,
-        };
-        var writeGate = new SemaphoreSlim(1, 1);
+        // The service holds the runtime's feed credentials only while it runs: its
+        // exit, however it comes, lets go, so a preview with nothing running keeps
+        // no credential file.
+        var feeds = runtime.Feeds.Acquire();
+        StreamWriter? writer = null;
+        SemaphoreSlim? writeGate = null;
 
         try
         {
+            var resolved = BuildResolvedStep(service, runtime, service.Port, feeds.Environment);
+            var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
+            writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+            {
+                AutoFlush = true,
+            };
+            writeGate = new SemaphoreSlim(1, 1);
+
             // Echo the command before spawning, not after: everything from Process.Start
             // to the return must be incapable of throwing, or a started process would be
             // lost before its caller could ever track it (see StartAsync). It also puts
@@ -969,19 +985,27 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             var process = Process.Start(BuildPreviewProcess(resolved))
                 ?? throw new InvalidOperationException($"Failed to start preview service '{service.Name}'.");
 
+            // Subscribed before the check, so an exit that has already happened and
+            // one still to come both let go (the lease ignores the second).
+            process.EnableRaisingEvents = true;
+            process.Exited += (_, _) => feeds.Dispose();
+            if (process.HasExited)
+                feeds.Dispose();
+
             var stdoutTask = PumpStreamAsync(process.StandardOutput, writer, writeGate, cancellationToken);
             var stderrTask = PumpStreamAsync(process.StandardError, writer, writeGate, cancellationToken);
 
-            return new ManagedPreviewProcess(service, process, writer, writeGate, stdoutTask, stderrTask, logPath);
+            return new ManagedPreviewProcess(service, process, writer, writeGate, stdoutTask, stderrTask, logPath, feeds);
         }
         catch
         {
             // Only reachable while the spawn itself fails, so there is no process to
-            // stop — just the log handle this method opened, which nothing else will
-            // ever hold a reference to. StopProcessAsync owns it once the returned
-            // ManagedPreviewProcess exists.
-            writer.Dispose();
-            writeGate.Dispose();
+            // stop — just the log handle and feed lease this method took, which nothing
+            // else will ever hold a reference to. StopProcessAsync owns them once the
+            // returned ManagedPreviewProcess exists.
+            writer?.Dispose();
+            writeGate?.Dispose();
+            feeds.Dispose();
             throw;
         }
     }
@@ -1027,6 +1051,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             // Ignore log pump failures during shutdown.
         }
+
+        // Its exit already let go of the feed credentials unless the event has yet to
+        // be delivered; a stop does not wait for that.
+        process.FeedLease.Dispose();
 
         try
         {
@@ -1314,12 +1342,15 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         => Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(worktreePath))).ToLowerInvariant();
 
-    private ResolvedStep BuildResolvedStep(PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias)
+    private ResolvedStep BuildResolvedStep(
+        PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias,
+        IReadOnlyDictionary<string, string> feedEnvironment)
     {
         var workingDirectory = ResolveWorkingDirectory(step.Cwd, runtime, currentPortAlias);
         var environment = BuildDefaultEnvironment(runtime.StateDirectory);
 
-        // Precedence: base defaults < per-service ild.config env < repo custom .env.
+        // Precedence: base defaults < per-service ild.config env < repo custom .env
+        // < package feed credentials.
         // The committed config is the profile's default; the repo's .env is what the
         // human who owns the repository typed for this deployment, so it wins — every
         // key in it was set deliberately, and a value it cannot override is a value
@@ -1339,6 +1370,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // password containing ${...} would otherwise be rewritten, or rejected
         // outright as an unsupported token, for looking like something it isn't.
         foreach (var entry in runtime.CustomEnv)
+        {
+            environment[entry.Key] = entry.Value;
+        }
+
+        // Last of all: the selected package feeds' credentials name a file only this
+        // runtime can put in place, so nothing typed anywhere may repoint them.
+        foreach (var entry in feedEnvironment)
         {
             environment[entry.Key] = entry.Value;
         }
@@ -1666,8 +1704,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             Dictionary<string, int> ports,
             List<ManagedPreviewProcess> processes,
             IReadOnlyDictionary<string, string> customEnv,
+            PackageFeedFileShare feeds,
             string? workItemId = null)
         {
+            Feeds = feeds;
             WorkItemId = workItemId;
             WorktreePath = worktreePath;
             ConfigPath = configPath;
@@ -1730,6 +1770,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         /// <summary>Parsed repository custom <c>.env</c> (see <c>Repository.PreviewEnv</c>),
         /// injected into every step's environment. Empty when none is configured.</summary>
         public IReadOnlyDictionary<string, string> CustomEnv { get; }
+
+        /// <summary>
+        /// The selected package feeds' credentials. Their file exists only while an
+        /// install run or a service of this runtime is running; each holds a lease.
+        /// </summary>
+        public PackageFeedFileShare Feeds { get; }
     }
 
     private sealed class ManagedPreviewProcess
@@ -1741,8 +1787,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             SemaphoreSlim writeGate,
             Task stdOutPump,
             Task stdErrPump,
-            string logFilePath)
+            string logFilePath,
+            PackageFeedFileShare.Lease feedLease)
         {
+            FeedLease = feedLease;
             Service = service;
             Process = process;
             Writer = writer;
@@ -1759,6 +1807,9 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         public Task StdOutPump { get; }
         public Task StdErrPump { get; }
         public string LogFilePath { get; }
+
+        /// <summary>This service's hold on the runtime's feed credential file, let go when it exits.</summary>
+        public PackageFeedFileShare.Lease FeedLease { get; }
 
         private volatile bool _stopped;
 

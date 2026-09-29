@@ -24,6 +24,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAppSettingStore, Stores.AppSettingStore>();
         services.AddScoped<INetworkPolicyStore, Stores.NetworkPolicyStore>();
         services.AddScoped<INetworkForwardStore, Stores.NetworkForwardStore>();
+        services.AddScoped<IPackageFeedStore, Stores.PackageFeedStore>();
         return services;
     }
 }

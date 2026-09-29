@@ -1,6 +1,8 @@
 using System.Text.Json;
 using ILD.Api.Contracts;
 using ILD.Api.Services;
+using ILD.Core.Services.Implementations.Executors;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -20,6 +22,7 @@ public class LoopRunsController : ControllerBase
     private readonly InteractiveShellSessionService _shellSessions;
     private readonly IRunReclaimer _runReclaimer;
     private readonly IWorkItemManager _workItemManager;
+    private readonly IPackageFeedResolver _packageFeeds;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
@@ -28,7 +31,8 @@ public class LoopRunsController : ControllerBase
         IAdapterSessionSnapshotStore sessionSnapshotStore,
         InteractiveShellSessionService shellSessions,
         IRunReclaimer runReclaimer,
-        IWorkItemManager workItemManager)
+        IWorkItemManager workItemManager,
+        IPackageFeedResolver packageFeeds)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
@@ -37,6 +41,7 @@ public class LoopRunsController : ControllerBase
         _shellSessions = shellSessions;
         _runReclaimer = runReclaimer;
         _workItemManager = workItemManager;
+        _packageFeeds = packageFeeds;
     }
 
     /// <summary>
@@ -435,8 +440,12 @@ public class LoopRunsController : ControllerBase
         if (string.IsNullOrWhiteSpace(run.WorktreePath) || !Directory.Exists(run.WorktreePath))
             return BadRequest(new { error = "Run has no live worktree." });
 
+        // The worktree is the run's, so its shell gets the feeds the run's processes get.
+        var feeds = await _packageFeeds.ResolveAsync(
+            await RunRepository.IdOfAsync(run, _workItemManager), HttpContext.RequestAborted);
         using var socket = await HttpContext.WebSockets.AcceptWebSocketAsync();
-        await _shellSessions.RunAsync(socket, run.WorktreePath, run.Id.ToString("N"), cols, rows, HttpContext.RequestAborted);
+        await _shellSessions.RunAsync(
+            socket, run.WorktreePath, run.Id.ToString("N"), cols, rows, feeds.Feeds, HttpContext.RequestAborted);
         return new EmptyResult();
     }
 }

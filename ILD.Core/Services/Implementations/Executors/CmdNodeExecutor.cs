@@ -1,6 +1,8 @@
 using ILD.Data.Enums;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Diagnostics;
 using System.Text;
 
@@ -33,7 +35,9 @@ public sealed class CmdNodeExecutor : INodeExecutor
 
         yield return new NodeOutcome.NodeStarting(command);
 
-        var (ok, output, error) = await RunProcessAsync(command, worktree, ctx);
+        var feeds = await ctx.Services.GetRequiredService<IPackageFeedResolver>()
+            .ResolveAsync(await RunRepository.IdOfAsync(ctx.Run, workItems), ctx.CancellationToken);
+        var (ok, output, error) = await RunProcessAsync(command, worktree, feeds.Feeds, ctx);
         if (!ok)
         {
             yield return new NodeOutcome.Fail(EdgeType.OnFailure, error ?? "command failed", output);
@@ -43,10 +47,12 @@ public sealed class CmdNodeExecutor : INodeExecutor
     }
 
     private static async Task<(bool Ok, string Output, string? Error)> RunProcessAsync(
-        string command, string workingDirectory, NodeExecutionContext ctx)
+        string command, string workingDirectory, IReadOnlyList<PackageFeedCredential> packageFeeds, NodeExecutionContext ctx)
     {
         var sb = new StringBuilder();
         var err = new StringBuilder();
+        using var feeds = PackageFeedCredentialFiles.Materialize(
+            packageFeeds, ctx.Run.Id.ToString("N"), ctx.Services.GetService<ILogger<CmdNodeExecutor>>());
         using var p = new Process
         {
             StartInfo = IsolateCommand(
@@ -55,6 +61,8 @@ public sealed class CmdNodeExecutor : INodeExecutor
                 AgentIsolation.EgressProxyUrl(aiProviderId: null)),
             EnableRaisingEvents = true,
         };
+        foreach (var (name, value) in feeds.Environment)
+            p.StartInfo.Environment[name] = value;
         // Forward the full stdout+stderr stream verbatim (newline included, ANSI
         // preserved) so the live view captures the complete output rather than
         // newline-stripped fragments.

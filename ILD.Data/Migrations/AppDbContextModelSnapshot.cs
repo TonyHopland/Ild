@@ -930,6 +930,46 @@ namespace ILD.Data.Migrations
                     b.ToTable("NetworkPolicyEntries");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.PackageFeed", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FeedUrl")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Pat")
+                        .IsRequired()
+                        .HasMaxLength(2048)
+                        .HasColumnType("character varying(2048)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique();
+
+                    b.ToTable("PackageFeeds");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.RemoteProvider", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1026,6 +1066,25 @@ namespace ILD.Data.Migrations
                     b.HasIndex("RemoteProviderId");
 
                     b.ToTable("Repositories");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.RepositoryPackageFeed", b =>
+                {
+                    b.Property<Guid>("RepositoryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("NormalizedName")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.HasKey("RepositoryId", "NormalizedName");
+
+                    b.ToTable("RepositoryPackageFeeds");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.User", b =>
@@ -1281,6 +1340,17 @@ namespace ILD.Data.Migrations
                     b.Navigation("RemoteProvider");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.RepositoryPackageFeed", b =>
+                {
+                    b.HasOne("ILD.Data.Entities.Repository", "Repository")
+                        .WithMany("PackageFeeds")
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Repository");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.UserSession", b =>
                 {
                     b.HasOne("ILD.Data.Entities.User", "User")
@@ -1335,6 +1405,11 @@ namespace ILD.Data.Migrations
             modelBuilder.Entity("ILD.Data.Entities.RemoteProvider", b =>
                 {
                     b.Navigation("Repositories");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.Repository", b =>
+                {
+                    b.Navigation("PackageFeeds");
                 });
 #pragma warning restore 612, 618
         }

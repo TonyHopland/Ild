@@ -1,6 +1,7 @@
 using ILD.Api.Authentication;
 using ILD.Api.Contracts;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data;
@@ -62,6 +63,7 @@ public class AgentController : ControllerBase
     private readonly ILoopRunStore _runs;
     private readonly AppDbContext _db;
     private readonly IProviderStore _providerStore;
+    private readonly IPackageFeedResolver _packageFeeds;
     private readonly IWorktreePreviewService _preview;
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IChatNotifier _chatNotifier;
@@ -73,6 +75,7 @@ public class AgentController : ControllerBase
         ILoopRunStore runs,
         AppDbContext db,
         IProviderStore providerStore,
+        IPackageFeedResolver packageFeeds,
         IWorktreePreviewService preview,
         IChatLoopScratchpad loopScratchpad,
         IChatNotifier chatNotifier,
@@ -83,6 +86,7 @@ public class AgentController : ControllerBase
         _runs = runs;
         _db = db;
         _providerStore = providerStore;
+        _packageFeeds = packageFeeds;
         _preview = preview;
         _loopScratchpad = loopScratchpad;
         _chatNotifier = chatNotifier;
@@ -370,13 +374,7 @@ public class AgentController : ControllerBase
         {
             var response = await _preview.StartAsync(
                 workItem!.WorktreePath!,
-                new WorktreePreviewStartOptions(
-                    request?.ProfileName,
-                    request?.SkipInstall == true,
-                    request?.PublicHost,
-                    request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RunRepositoryId),
-                    workItem!.Id));
+                await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
@@ -416,13 +414,7 @@ public class AgentController : ControllerBase
             var response = await _preview.StartServiceAsync(
                 workItem!.WorktreePath!,
                 service,
-                new WorktreePreviewStartOptions(
-                    request?.ProfileName,
-                    request?.SkipInstall == true,
-                    request?.PublicHost,
-                    request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RunRepositoryId),
-                    workItem!.Id));
+                await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

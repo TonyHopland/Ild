@@ -31,6 +31,12 @@ public class RepositoryDto
     [StringLength(16384)]
     public string? PreviewEnv { get; set; }
 
+    /// <summary>
+    /// Names of the package feeds the repository selects; the feeds' credentials go
+    /// to its runs' processes. Null on update keeps the selection as it is.
+    /// </summary>
+    public List<string>? PackageFeeds { get; set; }
+
     [Required]
     public string RemoteProviderId { get; set; } = string.Empty;
 

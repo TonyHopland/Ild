@@ -657,8 +657,32 @@ export interface Repository {
   // `repositoryService.getPreviewEnv`, which agents cannot call.
   previewEnv?: string | null;
   hasPreviewEnv?: boolean;
+  /** The package feeds it selects, by name; `missing` once the feed has been deleted. */
+  packageFeeds?: RepositoryPackageFeed[];
   createdAt: string;
   updatedAt?: string | null;
+}
+
+export interface RepositoryPackageFeed {
+  name: string;
+  missing: boolean;
+}
+
+/** What creating or editing a repository sends: its package feed selection by name. */
+export type RepositoryInput = Omit<Partial<Repository>, "packageFeeds"> & {
+  packageFeeds?: string[];
+};
+
+/** A private package feed. Its PAT is write-only: only `patHint` ever comes back. */
+export interface PackageFeed {
+  id: string;
+  name: string;
+  feedUrl: string;
+  patHint: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Instance-wide: NuGet in run processes will not find the Azure Artifacts credential provider. */
+  credentialProviderMissing?: boolean;
 }
 
 export interface RemoteProvider {

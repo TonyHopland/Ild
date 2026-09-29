@@ -69,6 +69,8 @@ public class TemplateFieldRenderSiteTests
         workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
 
         var services = new ServiceCollection();
+
+        services.AddSingleton(NoPackageFeeds.Resolver);
         services.AddSingleton(workItems.Object);
         services.AddSingleton<IPromptRenderingService>(new FakeRendering());
         return services;

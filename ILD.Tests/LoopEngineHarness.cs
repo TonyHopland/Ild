@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -73,6 +74,7 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<ILoopRunStore>(Db.LoopRuns);
         services.AddSingleton<ILoopTemplateStore>(Db.LoopTemplates);
         services.AddSingleton<IEventLogStore>(Db.EventLogs);
+        services.AddSingleton<IPackageFeedResolver>(new PackageFeedResolver(Db.PackageFeeds, NullLogger<PackageFeedResolver>.Instance));
         // The engine resolves IEventLogService optionally; register it so node and
         // edge-traversal events are written exactly as they are in production.
         services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, Db.LoopRuns));

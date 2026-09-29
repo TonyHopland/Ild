@@ -64,6 +64,7 @@ public class AINodeExecutorSteeringTests
 
         var adapter = new CapturingAdapter();
         var services = new ServiceCollection();
+        services.AddSingleton(NoPackageFeeds.Resolver);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton(wim);

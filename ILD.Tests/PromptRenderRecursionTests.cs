@@ -99,6 +99,8 @@ public class PromptRenderRecursionTests
             r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
 
         var services = new ServiceCollection();
+
+        services.AddSingleton(NoPackageFeeds.Resolver);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(workItems.Object);
         services.AddSingleton(runStore.Object);

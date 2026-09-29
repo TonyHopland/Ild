@@ -76,6 +76,8 @@ public class AINodeExecutorThrottleParkTests
                 == Task.FromResult<WorkItemView?>(new WorkItemView { Id = "WI-1", RepositoryId = null }));
 
         var services = new ServiceCollection();
+
+        services.AddSingleton(NoPackageFeeds.Resolver);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton(wim);

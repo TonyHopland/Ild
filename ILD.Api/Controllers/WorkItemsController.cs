@@ -2,6 +2,7 @@ using ILD.Api.Contracts;
 using ILD.Api.Filters;
 using ILD.Core.Services.Attachments;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -28,10 +29,11 @@ public class WorkItemsController : ControllerBase
     private readonly ILogger<WorkItemsController> _logger;
     private readonly IWorkItemNotifier _notifier;
     private readonly IProviderStore _providerStore;
+    private readonly IPackageFeedResolver _packageFeeds;
     private readonly IBranchNameOverrideService _branchNames;
     private readonly AttachmentLimits _attachmentLimits;
 
-    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IBranchNameOverrideService branchNames, AttachmentLimits attachmentLimits, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null)
+    public WorkItemsController(IWorkItemManager workItemManager, ILoopEngine engine, IWorktreePreviewService worktreePreviewService, IRepositoryManager repositoryManager, ILoopRunStore loopRunStore, IProviderStore providerStore, IPackageFeedResolver packageFeeds, IBranchNameOverrideService branchNames, AttachmentLimits attachmentLimits, ILogger<WorkItemsController> logger, IWorkItemNotifier? notifier = null)
     {
         _workItemManager = workItemManager;
         _engine = engine;
@@ -39,6 +41,7 @@ public class WorkItemsController : ControllerBase
         _repositoryManager = repositoryManager;
         _loopRunStore = loopRunStore;
         _providerStore = providerStore;
+        _packageFeeds = packageFeeds;
         _logger = logger;
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _branchNames = branchNames;
@@ -365,13 +368,7 @@ public class WorkItemsController : ControllerBase
         {
             var response = await _worktreePreviewService.StartAsync(
                 workItem!.WorktreePath!,
-                new WorktreePreviewStartOptions(
-                    request?.ProfileName,
-                    request?.SkipInstall == true,
-                    request?.PublicHost,
-                    request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RunRepositoryId),
-                    workItem!.Id));
+                await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }
@@ -411,13 +408,7 @@ public class WorkItemsController : ControllerBase
             var response = await _worktreePreviewService.StartServiceAsync(
                 workItem!.WorktreePath!,
                 service,
-                new WorktreePreviewStartOptions(
-                    request?.ProfileName,
-                    request?.SkipInstall == true,
-                    request?.PublicHost,
-                    request?.PortOverrides,
-                    await _providerStore.GetRepositoryPreviewEnvAsync(workItem!.RunRepositoryId),
-                    workItem!.Id));
+                await PreviewStart.OptionsAsync(request, workItem!, _providerStore, _packageFeeds));
             await _notifier.PreviewStateChangedAsync(id);
             return Ok(response);
         }

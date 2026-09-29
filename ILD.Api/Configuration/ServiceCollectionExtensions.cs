@@ -3,6 +3,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Network;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Remote;
 using ILD.Api.Middleware;
@@ -45,6 +46,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRemoteProviderTypeCatalog, RemoteProviderTypeCatalog>();
         services.AddScoped<IRemoteProvider, RemoteProviderService>();
         services.AddScoped<IConnectionTester, ConnectionTester>();
+        services.AddScoped<IPackageFeedResolver, PackageFeedResolver>();
         services.AddHttpClient<IManagedAgentService, ManagedAgentService>();
         services.AddSingleton<ManagedAgentProvisioner>();
         services.AddSingleton<IManagedAgentProvisioner>(sp => sp.GetRequiredService<ManagedAgentProvisioner>());

@@ -64,7 +64,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     ctx.Prompt,
                     opencodeModel,
                     opencodeConfigJson,
-                    sessionIdToUse), ctx.Provider.Id);
+                    sessionIdToUse), ctx.Provider.Id, ctx.Environment);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -79,7 +79,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                             opencodeModel,
                             opencodeConfigJson,
                             sessionIdToUse,
-                            useWorktreeAsWorkingDirectory: false), ctx.Provider.Id);
+                            useWorktreeAsWorkingDirectory: false), ctx.Provider.Id, ctx.Environment);
                     }
                     catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
                     {
@@ -212,7 +212,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
             return ManagedSessionRestoreResult.Use(sessionId);
 
-        var localSession = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx.Provider.Id, ctx.Cancel, ["export", sessionId]);
+        var localSession = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx, ["export", sessionId]);
         if (localSession.ExitCode == 0 && !string.IsNullOrWhiteSpace(localSession.Stdout))
             return ManagedSessionRestoreResult.Use(sessionId);
 
@@ -224,7 +224,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         try
         {
-            var importResult = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx.Provider.Id, ctx.Cancel, ["import", tempFile]);
+            var importResult = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx, ["import", tempFile]);
             if (importResult.ExitCode != 0)
                 return ManagedSessionRestoreResult.StartFresh();
         }
@@ -241,7 +241,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         if (ScopeFactory is null)
             return (null, null);
 
-        var exportResult = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx.Provider.Id, ctx.Cancel, ["export", sessionId]);
+        var exportResult = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx, ["export", sessionId]);
         if (exportResult.ExitCode != 0)
             return ($"[opencode-error] failed to export managed session '{sessionId}': {BuildCommandFailure(exportResult)}", null);
         if (string.IsNullOrWhiteSpace(exportResult.Stdout))
@@ -258,8 +258,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     private static async Task<OpencodeCommandResult> RunOpencodeCommandAsync(
         string binaryPath,
         string worktreePath,
-        Guid aiProviderId,
-        CancellationToken cancellationToken,
+        AgentExecutionContext ctx,
         IReadOnlyList<string> arguments)
     {
         Process? proc = null;
@@ -271,7 +270,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
             // Session export/import must run as the same agent user as the run
             // itself, or it would look for the session under the wrong home.
-            proc = StartAgentProcess(psi, aiProviderId);
+            proc = StartAgentProcess(psi, ctx.Provider.Id, ctx.Environment);
         }
         catch (Exception ex) when (ex is InvalidOperationException or IOException)
         {
@@ -280,7 +279,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 var retryPsi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory: false);
                 foreach (var argument in arguments)
                     retryPsi.ArgumentList.Add(argument);
-                proc = StartAgentProcess(retryPsi, aiProviderId);
+                proc = StartAgentProcess(retryPsi, ctx.Provider.Id, ctx.Environment);
             }
             else
             {
@@ -290,10 +289,10 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
         using var process = proc ?? throw new InvalidOperationException("Process.Start returned null");
 
-        var stdoutTask = ReadAllFromStreamAsync(process.StandardOutput, cancellationToken);
-        var stderrTask = ReadAllFromStreamAsync(process.StandardError, cancellationToken);
+        var stdoutTask = ReadAllFromStreamAsync(process.StandardOutput, ctx.Cancel);
+        var stderrTask = ReadAllFromStreamAsync(process.StandardError, ctx.Cancel);
 
-        await process.WaitForExitAsync(cancellationToken);
+        await process.WaitForExitAsync(ctx.Cancel);
 
         return new OpencodeCommandResult(
             process.ExitCode,

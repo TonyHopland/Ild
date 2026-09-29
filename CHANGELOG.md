@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Runs and previews can restore packages from private Azure Artifacts npm and NuGet feeds.** NuGet feeds need an image with a .NET SDK 9.0.200 or later.
+
 - **The chat button and your past chats show a red dot when a reply is waiting that you have not read.**
 
 ### Changed
