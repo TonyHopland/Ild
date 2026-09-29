@@ -646,8 +646,8 @@ repository selects none by default. Selecting a feed only provides its
 credentials: which feed a package comes from is still the repository's own
 `.npmrc` / `nuget.config`, so the order does not matter. A selected feed that is
 later deleted shows as `name (missing)`, is skipped at run time with a warning
-(on the Start node's output when it runs install steps), and resolves again if a
-feed with the same name is added back.
+(logged, and on the Start node's output at every run start), and resolves again
+if a feed with the same name is added back.
 
 **What a run gets.** With at least one selected feed, every process of the run
 — the Start node's install steps, every preview install step and service, Cmd
@@ -680,6 +680,11 @@ which `NUGET_PLUGIN_PATHS` points NuGet at whatever `HOME` a process runs with.
 The build runs it once and fails if it cannot answer. `dotnet restore -v detailed`
 prints `Using … CredentialProvider.Microsoft.dll as a credential provider plugin`
 when NuGet has found it.
+Only SDK images set that variable: it replaces NuGet's own `~/.nuget/plugins`
+lookup, which the runtime image leaves as it is. On an architecture Microsoft
+publishes no build for (anything but amd64 and arm64) the SDK image is built
+without the provider and the variable names no file, which Settings reports as
+below; unset it, or point it at a provider you install.
 
 Where a .NET SDK is installed but ILD cannot find a provider the run processes
 could read — looked for the way NuGet looks: the file `NUGET_PLUGIN_PATHS` names,

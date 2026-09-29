@@ -62,6 +62,10 @@ RUN dotnet publish -c Release -o /app/mcp-server --no-restore ${VERSION:+-p:Vers
 # identical either way.
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final-base-0
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS final-base-1
+# Only an SDK image restores packages, so only it gets the credential provider
+# (installed in the final stage) and points NuGet at it. NUGET_PLUGIN_PATHS
+# replaces NuGet's own ~/.nuget/plugins lookup, so the runtime image must not set it.
+ENV NUGET_PLUGIN_PATHS=/usr/local/share/artifacts-credprovider/plugins/netcore/CredentialProvider.Microsoft/CredentialProvider.Microsoft.dll
 
 FROM final-base-${WITH_DOTNET_SDK} AS final
 WORKDIR /app
@@ -213,10 +217,10 @@ fi
 # The self-contained build needs no separate .NET runtime, and is run once here
 # against a made-up endpoint so an image whose plugin cannot answer is never
 # built. Like Chrome, an architecture without a build is skipped with a message;
-# a failed download or smoke run fails the build.
+# NUGET_PLUGIN_PATHS (set on the SDK base) then names no file, which Settings
+# reports as a missing provider. A failed download or smoke run fails the build.
 ARG WITH_DOTNET_SDK
 ARG ARTIFACTS_CREDPROVIDER_VERSION=2.0.4
-ENV NUGET_PLUGIN_PATHS=/usr/local/share/artifacts-credprovider/plugins/netcore/CredentialProvider.Microsoft/CredentialProvider.Microsoft.dll
 RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
   CREDPROVIDER_ARCH="$(dpkg --print-architecture)"; \
   case "$CREDPROVIDER_ARCH" in \

@@ -45,7 +45,10 @@ public class PackageFeedsController : ControllerBase
 
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken ct)
-        => Ok((await _feeds.GetFeedsAsync(ct)).Select(View));
+    {
+        var providerMissing = NuGetCredentialProvider.IsMissing(ProcessEnvironment.Current);
+        return Ok((await _feeds.GetFeedsAsync(ct)).Select(f => View(f, providerMissing)));
+    }
 
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateFeedRequest request, CancellationToken ct)
@@ -87,7 +90,7 @@ public class PackageFeedsController : ControllerBase
             // The unique index caught what the read above could not: two saves racing.
             return BadRequest(new { error = NameTaken(name) });
         }
-        return CreatedAtAction(nameof(GetAll), View(feed));
+        return CreatedAtAction(nameof(GetAll), View(feed, NuGetCredentialProvider.IsMissing(ProcessEnvironment.Current)));
     }
 
     [HttpPut("{id:guid}")]
@@ -115,7 +118,7 @@ public class PackageFeedsController : ControllerBase
             // Deleted between the read above and this save.
             return NotFound();
         }
-        return Ok(View(feed));
+        return Ok(View(feed, NuGetCredentialProvider.IsMissing(ProcessEnvironment.Current)));
     }
 
     [HttpDelete("{id:guid}")]
@@ -136,7 +139,7 @@ public class PackageFeedsController : ControllerBase
     // credentialProviderMissing is instance-wide, not per feed; it rides on each feed
     // so the list the Settings page already reads can warn that NuGet restores from
     // any of them will fail.
-    private static object View(PackageFeed f) => new
+    private static object View(PackageFeed f, bool credentialProviderMissing) => new
     {
         id = f.Id,
         name = f.Name,
@@ -144,7 +147,7 @@ public class PackageFeedsController : ControllerBase
         patHint = PatHint(f.Pat),
         createdAt = f.CreatedAt,
         updatedAt = f.UpdatedAt,
-        credentialProviderMissing = NuGetCredentialProvider.IsMissing(ProcessEnvironment.Current),
+        credentialProviderMissing,
     };
 
     // Only a PAT long enough to keep most of it hidden shows its tail.
