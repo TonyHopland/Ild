@@ -46,7 +46,7 @@ describe("loopTemplateExport", () => {
     test("produces correct export format with $schema", () => {
       const exportData = serializeForExport(sampleTemplate);
 
-      expect(exportData.$schema).toBe("ild-loop-template/v1");
+      expect(exportData.$schema).toBe("ild-loop-template/v2");
       expect(exportData.name).toBe("Dev Loop");
       expect(exportData.description).toBe("Standard development loop");
       expect(exportData.recoveryPolicy).toBe(RecoveryPolicy.AutoResume);
@@ -129,7 +129,7 @@ describe("loopTemplateExport", () => {
     test("rejects empty name", () => {
       const result = parseImportFile(
         JSON.stringify({
-          $schema: "ild-loop-template/v1",
+          $schema: "ild-loop-template/v2",
           name: "",
           description: "",
           recoveryPolicy: "AutoResume",
@@ -144,7 +144,7 @@ describe("loopTemplateExport", () => {
     test("rejects invalid recoveryPolicy", () => {
       const result = parseImportFile(
         JSON.stringify({
-          $schema: "ild-loop-template/v1",
+          $schema: "ild-loop-template/v2",
           name: "Test",
           description: "",
           recoveryPolicy: "InvalidPolicy",
@@ -159,7 +159,7 @@ describe("loopTemplateExport", () => {
     test("rejects missing nodes array", () => {
       const result = parseImportFile(
         JSON.stringify({
-          $schema: "ild-loop-template/v1",
+          $schema: "ild-loop-template/v2",
           name: "Test",
           description: "",
           recoveryPolicy: "AutoResume",
@@ -173,7 +173,7 @@ describe("loopTemplateExport", () => {
     test("rejects malformed node", () => {
       const result = parseImportFile(
         JSON.stringify({
-          $schema: "ild-loop-template/v1",
+          $schema: "ild-loop-template/v2",
           name: "Test",
           description: "",
           recoveryPolicy: "AutoResume",
@@ -193,7 +193,7 @@ describe("loopTemplateExport", () => {
       ]) {
         const result = parseImportFile(
           JSON.stringify({
-            $schema: "ild-loop-template/v1",
+            $schema: "ild-loop-template/v2",
             name: "Test",
             description: "",
             recoveryPolicy: policy,
@@ -215,7 +215,7 @@ describe("loopTemplateExport", () => {
     test("trims whitespace from name", () => {
       const result = parseImportFile(
         JSON.stringify({
-          $schema: "ild-loop-template/v1",
+          $schema: "ild-loop-template/v2",
           name: "  Trimmed Name  ",
           description: "",
           recoveryPolicy: "AutoResume",

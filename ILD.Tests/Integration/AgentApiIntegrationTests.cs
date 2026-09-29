@@ -726,7 +726,7 @@ public class AgentApiIntegrationTests
         var client = await factory.CreateAuthenticatedClientAsync();
         var chatSessionId = await SeedChatSessionAsync(factory);
 
-        const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Live Loop\",\"nodes\":[]}";
+        const string document = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Live Loop\",\"nodes\":[]}";
         factory.Services.GetRequiredService<IChatLoopScratchpad>().Set(chatSessionId, document);
 
         var get = new HttpRequestMessage(HttpMethod.Get, "/api/v1/agent/current-loop");
@@ -735,7 +735,7 @@ public class AgentApiIntegrationTests
         resp.EnsureSuccessStatusCode();
 
         var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
-        Assert.Equal("ild-loop-template/v1", doc.GetProperty("$schema").GetString());
+        Assert.Equal("ild-loop-template/v2", doc.GetProperty("$schema").GetString());
         Assert.Equal("Live Loop", doc.GetProperty("name").GetString());
     }
 
@@ -779,16 +779,16 @@ public class AgentApiIntegrationTests
 
         var put = new HttpRequestMessage(HttpMethod.Put, "/api/v1/agent/current-loop")
         {
-            Content = JsonContent.Create(new { document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"x\",\"nodes\":[]}" }),
+            Content = JsonContent.Create(new { document = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"x\",\"nodes\":[]}" }),
         };
         put.Headers.Add("X-ILD-Chat-Session-Id", unknown);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(put, TestContext.Current.CancellationToken)).StatusCode);
     }
 
-    // A valid ild-loop-template/v1 with Start → AI → Cleanup. Used by the scoped-edit
+    // A valid ild-loop-template/v2 with Start → AI → Cleanup. Used by the scoped-edit
     // integration tests as the document the browser stashed this turn.
     private const string ValidLoopDocument =
-        "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Live\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
+        "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Live\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
         "\"nodes\":[" +
         "{\"id\":\"start\",\"type\":\"Start\",\"label\":\"Start\",\"config\":{}}," +
         "{\"id\":\"ai\",\"type\":\"AI\",\"label\":\"Reviewer\",\"config\":{\"prompt\":\"Review the code.\",\"aiProviderId\":\"prov\"}}," +
@@ -832,7 +832,7 @@ public class AgentApiIntegrationTests
         {
             Content = JsonContent.Create(new
             {
-                document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Broken\",\"nodes\":[],\"edges\":[]}",
+                document = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Broken\",\"nodes\":[],\"edges\":[]}",
             }),
         };
         put.Headers.Add("X-ILD-Chat-Session-Id", chatSessionId.ToString());

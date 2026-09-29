@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
@@ -12,15 +13,15 @@ namespace ILD.Tests;
 /// </summary>
 public class LoopDocumentEditorTests
 {
-    // A valid ild-loop-template/v1 with Start → AI → Cleanup. The AI prompt carries
+    // A valid ild-loop-template/v2 with Start → AI → Cleanup. The AI prompt carries
     // a newline and embedded quotes so escaping round-trips are exercised. Built via
     // the serializer so the on-disk escaping is exactly what a real document has.
     private const string AiPrompt = "Review the code.\nBe \"strict\" about tests.";
 
-    private static string ValidDocument(string? aiPrompt = null) =>
+    private static string ValidDocument(string? aiPrompt = null, string schema = "ild-loop-template/v2") =>
         JsonSerializer.Serialize(new
         {
-            schema = "ild-loop-template/v1",
+            schema,
             name = "Test Loop",
             description = "",
             recoveryPolicy = "AutoResume",
@@ -233,7 +234,7 @@ public class LoopDocumentEditorTests
     [Fact]
     public void ReplaceDocument_rejects_a_graph_without_a_start_node()
     {
-        const string noStart = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"x\",\"nodes\":[],\"edges\":[]}";
+        const string noStart = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"x\",\"nodes\":[],\"edges\":[]}";
         var result = LoopDocumentEditor.ReplaceDocument(noStart);
 
         Assert.False(result.Applied);
@@ -250,5 +251,160 @@ public class LoopDocumentEditorTests
         Assert.Null(result.Document);
         Assert.Empty(result.ValidationErrors);
         Assert.Contains("not valid JSON", result.Error);
+    }
+
+    // -- ild-loop-template/v2: declared outputs ----------------------------------
+
+    private static JsonObject Root(string document) => (JsonObject)JsonNode.Parse(document)!;
+
+    private static JsonObject ConfigOf(string document, string nodeId) =>
+        (JsonObject)Root(document)["nodes"]!.AsArray().Single(n => (string)n!["id"]! == nodeId)!["config"]!;
+
+    // A v1 document an AI may still send from memory: the Human node defines its
+    // "Respond" output through customEdges.
+    private const string LegacyHumanDocument =
+        "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Old\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
+        "\"nodes\":[" +
+        "{\"id\":\"start\",\"type\":\"Start\",\"label\":\"Start\",\"config\":{}}," +
+        "{\"id\":\"review\",\"type\":\"Human\",\"label\":\"Review\",\"config\":{\"prompt\":\"ok?\",\"customEdges\":[\"Respond\"]}}," +
+        "{\"id\":\"cleanup\",\"type\":\"Cleanup\",\"label\":\"Cleanup\",\"config\":{}}]," +
+        "\"edges\":[" +
+        "{\"id\":\"e1\",\"sourceNodeId\":\"start\",\"targetNodeId\":\"review\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
+        "{\"id\":\"e2\",\"sourceNodeId\":\"review\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"Respond\"}]}";
+
+    [Fact]
+    public void ReplaceDocument_upgrades_a_v1_document_instead_of_rejecting_it()
+    {
+        var result = LoopDocumentEditor.ReplaceDocument(LegacyHumanDocument);
+
+        Assert.True(result.Applied, string.Join("; ", result.ValidationErrors) + result.Error);
+        Assert.Equal("ild-loop-template/v2", (string)Root(result.Document!)["$schema"]!);
+        var review = ConfigOf(result.Document!, "review");
+        Assert.False(review.ContainsKey("customEdges"));
+        Assert.Contains(review["outputs"]!.AsArray(), o => (string)o!["name"]! == "Respond");
+    }
+
+    [Fact]
+    public void ReplaceDocument_keeps_a_v2_document_byte_for_byte()
+    {
+        var document = ValidDocument();
+
+        var result = LoopDocumentEditor.ReplaceDocument(document);
+
+        Assert.Equal(document, result.Document);
+    }
+
+    [Fact]
+    public void EditFile_returns_an_edited_v1_document_upgraded_to_v2()
+    {
+        var result = LoopDocumentEditor.EditFile(LegacyHumanDocument, "\"label\":\"Review\"", "\"label\":\"Sign off\"");
+
+        Assert.True(result.Applied, string.Join("; ", result.ValidationErrors) + result.Error);
+        Assert.Equal("ild-loop-template/v2", (string)Root(result.Document!)["$schema"]!);
+        Assert.Contains(ConfigOf(result.Document!, "review")["outputs"]!.AsArray(), o => (string)o!["name"]! == "Respond");
+    }
+
+    [Fact]
+    public void EditFile_on_a_v2_document_changes_only_the_edited_bytes()
+    {
+        var document = ValidDocument();
+
+        var result = LoopDocumentEditor.EditFile(document, "\"label\":\"Reviewer\"", "\"label\":\"Strict Reviewer\"");
+
+        Assert.Equal(document.Replace("\"label\":\"Reviewer\"", "\"label\":\"Strict Reviewer\""), result.Document);
+    }
+
+    // Start → AI (declares "reject") → Condition switch (declares its case and default) → Cleanup.
+    private const string StructuredDocument =
+        "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Live\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
+        "\"nodes\":[" +
+        "{\"id\":\"start\",\"type\":\"Start\",\"label\":\"Start\",\"config\":{}}," +
+        "{\"id\":\"ai\",\"type\":\"AI\",\"label\":\"Reviewer\",\"config\":{\"prompt\":\"Review it\",\"outputs\":[{\"name\":\"reject\"}]}}," +
+        "{\"id\":\"gate\",\"type\":\"Condition\",\"label\":\"Gate\",\"config\":{\"cases\":[{\"variant\":\"PrExists\",\"edgeName\":\"has-pr\"}],\"defaultEdge\":\"otherwise\",\"outputs\":[{\"name\":\"has-pr\"},{\"name\":\"otherwise\"}]}}," +
+        "{\"id\":\"cleanup\",\"type\":\"Cleanup\",\"label\":\"Cleanup\",\"config\":{}}]," +
+        "\"edges\":[" +
+        "{\"id\":\"e1\",\"sourceNodeId\":\"start\",\"targetNodeId\":\"ai\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
+        "{\"id\":\"e2\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"gate\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
+        "{\"id\":\"e3\",\"sourceNodeId\":\"gate\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"has-pr\"}," +
+        "{\"id\":\"e4\",\"sourceNodeId\":\"gate\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"otherwise\"}]}";
+
+    [Theory]
+    [InlineData("ai", "outputs", "[{\"name\":\"reject\",\"visible\":false,\"color\":\"x\"}]")]
+    [InlineData("ai", "matchRules", "[{\"pattern\":\"REJECT\",\"edgeName\":\"reject\"}]")]
+    [InlineData("ai", "toolAllowlist", "[\"read\",\"write\"]")]
+    [InlineData("gate", "cases", "[{\"variant\":\"HasTag\",\"tag\":\"urgent\",\"edgeName\":\"has-pr\"}]")]
+    public void SetNodeField_stores_a_structured_field_as_json(string nodeId, string field, string value)
+    {
+        var result = LoopDocumentEditor.SetNodeField(StructuredDocument, nodeId, field, value);
+
+        Assert.True(result.Applied, string.Join("; ", result.ValidationErrors) + result.Error);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(value), ConfigOf(result.Document!, nodeId)[field]),
+            ConfigOf(result.Document!, nodeId)[field]?.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData("outputs", "approve")]
+    [InlineData("outputs", "{\"name\":\"approve\"}")]
+    [InlineData("matchRules", "[{\"pattern\":\"x\"")]
+    [InlineData("toolAllowlist", "\"read\"")]
+    public void SetNodeField_rejects_a_structured_value_that_is_not_a_json_array(string field, string value)
+    {
+        var result = LoopDocumentEditor.SetNodeField(StructuredDocument, "ai", field, value);
+
+        Assert.False(result.Applied);
+        Assert.Null(result.Document);
+        Assert.False(string.IsNullOrWhiteSpace(result.Error));
+    }
+
+    [Fact]
+    public void SetNodeField_keeps_a_text_field_as_text_even_when_it_looks_like_json()
+    {
+        var result = LoopDocumentEditor.SetNodeField(StructuredDocument, "ai", "prompt", "[{\"name\":\"x\"}]");
+
+        Assert.True(result.Applied);
+        Assert.Equal("[{\"name\":\"x\"}]", (string)ConfigOf(result.Document!, "ai")["prompt"]!);
+    }
+
+    [Fact]
+    public void An_ai_can_add_rename_and_change_an_output_with_the_targeted_tools()
+    {
+        const string rule = "[{\"pattern\":\"REJECT\",\"edgeName\":\"reject\"}]";
+        var document = ValidDocument();
+
+        // A rule that refers to an output nobody declared is refused, and says what to do.
+        var early = LoopDocumentEditor.SetNodeField(document, "ai", "matchRules", rule);
+        Assert.False(early.Applied);
+        Assert.Contains(early.ValidationErrors, e => e.Contains("'reject'") && e.Contains("outputs"));
+
+        string Apply(LoopEditResult step)
+        {
+            Assert.True(step.Applied, string.Join("; ", step.ValidationErrors) + step.Error);
+            return step.Document!;
+        }
+
+        // Add: declare the output, add the rule, wire the edge.
+        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "outputs", "[{\"name\":\"reject\"}]"));
+        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "matchRules", rule));
+        var edgesAnchor = System.Text.RegularExpressions.Regex.Match(document, "\"edges\"\\s*:\\s*\\[").Value;
+        document = Apply(LoopDocumentEditor.EditFile(document, edgesAnchor,
+            edgesAnchor + "{\"id\":\"e-reject\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"reject\"},"));
+
+        // Rename: add the new name, repoint the rule and the edge, remove the old name.
+        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "outputs", "[{\"name\":\"reject\"},{\"name\":\"rework\"}]"));
+        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "matchRules", rule.Replace("reject", "rework")));
+        var edgeStart = document.IndexOf("\"e-reject\"", StringComparison.Ordinal);
+        var edgeName = document.IndexOf("\"reject\"", edgeStart, StringComparison.Ordinal) + "\"reject\"".Length;
+        var edgeText = document[edgeStart..edgeName];
+        document = Apply(LoopDocumentEditor.EditFile(document, edgeText, edgeText[..^"\"reject\"".Length] + "\"rework\""));
+        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "outputs", "[{\"name\":\"rework\"}]"));
+
+        // Change: give the output a setting.
+        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "outputs", "[{\"name\":\"rework\",\"visible\":false}]"));
+
+        var ai = ConfigOf(document, "ai");
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse("[{\"name\":\"rework\",\"visible\":false}]"), ai["outputs"]));
+        Assert.Equal("rework", (string)ai["matchRules"]![0]!["edgeName"]!);
+        var edge = Root(document)["edges"]!.AsArray().Single(e => (string)e!["id"]! == "e-reject")!;
+        Assert.Equal("rework", (string)edge["name"]!);
     }
 }

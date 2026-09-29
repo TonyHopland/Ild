@@ -68,10 +68,10 @@ const sampleTemplate = {
   isArchived: false,
 };
 
-// A complete ild-loop-template/v1 document the AI "pushes" — different node labels
+// A complete ild-loop-template/v2 document the AI "pushes" — different node labels
 // so a successful apply is visible on the canvas.
 const aiDocument = {
-  $schema: "ild-loop-template/v1",
+  $schema: "ild-loop-template/v2",
   name: "AI Reworked Loop",
   description: "rebuilt by the agent",
   recoveryPolicy: RecoveryPolicy.AutoResume,
@@ -129,7 +129,7 @@ afterEach(() => {
 });
 
 describe("Loop Editor — loop editor context (ADR-0011)", () => {
-  test("exposes the open loop as a live ild-loop-template/v1 document for the chat", async () => {
+  test("exposes the open loop as a live ild-loop-template/v2 document for the chat", async () => {
     loopTemplateService.getAll.mockResolvedValue([sampleTemplate]);
     aiProviderService.getAll.mockResolvedValue([]);
 
@@ -138,7 +138,7 @@ describe("Loop Editor — loop editor context (ADR-0011)", () => {
 
     const live = getOpenLoopDocument();
     expect(live).toBeTruthy();
-    expect(live!.$schema).toBe("ild-loop-template/v1");
+    expect(live!.$schema).toBe("ild-loop-template/v2");
     expect(live!.name).toBe("Dev Loop");
     expect(live!.nodes.map((n) => n.label).sort()).toEqual(["Initialize", "Tidy Up"]);
   });
