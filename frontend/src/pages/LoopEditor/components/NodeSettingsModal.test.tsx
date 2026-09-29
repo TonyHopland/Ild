@@ -287,3 +287,30 @@ describe("NodeSettingsModal condition node", () => {
     ]);
   });
 });
+
+describe("NodeSettingsModal outgoing edge toggles", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  test("describes each toggle by its target, so two edges with the same label stay distinguishable", () => {
+    renderModal({
+      selectedNode: makeNode(NodeType.Human),
+      outgoingEdges: [
+        { id: "e1", label: "success", targetLabel: "Build", visible: true },
+        { id: "e2", label: "success", targetLabel: "Deploy", visible: false },
+      ],
+    });
+
+    const toBuild = screen.getByRole("checkbox", {
+      name: "Visible to user: success",
+      description: "Build",
+    }) as HTMLInputElement;
+    const toDeploy = screen.getByRole("checkbox", {
+      name: "Visible to user: success",
+      description: "Deploy",
+    }) as HTMLInputElement;
+    expect(toBuild.checked).toBe(true);
+    expect(toDeploy.checked).toBe(false);
+  });
+});

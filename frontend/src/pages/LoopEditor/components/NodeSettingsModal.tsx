@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import type { Node } from "@xyflow/react";
 import PromptEditor from "../../../components/PromptEditor";
 import {
@@ -348,6 +348,7 @@ export function NodeSettingsModal({
   onEdgeVisibilityChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
+  const edgeTargetIdPrefix = useId();
 
   return (
     <div
@@ -669,11 +670,14 @@ export function NodeSettingsModal({
                 <div key={edge.id} className="edge-visibility-row">
                   <span>{edge.label}</span>
                   <span aria-hidden="true">→</span>
-                  <span className="edge-visibility-target">{edge.targetLabel}</span>
+                  <span id={`${edgeTargetIdPrefix}-${edge.id}`} className="edge-visibility-target">
+                    {edge.targetLabel}
+                  </span>
                   <label className="checkbox-label">
                     <input
                       type="checkbox"
                       aria-label={`Visible to user: ${edge.label}`}
+                      aria-describedby={`${edgeTargetIdPrefix}-${edge.id}`}
                       checked={edge.visible}
                       onChange={(event) => onEdgeVisibilityChange(edge.id, event.target.checked)}
                     />
