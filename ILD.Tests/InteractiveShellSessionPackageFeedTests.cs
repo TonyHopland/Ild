@@ -22,11 +22,12 @@ public sealed class InteractiveShellSessionPackageFeedTests : IDisposable
     }
 
     // The typed command is echoed back first, with its format string where the
-    // value goes; what the shell printed is the last match.
+    // value goes; what the shell printed is the last match. END<done> only
+    // appears once the shell has run the whole line.
     private const string Report =
         "printf 'CFG<%s>\\n' \"${NPM_CONFIG_USERCONFIG-unset}\"; "
         + "printf 'NUGET<%s>\\n' \"${VSS_NUGET_EXTERNAL_FEED_ENDPOINTS-unset}\"; "
-        + "[ -f \"$NPM_CONFIG_USERCONFIG\" ] && printf 'FILE<%s>\\n' present; exit\n";
+        + "[ -f \"$NPM_CONFIG_USERCONFIG\" ] && printf 'FILE<%s>\\n' present; printf 'END<%s>\\n' done\n";
 
     private async Task<string> RunShellAsync(IReadOnlyList<PackageFeedCredential> feeds)
     {
@@ -36,14 +37,22 @@ public sealed class InteractiveShellSessionPackageFeedTests : IDisposable
         var session = new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance)
             .RunAsync(server, _worktree, Guid.NewGuid().ToString("N"), 120, 30, feeds, cts.Token);
 
+        // The session closes as soon as the shell exits, which can drop output the
+        // shell printed just before; so exit only once the report has arrived.
         await client.SendAsync(Encoding.UTF8.GetBytes(Report), WebSocketMessageType.Binary, endOfMessage: true, cts.Token);
         var output = new StringBuilder();
         var buffer = new byte[4096];
+        var exitSent = false;
         while (true)
         {
             var frame = await client.ReceiveAsync(buffer, cts.Token);
             if (frame.MessageType == WebSocketMessageType.Close) break;
             output.Append(Encoding.UTF8.GetString(buffer, 0, frame.Count));
+            if (!exitSent && output.ToString().Contains("END<done>", StringComparison.Ordinal))
+            {
+                exitSent = true;
+                await client.SendAsync("exit\n"u8.ToArray(), WebSocketMessageType.Binary, endOfMessage: true, cts.Token);
+            }
         }
         await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
         await session.WaitAsync(cts.Token);
