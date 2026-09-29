@@ -62,10 +62,6 @@ RUN dotnet publish -c Release -o /app/mcp-server --no-restore ${VERSION:+-p:Vers
 # identical either way.
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS final-base-0
 FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS final-base-1
-# Only an SDK image restores packages, so only it gets the credential provider
-# (installed in the final stage) and points NuGet at it. NUGET_PLUGIN_PATHS
-# replaces NuGet's own ~/.nuget/plugins lookup, so the runtime image must not set it.
-ENV NUGET_PLUGIN_PATHS=/usr/local/share/artifacts-credprovider/plugins/netcore/CredentialProvider.Microsoft/CredentialProvider.Microsoft.dll
 
 FROM final-base-${WITH_DOTNET_SDK} AS final
 WORKDIR /app
@@ -210,41 +206,43 @@ fi
 
 # The Azure Artifacts credential provider, for repositories that restore from a
 # private NuGet feed: it answers NuGet with the credentials a run hands it in
-# VSS_NUGET_EXTERNAL_FEED_ENDPOINTS, and holds no secret itself. One root-owned
-# copy that every uid can read, found through NUGET_PLUGIN_PATHS rather than
-# ~/.nuget/plugins, so it is there whatever HOME a process runs with: the agent's,
-# the orchestrator's in single-uid mode, or one a repository's own script sets.
-# The self-contained build needs no separate .NET runtime, and is run once here
-# against a made-up endpoint so an image whose plugin cannot answer is never
-# built. Like Chrome, an architecture without a build is skipped with a message;
-# NUGET_PLUGIN_PATHS (set on the SDK base) then names no file, which Settings
-# reports as a missing provider. A failed download or smoke run fails the build.
+# VSS_NUGET_EXTERNAL_FEED_ENDPOINTS, and holds no secret itself. Installed as the
+# .NET tool, pinned, into one root-owned directory every uid can read, and linked
+# into /usr/local/bin: NuGet (from SDK 9.0.200) finds a nuget-plugin-* command on
+# PATH, and /usr/local/bin stays on PATH whatever HOME a process has, including
+# the login shells previews run in, which reset PATH. No NUGET_PLUGIN_PATHS: set,
+# it would switch that PATH lookup and ~/.nuget/plugins off for every process.
+# The tool runs on the image's own runtime, so every architecture .NET supports
+# is covered. An SDK too old for it fails the build rather than shipping an image
+# whose NuGet feeds cannot work; so does a failed install. The smoke check runs
+# the provider by name, as the agent, from a login shell, against a made-up
+# endpoint, so the image is never built unless the agent's NuGet can find and run it.
 ARG WITH_DOTNET_SDK
+ARG DOTNET_VERSION
 ARG ARTIFACTS_CREDPROVIDER_VERSION=2.0.4
 RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
-  CREDPROVIDER_ARCH="$(dpkg --print-architecture)"; \
-  case "$CREDPROVIDER_ARCH" in \
-    amd64) CREDPROVIDER_RID=linux-x64 ;; \
-    arm64) CREDPROVIDER_RID=linux-arm64 ;; \
-    *) CREDPROVIDER_RID= ;; \
-  esac; \
-  if [ -z "$CREDPROVIDER_RID" ]; then \
-    echo "Skipping the Azure Artifacts credential provider: no build for $CREDPROVIDER_ARCH" >&2; \
-  else \
-    apt-get update && \
-    apt-get install -y --no-install-recommends wget ca-certificates && \
-    rm -rf /var/lib/apt/lists/* && \
-    wget -q -O /tmp/credprovider.tar.gz "https://github.com/microsoft/artifacts-credprovider/releases/download/v${ARTIFACTS_CREDPROVIDER_VERSION}/Microsoft.${CREDPROVIDER_RID}.NuGet.CredentialProvider.tar.gz" && \
-    mkdir -p /usr/local/share/artifacts-credprovider && \
-    tar -xzf /tmp/credprovider.tar.gz --no-same-owner -C /usr/local/share/artifacts-credprovider plugins && \
-    chmod -R a+rX,go-w /usr/local/share/artifacts-credprovider && \
-    rm -f /tmp/credprovider.tar.gz && \
-    smoke_endpoint=https://pkgs.dev.azure.com/image-build/_packaging/smoke/nuget/v3/index.json && \
+  sdk_version="$(dotnet --version)" && \
+  if ! printf '%s\n' "$sdk_version" | awk -F. '{ exit !($1 > 9 || ($1 == 9 && ($2 > 0 || $3 + 0 >= 200))) }'; then \
+    echo "The Azure Artifacts credential provider needs .NET SDK 9.0.200 or later, but DOTNET_VERSION=${DOTNET_VERSION} gives SDK ${sdk_version}. Build with DOTNET_VERSION=9.0 or later." >&2; \
+    exit 1; \
+  fi && \
+  mkdir -p /tmp/credprovider-install && \
+  DOTNET_CLI_HOME=/tmp/credprovider-install NUGET_PACKAGES=/tmp/credprovider-install/packages \
+  DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+    dotnet tool install Microsoft.Artifacts.CredentialProvider.NuGet.Tool \
+      --version "$ARTIFACTS_CREDPROVIDER_VERSION" --tool-path /usr/local/share/artifacts-credprovider && \
+  rm -rf /tmp/credprovider-install && \
+  chmod -R a+rX,go-w /usr/local/share/artifacts-credprovider && \
+  ln -s /usr/local/share/artifacts-credprovider/nuget-plugin-microsoft-artifacts-credential-provider /usr/local/bin/ && \
+  mkdir -p /tmp/credprovider-smoke && \
+  chown ${AGENT_UID}:${AGENT_GID} /tmp/credprovider-smoke && \
+  smoke_endpoint=https://pkgs.dev.azure.com/image-build/_packaging/smoke/nuget/v3/index.json && \
+  gosu ${AGENT_UID}:${AGENT_GID} env HOME=/tmp/credprovider-smoke \
     VSS_NUGET_EXTERNAL_FEED_ENDPOINTS="{\"endpointCredentials\":[{\"endpoint\":\"$smoke_endpoint\",\"username\":\"ild\",\"password\":\"smoke-check\"}]}" \
-      "${NUGET_PLUGIN_PATHS%.dll}" -U "$smoke_endpoint" -N -C -F Json > /tmp/credprovider-smoke.json && \
-    grep -q '"Password":"smoke-check"' /tmp/credprovider-smoke.json && \
-    rm -f /tmp/credprovider-smoke.json; \
-  fi; \
+    sh -lc 'nuget-plugin-microsoft-artifacts-credential-provider -U "$0" -N -C -F Json' "$smoke_endpoint" \
+    > /tmp/credprovider-smoke.json && \
+  grep -q '"Password":"smoke-check"' /tmp/credprovider-smoke.json && \
+  rm -rf /tmp/credprovider-smoke /tmp/credprovider-smoke.json; \
 fi
 
 COPY --from=build /certs /tmp/extra-certs

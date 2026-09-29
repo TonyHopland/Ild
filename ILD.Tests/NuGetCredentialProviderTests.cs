@@ -17,14 +17,24 @@ public sealed class NuGetCredentialProviderTests : IDisposable
     }
 
     /// <summary>A <c>dotnet</c> on a PATH directory, with an SDK beside it when asked.</summary>
-    private string DotNet(bool withSdk)
+    private string DotNet(bool withSdk, string sdk = "10.0.100")
     {
-        var dotnetRoot = Directory.CreateDirectory(Path.Combine(_root, withSdk ? "dotnet-sdk" : "dotnet-runtime")).FullName;
+        var dotnetRoot = Directory.CreateDirectory(Path.Combine(_root, withSdk ? $"dotnet-sdk-{sdk}" : "dotnet-runtime")).FullName;
         File.WriteAllText(Path.Combine(dotnetRoot, "dotnet"), "");
         Directory.CreateDirectory(Path.Combine(dotnetRoot, "shared", "Microsoft.NETCore.App", "10.0.0"));
         if (withSdk)
-            Directory.CreateDirectory(Path.Combine(dotnetRoot, "sdk", "10.0.100"));
+            Directory.CreateDirectory(Path.Combine(dotnetRoot, "sdk", sdk));
         return dotnetRoot;
+    }
+
+    /// <summary>The .NET tool's command in a directory, runnable by everyone.</summary>
+    private string Tool(string directory)
+    {
+        var path = Path.Combine(Directory.CreateDirectory(directory).FullName, NuGetCredentialProvider.ToolCommand);
+        File.WriteAllText(path, "");
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, (UnixFileMode)0b111_101_101);
+        return path;
     }
 
     private string Plugin(string directory, UnixFileMode? mode = null)
@@ -111,5 +121,48 @@ public sealed class NuGetCredentialProviderTests : IDisposable
         Assert.True(NuGetCredentialProvider.IsMissing(env));
         File.SetUnixFileMode(plugin, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
         Assert.False(NuGetCredentialProvider.IsMissing(env));
+    }
+
+    [Fact]
+    public void The_dotnet_tool_on_the_path_is_found_by_an_sdk_that_looks_there()
+    {
+        var tool = Tool(Path.Combine(_root, "usr-local-bin"));
+        var env = new TestProcessEnvironment
+        {
+            { "PATH", string.Join(Path.PathSeparator, DotNet(withSdk: true), Path.GetDirectoryName(tool)) },
+            { "HOME", Home() },
+        };
+
+        Assert.Equal(tool, NuGetCredentialProvider.Locate(env));
+        Assert.False(NuGetCredentialProvider.IsMissing(env));
+    }
+
+    [Fact]
+    public void An_sdk_before_9_0_200_does_not_look_on_the_path_so_the_tool_does_not_count()
+    {
+        var tool = Tool(Path.Combine(_root, "usr-local-bin"));
+        var env = new TestProcessEnvironment
+        {
+            { "PATH", string.Join(Path.PathSeparator, DotNet(withSdk: true, sdk: "9.0.100"), Path.GetDirectoryName(tool)) },
+            { "HOME", Home() },
+        };
+
+        Assert.True(NuGetCredentialProvider.IsMissing(env));
+    }
+
+    [Fact]
+    public void Plugin_paths_that_name_no_provider_switch_the_path_lookup_off_as_nuget_does()
+    {
+        var tool = Tool(Path.Combine(_root, "usr-local-bin"));
+        var env = new TestProcessEnvironment
+        {
+            { "PATH", string.Join(Path.PathSeparator, DotNet(withSdk: true), Path.GetDirectoryName(tool)) },
+            { "HOME", Home() },
+            { "NUGET_PLUGIN_PATHS", Path.Combine(_root, "gone", "CredentialProvider.Microsoft.dll") },
+        };
+
+        Assert.True(NuGetCredentialProvider.IsMissing(env));
+        env.Set("NUGET_PLUGIN_PATHS", tool);
+        Assert.Equal(tool, NuGetCredentialProvider.Locate(env));
     }
 }

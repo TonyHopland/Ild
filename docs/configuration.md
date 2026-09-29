@@ -561,7 +561,8 @@ Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, and
 `NODE_RUNTIME_VERSION`. With `WITH_DOTNET_SDK=1` the image is based on
 `mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION`, so the SDK available to agents
 tracks `DOTNET_VERSION` rather than a separate channel. It also carries the Azure
-Artifacts credential provider, pinned by `ARTIFACTS_CREDPROVIDER_VERSION` — see
+Artifacts credential provider, pinned by `ARTIFACTS_CREDPROVIDER_VERSION`, which
+needs a `DOTNET_VERSION` whose SDK is 9.0.200 or later — see
 [Package feeds](#package-feeds).
 
 ### Agent network limits
@@ -674,28 +675,40 @@ nothing is written or set.
 into credentials only through Microsoft's Azure Artifacts credential provider;
 without it a restore from the feed fails with `NU1301 … 401 (Unauthorized)`
 however good the PAT is. The image carries it when it is built with
-`WITH_DOTNET_SDK=1` (version `ARTIFACTS_CREDPROVIDER_VERSION`, 2.0.4 by
-default): one read-only copy under `/usr/local/share/artifacts-credprovider`,
-which `NUGET_PLUGIN_PATHS` points NuGet at whatever `HOME` a process runs with.
-The build runs it once and fails if it cannot answer. `dotnet restore -v detailed`
-prints `Using … CredentialProvider.Microsoft.dll as a credential provider plugin`
+`WITH_DOTNET_SDK=1`: the `Microsoft.Artifacts.CredentialProvider.NuGet.Tool`
+.NET tool (version `ARTIFACTS_CREDPROVIDER_VERSION`, 2.0.4 by default),
+installed once under `/usr/local/share/artifacts-credprovider` and linked into
+`/usr/local/bin` as `nuget-plugin-microsoft-artifacts-credential-provider`.
+NuGet finds a `nuget-plugin-*` command on `PATH`, so it is found for every uid,
+whatever `HOME` a process has, and in the login shells preview steps run in.
+The build runs it once, as the agent user, and fails if it cannot answer.
+`dotnet restore -v detailed` prints
+`Using …/nuget-plugin-microsoft-artifacts-credential-provider as a credential provider plugin`
 when NuGet has found it.
-Only SDK images set that variable: it replaces NuGet's own `~/.nuget/plugins`
-lookup, which the runtime image leaves as it is. On an architecture Microsoft
-publishes no build for (anything but amd64 and arm64) the SDK image is built
-without the provider and the variable names no file, which Settings reports as
-below; unset it, or point it at a provider you install.
+
+The tool needs a **.NET SDK 9.0.200 or later**; older SDKs do not look on `PATH`
+for plugins. An image built with `WITH_DOTNET_SDK=1` and a `DOTNET_VERSION` whose
+SDK is older fails to build with a message saying so. Projects that target
+`net8.0` still restore and build with the newer SDK, but a repository whose
+`global.json` pins an 8.0 SDK runs NuGet from that SDK and cannot use private
+feeds; for those, install the provider as a plugin instead (below).
 
 Where a .NET SDK is installed but ILD cannot find a provider the run processes
-could read — looked for the way NuGet looks: the file `NUGET_PLUGIN_PATHS` names,
-else `~/.nuget/plugins` in the agent's home — Settings → Package feeds shows
-"NuGet restores won't be authenticated", Test's OK says NuGet credentials can't
-be delivered, and a run with feeds logs the warning at its start (it is also on
-the Start node's output). npm feeds are unaffected. This is the usual state of a
-**local development** setup, or of an image built without `WITH_DOTNET_SDK=1`
-and given an SDK some other way: install the provider with Microsoft's
-`installcredprovider.sh` for the user the agent runs as, or point
-`NUGET_PLUGIN_PATHS` at it.
+could use — looked for the way NuGet looks: the files `NUGET_PLUGIN_PATHS` names
+(which switch every other lookup off), else the tool's command on `PATH` (for an
+SDK from 9.0.200 on), else `~/.nuget/plugins` in the agent's home — Settings →
+Package feeds shows "NuGet restores won't be authenticated", Test's OK says NuGet
+credentials can't be delivered, and a run with feeds logs the warning at its
+start (it is also on the Start node's output). npm feeds are unaffected. This is
+the usual state of a **local development** setup, or of an image built without
+`WITH_DOTNET_SDK=1` and given an SDK some other way. Install the provider for
+the user the agent runs as:
+
+- with a .NET SDK 9.0.200 or later,
+  `dotnet tool install --global Microsoft.Artifacts.CredentialProvider.NuGet.Tool --version 2.0.4`,
+  with `~/.dotnet/tools` on that user's `PATH`;
+- with an older SDK, Microsoft's `installcredprovider.sh`, which puts the plugin
+  in `~/.nuget/plugins`.
 
 In `whitelist` network mode, allow the feed's hosts (see
 [Agent network limits](#agent-network-limits)) or restores are blocked like
