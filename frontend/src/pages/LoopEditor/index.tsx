@@ -236,9 +236,12 @@ export default function LoopEditor() {
   const [edgeError, setEdgeError] = useState<string | null>(null);
   const [showEdgeDeletePanel, setShowEdgeDeletePanel] = useState(false);
   const [showNodeSettingsModal, setShowNodeSettingsModal] = useState(false);
-  // "Visible to user" values toggled in the open node's settings, by edge id;
+  // "Visible to user" values toggled in the open node's settings, by edge id (a
+  // Map, since loop documents let authors choose ids such as "constructor");
   // committed to the edges only by Save.
-  const [edgeVisibilityDraft, setEdgeVisibilityDraft] = useState<Record<string, boolean>>({});
+  const [edgeVisibilityDraft, setEdgeVisibilityDraft] = useState<ReadonlyMap<string, boolean>>(
+    new Map(),
+  );
   const [nodeLabel, setNodeLabel] = useState("");
   const [cmdCommand, setCmdCommand] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -336,7 +339,7 @@ export default function LoopEditor() {
             label: edgeLabelFor(data.edgeType, data.name),
             targetLabel: (target?.data as { label?: string } | undefined)?.label ?? edge.target,
             visible:
-              edgeVisibilityDraft[edge.id] ??
+              edgeVisibilityDraft.get(edge.id) ??
               edgeUserVisible(edge, (selectedNode.data as { type: NodeType }).type),
           };
         })
@@ -1124,7 +1127,7 @@ export default function LoopEditor() {
         conditionDefaultEdge: readConditionDefaultEdge(config),
         conditionOutput: (config.output as string) ?? CONDITION_DEFAULT_TEMPLATE,
       });
-      setEdgeVisibilityDraft({});
+      setEdgeVisibilityDraft(new Map());
       setShowNodeSettingsModal(true);
     },
     [aiProviders],
@@ -1244,7 +1247,7 @@ export default function LoopEditor() {
     // taking the creation default.
     setEdges((currentEdges) =>
       currentEdges.map((edge) => {
-        const visible = edgeVisibilityDraft[edge.id];
+        const visible = edgeVisibilityDraft.get(edge.id);
         return edge.source === selectedNode.id &&
           visible !== undefined &&
           visible !== edgeUserVisible(edge, selectedNodeType as NodeType)
@@ -1252,7 +1255,7 @@ export default function LoopEditor() {
           : edge;
       }),
     );
-    setEdgeVisibilityDraft({});
+    setEdgeVisibilityDraft(new Map());
 
     setSelectedNode(null);
     setShowNodeSettingsModal(false);
@@ -1307,7 +1310,7 @@ export default function LoopEditor() {
       setConditionDefaultEdge(originalNodeConfig.conditionDefaultEdge);
       setConditionOutput(originalNodeConfig.conditionOutput);
     }
-    setEdgeVisibilityDraft({});
+    setEdgeVisibilityDraft(new Map());
 
     setSelectedNode(null);
     setShowNodeSettingsModal(false);
@@ -1738,7 +1741,7 @@ export default function LoopEditor() {
                       onConditionOutputChange={setConditionOutput}
                       outgoingEdges={outgoingEdgeVisibility}
                       onEdgeVisibilityChange={(edgeId, visible) =>
-                        setEdgeVisibilityDraft((draft) => ({ ...draft, [edgeId]: visible }))
+                        setEdgeVisibilityDraft((draft) => new Map(draft).set(edgeId, visible))
                       }
                     />
                   )}

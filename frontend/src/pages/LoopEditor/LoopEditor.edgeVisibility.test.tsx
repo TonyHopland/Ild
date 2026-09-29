@@ -100,8 +100,8 @@ const authValue = {
   logout: vi.fn(),
 };
 
-async function renderEditor() {
-  loopTemplateService.getAll.mockResolvedValue([template]);
+async function renderEditor(loaded = template) {
+  loopTemplateService.getAll.mockResolvedValue([loaded]);
   loopTemplateService.validate.mockResolvedValue({ valid: true, errors: [] });
   loopTemplateService.update.mockResolvedValue({ id: "tpl-1" });
   aiProviderService.getAll.mockResolvedValue([]);
@@ -217,5 +217,28 @@ describe("Loop Editor — Visible to user toggle per edge", () => {
     expect(sent["e-pr-ok"]).toBe(false);
     // Never set: either left for the server's default or sent as that default.
     expect(sent["e-pr-merged"]).not.toBe(true);
+  });
+
+  test("an edge id that names an Object member still shows and keeps the edge's own value", async () => {
+    // Loop documents let the author choose edge ids, so an id can collide with
+    // a member every plain object inherits.
+    const renamed: Record<string, string> = { "e-pr-ok": "constructor", "e-pr-ci": "toString" };
+    await renderEditor({
+      ...template,
+      edges: template.edges.map((edge) => ({ ...edge, id: renamed[edge.id] ?? edge.id })),
+    });
+
+    let dialog = await openNode("Open PR");
+    expect(toggle(dialog, "success").checked).toBe(false);
+    expect(toggle(dialog, "on_ci_failed").checked).toBe(true);
+    await closeDialogWith(dialog, "Save");
+
+    dialog = await openNode("Open PR");
+    fireEvent.click(toggle(dialog, "on_ci_failed"));
+    await closeDialogWith(dialog, "Save");
+
+    const sent = await saveLoopAndReadVisibility();
+    expect(sent["constructor"]).toBe(false);
+    expect(sent["toString"]).toBe(false);
   });
 });
