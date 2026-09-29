@@ -109,8 +109,11 @@ public sealed class ConnectionTester : IConnectionTester
         var evidence = $"HTTP {(int)status} {status}\n{body}";
         return status switch
         {
-            _ when (int)status is >= 200 and < 300 =>
-                new ConnectionTestResult(ConnectionTestOutcome.Ok, "The PAT can read this feed.", null),
+            _ when (int)status is >= 200 and < 300 => new ConnectionTestResult(ConnectionTestOutcome.Ok,
+                NuGetCredentialProvider.Locate(ProcessEnvironment.Current) is null
+                    ? "The PAT can read this feed, but NuGet restores will fail here: the Azure Artifacts credential provider is not installed."
+                    : "The PAT can read this feed.",
+                null),
             HttpStatusCode.Unauthorized => new ConnectionTestResult(ConnectionTestOutcome.InvalidApiKey,
                 "PAT rejected, probably expired or revoked. Create a new one with Packaging (Read) and paste it here.", evidence),
             HttpStatusCode.Forbidden => new ConnectionTestResult(ConnectionTestOutcome.AccessDenied,

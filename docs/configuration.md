@@ -625,10 +625,11 @@ does today.
 
 - a **name**, e.g. `company` — repositories select feeds by name, so it cannot
   be changed later;
-- the **feed URL**, `https://pkgs.dev.azure.com/{organization}/_packaging/{feed}`
-  or, for a project-scoped feed,
-  `https://pkgs.dev.azure.com/{organization}/{project}/_packaging/{feed}`. One
-  feed serves both npm and NuGet;
+- the **feed URL**, on either host Azure DevOps serves feeds from:
+  `https://pkgs.dev.azure.com/{organization}[/{project}]/_packaging/{feed}` or the
+  legacy `https://{organization}.pkgs.visualstudio.com[/{project}]/_packaging/{feed}`,
+  with `/{project}` for a project-scoped feed. It is shown as you typed it; either
+  form covers the feed on both hosts. One feed serves both npm and NuGet;
 - a **PAT** with only the _Packaging (Read)_ scope, for that one organization,
   with a short expiry. It is stored encrypted like every other secret and is
   write-only: after saving, only a masked hint (`••••3fa9`) is shown, and an edit
@@ -638,7 +639,9 @@ does today.
 says what it found: OK; the PAT rejected (expired or revoked); no access to this
 feed (scope or organization); feed not found (the URL); or Azure DevOps
 unreachable. Nothing checks a PAT on its own — when one expires, restores fail
-and Test confirms why.
+and Test confirms why. An OK also says when NuGet restores will still fail
+because the credential provider (below) is not installed; runs log the same
+warning, and the Start node's output carries it.
 
 Then tick the feed under **Package feeds** on the repository's edit form. A
 repository selects none by default. Selecting a feed only provides its
@@ -650,27 +653,37 @@ feed with the same name is added back.
 
 **What a run gets.** With at least one selected feed, every process of the run
 — the Start node's install steps, every preview install step and service, Cmd
-nodes and each AI node's agent CLI — gets two variables, over anything else it
-is given, the repository's custom `.env` included:
+nodes, each AI node's agent CLI, and the terminal opened on the run's worktree
+— gets two variables, over anything else it is given, the repository's custom
+`.env` included:
 
 - `NPM_CONFIG_USERCONFIG`, an npm user config that authenticates every selected
-  feed on both of Azure's documented registry paths (`…/npm/registry/` and
-  `…/npm/`). The repository's `.npmrc` still applies on top, so its registries
-  and scoped registries are used unchanged. ILD never sets a registry.
+  feed on both hosts and on both of Azure's documented registry paths
+  (`…/npm/registry/` and `…/npm/`). The repository's `.npmrc` still applies on
+  top, so its registries and scoped registries are used unchanged. ILD never
+  sets a registry.
 - `VSS_NUGET_EXTERNAL_FEED_ENDPOINTS`, the endpoint list the Azure Artifacts
-  credential provider reads, naming each feed's service index on
-  `pkgs.dev.azure.com` and on the legacy `{organization}.pkgs.visualstudio.com`.
+  credential provider reads, naming each feed's service index on both hosts.
 
-The npm config is written for each launch (or preview) under the agent read
-directory, never inside the worktree and never in the agent's home, which every
-repository shares; it is deleted when the launch ends or the preview stops, and
-whatever a restart interrupted is removed at the next startup. With no feed
-selected, nothing is written or set.
+The npm config is written for each launch, preview or terminal session under the
+agent read directory, never inside the worktree and never in the agent's home,
+which every repository shares. It is deleted when the launch ends, when nothing
+of the preview is running any more, or when the terminal closes, and whatever a
+restart interrupted is removed at the next startup. With no feed selected,
+nothing is written or set.
 
-The credential provider comes with the image when it is built with
+**The credential provider.** NuGet turns `VSS_NUGET_EXTERNAL_FEED_ENDPOINTS`
+into credentials only through Microsoft's Azure Artifacts credential provider;
+without it a restore from the feed fails with `NU1301 … 401 (Unauthorized)`
+however good the PAT is. The image carries it when it is built with
 `WITH_DOTNET_SDK=1` (version `ARTIFACTS_CREDPROVIDER_VERSION`, 2.0.4 by
-default). If you run ILD outside the image, install it for the user the agent
-runs as with Microsoft's `installcredprovider.sh`.
+default): one read-only copy under `/usr/local/share/artifacts-credprovider`,
+which `NUGET_PLUGIN_PATHS` points NuGet at whatever `HOME` a process runs with.
+The build runs it once and fails if it cannot answer. If you run ILD outside the
+image, install it with Microsoft's `installcredprovider.sh` for the user the
+agent runs as, or point `NUGET_PLUGIN_PATHS` at it. `dotnet restore -v detailed`
+prints `Using … CredentialProvider.Microsoft.dll as a credential provider plugin`
+when NuGet has found it.
 
 In `whitelist` network mode, allow the feed's hosts (see
 [Agent network limits](#agent-network-limits)) or restores are blocked like
@@ -684,11 +697,15 @@ Known limits:
   requests of repositories that use private feeds need a human review. All runs
   share one agent uid, so a process of one run can also read another active
   run's feed credentials.
-- npm's legacy `{organization}.pkgs.visualstudio.com` registry URLs are not
-  authenticated; only NuGet's are.
+- npm matches the path of a registry URL case-sensitively. A feed entered on the
+  legacy host is authenticated with the organization name in lower case, the way
+  that host spells it; a repository whose `.npmrc` names the same feed on
+  `pkgs.dev.azure.com` with a capitalised organization then needs the feed
+  entered in that form.
 - `npm config set` and `npm login` fail in a process that has feeds, because the
   npm user config it is given is read-only. The agent's own `~/.npmrc` is not
   read in those processes.
+- Chat sessions and the AI provider login terminal get no feeds.
 
 ## AI provider configuration
 

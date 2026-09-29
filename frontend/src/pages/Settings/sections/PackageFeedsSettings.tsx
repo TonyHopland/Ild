@@ -78,7 +78,7 @@ function FeedForm({ form, onSaved, onCancel }: FeedFormProps) {
       <SettingRow
         label="Feed URL"
         htmlFor={`${field}-url`}
-        help="https://pkgs.dev.azure.com/{organization}/_packaging/{feed}, or with /{project} before /_packaging for a project-scoped feed."
+        help="https://pkgs.dev.azure.com/{organization}/_packaging/{feed} or https://{organization}.pkgs.visualstudio.com/_packaging/{feed}, with /{project} before /_packaging for a project-scoped feed."
       >
         <input
           id={`${field}-url`}

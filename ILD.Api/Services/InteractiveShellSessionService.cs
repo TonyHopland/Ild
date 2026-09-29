@@ -1,5 +1,6 @@
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using Porta.Pty;
 
 namespace ILD.Api.Services;
@@ -22,12 +23,22 @@ public sealed class InteractiveShellSessionService
         _logger = logger;
     }
 
+    /// <param name="sessionLabel">
+    /// Names the PTY and prefixes the session's package feed credential file, so a
+    /// run id here lets reclaiming the run find it.
+    /// </param>
+    /// <param name="packageFeeds">
+    /// The selected package feeds of the repository the worktree belongs to. The
+    /// shell gets their npm user config and NuGet endpoints, exactly as the run's
+    /// own processes do; the file lives as long as the session.
+    /// </param>
     public async Task RunAsync(
         WebSocket socket,
         string cwd,
         string sessionLabel,
         int initialCols,
         int initialRows,
+        IReadOnlyList<PackageFeedCredential> packageFeeds,
         CancellationToken cancellationToken)
     {
         if (!Directory.Exists(cwd))
@@ -37,6 +48,7 @@ public sealed class InteractiveShellSessionService
             return;
         }
 
+        using var feeds = PackageFeedCredentialFiles.Materialize(packageFeeds, sessionLabel, _logger);
         var options = new PtyOptions
         {
             Name = $"ild-shell-{sessionLabel}",
@@ -45,7 +57,7 @@ public sealed class InteractiveShellSessionService
             Cwd = cwd,
             App = ResolveShell(),
             CommandLine = Array.Empty<string>(),
-            Environment = new Dictionary<string, string>(),
+            Environment = new Dictionary<string, string>(feeds.Environment),
         };
 
         await PtyWebSocketBridge.RunAsync(socket, options, _logger, cancellationToken);

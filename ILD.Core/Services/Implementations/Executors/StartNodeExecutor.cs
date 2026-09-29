@@ -85,6 +85,8 @@ public sealed class StartNodeExecutor : INodeExecutor
             var feeds = await sp.GetRequiredService<IPackageFeedResolver>().ResolveAsync(repo.Id, ctx.CancellationToken);
             if (feeds.Missing.Count > 0)
                 warnings.Add($"selected package feed(s) no longer exist and were skipped: {string.Join(", ", feeds.Missing)}");
+            if (feeds.CredentialProviderMissing)
+                warnings.Add(NuGetCredentialProvider.MissingWarning);
 
             var (installError, warning) = await RunInstallAsync(preview, worktreePath, repo.PreviewEnv, feeds.Feeds, ctx.CancellationToken);
             if (installError is not null)

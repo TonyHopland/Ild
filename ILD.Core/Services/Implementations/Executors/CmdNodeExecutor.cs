@@ -35,9 +35,8 @@ public sealed class CmdNodeExecutor : INodeExecutor
 
         yield return new NodeOutcome.NodeStarting(command);
 
-        var workItem = ctx.Run.RepositoryId is null ? await workItems.GetWorkItemAsync(ctx.Run.WorkItemId) : null;
         var feeds = await ctx.Services.GetRequiredService<IPackageFeedResolver>()
-            .ResolveAsync(RunRepository.IdOf(ctx.Run, workItem), ctx.CancellationToken);
+            .ResolveAsync(await RunRepository.IdOfAsync(ctx.Run, workItems), ctx.CancellationToken);
         var (ok, output, error) = await RunProcessAsync(command, worktree, feeds.Feeds, ctx);
         if (!ok)
         {

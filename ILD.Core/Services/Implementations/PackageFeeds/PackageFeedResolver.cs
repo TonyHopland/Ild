@@ -7,7 +7,12 @@ namespace ILD.Core.Services.Implementations.PackageFeeds;
 /// The feeds a repository selected that still exist, with their PATs, and the
 /// names of those that no longer do.
 /// </summary>
-public sealed record ResolvedPackageFeeds(IReadOnlyList<PackageFeedCredential> Feeds, IReadOnlyList<string> Missing)
+/// <param name="CredentialProviderMissing">
+/// True when there are feeds to hand out but NuGet in the run's processes will not
+/// find the credential provider that reads them (see <see cref="NuGetCredentialProvider"/>).
+/// </param>
+public sealed record ResolvedPackageFeeds(
+    IReadOnlyList<PackageFeedCredential> Feeds, IReadOnlyList<string> Missing, bool CredentialProviderMissing = false)
 {
     public static readonly ResolvedPackageFeeds None = new([], []);
 }
@@ -61,6 +66,9 @@ public sealed class PackageFeedResolver : IPackageFeedResolver
                 feeds.Add(new PackageFeedCredential(selection.Feed.Name, url!, selection.Feed.Pat));
             }
         }
-        return new ResolvedPackageFeeds(feeds, missing);
+        var providerMissing = feeds.Count > 0 && NuGetCredentialProvider.Locate(ProcessEnvironment.Current) is null;
+        if (providerMissing)
+            _logger.LogWarning("Repository {RepositoryId} selects package feeds, but {Problem}", id, NuGetCredentialProvider.MissingWarning);
+        return new ResolvedPackageFeeds(feeds, missing, providerMissing);
     }
 }

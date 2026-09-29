@@ -205,15 +205,18 @@ RUN if [ "$WITH_CHROME" = "1" ]; then \
 fi
 
 # The Azure Artifacts credential provider, for repositories that restore from a
-# private NuGet feed: NuGet finds it under ~/.nuget/plugins and it answers with
-# the credentials a run hands it in VSS_NUGET_EXTERNAL_FEED_ENDPOINTS. It holds
-# no secret. Installed for both users, as Microsoft's installcredprovider.sh
-# does, each ~/.nuget owned by its user so restores can put packages beside it.
-# The self-contained build needs no separate .NET runtime. Like Chrome, an
-# architecture without a build is skipped with a message; a failed download
-# fails the build.
+# private NuGet feed: it answers NuGet with the credentials a run hands it in
+# VSS_NUGET_EXTERNAL_FEED_ENDPOINTS, and holds no secret itself. One root-owned
+# copy that every uid can read, found through NUGET_PLUGIN_PATHS rather than
+# ~/.nuget/plugins, so it is there whatever HOME a process runs with: the agent's,
+# the orchestrator's in single-uid mode, or one a repository's own script sets.
+# The self-contained build needs no separate .NET runtime, and is run once here
+# against a made-up endpoint so an image whose plugin cannot answer is never
+# built. Like Chrome, an architecture without a build is skipped with a message;
+# a failed download or smoke run fails the build.
 ARG WITH_DOTNET_SDK
 ARG ARTIFACTS_CREDPROVIDER_VERSION=2.0.4
+ENV NUGET_PLUGIN_PATHS=/usr/local/share/artifacts-credprovider/plugins/netcore/CredentialProvider.Microsoft/CredentialProvider.Microsoft.dll
 RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
   CREDPROVIDER_ARCH="$(dpkg --print-architecture)"; \
   case "$CREDPROVIDER_ARCH" in \
@@ -228,12 +231,15 @@ RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
     apt-get install -y --no-install-recommends wget ca-certificates && \
     rm -rf /var/lib/apt/lists/* && \
     wget -q -O /tmp/credprovider.tar.gz "https://github.com/microsoft/artifacts-credprovider/releases/download/v${ARTIFACTS_CREDPROVIDER_VERSION}/Microsoft.${CREDPROVIDER_RID}.NuGet.CredentialProvider.tar.gz" && \
-    mkdir -p /home/agent/.nuget /home/ild/.nuget && \
-    tar -xzf /tmp/credprovider.tar.gz -C /home/agent/.nuget plugins && \
-    tar -xzf /tmp/credprovider.tar.gz -C /home/ild/.nuget plugins && \
-    chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.nuget && \
-    chown -R ${APP_UID}:${APP_GID} /home/ild/.nuget && \
-    rm -f /tmp/credprovider.tar.gz; \
+    mkdir -p /usr/local/share/artifacts-credprovider && \
+    tar -xzf /tmp/credprovider.tar.gz --no-same-owner -C /usr/local/share/artifacts-credprovider plugins && \
+    chmod -R a+rX,go-w /usr/local/share/artifacts-credprovider && \
+    rm -f /tmp/credprovider.tar.gz && \
+    smoke_endpoint=https://pkgs.dev.azure.com/image-build/_packaging/smoke/nuget/v3/index.json && \
+    VSS_NUGET_EXTERNAL_FEED_ENDPOINTS="{\"endpointCredentials\":[{\"endpoint\":\"$smoke_endpoint\",\"username\":\"ild\",\"password\":\"smoke-check\"}]}" \
+      "${NUGET_PLUGIN_PATHS%.dll}" -U "$smoke_endpoint" -N -C -F Json > /tmp/credprovider-smoke.json && \
+    grep -q '"Password":"smoke-check"' /tmp/credprovider-smoke.json && \
+    rm -f /tmp/credprovider-smoke.json; \
   fi; \
 fi
 
