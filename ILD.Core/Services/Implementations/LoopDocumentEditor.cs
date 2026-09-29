@@ -1,12 +1,13 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ILD.Data;
 using ILD.Data.DTOs;
 
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
 /// The result of a scoped (or full-document) edit against a live
-/// <c>ild-loop-template/v1</c> document. This is the synchronous ack every loop
+/// <c>ild-loop-template/v2</c> document. This is the synchronous ack every loop
 /// edit surface returns (loop editor context, ADR-0011): the agent learns
 /// <em>now</em> whether its edit landed instead of re-reading the loop next turn.
 ///
@@ -44,7 +45,7 @@ public sealed record LoopEditResult(
 }
 
 /// <summary>
-/// Targeted, in-place edits over a live <c>ild-loop-template/v1</c> document
+/// Targeted, in-place edits over a live <c>ild-loop-template/v2</c> document
 /// (loop editor context, ADR-0011). Purpose: let an agent change one node's prompt
 /// or one substring of the raw JSON <em>without</em> re-serializing the whole
 /// document, which used to corrupt unrelated nodes and gave no validation ack.
@@ -130,9 +131,19 @@ public static class LoopDocumentEditor
     }
 
     /// <summary>
+    /// Config fields that hold a JSON array rather than text. <see cref="SetNodeField"/>
+    /// parses the value it is given for these, so an agent can replace a node's
+    /// outputs, rules, cases or tool list in one call.
+    /// </summary>
+    private static readonly HashSet<string> StructuredFields =
+        new(StringComparer.Ordinal) { "outputs", "matchRules", "cases", "toolAllowlist" };
+
+    /// <summary>
     /// Overwrite a node config field wholesale with <paramref name="value"/> (the
-    /// intentional replace-all path). The field is created if absent. The value is
-    /// stored as plain text; the server owns the JSON encoding.
+    /// intentional replace-all path). The field is created if absent. A text field
+    /// stores the value as plain text and the server owns the JSON encoding; a
+    /// structured field (<see cref="StructuredFields"/>) takes the value as a JSON
+    /// array and refuses anything else, changing nothing.
     /// </summary>
     public static LoopEditResult SetNodeField(string document, string nodeId, string field, string value)
     {
@@ -148,15 +159,48 @@ public static class LoopDocumentEditor
         if (node["config"] is not JsonObject config)
             return LoopEditResult.MatchFailure(0, $"Node '{nodeId}' has no config object to edit.");
 
-        config[field] = JsonValue.Create(value);
+        if (StructuredFields.Contains(field))
+        {
+            if (ParseArray(value) is not { } array)
+                return LoopEditResult.MatchFailure(0,
+                    $"Field '{field}' holds a JSON array, and value is not one. Pass the whole array as JSON, "
+                    + $"e.g. {StructuredFieldExample(field)}. No change made.");
+            config[field] = array;
+        }
+        else
+        {
+            config[field] = JsonValue.Create(value);
+        }
         return Finalize(root, 1, $"Set field '{field}' on node '{nodeId}'.");
     }
+
+    private static JsonArray? ParseArray(string value)
+    {
+        try
+        {
+            return JsonNode.Parse(value) as JsonArray;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string StructuredFieldExample(string field) => field switch
+    {
+        "outputs" => "[{\"name\":\"approve\"},{\"name\":\"reject\"}]",
+        "matchRules" => "[{\"pattern\":\"(?m)^REJECT$\",\"edgeName\":\"reject\"}]",
+        "cases" => "[{\"variant\":\"PrExists\",\"edgeName\":\"has-pr\"}]",
+        _ => "[\"read\",\"write\"]",
+    };
 
     /// <summary>
     /// Replace a unique occurrence of <paramref name="oldString"/> in the raw JSON
     /// document text — the escape hatch for structural nudges (edges, ids, node
     /// scaffolding) a field edit can't reach. Zero or multiple matches change
-    /// nothing. The result is still re-validated before it is returned.
+    /// nothing. The result is still re-validated before it is returned. A result that
+    /// is still an old-format (v1) document comes back upgraded to v2; a v2 one
+    /// changes only in the replaced bytes.
     /// </summary>
     public static LoopEditResult EditFile(string document, string oldString, string newString)
     {
@@ -170,7 +214,7 @@ public static class LoopDocumentEditor
             return LoopEditResult.MatchFailure(count,
                 $"old_string matches {count} times in the loop document; make it unique (include surrounding context). No change made.");
 
-        var candidate = ReplaceOnce(document, oldString, newString);
+        var candidate = LoopDocumentUpgrader.Upgrade(ReplaceOnce(document, oldString, newString));
         var validationErrors = Validate(candidate, out var parseError);
         if (parseError != null)
             return LoopEditResult.MatchFailure(1, $"The edit produced invalid JSON: {parseError}. No change made.");
@@ -184,9 +228,12 @@ public static class LoopDocumentEditor
     /// Validate and accept a whole-document replacement (the <c>update_current_loop</c>
     /// escape hatch, retrofitted with the same synchronous ack). A document that
     /// fails graph validation is rejected up front and the canvas is left untouched.
+    /// An old-format (v1) document is upgraded to v2 rather than rejected, so an
+    /// agent writing from memory of the old format still lands its edit.
     /// </summary>
     public static LoopEditResult ReplaceDocument(string document)
     {
+        document = LoopDocumentUpgrader.Upgrade(document);
         var validationErrors = Validate(document, out var parseError);
         if (parseError != null)
             return LoopEditResult.MatchFailure(0, $"document is not valid JSON: {parseError}.");
@@ -205,6 +252,7 @@ public static class LoopDocumentEditor
     /// </summary>
     private static LoopEditResult Finalize(JsonObject root, int matchCount, string summary)
     {
+        LoopDocumentUpgrader.TryUpgrade(root);
         var candidate = root.ToJsonString(OutputOptions);
         var validationErrors = Validate(candidate, out var parseError);
         // A DOM we just mutated always re-parses, so a parse error here would be a
@@ -342,7 +390,7 @@ public static class LoopDocumentEditor
             : haystack[..index] + replacement + haystack[(index + needle.Length)..];
     }
 
-    /// <summary>The subset of an <c>ild-loop-template/v1</c> document the validator needs.</summary>
+    /// <summary>The subset of an <c>ild-loop-template/v2</c> document the validator needs.</summary>
     private sealed class LoopDocumentShape
     {
         public List<LoopNodeDto>? Nodes { get; set; }

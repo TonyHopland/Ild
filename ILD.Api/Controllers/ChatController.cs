@@ -186,7 +186,7 @@ public sealed class ChatMessageRequest
     public string? OpenWorkItemId { get; set; }
 
     /// <summary>
-    /// The live <c>ild-loop-template/v1</c> document of the loop open in the Loop
+    /// The live <c>ild-loop-template/v2</c> document of the loop open in the Loop
     /// Editor when sending this message, or null when none is open (loop editor
     /// context, ADR-0011). Stashed server-side in the per-session loop scratchpad,
     /// overwritten every message; the agent reads it on demand via

@@ -1,6 +1,10 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -141,6 +145,39 @@ public class LoopTemplatesController : ControllerBase
             nodes = graph.Nodes,
             edges = graph.Edges,
         });
+    }
+
+    /// <summary>
+    /// The outputs every node type always holds — success/failure, and on a PR
+    /// node the reserved outputs — so the editor needs no list of its own.
+    /// </summary>
+    [HttpGet("node-outputs")]
+    public IActionResult GetNodeOutputs()
+        => Ok(Enum.GetValues<NodeType>().ToDictionary(
+            type => type.ToString(),
+            type => LoopOutputs.Fixed(type).Select(name => LoopOutputs.IsReserved(type, name)
+                ? (object)new { name, reserved = true }
+                : new { name })));
+
+    /// <summary>
+    /// Upgrades an imported loop file to the current format with the same
+    /// upgrader the server applies to every document it receives. A document
+    /// already in the current (or an unknown) format comes back unchanged.
+    /// </summary>
+    [HttpPost("upgrade-document")]
+    public IActionResult UpgradeDocument([FromBody] LoopDocumentUpgradeRequest request)
+    {
+        try
+        {
+            if (JsonNode.Parse(request.Document) is not JsonObject)
+                return BadRequest(new { error = "The loop file is not a JSON object." });
+        }
+        catch (JsonException ex)
+        {
+            return BadRequest(new { error = $"The loop file is not valid JSON: {ex.Message}" });
+        }
+
+        return Ok(new { document = LoopDocumentUpgrader.Upgrade(request.Document) });
     }
 
     [HttpPost("validate")]

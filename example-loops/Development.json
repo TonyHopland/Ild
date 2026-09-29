@@ -1,5 +1,5 @@
 {
-  "$schema": "ild-loop-template/v1",
+  "$schema": "ild-loop-template/v2",
   "name": "Development",
   "description": "Full implementation flow: AI implements with tests, a strict independent AI reviewer gates every change, then a PR where human merge is the final gate. Review rejections and PR feedback loop back into the same implementation session.",
   "recoveryPolicy": "AutoResume",
@@ -13,7 +13,20 @@
         "__pos": {
           "x": 564.5,
           "y": 256.5
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" },
+          { "name": "on_rejected", "reserved": true },
+          { "name": "on_merge_conflict", "reserved": true },
+          { "name": "on_ci_failed", "reserved": true },
+          { "name": "on_comment", "reserved": true },
+          { "name": "on_approved", "reserved": true },
+          { "name": "on_ci_passed", "reserved": true },
+          { "name": "on_merged", "reserved": true },
+          { "name": "on_abandoned", "reserved": true },
+          { "name": "Respond" }
+        ]
       }
     },
     {
@@ -25,7 +38,11 @@
         "__pos": {
           "x": -66.5,
           "y": 386
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -37,7 +54,11 @@
         "__pos": {
           "x": 190.5,
           "y": 123.5
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -59,6 +80,11 @@
             "pattern": "\\*\\*Reject\\*\\*",
             "edgeName": "Reject"
           }
+        ],
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" },
+          { "name": "Reject" }
         ]
       }
     },
@@ -70,7 +96,8 @@
         "__pos": {
           "x": 746.625,
           "y": 282.5
-        }
+        },
+        "outputs": []
       }
     },
     {
@@ -87,7 +114,11 @@
         "__pos": {
           "x": 205,
           "y": 288.5
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -99,7 +130,11 @@
         "__pos": {
           "x": -24.5,
           "y": 181
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -112,7 +147,11 @@
           "y": 90
         },
         "createWorktree": true,
-        "runInstall": true
+        "runInstall": true,
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     }
   ],

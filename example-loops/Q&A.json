@@ -1,5 +1,5 @@
 {
-  "$schema": "ild-loop-template/v1",
+  "$schema": "ild-loop-template/v2",
   "name": "Q&A",
   "description": "",
   "recoveryPolicy": "AutoResume",
@@ -15,7 +15,12 @@
           "x": -70,
           "y": 128
         },
-        "customEdges": ["Respond", "Complete"]
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" },
+          { "name": "Respond" },
+          { "name": "Complete" }
+        ]
       }
     },
     {
@@ -26,7 +31,8 @@
         "__pos": {
           "x": 130.5,
           "y": 129
-        }
+        },
+        "outputs": []
       }
     },
     {
@@ -39,7 +45,11 @@
           "y": 127.5
         },
         "createWorktree": true,
-        "runInstall": true
+        "runInstall": true,
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -55,7 +65,11 @@
         "__pos": {
           "x": -270.5,
           "y": 128.5
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -67,7 +81,11 @@
         "__pos": {
           "x": -468.5,
           "y": 127
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     }
   ],
