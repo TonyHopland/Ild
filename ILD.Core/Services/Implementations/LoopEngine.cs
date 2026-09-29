@@ -944,16 +944,22 @@ public sealed class LoopEngine : ILoopEngine
                         await loopRunStore.UpdateRunAsync(run);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
                         await _notifier.RunStateChangedAsync(run.Id, oldStatus, LoopRunStatus.WaitingHuman);
-                        var outEdges = await loopRunStore.GetEdgesForNodeIdsAsync(new[] { node.Id });
+                        var outEdges = (await loopRunStore.GetEdgesForNodeIdsAsync(new[] { node.Id }))
+                            .Where(e => e.SourceNodeId == node.Id)
+                            .ToList();
                         // Custom edges surface by their name (the Human node's button
                         // labels); default/fallback edges surface by their role name.
+                        // Only visible edges become buttons. No edges at all sends no
+                        // list, which the run UI answers with its default buttons;
+                        // edges that are all hidden send an empty one, which it
+                        // answers with none.
                         var actions = string.Join(",", outEdges
-                            .Where(e => e.SourceNodeId == node.Id)
+                            .Where(e => e.UserVisible)
                             .Select(e => e.EdgeType == EdgeType.Custom ? e.Name : e.EdgeType.ToString())
                             .Where(s => !string.IsNullOrEmpty(s))
                             .Distinct());
                         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-                            reason: wa.Reason, actions: string.IsNullOrEmpty(actions) ? null : actions,
+                            reason: wa.Reason, actions: outEdges.Count == 0 ? null : actions,
                             humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id, name: node.Label, runNodeId: runNodeId);
                         return ParkResult.Stop;
                     }

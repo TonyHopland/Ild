@@ -29,6 +29,12 @@ public class LoopNodeEdge
     [MaxLength(256)]
     public string? Name { get; set; }
 
+    /// <summary>
+    /// Whether the run UI offers this edge as a button while a run waits at its
+    /// source node. The system fires the edge regardless.
+    /// </summary>
+    public bool UserVisible { get; set; } = true;
+
     public DateTime CreatedAt { get; set; }
 
     [ForeignKey(nameof(SourceNodeId))]

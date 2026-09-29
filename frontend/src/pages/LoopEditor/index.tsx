@@ -43,6 +43,8 @@ import {
   appendEdge,
   getCustomEdgeNames,
   getConnectedCustomEdgeNames,
+  edgeLabelFor,
+  edgeUserVisible,
   LOOP_EDGE_TYPE,
 } from "../../utils/edgeUtils";
 import {
@@ -62,7 +64,7 @@ import {
 import { EdgePanels } from "./components/EdgePanels";
 import { LoopEditorHeader } from "./components/LoopEditorHeader";
 import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
-import { NodeSettingsModal } from "./components/NodeSettingsModal";
+import { NodeSettingsModal, type OutgoingEdgeVisibility } from "./components/NodeSettingsModal";
 import SaveDiffModal from "./components/SaveDiffModal";
 import type {
   ImportFeedbackItem,
@@ -234,6 +236,9 @@ export default function LoopEditor() {
   const [edgeError, setEdgeError] = useState<string | null>(null);
   const [showEdgeDeletePanel, setShowEdgeDeletePanel] = useState(false);
   const [showNodeSettingsModal, setShowNodeSettingsModal] = useState(false);
+  // "Visible to user" values toggled in the open node's settings, by edge id;
+  // committed to the edges only by Save.
+  const [edgeVisibilityDraft, setEdgeVisibilityDraft] = useState<Record<string, boolean>>({});
   const [nodeLabel, setNodeLabel] = useState("");
   const [cmdCommand, setCmdCommand] = useState("");
   const [aiPrompt, setAiPrompt] = useState("");
@@ -320,6 +325,22 @@ export default function LoopEditor() {
     [aiProviders, aiProviderTag],
   );
   const availableAiTools: AiToolDefinition[] = resolvedAiProvider?.supportedTools ?? [];
+  const outgoingEdgeVisibility: OutgoingEdgeVisibility[] = selectedNode
+    ? edges
+        .filter((edge) => edge.source === selectedNode.id)
+        .map((edge) => {
+          const data = edge.data as { edgeType: EdgeType; name?: string | null };
+          const target = nodes.find((node) => node.id === edge.target);
+          return {
+            id: edge.id,
+            label: edgeLabelFor(data.edgeType, data.name),
+            targetLabel: (target?.data as { label?: string } | undefined)?.label ?? edge.target,
+            visible:
+              edgeVisibilityDraft[edge.id] ??
+              edgeUserVisible(edge, (selectedNode.data as { type: NodeType }).type),
+          };
+        })
+    : [];
 
   useEffect(() => {
     void loadTemplates();
@@ -1103,6 +1124,7 @@ export default function LoopEditor() {
         conditionDefaultEdge: readConditionDefaultEdge(config),
         conditionOutput: (config.output as string) ?? CONDITION_DEFAULT_TEMPLATE,
       });
+      setEdgeVisibilityDraft({});
       setShowNodeSettingsModal(true);
     },
     [aiProviders],
@@ -1218,11 +1240,27 @@ export default function LoopEditor() {
       ),
     );
 
+    // Only a value that changed is stored, so a new edge nobody touched keeps
+    // taking the creation default.
+    setEdges((currentEdges) =>
+      currentEdges.map((edge) => {
+        const visible = edgeVisibilityDraft[edge.id];
+        return edge.source === selectedNode.id &&
+          visible !== undefined &&
+          visible !== edgeUserVisible(edge, selectedNodeType as NodeType)
+          ? { ...edge, data: { ...edge.data, userVisible: visible } }
+          : edge;
+      }),
+    );
+    setEdgeVisibilityDraft({});
+
     setSelectedNode(null);
     setShowNodeSettingsModal(false);
     setOriginalNodeConfig(null);
   }, [
     selectedNode,
+    edgeVisibilityDraft,
+    setEdges,
     aiProviderTag,
     aiPrompt,
     aiMatchRules,
@@ -1269,6 +1307,7 @@ export default function LoopEditor() {
       setConditionDefaultEdge(originalNodeConfig.conditionDefaultEdge);
       setConditionOutput(originalNodeConfig.conditionOutput);
     }
+    setEdgeVisibilityDraft({});
 
     setSelectedNode(null);
     setShowNodeSettingsModal(false);
@@ -1697,6 +1736,10 @@ export default function LoopEditor() {
                       onConditionCasesChange={setConditionCases}
                       onConditionDefaultEdgeChange={setConditionDefaultEdge}
                       onConditionOutputChange={setConditionOutput}
+                      outgoingEdges={outgoingEdgeVisibility}
+                      onEdgeVisibilityChange={(edgeId, visible) =>
+                        setEdgeVisibilityDraft((draft) => ({ ...draft, [edgeId]: visible }))
+                      }
                     />
                   )}
 

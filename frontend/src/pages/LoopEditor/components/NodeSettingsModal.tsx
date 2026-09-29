@@ -63,7 +63,17 @@ interface NodeSettingsModalProps {
   onPrCommentTemplateChange: (value: string) => void;
   onConditionCasesChange: (value: ConditionCase[]) => void;
   onConditionDefaultEdgeChange: (value: string) => void;
+  outgoingEdges: OutgoingEdgeVisibility[];
+  onEdgeVisibilityChange: (edgeId: string, visible: boolean) => void;
   onConditionOutputChange: (value: string) => void;
+}
+
+/** One of the node's outgoing edges and whether the run UI offers it as a button. */
+export interface OutgoingEdgeVisibility {
+  id: string;
+  label: string;
+  targetLabel: string;
+  visible: boolean;
 }
 
 /** Titled group of related fields inside the node settings body. */
@@ -334,6 +344,8 @@ export function NodeSettingsModal({
   onConditionCasesChange,
   onConditionDefaultEdgeChange,
   onConditionOutputChange,
+  outgoingEdges,
+  onEdgeVisibilityChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
 
@@ -645,6 +657,31 @@ export function NodeSettingsModal({
                 </small>
               </div>
             </>
+          )}
+
+          {outgoingEdges.length > 0 && (
+            <ConfigSection title="Outgoing edges">
+              <small className="config-help-text">
+                A visible edge is offered as a button while a run waits at this node. The system
+                still fires hidden edges.
+              </small>
+              {outgoingEdges.map((edge) => (
+                <div key={edge.id} className="edge-visibility-row">
+                  <span>{edge.label}</span>
+                  <span aria-hidden="true">→</span>
+                  <span className="edge-visibility-target">{edge.targetLabel}</span>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      aria-label={`Visible to user: ${edge.label}`}
+                      checked={edge.visible}
+                      onChange={(event) => onEdgeVisibilityChange(edge.id, event.target.checked)}
+                    />
+                    Visible to user
+                  </label>
+                </div>
+              ))}
+            </ConfigSection>
           )}
         </div>
         <div className="node-settings-modal-footer">

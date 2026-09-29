@@ -50,6 +50,30 @@ export const PR_RESERVED_EDGE_NAMES = [
 ] as const;
 
 /**
+ * Whether a new edge is offered as a run-UI button when it has no stored value:
+ * a PR node's reserved edges are fired by the system and start hidden, every
+ * other edge starts visible. Mirrors ILD.Core PrNodeEdges.DefaultUserVisible.
+ */
+export function defaultEdgeUserVisible(
+  sourceType: NodeType,
+  edgeType: EdgeType,
+  name: string | null | undefined,
+): boolean {
+  return !(
+    sourceType === NodeType.PR &&
+    edgeType === EdgeType.Custom &&
+    name != null &&
+    (PR_RESERVED_EDGE_NAMES as readonly string[]).includes(name)
+  );
+}
+
+/** Whether the run UI offers an editor edge: its stored value, or the creation default when it has none yet. */
+export function edgeUserVisible(edge: Edge, sourceType: NodeType): boolean {
+  const data = edge.data as { edgeType: EdgeType; name?: string | null; userVisible?: boolean };
+  return data.userVisible ?? defaultEdgeUserVisible(sourceType, data.edgeType, data.name);
+}
+
+/**
  * The custom-edge names a node declares, used to populate the "Which edge?"
  * dropdown when connecting from the custom handle. AI nodes derive them from
  * their match rules' edge names; Human nodes from their `customEdges` list; PR
@@ -151,7 +175,7 @@ function edgeVisualStyle(edgeType: EdgeType) {
   return { stroke: "#f59e0b" as const, strokeDasharray: "4 4" as const };
 }
 
-function edgeLabelFor(edgeType: EdgeType, name?: string | null): string {
+export function edgeLabelFor(edgeType: EdgeType, name?: string | null): string {
   if (edgeType === EdgeType.OnSuccess) return "success";
   if (edgeType === EdgeType.OnFailure) return "failure";
   // Custom edges read by their name so overlapping outlets stay distinguishable.

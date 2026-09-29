@@ -32,6 +32,7 @@ export function serializeForExport(template: LoopTemplate): LoopTemplateExport {
       targetNodeId: e.targetNodeId,
       edgeType: e.edgeType,
       name: e.name ?? null,
+      ...withUserVisible(e),
     })),
   };
 }
@@ -155,10 +156,17 @@ export function exportEdgesToLoopNodeEdges(edges: LoopTemplateExportEdge[]): Loo
     targetNodeId: e.targetNodeId,
     edgeType: e.edgeType,
     name: e.name ?? null,
+    ...withUserVisible(e),
   }));
 }
 
 // --- Private helpers ---
+
+// An edge without a stored value (a new one, or null in an imported file) is
+// carried without one, so the server applies the creation default.
+function withUserVisible(edge: LoopNodeEdge): Pick<LoopNodeEdge, "userVisible"> {
+  return typeof edge.userVisible === "boolean" ? { userVisible: edge.userVisible } : {};
+}
 
 function isRecoveryPolicy(value: string): value is RecoveryPolicy {
   return (
@@ -187,6 +195,9 @@ function validateExportEdge(edge: unknown): boolean {
     typeof obj.id === "string" &&
     typeof obj.sourceNodeId === "string" &&
     typeof obj.targetNodeId === "string" &&
-    typeof obj.edgeType === "string"
+    typeof obj.edgeType === "string" &&
+    (obj.userVisible === undefined ||
+      obj.userVisible === null ||
+      typeof obj.userVisible === "boolean")
   );
 }

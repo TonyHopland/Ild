@@ -23,7 +23,7 @@ public static class LoopAuthoringGuide
         """
         Loop authoring guide — a loop is a directed graph executed from its Start node.
         Document shape: { "$schema": "ild-loop-template/v1", "name", "description", "recoveryPolicy" (AutoResume|NeedsReview|Cancel), "nodes": [...], "edges": [...] }.
-        Each node: { "id", "type", "label" (unique), "config": {...} }. Each edge: { "id", "sourceNodeId", "targetNodeId", "edgeType" (OnSuccess|OnFailure|Custom), "name" (Custom only) }.
+        Each node: { "id", "type", "label" (unique), "config": {...} }. Each edge: { "id", "sourceNodeId", "targetNodeId", "edgeType" (OnSuccess|OnFailure|Custom), "name" (Custom only), "userVisible" (optional bool: whether the run UI offers the edge as a button while the run waits at its source; omitted on a new edge it is false for a PR node's reserved edges and true otherwise; the system still fires a hidden edge) }.
         Node types and their key config fields:
         - Start: entry point; creates the worktree/branch. config.createWorktree (bool), config.runInstall (bool).
         - Cmd: runs a shell command in the worktree, succeeds on exit 0. config.command. Under uid isolation (the default) it runs as the agent user, with the agent's environment, HOME and network (egress) rules, and cannot read ILD's own secrets; a command that needs credentials must be given its own. With uid isolation off it runs as ILD's own user, which can still read ILD's process environment.

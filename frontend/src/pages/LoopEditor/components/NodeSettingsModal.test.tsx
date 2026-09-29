@@ -64,6 +64,8 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     onConditionCasesChange: vi.fn(),
     onConditionDefaultEdgeChange: vi.fn(),
     onConditionOutputChange: vi.fn(),
+    outgoingEdges: [],
+    onEdgeVisibilityChange: vi.fn(),
     ...overrides,
   };
   render(<NodeSettingsModal {...props} />);

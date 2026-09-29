@@ -23,7 +23,8 @@ const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
  * Renders the Approve / Merge / custom-edge / Reject buttons based on the
  * comma-separated <c>humanFeedbackActions</c> string from the work item.
  * Each connected custom edge surfaces as its own button (its name is the edge
- * key sent back to the engine). Defaults to Approve + Reject when empty.
+ * key sent back to the engine). No list at all (the node has no outgoing edges)
+ * defaults to Approve + Reject; an empty one (every edge hidden) offers none.
  */
 export default function FeedbackActions({
   actions,
@@ -36,12 +37,13 @@ export default function FeedbackActions({
   const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(true);
 
-  const actionList = actions
-    ? actions
-        .split(",")
-        .map((a) => a.trim())
-        .filter(Boolean)
-    : ["OnSuccess", "OnFailure"];
+  const actionList =
+    actions != null
+      ? actions
+          .split(",")
+          .map((a) => a.trim())
+          .filter(Boolean)
+      : ["OnSuccess", "OnFailure"];
 
   const customNames = actionList.filter((a) => !ROLE_TOKENS.has(a));
 

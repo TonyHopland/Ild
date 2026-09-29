@@ -1069,6 +1069,22 @@
   margin-bottom: 0;
 }
 
+.edge-visibility-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.edge-visibility-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8a8aa8;
+}
+
 /* Session memory mode: segmented 3-way toggle + mode-specific panel. */
 .session-mode-toggle {
   display: flex;

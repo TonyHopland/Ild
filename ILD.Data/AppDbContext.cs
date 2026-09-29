@@ -349,6 +349,10 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<LoopNodeEdge>(e =>
         {
             e.Property(l => l.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+            // Rows that predate the column are visible. The sentinel is true, not
+            // the CLR default false, so an explicit false is written rather than
+            // left to the database default.
+            e.Property(l => l.UserVisible).HasDefaultValue(true).HasSentinel(true);
         });
 
         modelBuilder.Entity<LoopRun>(e =>

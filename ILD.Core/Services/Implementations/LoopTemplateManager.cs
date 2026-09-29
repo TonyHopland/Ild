@@ -3,6 +3,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -136,15 +137,15 @@ public class LoopTemplateManager : ILoopTemplateManager
         };
         await _store.CreateVersionAsync(version);
 
-        var idMap = new Dictionary<string, Guid>();
+        var idMap = new Dictionary<string, (Guid Id, NodeType Type)>();
 
         var nodes = graph.Nodes.Select(n =>
         {
             var nodeId = Guid.NewGuid();
-            idMap[n.Id] = nodeId;
 
             if (!Enum.TryParse<NodeType>(n.NodeType, ignoreCase: true, out var type))
                 type = NodeType.Cmd;
+            idMap[n.Id] = (nodeId, type);
 
             return new LoopNode
             {
@@ -160,18 +161,20 @@ public class LoopTemplateManager : ILoopTemplateManager
 
         var edges = graph.Edges.Select(e =>
         {
-            if (!idMap.TryGetValue(e.SourceNodeId, out var srcId)) return null;
-            if (!idMap.TryGetValue(e.TargetNodeId, out var tgtId)) return null;
+            if (!idMap.TryGetValue(e.SourceNodeId, out var src)) return null;
+            if (!idMap.TryGetValue(e.TargetNodeId, out var tgt)) return null;
 
             var edgeType = Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var parsed) ? parsed : EdgeType.OnSuccess;
+            var name = string.IsNullOrWhiteSpace(e.Name) ? null : e.Name;
 
             return new LoopNodeEdge
             {
                 Id = Guid.NewGuid(),
-                SourceNodeId = srcId,
-                TargetNodeId = tgtId,
+                SourceNodeId = src.Id,
+                TargetNodeId = tgt.Id,
                 EdgeType = edgeType,
-                Name = string.IsNullOrWhiteSpace(e.Name) ? null : e.Name,
+                Name = name,
+                UserVisible = e.UserVisible ?? PrNodeEdges.DefaultUserVisible(src.Type, edgeType, name),
             };
         }).Where(e => e != null).Cast<LoopNodeEdge>().ToList();
 
@@ -201,6 +204,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             TargetNodeId = e.TargetNodeId.ToString(),
             EdgeType = e.EdgeType.ToString(),
             Name = e.Name,
+            UserVisible = e.UserVisible,
         }).ToList();
 
         return new LoopTemplateGraph(v.Id, nodeDtos, edgeDtos);

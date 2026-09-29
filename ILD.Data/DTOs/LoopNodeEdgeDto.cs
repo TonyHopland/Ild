@@ -12,4 +12,10 @@ public class LoopNodeEdgeDto
     /// graph so a node's named custom outlets round-trip and stay distinct.
     /// </summary>
     public string? Name { get; set; }
+
+    /// <summary>
+    /// Whether the run UI offers the edge as a button. Optional on input, where
+    /// null takes the creation default; always set on output.
+    /// </summary>
+    public bool? UserVisible { get; set; }
 }

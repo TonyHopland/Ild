@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The chat button and your past chats show a red dot when a reply is waiting that you have not read.**
 
+- **Each edge in a node's settings has a Visible to user toggle that decides whether it is offered as a button while a run waits, and new pull-request edges start hidden.**
+
 ### Changed
 
 - **WorkItem Server settings have moved from the top bar to their own page under Settings.**

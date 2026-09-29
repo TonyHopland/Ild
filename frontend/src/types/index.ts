@@ -401,6 +401,9 @@ export interface LoopNodeEdge {
   edgeType: EdgeType;
   // Custom-edge key; null for default (OnSuccess) and fallback (OnFailure) edges.
   name?: string | null;
+  // Whether the run UI offers the edge as a button. Always present on a loaded
+  // edge; omitted on a new one, which then takes the creation default.
+  userVisible?: boolean;
 }
 
 export enum RecoveryPolicy {

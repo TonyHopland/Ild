@@ -1,5 +1,6 @@
 using System.Text;
 using ILD.Data.DTOs;
+using ILD.Data.Enums;
 
 namespace ILD.Core.Services.Remote;
 
@@ -43,6 +44,14 @@ public static class PrNodeEdges
         OnMerged,
         OnAbandoned,
     };
+
+    /// <summary>
+    /// Whether a new edge is offered as a run-UI button when it arrives without
+    /// a value: a PR node's reserved edges are fired by the system and start
+    /// hidden; every other edge starts visible.
+    /// </summary>
+    public static bool DefaultUserVisible(NodeType sourceType, EdgeType edgeType, string? name)
+        => !(sourceType == NodeType.PR && edgeType == EdgeType.Custom && name is not null && ByPriority.Contains(name));
 
     /// <summary>
     /// The set of edge-state names that are currently true for a snapshot. A
