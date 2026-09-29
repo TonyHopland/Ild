@@ -53,9 +53,9 @@ const handleStyles = {
 export default function LoopNodeComponent({ data }: NodeProps) {
   const nodeData = data as { label: string; type: string };
   const style = nodeStyles[nodeData.type] || nodeStyles[NodeType.Cmd];
-  // The top handle is the single "custom" outlet; any number of named custom
-  // edges may leave it. Human, AI and PR nodes declare custom edges, and a
-  // Condition switch routes its per-case and default branches through it too.
+  // The top handle is the single "custom" outlet; the Custom edge of every named
+  // output the node declares leaves it. Human, AI, PR and Condition nodes have
+  // named outputs (a Condition switch routes its cases and default through it).
   const hasCustomHandle =
     nodeData.type === NodeType.Human ||
     nodeData.type === NodeType.AI ||

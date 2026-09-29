@@ -25,5 +25,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0020](./0020-raw-tcp-egress-through-declared-forwards.md) | Raw-TCP egress is served by a declared, judged relay, not a hole in the firewall      |
 | [0021](./0021-client-state-scoped-to-its-entity.md)        | Client state is scoped per entity; every in-flight request and event carries identity |
 | [0022](./0022-agent-edits-are-human-approved-proposals.md) | Agents edit items they did not create only through proposals a human approves         |
+| [0023](./0023-node-outputs-declared-once.md)               | A node declares each of its outputs once, in config                                   |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

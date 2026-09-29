@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Exported loops use a new file format; older exports still import.**
+
 - **WorkItem Server settings have moved from the top bar to their own page under Settings.**
 
 - **An agent answering the same review comment again replaces its earlier pending answer, and can take back what it queued for the pull request before it is sent.**
