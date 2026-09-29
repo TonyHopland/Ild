@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -152,14 +153,14 @@ public class PrSyncService : IPrSyncService
         merged = string.Equals(payload.MergeStatus, "merged", StringComparison.OrdinalIgnoreCase)
             || string.Equals(payload.EventType, "pull_request.merged", StringComparison.OrdinalIgnoreCase);
         if (merged)
-            return PrNodeEdges.OnMerged;
+            return LoopOutputs.OnMerged;
 
         if (string.Equals(payload.MergeStatus, "changes_requested", StringComparison.OrdinalIgnoreCase)
             || string.Equals(payload.MergeStatus, "rejected", StringComparison.OrdinalIgnoreCase))
-            return PrNodeEdges.OnRejected;
+            return LoopOutputs.OnRejected;
 
         if (string.Equals(payload.MergeStatus, "closed", StringComparison.OrdinalIgnoreCase))
-            return PrNodeEdges.OnAbandoned;
+            return LoopOutputs.OnAbandoned;
 
         return null;
     }

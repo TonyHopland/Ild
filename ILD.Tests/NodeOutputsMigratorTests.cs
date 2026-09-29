@@ -142,22 +142,42 @@ public class NodeOutputsMigratorTests
     }
 
     [Fact]
-    public async Task An_output_already_declared_keeps_its_fields_and_is_not_added_twice()
+    public async Task A_node_that_already_has_outputs_is_left_exactly_as_it_is()
     {
         using var db = new TestDb();
         var templateId = SeedTemplate(db);
-        var version = SeedLegacyVersion(db, templateId, 1,
-            "{\"prompt\":\"ok?\",\"outputs\":[{\"name\":\"Respond\",\"visible\":false,\"color\":\"x\"}],\"customEdges\":[\"Respond\"]}");
+        // A v2 node whose outputs disagree with its edges (Escalate is wired but
+        // not declared) and that even carries a stray customEdges key: the
+        // migrator converts old configs only, so it must not paper over either.
+        const string v2Review = "{\"prompt\":\"ok?\",\"outputs\":[{\"name\":\"Respond\",\"visible\":false,\"color\":\"x\"}],\"customEdges\":[\"Other\"]}";
+        var version = SeedLegacyVersion(db, templateId, 1, v2Review);
         db.Context.SaveChanges();
 
+        var migrated = await NodeOutputsMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(5, migrated);
+        var review = await db.Fresh().LoopNodes.SingleAsync(n => n.Id == version.NodeIds["review"], TestContext.Current.CancellationToken);
+        Assert.Equal(v2Review, review.Config);
+    }
+
+    [Fact]
+    public async Task An_already_migrated_database_produces_zero_writes()
+    {
+        using var db = new TestDb();
+        var templateId = SeedTemplate(db);
+        SeedLegacyVersion(db, templateId, 1, "{\"prompt\":\"ok?\",\"customEdges\":[\"Respond\"]}");
+        db.Context.SaveChanges();
         await NodeOutputsMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
 
-        var outputs = Outputs(await ConfigOf(db, version.NodeIds["review"]));
-        Assert.Single(outputs, o => (string)o["name"]! == "Respond");
-        Assert.True(JsonNode.DeepEquals(
-            JsonNode.Parse("{\"name\":\"Respond\",\"visible\":false,\"color\":\"x\"}"),
-            outputs[0]));
+        using var context = db.Fresh();
+        var saves = 0;
+        context.SavingChanges += (_, _) => saves++;
+
+        Assert.Equal(0, await NodeOutputsMigrator.MigrateAsync(context, TestContext.Current.CancellationToken));
+        Assert.Equal(0, saves);
+        Assert.Empty(context.ChangeTracker.Entries<LoopNode>());
     }
+
 
     [Fact]
     public async Task A_second_run_rewrites_nothing_and_changes_no_bytes()

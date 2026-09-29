@@ -5,9 +5,9 @@ using ILD.Data.DTOs;
 namespace ILD.Core.Services.Remote;
 
 /// <summary>
-/// The eight reserved outputs every PR node holds (defined once, in
-/// <see cref="LoopOutputs"/>), the state each fires on, and the priority used to
-/// pick a single one when several states newly become true in one heartbeat
+/// The state each of the eight reserved PR outputs fires on (the names and their
+/// priority are defined once, in <see cref="LoopOutputs.ReservedPr"/>), and the
+/// pick of a single one when several states newly become true in one heartbeat
 /// tick. The PR heartbeat poller emits a <c>NodeSignal.Custom</c> for the
 /// highest-priority output that is both newly-true and actually wired;
 /// everything else only updates the persisted snapshot. Also owns the prose each
@@ -16,45 +16,29 @@ namespace ILD.Core.Services.Remote;
 /// </summary>
 public static class PrNodeEdges
 {
-    public const string OnRejected = LoopOutputs.OnRejected;
-    public const string OnMergeConflict = LoopOutputs.OnMergeConflict;
-    public const string OnCiFailed = LoopOutputs.OnCiFailed;
-
-    /// <summary>
-    /// Review or comment items the run has not been handed yet. Unlike the other
-    /// seven this is not a state of the snapshot — it is decided from the run's
-    /// own delivery ledger (see <c>PrCommentDelivery</c>), which is what keeps a
-    /// comment ILD itself posted from starting a round.
-    /// </summary>
-    public const string OnComment = LoopOutputs.OnComment;
-    public const string OnApproved = LoopOutputs.OnApproved;
-    public const string OnCiPassed = LoopOutputs.OnCiPassed;
-    public const string OnMerged = LoopOutputs.OnMerged;
-    public const string OnAbandoned = LoopOutputs.OnAbandoned;
-
-    /// <summary>Reserved output names in descending priority (index 0 = highest).</summary>
-    public static readonly IReadOnlyList<string> ByPriority = LoopOutputs.ReservedPr;
-
     /// <summary>
     /// The set of edge-state names that are currently true for a snapshot. A
     /// closed PR surfaces only its terminal state (<c>on_merged</c> /
-    /// <c>on_abandoned</c>); an open PR surfaces the review/conflict/CI states.
+    /// <c>on_abandoned</c>); an open PR surfaces the review/conflict/CI states. <c>on_comment</c>
+    /// is never among them: it is decided from the run's own delivery ledger (see
+    /// <c>PrCommentDelivery</c>), which is what keeps a comment ILD itself posted
+    /// from starting a round.
     /// </summary>
     public static HashSet<string> ActiveStates(RemotePrSnapshot s)
     {
         var states = new HashSet<string>(StringComparer.Ordinal);
         if (string.Equals(s.State, "closed", StringComparison.OrdinalIgnoreCase))
         {
-            states.Add(s.Merged ? OnMerged : OnAbandoned);
+            states.Add(s.Merged ? LoopOutputs.OnMerged : LoopOutputs.OnAbandoned);
             return states;
         }
 
-        if (s.ChangesRequested) states.Add(OnRejected);
+        if (s.ChangesRequested) states.Add(LoopOutputs.OnRejected);
         if (s.Mergeable == false || string.Equals(s.MergeableState, "dirty", StringComparison.OrdinalIgnoreCase))
-            states.Add(OnMergeConflict);
-        if (s.Ci == RemotePrCiStatus.Failed) states.Add(OnCiFailed);
-        if (s.Approved) states.Add(OnApproved);
-        if (s.Ci == RemotePrCiStatus.Passed) states.Add(OnCiPassed);
+            states.Add(LoopOutputs.OnMergeConflict);
+        if (s.Ci == RemotePrCiStatus.Failed) states.Add(LoopOutputs.OnCiFailed);
+        if (s.Approved) states.Add(LoopOutputs.OnApproved);
+        if (s.Ci == RemotePrCiStatus.Passed) states.Add(LoopOutputs.OnCiPassed);
         return states;
     }
 
@@ -62,7 +46,7 @@ public static class PrNodeEdges
     public static string? HighestPriority(IEnumerable<string> candidates)
     {
         var set = candidates as ISet<string> ?? new HashSet<string>(candidates, StringComparer.Ordinal);
-        return ByPriority.FirstOrDefault(set.Contains);
+        return LoopOutputs.ReservedPr.FirstOrDefault(set.Contains);
     }
 
     /// <summary>
@@ -133,21 +117,21 @@ public static class PrNodeEdges
     /// the review's prose and never the comments behind it.
     /// </summary>
     private static string ReviewPointer(string? edge, string? workItemId)
-        => edge is OnComment or OnRejected && !string.IsNullOrWhiteSpace(workItemId)
+        => edge is LoopOutputs.OnComment or LoopOutputs.OnRejected && !string.IsNullOrWhiteSpace(workItemId)
             ? "\n\nThis is not the whole review. To read every comment on it — inline and suppressed, with its thread id and whether that thread is resolved — call "
               + $"get_pr_review(workItemId: \"{workItemId}\")."
             : string.Empty;
 
     private static string Headline(string? edge) => edge switch
     {
-        OnRejected => "A reviewer requested changes on the pull request.",
-        OnMergeConflict => "The pull request conflicts with its target branch and cannot be merged.",
-        OnCiFailed => "CI failed on the pull request.",
-        OnComment => "New comments arrived on the pull request.",
-        OnApproved => "The pull request was approved.",
-        OnCiPassed => "CI passed on the pull request.",
-        OnMerged => "The pull request was merged.",
-        OnAbandoned => "The pull request was closed without being merged.",
+        LoopOutputs.OnRejected => "A reviewer requested changes on the pull request.",
+        LoopOutputs.OnMergeConflict => "The pull request conflicts with its target branch and cannot be merged.",
+        LoopOutputs.OnCiFailed => "CI failed on the pull request.",
+        LoopOutputs.OnComment => "New comments arrived on the pull request.",
+        LoopOutputs.OnApproved => "The pull request was approved.",
+        LoopOutputs.OnCiPassed => "CI passed on the pull request.",
+        LoopOutputs.OnMerged => "The pull request was merged.",
+        LoopOutputs.OnAbandoned => "The pull request was closed without being merged.",
         _ => "The pull request changed state.",
     };
 
@@ -157,8 +141,8 @@ public static class PrNodeEdges
 
         return edge switch
         {
-            OnCiFailed => DescribeFailedChecks(snapshot, workItemId),
-            OnRejected => LatestChangesRequestedReview(snapshot),
+            LoopOutputs.OnCiFailed => DescribeFailedChecks(snapshot, workItemId),
+            LoopOutputs.OnRejected => LatestChangesRequestedReview(snapshot),
             _ => string.Empty,
         };
     }

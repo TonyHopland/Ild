@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -105,12 +106,12 @@ public class PrStatusPollServiceTests
     {
         var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed) });
+            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnCiFailed) });
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
-            It.Is<NodeSignal>(sig => sig.EdgeName == PrNodeEdges.OnCiFailed)), Times.Once);
+            It.Is<NodeSignal>(sig => sig.EdgeName == LoopOutputs.OnCiFailed)), Times.Once);
     }
 
     [Fact]
@@ -142,12 +143,12 @@ public class PrStatusPollServiceTests
             failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
             baseline: null);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed) });
+            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnCiFailed) });
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
-            It.Is<NodeSignal>(sig => sig.EdgeName == PrNodeEdges.OnCiFailed
+            It.Is<NodeSignal>(sig => sig.EdgeName == LoopOutputs.OnCiFailed
                 && sig.Output != null
                 && sig.Output.Contains("build")
                 && sig.Output.Contains("https://ci/build")
@@ -163,7 +164,7 @@ public class PrStatusPollServiceTests
     {
         var h = new Harness(Snapshot(state: "closed", merged: true), baseline: null);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnMerged) });
+            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnMerged) });
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -177,7 +178,7 @@ public class PrStatusPollServiceTests
         var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: null);
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
-        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrPolledEdgeStates!.Contains(PrNodeEdges.OnCiFailed))), Times.Once);
+        h.Runs.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.PrPolledEdgeStates!.Contains(LoopOutputs.OnCiFailed))), Times.Once);
         h.Engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
     }
 
@@ -190,14 +191,14 @@ public class PrStatusPollServiceTests
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[]
             {
-                CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed),
-                CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnRejected),
+                CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnCiFailed),
+                CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnRejected),
             });
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
-            It.Is<NodeSignal>(sig => sig.EdgeName == PrNodeEdges.OnRejected)), Times.Once);
+            It.Is<NodeSignal>(sig => sig.EdgeName == LoopOutputs.OnRejected)), Times.Once);
     }
 
     [Fact]
@@ -205,9 +206,9 @@ public class PrStatusPollServiceTests
     {
         // CI was already failing last tick (in the baseline), so it is not a
         // transition this tick and must not fire again.
-        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: PrNodeEdges.OnCiFailed);
+        var h = new Harness(Snapshot(ci: RemotePrCiStatus.Failed), baseline: LoopOutputs.OnCiFailed);
         h.Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, PrNodeEdges.OnCiFailed) });
+            .ReturnsAsync(new[] { CustomEdge(h.RunNode.LoopNodeId, LoopOutputs.OnCiFailed) });
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 

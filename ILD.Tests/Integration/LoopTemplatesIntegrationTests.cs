@@ -1,3 +1,4 @@
+using ILD.Data;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -57,7 +58,7 @@ public class LoopTemplatesIntegrationTests
         // The PR node's reserved outputs are the ones the heartbeat fires: one definition.
         var pr = OutputsOf(map, "PR");
         Assert.Equal(
-            PrNodeEdges.ByPriority.Select(n => (n, true)).Append(("OnSuccess", false)).Append(("OnFailure", false)).OrderBy(o => o.Item1, StringComparer.Ordinal),
+            LoopOutputs.ReservedPr.Select(n => (n, true)).Append(("OnSuccess", false)).Append(("OnFailure", false)).OrderBy(o => o.Item1, StringComparer.Ordinal),
             pr.OrderBy(o => o.Name, StringComparer.Ordinal));
     }
 

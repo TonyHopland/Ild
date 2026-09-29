@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -533,7 +534,7 @@ public class PRNodeExecutorTests
                 false, false, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow)),
             ExternalActionResult = signalOutput ?? string.Empty,
             ExternalActionResultType = ExternalActionResultType.Success,
-            ExternalActionEdgeName = PrNodeEdges.OnCiFailed,
+            ExternalActionEdgeName = LoopOutputs.OnCiFailed,
         };
 
         var outcomes = new List<NodeOutcome>();
@@ -542,7 +543,7 @@ public class PRNodeExecutorTests
 
         var success = outcomes.OfType<NodeOutcome.Success>().Single();
         Assert.Equal(EdgeType.Custom, success.Edge);
-        Assert.Equal(PrNodeEdges.OnCiFailed, success.EdgeName);
+        Assert.Equal(LoopOutputs.OnCiFailed, success.EdgeName);
         Assert.False(string.IsNullOrWhiteSpace(success.Output));
         if (signalOutput is null)
             Assert.Contains("build", success.Output);
@@ -563,14 +564,14 @@ public class PRNodeExecutorTests
             PrUrl = "https://example.com/o/r/pull/7",
             ExternalActionResult = string.Empty,
             ExternalActionResultType = ExternalActionResultType.Success,
-            ExternalActionEdgeName = PrNodeEdges.OnCiFailed,
+            ExternalActionEdgeName = LoopOutputs.OnCiFailed,
         };
 
         var outcomes = new List<NodeOutcome>();
         await foreach (var o in new PRNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
             outcomes.Add(o);
 
-        Assert.Equal(PrNodeEdges.Describe(PrNodeEdges.OnCiFailed),
+        Assert.Equal(PrNodeEdges.Describe(LoopOutputs.OnCiFailed),
             outcomes.OfType<NodeOutcome.Success>().Single().Output);
     }
 

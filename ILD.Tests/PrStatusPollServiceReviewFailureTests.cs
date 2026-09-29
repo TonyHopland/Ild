@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -84,7 +85,7 @@ public class PrStatusPollServiceReviewFailureTests
                     SourceNodeId = loopNodeId,
                     TargetNodeId = Guid.NewGuid(),
                     EdgeType = EdgeType.Custom,
-                    Name = PrNodeEdges.OnComment,
+                    Name = LoopOutputs.OnComment,
                 },
             });
             Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Snapshot());

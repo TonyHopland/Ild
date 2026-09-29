@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -174,7 +175,7 @@ public class PrCommentLedgerDurabilityTests
         // the same items fire again next tick, for ever, with no comment of
         // ILD's own anywhere in it for the marker to catch.
         using var db = new TestDb();
-        var seeded = await SeedParkedRunAsync(db, PrNodeEdges.OnComment);
+        var seeded = await SeedParkedRunAsync(db, LoopOutputs.OnComment);
         var watching = PrCommentLedgerJson.Serialize(
             PrCommentDelivery.Decide(Fetched(), Head, null).Ledger);
         await db.LoopRuns.SetPrCommentLedgerAsync(seeded.Run.Id, watching);
@@ -191,7 +192,7 @@ public class PrCommentLedgerDurabilityTests
         await service.PollOnceAsync(TestContext.Current.CancellationToken);
 
         engine.Verify(e => e.SignalNodeResultAsync(seeded.Run.Id, seeded.RunNode.Id,
-            It.Is<NodeSignal>(s => s.EdgeName == PrNodeEdges.OnComment)), Times.Once);
+            It.Is<NodeSignal>(s => s.EdgeName == LoopOutputs.OnComment)), Times.Once);
 
         var reread = await RereadAsync(db, seeded.Run.Id);
         Assert.NotNull(reread.PrSnapshot);
@@ -202,7 +203,7 @@ public class PrCommentLedgerDurabilityTests
     public async Task A_quiet_tick_leaves_the_ledger_where_it_was()
     {
         using var db = new TestDb();
-        var seeded = await SeedParkedRunAsync(db, PrNodeEdges.OnComment);
+        var seeded = await SeedParkedRunAsync(db, LoopOutputs.OnComment);
         var alreadySeen = Fetched(Inline("4049159495"));
         var watching = PrCommentLedgerJson.Serialize(PrCommentDelivery.Decide(alreadySeen, Head, null).Ledger);
         await db.LoopRuns.SetPrCommentLedgerAsync(seeded.Run.Id, watching);

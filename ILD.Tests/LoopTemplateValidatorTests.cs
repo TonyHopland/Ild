@@ -332,13 +332,15 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
-    public void Ai_match_rule_referencing_a_declared_output_that_has_no_edge_is_valid()
+    public void Ai_match_rule_routing_to_a_declared_output_that_has_no_edge_is_rejected_and_says_how_to_fix_it()
     {
-        // A rule may point at an output nobody has wired yet: the author wires it next.
+        // The rule would fire at run time and find no edge to take.
         var g = new LoopTemplateGraph(Guid.NewGuid(),
             new() { Declare(AiNodeWithRules("a", ("Reject", "Reject")), "Reject"), Node("s", "Start"), Node("c", "Cleanup") },
             new() { Edge("s", "a"), Edge("a", "c") });
-        Assert.Empty(LoopTemplateValidator.Validate(g));
+        Assert.Equal(
+            new[] { "AI node a matchRules routes to output 'Reject', which has no edge; connect 'Reject' to a target node or remove the rule." },
+            LoopTemplateValidator.Validate(g));
     }
 
     [Fact]
@@ -810,12 +812,33 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
-    public void Condition_switch_with_a_declared_but_unwired_output_is_valid()
+    public void Condition_switch_default_routing_to_a_declared_output_that_has_no_edge_is_rejected()
     {
-        // The "otherwise" default is declared but not wired yet.
+        // The "otherwise" default is declared but not wired.
         var cond = SwitchConditionNode("q",
             new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
-        Assert.Empty(LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr")));
+        Assert.Equal(
+            new[] { "Condition node q defaultEdge routes to output 'otherwise', which has no edge; connect 'otherwise' to a target node or make a wired output the default edge." },
+            LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr")));
+    }
+
+    [Fact]
+    public void Condition_switch_case_routing_to_a_declared_output_that_has_no_edge_is_rejected()
+    {
+        var cond = SwitchConditionNode("q",
+            new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
+        Assert.Equal(
+            new[] { "Condition node q case 1 routes to output 'has-pr', which has no edge; connect 'has-pr' to a target node or remove the case." },
+            LoopTemplateValidator.Validate(SwitchGraph(cond, "otherwise")));
+    }
+
+    [Fact]
+    public void Condition_switch_with_a_declared_output_nothing_references_or_wires_is_valid()
+    {
+        var cond = Declare(
+            UndeclaredSwitchConditionNode("q", new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise"),
+            "has-pr", "otherwise", "spare");
+        Assert.Empty(LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise")));
     }
 
     [Fact]
@@ -878,5 +901,18 @@ public class LoopTemplateValidatorTests
             UndeclaredSwitchConditionNode("q", new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise"),
             "has-pr", "otherwise", "spare");
         Assert.Empty(LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise", "spare")));
+    }
+
+    [Fact]
+    public void A_config_that_still_carries_customEdges_is_rejected()
+    {
+        var human = Declare(Node("h", "Human", "ok?"), "Respond");
+        human.Config["customEdges"] = new List<string> { "Respond" };
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), human, Node("c", "Cleanup") },
+            new() { Edge("s", "h"), Edge("h", "c"), Edge("h", "c", "Custom", "Respond") });
+        Assert.Equal(
+            new[] { "Node h has customEdges, which is no longer supported; declare outputs in config.outputs, e.g. [{ \"name\": \"approve\" }], and remove customEdges." },
+            LoopTemplateValidator.Validate(g));
     }
 }

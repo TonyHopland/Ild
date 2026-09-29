@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -130,12 +131,12 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task A_comment_that_arrived_since_the_last_tick_fires_on_comment()
     {
-        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), PrNodeEdges.OnComment).CaptureSignal();
+        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment).CaptureSignal();
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(h.Fired);
-        Assert.Equal(PrNodeEdges.OnComment, h.Fired!.EdgeName);
+        Assert.Equal(LoopOutputs.OnComment, h.Fired!.EdgeName);
     }
 
     [Fact]
@@ -148,7 +149,7 @@ public class PrStatusPollServiceOnCommentTests
                     body: "preserve the original text", threadId: "PRRT-thread-77"),
                 Issue("4051372317", "and one at the pull request level", author: "tony")),
             WatchedSince(),
-            PrNodeEdges.OnComment).CaptureSignal();
+            LoopOutputs.OnComment).CaptureSignal();
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -181,7 +182,7 @@ public class PrStatusPollServiceOnCommentTests
             Snapshot(),
             Ledger(Inline("11"), Inline("12", path: "src/B.cs"), Inline("13", path: "src/C.cs"), Issue("14", "and a note")),
             WatchedSince(),
-            PrNodeEdges.OnComment).CaptureSignal();
+            LoopOutputs.OnComment).CaptureSignal();
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -194,7 +195,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task The_same_items_do_not_fire_again_on_the_next_tick()
     {
-        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), PrNodeEdges.OnComment).CaptureSignal();
+        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment).CaptureSignal();
         var service = h.Build();
 
         await service.PollOnceAsync(TestContext.Current.CancellationToken);
@@ -213,7 +214,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task A_run_that_has_never_watched_this_pull_request_records_what_is_there_and_fires_nothing()
     {
-        var h = new Harness(Snapshot(), Ledger(Inline("11"), Issue("12", "an old note")), runLedger: null, PrNodeEdges.OnComment);
+        var h = new Harness(Snapshot(), Ledger(Inline("11"), Issue("12", "an old note")), runLedger: null, LoopOutputs.OnComment);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -230,7 +231,7 @@ public class PrStatusPollServiceOnCommentTests
     {
         // Unwired means untouched: no forge call, no persisted ledger, and the
         // snapshot and its GUI push behave exactly as before.
-        var h = new Harness(Snapshot(), ledger: null, runLedger: null, PrNodeEdges.OnMerged);
+        var h = new Harness(Snapshot(), ledger: null, runLedger: null, LoopOutputs.OnMerged);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -250,12 +251,12 @@ public class PrStatusPollServiceOnCommentTests
             Snapshot(ci: RemotePrCiStatus.Failed, failedChecks: new[] { new RemotePrCheck("build", "failure", null, null, "991") }),
             Ledger(Inline("11")),
             WatchedSince(),
-            PrNodeEdges.OnCiFailed, PrNodeEdges.OnComment).CaptureSignal();
+            LoopOutputs.OnCiFailed, LoopOutputs.OnComment).CaptureSignal();
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.NotNull(h.Fired);
-        Assert.Equal(PrNodeEdges.OnCiFailed, h.Fired!.EdgeName);
+        Assert.Equal(LoopOutputs.OnCiFailed, h.Fired!.EdgeName);
         h.Runs.Verify(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
     }
 
@@ -263,7 +264,7 @@ public class PrStatusPollServiceOnCommentTests
     public async Task A_comment_ild_posted_itself_does_not_fire_the_edge()
     {
         var reply = PrCommentMarker.Stamp("Answered: the build is green.", Guid.NewGuid());
-        var h = new Harness(Snapshot(), Ledger(Issue("500", reply)), WatchedSince(), PrNodeEdges.OnComment);
+        var h = new Harness(Snapshot(), Ledger(Issue("500", reply)), WatchedSince(), LoopOutputs.OnComment);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -277,7 +278,7 @@ public class PrStatusPollServiceOnCommentTests
             Snapshot(),
             new RemotePrReviewLedger(new[] { Review("r9", incomplete: true) }, new[] { Inline("31", reviewId: "r9") }, Head, null),
             WatchedSince(),
-            PrNodeEdges.OnComment);
+            LoopOutputs.OnComment);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 
@@ -287,7 +288,7 @@ public class PrStatusPollServiceOnCommentTests
     [Fact]
     public async Task The_snapshot_is_still_persisted_and_pushed_on_a_tick_that_fires_a_comment()
     {
-        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), PrNodeEdges.OnComment);
+        var h = new Harness(Snapshot(), Ledger(Inline("11")), WatchedSince(), LoopOutputs.OnComment);
 
         await h.Build().PollOnceAsync(TestContext.Current.CancellationToken);
 

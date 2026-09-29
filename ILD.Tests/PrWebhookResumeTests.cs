@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -79,12 +80,12 @@ public class PrWebhookResumeTests
     [Fact]
     public async Task A_rejection_that_resumes_the_run_here_does_not_also_wake_the_heartbeat()
     {
-        var h = new Harness(PrNodeEdges.OnRejected);
+        var h = new Harness(LoopOutputs.OnRejected);
 
         await h.Build().HandleWebhookAsync(ChangesRequested());
 
         h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
-            It.Is<NodeSignal>(s => s.EdgeName == PrNodeEdges.OnRejected)), Times.Once);
+            It.Is<NodeSignal>(s => s.EdgeName == LoopOutputs.OnRejected)), Times.Once);
         h.Poller.Verify(p => p.Pulse(), Times.Never);
     }
 
@@ -93,7 +94,7 @@ public class PrWebhookResumeTests
     {
         // Nothing resumed the run, and the reviewer did say something. The
         // heartbeat is the only path left to that prose, under every throttle.
-        var h = new Harness(PrNodeEdges.OnComment);
+        var h = new Harness(LoopOutputs.OnComment);
 
         await h.Build().HandleWebhookAsync(ChangesRequested());
 
@@ -106,7 +107,7 @@ public class PrWebhookResumeTests
     {
         // It maps to no edge of its own, and most of what a person says on a
         // pull request is said exactly here.
-        var h = new Harness(PrNodeEdges.OnComment, PrNodeEdges.OnApproved);
+        var h = new Harness(LoopOutputs.OnComment, LoopOutputs.OnApproved);
 
         await h.Build().HandleWebhookAsync(
             new WebhookPayload("pull_request.review", "repo-1", "7", PrUrl, "Nice. One thought on the naming.", null));
@@ -117,7 +118,7 @@ public class PrWebhookResumeTests
     [Fact]
     public async Task A_plain_comment_still_wakes_the_heartbeat_and_fires_nothing_itself()
     {
-        var h = new Harness(PrNodeEdges.OnComment);
+        var h = new Harness(LoopOutputs.OnComment);
 
         await h.Build().HandleWebhookAsync(
             new WebhookPayload("pull_request.comment", "repo-1", "7", PrUrl, "one more thing", null));
@@ -129,7 +130,7 @@ public class PrWebhookResumeTests
     [Fact]
     public async Task A_webhook_that_says_nothing_wakes_nothing()
     {
-        var h = new Harness(PrNodeEdges.OnComment);
+        var h = new Harness(LoopOutputs.OnComment);
 
         await h.Build().HandleWebhookAsync(
             new WebhookPayload("pull_request.merged", "repo-1", "7", PrUrl, null, "merged"));
@@ -142,7 +143,7 @@ public class PrWebhookResumeTests
     {
         // The feedback log is not part of the resume decision: a rejection that
         // signalled its own edge still has to leave the prose behind it.
-        var h = new Harness(PrNodeEdges.OnRejected);
+        var h = new Harness(LoopOutputs.OnRejected);
 
         await h.Build().HandleWebhookAsync(ChangesRequested());
 

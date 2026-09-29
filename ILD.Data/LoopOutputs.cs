@@ -61,8 +61,7 @@ public static class LoopOutputs
         => type == NodeType.PR && ReservedPr.Contains(name, StringComparer.Ordinal);
 
     /// <summary>
-    /// Brings a node config to the saved shape: creates <c>outputs</c>, moves any
-    /// leftover <c>customEdges</c> names into it and drops that key, appends
+    /// Brings a node config to the saved shape: creates <c>outputs</c>, appends
     /// missing fixed outputs, and makes <c>reserved: true</c> appear on exactly the
     /// reserved outputs. Existing entries and keys are never reordered or dropped.
     /// A present but malformed <c>outputs</c> is left for the validator to report.
@@ -71,15 +70,6 @@ public static class LoopOutputs
     public static bool NormalizeOutputs(NodeType? type, JsonObject config)
     {
         if (OutputsOf(config, out var changed) is not { } outputs) return false;
-
-        if (config.TryGetPropertyValue("customEdges", out var customEdges))
-        {
-            if (customEdges is JsonArray names)
-                foreach (var name in names)
-                    AppendMissing(outputs, StringOf(name));
-            config.Remove("customEdges");
-            changed = true;
-        }
 
         if (type is { } known)
             foreach (var name in Fixed(known))
@@ -106,48 +96,54 @@ public static class LoopOutputs
 
     /// <summary>
     /// Converts a config written before outputs existed: every name the old model
-    /// used to define an output — <c>customEdges</c>, AI <c>matchRules</c>,
-    /// Condition <c>cases</c>/<c>defaultEdge</c> (trimmed, as the executor trims
-    /// them) and each outgoing edge in <paramref name="outgoing"/> — is declared,
-    /// then the config is normalized. Shared by the startup migrator and the
-    /// document upgrader so the two cannot convert a node differently. An unknown
-    /// <paramref name="type"/> (a document node whose type does not parse) gets the
-    /// names only. Returns whether anything changed.
+    /// used to define an output — <c>customEdges</c> (which is then dropped), AI
+    /// <c>matchRules</c>, Condition <c>cases</c>/<c>defaultEdge</c> (trimmed, as the
+    /// executor trims them) and each outgoing edge in <paramref name="outgoing"/> —
+    /// is declared, then the config is normalized. A config that already has an
+    /// <c>outputs</c> key is already converted and is left exactly as it is. Shared
+    /// by the startup migrator and the document upgrader so the two cannot convert
+    /// a node differently. An unknown <paramref name="type"/> (a document node whose
+    /// type does not parse) gets the names only. Returns whether anything changed.
     /// </summary>
     public static bool UpgradeLegacyConfig(
         NodeType? type, JsonObject config, IEnumerable<(EdgeType Type, string? Name)> outgoing)
     {
-        if (OutputsOf(config, out var changed) is not { } outputs) return false;
+        if (config.ContainsKey("outputs")) return false;
+
+        var outputs = new JsonArray();
+        config["outputs"] = outputs;
 
         if (type is { } known)
             foreach (var name in Fixed(known))
-                changed |= AppendMissing(outputs, name);
+                AppendMissing(outputs, name);
 
         if (config["customEdges"] is JsonArray customEdges)
             foreach (var name in customEdges)
-                changed |= AppendMissing(outputs, StringOf(name));
+                AppendMissing(outputs, StringOf(name));
+        config.Remove("customEdges");
 
         if (type is null or NodeType.AI && config["matchRules"] is JsonArray rules)
             foreach (var rule in rules)
-                changed |= AppendMissing(outputs, StringOf((rule as JsonObject)?["edgeName"]));
+                AppendMissing(outputs, StringOf((rule as JsonObject)?["edgeName"]));
 
         if (type is null or NodeType.Condition)
         {
             if (config["cases"] is JsonArray cases)
                 foreach (var c in cases)
-                    changed |= AppendMissing(outputs, StringOf((c as JsonObject)?["edgeName"])?.Trim());
-            changed |= AppendMissing(outputs, StringOf(config["defaultEdge"])?.Trim());
+                    AppendMissing(outputs, StringOf((c as JsonObject)?["edgeName"])?.Trim());
+            AppendMissing(outputs, StringOf(config["defaultEdge"])?.Trim());
         }
 
         foreach (var (edgeType, edgeName) in outgoing)
-            changed |= AppendMissing(outputs, edgeType switch
+            AppendMissing(outputs, edgeType switch
             {
                 EdgeType.OnSuccess => OnSuccess,
                 EdgeType.OnFailure => OnFailure,
                 _ => edgeName,
             });
 
-        return NormalizeOutputs(type, config) | changed;
+        NormalizeOutputs(type, config);
+        return true;
     }
 
     /// <summary>The <c>name</c> of an output object, or null when it has no string name.</summary>

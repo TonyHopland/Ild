@@ -254,7 +254,7 @@ public class LoopTemplateManagerTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Save_moves_leftover_customEdges_into_outputs(bool wired)
+    public async Task Save_refuses_a_config_that_still_carries_customEdges(bool wired)
     {
         using var db = new TestDb();
         var mgr = new LoopTemplateManager(db.LoopTemplates);
@@ -267,14 +267,11 @@ public class LoopTemplateManagerTests
             graph.Edges.Add(E("pr", "c", "Custom", "deploy"));
         }
 
-        var id = await mgr.CreateLoopTemplateAsync("outputs", "", graph);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => mgr.CreateLoopTemplateAsync("outputs", "", graph));
 
-        var configs = await StoredConfigs(db, id, 1);
-        Assert.False(Obj(configs["h"]).ContainsKey("customEdges"));
-        Assert.False(Obj(configs["pr"]).ContainsKey("customEdges"));
-        Assert.Contains("Respond", NamesOf(configs["h"]));
-        Assert.Contains("deploy", NamesOf(configs["pr"]));
-        Assert.Equal("Why?", (string)Obj(configs["h"])["inputLabel"]!);
+        Assert.Contains("Node h has customEdges, which is no longer supported; declare outputs in config.outputs", ex.Message);
+        Assert.Contains("Node pr has customEdges, which is no longer supported; declare outputs in config.outputs", ex.Message);
+        Assert.Empty(await db.Fresh().LoopTemplates.ToListAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -284,7 +281,7 @@ public class LoopTemplateManagerTests
         var mgr = new LoopTemplateManager(db.LoopTemplates);
         var graph = AllTypesGraph(
             prConfig: "{\"prDescriptionTemplate\":\"t\",\"outputs\":[{\"name\":\"deploy\",\"color\":\"x\"}]}",
-            humanConfig: "{\"prompt\":\"ok?\",\"customEdges\":[\"Respond\"],\"outputs\":[{\"name\":\"approve\",\"visible\":false}]}");
+            humanConfig: "{\"prompt\":\"ok?\",\"outputs\":[{\"name\":\"approve\",\"visible\":false}]}");
         graph.Edges.Add(E("h", "c", "Custom", "approve"));
 
         var id = await mgr.CreateLoopTemplateAsync("outputs", "", graph);

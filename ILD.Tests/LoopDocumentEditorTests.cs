@@ -314,7 +314,7 @@ public class LoopDocumentEditorTests
         Assert.Equal(document.Replace("\"label\":\"Reviewer\"", "\"label\":\"Strict Reviewer\""), result.Document);
     }
 
-    // Start → AI (declares "reject") → Condition switch (declares its case and default) → Cleanup.
+    // Start → AI (declares and wires "reject") → Condition switch (declares its case and default) → Cleanup.
     private const string StructuredDocument =
         "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Live\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
         "\"nodes\":[" +
@@ -326,7 +326,8 @@ public class LoopDocumentEditorTests
         "{\"id\":\"e1\",\"sourceNodeId\":\"start\",\"targetNodeId\":\"ai\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
         "{\"id\":\"e2\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"gate\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
         "{\"id\":\"e3\",\"sourceNodeId\":\"gate\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"has-pr\"}," +
-        "{\"id\":\"e4\",\"sourceNodeId\":\"gate\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"otherwise\"}]}";
+        "{\"id\":\"e4\",\"sourceNodeId\":\"gate\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"otherwise\"}," +
+        "{\"id\":\"e5\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"reject\"}]}";
 
     [Theory]
     [InlineData("ai", "outputs", "[{\"name\":\"reject\",\"visible\":false,\"color\":\"x\"}]")]
@@ -382,20 +383,34 @@ public class LoopDocumentEditorTests
             return step.Document!;
         }
 
-        // Add: declare the output, add the rule, wire the edge.
-        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "outputs", "[{\"name\":\"reject\"}]"));
-        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "matchRules", rule));
-        var edgesAnchor = System.Text.RegularExpressions.Regex.Match(document, "\"edges\"\\s*:\\s*\\[").Value;
-        document = Apply(LoopDocumentEditor.EditFile(document, edgesAnchor,
-            edgesAnchor + "{\"id\":\"e-reject\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"reject\"},"));
+        string AddEdge(string doc, string id, string name)
+        {
+            var edgesAnchor = System.Text.RegularExpressions.Regex.Match(doc, "\"edges\"\\s*:\\s*\\[").Value;
+            return Apply(LoopDocumentEditor.EditFile(doc, edgesAnchor,
+                edgesAnchor + $"{{\"id\":\"{id}\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"{name}\"}},"));
+        }
 
-        // Rename: add the new name, repoint the rule and the edge, remove the old name.
+        // A rule routing to a declared output that has no edge is refused too.
+        var declared = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "outputs", "[{\"name\":\"reject\"}]"));
+        var unwired = LoopDocumentEditor.SetNodeField(declared, "ai", "matchRules", rule);
+        Assert.False(unwired.Applied);
+        Assert.Contains(unwired.ValidationErrors, e => e.Contains("'reject'") && e.Contains("no edge"));
+
+        // Add: declare the output, wire the edge, add the rule.
+        document = declared;
+        document = AddEdge(document, "e-reject", "reject");
+        document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "matchRules", rule));
+
+        // Rename: add the new name and wire it, repoint the rule, then remove the
+        // old edge and the old name.
         document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "outputs", "[{\"name\":\"reject\"},{\"name\":\"rework\"}]"));
+        document = AddEdge(document, "e-rework", "rework");
         document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "matchRules", rule.Replace("reject", "rework")));
-        var edgeStart = document.IndexOf("\"e-reject\"", StringComparison.Ordinal);
-        var edgeName = document.IndexOf("\"reject\"", edgeStart, StringComparison.Ordinal) + "\"reject\"".Length;
-        var edgeText = document[edgeStart..edgeName];
-        document = Apply(LoopDocumentEditor.EditFile(document, edgeText, edgeText[..^"\"reject\"".Length] + "\"rework\""));
+        var idAt = document.IndexOf("\"e-reject\"", StringComparison.Ordinal);
+        var objectStart = document.LastIndexOf('{', idAt);
+        var afterObject = document.IndexOf('}', idAt) + 1;
+        var oldEdge = document[objectStart..(document.IndexOf(',', afterObject) + 1)];
+        document = Apply(LoopDocumentEditor.EditFile(document, oldEdge, ""));
         document = Apply(LoopDocumentEditor.SetNodeField(document, "ai", "outputs", "[{\"name\":\"rework\"}]"));
 
         // Change: give the output a setting.
@@ -404,7 +419,8 @@ public class LoopDocumentEditorTests
         var ai = ConfigOf(document, "ai");
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse("[{\"name\":\"rework\",\"visible\":false}]"), ai["outputs"]));
         Assert.Equal("rework", (string)ai["matchRules"]![0]!["edgeName"]!);
-        var edge = Root(document)["edges"]!.AsArray().Single(e => (string)e!["id"]! == "e-reject")!;
-        Assert.Equal("rework", (string)edge["name"]!);
+        var edges = Root(document)["edges"]!.AsArray();
+        Assert.DoesNotContain(edges, e => (string?)e!["name"] == "reject");
+        Assert.Equal("ai", (string)edges.Single(e => (string?)e!["name"] == "rework")!["sourceNodeId"]!);
     }
 }

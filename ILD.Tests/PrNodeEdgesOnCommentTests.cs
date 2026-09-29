@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 
@@ -31,29 +32,29 @@ public class PrNodeEdgesOnCommentTests
         Assert.Equal(
             new[]
             {
-                PrNodeEdges.OnRejected,
-                PrNodeEdges.OnMergeConflict,
-                PrNodeEdges.OnCiFailed,
-                PrNodeEdges.OnComment,
-                PrNodeEdges.OnApproved,
-                PrNodeEdges.OnCiPassed,
-                PrNodeEdges.OnMerged,
-                PrNodeEdges.OnAbandoned,
+                LoopOutputs.OnRejected,
+                LoopOutputs.OnMergeConflict,
+                LoopOutputs.OnCiFailed,
+                LoopOutputs.OnComment,
+                LoopOutputs.OnApproved,
+                LoopOutputs.OnCiPassed,
+                LoopOutputs.OnMerged,
+                LoopOutputs.OnAbandoned,
             },
-            PrNodeEdges.ByPriority);
+            LoopOutputs.ReservedPr);
     }
 
     [Fact]
     public void The_new_edge_is_named_on_comment()
-        => Assert.Equal("on_comment", PrNodeEdges.OnComment);
+        => Assert.Equal("on_comment", LoopOutputs.OnComment);
 
     [Fact]
     public void A_higher_priority_state_in_the_same_tick_beats_a_comment()
     {
-        Assert.Equal(PrNodeEdges.OnCiFailed,
-            PrNodeEdges.HighestPriority(new[] { PrNodeEdges.OnComment, PrNodeEdges.OnCiFailed }));
-        Assert.Equal(PrNodeEdges.OnComment,
-            PrNodeEdges.HighestPriority(new[] { PrNodeEdges.OnApproved, PrNodeEdges.OnComment }));
+        Assert.Equal(LoopOutputs.OnCiFailed,
+            PrNodeEdges.HighestPriority(new[] { LoopOutputs.OnComment, LoopOutputs.OnCiFailed }));
+        Assert.Equal(LoopOutputs.OnComment,
+            PrNodeEdges.HighestPriority(new[] { LoopOutputs.OnApproved, LoopOutputs.OnComment }));
     }
 
     [Fact]
@@ -64,18 +65,18 @@ public class PrNodeEdgesOnCommentTests
         var everything = PrNodeEdges.ActiveStates(Snapshot(
             ci: RemotePrCiStatus.Failed, approved: true, changesRequested: true, mergeable: false));
 
-        Assert.DoesNotContain(PrNodeEdges.OnComment, everything);
+        Assert.DoesNotContain(LoopOutputs.OnComment, everything);
     }
 
     [Fact]
     public void The_new_edge_still_says_what_happened_with_no_detail_to_offer()
-        => Assert.NotEmpty(PrNodeEdges.Describe(PrNodeEdges.OnComment));
+        => Assert.NotEmpty(PrNodeEdges.Describe(LoopOutputs.OnComment));
 
     [Fact]
     public void A_comment_batch_ends_with_the_call_that_reads_the_rest()
     {
         var reason = PrNodeEdges.Describe(
-            PrNodeEdges.OnComment,
+            LoopOutputs.OnComment,
             detail: "### src/A.cs:10 — Copilot\ncomment id: 11\nthis allocation is wrong",
             workItemId: "WI-42");
 
@@ -96,7 +97,7 @@ public class PrNodeEdgesOnCommentTests
             $"### src/File{i}.cs:{i} — Copilot\ncomment id: {i}\nthread id: t{i}\n{new string('x', 600)}"));
         Assert.True(batch.Length > PrNodeEdges.MaxReasonLength * 3);
 
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnComment, detail: batch, workItemId: "WI-42");
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnComment, detail: batch, workItemId: "WI-42");
 
         Assert.True(reason.Length <= PrNodeEdges.MaxReasonLength, $"reason was {reason.Length} chars");
         Assert.Contains("truncated", reason, StringComparison.Ordinal);
@@ -115,7 +116,7 @@ public class PrNodeEdgesOnCommentTests
     {
         // Review bodies carry emoji — the real ones open with one.
         var reason = PrNodeEdges.Describe(
-            PrNodeEdges.OnComment,
+            LoopOutputs.OnComment,
             detail: string.Concat(Enumerable.Repeat("🟡", 8000)),
             workItemId: "WI-42");
 
@@ -131,7 +132,7 @@ public class PrNodeEdgesOnCommentTests
         // While changes are requested, on_rejected outranks on_comment every
         // tick, so that round only ever sees the review's prose — the comments
         // behind it are reachable only through the tool.
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnRejected, Snapshot(
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnRejected, Snapshot(
             changesRequested: true,
             conversation: new[]
             {
@@ -155,14 +156,14 @@ public class PrNodeEdgesOnCommentTests
         // No work item id to spell into the call means no call to advertise,
         // and the other six edges' reasons are untouched.
         Assert.DoesNotContain("get_pr_review",
-            PrNodeEdges.Describe(PrNodeEdges.OnComment, detail: "a comment"), StringComparison.Ordinal);
+            PrNodeEdges.Describe(LoopOutputs.OnComment, detail: "a comment"), StringComparison.Ordinal);
 
-        Assert.DoesNotContain("get_pr_review", PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+        Assert.DoesNotContain("get_pr_review", PrNodeEdges.Describe(LoopOutputs.OnCiFailed, Snapshot(
                 ci: RemotePrCiStatus.Failed,
                 failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "991") }),
             workItemId: "WI-42"), StringComparison.Ordinal);
 
-        foreach (var edge in new[] { PrNodeEdges.OnMergeConflict, PrNodeEdges.OnApproved, PrNodeEdges.OnCiPassed, PrNodeEdges.OnMerged, PrNodeEdges.OnAbandoned })
+        foreach (var edge in new[] { LoopOutputs.OnMergeConflict, LoopOutputs.OnApproved, LoopOutputs.OnCiPassed, LoopOutputs.OnMerged, LoopOutputs.OnAbandoned })
             Assert.DoesNotContain("get_pr_review", PrNodeEdges.Describe(edge, Snapshot(), workItemId: "WI-42"), StringComparison.Ordinal);
     }
 }

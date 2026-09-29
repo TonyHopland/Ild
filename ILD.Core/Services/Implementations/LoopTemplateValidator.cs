@@ -134,6 +134,15 @@ public static class LoopTemplateValidator
         var declaredById = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         foreach (var node in nodes)
             declaredById.TryAdd(node.Id, DeclaredOutputs(node, errors));
+        // The named outputs each node has a Custom edge from. A rule, case or
+        // default routing to an unwired output would fail the run when it routes,
+        // so it is refused here.
+        var wiredById = edges
+            .Where(e => !string.IsNullOrWhiteSpace(e.Name)
+                && Enum.TryParse<EdgeType>(e.EdgeType, ignoreCase: true, out var role) && role == EdgeType.Custom)
+            .GroupBy(e => e.SourceNodeId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.Name!).ToHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
+        HashSet<string> WiredFrom(string nodeId) => wiredById.GetValueOrDefault(nodeId) ?? new(StringComparer.Ordinal);
         var nodeTypeById = nodes
             .GroupBy(n => n.Id, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First().NodeType, StringComparer.Ordinal);
@@ -247,7 +256,7 @@ public static class LoopTemplateValidator
                 foreach (var rule in cfg.MatchRules ?? new())
                 {
                     if (!string.IsNullOrWhiteSpace(rule.EdgeName))
-                        CheckOutputReference(node.Id, "AI", "matchRules", rule.EdgeName, declaredById[node.Id], errors);
+                        CheckOutputReference(node.Id, "AI", "matchRules", rule.EdgeName, declaredById[node.Id], WiredFrom(node.Id), "remove the rule", errors);
                     ValidateMatchRulePattern(node.Id, rule, errors);
                 }
             }
@@ -269,7 +278,7 @@ public static class LoopTemplateValidator
                 if (defaultEdge.Length == 0)
                     errors.Add($"Condition node {node.Id} must set a default edge.");
                 else
-                    CheckOutputReference(node.Id, "Condition", "defaultEdge", defaultEdge, declaredById[node.Id], errors);
+                    CheckOutputReference(node.Id, "Condition", "defaultEdge", defaultEdge, declaredById[node.Id], WiredFrom(node.Id), "make a wired output the default edge", errors);
                 if (cases.Count == 0)
                     errors.Add($"Condition node {node.Id} must have at least one case.");
 
@@ -281,7 +290,7 @@ public static class LoopTemplateValidator
                     if (edgeName.Length == 0)
                         errors.Add($"Condition node {node.Id} case {i + 1} must set an edge name.");
                     else
-                        CheckOutputReference(node.Id, "Condition", $"case {i + 1}", edgeName, declaredById[node.Id], errors);
+                        CheckOutputReference(node.Id, "Condition", $"case {i + 1}", edgeName, declaredById[node.Id], WiredFrom(node.Id), "remove the case", errors);
 
                     var variant = (c.Variant ?? string.Empty).Trim();
                     if (string.Equals(variant, "TextMatches", StringComparison.OrdinalIgnoreCase))
@@ -329,8 +338,8 @@ public static class LoopTemplateValidator
 
     /// <summary>
     /// The names a node declares in <c>config.outputs</c>, plus the fixed outputs
-    /// of its type. Reports a malformed list, a bad or repeated name, and outputs
-    /// the node's type may not have. Names are ordinal, as the engine routes them.
+    /// of its type. Reports a leftover <c>customEdges</c>, a malformed list, a bad or
+    /// repeated name, and outputs the node's type may not have. Names are ordinal, as the engine routes them.
     /// </summary>
     private static HashSet<string> DeclaredOutputs(LoopNodeDto node, List<string> errors)
     {
@@ -338,7 +347,11 @@ public static class LoopTemplateValidator
         var declared = new HashSet<string>(StringComparer.Ordinal);
         const string Example = "{ \"name\": \"approve\" }";
 
-        var outputs = (JsonSerializer.SerializeToNode(node.Config) as JsonObject)?["outputs"];
+        var config = JsonSerializer.SerializeToNode(node.Config) as JsonObject;
+        if (config?.ContainsKey("customEdges") == true)
+            errors.Add($"Node {node.Id} has customEdges, which is no longer supported; declare outputs in config.outputs, e.g. [{Example}], and remove customEdges.");
+
+        var outputs = config?["outputs"];
         if (outputs is not null and not JsonArray)
             errors.Add($"Node {node.Id} outputs must be an array of output objects, e.g. [{Example}].");
 
@@ -374,15 +387,18 @@ public static class LoopTemplateValidator
 
     /// <summary>
     /// A match rule, case or default names the output it routes to; that output
-    /// must be one the node declares, and never success or failure, which are
-    /// taken by the edge's own type rather than by name.
+    /// must be one the node declares and has a Custom edge from, and never success
+    /// or failure, which are taken by the edge's own type rather than by name.
     /// </summary>
     private static void CheckOutputReference(
-        string nodeId, string kind, string field, string name, HashSet<string> declared, List<string> errors)
+        string nodeId, string kind, string field, string name, HashSet<string> declared, HashSet<string> wired,
+        string otherFix, List<string> errors)
     {
         if (LoopOutputs.IsSuccessOrFailure(name))
             errors.Add($"{kind} node {nodeId} {field} references '{name}', which is a fixed output and cannot be routed to by name; declare a named output in outputs and reference that instead.");
         else if (!declared.Contains(name))
             errors.Add($"{kind} node {nodeId} {field} references output '{name}', which is not declared in outputs; add {{ \"name\": \"{name}\" }} to outputs.");
+        else if (!wired.Contains(name))
+            errors.Add($"{kind} node {nodeId} {field} routes to output '{name}', which has no edge; connect '{name}' to a target node or {otherFix}.");
     }
 }
