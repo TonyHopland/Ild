@@ -16,14 +16,14 @@ interface FeedbackActionsProps {
 }
 
 // Tokens in the comma-separated actions string that map to the fixed
-// success/failure roles; everything else is a named custom edge.
+// success/failure roles; everything else names one of the node's outputs.
 const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
 
 /**
- * Renders the Approve / Merge / custom-edge / Reject buttons based on the
+ * Renders the Approve / Merge / named-output / Reject buttons based on the
  * comma-separated <c>humanFeedbackActions</c> string from the work item.
- * Each connected custom edge surfaces as its own button (its name is the edge
- * key sent back to the engine). Defaults to Approve + Reject when empty.
+ * Each wired named output surfaces as its own button (its name is the output
+ * sent back to the engine). Defaults to Approve + Reject when empty.
  */
 export default function FeedbackActions({
   actions,

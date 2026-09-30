@@ -626,11 +626,11 @@
         "type": "string"
       },
       "field": {
-        "description": "The config field to overwrite, e.g. 'prompt', 'command'.",
+        "description": "The config field to overwrite, e.g. 'prompt', 'command', or a structured field: 'outputs', 'matchRules', 'cases', 'toolAllowlist'.",
         "type": "string"
       },
       "value": {
-        "description": "The new value stored as the field's text.",
+        "description": "The new value: the field's text, or for outputs/matchRules/cases/toolAllowlist the whole array as JSON.",
         "type": "string"
       }
     },
@@ -745,7 +745,7 @@
     "type": "object",
     "properties": {
       "document": {
-        "description": "A complete ild-loop-template/v1 document as JSON (with $schema, name, description, recoveryPolicy, nodes, edges).",
+        "description": "A complete ild-loop-template/v2 document as JSON (with $schema, name, description, recoveryPolicy, nodes, edges; each node declares its outputs in config.outputs).",
         "type": "string"
       }
     },

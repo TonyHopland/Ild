@@ -845,6 +845,11 @@
   background: #5558e6;
 }
 
+.node-settings-btn-save[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .loop-list-controls {
   padding: 0.5rem 0.25rem;
   margin-bottom: 0.25rem;
@@ -971,7 +976,7 @@
   margin-top: 0.35rem;
 }
 
-/* Repeatable rows for AI match rules and Human/PR custom edge names. */
+/* Repeatable rows for AI match rules and node outputs. */
 .match-rule-row {
   display: flex;
   gap: 0.375rem;

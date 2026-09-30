@@ -3,9 +3,9 @@ import { computeLineDiff } from "../../../utils/jsonDiff";
 
 export interface SaveDiffModalProps {
   isOpen: boolean;
-  /** The last-saved loop as pretty-printed ild-loop-template/v1 JSON ("" for a new template). */
+  /** The last-saved loop as pretty-printed ild-loop-template/v2 JSON ("" for a new template). */
   beforeJson: string;
-  /** The currently-edited loop as pretty-printed ild-loop-template/v1 JSON. */
+  /** The currently-edited loop as pretty-printed ild-loop-template/v2 JSON. */
   afterJson: string;
   isSaving: boolean;
   onConfirm: () => void;

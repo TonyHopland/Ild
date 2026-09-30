@@ -1,3 +1,4 @@
+using ILD.Data;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
@@ -150,7 +151,7 @@ public class PRNodeExecutorPrCommentTests
                 SourceNodeId = loopNodeId,
                 TargetNodeId = Guid.NewGuid(),
                 EdgeType = EdgeType.Custom,
-                Name = PrNodeEdges.OnComment,
+                Name = LoopOutputs.OnComment,
             },
         });
 
@@ -223,7 +224,7 @@ public class PRNodeExecutorPrCommentTests
         var engine = await PollAfterAsync(f.Run, f.RecordedLedger, "4053396999", "Answered every point in the review.");
 
         engine.Verify(e => e.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(),
-            It.Is<NodeSignal>(s => s.EdgeName == PrNodeEdges.OnComment)), Times.Once);
+            It.Is<NodeSignal>(s => s.EdgeName == LoopOutputs.OnComment)), Times.Once);
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
@@ -98,7 +99,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
             .Select(e => e.Name!)
             .ToHashSet(StringComparer.Ordinal);
 
-        var review = connected.Contains(PrNodeEdges.OnComment)
+        var review = connected.Contains(LoopOutputs.OnComment)
             ? await ReadReviewAsync(run, repoUrl, prNumber)
             : null;
 
@@ -121,12 +122,12 @@ public sealed class PrStatusPollService : IPrStatusPollService
 
         var candidates = newlyTrue.Where(connected.Contains).ToHashSet(StringComparer.Ordinal);
         if (review is { Seeding: false } && review.Decision.Items.Count > 0)
-            candidates.Add(PrNodeEdges.OnComment);
+            candidates.Add(LoopOutputs.OnComment);
 
         // Only the round that is actually being handed the items consumes them:
         // a higher-priority state winning this tick leaves them outstanding.
         string? detail = null;
-        if (PrNodeEdges.HighestPriority(candidates) == PrNodeEdges.OnComment)
+        if (PrNodeEdges.HighestPriority(candidates) == LoopOutputs.OnComment)
         {
             // Describe what the WRITE handed over, not what this pass decided
             // before the forge fetch. The write re-decides against the ledger as
@@ -148,7 +149,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
                 // saved above, so an approval or a green CI that lost the
                 // priority contest to a batch which then vanished is already
                 // counted as seen, and nothing clears that until a re-park.
-                candidates.Remove(PrNodeEdges.OnComment);
+                candidates.Remove(LoopOutputs.OnComment);
             }
             else
             {

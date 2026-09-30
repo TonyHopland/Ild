@@ -1,7 +1,7 @@
 namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
-/// Per-session scratchpad holding the live <c>ild-loop-template/v1</c> document
+/// Per-session scratchpad holding the live <c>ild-loop-template/v2</c> document
 /// the user has open in the Loop Editor (loop editor context, ADR-0011). The
 /// browser includes the live document on each <c>sendMessage</c>; the server
 /// overwrites the entry every message so the agent always reads the loop as-of

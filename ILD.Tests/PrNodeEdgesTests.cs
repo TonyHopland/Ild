@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 
@@ -23,29 +24,29 @@ public class PrNodeEdgesTests
     [Fact]
     public void ActiveStates_open_pr_maps_each_signal()
     {
-        Assert.Contains(PrNodeEdges.OnRejected, PrNodeEdges.ActiveStates(Snapshot(changesRequested: true)));
-        Assert.Contains(PrNodeEdges.OnMergeConflict, PrNodeEdges.ActiveStates(Snapshot(mergeable: false)));
-        Assert.Contains(PrNodeEdges.OnMergeConflict, PrNodeEdges.ActiveStates(Snapshot(mergeableState: "dirty")));
-        Assert.Contains(PrNodeEdges.OnCiFailed, PrNodeEdges.ActiveStates(Snapshot(ci: RemotePrCiStatus.Failed)));
-        Assert.Contains(PrNodeEdges.OnApproved, PrNodeEdges.ActiveStates(Snapshot(approved: true)));
-        Assert.Contains(PrNodeEdges.OnCiPassed, PrNodeEdges.ActiveStates(Snapshot(ci: RemotePrCiStatus.Passed)));
+        Assert.Contains(LoopOutputs.OnRejected, PrNodeEdges.ActiveStates(Snapshot(changesRequested: true)));
+        Assert.Contains(LoopOutputs.OnMergeConflict, PrNodeEdges.ActiveStates(Snapshot(mergeable: false)));
+        Assert.Contains(LoopOutputs.OnMergeConflict, PrNodeEdges.ActiveStates(Snapshot(mergeableState: "dirty")));
+        Assert.Contains(LoopOutputs.OnCiFailed, PrNodeEdges.ActiveStates(Snapshot(ci: RemotePrCiStatus.Failed)));
+        Assert.Contains(LoopOutputs.OnApproved, PrNodeEdges.ActiveStates(Snapshot(approved: true)));
+        Assert.Contains(LoopOutputs.OnCiPassed, PrNodeEdges.ActiveStates(Snapshot(ci: RemotePrCiStatus.Passed)));
     }
 
     [Fact]
     public void ActiveStates_closed_pr_only_surfaces_terminal_state()
     {
         var merged = PrNodeEdges.ActiveStates(Snapshot(state: "closed", merged: true, ci: RemotePrCiStatus.Failed));
-        Assert.Equal(new[] { PrNodeEdges.OnMerged }, merged);
+        Assert.Equal(new[] { LoopOutputs.OnMerged }, merged);
 
         var abandoned = PrNodeEdges.ActiveStates(Snapshot(state: "closed", merged: false, changesRequested: true));
-        Assert.Equal(new[] { PrNodeEdges.OnAbandoned }, abandoned);
+        Assert.Equal(new[] { LoopOutputs.OnAbandoned }, abandoned);
     }
 
     [Fact]
     public void HighestPriority_picks_rejected_over_lower_states()
     {
-        var candidates = new[] { PrNodeEdges.OnCiPassed, PrNodeEdges.OnRejected, PrNodeEdges.OnApproved };
-        Assert.Equal(PrNodeEdges.OnRejected, PrNodeEdges.HighestPriority(candidates));
+        var candidates = new[] { LoopOutputs.OnCiPassed, LoopOutputs.OnRejected, LoopOutputs.OnApproved };
+        Assert.Equal(LoopOutputs.OnRejected, PrNodeEdges.HighestPriority(candidates));
     }
 
     [Fact]
@@ -55,17 +56,17 @@ public class PrNodeEdgesTests
     [Fact]
     public void ParseStates_roundtrips_a_persisted_csv()
     {
-        var set = PrNodeEdges.ParseStates($"{PrNodeEdges.OnCiFailed},{PrNodeEdges.OnApproved}");
+        var set = PrNodeEdges.ParseStates($"{LoopOutputs.OnCiFailed},{LoopOutputs.OnApproved}");
         Assert.Equal(2, set.Count);
-        Assert.Contains(PrNodeEdges.OnCiFailed, set);
-        Assert.Contains(PrNodeEdges.OnApproved, set);
+        Assert.Contains(LoopOutputs.OnCiFailed, set);
+        Assert.Contains(LoopOutputs.OnApproved, set);
         Assert.Empty(PrNodeEdges.ParseStates(null));
     }
 
     [Fact]
     public void Describe_ci_failed_names_every_failing_check_with_its_url_and_output()
     {
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnCiFailed, Snapshot(
             ci: RemotePrCiStatus.Failed,
             failedChecks: new[]
             {
@@ -87,7 +88,7 @@ public class PrNodeEdgesTests
         // details_url is for a human. What makes the log reachable from a loop is
         // the check id plus the tool call spelled out with the work item id —
         // which the agent has no placeholder to look up.
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnCiFailed, Snapshot(
             ci: RemotePrCiStatus.Failed,
             failedChecks: new[] { new RemotePrCheck("build", "failure", "https://ci/build", "tsc: 3 errors", "67890") }),
             workItemId: "WI-42");
@@ -104,7 +105,7 @@ public class PrNodeEdgesTests
     {
         // An unattributed rollup has no handle; promising a tool call that cannot
         // be made costs the agent a wasted turn.
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnCiFailed, Snapshot(
             ci: RemotePrCiStatus.Failed,
             failedChecks: new[] { new RemotePrCheck("commit status", "failure", null, null, null) }),
             workItemId: "WI-42");
@@ -119,7 +120,7 @@ public class PrNodeEdgesTests
         // A snapshot persisted before failed checks were captured deserializes
         // them as null; the headline is the floor, never the empty string that
         // left the downstream agent guessing.
-        foreach (var edge in PrNodeEdges.ByPriority)
+        foreach (var edge in LoopOutputs.ReservedPr)
         {
             Assert.NotEmpty(PrNodeEdges.Describe(edge));
             Assert.NotEmpty(PrNodeEdges.Describe(edge, Snapshot(failedChecks: null!)));
@@ -130,7 +131,7 @@ public class PrNodeEdgesTests
     [Fact]
     public void Describe_rejected_quotes_the_review_that_asked_for_changes()
     {
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnRejected, Snapshot(
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnRejected, Snapshot(
             changesRequested: true,
             conversation: new[]
             {
@@ -148,7 +149,7 @@ public class PrNodeEdgesTests
     [Fact]
     public void Describe_prefers_the_callers_own_detail_over_the_snapshot()
     {
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnRejected, Snapshot(
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnRejected, Snapshot(
                 conversation: new[]
                 {
                     new RemotePrConversationEntry("review", "alice", "stale snapshot text", DateTime.UtcNow, "CHANGES_REQUESTED"),
@@ -162,7 +163,7 @@ public class PrNodeEdgesTests
     [Fact]
     public void Describe_caps_a_huge_reason()
     {
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnCiFailed, Snapshot(
             ci: RemotePrCiStatus.Failed,
             failedChecks: Enumerable.Range(0, 200)
                 .Select(i => new RemotePrCheck($"check-{i}", "failure", null, new string('x', 900), null))
@@ -179,7 +180,7 @@ public class PrNodeEdgesTests
     {
         // CI output carries emoji; half a pair is an unpaired surrogate that
         // survives to the agent's prompt as a replacement character.
-        var reason = PrNodeEdges.Describe(PrNodeEdges.OnCiFailed, Snapshot(
+        var reason = PrNodeEdges.Describe(LoopOutputs.OnCiFailed, Snapshot(
             ci: RemotePrCiStatus.Failed,
             failedChecks: new[]
             {

@@ -161,7 +161,7 @@ public sealed class ChatService : IChatService
         // (a null/empty document clears it). The agent reads it back through the
         // get_current_loop tool — only the "loop editor is open" flag below enters
         // the model context unprompted.
-        _loopScratchpad.Set(chatSessionId, openLoopDocument);
+        _loopScratchpad.Set(chatSessionId, openLoopDocument is null ? null : LoopDocumentUpgrader.Upgrade(openLoopDocument));
 
         var nextSeq = await NextSequenceAsync(chatSessionId, ct);
 
@@ -417,11 +417,13 @@ public sealed class ChatService : IChatService
     /// </summary>
     private const string LoopEditorBrief =
         "The user has a loop open in the Loop Editor. Call get_current_loop to read it as the "
-        + "ild-loop-template/v1 document. To EDIT it, prefer the targeted tools — they change only "
+        + "ild-loop-template/v2 document, in which every node declares its outputs once in "
+        + "config.outputs. To EDIT it, prefer the targeted tools — they change only "
         + "what you name (never corrupting an unrelated node) and each returns a synchronous ack "
         + "{ applied, matchCount, validationErrors }: use get_loop_node + edit_loop_node_field for a "
         + "prompt/config tweak (plain-text find-and-replace, the server handles JSON escaping; "
-        + "old_string must match exactly once), set_loop_node_field to overwrite a whole field, and "
+        + "old_string must match exactly once), set_loop_node_field to overwrite a whole field "
+        + "(outputs, matchRules, cases and toolAllowlist take a JSON array), and "
         + "edit_loop_file for structural nudges (edges, ids). update_current_loop (full replacement) "
         + "is a last resort. Every edit applies to the live canvas immediately but is transient — only "
         + "the human can save. The authoring guide below is sent once for this session; call "
@@ -437,8 +439,8 @@ public sealed class ChatService : IChatService
     private const string LoopEditorReminder =
         "The user has a loop open in the Loop Editor. Read it with get_current_loop and change it "
         + "with the targeted loop tools; edits reach the live canvas immediately but are transient — "
-        + "only the human can save. Call get_loop_authoring_guide for the loop model, the field "
-        + "semantics and the save-time graph rules.";
+        + "only the human can save. Call get_loop_authoring_guide for the loop model (ild-loop-template/v2, "
+        + "with outputs declared in config.outputs), the field semantics and the save-time graph rules.";
 
     /// <summary>
     /// The decided edit proposals this chat made and has not been told about.

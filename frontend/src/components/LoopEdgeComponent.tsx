@@ -17,7 +17,7 @@ const SMOOTHSTEP_OFFSET = 20;
 
 /**
  * Renders a loop edge. Every edge — lone or one of several sharing the same
- * source/target route (e.g. several PR custom edges into one node) — draws the
+ * source/target route (e.g. the edges of several PR outputs into one node) — draws the
  * same smooth-step path, so each connects cleanly at its handles. Siblings are
  * told apart by staggering their labels vertically rather than pulling the lines
  * onto distant lanes. The label is itself the click target — selecting it picks

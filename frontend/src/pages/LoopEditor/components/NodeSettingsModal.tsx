@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Node } from "@xyflow/react";
 import PromptEditor from "../../../components/PromptEditor";
 import {
@@ -7,10 +7,20 @@ import {
   type AiProvider,
   type AiToolDefinition,
   type ConditionCase,
+  type NodeOutput,
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
 import { resolveProviderForTag } from "../../../utils/providerTags";
-import { PR_RESERVED_EDGE_NAMES } from "../../../utils/edgeUtils";
+import ConfirmModal from "../../../components/ConfirmModal";
+import {
+  isReferenced,
+  outputReferences,
+  hasSettingsProblems,
+  nodeSettingsProblems,
+  type OutputReferences,
+  type OutputRow,
+  type WiredOutput,
+} from "../../../utils/nodeOutputs";
 import type { SessionPlaceholderUsage } from "../types";
 
 interface NodeSettingsModalProps {
@@ -22,7 +32,11 @@ interface NodeSettingsModalProps {
   aiProviderTag: string;
   aiTools: string[];
   aiMatchRules: AiMatchRule[];
-  customEdgeNames: string[];
+  outputRows: OutputRow[];
+  /** The fixed named outputs of the node's type (a PR node's reserved ones). */
+  fixedOutputs: NodeOutput[];
+  /** The Custom edges wired from the node, which deleting their output removes. */
+  wiredOutputs: WiredOutput[];
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   aiForkFromPlaceholder: string;
@@ -50,7 +64,7 @@ interface NodeSettingsModalProps {
   onAiProviderTagChange: (value: string) => void;
   onAiToolsChange: (value: string[]) => void;
   onAiMatchRulesChange: (value: AiMatchRule[]) => void;
-  onCustomEdgeNamesChange: (value: string[]) => void;
+  onOutputRowsChange: (value: OutputRow[]) => void;
   onAiUseSessionChange: (value: boolean) => void;
   onAiSessionPlaceholderChange: (value: string) => void;
   onAiForkFromPlaceholderChange: (value: string) => void;
@@ -76,62 +90,97 @@ function ConfigSection({ title, children }: { title: string; children: ReactNode
   );
 }
 
-/** Repeatable list of custom edge names, rendered for Human and PR nodes. */
-function CustomEdgesEditor({
-  names,
+/**
+ * A node's named outputs, rendered for Human, AI, PR and Condition nodes. Each
+ * row edits one output object, so fields the editor does not show are kept.
+ * Reserved outputs — the declared ones and the fixed ones of the node's type
+ * the config does not list yet — are shown read-only and cannot be removed. A
+ * row with a blank or taken name shows why, and the settings cannot be saved
+ * until it is fixed.
+ */
+function OutputsEditor({
+  rows,
+  fixed,
+  nodeType,
+  problems,
   onChange,
-  reserved,
+  onRemove,
 }: {
-  names: string[];
-  onChange: (value: string[]) => void;
-  reserved?: readonly string[];
+  rows: OutputRow[];
+  fixed: NodeOutput[];
+  nodeType: NodeType;
+  problems: (string | null)[];
+  onChange: (value: OutputRow[]) => void;
+  onRemove: (row: OutputRow) => void;
 }) {
-  const missingReserved = (reserved ?? []).filter((r) => !names.includes(r));
+  const isReserved = (row: OutputRow) =>
+    (nodeType === NodeType.PR && row.output.reserved === true) ||
+    fixed.some((output) => output.reserved === true && output.name === row.originalName);
+  const undeclaredFixed = fixed.filter(
+    (output) => !rows.some((row) => row.originalName === output.name),
+  );
   return (
     <div className="config-field">
-      <label>Custom Edges</label>
+      <label>Outputs</label>
       <small className="config-help-text">
-        Named outlets shown as buttons when this node waits for a human. Define them here, then
+        The named outlets this node can take besides success and failure. Declare them here, then
         connect each from the node's top handle.
       </small>
-      {reserved && reserved.length > 0 && (
-        <div className="pr-reserved-edges">
-          {missingReserved.map((name) => (
-            <button
-              key={name}
-              type="button"
-              className="match-rule-add"
-              aria-label={`Add reserved edge ${name}`}
-              onClick={() => onChange([...names, name])}
-            >
-              + {name}
-            </button>
-          ))}
-        </div>
-      )}
-      {names.map((name, index) => (
-        <div key={index} className="match-rule-row">
+      {rows.map((row, index) => {
+        const reserved = isReserved(row);
+        const problem = problems[index];
+        return (
+          <div key={index}>
+            <div className="match-rule-row">
+              <input
+                type="text"
+                aria-label={`Output ${index + 1}`}
+                aria-invalid={problem !== null}
+                className={problem ? "input-error" : ""}
+                value={row.output.name}
+                readOnly={reserved}
+                onChange={(event) =>
+                  onChange(
+                    rows.map((existing, i) =>
+                      i === index
+                        ? { ...existing, output: { ...existing.output, name: event.target.value } }
+                        : existing,
+                    ),
+                  )
+                }
+                placeholder="Output name"
+              />
+              {!reserved && (
+                <button
+                  type="button"
+                  className="match-rule-remove"
+                  aria-label={`Remove output ${index + 1}`}
+                  onClick={() => onRemove(row)}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            {problem && <div className="validation-error">{problem}</div>}
+          </div>
+        );
+      })}
+      {undeclaredFixed.map((output) => (
+        <div key={output.name} className="match-rule-row">
           <input
             type="text"
-            aria-label={`Custom edge name ${index + 1}`}
-            value={name}
-            onChange={(event) =>
-              onChange(names.map((existing, i) => (i === index ? event.target.value : existing)))
-            }
-            placeholder="Edge name"
+            aria-label={`Reserved output ${output.name}`}
+            value={output.name}
+            readOnly
           />
-          <button
-            type="button"
-            className="match-rule-remove"
-            aria-label={`Remove custom edge ${index + 1}`}
-            onClick={() => onChange(names.filter((_, i) => i !== index))}
-          >
-            ×
-          </button>
         </div>
       ))}
-      <button type="button" className="match-rule-add" onClick={() => onChange([...names, ""])}>
-        + Add edge
+      <button
+        type="button"
+        className="match-rule-add"
+        onClick={() => onChange([...rows, { output: { name: "" }, originalName: null }])}
+      >
+        + Add output
       </button>
     </div>
   );
@@ -148,14 +197,16 @@ const EMPTY_CONDITION_CASE: ConditionCase = {
 
 /**
  * Ordered switch cases for a Condition node. Each case picks a predicate
- * (variant) and the custom edge to route to when it holds; the first matching
+ * (variant) and the output to route to when it holds; the first matching
  * case wins. Mirrors the AI node's Match Rules editor.
  */
 function ConditionCasesEditor({
   cases,
+  problems,
   onChange,
 }: {
   cases: ConditionCase[];
+  problems: (string | null)[];
   onChange: (value: ConditionCase[]) => void;
 }) {
   const update = (index: number, patch: Partial<ConditionCase>) =>
@@ -165,8 +216,8 @@ function ConditionCasesEditor({
     <div className="config-field">
       <label>Cases</label>
       <small className="config-help-text">
-        Each case is evaluated in order; the first whose predicate holds routes to its named custom
-        edge. If none match, the default edge is taken.
+        Each case is evaluated in order; the first whose predicate holds routes to the output it
+        names. If none match, the default output is taken.
       </small>
       {cases.map((c, index) => (
         <div key={index} className="condition-case-row">
@@ -182,10 +233,12 @@ function ConditionCasesEditor({
             </select>
             <input
               type="text"
-              aria-label={`Case edge name ${index + 1}`}
+              aria-label={`Case ${index + 1} output`}
+              aria-invalid={problems[index] != null}
+              className={problems[index] ? "input-error" : ""}
               value={c.edgeName}
               onChange={(event) => update(index, { edgeName: event.target.value })}
-              placeholder="Edge name"
+              placeholder="Output name"
             />
             <button
               type="button"
@@ -196,6 +249,7 @@ function ConditionCasesEditor({
               ×
             </button>
           </div>
+          {problems[index] && <div className="validation-error">{problems[index]}</div>}
           {c.variant === "TextMatches" && (
             <>
               <PromptEditor
@@ -292,7 +346,9 @@ export function NodeSettingsModal({
   aiProviderTag,
   aiTools,
   aiMatchRules,
-  customEdgeNames,
+  outputRows,
+  fixedOutputs,
+  wiredOutputs,
   aiUseSession,
   aiSessionPlaceholder,
   aiForkFromPlaceholder,
@@ -320,7 +376,7 @@ export function NodeSettingsModal({
   onAiProviderTagChange,
   onAiToolsChange,
   onAiMatchRulesChange,
-  onCustomEdgeNamesChange,
+  onOutputRowsChange,
   onAiUseSessionChange,
   onAiSessionPlaceholderChange,
   onAiForkFromPlaceholderChange,
@@ -336,6 +392,63 @@ export function NodeSettingsModal({
   onConditionOutputChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
+  const problems = nodeSettingsProblems(selectedNodeType, {
+    rows: outputRows,
+    fixed: fixedOutputs,
+    matchRules: aiMatchRules,
+    cases: conditionCases,
+    defaultEdge: conditionDefaultEdge,
+  });
+  const [pendingDelete, setPendingDelete] = useState<OutputRow | null>(null);
+
+  const referencesOf = (row: OutputRow): OutputReferences =>
+    outputReferences(row, outputRows, {
+      wired: wiredOutputs,
+      matchRules: selectedNodeType === NodeType.AI ? aiMatchRules : [],
+      cases: selectedNodeType === NodeType.Condition ? conditionCases : [],
+      defaultEdge: selectedNodeType === NodeType.Condition ? conditionDefaultEdge : null,
+    });
+
+  // Deleting an output takes everything that uses it along: the rules and
+  // cases routing to it here, its Custom edges when the settings are saved,
+  // and the default edge, which is left blank for the author to choose again.
+  const deleteOutput = (row: OutputRow) => {
+    const references = referencesOf(row);
+    onOutputRowsChange(outputRows.filter((existing) => existing !== row));
+    if (references.matchRules.length > 0)
+      onAiMatchRulesChange(aiMatchRules.filter((_, i) => !references.matchRules.includes(i)));
+    if (references.cases.length > 0)
+      onConditionCasesChange(conditionCases.filter((_, i) => !references.cases.includes(i)));
+    if (references.defaultEdge) onConditionDefaultEdgeChange("");
+  };
+
+  const requestDelete = (row: OutputRow) => {
+    if (isReferenced(referencesOf(row))) setPendingDelete(row);
+    else deleteOutput(row);
+  };
+
+  const pendingReferences = pendingDelete ? referencesOf(pendingDelete) : null;
+  const pendingItems = pendingReferences
+    ? [
+        ...pendingReferences.wired.map((edge) => `The edge to ${edge.targetLabel}`),
+        ...pendingReferences.matchRules.map(
+          (i) => `Match rule ${i + 1} (${aiMatchRules[i].pattern || "no pattern"})`,
+        ),
+        ...pendingReferences.cases.map((i) => `Case ${i + 1} (${conditionCases[i].variant})`),
+        ...(pendingReferences.defaultEdge ? ["The default output (you will pick a new one)"] : []),
+      ]
+    : [];
+
+  const outputsEditor = (
+    <OutputsEditor
+      rows={outputRows}
+      fixed={fixedOutputs}
+      nodeType={selectedNodeType}
+      problems={problems.outputs}
+      onChange={onOutputRowsChange}
+      onRemove={requestDelete}
+    />
+  );
 
   return (
     <div
@@ -442,53 +555,63 @@ export function NodeSettingsModal({
               </ConfigSection>
 
               <ConfigSection title="Routing">
+                {outputsEditor}
                 <div className="config-field">
                   <label>Match Rules</label>
                   <small className="config-help-text">
                     Each rule's pattern is matched case-insensitively against the AI output. The
-                    rule matching latest in the output routes to its named custom edge; no match
-                    takes the success edge.
+                    rule matching latest in the output routes to the output it names; no match takes
+                    the success edge. A name not yet in Outputs is added on save.
                   </small>
                   {aiMatchRules.map((rule, index) => (
-                    <div key={index} className="match-rule-row">
-                      <input
-                        type="text"
-                        aria-label={`Match pattern ${index + 1}`}
-                        value={rule.pattern}
-                        onChange={(event) =>
-                          onAiMatchRulesChange(
-                            aiMatchRules.map((existing, i) =>
-                              i === index ? { ...existing, pattern: event.target.value } : existing,
-                            ),
-                          )
-                        }
-                        placeholder="Match pattern (regex)"
-                      />
-                      <input
-                        type="text"
-                        aria-label={`Edge name ${index + 1}`}
-                        value={rule.edgeName}
-                        onChange={(event) =>
-                          onAiMatchRulesChange(
-                            aiMatchRules.map((existing, i) =>
-                              i === index
-                                ? { ...existing, edgeName: event.target.value }
-                                : existing,
-                            ),
-                          )
-                        }
-                        placeholder="Edge name"
-                      />
-                      <button
-                        type="button"
-                        className="match-rule-remove"
-                        aria-label={`Remove rule ${index + 1}`}
-                        onClick={() =>
-                          onAiMatchRulesChange(aiMatchRules.filter((_, i) => i !== index))
-                        }
-                      >
-                        ×
-                      </button>
+                    <div key={index}>
+                      <div className="match-rule-row">
+                        <input
+                          type="text"
+                          aria-label={`Match pattern ${index + 1}`}
+                          value={rule.pattern}
+                          onChange={(event) =>
+                            onAiMatchRulesChange(
+                              aiMatchRules.map((existing, i) =>
+                                i === index
+                                  ? { ...existing, pattern: event.target.value }
+                                  : existing,
+                              ),
+                            )
+                          }
+                          placeholder="Match pattern (regex)"
+                        />
+                        <input
+                          type="text"
+                          aria-label={`Output name ${index + 1}`}
+                          aria-invalid={problems.matchRules[index] != null}
+                          className={problems.matchRules[index] ? "input-error" : ""}
+                          value={rule.edgeName}
+                          onChange={(event) =>
+                            onAiMatchRulesChange(
+                              aiMatchRules.map((existing, i) =>
+                                i === index
+                                  ? { ...existing, edgeName: event.target.value }
+                                  : existing,
+                              ),
+                            )
+                          }
+                          placeholder="Output name"
+                        />
+                        <button
+                          type="button"
+                          className="match-rule-remove"
+                          aria-label={`Remove rule ${index + 1}`}
+                          onClick={() =>
+                            onAiMatchRulesChange(aiMatchRules.filter((_, i) => i !== index))
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                      {problems.matchRules[index] && (
+                        <div className="validation-error">{problems.matchRules[index]}</div>
+                      )}
                     </div>
                   ))}
                   <button
@@ -546,7 +669,7 @@ export function NodeSettingsModal({
                   onChange={onHumanPromptChange}
                 />
               </div>
-              <CustomEdgesEditor names={customEdgeNames} onChange={onCustomEdgeNamesChange} />
+              {outputsEditor}
             </>
           )}
 
@@ -591,42 +714,48 @@ export function NodeSettingsModal({
                 </small>
               </div>
               <small className="config-help-text">
-                The PR heartbeat fires these reserved edges on PR state changes (in priority order):
-                on_rejected, on_merge_conflict, on_ci_failed, on_comment, on_approved, on_ci_passed,
-                on_merged, on_abandoned. Only wired edges route; there is no fallback to
-                on_success/on_failure, so wire <strong>on_merged</strong> and{" "}
+                The PR heartbeat fires the reserved outputs listed below on PR state changes; they
+                are always present and cannot be renamed or removed. Only wired outputs route; there
+                is no fallback to success/failure, so wire <strong>on_merged</strong> and{" "}
                 <strong>on_abandoned</strong> to a Cleanup path or the run parks forever once the PR
                 closes. <strong>on_comment</strong> carries review and comment items the run has not
                 been handed yet — while a review has changes requested, on_rejected outranks it
                 every tick, and that round reads the comments with the get_pr_review tool instead.
               </small>
-              <CustomEdgesEditor
-                names={customEdgeNames}
-                onChange={onCustomEdgeNamesChange}
-                reserved={PR_RESERVED_EDGE_NAMES}
-              />
+              {outputsEditor}
             </>
           )}
 
           {selectedNodeType === NodeType.Condition && (
             <>
               <small className="config-help-text">
-                A switch: each case routes to a named custom edge when its predicate holds, and the
-                default edge is taken when none match. No AI, command, or worktree access. Wire each
-                edge from the node's top handle.
+                A switch: each case routes to one of the node's outputs when its predicate holds,
+                and the default output is taken when none match. No AI, command, or worktree access.
+                Wire each output from the node's top handle.
               </small>
 
-              <ConditionCasesEditor cases={conditionCases} onChange={onConditionCasesChange} />
+              {outputsEditor}
+
+              <ConditionCasesEditor
+                cases={conditionCases}
+                problems={problems.cases}
+                onChange={onConditionCasesChange}
+              />
 
               <div className="config-field">
-                <label htmlFor="condition-default-edge">Default edge</label>
+                <label htmlFor="condition-default-edge">Default output</label>
                 <input
                   id="condition-default-edge"
                   type="text"
+                  className={problems.defaultEdge ? "input-error" : ""}
+                  aria-invalid={problems.defaultEdge !== null}
                   value={conditionDefaultEdge}
                   onChange={(event) => onConditionDefaultEdgeChange(event.target.value)}
-                  placeholder="Edge name"
+                  placeholder="Output name"
                 />
+                {problems.defaultEdge && (
+                  <div className="validation-error">{problems.defaultEdge}</div>
+                )}
                 <small className="config-help-text">
                   Taken when no case matches. Connect it from the node's top handle.
                 </small>
@@ -655,11 +784,27 @@ export function NodeSettingsModal({
             <button className="node-settings-btn-cancel" onClick={onClose}>
               Cancel
             </button>
-            <button className="node-settings-btn-save" onClick={onSave}>
+            <button
+              className="node-settings-btn-save"
+              onClick={onSave}
+              aria-disabled={hasSettingsProblems(problems)}
+            >
               Save
             </button>
           </div>
         </div>
+        <ConfirmModal
+          isOpen={pendingDelete !== null}
+          title="Delete output"
+          message={`Deleting the output '${pendingDelete?.output.name.trim() ?? ""}' also removes:`}
+          items={pendingItems}
+          confirmText="Delete output"
+          onConfirm={() => {
+            if (pendingDelete) deleteOutput(pendingDelete);
+            setPendingDelete(null);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
       </div>
     </div>
   );

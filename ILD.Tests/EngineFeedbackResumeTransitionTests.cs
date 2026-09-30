@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -33,14 +34,14 @@ public class EngineFeedbackResumeTransitionTests
         using var h = new LoopEngineHarness();
         h.AddNode("pr", NodeType.PR);
         h.AddNode("coder", NodeType.Cmd);
-        h.AddEdge("pr", "coder", EdgeType.Custom, PrNodeEdges.OnCiFailed);
+        h.AddEdge("pr", "coder", EdgeType.Custom, LoopOutputs.OnCiFailed);
 
         var prExec = new ScriptedExecutor(NodeType.PR,
             new NodeOutcome.NodeStarting("open pr"),
             new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, "prompt"));
         prExec.Then(
             new NodeOutcome.NodeStarting("re-entry"),
-            new NodeOutcome.Success(EdgeType.Custom, "ci-failed", PrNodeEdges.OnCiFailed));
+            new NodeOutcome.Success(EdgeType.Custom, "ci-failed", LoopOutputs.OnCiFailed));
         h.Registry.Register(prExec);
         h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
             new NodeOutcome.NodeStarting("coder"),

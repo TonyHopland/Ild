@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
@@ -42,7 +43,7 @@ public class PrSyncServiceTests
         loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
         loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
         loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, PrNodeEdges.OnMerged) });
+            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, LoopOutputs.OnMerged) });
 
         var events = new Mock<IEventLogStore>();
         var workItems = new Mock<IWorkItemManager>();
@@ -54,7 +55,7 @@ public class PrSyncServiceTests
 
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
         engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id,
-            It.Is<NodeSignal>(signal => signal.EdgeName == PrNodeEdges.OnMerged)), Times.Once);
+            It.Is<NodeSignal>(signal => signal.EdgeName == LoopOutputs.OnMerged)), Times.Once);
     }
 
     [Fact]
@@ -175,7 +176,7 @@ public class PrSyncServiceTests
         loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
         loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
         loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, PrNodeEdges.OnRejected) });
+            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, LoopOutputs.OnRejected) });
 
         var events = new Mock<IEventLogStore>();
         var workItems = new Mock<IWorkItemManager>();
@@ -187,7 +188,7 @@ public class PrSyncServiceTests
 
         events.Verify(s => s.AppendAsync(It.Is<EventLog>(e => e.Data == "needs work")), Times.Once);
         engine.Verify(s => s.SignalNodeResultAsync(run.Id, runNode.Id,
-            It.Is<NodeSignal>(signal => signal.EdgeName == PrNodeEdges.OnRejected)), Times.Once);
+            It.Is<NodeSignal>(signal => signal.EdgeName == LoopOutputs.OnRejected)), Times.Once);
     }
 
     [Fact]
@@ -219,7 +220,7 @@ public class PrSyncServiceTests
         loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
         loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
         loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, PrNodeEdges.OnRejected) });
+            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, LoopOutputs.OnRejected) });
 
         var engine = new Mock<ILoopEngine>();
         var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogStore>().Object,
@@ -257,7 +258,7 @@ public class PrSyncServiceTests
         loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
         loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
         loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, PrNodeEdges.OnAbandoned) });
+            .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, LoopOutputs.OnAbandoned) });
 
         var engine = new Mock<ILoopEngine>();
         var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogStore>().Object,

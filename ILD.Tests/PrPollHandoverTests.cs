@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
@@ -93,7 +94,7 @@ public class PrPollHandoverTests
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
-                .ReturnsAsync((wiredEdges.Length == 0 ? new[] { PrNodeEdges.OnComment } : wiredEdges)
+                .ReturnsAsync((wiredEdges.Length == 0 ? new[] { LoopOutputs.OnComment } : wiredEdges)
                     .Select(name => new LoopNodeEdge
                     {
                         Id = Guid.NewGuid(),
@@ -168,12 +169,12 @@ public class PrPollHandoverTests
         var incoming = Inline("10", NewFinding);
         var h = new Harness(
             Fetched(incoming), carried: Holding(), row: Holding(incoming),
-            approved: true, PrNodeEdges.OnComment, PrNodeEdges.OnApproved);
+            approved: true, LoopOutputs.OnComment, LoopOutputs.OnApproved);
 
         await h.PollAsync();
 
         Assert.NotNull(h.Fired);
-        Assert.Equal(PrNodeEdges.OnApproved, h.Fired!.EdgeName);
+        Assert.Equal(LoopOutputs.OnApproved, h.Fired!.EdgeName);
     }
 
     [Fact]
@@ -184,7 +185,7 @@ public class PrPollHandoverTests
         var incoming = Inline("10", NewFinding);
         var h = new Harness(
             Fetched(incoming), carried: Holding(), row: Holding(incoming),
-            approved: true, PrNodeEdges.OnComment);
+            approved: true, LoopOutputs.OnComment);
 
         await h.PollAsync();
 
@@ -221,7 +222,7 @@ public class PrPollHandoverTests
         await h.PollAsync();
 
         Assert.NotNull(h.Fired);
-        Assert.Equal(PrNodeEdges.OnComment, h.Fired!.EdgeName);
+        Assert.Equal(LoopOutputs.OnComment, h.Fired!.EdgeName);
         Assert.Contains(NewFinding, h.Fired.Output, StringComparison.Ordinal);
         Assert.Contains(PrCommentLedger.KeyFor("review", "10"),
             PrCommentLedgerJson.TryParse(h.Row)!.DeliveredIds);

@@ -8,7 +8,7 @@ namespace ILD.Data.DTOs;
 public class AgentLoopUpdateRequest
 {
     /// <summary>
-    /// A complete <c>ild-loop-template/v1</c> document (full replacement, not a
+    /// A complete <c>ild-loop-template/v2</c> document (full replacement, not a
     /// patch). The server forwards it verbatim to the open Loop Editor, which
     /// validates and direct-applies it to the live canvas.
     /// </summary>

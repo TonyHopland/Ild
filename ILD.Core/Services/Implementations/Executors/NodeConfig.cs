@@ -36,7 +36,7 @@ internal static class NodeConfig
 
     /// <summary>
     /// One AI output-matching rule: if <see cref="Pattern"/> (a case-insensitive
-    /// regex) matches the AI output, route to the custom edge named
+    /// regex) matches the AI output, route to the output named
     /// <see cref="EdgeName"/>. When several rules match, the one matching latest
     /// in the output wins (configured order only breaks ties).
     ///
@@ -61,8 +61,8 @@ internal static class NodeConfig
         public string[]? ToolAllowlist { get; init; }
 
         /// <summary>
-        /// Output-match rules routing to named custom edges. The rule whose last
-        /// occurrence appears furthest into the output routes to its named edge
+        /// Output-match rules routing to named outputs. The rule whose last
+        /// occurrence appears furthest into the output routes to its output
         /// — an agent's closing verdict beats anything it mentioned earlier; no
         /// match takes the default OnSuccess edge.
         /// </summary>
@@ -101,7 +101,7 @@ internal static class NodeConfig
 
     /// <summary>
     /// One case of a Condition switch: a predicate that, when it holds, routes
-    /// the node to the custom edge named <see cref="EdgeName"/>. Cases are
+    /// the node to the output named <see cref="EdgeName"/>. Cases are
     /// evaluated in order and the first match wins; if none match the node takes
     /// the switch's default edge. The predicate is picked by <see cref="Variant"/>
     /// exactly as the legacy single-predicate Condition did.
@@ -120,13 +120,13 @@ internal static class NodeConfig
         /// <summary>HasTag: the work-item tag tested by case-insensitive whole-string equality.</summary>
         public string? Tag { get; init; }
 
-        /// <summary>The custom edge this case routes to when its predicate holds.</summary>
+        /// <summary>The output this case routes to when its predicate holds.</summary>
         public string? EdgeName { get; init; }
     }
 
     /// <summary>
     /// A Condition node is a switch: an ordered list of <see cref="Cases"/> each
-    /// routing to a named custom edge, plus a <see cref="DefaultEdge"/> taken
+    /// routing to a named output, plus a <see cref="DefaultEdge"/> taken
     /// when no case matches. It never invokes AI, runs a command, or touches the
     /// worktree. Pre-switch true/false conditions are upgraded to this shape by
     /// the one-time <c>ConditionSwitchMigrator</c> at startup; nothing reads the
@@ -137,7 +137,7 @@ internal static class NodeConfig
         /// <summary>Ordered switch cases; the first whose predicate holds wins.</summary>
         public List<ConditionCase>? Cases { get; init; }
 
-        /// <summary>The custom edge taken when no case matches.</summary>
+        /// <summary>The output taken when no case matches.</summary>
         public string? DefaultEdge { get; init; }
 
         /// <summary>

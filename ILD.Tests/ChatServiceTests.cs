@@ -434,7 +434,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
-        const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"My Loop\",\"nodes\":[]}";
+        const string document = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"My Loop\",\"nodes\":[]}";
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "tidy this loop", openWorkItemId: null, document, CancellationToken.None);
 
         // The flag enters the model context, the heavy JSON does not (it is pulled
@@ -452,6 +452,28 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteTurnAsync_stashes_a_v1_loop_document_upgraded_to_v2()
+    {
+        var provider = await SeedProviderAsync();
+        var adapter = new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok")));
+        var svc = NewService(adapter);
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        // An editor tab opened before the upgrade still sends the old format.
+        const string legacy =
+            "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"Old\",\"nodes\":[" +
+            "{\"id\":\"review\",\"type\":\"Human\",\"label\":\"Review\",\"config\":{\"customEdges\":[\"Respond\"]}}]," +
+            "\"edges\":[{\"id\":\"e1\",\"sourceNodeId\":\"review\",\"targetNodeId\":\"done\",\"edgeType\":\"Custom\",\"name\":\"Respond\"}]}";
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "tidy this loop", openWorkItemId: null, legacy, CancellationToken.None);
+
+        var stashed = System.Text.Json.Nodes.JsonNode.Parse(_loopScratchpad.Get(started.Id)!)!;
+        Assert.Equal("ild-loop-template/v2", (string)stashed["$schema"]!);
+        var review = stashed["nodes"]![0]!["config"]!.AsObject();
+        Assert.False(review.ContainsKey("customEdges"));
+        Assert.Contains(review["outputs"]!.AsArray(), o => (string)o!["name"]! == "Respond");
+    }
+
+    [Fact]
     public async Task ExecuteTurnAsync_includes_node_variable_and_session_guidance_when_a_loop_is_open()
     {
         var provider = await SeedProviderAsync();
@@ -459,7 +481,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
-        const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"L\",\"nodes\":[]}";
+        const string document = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"L\",\"nodes\":[]}";
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "help me wire this up", openWorkItemId: null, document, CancellationToken.None);
 
         // The Chat Context teaches the agent the loop model so it can author a valid
@@ -529,7 +551,7 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
-        const string document = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"L\",\"nodes\":[]}";
+        const string document = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"L\",\"nodes\":[]}";
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "how do loop variables work?", openWorkItemId: null, document, CancellationToken.None);
 
         var sent = cli.CapturedPrompt;
@@ -593,8 +615,8 @@ public sealed class ChatServiceTests : IDisposable
         var svc = NewService(adapter);
         var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
 
-        const string first = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"v1\",\"nodes\":[]}";
-        const string second = "{\"$schema\":\"ild-loop-template/v1\",\"name\":\"v2\",\"nodes\":[]}";
+        const string first = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"v1\",\"nodes\":[]}";
+        const string second = "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"v2\",\"nodes\":[]}";
 
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "first", openWorkItemId: null, first, CancellationToken.None);
         Assert.Equal(first, _loopScratchpad.Get(started.Id));

@@ -34,7 +34,7 @@ public interface IChatNotifier
     Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted);
 
     /// <summary>
-    /// Push a full <c>ild-loop-template/v1</c> document to the open Loop Editor so
+    /// Push a full <c>ild-loop-template/v2</c> document to the open Loop Editor so
     /// it can validate and direct-apply it to the live canvas (loop editor context,
     /// ADR-0011). Fire-and-forget: the agent gets no structured ack — a rejected
     /// document is discovered only by re-reading the loop on a later turn.

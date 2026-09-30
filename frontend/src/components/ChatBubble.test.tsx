@@ -242,7 +242,7 @@ describe("ChatBubble", () => {
     {
       name: "sends the open Loop Editor's live document with the message",
       path: "/",
-      liveLoop: { $schema: "ild-loop-template/v1", name: "My Loop", nodes: [], edges: [] },
+      liveLoop: { $schema: "ild-loop-template/v2", name: "My Loop", nodes: [], edges: [] },
       text: "edit the loop",
       workItemId: null,
     },

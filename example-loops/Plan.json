@@ -1,5 +1,5 @@
 {
-  "$schema": "ild-loop-template/v1",
+  "$schema": "ild-loop-template/v2",
   "name": "Plan",
   "description": "Interactive planning loop: an AI interviewer stress-tests your plan one question at a time against the existing domain model and codebase, sharpening terminology and capturing decisions in CONTEXT.md and ADRs as they crystallise. Each human answer feeds back into the same session; at any point you can have the same session break the refined plan into ILD work items. Self-contained — the grilling methodology is embedded in the prompts and assumes nothing about the target repository.",
   "recoveryPolicy": "AutoResume",
@@ -14,7 +14,11 @@
           "y": 128
         },
         "createWorktree": true,
-        "runInstall": false
+        "runInstall": false,
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -26,7 +30,11 @@
         "__pos": {
           "x": -468,
           "y": 128
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -42,7 +50,11 @@
         "__pos": {
           "x": -270,
           "y": 128
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -56,7 +68,13 @@
           "x": -70,
           "y": 128
         },
-        "customEdges": ["Respond", "Create work items", "Complete"]
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" },
+          { "name": "Respond" },
+          { "name": "Create work items" },
+          { "name": "Complete" }
+        ]
       }
     },
     {
@@ -68,7 +86,11 @@
         "__pos": {
           "x": -270,
           "y": 320
-        }
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
       }
     },
     {
@@ -79,7 +101,8 @@
         "__pos": {
           "x": 150,
           "y": 128
-        }
+        },
+        "outputs": []
       }
     }
   ],

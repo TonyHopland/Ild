@@ -2,6 +2,8 @@ using ILD.Api.Configuration;
 using ILD.Core.Services.Implementations;
 using ILD.Data.Enums;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using ILD.Data;
 
 namespace ILD.Tests;
 
@@ -91,6 +93,32 @@ public class TemplateSeederTests
         var secondCount = (await db.LoopTemplates.GetAllAsync()).Count();
 
         Assert.Equal(firstCount, secondCount);
+    }
+
+    [Theory]
+    [InlineData("DevTeam.json")]
+    [InlineData("Development.json")]
+    [InlineData("Plan.json")]
+    [InlineData("Q&A.json")]
+    public void Example_loop_is_a_v2_document_the_upgrader_has_nothing_left_to_add_to(string file)
+    {
+        // The example loops are the seed templates: a name they route by but do not
+        // declare would be refused at seed time or lost from the editor.
+        var original = JsonNode.Parse(RepositoryFiles.ReadAllText(Path.Combine("example-loops", file)))!.AsObject();
+        Assert.Equal("ild-loop-template/v2", (string)original["$schema"]!);
+
+        var asV1 = original.DeepClone().AsObject();
+        asV1["$schema"] = "ild-loop-template/v1";
+        var reupgraded = JsonNode.Parse(LoopDocumentUpgrader.Upgrade(asV1.ToJsonString()))!.AsObject();
+
+        foreach (var node in original["nodes"]!.AsArray())
+        {
+            var config = node!["config"]!.AsObject();
+            Assert.False(config.ContainsKey("customEdges"), $"{file}: node '{node["label"]}' still sets customEdges");
+            var again = reupgraded["nodes"]!.AsArray().Single(n => (string)n!["id"]! == (string)node["id"]!)!["config"];
+            Assert.True(JsonNode.DeepEquals(config, again),
+                $"{file}: node '{node["label"]}' is missing outputs: {config.ToJsonString()} vs {again!.ToJsonString()}");
+        }
     }
 
     private static bool ReadBool(Dictionary<string, object> config, string key)

@@ -12,10 +12,10 @@ public sealed record NodeSignal(ExternalActionResultType Type, string? Output = 
     public static NodeSignal Success(string? output = null) => new(ExternalActionResultType.Success, output);
     public static NodeSignal Reject(string error, string? output = null) => new(ExternalActionResultType.Reject, output, error);
 
-    /// <summary>Route to a node's named custom edge (e.g. a Human node button).</summary>
+    /// <summary>Route to one of a node's named outputs (e.g. a Human node button).</summary>
     public static NodeSignal Custom(string edgeName, string? output = null) => new(ExternalActionResultType.Success, output, EdgeName: edgeName);
 
-    /// <summary>Back-compat alias: the historical "respond" outlet is the custom edge named "Respond".</summary>
+    /// <summary>Back-compat alias: the historical "respond" outlet is the output named "Respond".</summary>
     public static NodeSignal Respond(string? output = null) => Custom("Respond", output);
 }
 

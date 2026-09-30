@@ -54,7 +54,7 @@ public class AgentController : ControllerBase
     private const string RunIdHeader = "X-ILD-Run-Id";
     private const string ChatSessionIdHeader = "X-ILD-Chat-Session-Id";
 
-    // Upper bound on a pushed loop document (~1 MB). A real ild-loop-template/v1 is
+    // Upper bound on a pushed loop document (~1 MB). A real ild-loop-template/v2 is
     // a few KB; this stops a rogue agent from shoving megabytes over the chat hub.
     private const int MaxLoopDocumentChars = 1_000_000;
 
@@ -941,7 +941,7 @@ public class AgentController : ControllerBase
         var (chatSessionId, error) = await ResolveChatSessionAsync();
         if (error != null) return error;
         if (request == null || string.IsNullOrWhiteSpace(request.Document))
-            return BadRequest(new { error = "document is required — pass a complete ild-loop-template/v1 document." });
+            return BadRequest(new { error = "document is required — pass a complete ild-loop-template/v2 document." });
         if (request.Document.Length > MaxLoopDocumentChars)
             return BadRequest(new { error = $"document is too large ({request.Document.Length} chars); the limit is {MaxLoopDocumentChars}." });
 

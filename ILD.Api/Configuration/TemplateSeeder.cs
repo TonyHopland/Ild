@@ -1,5 +1,7 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
@@ -69,15 +71,19 @@ public static class TemplateSeeder
         {
             using var stream = assembly.GetManifestResourceStream(name)
                 ?? throw new InvalidOperationException($"Seed template resource '{name}' could not be opened.");
-            var template = JsonSerializer.Deserialize<SeedTemplate>(stream, SeedJsonOptions)
+            if (JsonNode.Parse(stream) is not JsonObject document)
+                throw new InvalidOperationException($"Seed template resource '{name}' is not a JSON object.");
+            LoopDocumentUpgrader.TryUpgrade(document);
+            var template = document.Deserialize<SeedTemplate>(SeedJsonOptions)
                 ?? throw new InvalidOperationException($"Seed template resource '{name}' could not be parsed.");
             yield return template;
         }
     }
 
     /// <summary>
-    /// Deserialization shape for the ild-loop-template/v1 export JSON. The node
-    /// and edge DTOs already match the file's field names, so they bind directly.
+    /// Deserialization shape for the ild-loop-template/v2 export JSON (a v1 file
+    /// is upgraded first). The node and edge DTOs already match the file's field
+    /// names, so they bind directly.
     /// </summary>
     private sealed class SeedTemplate
     {

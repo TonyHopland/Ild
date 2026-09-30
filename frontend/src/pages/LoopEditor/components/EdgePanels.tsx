@@ -5,7 +5,7 @@ interface EdgePanelsProps {
   pendingConnection: boolean;
   edgeType: EdgeType;
   edgeName: string;
-  customEdgeOptions: string[];
+  outputOptions: string[];
   edgeError: string | null;
   showEdgeDeletePanel: boolean;
   selectedEdge: Edge | null;
@@ -37,7 +37,7 @@ export function EdgePanels({
   pendingConnection,
   edgeType,
   edgeName,
-  customEdgeOptions,
+  outputOptions,
   edgeError,
   showEdgeDeletePanel,
   selectedEdge,
@@ -63,22 +63,22 @@ export function EdgePanels({
           </div>
           {isCustom && (
             <div className="config-field">
-              <label htmlFor="edge-name">Which edge?</label>
+              <label htmlFor="edge-name">Which output?</label>
               <select
                 id="edge-name"
                 value={edgeName}
                 onChange={(event) => onEdgeNameChange(event.target.value)}
               >
-                <option value="">Select an edge…</option>
-                {customEdgeOptions.map((name) => (
+                <option value="">Select an output…</option>
+                {outputOptions.map((name) => (
                   <option key={name} value={name}>
                     {name}
                   </option>
                 ))}
               </select>
-              {customEdgeOptions.length === 0 && (
+              {outputOptions.length === 0 && (
                 <small className="config-help-text">
-                  Define custom edges in the source node's settings first.
+                  Declare named outputs in the source node's settings first.
                 </small>
               )}
             </div>

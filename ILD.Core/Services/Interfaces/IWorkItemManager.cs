@@ -156,7 +156,7 @@ public interface IWorkItemManager
     Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input);
 
     /// <summary>
-    /// Route the parked node to its named custom edge <paramref name="edgeName"/>
+    /// Route the parked node to its named output <paramref name="edgeName"/>
     /// (a Human node button), passing <paramref name="input"/> as the node's
     /// output for downstream <c>{{PreviousNode.Output}}</c>.
     /// </summary>

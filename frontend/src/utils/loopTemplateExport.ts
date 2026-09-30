@@ -8,7 +8,7 @@ import type {
 } from "../types";
 import { RecoveryPolicy } from "../types";
 
-const EXPORT_SCHEMA = "ild-loop-template/v1" as const;
+const EXPORT_SCHEMA = "ild-loop-template/v2" as const;
 
 /**
  * Serialize a LoopTemplate (from the editor's current graph + template metadata)

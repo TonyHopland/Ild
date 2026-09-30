@@ -1,5 +1,5 @@
-import type { Edge, Node } from "@xyflow/react";
-import { AiMatchRule, ConditionCase, EdgeType, NodeType } from "../types";
+import type { Edge } from "@xyflow/react";
+import { EdgeType, NodeType } from "../types";
 
 // Every loop edge renders through the custom LoopEdgeComponent (registered under
 // this type) so siblings that share one source/target route can fan apart.
@@ -19,102 +19,25 @@ export interface EdgeConstraintResult {
   error?: string;
 }
 
-// Every node (except the Cleanup sink) routes success and failure. Only Human,
-// AI, PR and Condition nodes may additionally declare named custom edges
-// (a Condition switch declares one per case plus its default edge).
-const customEdgeNodeTypes = new Set<NodeType>([
+// Every node (except the Cleanup sink) has success and failure outputs. Only
+// Human, AI, PR and Condition nodes may also declare named outputs, which are
+// wired with Custom edges.
+const namedOutputNodeTypes = new Set<NodeType>([
   NodeType.Human,
   NodeType.AI,
   NodeType.PR,
   NodeType.Condition,
 ]);
 
-export function nodeAllowsCustomEdges(nodeType: NodeType): boolean {
-  return customEdgeNodeTypes.has(nodeType);
-}
-
-// The eight reserved PR-node custom edges fired by the PR heartbeat poller, in
-// priority order (highest first). Mirrors ILD.Core PrNodeEdges. Wiring one
-// routes the run away from the parked PR node when that state is observed; an
-// unwired edge never fires. There is NO fallback to on_success/on_failure — to
-// reach a terminal/Cleanup path a template MUST wire on_merged / on_abandoned.
-export const PR_RESERVED_EDGE_NAMES = [
-  "on_rejected",
-  "on_merge_conflict",
-  "on_ci_failed",
-  "on_comment",
-  "on_approved",
-  "on_ci_passed",
-  "on_merged",
-  "on_abandoned",
-] as const;
-
-/**
- * The custom-edge names a node declares, used to populate the "Which edge?"
- * dropdown when connecting from the custom handle. AI nodes derive them from
- * their match rules' edge names; Human nodes from their `customEdges` list; PR
- * nodes from their `customEdges` plus the eight reserved heartbeat edges so the
- * editor can always wire them.
- */
-export function getCustomEdgeNames(node: Node | undefined | null): string[] {
-  if (!node) return [];
-  const data = node.data as { type?: NodeType; config?: Record<string, unknown> };
-  const config = data?.config ?? {};
-  const collect = (values: (string | undefined)[]): string[] => {
-    const seen = new Set<string>();
-    for (const value of values) {
-      const trimmed = value?.trim();
-      if (trimmed) seen.add(trimmed);
-    }
-    return [...seen];
-  };
-
-  if (data?.type === NodeType.AI) {
-    const rules = (config.matchRules as AiMatchRule[] | undefined) ?? [];
-    return collect(rules.map((rule) => rule?.edgeName));
-  }
-  if (data?.type === NodeType.PR) {
-    const names = (config.customEdges as string[] | undefined) ?? [];
-    return collect([...PR_RESERVED_EDGE_NAMES, ...names]);
-  }
-  if (data?.type === NodeType.Human) {
-    const names = (config.customEdges as string[] | undefined) ?? [];
-    return collect(names);
-  }
-  if (data?.type === NodeType.Condition) {
-    // A switch: derive the outlets from its cases' edge names plus the default
-    // edge. (Pre-switch true/false configs are upgraded by the backend's
-    // one-time migration, so no legacy shape reaches the editor.)
-    const cases = (config.cases as ConditionCase[] | undefined) ?? [];
-    return collect([...cases.map((c) => c?.edgeName), config.defaultEdge as string | undefined]);
-  }
-  return [];
-}
-
-/**
- * The custom-edge names actually wired out of a node, read from its connected
- * edges rather than its config. Seeded and migrated templates carry a connected
- * custom edge (e.g. "Respond") on Human/PR nodes without a matching
- * `customEdges` config entry, so the editor must union these in or the edge —
- * and the run-time button it produces — stays invisible in the settings panel.
- */
-export function getConnectedCustomEdgeNames(nodeId: string, edges: Edge[]): string[] {
-  const seen = new Set<string>();
-  for (const edge of edges) {
-    if (edge.source !== nodeId) continue;
-    const data = edge.data as { edgeType?: EdgeType; name?: string | null };
-    if (data?.edgeType !== EdgeType.Custom) continue;
-    const name = data?.name?.trim();
-    if (name) seen.add(name);
-  }
-  return [...seen];
+export function nodeHasNamedOutputs(nodeType: NodeType): boolean {
+  return namedOutputNodeTypes.has(nodeType);
 }
 
 /**
  * Validates that a node of {@link sourceNodeType} may gain an outgoing edge of
- * {@link edgeType}. Default/fallback edges are single per node; custom edges are
- * allowed in any number on Human/AI/PR (per-name uniqueness is enforced at
- * confirm time, once the user has picked a name).
+ * {@link edgeType}. Default/fallback edges are single per node; Custom edges are
+ * allowed in any number on nodes with named outputs (per-name uniqueness is
+ * enforced at confirm time, once the user has picked an output).
  */
 export function checkEdgeConstraints(
   sourceId: string,
@@ -126,10 +49,10 @@ export function checkEdgeConstraints(
     return { allowed: false, error: "Cleanup nodes cannot have outgoing edges" };
   }
   if (edgeType === EdgeType.Custom) {
-    if (!nodeAllowsCustomEdges(sourceNodeType)) {
+    if (!nodeHasNamedOutputs(sourceNodeType)) {
       return {
         allowed: false,
-        error: "Only Human, AI and PR nodes can have custom edges",
+        error: "Only Human, AI, PR and Condition nodes have named outputs",
       };
     }
     return { allowed: true };
@@ -230,4 +153,40 @@ export function parallelEdgeRoute(edges: Edge[], edge: Edge): { index: number; c
 export function parallelLabelOffset(index: number, count: number): number {
   if (count <= 1) return 0;
   return (index - (count - 1) / 2) * PARALLEL_LABEL_STAGGER;
+}
+
+/**
+ * Applies a settings edit of {@link sourceId}'s outputs to the Custom edges
+ * wired from them: an edge from a renamed output (old name → new name) is
+ * renamed, label included, and an edge from a deleted output is removed. Every
+ * other edge is left as is.
+ */
+export function updateOutputEdges(
+  edges: Edge[],
+  sourceId: string,
+  renames: ReadonlyMap<string, string>,
+  deleted: ReadonlySet<string>,
+): Edge[] {
+  if (renames.size === 0 && deleted.size === 0) return edges;
+  const outputOf = (edge: Edge) => {
+    const data = edge.data as { edgeType?: EdgeType; name?: string | null };
+    return edge.source === sourceId && data?.edgeType === EdgeType.Custom && data.name
+      ? data.name
+      : null;
+  };
+  return edges.flatMap((edge) => {
+    const output = outputOf(edge);
+    if (output === null) return [edge];
+    if (deleted.has(output)) return [];
+    const renamed = renames.get(output);
+    return renamed === undefined
+      ? [edge]
+      : [
+          {
+            ...edge,
+            data: { ...edge.data, name: renamed },
+            label: edgeLabelFor(EdgeType.Custom, renamed),
+          },
+        ];
+  });
 }

@@ -211,14 +211,29 @@ public class LoopTemplateValidatorTests
         Assert.Empty(errs);
     }
 
+    /// <summary>Declares <paramref name="names"/> as the node's outputs, one { "name" } object each.</summary>
+    private static LoopNodeDto Declare(LoopNodeDto node, params string[] names)
+    {
+        node.Config["outputs"] = names.Select(n => new Dictionary<string, object> { ["name"] = n }).ToList();
+        return node;
+    }
+
+    /// <summary>Sets a config key to raw JSON, the way a request body or a loop document delivers it.</summary>
+    private static LoopNodeDto WithRawConfig(LoopNodeDto node, string key, string json)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        node.Config[key] = doc.RootElement.Clone();
+        return node;
+    }
+
     [Fact]
     public void Custom_edge_on_non_human_ai_pr_node_is_invalid()
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),
-            new() { Node("s", "Start"), Node("a", "Cmd"), Node("c", "Cleanup") },
-            new() { Edge("s", "a"), Edge("a", "c"), Edge("a", "c", "Custom", "Retry") });
+            new() { Node("s", "Start"), Node("build", "Cmd"), Node("c", "Cleanup") },
+            new() { Edge("s", "build"), Edge("build", "c"), Edge("build", "c", "Custom", "Retry") });
         var errs = LoopTemplateValidator.Validate(g);
-        Assert.Contains(errs, e => e.Contains("custom edges"));
+        Assert.Contains(errs, e => e.Contains("build") && e.Contains("Retry"));
     }
 
     [Fact]
@@ -235,7 +250,7 @@ public class LoopTemplateValidatorTests
     public void Duplicate_custom_edge_names_on_one_node_is_invalid()
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),
-            new() { Node("s", "Start"), Node("h", "Human", "Review"), Node("a", "AI"), Node("c", "Cleanup") },
+            new() { Node("s", "Start"), Declare(Node("h", "Human", "Review"), "Respond"), Node("a", "AI"), Node("c", "Cleanup") },
             new() {
                 Edge("s", "h"),
                 Edge("h", "a", "Custom", "Respond"),
@@ -243,7 +258,7 @@ public class LoopTemplateValidatorTests
                 Edge("a", "c")
             });
         var errs = LoopTemplateValidator.Validate(g);
-        Assert.Contains(errs, e => e.Contains("duplicate custom edge 'Respond'"));
+        Assert.Contains(errs, e => e.Contains("duplicate") && e.Contains("'Respond'"));
     }
 
     [Fact]
@@ -252,7 +267,7 @@ public class LoopTemplateValidatorTests
         var g = new LoopTemplateGraph(Guid.NewGuid(),
             new() {
                 Node("s", "Start"),
-                Node("h", "Human", "Review this"),
+                Declare(Node("h", "Human", "Review this"), "Respond", "Escalate"),
                 Node("a", "AI"),
                 Node("c", "Cleanup")
             },
@@ -278,37 +293,79 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
-    public void Ai_custom_edge_without_matching_rule_is_invalid()
+    public void Custom_edge_from_an_output_the_node_does_not_declare_is_invalid()
     {
-        // Removed the rule but left the custom edge: the edge is unreachable.
+        // An edge row only connects a declared output; it no longer defines one.
         var g = new LoopTemplateGraph(Guid.NewGuid(),
-            new() { Node("s", "Start"), Node("a", "AI"), Node("c", "Cleanup") },
+            new() { Node("s", "Start"), Node("reviewer", "AI"), Node("c", "Cleanup") },
             new()
             {
-                Edge("s", "a"),
-                Edge("a", "c"),
-                Edge("a", "c", "Custom", "Reject"),
+                Edge("s", "reviewer"),
+                Edge("reviewer", "c"),
+                Edge("reviewer", "c", "Custom", "Reject"),
             });
         var errs = LoopTemplateValidator.Validate(g);
-        Assert.Contains(errs, e => e.Contains("custom edge 'Reject' that no match rule routes to"));
+        Assert.Contains(errs, e => e.Contains("reviewer") && e.Contains("'Reject'"));
+    }
+
+    [Theory]
+    [InlineData("OnSuccess")]
+    [InlineData("OnFailure")]
+    public void Custom_edge_named_after_a_fixed_output_is_invalid(string name)
+    {
+        // Success and failure are wired as their own edge types, never as a named custom edge.
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Node("review", "Human", "ok?"), Node("c", "Cleanup") },
+            new() { Edge("s", "review"), Edge("review", "c", "Custom", name) });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("review") && e.Contains(name));
     }
 
     [Fact]
-    public void Ai_match_rule_without_custom_edge_is_invalid()
+    public void Ai_match_rule_referencing_an_undeclared_output_is_invalid_and_says_to_declare_it()
     {
-        // Rule references an edge that does not exist: routing would fail at run time.
         var g = new LoopTemplateGraph(Guid.NewGuid(),
-            new() { AiNodeWithRules("a", ("Reject", "Reject")), Node("s", "Start"), Node("c", "Cleanup") },
-            new() { Edge("s", "a"), Edge("a", "c") });
+            new() { AiNodeWithRules("reviewer", ("Reject", "reject")), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Edge("s", "reviewer"), Edge("reviewer", "c") });
         var errs = LoopTemplateValidator.Validate(g);
-        Assert.Contains(errs, e => e.Contains("match rule routing to 'Reject' but no custom edge"));
+        Assert.Contains(errs, e => e.Contains("reviewer") && e.Contains("'reject'") && e.Contains("outputs"));
+    }
+
+    [Fact]
+    public void Ai_match_rule_routing_to_a_declared_output_that_has_no_edge_is_rejected_and_says_how_to_fix_it()
+    {
+        // The rule would fire at run time and find no edge to take.
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Declare(AiNodeWithRules("a", ("Reject", "Reject")), "Reject"), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Edge("s", "a"), Edge("a", "c") });
+        Assert.Equal(
+            new[] { "AI node a matchRules routes to output 'Reject', which has no edge; connect 'Reject' to a target node or remove the rule." },
+            LoopTemplateValidator.Validate(g));
+    }
+
+    [Fact]
+    public void Declared_output_that_no_rule_references_and_no_edge_connects_is_valid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Declare(Node("a", "AI"), "Escalate"), Declare(Node("h", "Human", "ok?"), "Later"), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Edge("s", "a"), Edge("a", "h"), Edge("h", "c") });
+        Assert.Empty(LoopTemplateValidator.Validate(g));
+    }
+
+    [Fact]
+    public void Declared_output_wired_but_referenced_by_no_rule_is_valid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Declare(Node("a", "AI"), "Escalate"), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Edge("s", "a"), Edge("a", "c"), Edge("a", "c", "Custom", "Escalate") });
+        Assert.Empty(LoopTemplateValidator.Validate(g));
     }
 
     [Fact]
     public void Ai_match_rule_with_matching_custom_edge_is_valid()
     {
         var g = new LoopTemplateGraph(Guid.NewGuid(),
-            new() { AiNodeWithRules("a", ("Reject", "Reject")), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Declare(AiNodeWithRules("a", ("Reject", "Reject")), "Reject"), Node("s", "Start"), Node("c", "Cleanup") },
             new()
             {
                 Edge("s", "a"),
@@ -319,11 +376,23 @@ public class LoopTemplateValidatorTests
         Assert.Empty(errs);
     }
 
+    [Theory]
+    [InlineData("OnSuccess")]
+    [InlineData("OnFailure")]
+    public void Ai_match_rule_may_not_route_to_a_fixed_output(string name)
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { AiNodeWithRules("reviewer", ("Reject", name)), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Edge("s", "reviewer"), Edge("reviewer", "c") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("reviewer") && e.Contains(name));
+    }
+
     /// <summary>Wires an AI node whose single rule routes to a real custom edge,
     /// so the only thing left for the validator to complain about is the pattern.</summary>
     private static LoopTemplateGraph GraphWithAiPattern(string pattern)
         => new(Guid.NewGuid(),
-            new() { AiNodeWithRules("a", (pattern, "Reject")), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Declare(AiNodeWithRules("a", (pattern, "Reject")), "Reject"), Node("s", "Start"), Node("c", "Cleanup") },
             new()
             {
                 Edge("s", "a"),
@@ -398,21 +467,19 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
-    public void Ai_custom_edge_name_casing_must_match_rule_exactly()
+    public void Ai_match_rule_must_name_a_declared_output_with_the_same_casing()
     {
-        // The engine resolves edges by ordinal name, so a casing mismatch leaves
-        // both the edge orphaned and the rule dangling.
+        // The engine resolves outputs by ordinal name, so 'reject' is not 'Reject'.
         var g = new LoopTemplateGraph(Guid.NewGuid(),
-            new() { AiNodeWithRules("a", ("Reject", "reject")), Node("s", "Start"), Node("c", "Cleanup") },
+            new() { Declare(AiNodeWithRules("reviewer", ("Reject", "reject")), "Reject"), Node("s", "Start"), Node("c", "Cleanup") },
             new()
             {
-                Edge("s", "a"),
-                Edge("a", "c"),
-                Edge("a", "c", "Custom", "Reject"),
+                Edge("s", "reviewer"),
+                Edge("reviewer", "c"),
+                Edge("reviewer", "c", "Custom", "Reject"),
             });
         var errs = LoopTemplateValidator.Validate(g);
-        Assert.Contains(errs, e => e.Contains("custom edge 'Reject' that no match rule routes to"));
-        Assert.Contains(errs, e => e.Contains("match rule routing to 'reject' but no custom edge"));
+        Assert.Contains(errs, e => e.Contains("reviewer") && e.Contains("'reject'"));
     }
 
     [Fact]
@@ -421,7 +488,7 @@ public class LoopTemplateValidatorTests
         var g = new LoopTemplateGraph(Guid.NewGuid(),
             new() {
                 Node("s", "Start"),
-                Node("p", "PR"),
+                Declare(Node("p", "PR"), "Respond"),
                 Node("a", "AI"),
                 Node("c", "Cleanup")
             },
@@ -436,6 +503,153 @@ public class LoopTemplateValidatorTests
         Assert.Empty(errs);
     }
 
+    [Fact]
+    public void Reserved_pr_outputs_count_as_declared_even_when_absent_from_config()
+    {
+        // A PR node always has its reserved outputs, so wiring one needs no declaration.
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Node("p", "PR"), Node("a", "AI"), Node("c", "Cleanup") },
+            new() {
+                Edge("s", "p"),
+                Edge("p", "a", "Custom", "on_comment"),
+                Edge("p", "c", "Custom", "on_merged"),
+                Edge("p", "c", "Custom", "on_abandoned"),
+                Edge("a", "c")
+            });
+        Assert.Empty(LoopTemplateValidator.Validate(g));
+    }
+
+    [Fact]
+    public void Reserved_pr_output_is_not_available_on_other_node_types()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Node("review", "Human", "ok?"), Node("c", "Cleanup") },
+            new() { Edge("s", "review"), Edge("review", "c", "Custom", "on_merged") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("review") && e.Contains("on_merged"));
+    }
+
+    [Fact]
+    public void Output_objects_may_carry_fields_the_validator_does_not_know()
+    {
+        var pr = WithRawConfig(Node("p", "PR"), "outputs",
+            "[{\"name\":\"on_merged\",\"reserved\":true,\"visible\":false},{\"name\":\"deploy\",\"color\":\"x\",\"confirm\":{\"text\":\"sure?\"}}]");
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), pr, Node("c", "Cleanup") },
+            new() { Edge("s", "p"), Edge("p", "c", "Custom", "on_merged"), Edge("p", "c", "Custom", "deploy") });
+        Assert.Empty(LoopTemplateValidator.Validate(g));
+    }
+
+    // ---- outputs: shape and uniqueness ---------------------------------------
+
+    public static TheoryData<string> MalformedOutputs => new()
+    {
+        "\"approve\"",                                   // not an array
+        "{\"name\":\"approve\"}",                        // an object, not an array of them
+        "[\"approve\"]",                                 // entries must be objects
+        "[{}]",                                          // missing name
+        "[{\"name\":\"\"}]",                             // empty name
+        "[{\"name\":\"   \"}]",                          // blank name
+        "[{\"name\":5}]",                                // non-string name
+        "[{\"name\":null}]",
+        "[{\"name\":\"approve\"},{\"name\":\"approve\"}]", // declared twice
+    };
+
+    [Theory]
+    [MemberData(nameof(MalformedOutputs))]
+    public void Malformed_outputs_are_rejected_and_name_the_node(string outputsJson)
+    {
+        var human = WithRawConfig(Node("review", "Human", "ok?"), "outputs", outputsJson);
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), human, Node("c", "Cleanup") },
+            new() { Edge("s", "review"), Edge("review", "c") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("review"));
+    }
+
+    [Fact]
+    public void Duplicate_output_error_names_the_output()
+    {
+        var human = WithRawConfig(Node("review", "Human", "ok?"), "outputs",
+            "[{\"name\":\"approve\"},{\"name\":\"approve\",\"visible\":false}]");
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), human, Node("c", "Cleanup") },
+            new() { Edge("s", "review"), Edge("review", "c") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("review") && e.Contains("'approve'"));
+    }
+
+    [Fact]
+    public void Output_names_that_differ_only_in_case_are_distinct()
+    {
+        var human = Declare(Node("review", "Human", "ok?"), "approve", "Approve");
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), human, Node("c", "Cleanup") },
+            new() { Edge("s", "review"), Edge("review", "c") });
+        Assert.Empty(LoopTemplateValidator.Validate(g));
+    }
+
+    // ---- per-type output rules -----------------------------------------------
+
+    private static LoopTemplateGraph SingleStepGraph(string type, params string[] outputs)
+    {
+        var node = Declare(Node("step", type, type == "Prompt" ? "go" : null), outputs);
+        return type == "Start"
+            ? new LoopTemplateGraph(Guid.NewGuid(), new() { node, Node("c", "Cleanup") }, new() { Edge("step", "c") })
+            : new LoopTemplateGraph(Guid.NewGuid(),
+                new() { Node("s", "Start"), node, Node("c", "Cleanup") },
+                new() { Edge("s", "step"), Edge("step", "c") });
+    }
+
+    [Theory]
+    [InlineData("Start")]
+    [InlineData("Cmd")]
+    [InlineData("Prompt")]
+    public void Nodes_without_named_outputs_may_declare_success_and_failure(string type)
+    {
+        Assert.Empty(LoopTemplateValidator.Validate(SingleStepGraph(type, "OnSuccess", "OnFailure")));
+    }
+
+    [Theory]
+    [InlineData("Start")]
+    [InlineData("Cmd")]
+    [InlineData("Prompt")]
+    public void Nodes_without_named_outputs_may_not_declare_one(string type)
+    {
+        var errs = LoopTemplateValidator.Validate(SingleStepGraph(type, "OnSuccess", "OnFailure", "Retry"));
+        Assert.Contains(errs, e => e.Contains("step") && e.Contains("Retry"));
+    }
+
+    [Fact]
+    public void Cleanup_declares_no_outputs()
+    {
+        var cleanup = Declare(Node("done", "Cleanup"), "OnSuccess");
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), cleanup },
+            new() { Edge("s", "done") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("done"));
+    }
+
+    [Fact]
+    public void Cleanup_with_an_empty_outputs_list_is_valid()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Declare(Node("c", "Cleanup")) },
+            new() { Edge("s", "c") });
+        Assert.Empty(LoopTemplateValidator.Validate(g));
+    }
+
+    [Fact]
+    public void Cleanup_has_no_outgoing_edges()
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), Node("done", "Cleanup"), Node("a", "Cmd") },
+            new() { Edge("s", "done"), Edge("done", "a") });
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("done"));
+    }
+
     // ---- Condition switch (multiple cases + default edge) ------------------
 
     private static Dictionary<string, object> SwitchCase(
@@ -448,7 +662,19 @@ public class LoopTemplateValidatorTests
         return c;
     }
 
+    /// <summary>A switch Condition declaring every name its cases and default refer to.</summary>
     private static LoopNodeDto SwitchConditionNode(string id, object[] cases, string defaultEdge, string? output = null)
+    {
+        var referenced = cases.OfType<Dictionary<string, object>>()
+            .Select(c => ((string)c["edgeName"]).Trim())
+            .Append(defaultEdge.Trim())
+            .Where(n => n.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return Declare(UndeclaredSwitchConditionNode(id, cases, defaultEdge, output), referenced);
+    }
+
+    private static LoopNodeDto UndeclaredSwitchConditionNode(string id, object[] cases, string defaultEdge, string? output = null)
     {
         var dto = new LoopNodeDto { Id = id, NodeType = "Condition", Label = id };
         dto.Config["cases"] = cases;
@@ -457,7 +683,7 @@ public class LoopTemplateValidatorTests
         return dto;
     }
 
-    // A switch Condition wired to one custom edge per referenced name.
+    // A switch Condition wired to one custom edge per given name.
     private static LoopTemplateGraph SwitchGraph(LoopNodeDto cond, params string[] edgeNames)
     {
         var edges = new List<LoopNodeEdgeDto> { Edge("s", cond.Id) };
@@ -521,12 +747,32 @@ public class LoopTemplateValidatorTests
     [Fact]
     public void Condition_switch_with_on_success_edge_is_rejected()
     {
+        var cond = SwitchConditionNode("gate",
+            new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
+        var g = SwitchGraph(cond, "has-pr", "otherwise");
+        g.Edges.Add(Edge("gate", "c", "OnSuccess"));
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains("gate") && e.Contains("OnSuccess"));
+    }
+
+    [Fact]
+    public void Condition_switch_declaring_an_on_success_output_is_rejected()
+    {
+        var cond = Declare(
+            UndeclaredSwitchConditionNode("gate", new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise"),
+            "has-pr", "otherwise", "OnSuccess");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise"));
+        Assert.Contains(errs, e => e.Contains("gate") && e.Contains("OnSuccess"));
+    }
+
+    [Fact]
+    public void Condition_switch_may_wire_its_failure_edge()
+    {
         var cond = SwitchConditionNode("q",
             new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
         var g = SwitchGraph(cond, "has-pr", "otherwise");
-        g.Edges.Add(Edge("q", "c", "OnSuccess"));
-        var errs = LoopTemplateValidator.Validate(g);
-        Assert.Contains(errs, e => e.Contains("must not have an OnSuccess edge"));
+        g.Edges.Add(Edge("q", "c", "OnFailure"));
+        Assert.Empty(LoopTemplateValidator.Validate(g));
     }
 
     [Fact]
@@ -566,22 +812,107 @@ public class LoopTemplateValidatorTests
     }
 
     [Fact]
-    public void Condition_switch_with_unwired_referenced_edge_is_rejected()
+    public void Condition_switch_default_routing_to_a_declared_output_that_has_no_edge_is_rejected()
     {
-        // The "otherwise" default edge is referenced but never wired out.
+        // The "otherwise" default is declared but not wired.
         var cond = SwitchConditionNode("q",
             new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
-        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr"));
-        Assert.Contains(errs, e => e.Contains("routes to 'otherwise' but no custom edge with that name exists"));
+        Assert.Equal(
+            new[] { "Condition node q defaultEdge routes to output 'otherwise', which has no edge; connect 'otherwise' to a target node or make a wired output the default edge." },
+            LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr")));
     }
 
     [Fact]
-    public void Condition_switch_with_orphan_wired_edge_is_rejected()
+    public void Condition_switch_case_routing_to_a_declared_output_that_has_no_edge_is_rejected()
     {
-        // A wired custom edge no case or default routes to.
         var cond = SwitchConditionNode("q",
             new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
+        Assert.Equal(
+            new[] { "Condition node q case 1 routes to output 'has-pr', which has no edge; connect 'has-pr' to a target node or remove the case." },
+            LoopTemplateValidator.Validate(SwitchGraph(cond, "otherwise")));
+    }
+
+    [Fact]
+    public void Condition_switch_with_a_declared_output_nothing_references_or_wires_is_valid()
+    {
+        var cond = Declare(
+            UndeclaredSwitchConditionNode("q", new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise"),
+            "has-pr", "otherwise", "spare");
+        Assert.Empty(LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise")));
+    }
+
+    [Fact]
+    public void Condition_switch_case_referencing_an_undeclared_output_is_rejected()
+    {
+        var cond = Declare(
+            UndeclaredSwitchConditionNode("gate", new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise"),
+            "otherwise");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "otherwise"));
+        Assert.Contains(errs, e => e.Contains("gate") && e.Contains("'has-pr'") && e.Contains("outputs"));
+    }
+
+    [Fact]
+    public void Condition_switch_default_referencing_an_undeclared_output_is_rejected()
+    {
+        var cond = Declare(
+            UndeclaredSwitchConditionNode("gate", new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise"),
+            "has-pr");
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr"));
+        Assert.Contains(errs, e => e.Contains("gate") && e.Contains("'otherwise'") && e.Contains("outputs"));
+    }
+
+    [Fact]
+    public void Condition_switch_references_are_trimmed_before_they_are_looked_up()
+    {
+        // The executor trims case and default names, so padded references still resolve.
+        var cond = Declare(
+            UndeclaredSwitchConditionNode("q", new object[] { SwitchCase("PrExists", "  has-pr ") }, " otherwise "),
+            "has-pr", "otherwise");
+        Assert.Empty(LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise")));
+    }
+
+    [Theory]
+    [InlineData("OnFailure", "otherwise")]
+    [InlineData("has-pr", "OnFailure")]
+    [InlineData("OnSuccess", "otherwise")]
+    public void Condition_switch_may_not_route_a_case_or_default_to_a_fixed_output(string caseEdge, string defaultEdge)
+    {
+        var cond = Declare(
+            UndeclaredSwitchConditionNode("gate", new object[] { SwitchCase("PrExists", caseEdge) }, defaultEdge),
+            "has-pr", "otherwise");
+        var fixedName = caseEdge.StartsWith("On") ? caseEdge : defaultEdge;
+        var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise"));
+        Assert.Contains(errs, e => e.Contains("gate") && e.Contains(fixedName));
+    }
+
+    [Fact]
+    public void Condition_switch_with_a_wired_edge_from_an_undeclared_output_is_rejected()
+    {
+        var cond = SwitchConditionNode("gate",
+            new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise");
         var errs = LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise", "orphan"));
-        Assert.Contains(errs, e => e.Contains("custom edge 'orphan' that no case or default routes to"));
+        Assert.Contains(errs, e => e.Contains("gate") && e.Contains("'orphan'"));
+    }
+
+    [Fact]
+    public void Condition_switch_with_a_declared_output_no_case_references_is_valid()
+    {
+        var cond = Declare(
+            UndeclaredSwitchConditionNode("q", new object[] { SwitchCase("PrExists", "has-pr") }, "otherwise"),
+            "has-pr", "otherwise", "spare");
+        Assert.Empty(LoopTemplateValidator.Validate(SwitchGraph(cond, "has-pr", "otherwise", "spare")));
+    }
+
+    [Fact]
+    public void A_config_that_still_carries_customEdges_is_rejected()
+    {
+        var human = Declare(Node("h", "Human", "ok?"), "Respond");
+        human.Config["customEdges"] = new List<string> { "Respond" };
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), human, Node("c", "Cleanup") },
+            new() { Edge("s", "h"), Edge("h", "c"), Edge("h", "c", "Custom", "Respond") });
+        Assert.Equal(
+            new[] { "Node h has customEdges, which is no longer supported; declare outputs in config.outputs, e.g. [{ \"name\": \"approve\" }], and remove customEdges." },
+            LoopTemplateValidator.Validate(g));
     }
 }

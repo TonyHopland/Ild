@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -17,6 +20,7 @@ public class LoopTemplateManager : ILoopTemplateManager
 
     public async Task<Guid> CreateLoopTemplateAsync(string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy = RecoveryPolicy.AutoResume)
     {
+        NormalizeOutputs(graph);
         var errors = LoopTemplateValidator.Validate(graph);
         if (errors.Count > 0)
             throw new InvalidOperationException("Invalid loop template graph: " + string.Join("; ", errors));
@@ -47,6 +51,7 @@ public class LoopTemplateManager : ILoopTemplateManager
 
     public async Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy? recoveryPolicy = null)
     {
+        NormalizeOutputs(graph);
         var errors = LoopTemplateValidator.Validate(graph);
         if (errors.Count > 0)
             throw new InvalidOperationException("Invalid loop template graph: " + string.Join("; ", errors));
@@ -103,6 +108,7 @@ public class LoopTemplateManager : ILoopTemplateManager
 
     public Task<(bool Valid, IReadOnlyList<string> Errors)> ValidateGraphAsync(LoopTemplateGraph graph)
     {
+        NormalizeOutputs(graph);
         var errors = LoopTemplateValidator.Validate(graph);
         return Task.FromResult((errors.Count == 0, errors));
     }
@@ -126,6 +132,24 @@ public class LoopTemplateManager : ILoopTemplateManager
         await _store.SaveChangesAsync();
     }
 
+    /// <summary>The type a node is stored as: one that does not parse is saved as Cmd.</summary>
+    internal static NodeType StoredNodeType(string? nodeType)
+        => Enum.TryParse<NodeType>(nodeType, ignoreCase: true, out var type) ? type : NodeType.Cmd;
+
+    /// <summary>
+    /// Brings every node config to its saved outputs shape (<see cref="LoopOutputs.NormalizeOutputs"/>)
+    /// before validation, so fixed and reserved outputs are always stored.
+    /// </summary>
+    private static void NormalizeOutputs(LoopTemplateGraph graph)
+    {
+        foreach (var node in graph.Nodes)
+        {
+            if (JsonSerializer.SerializeToNode(node.Config) is JsonObject config
+                && LoopOutputs.NormalizeOutputs(StoredNodeType(node.NodeType), config))
+                node.Config = config.Deserialize<Dictionary<string, object>>() ?? new();
+        }
+    }
+
     private async Task AddVersionFromGraph(Guid templateId, int versionNumber, LoopTemplateGraph graph)
     {
         var version = new LoopTemplateVersion
@@ -143,14 +167,11 @@ public class LoopTemplateManager : ILoopTemplateManager
             var nodeId = Guid.NewGuid();
             idMap[n.Id] = nodeId;
 
-            if (!Enum.TryParse<NodeType>(n.NodeType, ignoreCase: true, out var type))
-                type = NodeType.Cmd;
-
             return new LoopNode
             {
                 Id = nodeId,
                 LoopTemplateVersionId = version.Id,
-                NodeType = type,
+                NodeType = StoredNodeType(n.NodeType),
                 Label = string.IsNullOrEmpty(n.Label) ? n.Id : n.Label,
                 Config = System.Text.Json.JsonSerializer.Serialize(n.Config),
             };

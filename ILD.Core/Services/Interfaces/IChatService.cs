@@ -63,7 +63,7 @@ public interface IChatService
     /// open, pushed into the model context as a thin pointer and used to grant the
     /// item's active-run worktree as an extra allowed directory (gated by the
     /// session's filesystem tools). <paramref name="openLoopDocument"/> is the live
-    /// <c>ild-loop-template/v1</c> document of the loop open in the Loop Editor (or
+    /// <c>ild-loop-template/v2</c> document of the loop open in the Loop Editor (or
     /// null when none is open); it is stashed in the per-session loop scratchpad,
     /// overwritten every message, and only a "loop editor is open" flag enters the
     /// model context — the agent pulls the JSON on demand via <c>get_current_loop</c>.

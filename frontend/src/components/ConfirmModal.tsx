@@ -4,6 +4,8 @@ interface ConfirmModalProps {
   isOpen: boolean;
   title: string;
   message: string;
+  /** What the action will affect, listed under the message. */
+  items?: string[];
   onConfirm: () => void;
   onCancel: () => void;
   /** Label for the confirm button. Defaults to "Delete". */
@@ -16,6 +18,7 @@ export default function ConfirmModal({
   message,
   onConfirm,
   onCancel,
+  items = [],
   confirmText = "Delete",
 }: ConfirmModalProps) {
   useEffect(() => {
@@ -45,6 +48,13 @@ export default function ConfirmModal({
         </div>
         <div className="modal-body">
           <p>{message}</p>
+          {items.length > 0 && (
+            <ul>
+              {items.map((item, index) => (
+                <li key={index}>{item}</li>
+              ))}
+            </ul>
+          )}
         </div>
         <div className="modal-footer">
           <button type="button" className="btn btn-secondary" onClick={onCancel}>
