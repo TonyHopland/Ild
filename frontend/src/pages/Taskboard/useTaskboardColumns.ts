@@ -49,6 +49,8 @@ interface ColumnFetch {
   append: boolean;
   /** The request answers a Load more, whose busy flag it clears when it lands. */
   loadMore: boolean;
+  /** The request re-reads a short column, which may be re-read again once it lands. */
+  refill: boolean;
 }
 
 /**
@@ -66,7 +68,9 @@ interface ColumnFetch {
  * live copy while that still belongs in this column, and otherwise leaves the
  * item out, and out of its total; the totals are then asked for again. A
  * window of any size is read in pages the server allows, so a reload never
- * drops a loaded card.
+ * drops a loaded card. A loaded column never shows fewer cards than its total
+ * or a page, whichever is less: one that does after a live change, a counts
+ * refresh or a read that left cards out has its first page read again.
  */
 export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: string) => void) {
   const [columns, setColumns] = useState<TaskboardColumns>(emptyColumns);
@@ -83,11 +87,30 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   const liveRef = useRef(new Map<string, { at: number; item: WorkItem | null }>());
   const settledRef = useRef(new Set<WorkItemStatus>());
   const countsRef = useRef({ inFlight: false, dirty: false });
+  const refillingRef = useRef(new Set<WorkItemStatus>());
+  // Set once `fetchColumn` exists: the reads it starts are what ask for a refill.
+  const fetchColumnRef = useRef<(status: WorkItemStatus, request: ColumnFetch) => void>(() => {});
 
   const show = useCallback((next: TaskboardColumns) => {
     if (next === boardRef.current) return;
     boardRef.current = next;
     setColumns(next);
+  }, []);
+
+  const refillShortColumns = useCallback(() => {
+    for (const status of STATUSES) {
+      const column = boardRef.current[status];
+      if (!column.loaded || column.loadingMore || refillingRef.current.has(status)) continue;
+      if (column.items.length >= Math.min(column.total, TASKBOARD_PAGE_SIZE)) continue;
+      refillingRef.current.add(status);
+      fetchColumnRef.current(status, {
+        skip: 0,
+        take: TASKBOARD_PAGE_SIZE,
+        append: false,
+        loadMore: false,
+        refill: true,
+      });
+    }
   }, []);
 
   const commitLive = useCallback(
@@ -99,8 +122,9 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           seqRef.current[status] = (seqRef.current[status] ?? 0) + 1;
       }
       show(next);
+      refillShortColumns();
     },
-    [show],
+    [show, refillShortColumns],
   );
 
   const settle = useCallback((status: WorkItemStatus) => {
@@ -156,6 +180,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
             }
           }
           show(STATUSES.some((s) => next[s] !== board[s]) ? next : board);
+          refillShortColumns();
         })
         .catch(() => {
           // Best effort: the totals keep their optimistic values until the next
@@ -170,7 +195,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           }
         });
     },
-    [show],
+    [show, refillShortColumns],
   );
 
   const fetchColumn = useCallback(
@@ -192,6 +217,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
               take: windowSize(loaded),
               append: false,
               loadMore: request.loadMore,
+              refill: request.refill,
             });
             return;
           }
@@ -213,11 +239,14 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
             },
           });
           settle(status);
+          if (request.refill) refillingRef.current.delete(status);
+          if (fresh.length < page.items.length) refillShortColumns();
           // The read's total predates the live changes since it was issued.
           if (clockRef.current > issuedAt) requestCountsRefresh();
         })
         .catch((error: unknown) => {
           if (stale()) return;
+          if (request.refill) refillingRef.current.delete(status);
           if (request.loadMore) {
             const column = boardRef.current[status];
             show({ ...boardRef.current, [status]: { ...column, loadingMore: false } });
@@ -226,14 +255,16 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           onErrorRef.current(errorMessage(error, "Failed to load work items."));
         });
     },
-    [readWindow, show, settle, requestCountsRefresh],
+    [readWindow, show, settle, requestCountsRefresh, refillShortColumns],
   );
+  fetchColumnRef.current = fetchColumn;
 
   const reloadAll = useCallback(
     ({ windowed }: { windowed: boolean }) => {
       generationRef.current += 1;
       countsRef.current = { inFlight: false, dirty: false };
       liveRef.current.clear();
+      refillingRef.current.clear();
       const board = boardRef.current;
       const next = { ...board };
       for (const status of STATUSES) {
@@ -246,6 +277,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           take: windowed ? windowSize(board[status].items.length) : TASKBOARD_PAGE_SIZE,
           append: false,
           loadMore: false,
+          refill: false,
         });
       }
     },
@@ -262,6 +294,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
         take: TASKBOARD_PAGE_SIZE,
         append: true,
         loadMore: true,
+        refill: false,
       });
     },
     [show, fetchColumn],
