@@ -180,16 +180,9 @@ public sealed class PRNodeExecutor : INodeExecutor
             // PR already exists for this run, and the round has things to say on
             // it. This is where they go out: agents record what they intend to
             // write and nothing reaches the pull request until here, so a human
-            // has the whole round to see it and drop any of it.
-            //
-            // The node no longer posts a comment of its own. It used to render
-            // prCommentTemplate on every re-visit, which meant a round that had
-            // already answered on the threads announced itself a second time
-            // carrying nothing — and no amount of tuning the rule for when to
-            // skip it could work, because only the round knows whether it has
-            // anything general left to say. So the round decides: it queues a
-            // comment when it does, and the pull request stays quiet when it
-            // does not.
+            // has the whole round to see it and drop any of it. The node posts
+            // nothing of its own: only the round knows whether it has anything
+            // general to say, so it queues a comment when it does.
             var remote = sp.GetRequiredService<IRemoteProvider>();
             var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
             if (string.IsNullOrEmpty(prNumber))

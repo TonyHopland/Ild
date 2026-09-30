@@ -6,18 +6,9 @@ namespace ILD.Tests;
 /// The loops under <c>example-loops/</c> are what a fresh install gets
 /// (`TemplateSeeder` embeds and seeds them), so a change to what a PR node does
 /// reaches every new user through these files or not at all.
-///
-/// They had drifted: both still set `prCommentTemplate`, which stopped doing
-/// anything, and neither told the agent handling PR feedback that
-/// `get_pr_review` exists. The effect on a fresh install was silence — the
-/// bundled loops stopped saying anything on their pull requests, with no hint
-/// why. Nothing failed, because nothing looked.
 /// </summary>
 public class ExampleLoopPrToolsTests
 {
-    /// <summary>Config keys a PR node no longer reads. Set, they promise something that will not happen.</summary>
-    private static readonly string[] DeadPrConfig = { "prCommentTemplate" };
-
     private static readonly string[] LoopFiles =
     {
         "DevTeam.json",
@@ -45,16 +36,6 @@ public class ExampleLoopPrToolsTests
                     yield return (file, label, config.Clone());
             }
         }
-    }
-
-    [Fact]
-    public void No_shipped_loop_sets_pr_config_the_node_no_longer_reads()
-    {
-        foreach (var (file, label, config) in Nodes())
-            foreach (var dead in DeadPrConfig)
-                Assert.False(
-                    config.TryGetProperty(dead, out _),
-                    $"{file}: node '{label}' still sets {dead}, which does nothing now.");
     }
 
     [Fact]

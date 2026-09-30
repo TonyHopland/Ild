@@ -19,12 +19,6 @@ namespace ILD.Tests;
 /// starts the next round — round, comment, round, comment, each one a full
 /// verification gate with no human in the way. This drives the path the comment
 /// really goes out on and then feeds what it wrote back through the heartbeat.
-///
-/// The node no longer writes a comment of its own from `prCommentTemplate`: it
-/// could only guess whether a round had anything left to say, and the guess was
-/// wrong in one direction or the other every time. So the round says it, through
-/// `comment_on_pr` — and everything that made the node's comment safe has to
-/// hold for the round's, which is what these pin.
 /// </summary>
 public class PRNodeExecutorPrCommentTests
 {
@@ -105,9 +99,6 @@ public class PRNodeExecutorPrCommentTests
             services.AddSingleton(Mock.Of<IRepositoryManager>());
             if (WithRunStore) services.AddSingleton(Runs.Object);
 
-            // Deliberately no prCommentTemplate: the node ignores it now, and a
-            // test that still set one could not tell an ignored field from a
-            // working one.
             var node = new LoopNode
             {
                 Id = Run.CurrentNodeId!.Value,

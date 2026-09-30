@@ -192,6 +192,10 @@ try
             if (outputsMigrated > 0)
                 Log.Information("Migrated {Count} loop node(s) to declared outputs", outputsMigrated);
 
+            var prCommentTemplatesDropped = await ILD.Data.Migrations.PrCommentTemplateMigrator.MigrateAsync(dbContext);
+            if (prCommentTemplatesDropped > 0)
+                Log.Information("Dropped the unused PR comment template from {Count} loop node(s)", prCommentTemplatesDropped);
+
             // Pull any historically offloaded event payloads back inline into the
             // DB. The payload files lived on the ephemeral /app layer, so this also
             // clears dangling paths whose files a redeploy already wiped.

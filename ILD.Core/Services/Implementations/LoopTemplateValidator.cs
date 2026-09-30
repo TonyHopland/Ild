@@ -221,7 +221,6 @@ public static class LoopTemplateValidator
                 ? node.Config.GetValueOrDefault("prompt")?.ToString()
                 : null;
             var prTemplate = node.Config.GetValueOrDefault("prDescriptionTemplate")?.ToString();
-            var prCommentTemplate = node.Config.GetValueOrDefault("prCommentTemplate")?.ToString();
             var humanPrompt = string.Equals(node.NodeType, "Human", StringComparison.OrdinalIgnoreCase)
                 ? node.Config.GetValueOrDefault("prompt")?.ToString()
                 : null;
@@ -316,7 +315,7 @@ public static class LoopTemplateValidator
                 }
             }
 
-            var templates = new[] { aiPrompt, prTemplate, prCommentTemplate, humanPrompt, promptNodePrompt }
+            var templates = new[] { aiPrompt, prTemplate, humanPrompt, promptNodePrompt }
                 .Where(t => !string.IsNullOrEmpty(t))
                 .Concat(conditionTemplates ?? Enumerable.Empty<string>())
                 .Where(t => !string.IsNullOrEmpty(t))
