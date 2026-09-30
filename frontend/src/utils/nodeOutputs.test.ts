@@ -1,10 +1,15 @@
 import { describe, expect, test } from "vite-plus/test";
+import type { Edge, Node } from "@xyflow/react";
+import { EdgeType, NodeType } from "../types";
 import {
+  hasSettingsProblems,
   mergeOutputs,
+  nodeSettingsProblems,
   outputReferences,
   outputRenames,
   outputRowProblems,
   readFixedOutputs,
+  wiredOutputsOf,
   type OutputRow,
 } from "./nodeOutputs";
 
@@ -22,6 +27,10 @@ describe("outputRenames", () => {
 
   test("ignores added rows and compares names trimmed", () => {
     expect([...outputRenames([row("new", null), row(" kept ", "kept")])]).toEqual([]);
+  });
+
+  test("a blank name is not a rename: the output keeps its loaded name until it is fixed", () => {
+    expect([...outputRenames([row("  ", "a"), row("c", "b")])]).toEqual([["b", "c"]]);
   });
 });
 
@@ -48,9 +57,14 @@ describe("mergeOutputs", () => {
     ]);
   });
 
-  test("drops a deleted output and never brings it back, even when still referenced", () => {
+  test("drops a deleted output", () => {
     const previous = [{ name: "OnFailure" }, { name: "gone", color: "x" }];
-    expect(mergeOutputs(previous, [], ["gone"])).toEqual([{ name: "OnFailure" }]);
+    expect(mergeOutputs(previous, [], [])).toEqual([{ name: "OnFailure" }]);
+  });
+
+  test("a deleted output's name typed into a rule is declared again as a new output", () => {
+    const previous = [{ name: "OnFailure" }, { name: "gone", color: "x" }];
+    expect(mergeOutputs(previous, [], ["gone"])).toEqual([{ name: "OnFailure" }, { name: "gone" }]);
   });
 
   test("appends added rows, then referenced names the node never declared, once each", () => {
@@ -155,15 +169,118 @@ describe("outputReferences", () => {
     expect(references.matchRules).toEqual([0]);
   });
 
-  test("a blank row is referenced by nothing but its own edges", () => {
+  test("a blanked row still answers to the name it was loaded under, and never to a blank reference", () => {
     const rows = [row("", "a")];
     const references = outputReferences(rows[0], rows, {
       ...node,
-      matchRules: [{ pattern: "", edgeName: "" }],
+      matchRules: [
+        { pattern: "A", edgeName: "a" },
+        { pattern: "", edgeName: "" },
+      ],
       defaultEdge: "",
     });
-    expect(references.matchRules).toEqual([]);
+    expect(references.matchRules).toEqual([0]);
     expect(references.defaultEdge).toBe(false);
     expect(references.wired).toEqual([{ name: "a", targetLabel: "Fix" }]);
+  });
+});
+
+describe("wiredOutputsOf", () => {
+  const nodes = [
+    { id: "n-ai", data: { label: "Reviewer" } },
+    { id: "n-fix", data: { label: "Fix it" } },
+    { id: "n-nolabel", data: {} },
+  ] as Node[];
+  const edge = (id: string, source: string, target: string, edgeType: EdgeType, name?: string) =>
+    ({ id, source, target, data: { edgeType, name } }) as Edge;
+
+  test("lists the Custom edges leaving the node with the label of the node each reaches", () => {
+    const edges = [
+      edge("e1", "n-ai", "n-fix", EdgeType.Custom, "reject"),
+      edge("e2", "n-ai", "n-fix", EdgeType.OnSuccess),
+      edge("e3", "n-fix", "n-ai", EdgeType.Custom, "again"),
+      edge("e4", "n-ai", "n-nolabel", EdgeType.Custom, "park"),
+      edge("e5", "n-ai", "n-fix", EdgeType.Custom, ""),
+    ];
+    expect(wiredOutputsOf("n-ai", edges, nodes)).toEqual([
+      { name: "reject", targetLabel: "Fix it" },
+      { name: "park", targetLabel: "n-nolabel" },
+    ]);
+  });
+});
+
+describe("nodeSettingsProblems", () => {
+  const settings = {
+    rows: [row("reject", "reject")],
+    fixed: [],
+    matchRules: [{ pattern: "REJECT", edgeName: "reject" }],
+    cases: [{ variant: "PrExists", subject: "", pattern: "", tag: "", edgeName: "has-pr" }],
+    defaultEdge: "otherwise",
+  };
+
+  test("settings that resolve have no problems", () => {
+    expect(hasSettingsProblems(nodeSettingsProblems(NodeType.AI, settings))).toBe(false);
+    expect(hasSettingsProblems(nodeSettingsProblems(NodeType.Condition, settings))).toBe(false);
+  });
+
+  test("a new name is fine: saving declares it", () => {
+    const problems = nodeSettingsProblems(NodeType.AI, {
+      ...settings,
+      matchRules: [{ pattern: "NEW", edgeName: "brand-new" }],
+    });
+    expect(problems.matchRules).toEqual([null]);
+  });
+
+  test("a rule with a pattern and no output, or routing to success/failure, is a problem", () => {
+    const problems = nodeSettingsProblems(NodeType.AI, {
+      ...settings,
+      matchRules: [
+        { pattern: "X", edgeName: " " },
+        { pattern: "Y", edgeName: "OnFailure" },
+        { pattern: "", edgeName: "" },
+      ],
+    });
+    expect(problems.matchRules).toEqual([
+      "Name the output this rule routes to.",
+      "'OnFailure' is taken by the success and failure edges; route to a named output.",
+      null,
+    ]);
+    expect(hasSettingsProblems(problems)).toBe(true);
+  });
+
+  test("a case or default with no output, or routing to success/failure, is a problem", () => {
+    const problems = nodeSettingsProblems(NodeType.Condition, {
+      ...settings,
+      cases: [
+        { ...settings.cases[0], edgeName: "" },
+        { ...settings.cases[0], edgeName: "OnSuccess" },
+      ],
+      defaultEdge: "  ",
+    });
+    expect(problems.cases).toEqual([
+      "Name the output this case routes to.",
+      "'OnSuccess' is taken by the success and failure edges; route to a named output.",
+    ]);
+    expect(problems.defaultEdge).toBe(
+      "A default output is required: name the output taken when no case matches.",
+    );
+  });
+
+  test("rules are checked only on AI nodes, and cases and the default only on Conditions", () => {
+    const broken = {
+      ...settings,
+      matchRules: [{ pattern: "X", edgeName: "" }],
+      cases: [{ ...settings.cases[0], edgeName: "" }],
+      defaultEdge: "",
+    };
+    expect(hasSettingsProblems(nodeSettingsProblems(NodeType.Human, broken))).toBe(false);
+  });
+
+  test("an output row problem blocks saving too", () => {
+    expect(
+      hasSettingsProblems(
+        nodeSettingsProblems(NodeType.Human, { ...settings, rows: [row("", "a")] }),
+      ),
+    ).toBe(true);
   });
 });

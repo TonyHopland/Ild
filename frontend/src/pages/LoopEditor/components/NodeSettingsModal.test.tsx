@@ -236,10 +236,10 @@ describe("NodeSettingsModal condition node", () => {
     });
 
     expect(screen.getByLabelText("Case variant 1")).toBeTruthy();
-    expect((screen.getByLabelText("Case edge name 1") as HTMLInputElement).value).toBe("approved");
+    expect((screen.getByLabelText("Case 1 output") as HTMLInputElement).value).toBe("approved");
     expect((screen.getByLabelText("Case pattern 1") as HTMLInputElement).value).toBe("approve");
     expect(screen.queryByLabelText("Case tag 1")).toBeNull();
-    expect((screen.getByLabelText("Default edge") as HTMLInputElement).value).toBe("otherwise");
+    expect((screen.getByLabelText("Default output") as HTMLInputElement).value).toBe("otherwise");
     // Output is still shown for the switch.
     expect(screen.getByLabelText("Output")).toBeTruthy();
   });

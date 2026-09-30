@@ -8,6 +8,7 @@ import {
   parallelLabelOffset,
   PARALLEL_LABEL_STAGGER,
   LOOP_EDGE_TYPE,
+  updateOutputEdges,
 } from "./edgeUtils";
 import { EdgeType, NodeType } from "../types";
 
@@ -176,5 +177,65 @@ describe("appendEdge", () => {
     });
     expect(appendEdge(built, edges)).toEqual([built]);
     expect(edges).toHaveLength(0);
+  });
+});
+
+describe("updateOutputEdges", () => {
+  const edge = (id: string, source: string, edgeType: EdgeType, name?: string): Edge => ({
+    ...buildEdge({
+      source,
+      target: "n-next",
+      edgeType,
+      name,
+      sourceHandle: "respond",
+      targetHandle: "in",
+    }),
+    id,
+  });
+  const custom = (id: string, source: string, name: string) =>
+    edge(id, source, EdgeType.Custom, name);
+  const namesFrom = (edges: Edge[], source: string) =>
+    edges
+      .filter((e) => e.source === source)
+      .map((e) => [(e.data as { name?: string }).name, e.label]);
+
+  test("removes the Custom edges of a deleted output and keeps every other edge", () => {
+    const edges = [
+      custom("e1", "n-ai", "reject"),
+      custom("e2", "n-ai", "keep"),
+      custom("e3", "n-other", "reject"),
+      edge("e4", "n-ai", EdgeType.OnSuccess),
+    ];
+    const updated = updateOutputEdges(edges, "n-ai", new Map(), new Set(["reject"]));
+    expect(updated.map((e) => e.id)).toEqual(["e2", "e3", "e4"]);
+  });
+
+  test("renames the Custom edges of a renamed output, label included", () => {
+    const edges = [custom("e1", "n-ai", "reject"), custom("e2", "n-other", "reject")];
+    const updated = updateOutputEdges(edges, "n-ai", new Map([["reject", "rework"]]), new Set());
+    expect(namesFrom(updated, "n-ai")).toEqual([["rework", "rework"]]);
+    expect(namesFrom(updated, "n-other")).toEqual([["reject", "reject"]]);
+  });
+
+  test("swaps the edges of two outputs that swapped names", () => {
+    const edges = [custom("e1", "n-ai", "a"), custom("e2", "n-ai", "b")];
+    const updated = updateOutputEdges(
+      edges,
+      "n-ai",
+      new Map([
+        ["a", "b"],
+        ["b", "a"],
+      ]),
+      new Set(),
+    );
+    expect(updated.map((e) => [e.id, (e.data as { name?: string }).name])).toEqual([
+      ["e1", "b"],
+      ["e2", "a"],
+    ]);
+  });
+
+  test("returns the same list when nothing was renamed or deleted", () => {
+    const edges = [custom("e1", "n-ai", "a")];
+    expect(updateOutputEdges(edges, "n-ai", new Map(), new Set())).toBe(edges);
   });
 });

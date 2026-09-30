@@ -15,7 +15,8 @@ import ConfirmModal from "../../../components/ConfirmModal";
 import {
   isReferenced,
   outputReferences,
-  outputRowProblems,
+  hasSettingsProblems,
+  nodeSettingsProblems,
   type OutputReferences,
   type OutputRow,
   type WiredOutput,
@@ -133,7 +134,7 @@ function OutputsEditor({
             <div className="match-rule-row">
               <input
                 type="text"
-                aria-label={`Output name ${index + 1}`}
+                aria-label={`Output ${index + 1}`}
                 aria-invalid={problem !== null}
                 className={problem ? "input-error" : ""}
                 value={row.output.name}
@@ -201,9 +202,11 @@ const EMPTY_CONDITION_CASE: ConditionCase = {
  */
 function ConditionCasesEditor({
   cases,
+  problems,
   onChange,
 }: {
   cases: ConditionCase[];
+  problems: (string | null)[];
   onChange: (value: ConditionCase[]) => void;
 }) {
   const update = (index: number, patch: Partial<ConditionCase>) =>
@@ -230,10 +233,12 @@ function ConditionCasesEditor({
             </select>
             <input
               type="text"
-              aria-label={`Case edge name ${index + 1}`}
+              aria-label={`Case ${index + 1} output`}
+              aria-invalid={problems[index] != null}
+              className={problems[index] ? "input-error" : ""}
               value={c.edgeName}
               onChange={(event) => update(index, { edgeName: event.target.value })}
-              placeholder="Edge name"
+              placeholder="Output name"
             />
             <button
               type="button"
@@ -244,6 +249,7 @@ function ConditionCasesEditor({
               ×
             </button>
           </div>
+          {problems[index] && <div className="validation-error">{problems[index]}</div>}
           {c.variant === "TextMatches" && (
             <>
               <PromptEditor
@@ -386,10 +392,13 @@ export function NodeSettingsModal({
   onConditionOutputChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
-  const rowProblems = outputRowProblems(outputRows, fixedOutputs);
-  const defaultEdgeMissing =
-    selectedNodeType === NodeType.Condition && conditionDefaultEdge.trim() === "";
-  const canSave = rowProblems.every((problem) => problem === null) && !defaultEdgeMissing;
+  const problems = nodeSettingsProblems(selectedNodeType, {
+    rows: outputRows,
+    fixed: fixedOutputs,
+    matchRules: aiMatchRules,
+    cases: conditionCases,
+    defaultEdge: conditionDefaultEdge,
+  });
   const [pendingDelete, setPendingDelete] = useState<OutputRow | null>(null);
 
   const referencesOf = (row: OutputRow): OutputReferences =>
@@ -426,7 +435,7 @@ export function NodeSettingsModal({
           (i) => `Match rule ${i + 1} (${aiMatchRules[i].pattern || "no pattern"})`,
         ),
         ...pendingReferences.cases.map((i) => `Case ${i + 1} (${conditionCases[i].variant})`),
-        ...(pendingReferences.defaultEdge ? ["The default edge (you will pick a new one)"] : []),
+        ...(pendingReferences.defaultEdge ? ["The default output (you will pick a new one)"] : []),
       ]
     : [];
 
@@ -435,7 +444,7 @@ export function NodeSettingsModal({
       rows={outputRows}
       fixed={fixedOutputs}
       nodeType={selectedNodeType}
-      problems={rowProblems}
+      problems={problems.outputs}
       onChange={onOutputRowsChange}
       onRemove={requestDelete}
     />
@@ -555,45 +564,54 @@ export function NodeSettingsModal({
                     the success edge. A name not yet in Outputs is added on save.
                   </small>
                   {aiMatchRules.map((rule, index) => (
-                    <div key={index} className="match-rule-row">
-                      <input
-                        type="text"
-                        aria-label={`Match pattern ${index + 1}`}
-                        value={rule.pattern}
-                        onChange={(event) =>
-                          onAiMatchRulesChange(
-                            aiMatchRules.map((existing, i) =>
-                              i === index ? { ...existing, pattern: event.target.value } : existing,
-                            ),
-                          )
-                        }
-                        placeholder="Match pattern (regex)"
-                      />
-                      <input
-                        type="text"
-                        aria-label={`Edge name ${index + 1}`}
-                        value={rule.edgeName}
-                        onChange={(event) =>
-                          onAiMatchRulesChange(
-                            aiMatchRules.map((existing, i) =>
-                              i === index
-                                ? { ...existing, edgeName: event.target.value }
-                                : existing,
-                            ),
-                          )
-                        }
-                        placeholder="Edge name"
-                      />
-                      <button
-                        type="button"
-                        className="match-rule-remove"
-                        aria-label={`Remove rule ${index + 1}`}
-                        onClick={() =>
-                          onAiMatchRulesChange(aiMatchRules.filter((_, i) => i !== index))
-                        }
-                      >
-                        ×
-                      </button>
+                    <div key={index}>
+                      <div className="match-rule-row">
+                        <input
+                          type="text"
+                          aria-label={`Match pattern ${index + 1}`}
+                          value={rule.pattern}
+                          onChange={(event) =>
+                            onAiMatchRulesChange(
+                              aiMatchRules.map((existing, i) =>
+                                i === index
+                                  ? { ...existing, pattern: event.target.value }
+                                  : existing,
+                              ),
+                            )
+                          }
+                          placeholder="Match pattern (regex)"
+                        />
+                        <input
+                          type="text"
+                          aria-label={`Output name ${index + 1}`}
+                          aria-invalid={problems.matchRules[index] != null}
+                          className={problems.matchRules[index] ? "input-error" : ""}
+                          value={rule.edgeName}
+                          onChange={(event) =>
+                            onAiMatchRulesChange(
+                              aiMatchRules.map((existing, i) =>
+                                i === index
+                                  ? { ...existing, edgeName: event.target.value }
+                                  : existing,
+                              ),
+                            )
+                          }
+                          placeholder="Output name"
+                        />
+                        <button
+                          type="button"
+                          className="match-rule-remove"
+                          aria-label={`Remove rule ${index + 1}`}
+                          onClick={() =>
+                            onAiMatchRulesChange(aiMatchRules.filter((_, i) => i !== index))
+                          }
+                        >
+                          ×
+                        </button>
+                      </div>
+                      {problems.matchRules[index] && (
+                        <div className="validation-error">{problems.matchRules[index]}</div>
+                      )}
                     </div>
                   ))}
                   <button
@@ -718,23 +736,25 @@ export function NodeSettingsModal({
 
               {outputsEditor}
 
-              <ConditionCasesEditor cases={conditionCases} onChange={onConditionCasesChange} />
+              <ConditionCasesEditor
+                cases={conditionCases}
+                problems={problems.cases}
+                onChange={onConditionCasesChange}
+              />
 
               <div className="config-field">
-                <label htmlFor="condition-default-edge">Default edge</label>
+                <label htmlFor="condition-default-edge">Default output</label>
                 <input
                   id="condition-default-edge"
                   type="text"
-                  className={defaultEdgeMissing ? "input-error" : ""}
-                  aria-invalid={defaultEdgeMissing}
+                  className={problems.defaultEdge ? "input-error" : ""}
+                  aria-invalid={problems.defaultEdge !== null}
                   value={conditionDefaultEdge}
                   onChange={(event) => onConditionDefaultEdgeChange(event.target.value)}
-                  placeholder="Edge name"
+                  placeholder="Output name"
                 />
-                {defaultEdgeMissing && (
-                  <div className="validation-error">
-                    A default edge is required: name the output taken when no case matches.
-                  </div>
+                {problems.defaultEdge && (
+                  <div className="validation-error">{problems.defaultEdge}</div>
                 )}
                 <small className="config-help-text">
                   Taken when no case matches. Connect it from the node's top handle.
@@ -764,7 +784,11 @@ export function NodeSettingsModal({
             <button className="node-settings-btn-cancel" onClick={onClose}>
               Cancel
             </button>
-            <button className="node-settings-btn-save" onClick={onSave} disabled={!canSave}>
+            <button
+              className="node-settings-btn-save"
+              onClick={onSave}
+              aria-disabled={hasSettingsProblems(problems)}
+            >
               Save
             </button>
           </div>

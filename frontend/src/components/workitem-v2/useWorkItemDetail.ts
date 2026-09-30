@@ -628,7 +628,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleReject = () =>
     submitAnswer((id, input) => workItemService.humanFeedbackReject(id, input || undefined));
 
-  // Route the parked node to one of its named custom edges (a Human/PR button).
+  // Route the parked node to one of its named outputs (a Human/PR button).
   const handleEdge = (name: string) =>
     submitAnswer((id, input) => workItemService.humanFeedbackEdge(id, name, input));
 

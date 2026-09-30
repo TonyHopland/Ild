@@ -47,9 +47,11 @@ import {
 } from "../../utils/edgeUtils";
 import {
   fixedNamedOutputs,
+  hasSettingsProblems,
   initialOutputs,
   mergeOutputs,
   namedOutputNames,
+  nodeSettingsProblems,
   outputRenames,
   outputRowsOf,
   readFixedOutputs,
@@ -183,11 +185,12 @@ function readConditionCases(config: Record<string, unknown>): ConditionCase[] {
   return [{ ...CONDITION_DEFAULT_CASE }];
 }
 
-/** Reads a Condition switch's default edge, falling back to the starter default. */
+/**
+ * Reads a Condition switch's default output. A missing one reads as blank,
+ * which the settings show as an error to fix rather than filling in a guess.
+ */
 function readConditionDefaultEdge(config: Record<string, unknown>): string {
-  return typeof config.defaultEdge === "string" && config.defaultEdge.trim() !== ""
-    ? config.defaultEdge
-    : CONDITION_DEFAULT_EDGE;
+  return typeof config.defaultEdge === "string" ? config.defaultEdge : "";
 }
 
 export default function LoopEditor() {
@@ -247,7 +250,7 @@ export default function LoopEditor() {
   const [prDescriptionTemplate, setPrDescriptionTemplate] = useState("");
   const [prCommentTemplate, setPrCommentTemplate] = useState("");
   const [conditionCases, setConditionCases] = useState<ConditionCase[]>([]);
-  const [conditionDefaultEdge, setConditionDefaultEdge] = useState(CONDITION_DEFAULT_EDGE);
+  const [conditionDefaultEdge, setConditionDefaultEdge] = useState("");
   const [conditionOutput, setConditionOutput] = useState(CONDITION_DEFAULT_TEMPLATE);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -1135,6 +1138,17 @@ export default function LoopEditor() {
     if (!selectedNode) return;
     const selectedNodeType = (selectedNode.data as { type: string }).type;
 
+    // The modal shows these problems where they are; saving is refused here as
+    // well, so nothing the server would reject reaches the canvas.
+    const problems = nodeSettingsProblems(selectedNodeType as NodeType, {
+      rows: outputRows,
+      fixed: fixedNamedOutputs(selectedNodeType as NodeType, fixedOutputs),
+      matchRules: aiMatchRules,
+      cases: conditionCases,
+      defaultEdge: conditionDefaultEdge,
+    });
+    if (hasSettingsProblems(problems)) return;
+
     if (selectedNodeType === NodeType.AI && aiUseSession && !aiSessionPlaceholder.trim()) {
       setErrorText("AI nodes with Use Session enabled must set a session placeholder.");
       return;
@@ -1251,6 +1265,7 @@ export default function LoopEditor() {
     aiMatchRules,
     outputRows,
     originalNodeConfig,
+    fixedOutputs,
     aiSessionPlaceholder,
     aiForkFromPlaceholder,
     aiTools,
@@ -1343,7 +1358,7 @@ export default function LoopEditor() {
       let nextEdgeType = EdgeType.OnSuccess;
       if (connection.sourceHandle === "fail") nextEdgeType = EdgeType.OnFailure;
       // The top handle is the single custom outlet; the edge name is chosen in
-      // the Configure-Edge panel's "Which edge?" dropdown.
+      // the Configure-Edge panel's "Which output?" dropdown.
       if (connection.sourceHandle === "respond") nextEdgeType = EdgeType.Custom;
 
       const result = checkEdgeConstraints(
@@ -1734,7 +1749,7 @@ export default function LoopEditor() {
                     pendingConnection={pendingConnection !== null}
                     edgeType={edgeType}
                     edgeName={edgeName}
-                    customEdgeOptions={namedOutputNames(
+                    outputOptions={namedOutputNames(
                       nodes.find((node) => node.id === pendingConnection?.source),
                       fixedOutputs,
                     )}

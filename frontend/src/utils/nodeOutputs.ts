@@ -137,12 +137,83 @@ export function outputRowProblems(rows: OutputRow[], fixed: NodeOutput[]): (stri
   });
 }
 
-/** Old name → new name for every loaded output the rows renamed. */
+/** Why each settings field of a node cannot be saved; null where it can. */
+export interface SettingsProblems {
+  outputs: (string | null)[];
+  matchRules: (string | null)[];
+  cases: (string | null)[];
+  defaultEdge: string | null;
+}
+
+/**
+ * Everything in a node's settings that the server would refuse, checked where
+ * the author can fix it: the output rows ({@link outputRowProblems}), and every
+ * output name a match rule, case or default routes to. Such a name must be set
+ * and must not be success or failure, which are taken by the edge's own type;
+ * any other name is either declared or declared on save. A match rule with no
+ * pattern and no output is an unfinished row that saving drops.
+ */
+export function nodeSettingsProblems(
+  type: NodeType,
+  settings: {
+    rows: OutputRow[];
+    fixed: NodeOutput[];
+    matchRules: AiMatchRule[];
+    cases: ConditionCase[];
+    defaultEdge: string;
+  },
+): SettingsProblems {
+  const routeProblem = (name: string, missing: string) => {
+    const trimmed = name.trim();
+    if (trimmed === "") return missing;
+    return isSuccessOrFailure(trimmed)
+      ? `'${trimmed}' is taken by the success and failure edges; route to a named output.`
+      : null;
+  };
+  return {
+    outputs: outputRowProblems(settings.rows, settings.fixed),
+    matchRules:
+      type === NodeType.AI
+        ? settings.matchRules.map((rule) =>
+            rule.pattern.trim() === "" && rule.edgeName.trim() === ""
+              ? null
+              : routeProblem(rule.edgeName, "Name the output this rule routes to."),
+          )
+        : [],
+    cases:
+      type === NodeType.Condition
+        ? settings.cases.map((c) =>
+            routeProblem(c.edgeName, "Name the output this case routes to."),
+          )
+        : [],
+    defaultEdge:
+      type === NodeType.Condition
+        ? routeProblem(
+            settings.defaultEdge,
+            "A default output is required: name the output taken when no case matches.",
+          )
+        : null,
+  };
+}
+
+/** Whether any field of the node's settings has a problem, so they cannot be saved. */
+export function hasSettingsProblems(problems: SettingsProblems): boolean {
+  return (
+    [...problems.outputs, ...problems.matchRules, ...problems.cases].some((p) => p !== null) ||
+    problems.defaultEdge !== null
+  );
+}
+
+/**
+ * Old name → new name for every loaded output the rows renamed. A blank name is
+ * not a rename: that row is a problem to fix ({@link outputRowProblems}), and
+ * until it is fixed the output keeps the name it was loaded under.
+ */
 export function outputRenames(rows: OutputRow[]): Map<string, string> {
   const renames = new Map<string, string>();
   for (const row of rows) {
     const name = row.output.name.trim();
-    if (row.originalName !== null && name !== row.originalName) {
+    if (row.originalName !== null && name !== "" && name !== row.originalName) {
       renames.set(row.originalName, name);
     }
   }
@@ -165,9 +236,10 @@ export function outputReferences(
   },
 ): OutputReferences {
   const renames = outputRenames(rows);
-  const name = row.output.name.trim();
+  // A row blanked in this edit still answers to the name it was loaded under.
+  const name = row.output.name.trim() || row.originalName;
   const routesHere = (reference: string) =>
-    name !== "" && (renames.get(reference.trim()) ?? reference.trim()) === name;
+    !!name && (renames.get(reference.trim()) ?? reference.trim()) === name;
   const indexesOf = <T>(items: T[], referenceOf: (item: T) => string) =>
     items.flatMap((item, index) => (routesHere(referenceOf(item)) ? [index] : []));
   return {
@@ -193,9 +265,10 @@ export function isReferenced(references: OutputReferences): boolean {
  * The node's new `outputs`: every existing entry stays where it is — success
  * and failure untouched, a named one as its row now has it (renamed, with every
  * other field kept) or dropped when its row was deleted — then the added rows,
- * then any name in `referenced` the node never declared. A name that was
- * declared and whose row was deleted is not brought back. Entries that are not
- * well-formed are kept for the server to report.
+ * then any name in `referenced` it does not declare now — a name typed into a
+ * rule, case or default is declared like any new one, even when an output of
+ * that name was deleted in this edit. Entries that are not well-formed are kept
+ * for the server to report.
  */
 export function mergeOutputs(
   previous: unknown,
@@ -221,7 +294,7 @@ export function mergeOutputs(
     if (!placed.has(row)) place(row);
   }
 
-  const declared = new Set([...result, ...entries].map(nameOf));
+  const declared = new Set(result.map(nameOf));
   for (const name of referenced) {
     if (name !== "" && !isSuccessOrFailure(name) && !declared.has(name)) {
       declared.add(name);

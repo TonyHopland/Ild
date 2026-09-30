@@ -270,7 +270,7 @@ describe("Loop Editor — node outputs", () => {
     expect(within(dialog).queryAllByDisplayValue("OnSuccess")).toHaveLength(0);
     expect(within(dialog).queryAllByDisplayValue("OnFailure")).toHaveLength(0);
 
-    const ruleEdge = within(dialog).getByLabelText("Edge name 1");
+    const ruleEdge = within(dialog).getByLabelText("Output name 1");
     fireEvent.change(outputField(dialog, "reject", [ruleEdge]), { target: { value: "rework" } });
 
     const saved = await saveLoop(dialog, calls);
@@ -306,7 +306,7 @@ describe("Loop Editor — node outputs", () => {
       "Gate",
     );
 
-    const caseEdge = within(dialog).getByLabelText("Case edge name 1");
+    const caseEdge = within(dialog).getByLabelText("Case 1 output");
     fireEvent.change(outputField(dialog, "has-pr", [caseEdge]), { target: { value: "pr-open" } });
 
     const saved = await saveLoop(dialog, calls);
@@ -343,7 +343,7 @@ describe("Loop Editor — node outputs", () => {
       fireEvent.change(within(dialog).getByLabelText("Match pattern 1"), {
         target: { value: "ESCALATE" },
       });
-      fireEvent.change(within(dialog).getByLabelText("Edge name 1"), {
+      fireEvent.change(within(dialog).getByLabelText("Output name 1"), {
         target: { value: "escalate" },
       });
 
@@ -499,6 +499,22 @@ describe("Loop Editor — deleting and naming outputs", () => {
     },
   });
 
+  const gate = (config: Record<string, unknown> = {}): TemplateNode => ({
+    id: "n-gate",
+    type: NodeType.Condition,
+    label: "Gate",
+    config: {
+      cases: [
+        { variant: "PrExists", edgeName: "has-pr" },
+        { variant: "HasTag", tag: "urgent", edgeName: "otherwise" },
+      ],
+      defaultEdge: "otherwise",
+      output: "{{Node.Input}}",
+      outputs: [{ name: "OnFailure" }, { name: "has-pr" }, { name: "otherwise" }],
+      ...config,
+    },
+  });
+
   function wiredOutputNames(saved: { edges: TemplateEdge[] }, source: string) {
     return saved.edges
       .filter((e) => e.sourceNodeId === source && e.edgeType === EdgeType.Custom)
@@ -506,7 +522,26 @@ describe("Loop Editor — deleting and naming outputs", () => {
   }
 
   function saveButton(dialog: HTMLElement) {
-    return within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    return within(dialog).getByRole("button", { name: "Save" });
+  }
+
+  /** Save is shown as unavailable, and clicking it anyway keeps the settings open. */
+  function expectSaveRefused(dialog: HTMLElement) {
+    expect(saveButton(dialog).getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(saveButton(dialog));
+    expect(screen.getByRole("dialog", { name: "Node Settings" })).toBeTruthy();
+  }
+
+  function expectSaveAvailable(dialog: HTMLElement) {
+    expect(saveButton(dialog).getAttribute("aria-disabled")).toBe("false");
+  }
+
+  async function confirmDelete(dialog: HTMLElement, field: HTMLElement) {
+    fireEvent.click(removeButtonFor(field));
+    const confirm = await screen.findByRole("dialog", { name: "Delete output" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete output" }));
+    expect(screen.queryByRole("dialog", { name: "Delete output" })).toBeNull();
+    return dialog;
   }
 
   test("deleting a used output asks first, and cancelling changes nothing", async () => {
@@ -514,7 +549,7 @@ describe("Loop Editor — deleting and naming outputs", () => {
       { template: templateWith(reviewer(), ["reject"]) },
       "Reviewer",
     );
-    const rule = within(dialog).getByLabelText("Edge name 1");
+    const rule = within(dialog).getByLabelText("Output name 1");
 
     fireEvent.click(removeButtonFor(outputField(dialog, "reject", [rule])));
 
@@ -539,13 +574,10 @@ describe("Loop Editor — deleting and naming outputs", () => {
       { template: templateWith(reviewer(), ["reject"]) },
       "Reviewer",
     );
-    const rule = within(dialog).getByLabelText("Edge name 1");
+    const rule = within(dialog).getByLabelText("Output name 1");
 
-    fireEvent.click(removeButtonFor(outputField(dialog, "reject", [rule])));
-    const confirm = await screen.findByRole("dialog", { name: "Delete output" });
-    fireEvent.click(within(confirm).getByRole("button", { name: "Delete output" }));
+    await confirmDelete(dialog, outputField(dialog, "reject", [rule]));
 
-    expect(screen.queryByRole("dialog", { name: "Delete output" })).toBeNull();
     expect(within(dialog).queryAllByDisplayValue("reject")).toHaveLength(0);
     expect(within(dialog).queryByLabelText("Match pattern 1")).toBeNull();
 
@@ -555,6 +587,30 @@ describe("Loop Editor — deleting and naming outputs", () => {
     expect(outputs).toContainEqual({ name: "spare", visible: false });
     expect(configOf(saved, "n-ai").matchRules).toEqual([]);
     expect(wiredOutputNames(saved, "n-ai")).toEqual([]);
+  });
+
+  test("cancelling the settings after a confirmed delete keeps the output, its edge and its rule", async () => {
+    const { calls, dialog } = await openNode(
+      { template: templateWith(reviewer(), ["reject"]) },
+      "Reviewer",
+    );
+    const rule = within(dialog).getByLabelText("Output name 1");
+    await confirmDelete(dialog, outputField(dialog, "reject", [rule]));
+
+    const settingsCancel = dialog.querySelector(".node-settings-btn-cancel") as HTMLElement;
+    fireEvent.click(settingsCancel);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
+
+    fireEvent.click(screen.getByText("Reviewer"));
+    const reopened = await screen.findByRole("dialog", { name: "Node Settings" });
+    const reopenedRule = within(reopened).getByLabelText("Output name 1") as HTMLInputElement;
+    expect(reopenedRule.value).toBe("reject");
+    expect(outputField(reopened, "reject", [reopenedRule])).toBeTruthy();
+
+    const saved = await saveLoop(reopened, calls);
+    expect(outputsOf(saved, "n-ai")).toContainEqual({ name: "reject", color: "red" });
+    expect(configOf(saved, "n-ai").matchRules).toEqual([{ pattern: "REJECT", edgeName: "reject" }]);
+    expect(wiredOutputNames(saved, "n-ai")).toEqual(["reject"]);
   });
 
   test("an output nothing uses is deleted without asking", async () => {
@@ -573,46 +629,122 @@ describe("Loop Editor — deleting and naming outputs", () => {
     expect(wiredOutputNames(saved, "n-ai")).toEqual(["reject"]);
   });
 
-  test("deleting the Condition default's output clears the default and asks for a new one", async () => {
-    const gate: TemplateNode = {
-      id: "n-gate",
-      type: NodeType.Condition,
-      label: "Gate",
-      config: {
-        cases: [
-          { variant: "PrExists", edgeName: "has-pr" },
-          { variant: "HasTag", tag: "urgent", edgeName: "otherwise" },
-        ],
-        defaultEdge: "otherwise",
-        output: "{{Node.Input}}",
-        outputs: [{ name: "OnFailure" }, { name: "has-pr" }, { name: "otherwise" }],
-      },
-    };
+  test("a deleted output's name typed into a new rule is declared again as a new output", async () => {
+    const { calls, dialog } = await openNode(
+      { template: templateWith(reviewer(), ["reject"]) },
+      "Reviewer",
+    );
+    await confirmDelete(
+      dialog,
+      outputField(dialog, "reject", [within(dialog).getByLabelText("Output name 1")]),
+    );
+
+    fireEvent.click(within(dialog).getByText("+ Add rule"));
+    fireEvent.change(within(dialog).getByLabelText("Match pattern 1"), {
+      target: { value: "REDO" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Output name 1"), {
+      target: { value: "reject" },
+    });
+
+    const saved = await saveLoop(dialog, calls);
+    const outputs = outputsOf(saved, "n-ai");
+    expect(outputs.filter((o) => o.name === "reject")).toEqual([{ name: "reject" }]);
+    expect(configOf(saved, "n-ai").matchRules).toEqual([{ pattern: "REDO", edgeName: "reject" }]);
+    expect(wiredOutputNames(saved, "n-ai")).toEqual([]);
+  });
+
+  test.each([
+    ["no output", "", "Name the output this rule routes to."],
+    [
+      "success",
+      "OnSuccess",
+      "'OnSuccess' is taken by the success and failure edges; route to a named output.",
+    ],
+  ])("a match rule routing to %s is an error in the settings", async (_, name, message) => {
+    const { calls, dialog } = await openNode(
+      { template: templateWith(reviewer(), ["reject"]) },
+      "Reviewer",
+    );
+    const ruleOutput = within(dialog).getByLabelText("Output name 1");
+
+    fireEvent.change(ruleOutput, { target: { value: name } });
+
+    expect(within(dialog).getByText(message)).toBeTruthy();
+    expect(ruleOutput.getAttribute("aria-invalid")).toBe("true");
+    expectSaveRefused(dialog);
+
+    fireEvent.change(ruleOutput, { target: { value: "reject" } });
+    expectSaveAvailable(dialog);
+    const saved = await saveLoop(dialog, calls);
+    expect(configOf(saved, "n-ai").matchRules).toEqual([{ pattern: "REJECT", edgeName: "reject" }]);
+  });
+
+  test("a case with no output is an error in the settings", async () => {
     const { dialog } = await openNode(
-      { template: templateWith(gate, ["has-pr", "otherwise"]) },
+      { template: templateWith(gate(), ["has-pr", "otherwise"]) },
       "Gate",
     );
-    const defaultEdge = within(dialog).getByLabelText("Default edge") as HTMLInputElement;
-    const caseEdge = within(dialog).getByLabelText("Case edge name 2");
+    const caseOutput = within(dialog).getByLabelText("Case 1 output");
 
-    fireEvent.click(removeButtonFor(outputField(dialog, "otherwise", [defaultEdge, caseEdge])));
+    fireEvent.change(caseOutput, { target: { value: " " } });
+
+    expect(within(dialog).getByText("Name the output this case routes to.")).toBeTruthy();
+    expectSaveRefused(dialog);
+    fireEvent.change(caseOutput, { target: { value: "has-pr" } });
+    expectSaveAvailable(dialog);
+  });
+
+  test("deleting the Condition default's output clears it, asks for a new one and drops its edge", async () => {
+    const { calls, dialog } = await openNode(
+      { template: templateWith(gate(), ["has-pr", "otherwise"]) },
+      "Gate",
+    );
+    const defaultOutput = within(dialog).getByLabelText("Default output") as HTMLInputElement;
+    const caseOutput = within(dialog).getByLabelText("Case 2 output");
+
+    fireEvent.click(removeButtonFor(outputField(dialog, "otherwise", [defaultOutput, caseOutput])));
     const confirm = await screen.findByRole("dialog", { name: "Delete output" });
     expect(within(confirm).getByText("The edge to Tidy Up")).toBeTruthy();
     expect(within(confirm).getByText("Case 2 (HasTag)")).toBeTruthy();
-    expect(within(confirm).getByText(/default edge/i)).toBeTruthy();
+    expect(within(confirm).getByText(/default output/i)).toBeTruthy();
     fireEvent.click(within(confirm).getByRole("button", { name: "Delete output" }));
 
-    expect(defaultEdge.value).toBe("");
-    expect(within(dialog).getByText(/default edge is required/i)).toBeTruthy();
-    expect(within(dialog).queryByLabelText("Case edge name 2")).toBeNull();
-    expect((within(dialog).getByLabelText("Case edge name 1") as HTMLInputElement).value).toBe(
+    expect(defaultOutput.value).toBe("");
+    expect(within(dialog).getByText(/default output is required/i)).toBeTruthy();
+    expect(within(dialog).queryByLabelText("Case 2 output")).toBeNull();
+    expect((within(dialog).getByLabelText("Case 1 output") as HTMLInputElement).value).toBe(
       "has-pr",
     );
-    expect(saveButton(dialog).disabled).toBe(true);
+    expectSaveRefused(dialog);
 
-    fireEvent.change(defaultEdge, { target: { value: "has-pr" } });
-    expect(within(dialog).queryByText(/default edge is required/i)).toBeNull();
-    expect(saveButton(dialog).disabled).toBe(false);
+    fireEvent.change(defaultOutput, { target: { value: "has-pr" } });
+    expect(within(dialog).queryByText(/default output is required/i)).toBeNull();
+    expectSaveAvailable(dialog);
+
+    const saved = await saveLoop(dialog, calls);
+    const config = configOf(saved, "n-gate");
+    expect((outputsOf(saved, "n-gate") as Output[]).map((o) => o.name)).toEqual([
+      "OnFailure",
+      "has-pr",
+    ]);
+    expect(config.cases).toEqual([{ variant: "PrExists", edgeName: "has-pr" }]);
+    expect(config.defaultEdge).toBe("has-pr");
+    expect(wiredOutputNames(saved, "n-gate")).toEqual(["has-pr"]);
+  });
+
+  test("a Condition with no default opens with the default blank and the error showing", async () => {
+    const { defaultEdge: _dropped, ...withoutDefault } = gate().config;
+    const { dialog } = await openNode(
+      {
+        template: templateWith({ ...gate(), config: withoutDefault }, ["has-pr", "otherwise"]),
+      },
+      "Gate",
+    );
+
+    expect((within(dialog).getByLabelText("Default output") as HTMLInputElement).value).toBe("");
+    expect(within(dialog).getByText(/default output is required/i)).toBeTruthy();
+    expectSaveRefused(dialog);
   });
 
   test("a blank output name is an error to fix, not a delete", async () => {
@@ -620,7 +752,7 @@ describe("Loop Editor — deleting and naming outputs", () => {
       { template: templateWith(reviewer(), ["reject"]) },
       "Reviewer",
     );
-    const rule = within(dialog).getByLabelText("Edge name 1");
+    const rule = within(dialog).getByLabelText("Output name 1");
     const field = outputField(dialog, "reject", [rule]);
 
     fireEvent.change(field, { target: { value: "  " } });
@@ -628,10 +760,10 @@ describe("Loop Editor — deleting and naming outputs", () => {
     expect(screen.queryByRole("dialog", { name: "Delete output" })).toBeNull();
     expect(within(dialog).getByText("Give the output a name.")).toBeTruthy();
     expect(field.getAttribute("aria-invalid")).toBe("true");
-    expect(saveButton(dialog).disabled).toBe(true);
+    expectSaveRefused(dialog);
 
     fireEvent.change(field, { target: { value: "reject" } });
-    expect(saveButton(dialog).disabled).toBe(false);
+    expectSaveAvailable(dialog);
     const saved = await saveLoop(dialog, calls);
     expect(outputsOf(saved, "n-ai")).toContainEqual({ name: "reject", color: "red" });
     expect(wiredOutputNames(saved, "n-ai")).toEqual(["reject"]);
@@ -653,8 +785,6 @@ describe("Loop Editor — deleting and naming outputs", () => {
         `The node already has an output named '${taken}'. Pick another name.`,
       ),
     ).toBeTruthy();
-    expect(saveButton(dialog).disabled).toBe(true);
-    fireEvent.click(saveButton(dialog));
-    expect(screen.getByRole("dialog", { name: "Node Settings" })).toBeTruthy();
+    expectSaveRefused(dialog);
   });
 });
