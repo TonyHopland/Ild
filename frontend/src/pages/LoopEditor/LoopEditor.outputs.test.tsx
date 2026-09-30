@@ -5,7 +5,8 @@ import { AuthContext } from "../../hooks/useAuth";
 import { EdgeType, NodeType, RecoveryPolicy } from "../../types";
 
 // A node declares each of its outputs once, as an object in config.outputs. The
-// editor lists the named ones, keeps whatever else an output object carries, and
+// editor lists a Human or PR node's outputs, derives an AI or Condition node's
+// from what routes to them, keeps whatever else an output object carries, and
 // learns the fixed and reserved outputs of each node type from the server.
 
 vi.mock("../../hooks/useSignalR", () => ({
@@ -133,8 +134,15 @@ interface TemplateEdge {
   name?: string | null;
 }
 
-/** Start → {node} → Cleanup, plus the node's own Custom edges into Cleanup. */
-function templateWith(node: TemplateNode, wiredNames: string[] = []) {
+/**
+ * Start → {node} → Cleanup on success, plus the node's own Custom edges into
+ * Cleanup, and its failure edge too when `failureWired`.
+ */
+function templateWith(
+  node: TemplateNode,
+  wiredNames: string[] = [],
+  { failureWired = false }: { failureWired?: boolean } = {},
+) {
   const edges: TemplateEdge[] = [
     { id: "e-in", sourceNodeId: "n-start", targetNodeId: node.id, edgeType: EdgeType.OnSuccess },
     ...wiredNames.map((name) => ({
@@ -151,6 +159,14 @@ function templateWith(node: TemplateNode, wiredNames: string[] = []) {
       sourceNodeId: node.id,
       targetNodeId: "n-cleanup",
       edgeType: EdgeType.OnSuccess,
+    });
+  }
+  if (failureWired) {
+    edges.push({
+      id: "e-fail",
+      sourceNodeId: node.id,
+      targetNodeId: "n-cleanup",
+      edgeType: EdgeType.OnFailure,
     });
   }
   return {
@@ -186,6 +202,11 @@ async function openNode(server: Server, label: string) {
 /** Saves the node settings, then the loop, and returns what was sent to the server. */
 async function saveLoop(dialog: HTMLElement, calls: Call[]) {
   fireEvent.click(within(dialog).getByText("Save"));
+  return saveTemplate(calls);
+}
+
+/** Once the node settings have closed, saves the loop and returns what was sent. */
+async function saveTemplate(calls: Call[]) {
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
   fireEvent.click(screen.getByText("Save"));
   fireEvent.click(await screen.findByText("Save changes"));
@@ -245,81 +266,125 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/** The eye button of the output called exactly `name`, or null when it has none. */
+function queryToggle(dialog: HTMLElement, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const label = new RegExp(
+    `^(Visible to|Hidden from) user: ${escaped}( \\(no edge connected\\))?$`,
+  );
+  const found = within(dialog).queryAllByRole("button", { name: label });
+  expect(found.length).toBeLessThanOrEqual(1);
+  return (found[0] as HTMLButtonElement | undefined) ?? null;
+}
+
+function toggle(dialog: HTMLElement, name: string) {
+  const found = queryToggle(dialog, name);
+  expect(found, name).not.toBeNull();
+  return found!;
+}
+
+function toggles(dialog: HTMLElement) {
+  return within(dialog).queryAllByRole("button", {
+    name: /^(Visible to|Hidden from) user: /,
+  }) as HTMLButtonElement[];
+}
+
+function isOn(button: HTMLElement) {
+  return button.getAttribute("aria-pressed") === "true";
+}
+
 describe("Loop Editor — node outputs", () => {
-  test("renaming an AI output keeps its other fields and renames its match rule and wired edge", async () => {
-    const ai: TemplateNode = {
-      id: "n-ai",
-      type: NodeType.AI,
-      label: "Reviewer",
-      config: {
-        prompt: "Review it",
-        outputs: [
-          { name: "OnSuccess" },
-          { name: "OnFailure" },
-          { name: "reject", visible: false, color: "x" },
-        ],
-        matchRules: [{ pattern: "REJECT", edgeName: "reject" }],
-      },
-    };
+  const reviewer = (): TemplateNode => ({
+    id: "n-ai",
+    type: NodeType.AI,
+    label: "Reviewer",
+    config: {
+      prompt: "Review it",
+      matchRules: [{ pattern: "REJECT", edgeName: "reject" }],
+      outputs: [
+        { name: "OnSuccess" },
+        { name: "OnFailure" },
+        { name: "reject", color: "red", visible: false },
+        { name: "spare" },
+      ],
+    },
+  });
+
+  const gate = (): TemplateNode => ({
+    id: "n-gate",
+    type: NodeType.Condition,
+    label: "Gate",
+    config: {
+      cases: [
+        { variant: "PrExists", edgeName: "has-pr" },
+        { variant: "HasTag", tag: "urgent", edgeName: "otherwise" },
+      ],
+      defaultEdge: "otherwise",
+      output: "{{Node.Input}}",
+      outputs: [
+        { name: "OnFailure" },
+        { name: "has-pr", color: "x" },
+        { name: "otherwise" },
+        { name: "stale" },
+      ],
+    },
+  });
+
+  function wiredOutputNames(saved: { edges: TemplateEdge[] }, source: string) {
+    return saved.edges
+      .filter((e) => e.sourceNodeId === source && e.edgeType === EdgeType.Custom)
+      .map((e) => e.name);
+  }
+
+  /** Clicks Save and returns the confirmation that saving would remove edges. */
+  async function saveAskingToRemoveEdges(dialog: HTMLElement) {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    return await screen.findByRole("dialog", { name: "Remove edges" });
+  }
+
+  test.each([
+    ["an AI node", reviewer, "Reviewer"],
+    ["a Condition node", gate, "Gate"],
+  ])("%s has no Outputs list and no eye", async (_, opened, label) => {
+    const node = opened();
+    const { dialog } = await openNode({ template: templateWith(node) }, label);
+
+    expect(within(dialog).queryByText("Outputs")).toBeNull();
+    expect(within(dialog).queryByText("+ Add output")).toBeNull();
+    expect(within(dialog).queryAllByDisplayValue("spare")).toHaveLength(0);
+    expect(within(dialog).queryAllByDisplayValue("stale")).toHaveLength(0);
+    expect(within(dialog).queryAllByDisplayValue("OnSuccess")).toHaveLength(0);
+    expect(toggles(dialog)).toHaveLength(0);
+  });
+
+  test("saving an AI node declares what its rules route to and keeps those outputs' fields", async () => {
     const { calls, dialog } = await openNode(
-      { template: templateWith(ai, ["reject"]) },
+      { template: templateWith(reviewer(), ["reject"]) },
       "Reviewer",
     );
 
-    // Success and failure are not named outputs, so they are not listed.
-    expect(within(dialog).queryAllByDisplayValue("OnSuccess")).toHaveLength(0);
-    expect(within(dialog).queryAllByDisplayValue("OnFailure")).toHaveLength(0);
-
-    const ruleEdge = within(dialog).getByLabelText("Output name 1");
-    fireEvent.change(outputField(dialog, "reject", [ruleEdge]), { target: { value: "rework" } });
-
-    const saved = await saveLoop(dialog, calls);
-    const outputs = outputsOf(saved, "n-ai");
-    expect(outputs.map((o) => o.name)).not.toContain("reject");
-    expect(outputs.find((o) => o.name === "rework")).toEqual({
-      name: "rework",
-      visible: false,
-      color: "x",
+    fireEvent.click(within(dialog).getByText("+ Add rule"));
+    fireEvent.change(within(dialog).getByLabelText("Match pattern 2"), {
+      target: { value: "ESCALATE" },
     });
-    expect(configOf(saved, "n-ai").matchRules).toEqual([{ pattern: "REJECT", edgeName: "rework" }]);
-    expect(configOf(saved, "n-ai")).not.toHaveProperty("customEdges");
-    const wired = saved.edges.filter(
-      (e) => e.sourceNodeId === "n-ai" && e.edgeType === EdgeType.Custom,
-    );
-    expect(wired.map((e) => e.name)).toEqual(["rework"]);
-  });
+    fireEvent.change(within(dialog).getByLabelText("Output name 2"), {
+      target: { value: " escalate " },
+    });
 
-  test("renaming a Condition output renames the case that routes to it and its wired edge", async () => {
-    const gate: TemplateNode = {
-      id: "n-gate",
-      type: NodeType.Condition,
-      label: "Gate",
-      config: {
-        cases: [{ variant: "PrExists", edgeName: "has-pr" }],
-        defaultEdge: "otherwise",
-        output: "{{Node.Input}}",
-        outputs: [{ name: "OnFailure" }, { name: "has-pr", color: "x" }, { name: "otherwise" }],
-      },
-    };
-    const { calls, dialog } = await openNode(
-      { template: templateWith(gate, ["has-pr", "otherwise"]) },
-      "Gate",
-    );
-
-    const caseEdge = within(dialog).getByLabelText("Case 1 output");
-    fireEvent.change(outputField(dialog, "has-pr", [caseEdge]), { target: { value: "pr-open" } });
-
+    // The unwired output nothing routes to is dropped without asking.
     const saved = await saveLoop(dialog, calls);
-    const outputs = outputsOf(saved, "n-gate");
-    expect(outputs.map((o) => o.name)).not.toContain("has-pr");
-    expect(outputs.find((o) => o.name === "pr-open")).toEqual({ name: "pr-open", color: "x" });
-    const cases = configOf(saved, "n-gate").cases as Array<{ edgeName: string }>;
-    expect(cases[0].edgeName).toBe("pr-open");
-    const wired = saved.edges
-      .filter((e) => e.sourceNodeId === "n-gate" && e.edgeType === EdgeType.Custom)
-      .map((e) => e.name ?? "")
-      .sort((a, b) => a.localeCompare(b));
-    expect(wired).toEqual(["otherwise", "pr-open"]);
+    expect(outputsOf(saved, "n-ai")).toEqual([
+      { name: "OnSuccess" },
+      { name: "OnFailure" },
+      { name: "reject", color: "red", visible: false },
+      { name: "escalate" },
+    ]);
+    expect(configOf(saved, "n-ai").matchRules).toEqual([
+      { pattern: "REJECT", edgeName: "reject" },
+      { pattern: "ESCALATE", edgeName: "escalate" },
+    ]);
+    expect(configOf(saved, "n-ai")).not.toHaveProperty("customEdges");
+    expect(wiredOutputNames(saved, "n-ai")).toEqual(["reject"]);
   });
 
   test.each([
@@ -332,7 +397,11 @@ describe("Loop Editor — node outputs", () => {
         id: "n-ai",
         type: NodeType.AI,
         label: "Reviewer",
-        config: { prompt: "Review it", outputs: [{ name: "approve", color: "green" }] },
+        config: {
+          prompt: "Review it",
+          matchRules: [{ pattern: "APPROVE", edgeName: "approve" }],
+          outputs: [{ name: "approve", color: "green" }],
+        },
       };
       const { calls, dialog } = await openNode(
         { template: templateWith(ai), nodeOutputsFail },
@@ -340,10 +409,10 @@ describe("Loop Editor — node outputs", () => {
       );
 
       fireEvent.click(within(dialog).getByText("+ Add rule"));
-      fireEvent.change(within(dialog).getByLabelText("Match pattern 1"), {
+      fireEvent.change(within(dialog).getByLabelText("Match pattern 2"), {
         target: { value: "ESCALATE" },
       });
-      fireEvent.change(within(dialog).getByLabelText("Output name 1"), {
+      fireEvent.change(within(dialog).getByLabelText("Output name 2"), {
         target: { value: "escalate" },
       });
 
@@ -352,10 +421,89 @@ describe("Loop Editor — node outputs", () => {
       expect(outputs).toContainEqual({ name: "approve", color: "green" });
       expect(outputs.filter((o) => o.name === "escalate")).toHaveLength(1);
       expect(configOf(saved, "n-ai").matchRules).toEqual([
+        { pattern: "APPROVE", edgeName: "approve" },
         { pattern: "ESCALATE", edgeName: "escalate" },
       ]);
     },
   );
+
+  test("removing the last rule routing to a wired output asks before saving, and cancelling saves nothing", async () => {
+    const { calls, dialog } = await openNode(
+      { template: templateWith(reviewer(), ["reject"]) },
+      "Reviewer",
+    );
+
+    fireEvent.click(within(dialog).getByLabelText("Remove rule 1"));
+    const confirm = await saveAskingToRemoveEdges(dialog);
+    expect(within(confirm).getByText("The edge 'reject' to Tidy Up")).toBeTruthy();
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Remove edges" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Node Settings" })).toBeTruthy();
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  test("confirming saves the AI node without the output and its edge", async () => {
+    const { calls, dialog } = await openNode(
+      { template: templateWith(reviewer(), ["reject"]) },
+      "Reviewer",
+    );
+
+    fireEvent.change(within(dialog).getByLabelText("Output name 1"), {
+      target: { value: "rework" },
+    });
+    const confirm = await saveAskingToRemoveEdges(dialog);
+    fireEvent.click(within(confirm).getByRole("button", { name: "Save and remove" }));
+
+    const saved = await saveTemplate(calls);
+    expect(outputsOf(saved, "n-ai")).toEqual([
+      { name: "OnSuccess" },
+      { name: "OnFailure" },
+      { name: "rework" },
+    ]);
+    expect(configOf(saved, "n-ai").matchRules).toEqual([{ pattern: "REJECT", edgeName: "rework" }]);
+    expect(wiredOutputNames(saved, "n-ai")).toEqual([]);
+  });
+
+  test("saving a Condition node unchanged keeps what its cases and default route to, and nothing else", async () => {
+    const { calls, dialog } = await openNode(
+      { template: templateWith(gate(), ["has-pr", "otherwise"]) },
+      "Gate",
+    );
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-gate")).toEqual([
+      { name: "OnFailure" },
+      { name: "has-pr", color: "x" },
+      { name: "otherwise" },
+    ]);
+    expect(wiredOutputNames(saved, "n-gate")).toEqual(["has-pr", "otherwise"]);
+  });
+
+  test("moving a Condition's case and default off a wired output asks before its edge goes", async () => {
+    const { calls, dialog } = await openNode(
+      { template: templateWith(gate(), ["has-pr", "otherwise"]) },
+      "Gate",
+    );
+
+    fireEvent.click(within(dialog).getByLabelText("Remove case 2"));
+    fireEvent.change(within(dialog).getByLabelText("Default output"), {
+      target: { value: "has-pr" },
+    });
+    const confirm = await saveAskingToRemoveEdges(dialog);
+    expect(within(confirm).getByText("The edge 'otherwise' to Tidy Up")).toBeTruthy();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Save and remove" }));
+
+    const saved = await saveTemplate(calls);
+    const config = configOf(saved, "n-gate");
+    expect(outputsOf(saved, "n-gate")).toEqual([
+      { name: "OnFailure" },
+      { name: "has-pr", color: "x" },
+    ]);
+    expect(config.cases).toEqual([{ variant: "PrExists", edgeName: "has-pr" }]);
+    expect(config.defaultEdge).toBe("has-pr");
+    expect(wiredOutputNames(saved, "n-gate")).toEqual(["has-pr"]);
+  });
 
   test("adding and removing Human outputs edits the output objects and keeps the rest", async () => {
     const human: TemplateNode = {
@@ -379,7 +527,7 @@ describe("Loop Editor — node outputs", () => {
     fireEvent.click(removeButtonFor(outputField(dialog, "later")));
 
     const before = new Set(within(dialog).queryAllByRole("textbox"));
-    fireEvent.click(within(dialog).getByRole("button", { name: /add (output|edge)/i }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /add output/i }));
     const added = within(dialog)
       .queryAllByRole("textbox")
       .filter((el) => !before.has(el));
@@ -394,7 +542,7 @@ describe("Loop Editor — node outputs", () => {
     expect(configOf(saved, "n-human")).not.toHaveProperty("customEdges");
   });
 
-  test("a PR node lists every reserved output, none of which can be renamed or removed", async () => {
+  test("a PR node lists success, failure and every reserved output, none of which can be renamed or removed", async () => {
     const pr: TemplateNode = {
       id: "n-pr",
       type: NodeType.PR,
@@ -404,20 +552,45 @@ describe("Loop Editor — node outputs", () => {
     const { dialog } = await openNode({ template: templateWith(pr, ["deploy"]) }, "Pull Request");
 
     await waitFor(() => expect(isListed(dialog, "on_merged")).toBe(true));
-    for (const name of RESERVED) {
-      expect(isListed(dialog, name)).toBe(true);
-      for (const field of within(dialog).queryAllByDisplayValue(name)) {
-        expect(isEditable(field)).toBe(false);
-      }
+    for (const name of ["OnSuccess", "OnFailure", ...RESERVED]) {
+      const fields = within(dialog).queryAllByDisplayValue(name);
+      expect(fields, name).toHaveLength(1);
+      expect(isEditable(fields[0]), name).toBe(false);
     }
     expect(isEditable(outputField(dialog, "deploy"))).toBe(true);
-    // Success and failure have no name field of their own: they are routed by edge type.
-    expect(within(dialog).queryAllByDisplayValue("OnSuccess")).toHaveLength(0);
 
     const removable = within(dialog)
       .queryAllByRole("button", { name: /remove/i })
       .filter((b) => !(b as HTMLButtonElement).disabled);
     expect(removable).toEqual([removeButtonFor(outputField(dialog, "deploy"))]);
+  });
+
+  test("saving a PR node drops the PR comment template it no longer shows", async () => {
+    const pr: TemplateNode = {
+      id: "n-pr",
+      type: NodeType.PR,
+      label: "Pull Request",
+      config: { prDescriptionTemplate: "t", prCommentTemplate: "Update", outputs: [] },
+    };
+    const { calls, dialog } = await openNode({ template: templateWith(pr) }, "Pull Request");
+    expect(within(dialog).queryByText(/PR Comment Template/)).toBeNull();
+
+    const saved = await saveLoop(dialog, calls);
+    expect(configOf(saved, "n-pr")).not.toHaveProperty("prCommentTemplate");
+    expect(configOf(saved, "n-pr").prDescriptionTemplate).toBe("t");
+  });
+
+  test("the header names the node's type and there is no Type field", async () => {
+    const human: TemplateNode = {
+      id: "n-human",
+      type: NodeType.Human,
+      label: "Sign Off",
+      config: { outputs: [] },
+    };
+    const { dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+
+    expect(within(dialog).getByRole("heading", { level: 2 }).textContent).toBe("👤Human");
+    expect(within(dialog).queryByText("Type")).toBeNull();
   });
 });
 
@@ -484,6 +657,22 @@ describe("Loop Editor — importing an older export", () => {
 });
 
 describe("Loop Editor — deleting and naming outputs", () => {
+  const signOff = (): TemplateNode => ({
+    id: "n-human",
+    type: NodeType.Human,
+    label: "Sign Off",
+    config: {
+      prompt: "Ship it?",
+      outputs: [
+        { name: "OnSuccess" },
+        { name: "OnFailure" },
+        { name: "approve" },
+        { name: "later", color: "red" },
+        { name: "spare", visible: false },
+      ],
+    },
+  });
+
   const reviewer = (): TemplateNode => ({
     id: "n-ai",
     type: NodeType.AI,
@@ -491,12 +680,7 @@ describe("Loop Editor — deleting and naming outputs", () => {
     config: {
       prompt: "Review it",
       matchRules: [{ pattern: "REJECT", edgeName: "reject" }],
-      outputs: [
-        { name: "OnSuccess" },
-        { name: "OnFailure" },
-        { name: "reject", color: "red" },
-        { name: "spare", visible: false },
-      ],
+      outputs: [{ name: "OnSuccess" }, { name: "OnFailure" }, { name: "reject" }],
     },
   });
 
@@ -505,10 +689,7 @@ describe("Loop Editor — deleting and naming outputs", () => {
     type: NodeType.Condition,
     label: "Gate",
     config: {
-      cases: [
-        { variant: "PrExists", edgeName: "has-pr" },
-        { variant: "HasTag", tag: "urgent", edgeName: "otherwise" },
-      ],
+      cases: [{ variant: "PrExists", edgeName: "has-pr" }],
       defaultEdge: "otherwise",
       output: "{{Node.Input}}",
       outputs: [{ name: "OnFailure" }, { name: "has-pr" }, { name: "otherwise" }],
@@ -545,114 +726,75 @@ describe("Loop Editor — deleting and naming outputs", () => {
     return dialog;
   }
 
-  test("deleting a used output asks first, and cancelling changes nothing", async () => {
+  test("deleting a wired output asks first, and cancelling changes nothing", async () => {
     const { calls, dialog } = await openNode(
-      { template: templateWith(reviewer(), ["reject"]) },
-      "Reviewer",
+      { template: templateWith(signOff(), ["later"]) },
+      "Sign Off",
     );
-    const rule = within(dialog).getByLabelText("Output name 1");
 
-    fireEvent.click(removeButtonFor(outputField(dialog, "reject", [rule])));
+    fireEvent.click(removeButtonFor(outputField(dialog, "later")));
 
     const confirm = await screen.findByRole("dialog", { name: "Delete output" });
     expect(within(confirm).getByText("The edge to Tidy Up")).toBeTruthy();
-    expect(within(confirm).getByText("Match rule 1 (REJECT)")).toBeTruthy();
     fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog", { name: "Delete output" })).toBeNull();
-    expect(outputField(dialog, "reject", [rule])).toBeTruthy();
-    expect((within(dialog).getByLabelText("Match pattern 1") as HTMLInputElement).value).toBe(
-      "REJECT",
-    );
+    expect(outputField(dialog, "later")).toBeTruthy();
 
     const saved = await saveLoop(dialog, calls);
-    expect(outputsOf(saved, "n-ai")).toContainEqual({ name: "reject", color: "red" });
-    expect(configOf(saved, "n-ai").matchRules).toEqual([{ pattern: "REJECT", edgeName: "reject" }]);
-    expect(wiredOutputNames(saved, "n-ai")).toEqual(["reject"]);
+    expect(outputsOf(saved, "n-human")).toContainEqual({ name: "later", color: "red" });
+    expect(wiredOutputNames(saved, "n-human")).toEqual(["later"]);
   });
 
-  test("confirming the delete removes the output, its wired edge and the rule routing to it", async () => {
+  test("confirming the delete removes the output and its wired edge", async () => {
     const { calls, dialog } = await openNode(
-      { template: templateWith(reviewer(), ["reject"]) },
-      "Reviewer",
+      { template: templateWith(signOff(), ["later"]) },
+      "Sign Off",
     );
-    const rule = within(dialog).getByLabelText("Output name 1");
 
-    await confirmDelete(dialog, outputField(dialog, "reject", [rule]));
+    await confirmDelete(dialog, outputField(dialog, "later"));
 
-    expect(within(dialog).queryAllByDisplayValue("reject")).toHaveLength(0);
-    expect(within(dialog).queryByLabelText("Match pattern 1")).toBeNull();
-
+    expect(within(dialog).queryAllByDisplayValue("later")).toHaveLength(0);
     const saved = await saveLoop(dialog, calls);
-    const outputs = outputsOf(saved, "n-ai");
-    expect(outputs.map((o) => o.name)).not.toContain("reject");
+    const outputs = outputsOf(saved, "n-human");
+    expect(outputs.map((o) => o.name)).not.toContain("later");
     expect(outputs).toContainEqual({ name: "spare", visible: false });
-    expect(configOf(saved, "n-ai").matchRules).toEqual([]);
-    expect(wiredOutputNames(saved, "n-ai")).toEqual([]);
+    expect(wiredOutputNames(saved, "n-human")).toEqual([]);
   });
 
-  test("cancelling the settings after a confirmed delete keeps the output, its edge and its rule", async () => {
+  test("cancelling the settings after a confirmed delete keeps the output and its edge", async () => {
     const { calls, dialog } = await openNode(
-      { template: templateWith(reviewer(), ["reject"]) },
-      "Reviewer",
+      { template: templateWith(signOff(), ["later"]) },
+      "Sign Off",
     );
-    const rule = within(dialog).getByLabelText("Output name 1");
-    await confirmDelete(dialog, outputField(dialog, "reject", [rule]));
+    await confirmDelete(dialog, outputField(dialog, "later"));
 
     const settingsCancel = dialog.querySelector(".node-settings-btn-cancel") as HTMLElement;
     fireEvent.click(settingsCancel);
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
 
-    fireEvent.click(screen.getByText("Reviewer"));
+    fireEvent.click(screen.getByText("Sign Off"));
     const reopened = await screen.findByRole("dialog", { name: "Node Settings" });
-    const reopenedRule = within(reopened).getByLabelText("Output name 1") as HTMLInputElement;
-    expect(reopenedRule.value).toBe("reject");
-    expect(outputField(reopened, "reject", [reopenedRule])).toBeTruthy();
+    expect(outputField(reopened, "later")).toBeTruthy();
 
     const saved = await saveLoop(reopened, calls);
-    expect(outputsOf(saved, "n-ai")).toContainEqual({ name: "reject", color: "red" });
-    expect(configOf(saved, "n-ai").matchRules).toEqual([{ pattern: "REJECT", edgeName: "reject" }]);
-    expect(wiredOutputNames(saved, "n-ai")).toEqual(["reject"]);
+    expect(outputsOf(saved, "n-human")).toContainEqual({ name: "later", color: "red" });
+    expect(wiredOutputNames(saved, "n-human")).toEqual(["later"]);
   });
 
   test("an output nothing uses is deleted without asking", async () => {
     const { calls, dialog } = await openNode(
-      { template: templateWith(reviewer(), ["reject"]) },
-      "Reviewer",
+      { template: templateWith(signOff(), ["later"]) },
+      "Sign Off",
     );
 
     fireEvent.click(removeButtonFor(outputField(dialog, "spare")));
 
     expect(screen.queryByRole("dialog", { name: "Delete output" })).toBeNull();
     const saved = await saveLoop(dialog, calls);
-    const outputs = outputsOf(saved, "n-ai");
+    const outputs = outputsOf(saved, "n-human");
     expect(outputs.map((o) => o.name)).not.toContain("spare");
-    expect(outputs).toContainEqual({ name: "reject", color: "red" });
-    expect(wiredOutputNames(saved, "n-ai")).toEqual(["reject"]);
-  });
-
-  test("a deleted output's name typed into a new rule is declared again as a new output", async () => {
-    const { calls, dialog } = await openNode(
-      { template: templateWith(reviewer(), ["reject"]) },
-      "Reviewer",
-    );
-    await confirmDelete(
-      dialog,
-      outputField(dialog, "reject", [within(dialog).getByLabelText("Output name 1")]),
-    );
-
-    fireEvent.click(within(dialog).getByText("+ Add rule"));
-    fireEvent.change(within(dialog).getByLabelText("Match pattern 1"), {
-      target: { value: "REDO" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Output name 1"), {
-      target: { value: "reject" },
-    });
-
-    const saved = await saveLoop(dialog, calls);
-    const outputs = outputsOf(saved, "n-ai");
-    expect(outputs.filter((o) => o.name === "reject")).toEqual([{ name: "reject" }]);
-    expect(configOf(saved, "n-ai").matchRules).toEqual([{ pattern: "REDO", edgeName: "reject" }]);
-    expect(wiredOutputNames(saved, "n-ai")).toEqual([]);
+    expect(outputs).toContainEqual({ name: "later", color: "red" });
+    expect(wiredOutputNames(saved, "n-human")).toEqual(["later"]);
   });
 
   test.each([
@@ -674,6 +816,7 @@ describe("Loop Editor — deleting and naming outputs", () => {
     expect(within(dialog).getByText(message)).toBeTruthy();
     expect(ruleOutput.getAttribute("aria-invalid")).toBe("true");
     expectSaveRefused(dialog);
+    expect(screen.queryByRole("dialog", { name: "Remove edges" })).toBeNull();
 
     fireEvent.change(ruleOutput, { target: { value: "reject" } });
     expectSaveAvailable(dialog);
@@ -696,44 +839,6 @@ describe("Loop Editor — deleting and naming outputs", () => {
     expectSaveAvailable(dialog);
   });
 
-  test("deleting the Condition default's output clears it, asks for a new one and drops its edge", async () => {
-    const { calls, dialog } = await openNode(
-      { template: templateWith(gate(), ["has-pr", "otherwise"]) },
-      "Gate",
-    );
-    const defaultOutput = within(dialog).getByLabelText("Default output") as HTMLInputElement;
-    const caseOutput = within(dialog).getByLabelText("Case 2 output");
-
-    fireEvent.click(removeButtonFor(outputField(dialog, "otherwise", [defaultOutput, caseOutput])));
-    const confirm = await screen.findByRole("dialog", { name: "Delete output" });
-    expect(within(confirm).getByText("The edge to Tidy Up")).toBeTruthy();
-    expect(within(confirm).getByText("Case 2 (HasTag)")).toBeTruthy();
-    expect(within(confirm).getByText(/default output/i)).toBeTruthy();
-    fireEvent.click(within(confirm).getByRole("button", { name: "Delete output" }));
-
-    expect(defaultOutput.value).toBe("");
-    expect(within(dialog).getByText(/default output is required/i)).toBeTruthy();
-    expect(within(dialog).queryByLabelText("Case 2 output")).toBeNull();
-    expect((within(dialog).getByLabelText("Case 1 output") as HTMLInputElement).value).toBe(
-      "has-pr",
-    );
-    expectSaveRefused(dialog);
-
-    fireEvent.change(defaultOutput, { target: { value: "has-pr" } });
-    expect(within(dialog).queryByText(/default output is required/i)).toBeNull();
-    expectSaveAvailable(dialog);
-
-    const saved = await saveLoop(dialog, calls);
-    const config = configOf(saved, "n-gate");
-    expect((outputsOf(saved, "n-gate") as Output[]).map((o) => o.name)).toEqual([
-      "OnFailure",
-      "has-pr",
-    ]);
-    expect(config.cases).toEqual([{ variant: "PrExists", edgeName: "has-pr" }]);
-    expect(config.defaultEdge).toBe("has-pr");
-    expect(wiredOutputNames(saved, "n-gate")).toEqual(["has-pr"]);
-  });
-
   test("a Condition with no default opens with the default blank and the error showing", async () => {
     const { defaultEdge: _dropped, ...withoutDefault } = gate().config;
     const { dialog } = await openNode(
@@ -750,11 +855,10 @@ describe("Loop Editor — deleting and naming outputs", () => {
 
   test("a blank output name is an error to fix, not a delete", async () => {
     const { calls, dialog } = await openNode(
-      { template: templateWith(reviewer(), ["reject"]) },
-      "Reviewer",
+      { template: templateWith(signOff(), ["later"]) },
+      "Sign Off",
     );
-    const rule = within(dialog).getByLabelText("Output name 1");
-    const field = outputField(dialog, "reject", [rule]);
+    const field = outputField(dialog, "later");
 
     fireEvent.change(field, { target: { value: "  " } });
 
@@ -763,21 +867,18 @@ describe("Loop Editor — deleting and naming outputs", () => {
     expect(field.getAttribute("aria-invalid")).toBe("true");
     expectSaveRefused(dialog);
 
-    fireEvent.change(field, { target: { value: "reject" } });
+    fireEvent.change(field, { target: { value: "later" } });
     expectSaveAvailable(dialog);
     const saved = await saveLoop(dialog, calls);
-    expect(outputsOf(saved, "n-ai")).toContainEqual({ name: "reject", color: "red" });
-    expect(wiredOutputNames(saved, "n-ai")).toEqual(["reject"]);
+    expect(outputsOf(saved, "n-human")).toContainEqual({ name: "later", color: "red" });
+    expect(wiredOutputNames(saved, "n-human")).toEqual(["later"]);
   });
 
   test.each([
-    ["another output", "reject"],
+    ["another output", "later"],
     ["success", "OnSuccess"],
   ])("renaming an output to the name of %s is refused in the modal", async (_, taken) => {
-    const { dialog } = await openNode(
-      { template: templateWith(reviewer(), ["reject"]) },
-      "Reviewer",
-    );
+    const { dialog } = await openNode({ template: templateWith(signOff(), ["later"]) }, "Sign Off");
 
     fireEvent.change(outputField(dialog, "spare"), { target: { value: taken } });
 
@@ -801,23 +902,23 @@ describe("Loop Editor — visible to user", () => {
   const cmd = (config: Record<string, unknown> = {}) =>
     node(NodeType.Cmd, "Build", { command: "make", ...config });
 
-  function toggle(dialog: HTMLElement, name: string) {
-    return within(dialog).getByRole("checkbox", {
-      name: `Visible to user: ${name}`,
-    }) as HTMLInputElement;
-  }
-
-  function toggles(dialog: HTMLElement) {
-    return within(dialog).queryAllByRole("checkbox", {
-      name: /^Visible to user: /,
-    }) as HTMLInputElement[];
-  }
-
-  /** The dialog has one toggle per name, checked for exactly the names in `visible`. */
-  function expectToggles(dialog: HTMLElement, visible: string[], hidden: string[]) {
-    for (const name of visible) expect(toggle(dialog, name).checked, name).toBe(true);
-    for (const name of hidden) expect(toggle(dialog, name).checked, name).toBe(false);
-    expect(toggles(dialog)).toHaveLength(visible.length + hidden.length);
+  /**
+   * The dialog has one eye per name: open for exactly the names in `visible`,
+   * and crossed out and not clickable for those in `unwired`.
+   */
+  function expectToggles(
+    dialog: HTMLElement,
+    visible: string[],
+    hidden: string[],
+    unwired: string[] = [],
+  ) {
+    for (const name of visible) expect(isOn(toggle(dialog, name)), name).toBe(true);
+    for (const name of hidden) expect(isOn(toggle(dialog, name)), name).toBe(false);
+    for (const name of unwired) {
+      expect(isOn(toggle(dialog, name)), name).toBe(false);
+      expect(toggle(dialog, name).disabled, name).toBe(true);
+    }
+    expect(toggles(dialog)).toHaveLength(visible.length + hidden.length + unwired.length);
   }
 
   async function saveNodeAndReopen(dialog: HTMLElement, label: string) {
@@ -843,17 +944,19 @@ describe("Loop Editor — visible to user", () => {
   const TOGGLE_CASES: Array<{
     name: string;
     node: TemplateNode;
-    open?: string;
+    failureWired?: boolean;
     visible: string[];
     hidden: string[];
+    unwired: string[];
   }> = [
     {
       name: "a PR node with no visible fields hides its reserved outputs, declared or not",
       node: node(NodeType.PR, "Pull Request", {
         outputs: [{ name: "deploy" }, { name: "on_ci_failed", reserved: true }],
       }),
-      visible: ["OnSuccess", "OnFailure", "deploy"],
+      visible: ["OnSuccess", "deploy"],
       hidden: RESERVED,
+      unwired: ["OnFailure"],
     },
     {
       name: "a PR node shows what its outputs say",
@@ -866,44 +969,19 @@ describe("Loop Editor — visible to user", () => {
           { name: "deploy", visible: false },
         ],
       }),
-      visible: ["OnFailure", "on_merged"],
+      visible: ["on_merged"],
       hidden: ["OnSuccess", "deploy", ...OTHER_RESERVED],
+      unwired: ["OnFailure"],
     },
     {
-      name: "a Cmd node that declares no outputs has success and failure, both visible",
-      node: cmd(),
-      visible: ["OnSuccess", "OnFailure"],
-      hidden: [],
-    },
-    {
-      name: "a Cmd node can have a hidden failure output",
-      node: cmd({ outputs: [{ name: "OnSuccess" }, { name: "OnFailure", visible: false }] }),
-      visible: ["OnSuccess"],
-      hidden: ["OnFailure"],
-    },
-    {
-      name: "a Start node has success and failure",
-      node: cmd(),
-      open: "Initialize",
-      visible: ["OnSuccess", "OnFailure"],
-      hidden: [],
-    },
-    {
-      name: "a Condition node has failure and its named outputs, but no success",
-      node: node(NodeType.Condition, "Gate", {
-        cases: [{ variant: "PrExists", edgeName: "has-pr" }],
-        defaultEdge: "otherwise",
-        outputs: [{ name: "OnFailure" }, { name: "has-pr" }, { name: "otherwise", visible: false }],
+      name: "a PR node's wired failure output can be hidden",
+      node: node(NodeType.PR, "Pull Request", {
+        outputs: [{ name: "OnFailure", visible: false }],
       }),
-      visible: ["OnFailure", "has-pr"],
-      hidden: ["otherwise"],
-    },
-    {
-      name: "a Cleanup node has no outputs",
-      node: cmd(),
-      open: "Tidy Up",
-      visible: [],
-      hidden: [],
+      failureWired: true,
+      visible: ["OnSuccess"],
+      hidden: ["OnFailure", ...RESERVED],
+      unwired: [],
     },
     {
       name: "a Human output named like a reserved one, or with a visible that is not a boolean, is visible",
@@ -914,42 +992,113 @@ describe("Loop Editor — visible to user", () => {
           { name: "never", visible: 0 },
         ],
       }),
-      visible: ["OnSuccess", "OnFailure", "on_merged", "later", "never"],
+      visible: ["OnSuccess", "on_merged", "later", "never"],
       hidden: [],
+      unwired: ["OnFailure"],
+    },
+    {
+      name: "a Human node's unwired failure output shows as hidden whatever it says",
+      node: node(NodeType.Human, "Sign Off", {
+        outputs: [{ name: "OnFailure", visible: true }],
+      }),
+      visible: ["OnSuccess"],
+      hidden: [],
+      unwired: ["OnFailure"],
     },
   ];
 
   test.each(TOGGLE_CASES)(
-    "$name, and every toggle flips both ways",
-    async ({ node: opened, open, visible, hidden }) => {
-      const { dialog } = await openNode({ template: templateWith(opened) }, open ?? opened.label);
+    "$name, and every wired eye flips both ways",
+    async ({ node: opened, failureWired, visible, hidden, unwired }) => {
+      const { dialog } = await openNode(
+        { template: templateWith(opened, [], { failureWired }) },
+        opened.label,
+      );
 
-      await waitFor(() => expectToggles(dialog, visible, hidden));
+      await waitFor(() => expectToggles(dialog, visible, hidden, unwired));
 
       for (const name of [...visible, ...hidden]) {
-        const before = toggle(dialog, name).checked;
+        const before = isOn(toggle(dialog, name));
         expect(toggle(dialog, name).disabled, name).toBe(false);
         fireEvent.click(toggle(dialog, name));
-        expect(toggle(dialog, name).checked, name).toBe(!before);
+        expect(isOn(toggle(dialog, name)), name).toBe(!before);
         fireEvent.click(toggle(dialog, name));
-        expect(toggle(dialog, name).checked, name).toBe(before);
+        expect(isOn(toggle(dialog, name)), name).toBe(before);
       }
-      expectToggles(dialog, visible, hidden);
+      expectToggles(dialog, visible, hidden, unwired);
     },
   );
 
-  test("a reserved output's name stays read-only beside its toggle", async () => {
+  test.each([
+    ["a Cmd node", cmd(), "Build"],
+    ["a Start node", cmd(), "Initialize"],
+    ["a Cleanup node", cmd(), "Tidy Up"],
+    [
+      "an AI node",
+      node(NodeType.AI, "Reviewer", { prompt: "p", outputs: [{ name: "x", visible: false }] }),
+      "Reviewer",
+    ],
+    [
+      "a Condition node",
+      node(NodeType.Condition, "Gate", {
+        cases: [{ variant: "PrExists", edgeName: "has-pr" }],
+        defaultEdge: "otherwise",
+        outputs: [{ name: "OnFailure" }, { name: "has-pr" }, { name: "otherwise" }],
+      }),
+      "Gate",
+    ],
+    ["a Prompt node", node(NodeType.Prompt, "Brief", { prompt: "p" }), "Brief"],
+  ])("%s has no eye and no success and failure rows", async (_, opened, label) => {
+    const { dialog } = await openNode({ template: templateWith(opened) }, label);
+
+    expect(toggles(dialog)).toHaveLength(0);
+    expect(within(dialog).queryByText("Success and failure")).toBeNull();
+    expect(within(dialog).queryAllByDisplayValue("OnSuccess")).toHaveLength(0);
+    expect(within(dialog).queryAllByDisplayValue("OnFailure")).toHaveLength(0);
+  });
+
+  test("the eye names its state and the exact output, sits before the remove button, and mutes a hidden row", async () => {
+    const human = node(NodeType.Human, "Sign Off", {
+      outputs: [{ name: "later", visible: false }],
+    });
+    const { dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+
+    const later = toggle(dialog, "later");
+    expect(later.tagName).toBe("BUTTON");
+    expect(later.type).toBe("button");
+    expect(later.getAttribute("aria-label")).toBe("Hidden from user: later");
+    expect(later.title).toBe("Hidden from user: later");
+    expect(later.getAttribute("aria-pressed")).toBe("false");
+    const row = later.closest(".match-rule-row") as HTMLElement;
+    expect(row.classList.contains("output-row-hidden")).toBe(true);
+    const buttons = within(row).getAllByRole("button");
+    expect(buttons.indexOf(later)).toBe(
+      buttons.indexOf(removeButtonFor(outputField(dialog, "later"))) - 1,
+    );
+
+    fireEvent.click(later);
+    expect(later.getAttribute("aria-label")).toBe("Visible to user: later");
+    expect(later.title).toBe("Visible to user: later");
+    expect(later.getAttribute("aria-pressed")).toBe("true");
+    expect(row.classList.contains("output-row-hidden")).toBe(false);
+
+    const failure = toggle(dialog, "OnFailure");
+    expect(failure.title).toBe("Hidden from user: OnFailure (no edge connected)");
+    expect(failure.disabled).toBe(true);
+  });
+
+  test("a reserved output's name stays read-only beside its eye", async () => {
     const pr = node(NodeType.PR, "Pull Request", {
       outputs: [{ name: "on_merged", reserved: true }],
     });
     const { dialog } = await openNode({ template: templateWith(pr) }, "Pull Request");
-    await waitFor(() => expect(toggle(dialog, "on_abandoned").checked).toBe(false));
+    await waitFor(() => expect(isOn(toggle(dialog, "on_abandoned"))).toBe(false));
 
     fireEvent.click(toggle(dialog, "on_merged"));
     fireEvent.click(toggle(dialog, "on_abandoned"));
 
     for (const name of ["on_merged", "on_abandoned"]) {
-      expect(toggle(dialog, name).checked).toBe(true);
+      expect(isOn(toggle(dialog, name))).toBe(true);
       const fields = within(dialog).queryAllByDisplayValue(name);
       expect(fields.length).toBeGreaterThan(0);
       for (const field of fields) expect(isEditable(field)).toBe(false);
@@ -969,10 +1118,10 @@ describe("Loop Editor — visible to user", () => {
       ],
     });
     const { calls, dialog } = await openNode(
-      { template: templateWith(pr, ["deploy", "on_merged"]) },
+      { template: templateWith(pr, ["deploy", "on_merged"], { failureWired: true }) },
       "Pull Request",
     );
-    await waitFor(() => expect(toggle(dialog, "on_abandoned").checked).toBe(false));
+    await waitFor(() => expect(isOn(toggle(dialog, "on_abandoned"))).toBe(false));
 
     fireEvent.click(toggle(dialog, "OnSuccess"));
     fireEvent.click(toggle(dialog, "OnFailure"));
@@ -1026,40 +1175,57 @@ describe("Loop Editor — visible to user", () => {
         outputs: [{ name: "deploy" }, { name: "on_merged", reserved: true }],
       }),
     ],
-    ["a Cmd node that declares no outputs", cmd()],
     ["a Human node", node(NodeType.Human, "Sign Off", { outputs: [{ name: "later" }] })],
-  ])("saving %s without touching a toggle writes no visible", async (_, opened) => {
+  ])("saving %s without touching an eye writes no visible", async (_, opened) => {
     const { calls, dialog } = await openNode({ template: templateWith(opened) }, opened.label);
-    await waitFor(() => expect(toggle(dialog, "OnFailure").checked).toBe(true));
+    await waitFor(() => expect(isOn(toggle(dialog, "OnSuccess"))).toBe(true));
 
     const saved = await saveLoop(dialog, calls);
 
     expect(hasVisible(configOf(saved, "n-node").outputs)).toEqual([]);
   });
 
-  test("on a node type without named outputs only the toggled output's visible changes", async () => {
-    const outputs = [
-      { name: "OnSuccess", color: "g" },
-      { name: "extra", note: "kept" },
-      { name: "OnFailure", visible: false },
-    ];
-    const { calls, dialog } = await openNode({ template: templateWith(cmd({ outputs })) }, "Build");
-    await waitFor(() => expect(toggle(dialog, "OnFailure").checked).toBe(false));
-
-    fireEvent.click(toggle(dialog, "OnSuccess"));
+  test.each([
+    [
+      "a Cmd node",
+      cmd({
+        outputs: [
+          { name: "OnSuccess", color: "g", visible: false },
+          { name: "extra", note: "kept" },
+          { name: "OnFailure", visible: false },
+        ],
+      }),
+      "Build",
+    ],
+    [
+      "an AI node",
+      node(NodeType.AI, "Reviewer", {
+        prompt: "p",
+        matchRules: [{ pattern: "X", edgeName: "x" }],
+        outputs: [
+          { name: "OnSuccess", visible: false },
+          { name: "OnFailure" },
+          { name: "x", visible: true },
+        ],
+      }),
+      "Reviewer",
+    ],
+  ])("saving %s keeps the visible its outputs already carry", async (_, opened, label) => {
+    const before = structuredClone(opened.config.outputs);
+    const { calls, dialog } = await openNode({ template: templateWith(opened) }, label);
 
     const saved = await saveLoop(dialog, calls);
-    expect(outputsOf(saved, "n-node")).toEqual([
-      { name: "OnSuccess", color: "g", visible: false },
-      { name: "extra", note: "kept" },
-      { name: "OnFailure", visible: false },
-    ]);
-    expect(configOf(saved, "n-node").command).toBe("make");
+
+    expect(outputsOf(saved, "n-node")).toEqual(before);
   });
 
   test("hiding an output the config does not declare yet declares it", async () => {
-    const { calls, dialog } = await openNode({ template: templateWith(cmd()) }, "Build");
-    await waitFor(() => expect(toggle(dialog, "OnFailure").checked).toBe(true));
+    const human = node(NodeType.Human, "Sign Off", {});
+    const { calls, dialog } = await openNode(
+      { template: templateWith(human, [], { failureWired: true }) },
+      "Sign Off",
+    );
+    await waitFor(() => expect(isOn(toggle(dialog, "OnFailure"))).toBe(true));
 
     fireEvent.click(toggle(dialog, "OnFailure"));
 
@@ -1071,11 +1237,14 @@ describe("Loop Editor — visible to user", () => {
     expect(hasVisible(outputs).map((o) => o.name)).toEqual(["OnFailure"]);
   });
 
-  test("cancelling the settings discards the toggles", async () => {
+  test("cancelling the settings discards the eye changes", async () => {
     const human = node(NodeType.Human, "Sign Off", {
       outputs: [{ name: "later" }, { name: "never", visible: false }],
     });
-    const { calls, dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+    const { calls, dialog } = await openNode(
+      { template: templateWith(human, [], { failureWired: true }) },
+      "Sign Off",
+    );
     await waitFor(() => expectToggles(dialog, ["OnSuccess", "OnFailure", "later"], ["never"]));
 
     fireEvent.click(toggle(dialog, "OnSuccess"));
@@ -1095,14 +1264,14 @@ describe("Loop Editor — visible to user", () => {
       outputs: [{ name: "later", color: "x" }, { name: "now" }],
     });
     const { calls, dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
-    await waitFor(() => expect(toggle(dialog, "later").checked).toBe(true));
+    await waitFor(() => expect(isOn(toggle(dialog, "later"))).toBe(true));
 
     fireEvent.click(toggle(dialog, "later"));
     fireEvent.change(outputField(dialog, "later"), { target: { value: "deferred" } });
 
-    expect(toggle(dialog, "deferred").checked).toBe(false);
-    expect(toggle(dialog, "now").checked).toBe(true);
-    expect(within(dialog).queryByRole("checkbox", { name: "Visible to user: later" })).toBeNull();
+    expect(isOn(toggle(dialog, "deferred"))).toBe(false);
+    expect(isOn(toggle(dialog, "now"))).toBe(true);
+    expect(queryToggle(dialog, "later")).toBeNull();
 
     const saved = await saveLoop(dialog, calls);
     const outputs = outputsOf(saved, "n-node");
@@ -1128,7 +1297,7 @@ describe("Loop Editor — visible to user", () => {
     }
   }
 
-  test("outputs named like Object.prototype members, or with spaces, each have a toggle of their own", async () => {
+  test("outputs named like Object.prototype members, or with spaces, each have an eye of their own", async () => {
     const names = ["constructor", "toString", "__proto__", "hasOwnProperty", "needs more work"];
     const human = node(NodeType.Human, "Sign Off", {
       outputs: [
@@ -1137,7 +1306,10 @@ describe("Loop Editor — visible to user", () => {
         ...names.map((name) => ({ name, color: name })),
       ],
     });
-    const { calls, dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+    const { calls, dialog } = await openNode(
+      { template: templateWith(human, [], { failureWired: true }) },
+      "Sign Off",
+    );
     const all = ["OnSuccess", "OnFailure", ...names];
     await waitFor(() => expectToggles(dialog, all, []));
     expectWellFormedIds(dialog);
@@ -1173,11 +1345,14 @@ describe("Loop Editor — visible to user", () => {
     ]);
   });
 
-  test("success and a named output called 'success' have toggles that are told apart", async () => {
+  test("success and a named output called 'success' have eyes that are told apart", async () => {
     const human = node(NodeType.Human, "Sign Off", {
       outputs: [{ name: "OnSuccess" }, { name: "OnFailure" }, { name: "success" }],
     });
-    const { calls, dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+    const { calls, dialog } = await openNode(
+      { template: templateWith(human, [], { failureWired: true }) },
+      "Sign Off",
+    );
     await waitFor(() => expectToggles(dialog, ["OnSuccess", "OnFailure", "success"], []));
 
     expect(toggle(dialog, "success")).not.toBe(toggle(dialog, "OnSuccess"));

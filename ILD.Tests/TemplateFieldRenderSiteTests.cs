@@ -219,33 +219,6 @@ public class TemplateFieldRenderSiteTests
             repo.CloneUrl, It.IsAny<string>(), "main", Title, $"Closes {Title}"), Times.Once);
     }
 
-    [Fact]
-    public async Task PR_node_posts_nothing_of_its_own_on_a_pull_request_that_already_exists()
-    {
-        // prCommentTemplate used to be rendered and posted here on every
-        // re-visit. It is dead config now — a saved template that still sets it
-        // keeps loading, and the field does nothing — because only the round
-        // knows whether it has anything general to say, and it says so itself.
-        var wi = Wi(Guid.NewGuid());
-        var (services, remote, repo) = PrServices(wi);
-        remote.Setup(r => r.CreatePullRequestCommentAsync(repo.CloneUrl, "42", It.IsAny<string>()))
-            .ReturnsAsync(new RemotePrWriteResult(true, "1", null));
-
-        await RunAsync(
-            new PRNodeExecutor(),
-            Node(NodeType.PR, new { prCommentTemplate = "Update on {{WorkItem.Title}}" }),
-            new LoopRun
-            {
-                Id = Guid.NewGuid(),
-                WorkItemId = "WI-1",
-                PrUrl = "https://example.com/owner/repo/pull/42",
-            },
-            services.BuildServiceProvider());
-
-        remote.Verify(r => r.CreatePullRequestCommentAsync(
-            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
-    }
-
     // ---- 7-8. Condition node: output and case subject ----------------------
 
     [Fact]

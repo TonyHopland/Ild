@@ -12,12 +12,7 @@ namespace ILD.Tests;
 /// The round's own voice: what it says about itself, and what it says about an
 /// item it read and chose not to answer.
 ///
-/// The PR node used to write the first for it, from <c>prCommentTemplate</c>, on
-/// every re-visit — so a round that had already answered on the threads
-/// announced itself a second time carrying nothing. Three rounds of rules for
-/// when to skip that comment each failed in one direction or the other, because
-/// the question is not answerable from outside the round. It is answerable from
-/// inside: a round with something to add calls <c>comment_on_pr</c>, a round
+/// A round with something to add calls <c>comment_on_pr</c>, a round
 /// without says nothing, and an item that needed no answer is closed rather than
 /// replied to with prose that says nothing.
 /// </summary>

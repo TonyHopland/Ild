@@ -13,15 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The chat button and your past chats show a red dot when a reply is waiting that you have not read.**
 
-- **Each output of a node can be hidden from the person answering a run, and a pull request node's reserved outputs are hidden unless you show them.**
+- **An eye beside each output of a Human or pull request node hides it from the person answering the run; a pull request node's reserved outputs start hidden.**
 
 ### Changed
+
+- **AI and Condition node settings no longer list outputs: they come from the match rules, cases and default.**
+
+- **Node settings show the node's type and icon as their title.**
 
 - **Exported loops use a new file format; older exports still import.**
 
 - **WorkItem Server settings have moved from the top bar to their own page under Settings.**
 
 - **An agent answering the same review comment again replaces its earlier pending answer, and can take back what it queued for the pull request before it is sent.**
+
+### Removed
+
+- **The pull request node's unused comment template setting.**
 
 ### Fixed
 

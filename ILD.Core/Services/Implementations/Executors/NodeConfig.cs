@@ -96,7 +96,6 @@ internal static class NodeConfig
     {
         public string? Prompt { get; init; }
         public string? PrDescriptionTemplate { get; init; }
-        public string? PrCommentTemplate { get; init; }
     }
 
     /// <summary>

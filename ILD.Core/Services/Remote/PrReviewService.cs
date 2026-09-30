@@ -263,14 +263,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// <summary>
     /// Queue a comment on the pull request itself, tied to no item.
     ///
-    /// This is what the PR node's own <c>prCommentTemplate</c> used to do on
-    /// every re-visit, moved to where the judgement lives. The node could only
-    /// guess whether a round had anything general left to say — and every rule
-    /// for that guess was wrong in one direction or the other, because the
-    /// answer depends on what the round decided, which only the round knows.
-    /// A round with nothing general to add now says nothing, and the pull
-    /// request carries what reviewers asked about rather than a notice per
-    /// round.
+    /// Only the round knows whether it has anything general to say, so a round
+    /// with nothing to add says nothing, and the pull request carries what
+    /// reviewers asked about rather than a notice per round.
     /// </summary>
     public async Task<RemotePrWriteResult> CommentAsync(
         string workItemId, string body, Guid? callerRunId, Guid? callerChatSessionId = null)

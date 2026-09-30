@@ -14,77 +14,7 @@ namespace ILD.Tests;
 public class PRNodeExecutorTests
 {
     [Fact]
-    public async Task When_PR_exists_and_PrCommentTemplate_is_set_nothing_is_posted()
-    {
-        var repoId = Guid.NewGuid();
-        var workItem = new WorkItemView
-        {
-            Id = "WI-1",
-            Title = "Title",
-            Description = "Body",
-            RepositoryId = repoId,
-        };
-        var repo = new Repository
-        {
-            Id = repoId,
-            Name = "repo",
-            CloneUrl = "https://example.com/owner/repo.git",
-            DefaultBranch = "main",
-            RemoteProviderId = Guid.NewGuid(),
-        };
-
-        var workItems = new Mock<IWorkItemManager>();
-        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
-
-        var providerStore = new Mock<IProviderStore>();
-        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
-        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
-
-        var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.CreatePullRequestCommentAsync("https://example.com/owner/repo.git", "42", It.IsAny<string>()))
-            .ReturnsAsync(new RemotePrWriteResult(true, "1", null));
-
-        var rendering = new Mock<IPromptRenderingService>();
-        rendering.Setup(r => r.RenderAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<WorkItemView>(), It.IsAny<string?>()))
-            .ReturnsAsync((string template, Guid _, WorkItemView _, string? _) => template.Replace("{{WorkItem.Title}}", "Title"));
-
-        var services = new ServiceCollection();
-        services.AddSingleton(workItems.Object);
-        services.AddSingleton(providerStore.Object);
-        services.AddSingleton(remote.Object);
-        services.AddSingleton(rendering.Object);
-        services.AddSingleton(Mock.Of<IRepositoryManager>());
-        var sp = services.BuildServiceProvider();
-
-        // Dead config: still loads, still saves, posts nothing. The round
-        // decides what its pull request is told, through comment_on_pr.
-        var node = new LoopNode
-        {
-            Id = Guid.NewGuid(),
-            NodeType = NodeType.PR,
-            Config = """{"prCommentTemplate":"Update on {{WorkItem.Title}}"}""",
-        };
-        var run = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = "WI-1",
-            PrUrl = "https://example.com/owner/repo/pull/42",
-        };
-
-        var executor = new PRNodeExecutor();
-        var outcomes = new List<NodeOutcome>();
-        await foreach (var o in executor.ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
-            outcomes.Add(o);
-
-        remote.Verify(r => r.CreatePullRequestCommentAsync(
-            It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
-        Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
-        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrCreated);
-        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
-    }
-
-    [Fact]
-    public async Task When_PR_exists_without_PrCommentTemplate_skips_comment_and_parks()
+    public async Task When_PR_exists_and_nothing_is_queued_posts_nothing_and_parks()
     {
         var repoId = Guid.NewGuid();
         var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
@@ -499,7 +429,7 @@ public class PRNodeExecutorTests
         // A forge that would refuse a comment is beside the point now: with
         // nothing queued the node never reaches it, so there is nothing to fail
         // on and the round parks as it always meant to.
-        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = """{"prCommentTemplate":"hi"}""" };
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", PrUrl = "https://example.com/o/r/pull/9" };
 
         var executor = new PRNodeExecutor();

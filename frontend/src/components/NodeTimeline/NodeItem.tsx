@@ -1,13 +1,5 @@
 import { LoopRunNode, LoopRunNodeStatus, NodeType } from "../../types";
-
-const nodeTypeIcons: Record<string, string> = {
-  [NodeType.Start]: "▶",
-  [NodeType.Cmd]: "⚙",
-  [NodeType.AI]: "🤖",
-  [NodeType.Human]: "👤",
-  [NodeType.PR]: "🔁",
-  [NodeType.Cleanup]: "🧹",
-};
+import { nodeIconOf } from "../../utils/nodeStyles";
 
 const nodeStatusColors: Record<string, string> = {
   [LoopRunNodeStatus.Pending]: "#6b7280",
@@ -52,7 +44,7 @@ export default function NodeItem({
   children,
 }: NodeItemProps & { children?: React.ReactNode }) {
   const statusColor = nodeStatusColors[runNode.status] ?? "#6b7280";
-  const icon = nodeTypeIcons[templateNodeType] ?? "?";
+  const icon = nodeIconOf(templateNodeType) ?? "?";
   const duration = formatDuration(runNode.startedAt, runNode.completedAt);
   const displayLabel = templateNodeLabel ?? runNode.nodeLabel;
 
