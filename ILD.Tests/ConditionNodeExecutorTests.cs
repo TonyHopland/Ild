@@ -217,4 +217,28 @@ public class ConditionNodeExecutorTests
         Assert.Equal(EdgeType.OnFailure, fail.Edge);
         Assert.Contains("no edge name", fail.Reason);
     }
+
+    [Fact]
+    public async Task A_case_and_the_default_route_to_outputs_hidden_from_the_person_answering()
+    {
+        var config = new Dictionary<string, object?>
+        {
+            ["cases"] = new object[] { Case("PrExists", "has-pr") },
+            ["defaultEdge"] = "no-pr",
+            ["outputs"] = new object[]
+            {
+                new Dictionary<string, object?> { ["name"] = "has-pr", ["visible"] = false },
+                new Dictionary<string, object?> { ["name"] = "no-pr", ["visible"] = false },
+            },
+        };
+        var node = new LoopNode
+        {
+            Id = Guid.NewGuid(),
+            NodeType = NodeType.Condition,
+            Config = System.Text.Json.JsonSerializer.Serialize(config),
+        };
+
+        AssertSuccess(await RunAsync(node, MakeRun(prUrl: "https://example.test/pr/1"), BuildServices(Wi())), "has-pr");
+        AssertSuccess(await RunAsync(node, MakeRun(prUrl: null), BuildServices(Wi())), "no-pr");
+    }
 }

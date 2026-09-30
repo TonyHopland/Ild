@@ -6,6 +6,7 @@ import { WorkItem, WorkItemAttachment, WorkItemStatus, WorkItemPriority } from "
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { mockTaskboardServer } from "../../test-support";
+import { stageParkedNode } from "../../test-support.parkedNode";
 
 afterEach(() => {
   cleanup();
@@ -232,7 +233,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
       }),
     ];
     mockServices(items);
-    vi.spyOn(authServices.loopRunService, "getById").mockRejectedValue({ status: 404 });
+    stageParkedNode();
     const upload = vi.spyOn(authServices.workItemService, "uploadAttachment");
     const answer = vi
       .spyOn(authServices.workItemService, "humanFeedbackInput")
@@ -251,7 +252,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
       });
       await Promise.resolve();
     });
-    await click(within(feedback).getByRole("button", { name: "Approve" }));
+    await click(await within(feedback).findByRole("button", { name: "Approve" }));
 
     await openCard("Item B");
     await act(async () => {

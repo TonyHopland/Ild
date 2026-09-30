@@ -411,7 +411,8 @@ describe("Loop Editor — node outputs", () => {
       }
     }
     expect(isEditable(outputField(dialog, "deploy"))).toBe(true);
-    expect(isListed(dialog, "OnSuccess")).toBe(false);
+    // Success and failure have no name field of their own: they are routed by edge type.
+    expect(within(dialog).queryAllByDisplayValue("OnSuccess")).toHaveLength(0);
 
     const removable = within(dialog)
       .queryAllByRole("button", { name: /remove/i })
@@ -786,5 +787,411 @@ describe("Loop Editor — deleting and naming outputs", () => {
       ),
     ).toBeTruthy();
     expectSaveRefused(dialog);
+  });
+});
+
+describe("Loop Editor — visible to user", () => {
+  const node = (type: NodeType, label: string, config: Record<string, unknown>): TemplateNode => ({
+    id: "n-node",
+    type,
+    label,
+    config,
+  });
+
+  const cmd = (config: Record<string, unknown> = {}) =>
+    node(NodeType.Cmd, "Build", { command: "make", ...config });
+
+  function toggle(dialog: HTMLElement, name: string) {
+    return within(dialog).getByRole("checkbox", {
+      name: `Visible to user: ${name}`,
+    }) as HTMLInputElement;
+  }
+
+  function toggles(dialog: HTMLElement) {
+    return within(dialog).queryAllByRole("checkbox", {
+      name: /^Visible to user: /,
+    }) as HTMLInputElement[];
+  }
+
+  /** The dialog has one toggle per name, checked for exactly the names in `visible`. */
+  function expectToggles(dialog: HTMLElement, visible: string[], hidden: string[]) {
+    for (const name of visible) expect(toggle(dialog, name).checked, name).toBe(true);
+    for (const name of hidden) expect(toggle(dialog, name).checked, name).toBe(false);
+    expect(toggles(dialog)).toHaveLength(visible.length + hidden.length);
+  }
+
+  async function saveNodeAndReopen(dialog: HTMLElement, label: string) {
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
+    fireEvent.click(screen.getByText(label));
+    return await screen.findByRole("dialog", { name: "Node Settings" });
+  }
+
+  async function cancelAndReopen(dialog: HTMLElement, label: string) {
+    fireEvent.click(dialog.querySelector(".node-settings-btn-cancel") as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
+    fireEvent.click(screen.getByText(label));
+    return await screen.findByRole("dialog", { name: "Node Settings" });
+  }
+
+  function hasVisible(outputs: unknown) {
+    return ((outputs as Output[] | undefined) ?? []).filter((o) => "visible" in o);
+  }
+
+  const OTHER_RESERVED = RESERVED.filter((name) => name !== "on_merged");
+
+  const TOGGLE_CASES: Array<{
+    name: string;
+    node: TemplateNode;
+    open?: string;
+    visible: string[];
+    hidden: string[];
+  }> = [
+    {
+      name: "a PR node with no visible fields hides its reserved outputs, declared or not",
+      node: node(NodeType.PR, "Pull Request", {
+        outputs: [{ name: "deploy" }, { name: "on_ci_failed", reserved: true }],
+      }),
+      visible: ["OnSuccess", "OnFailure", "deploy"],
+      hidden: RESERVED,
+    },
+    {
+      name: "a PR node shows what its outputs say",
+      node: node(NodeType.PR, "Pull Request", {
+        outputs: [
+          { name: "OnSuccess", visible: false },
+          { name: "OnFailure" },
+          { name: "on_merged", reserved: true, visible: true },
+          { name: "on_ci_failed", reserved: true, visible: false },
+          { name: "deploy", visible: false },
+        ],
+      }),
+      visible: ["OnFailure", "on_merged"],
+      hidden: ["OnSuccess", "deploy", ...OTHER_RESERVED],
+    },
+    {
+      name: "a Cmd node that declares no outputs has success and failure, both visible",
+      node: cmd(),
+      visible: ["OnSuccess", "OnFailure"],
+      hidden: [],
+    },
+    {
+      name: "a Cmd node can have a hidden failure output",
+      node: cmd({ outputs: [{ name: "OnSuccess" }, { name: "OnFailure", visible: false }] }),
+      visible: ["OnSuccess"],
+      hidden: ["OnFailure"],
+    },
+    {
+      name: "a Start node has success and failure",
+      node: cmd(),
+      open: "Initialize",
+      visible: ["OnSuccess", "OnFailure"],
+      hidden: [],
+    },
+    {
+      name: "a Condition node has failure and its named outputs, but no success",
+      node: node(NodeType.Condition, "Gate", {
+        cases: [{ variant: "PrExists", edgeName: "has-pr" }],
+        defaultEdge: "otherwise",
+        outputs: [{ name: "OnFailure" }, { name: "has-pr" }, { name: "otherwise", visible: false }],
+      }),
+      visible: ["OnFailure", "has-pr"],
+      hidden: ["otherwise"],
+    },
+    {
+      name: "a Cleanup node has no outputs",
+      node: cmd(),
+      open: "Tidy Up",
+      visible: [],
+      hidden: [],
+    },
+    {
+      name: "a Human output named like a reserved one, or with a visible that is not a boolean, is visible",
+      node: node(NodeType.Human, "Sign Off", {
+        outputs: [
+          { name: "on_merged" },
+          { name: "later", visible: "no" },
+          { name: "never", visible: 0 },
+        ],
+      }),
+      visible: ["OnSuccess", "OnFailure", "on_merged", "later", "never"],
+      hidden: [],
+    },
+  ];
+
+  test.each(TOGGLE_CASES)(
+    "$name, and every toggle flips both ways",
+    async ({ node: opened, open, visible, hidden }) => {
+      const { dialog } = await openNode({ template: templateWith(opened) }, open ?? opened.label);
+
+      await waitFor(() => expectToggles(dialog, visible, hidden));
+
+      for (const name of [...visible, ...hidden]) {
+        const before = toggle(dialog, name).checked;
+        expect(toggle(dialog, name).disabled, name).toBe(false);
+        fireEvent.click(toggle(dialog, name));
+        expect(toggle(dialog, name).checked, name).toBe(!before);
+        fireEvent.click(toggle(dialog, name));
+        expect(toggle(dialog, name).checked, name).toBe(before);
+      }
+      expectToggles(dialog, visible, hidden);
+    },
+  );
+
+  test("a reserved output's name stays read-only beside its toggle", async () => {
+    const pr = node(NodeType.PR, "Pull Request", {
+      outputs: [{ name: "on_merged", reserved: true }],
+    });
+    const { dialog } = await openNode({ template: templateWith(pr) }, "Pull Request");
+    await waitFor(() => expect(toggle(dialog, "on_abandoned").checked).toBe(false));
+
+    fireEvent.click(toggle(dialog, "on_merged"));
+    fireEvent.click(toggle(dialog, "on_abandoned"));
+
+    for (const name of ["on_merged", "on_abandoned"]) {
+      expect(toggle(dialog, name).checked).toBe(true);
+      const fields = within(dialog).queryAllByDisplayValue(name);
+      expect(fields.length).toBeGreaterThan(0);
+      for (const field of fields) expect(isEditable(field)).toBe(false);
+    }
+  });
+
+  test("saving writes visible only where it differs from the default, onto that output alone", async () => {
+    const pr = node(NodeType.PR, "Pull Request", {
+      prDescriptionTemplate: "t",
+      outputs: [
+        { name: "OnSuccess" },
+        { name: "OnFailure", visible: false, color: "x" },
+        { name: "deploy", color: "blue" },
+        { name: "on_merged", reserved: true, visible: true },
+        { name: "on_ci_failed", reserved: true },
+        { name: "on_comment", reserved: true, visible: true },
+      ],
+    });
+    const { calls, dialog } = await openNode(
+      { template: templateWith(pr, ["deploy", "on_merged"]) },
+      "Pull Request",
+    );
+    await waitFor(() => expect(toggle(dialog, "on_abandoned").checked).toBe(false));
+
+    fireEvent.click(toggle(dialog, "OnSuccess"));
+    fireEvent.click(toggle(dialog, "OnFailure"));
+    fireEvent.click(toggle(dialog, "deploy"));
+    fireEvent.click(toggle(dialog, "on_merged"));
+    fireEvent.click(toggle(dialog, "on_ci_failed"));
+    fireEvent.click(toggle(dialog, "on_abandoned"));
+
+    // The choices are the node's as soon as its settings are saved.
+    const reopened = await saveNodeAndReopen(dialog, "Pull Request");
+    expectToggles(
+      reopened,
+      ["OnFailure", "on_ci_failed", "on_comment", "on_abandoned"],
+      [
+        "OnSuccess",
+        "deploy",
+        ...RESERVED.filter(
+          (name) => !["on_ci_failed", "on_comment", "on_abandoned"].includes(name),
+        ),
+      ],
+    );
+
+    const saved = await saveLoop(reopened, calls);
+    const outputs = outputsOf(saved, "n-node");
+    expect(outputs.slice(0, 6)).toEqual([
+      { name: "OnSuccess", visible: false },
+      { name: "OnFailure", color: "x" },
+      { name: "deploy", color: "blue", visible: false },
+      { name: "on_merged", reserved: true },
+      { name: "on_ci_failed", reserved: true, visible: true },
+      { name: "on_comment", reserved: true, visible: true },
+    ]);
+    const rest = outputs.slice(6);
+    expect(rest.filter((o) => o.name === "on_abandoned")).toHaveLength(1);
+    expect(rest.find((o) => o.name === "on_abandoned")).toMatchObject({ visible: true });
+    expect(hasVisible(rest).map((o) => o.name)).toEqual(["on_abandoned"]);
+    expect(configOf(saved, "n-node").prDescriptionTemplate).toBe("t");
+
+    // Visibility is the output's, not the edge's: the edges are sent as they were.
+    const wired = saved.edges.filter(
+      (e) => e.sourceNodeId === "n-node" && e.edgeType === EdgeType.Custom,
+    );
+    expect(wired.map((e) => e.name)).toEqual(["deploy", "on_merged"]);
+    for (const edge of saved.edges) expect(edge).not.toHaveProperty("visible");
+  });
+
+  test.each([
+    [
+      "a PR node",
+      node(NodeType.PR, "Pull Request", {
+        outputs: [{ name: "deploy" }, { name: "on_merged", reserved: true }],
+      }),
+    ],
+    ["a Cmd node that declares no outputs", cmd()],
+    ["a Human node", node(NodeType.Human, "Sign Off", { outputs: [{ name: "later" }] })],
+  ])("saving %s without touching a toggle writes no visible", async (_, opened) => {
+    const { calls, dialog } = await openNode({ template: templateWith(opened) }, opened.label);
+    await waitFor(() => expect(toggle(dialog, "OnFailure").checked).toBe(true));
+
+    const saved = await saveLoop(dialog, calls);
+
+    expect(hasVisible(configOf(saved, "n-node").outputs)).toEqual([]);
+  });
+
+  test("on a node type without named outputs only the toggled output's visible changes", async () => {
+    const outputs = [
+      { name: "OnSuccess", color: "g" },
+      { name: "extra", note: "kept" },
+      { name: "OnFailure", visible: false },
+    ];
+    const { calls, dialog } = await openNode({ template: templateWith(cmd({ outputs })) }, "Build");
+    await waitFor(() => expect(toggle(dialog, "OnFailure").checked).toBe(false));
+
+    fireEvent.click(toggle(dialog, "OnSuccess"));
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "OnSuccess", color: "g", visible: false },
+      { name: "extra", note: "kept" },
+      { name: "OnFailure", visible: false },
+    ]);
+    expect(configOf(saved, "n-node").command).toBe("make");
+  });
+
+  test("hiding an output the config does not declare yet declares it", async () => {
+    const { calls, dialog } = await openNode({ template: templateWith(cmd()) }, "Build");
+    await waitFor(() => expect(toggle(dialog, "OnFailure").checked).toBe(true));
+
+    fireEvent.click(toggle(dialog, "OnFailure"));
+
+    const saved = await saveLoop(dialog, calls);
+    const outputs = outputsOf(saved, "n-node");
+    expect(outputs.filter((o) => o.name === "OnFailure")).toEqual([
+      { name: "OnFailure", visible: false },
+    ]);
+    expect(hasVisible(outputs).map((o) => o.name)).toEqual(["OnFailure"]);
+  });
+
+  test("cancelling the settings discards the toggles", async () => {
+    const human = node(NodeType.Human, "Sign Off", {
+      outputs: [{ name: "later" }, { name: "never", visible: false }],
+    });
+    const { calls, dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+    await waitFor(() => expectToggles(dialog, ["OnSuccess", "OnFailure", "later"], ["never"]));
+
+    fireEvent.click(toggle(dialog, "OnSuccess"));
+    fireEvent.click(toggle(dialog, "later"));
+    fireEvent.click(toggle(dialog, "never"));
+    expectToggles(dialog, ["OnFailure", "never"], ["OnSuccess", "later"]);
+
+    const reopened = await cancelAndReopen(dialog, "Sign Off");
+    expectToggles(reopened, ["OnSuccess", "OnFailure", "later"], ["never"]);
+
+    const saved = await saveLoop(reopened, calls);
+    expect(hasVisible(outputsOf(saved, "n-node"))).toEqual([{ name: "never", visible: false }]);
+  });
+
+  test("an output renamed in the same edit keeps the visibility chosen for it", async () => {
+    const human = node(NodeType.Human, "Sign Off", {
+      outputs: [{ name: "later", color: "x" }, { name: "now" }],
+    });
+    const { calls, dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+    await waitFor(() => expect(toggle(dialog, "later").checked).toBe(true));
+
+    fireEvent.click(toggle(dialog, "later"));
+    fireEvent.change(outputField(dialog, "later"), { target: { value: "deferred" } });
+
+    expect(toggle(dialog, "deferred").checked).toBe(false);
+    expect(toggle(dialog, "now").checked).toBe(true);
+    expect(within(dialog).queryByRole("checkbox", { name: "Visible to user: later" })).toBeNull();
+
+    const saved = await saveLoop(dialog, calls);
+    const outputs = outputsOf(saved, "n-node");
+    expect(outputs.find((o) => o.name === "deferred")).toEqual({
+      name: "deferred",
+      color: "x",
+      visible: false,
+    });
+    expect(hasVisible(outputs).map((o) => o.name)).toEqual(["deferred"]);
+  });
+
+  /** No id is empty, holds whitespace or repeats, and every id reference resolves. */
+  function expectWellFormedIds(dialog: HTMLElement) {
+    const ids = [...dialog.querySelectorAll("[id]")].map((el) => el.getAttribute("id") ?? "");
+    for (const id of ids) expect(id).toMatch(/^\S+$/);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const attribute of ["aria-describedby", "aria-labelledby", "for"]) {
+      for (const el of dialog.querySelectorAll(`[${attribute}]`)) {
+        const references = (el.getAttribute(attribute) ?? "").split(/\s+/).filter(Boolean);
+        expect(references.length).toBeGreaterThan(0);
+        for (const id of references) expect(document.getElementById(id), id).not.toBeNull();
+      }
+    }
+  }
+
+  test("outputs named like Object.prototype members, or with spaces, each have a toggle of their own", async () => {
+    const names = ["constructor", "toString", "__proto__", "hasOwnProperty", "needs more work"];
+    const human = node(NodeType.Human, "Sign Off", {
+      outputs: [
+        { name: "OnSuccess" },
+        { name: "OnFailure" },
+        ...names.map((name) => ({ name, color: name })),
+      ],
+    });
+    const { calls, dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+    const all = ["OnSuccess", "OnFailure", ...names];
+    await waitFor(() => expectToggles(dialog, all, []));
+    expectWellFormedIds(dialog);
+
+    fireEvent.click(toggle(dialog, "toString"));
+    expectToggles(
+      dialog,
+      all.filter((name) => name !== "toString"),
+      ["toString"],
+    );
+
+    fireEvent.click(toggle(dialog, "__proto__"));
+    fireEvent.click(toggle(dialog, "needs more work"));
+    fireEvent.click(toggle(dialog, "hasOwnProperty"));
+    fireEvent.click(toggle(dialog, "hasOwnProperty"));
+    expectToggles(
+      dialog,
+      ["OnSuccess", "OnFailure", "constructor", "hasOwnProperty"],
+      ["toString", "__proto__", "needs more work"],
+    );
+    expectWellFormedIds(dialog);
+
+    const saved = await saveLoop(dialog, calls);
+    const outputs = outputsOf(saved, "n-node");
+    expect(outputs.map((o) => [o.name, o.color, "visible" in o ? o.visible : "-"])).toEqual([
+      ["OnSuccess", undefined, "-"],
+      ["OnFailure", undefined, "-"],
+      ["constructor", "constructor", "-"],
+      ["toString", "toString", false],
+      ["__proto__", "__proto__", false],
+      ["hasOwnProperty", "hasOwnProperty", "-"],
+      ["needs more work", "needs more work", false],
+    ]);
+  });
+
+  test("success and a named output called 'success' have toggles that are told apart", async () => {
+    const human = node(NodeType.Human, "Sign Off", {
+      outputs: [{ name: "OnSuccess" }, { name: "OnFailure" }, { name: "success" }],
+    });
+    const { calls, dialog } = await openNode({ template: templateWith(human) }, "Sign Off");
+    await waitFor(() => expectToggles(dialog, ["OnSuccess", "OnFailure", "success"], []));
+
+    expect(toggle(dialog, "success")).not.toBe(toggle(dialog, "OnSuccess"));
+    fireEvent.click(toggle(dialog, "success"));
+    expectToggles(dialog, ["OnSuccess", "OnFailure"], ["success"]);
+    fireEvent.click(toggle(dialog, "OnSuccess"));
+    fireEvent.click(toggle(dialog, "success"));
+    expectToggles(dialog, ["OnFailure", "success"], ["OnSuccess"]);
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "OnSuccess", visible: false },
+      { name: "OnFailure" },
+      { name: "success" },
+    ]);
   });
 });

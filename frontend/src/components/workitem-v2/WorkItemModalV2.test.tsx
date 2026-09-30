@@ -16,6 +16,7 @@ import {
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { stageParkedNode } from "../../test-support.parkedNode";
 
 // The real terminal spins up an xterm instance and a WebSocket, neither of which
 // jsdom provides. Stub it with a marker that echoes the props the modal passes so
@@ -644,6 +645,7 @@ describe("WorkItemModalV2", () => {
 
   test("feedback pane lives in the Action tab while waiting on a human", async () => {
     mockServices();
+    stageParkedNode();
     await renderDialog(
       makeWorkItem({
         status: WorkItemStatus.HumanFeedback,
@@ -663,7 +665,7 @@ describe("WorkItemModalV2", () => {
     expect((actionPanel as HTMLElement).hasAttribute("hidden")).toBe(false);
     expect(within(actionPanel as HTMLElement).getByText("Human Feedback")).toBeTruthy();
     expect(
-      within(actionPanel as HTMLElement).getByRole("button", { name: "Approve" }),
+      await within(actionPanel as HTMLElement).findByRole("button", { name: "Approve" }),
     ).toBeTruthy();
     expect(within(actionPanel as HTMLElement).getByRole("button", { name: "Reject" })).toBeTruthy();
     // Attachments belong to the work item and are handled from the Overview.
