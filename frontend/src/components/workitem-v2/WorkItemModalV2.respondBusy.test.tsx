@@ -6,6 +6,7 @@ import { pressEscapeUntil } from "../../test-support";
 import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { stageParkedNode } from "../../test-support.parkedNode";
 
 afterEach(() => {
   cleanup();
@@ -80,10 +81,7 @@ function mockServices() {
     nextCursor: 0,
     hasMore: false,
   });
-  vi.spyOn(authServices.loopRunService, "getById").mockRejectedValue({
-    status: 404,
-    message: "no run",
-  });
+  stageParkedNode();
   vi.spyOn(authServices.settingsService, "getAttachmentLimits").mockResolvedValue({
     maxBytesPerFile: 25 * MB,
     maxFilesPerRequest: 10,
@@ -124,6 +122,7 @@ async function settle() {
   await act(async () => {
     await Promise.resolve();
   });
+  await screen.findByRole("button", { name: "Approve" });
 }
 
 describe("an answer that has been submitted", () => {

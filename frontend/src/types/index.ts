@@ -388,12 +388,15 @@ export enum EdgeType {
 
 /**
  * One entry of a node's `config.outputs`: every output a node has is declared
- * once, by name. Other fields (settings such as `visible`) are carried through
- * untouched. `reserved` marks a PR output the server always keeps.
+ * once, by name. `reserved` marks a PR output the server always keeps.
+ * `visible` says whether the output is offered to the person answering in the
+ * run; when it is not a boolean the default applies (reserved outputs hidden,
+ * all others visible). Other fields are carried through untouched.
  */
 export interface NodeOutput {
   name: string;
   reserved?: boolean;
+  visible?: boolean;
   [key: string]: unknown;
 }
 

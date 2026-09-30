@@ -1005,6 +1005,23 @@
   min-width: 0;
 }
 
+.config-field .match-rule-row label.output-visible-toggle {
+  display: flex;
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  white-space: nowrap;
+}
+
+.config-field .match-rule-row .output-visible-toggle input {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.match-rule-row .output-name {
+  flex: 1;
+  min-width: 0;
+}
+
 .match-rule-remove {
   flex: 0 0 auto;
   width: 1.75rem;

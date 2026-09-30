@@ -61,6 +61,97 @@ export function fixedNamedOutputs(type: NodeType, fixed: FixedOutputs): NodeOutp
   return (fixed.get(type) ?? []).filter((output) => !isSuccessOrFailure(output.name));
 }
 
+/**
+ * Whether an output is reserved: the fixed outputs of the node's type flag its
+ * name, or a PR node's own entry is flagged.
+ */
+export function isReservedOutput(type: NodeType, output: NodeOutput, fixed: NodeOutput[]): boolean {
+  return (
+    (type === NodeType.PR && output.reserved === true) ||
+    fixed.some((entry) => entry.reserved === true && entry.name === output.name)
+  );
+}
+
+/**
+ * Whether an output is offered to the person answering in the run: its
+ * `visible` when that is a boolean, otherwise the default — hidden for a
+ * reserved output, visible for every other.
+ */
+export function isOutputVisible(output: NodeOutput, reserved: boolean): boolean {
+  return typeof output.visible === "boolean" ? output.visible : !reserved;
+}
+
+/** The output with `visible` stored only when the choice differs from the default. */
+export function withVisibility(
+  output: NodeOutput,
+  visible: boolean,
+  reserved: boolean,
+): NodeOutput {
+  const next = { ...output };
+  if (visible === !reserved) delete next.visible;
+  else next.visible = visible;
+  return next;
+}
+
+/**
+ * Looks up, by exact name, whether an output of a node is visible
+ * ({@link isOutputVisible}). The first declared entry of that name decides; a
+ * name the config does not declare gets the default.
+ */
+export function outputVisibilityOf(
+  type: NodeType,
+  config: Record<string, unknown> | undefined,
+  fixed: FixedOutputs,
+): (name: string) => boolean {
+  const declared = readOutputs(config);
+  const fixedForType = fixed.get(type) ?? [];
+  return (name) => {
+    const output = declared.find((entry) => entry.name === name) ?? { name };
+    return isOutputVisible(output, isReservedOutput(type, output, fixedForType));
+  };
+}
+
+/** The success and failure outputs a node has: those its type holds or its config declares. */
+export function successFailureOutputs(
+  type: NodeType,
+  config: Record<string, unknown> | undefined,
+  fixed: FixedOutputs,
+): string[] {
+  const names = new Set(
+    [...(fixed.get(type) ?? []), ...readOutputs(config)].map((output) => output.name),
+  );
+  return [EdgeType.OnSuccess, EdgeType.OnFailure].filter((name) => names.has(name));
+}
+
+/**
+ * `outputs` with each visibility choice written onto the first entry of that
+ * name ({@link withVisibility}); every other entry stays as it is, in place. A
+ * chosen output with no entry is declared — as its type's fixed output when it
+ * is one — only when the choice differs from the default.
+ */
+export function applyOutputVisibility(
+  outputs: unknown,
+  type: NodeType,
+  fixed: NodeOutput[],
+  choices: ReadonlyMap<string, boolean>,
+): unknown[] {
+  const pending = new Map(choices);
+  const result = (Array.isArray(outputs) ? outputs : []).map((entry: unknown) => {
+    const name = nameOf(entry);
+    const visible = name === null ? undefined : pending.get(name);
+    if (name === null || visible === undefined) return entry;
+    pending.delete(name);
+    const output = entry as NodeOutput;
+    return withVisibility(output, visible, isReservedOutput(type, output, fixed));
+  });
+  for (const [name, visible] of pending) {
+    const output = fixed.find((entry) => entry.name === name) ?? { name };
+    const declared = withVisibility(output, visible, isReservedOutput(type, output, fixed));
+    if ("visible" in declared) result.push(declared);
+  }
+  return result;
+}
+
 /** The settings rows for a node's declared named outputs. */
 export function outputRowsOf(type: NodeType, config: Record<string, unknown>): OutputRow[] {
   if (!nodeHasNamedOutputs(type)) return [];

@@ -594,4 +594,17 @@ public class AINodeExecutorTests
         // The override's slot was claimed and released around the adapter call.
         Assert.Equal(0, tracker.ActiveCount(seeded.Bravo.Id));
     }
+
+    [Fact]
+    public async Task A_match_rule_routes_to_an_output_hidden_from_the_person_answering()
+    {
+        const string config =
+            @"{""matchRules"":[{""pattern"":""reject"",""edgeName"":""Reject""}],""outputs"":[{""name"":""Reject"",""visible"":false},{""name"":""OnSuccess"",""visible"":false}]}";
+
+        var outcome = await LastOutcomeAsync(config, NodeExecutionResult.Ok("I REJECT this"));
+
+        var success = Assert.IsType<NodeOutcome.Success>(outcome);
+        Assert.Equal(EdgeType.Custom, success.Edge);
+        Assert.Equal("Reject", success.EdgeName);
+    }
 }

@@ -915,4 +915,19 @@ public class LoopTemplateValidatorTests
             new[] { "Node h has customEdges, which is no longer supported; declare outputs in config.outputs, e.g. [{ \"name\": \"approve\" }], and remove customEdges." },
             LoopTemplateValidator.Validate(g));
     }
+
+    [Theory]
+    [InlineData("Cmd", "[{\"name\":\"OnSuccess\",\"visible\":false},{\"name\":\"OnFailure\",\"visible\":true}]")]
+    [InlineData("Prompt", "[{\"name\":\"OnFailure\",\"visible\":false}]")]
+    [InlineData("Human", "[{\"name\":\"OnSuccess\",\"visible\":false},{\"name\":\"later\",\"visible\":false},{\"name\":\"now\",\"visible\":true}]")]
+    [InlineData("PR", "[{\"name\":\"on_merged\",\"reserved\":true,\"visible\":true},{\"name\":\"OnSuccess\",\"visible\":false}]")]
+    public void Visible_is_accepted_on_any_output_of_any_node_type(string type, string outputsJson)
+    {
+        var node = WithRawConfig(Node("n", type, "ok?"), "outputs", outputsJson);
+        if (type == "Cmd") node.Config["command"] = "echo hi";
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), node, Node("c", "Cleanup") },
+            new() { Edge("s", "n"), Edge("n", "c") });
+        Assert.Empty(LoopTemplateValidator.Validate(g));
+    }
 }

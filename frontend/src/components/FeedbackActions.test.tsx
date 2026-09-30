@@ -112,4 +112,96 @@ describe("FeedbackActions", () => {
     expect(onMerge).not.toHaveBeenCalled();
     expect(screen.queryByText("Delete branch after merge")).toBeNull();
   });
+
+  const hiding =
+    (...hidden: string[]) =>
+    (name: string) =>
+      !hidden.includes(name);
+
+  const buttonNames = () => screen.queryAllByRole("button").map((b) => b.textContent);
+
+  test.each([
+    ["OnSuccess,Respond,Escalate,OnFailure", ["OnSuccess"], ["Respond", "Escalate", "Reject"]],
+    ["OnSuccess,Respond,Escalate,OnFailure", ["OnFailure"], ["Approve", "Respond", "Escalate"]],
+    ["OnSuccess,Respond,Escalate,OnFailure", ["Escalate"], ["Approve", "Respond", "Reject"]],
+    [
+      "OnSuccess,constructor,toString,OnFailure",
+      ["toString"],
+      ["Approve", "constructor", "Reject"],
+    ],
+    [null, ["OnSuccess"], ["Reject"]],
+    [null, ["OnFailure"], ["Approve"]],
+    ["", ["OnFailure"], ["Approve"]],
+  ])("actions %j with %j hidden offers only the rest", (actions, hidden, expected) => {
+    render(
+      <FeedbackActions
+        actions={actions}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        isVisible={hiding(...hidden)}
+      />,
+    );
+
+    expect(buttonNames()).toHaveLength(expected.length);
+    expect(new Set(buttonNames())).toEqual(new Set(expected));
+  });
+
+  test.each([["OnSuccess,Respond,OnFailure"], [null]])(
+    "with every output of %j hidden there is no output button, and no fallback to Approve and Reject",
+    (actions) => {
+      render(
+        <FeedbackActions
+          actions={actions}
+          onApprove={vi.fn()}
+          onReject={vi.fn()}
+          onEdge={vi.fn()}
+          isVisible={() => false}
+        />,
+      );
+
+      expect(buttonNames()).toEqual([]);
+    },
+  );
+
+  test("a visible output beside hidden ones still submits as before", () => {
+    const onEdge = vi.fn();
+    const onReject = vi.fn();
+    render(
+      <FeedbackActions
+        actions="OnSuccess,Respond,Escalate,OnFailure"
+        onApprove={vi.fn()}
+        onReject={onReject}
+        onEdge={onEdge}
+        isVisible={hiding("OnSuccess", "Escalate")}
+      />,
+    );
+
+    expect(screen.queryByText("Approve")).toBeNull();
+    expect(screen.queryByText("Escalate")).toBeNull();
+    fireEvent.click(screen.getByText("Respond"));
+    fireEvent.click(screen.getByText("Reject"));
+    expect(onEdge).toHaveBeenCalledWith("Respond");
+    expect(onReject).toHaveBeenCalledTimes(1);
+  });
+
+  test("Merge and its confirmation work with every output hidden", () => {
+    const onMerge = vi.fn();
+    render(
+      <FeedbackActions
+        actions="OnSuccess,OnFailure,on_merged"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        onMerge={onMerge}
+        isVisible={() => false}
+      />,
+    );
+
+    expect(buttonNames()).toEqual(["Merge"]);
+    fireEvent.click(screen.getByText("Merge"));
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByText("Confirm Merge"));
+    expect(onMerge).toHaveBeenCalledWith(true);
+  });
 });

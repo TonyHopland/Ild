@@ -6,8 +6,10 @@ import {
   mergeOutputs,
   nodeSettingsProblems,
   outputReferences,
+  namedOutputNames,
   outputRenames,
   outputRowProblems,
+  outputVisibilityOf,
   readFixedOutputs,
   wiredOutputsOf,
   type OutputRow,
@@ -282,5 +284,151 @@ describe("nodeSettingsProblems", () => {
         nodeSettingsProblems(NodeType.Human, { ...settings, rows: [row("", "a")] }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("outputVisibilityOf", () => {
+  const RESERVED = [
+    "on_rejected",
+    "on_merge_conflict",
+    "on_ci_failed",
+    "on_comment",
+    "on_approved",
+    "on_ci_passed",
+    "on_merged",
+    "on_abandoned",
+  ];
+  const fixed = readFixedOutputs({
+    Human: [{ name: "OnSuccess" }, { name: "OnFailure" }],
+    Cmd: [{ name: "OnSuccess" }, { name: "OnFailure" }],
+    PR: [
+      { name: "OnSuccess" },
+      { name: "OnFailure" },
+      ...RESERVED.map((name) => ({ name, reserved: true })),
+    ],
+  });
+
+  test("with no visible fields a PR node hides exactly its reserved outputs", () => {
+    const isVisible = outputVisibilityOf(
+      NodeType.PR,
+      {
+        outputs: [{ name: "OnSuccess" }, { name: "deploy" }, { name: "on_merged", reserved: true }],
+      },
+      fixed,
+    );
+    for (const name of RESERVED) expect(isVisible(name)).toBe(false);
+    expect(["OnSuccess", "OnFailure", "deploy"].map(isVisible)).toEqual([true, true, true]);
+  });
+
+  test("a config with no outputs at all still gets the defaults", () => {
+    expect(outputVisibilityOf(NodeType.PR, {}, fixed)("on_ci_failed")).toBe(false);
+    expect(outputVisibilityOf(NodeType.PR, {}, fixed)("OnSuccess")).toBe(true);
+    expect(outputVisibilityOf(NodeType.Cmd, {}, fixed)("OnFailure")).toBe(true);
+  });
+
+  test("a boolean visible on the output wins over the default, either way, on any output", () => {
+    const pr = outputVisibilityOf(
+      NodeType.PR,
+      {
+        outputs: [
+          { name: "OnSuccess", visible: false },
+          { name: "on_merged", reserved: true, visible: true },
+          { name: "on_abandoned", reserved: true, visible: false },
+          { name: "deploy", visible: false },
+        ],
+      },
+      fixed,
+    );
+    expect(["OnSuccess", "on_merged", "on_abandoned", "deploy", "OnFailure"].map(pr)).toEqual([
+      false,
+      true,
+      false,
+      false,
+      true,
+    ]);
+    const cmd = outputVisibilityOf(
+      NodeType.Cmd,
+      { outputs: [{ name: "OnSuccess" }, { name: "OnFailure", visible: false }] },
+      fixed,
+    );
+    expect([cmd("OnSuccess"), cmd("OnFailure")]).toEqual([true, false]);
+  });
+
+  test.each([["false"], [0], [null], [{}]])(
+    "a visible of %j is not a boolean, so the default applies",
+    (visible) => {
+      const isVisible = outputVisibilityOf(
+        NodeType.PR,
+        {
+          outputs: [
+            { name: "deploy", visible },
+            { name: "on_merged", reserved: true, visible },
+          ],
+        },
+        fixed,
+      );
+      expect(isVisible("deploy")).toBe(true);
+      expect(isVisible("on_merged")).toBe(false);
+    },
+  );
+
+  test("an output named like a reserved one is visible on a node that is not a PR node", () => {
+    const isVisible = outputVisibilityOf(
+      NodeType.Human,
+      { outputs: [{ name: "on_merged" }, { name: "on_ci_failed" }] },
+      fixed,
+    );
+    expect([isVisible("on_merged"), isVisible("on_ci_failed")]).toEqual([true, true]);
+  });
+
+  test("names are matched exactly, including the names of Object.prototype members", () => {
+    const isVisible = outputVisibilityOf(
+      NodeType.Human,
+      {
+        outputs: [
+          { name: "constructor", visible: false },
+          { name: "toString" },
+          { name: "__proto__", visible: false },
+          { name: "needs more work", visible: false },
+          { name: "success", visible: false },
+        ],
+      },
+      fixed,
+    );
+    expect(
+      [
+        "constructor",
+        "toString",
+        "__proto__",
+        "hasOwnProperty",
+        "needs more work",
+        "success",
+        "OnSuccess",
+        "Success",
+      ].map(isVisible),
+    ).toEqual([false, true, false, true, false, false, true, true]);
+  });
+
+  test("a PR output its config flags reserved is hidden even when the fixed outputs are unknown", () => {
+    const isVisible = outputVisibilityOf(
+      NodeType.PR,
+      { outputs: [{ name: "on_merged", reserved: true }, { name: "deploy" }] },
+      new Map(),
+    );
+    expect([isVisible("on_merged"), isVisible("deploy")]).toEqual([false, true]);
+  });
+});
+
+describe("namedOutputNames", () => {
+  test("a hidden output can still be wired", () => {
+    const node = {
+      id: "h",
+      position: { x: 0, y: 0 },
+      data: {
+        type: NodeType.Human,
+        config: { outputs: [{ name: "later", visible: false }, { name: "now" }] },
+      },
+    } as Node;
+    expect(namedOutputNames(node, new Map())).toEqual(["later", "now"]);
   });
 });

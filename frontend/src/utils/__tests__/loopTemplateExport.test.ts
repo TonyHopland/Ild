@@ -297,5 +297,76 @@ describe("loopTemplateExport", () => {
         expect(startNode?.config.__pos).toEqual({ x: 100, y: 80 });
       }
     });
+
+    test("export → import keeps each output's visible, and puts none on the edges", () => {
+      const configs: Record<string, Record<string, unknown>> = {
+        "n-start": { outputs: [{ name: "OnSuccess", visible: false }, { name: "OnFailure" }] },
+        "n-cmd": { outputs: [{ name: "OnSuccess" }, { name: "OnFailure", visible: false }] },
+        "n-human": {
+          outputs: [{ name: "OnSuccess" }, { name: "later", visible: false }, { name: "now" }],
+        },
+        "n-pr": {
+          outputs: [
+            { name: "on_merged", reserved: true, visible: true },
+            { name: "on_ci_failed", reserved: true },
+          ],
+        },
+      };
+      const types: Record<string, NodeType> = {
+        "n-start": NodeType.Start,
+        "n-cmd": NodeType.Cmd,
+        "n-human": NodeType.Human,
+        "n-pr": NodeType.PR,
+      };
+      const template: LoopTemplate = {
+        ...sampleTemplate,
+        nodes: Object.keys(configs).map((id) => ({
+          id,
+          type: types[id],
+          label: id,
+          config: configs[id],
+        })),
+        edges: [
+          {
+            id: "e-1",
+            sourceNodeId: "n-start",
+            targetNodeId: "n-cmd",
+            edgeType: EdgeType.OnSuccess,
+          },
+          {
+            id: "e-2",
+            sourceNodeId: "n-human",
+            targetNodeId: "n-pr",
+            edgeType: EdgeType.Custom,
+            name: "later",
+          },
+        ],
+      };
+
+      const exported = serializeForExport(template);
+      const result = parseImportFile(JSON.stringify(exported));
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const imported = exportNodesToLoopNodes(result.data.nodes);
+        expect(Object.fromEntries(imported.map((n) => [n.id, n.config]))).toEqual(configs);
+        expect(exportEdgesToLoopNodeEdges(result.data.edges)).toEqual([
+          {
+            id: "e-1",
+            sourceNodeId: "n-start",
+            targetNodeId: "n-cmd",
+            edgeType: EdgeType.OnSuccess,
+            name: null,
+          },
+          {
+            id: "e-2",
+            sourceNodeId: "n-human",
+            targetNodeId: "n-pr",
+            edgeType: EdgeType.Custom,
+            name: "later",
+          },
+        ]);
+      }
+    });
   });
 });

@@ -427,4 +427,66 @@ public class LoopEngineRoutingTests
         Assert.Equal(new[] { "OnSuccess", "OnFailure" }, edgeNames);
     }
 
+    // Whether an output is shown to the person answering ("visible" on the output
+    // object) is a display setting: the engine lists and routes a hidden output
+    // like any other.
+    [Theory]
+    [InlineData("OnSuccess", "approved")]
+    [InlineData("OnFailure", "rejected")]
+    [InlineData("Rework", "reworked")]
+    public async Task Hidden_outputs_are_still_stored_as_feedback_actions_and_still_route(string taken, string expectedTarget)
+    {
+        using var h = new LoopEngineHarness();
+        var human = h.AddNode("h", NodeType.Human);
+        human.Config = "{\"outputs\":[{\"name\":\"OnSuccess\",\"visible\":false},{\"name\":\"OnFailure\",\"visible\":false},{\"name\":\"Rework\",\"visible\":false}]}";
+        h.Db.Context.SaveChanges();
+        h.AddNode("approved", NodeType.Cmd);
+        h.AddNode("rejected", NodeType.Cmd);
+        h.AddNode("reworked", NodeType.Cmd);
+        h.AddEdge("h", "approved", EdgeType.OnSuccess);
+        h.AddEdge("h", "rejected", EdgeType.OnFailure);
+        h.AddEdge("h", "reworked", EdgeType.Custom, "Rework");
+
+        var humanExec = new ScriptedExecutor(NodeType.Human,
+            new NodeOutcome.NodeStarting("ask"),
+            new NodeOutcome.WaitingAction("Human Input Needed", "prompt"));
+        humanExec.Then(
+            new NodeOutcome.NodeStarting("ask"),
+            taken switch
+            {
+                "OnSuccess" => new NodeOutcome.Success(EdgeType.OnSuccess, "answer"),
+                "OnFailure" => new NodeOutcome.Fail(EdgeType.OnFailure, "Rejected", "answer"),
+                _ => new NodeOutcome.Success(EdgeType.Custom, "answer", taken),
+            });
+        h.Registry.Register(humanExec);
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
+            new NodeOutcome.NodeStarting("next"),
+            new NodeOutcome.Terminal("done")));
+
+        h.SeedRun("h");
+        await h.RunAsync();
+
+        h.WorkItemsMock.Verify(m => m.TransitionAsync(
+            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<string?>(),
+            It.Is<string?>(actions => ListsExactly(actions, "OnSuccess", "OnFailure", "Rework")),
+            It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
+
+        var waiting = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
+        await h.Engine.SignalNodeResultAsync(h.RunId, waiting.Id, taken switch
+        {
+            "OnSuccess" => NodeSignal.Success("answer"),
+            "OnFailure" => NodeSignal.Reject("Rejected", "answer"),
+            _ => NodeSignal.Custom(taken, "answer"),
+        });
+        await h.WaitUntilIdleAsync();
+
+        var last = h.ReloadRunNodes().OrderBy(n => n.StartedAt).Last();
+        Assert.Equal(h.NodesById[expectedTarget].Id, last.LoopNodeId);
+    }
+
+    private static bool ListsExactly(string? actions, params string[] names)
+        => actions != null
+            && actions.Split(',').OrderBy(a => a, StringComparer.Ordinal)
+                .SequenceEqual(names.OrderBy(n => n, StringComparer.Ordinal));
 }

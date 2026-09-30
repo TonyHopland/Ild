@@ -180,7 +180,16 @@ export function FeedbackBanner({
         onEdge={detail.handleEdge}
         onMerge={isPr ? detail.handleMerge : undefined}
         busy={detail.respondLoading}
+        isVisible={
+          detail.feedbackOutputs.status === "ready" ? detail.feedbackOutputs.isVisible : () => false
+        }
       />
+      {detail.feedbackOutputs.status === "error" && (
+        <div className="preview-message preview-error">
+          This node's outputs could not be loaded, so none are offered here. Reopen the work item to
+          try again.
+        </div>
+      )}
       {detail.respondError && (
         <div className="preview-message preview-error">{detail.respondError}</div>
       )}

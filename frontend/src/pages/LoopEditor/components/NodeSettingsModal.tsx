@@ -13,8 +13,11 @@ import { AiSessionControls } from "./AiSessionControls";
 import { resolveProviderForTag } from "../../../utils/providerTags";
 import ConfirmModal from "../../../components/ConfirmModal";
 import {
+  isOutputVisible,
   isReferenced,
+  isReservedOutput,
   outputReferences,
+  withVisibility,
   hasSettingsProblems,
   nodeSettingsProblems,
   type OutputReferences,
@@ -37,6 +40,10 @@ interface NodeSettingsModalProps {
   fixedOutputs: NodeOutput[];
   /** The Custom edges wired from the node, which deleting their output removes. */
   wiredOutputs: WiredOutput[];
+  /** The success and failure outputs the node has, by name. */
+  successFailureOutputs: string[];
+  /** Whether an output that has no row — success, failure, an undeclared fixed one — is visible. */
+  isOutputVisible: (name: string) => boolean;
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   aiForkFromPlaceholder: string;
@@ -65,6 +72,7 @@ interface NodeSettingsModalProps {
   onAiToolsChange: (value: string[]) => void;
   onAiMatchRulesChange: (value: AiMatchRule[]) => void;
   onOutputRowsChange: (value: OutputRow[]) => void;
+  onOutputVisibleChange: (name: string, visible: boolean) => void;
   onAiUseSessionChange: (value: boolean) => void;
   onAiSessionPlaceholderChange: (value: string) => void;
   onAiForkFromPlaceholderChange: (value: string) => void;
@@ -90,11 +98,67 @@ function ConfigSection({ title, children }: { title: string; children: ReactNode
   );
 }
 
+/** Whether the output called `name` is offered to the person answering in the run. */
+function VisibleToUserToggle({
+  name,
+  checked,
+  onChange,
+}: {
+  name: string;
+  checked: boolean;
+  onChange: (visible: boolean) => void;
+}) {
+  return (
+    <label className="checkbox-label output-visible-toggle">
+      <input
+        type="checkbox"
+        aria-label={`Visible to user: ${name}`}
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      Visible to user
+    </label>
+  );
+}
+
+/** The node's success and failure outputs, which have no name field: they are routed by edge type. */
+function SuccessFailureOutputs({
+  names,
+  isVisible,
+  onVisibleChange,
+}: {
+  names: string[];
+  isVisible: (name: string) => boolean;
+  onVisibleChange: (name: string, visible: boolean) => void;
+}) {
+  if (names.length === 0) return null;
+  return (
+    <div className="config-field">
+      <label>Success and failure</label>
+      <small className="config-help-text">
+        An output that is not visible to the user is not offered to the person answering in the run.
+        It still routes as usual.
+      </small>
+      {names.map((name) => (
+        <div key={name} className="match-rule-row">
+          <div className="config-read-only output-name">{name}</div>
+          <VisibleToUserToggle
+            name={name}
+            checked={isVisible(name)}
+            onChange={(visible) => onVisibleChange(name, visible)}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /**
  * A node's named outputs, rendered for Human, AI, PR and Condition nodes. Each
  * row edits one output object, so fields the editor does not show are kept.
  * Reserved outputs — the declared ones and the fixed ones of the node's type
- * the config does not list yet — are shown read-only and cannot be removed. A
+ * the config does not list yet — are shown read-only and cannot be removed.
+ * Every output, reserved or not, can be hidden from the person answering. A
  * row with a blank or taken name shows why, and the settings cannot be saved
  * until it is fixed.
  */
@@ -103,19 +167,29 @@ function OutputsEditor({
   fixed,
   nodeType,
   problems,
+  isVisible,
   onChange,
+  onVisibleChange,
   onRemove,
 }: {
   rows: OutputRow[];
   fixed: NodeOutput[];
   nodeType: NodeType;
   problems: (string | null)[];
+  isVisible: (name: string) => boolean;
   onChange: (value: OutputRow[]) => void;
+  onVisibleChange: (name: string, visible: boolean) => void;
   onRemove: (row: OutputRow) => void;
 }) {
+  // By the name it was loaded under: typing a reserved name into a row does not reserve it.
   const isReserved = (row: OutputRow) =>
-    (nodeType === NodeType.PR && row.output.reserved === true) ||
-    fixed.some((output) => output.reserved === true && output.name === row.originalName);
+    isReservedOutput(nodeType, { ...row.output, name: row.originalName ?? "" }, fixed);
+  const updateRow = (index: number, update: (output: NodeOutput) => NodeOutput) =>
+    onChange(
+      rows.map((existing, i) =>
+        i === index ? { ...existing, output: update(existing.output) } : existing,
+      ),
+    );
   const undeclaredFixed = fixed.filter(
     (output) => !rows.some((row) => row.originalName === output.name),
   );
@@ -140,15 +214,16 @@ function OutputsEditor({
                 value={row.output.name}
                 readOnly={reserved}
                 onChange={(event) =>
-                  onChange(
-                    rows.map((existing, i) =>
-                      i === index
-                        ? { ...existing, output: { ...existing.output, name: event.target.value } }
-                        : existing,
-                    ),
-                  )
+                  updateRow(index, (output) => ({ ...output, name: event.target.value }))
                 }
                 placeholder="Output name"
+              />
+              <VisibleToUserToggle
+                name={row.output.name}
+                checked={isOutputVisible(row.output, reserved)}
+                onChange={(visible) =>
+                  updateRow(index, (output) => withVisibility(output, visible, reserved))
+                }
               />
               {!reserved && (
                 <button
@@ -172,6 +247,11 @@ function OutputsEditor({
             aria-label={`Reserved output ${output.name}`}
             value={output.name}
             readOnly
+          />
+          <VisibleToUserToggle
+            name={output.name}
+            checked={isVisible(output.name)}
+            onChange={(visible) => onVisibleChange(output.name, visible)}
           />
         </div>
       ))}
@@ -349,6 +429,8 @@ export function NodeSettingsModal({
   outputRows,
   fixedOutputs,
   wiredOutputs,
+  successFailureOutputs,
+  isOutputVisible: isUnlistedOutputVisible,
   aiUseSession,
   aiSessionPlaceholder,
   aiForkFromPlaceholder,
@@ -377,6 +459,7 @@ export function NodeSettingsModal({
   onAiToolsChange,
   onAiMatchRulesChange,
   onOutputRowsChange,
+  onOutputVisibleChange,
   onAiUseSessionChange,
   onAiSessionPlaceholderChange,
   onAiForkFromPlaceholderChange,
@@ -445,7 +528,9 @@ export function NodeSettingsModal({
       fixed={fixedOutputs}
       nodeType={selectedNodeType}
       problems={problems.outputs}
+      isVisible={isUnlistedOutputVisible}
       onChange={onOutputRowsChange}
+      onVisibleChange={onOutputVisibleChange}
       onRemove={requestDelete}
     />
   );
@@ -775,6 +860,12 @@ export function NodeSettingsModal({
               </div>
             </>
           )}
+
+          <SuccessFailureOutputs
+            names={successFailureOutputs}
+            isVisible={isUnlistedOutputVisible}
+            onVisibleChange={onOutputVisibleChange}
+          />
         </div>
         <div className="node-settings-modal-footer">
           <button className="node-settings-btn-delete" onClick={onDeleteNode}>

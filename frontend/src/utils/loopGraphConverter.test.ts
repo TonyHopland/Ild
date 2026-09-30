@@ -2,7 +2,7 @@ import { describe, expect, test } from "vite-plus/test";
 import type { Edge } from "@xyflow/react";
 import { templateToEdges, edgesToLoopNodeEdges } from "./loopGraphConverter";
 import { LOOP_EDGE_TYPE } from "./edgeUtils";
-import { EdgeType, type LoopTemplate } from "../types";
+import { EdgeType, NodeType, type LoopTemplate } from "../types";
 
 function template(edges: LoopTemplate["edges"]): LoopTemplate {
   return {
@@ -20,6 +20,45 @@ function template(edges: LoopTemplate["edges"]): LoopTemplate {
 }
 
 describe("loopGraphConverter custom edges", () => {
+  test("the edges of hidden outputs are drawn like any other", () => {
+    const loop = template([
+      { id: "e1", sourceNodeId: "h", targetNodeId: "c", edgeType: EdgeType.OnSuccess },
+      { id: "e2", sourceNodeId: "h", targetNodeId: "c", edgeType: EdgeType.Custom, name: "later" },
+      {
+        id: "e3",
+        sourceNodeId: "pr",
+        targetNodeId: "c",
+        edgeType: EdgeType.Custom,
+        name: "on_merged",
+      },
+    ]);
+    loop.nodes = [
+      {
+        id: "h",
+        type: NodeType.Human,
+        label: "Review",
+        config: {
+          outputs: [
+            { name: "OnSuccess", visible: false },
+            { name: "later", visible: false },
+          ],
+        },
+      },
+      { id: "pr", type: NodeType.PR, label: "PR", config: {} },
+      { id: "c", type: NodeType.Cleanup, label: "Cleanup", config: {} },
+    ];
+
+    const edges = templateToEdges(loop);
+
+    expect(edges.map((edge) => edge.id)).toEqual(["e1", "e2", "e3"]);
+    expect(edges.every((edge) => edge.hidden !== true)).toBe(true);
+    expect(edges.map((edge) => (edge.data as { name?: string | null }).name ?? null)).toEqual([
+      null,
+      "later",
+      "on_merged",
+    ]);
+  });
+
   test("templateToEdges carries the name through data and uses it as the label", () => {
     const [edge] = templateToEdges(
       template([

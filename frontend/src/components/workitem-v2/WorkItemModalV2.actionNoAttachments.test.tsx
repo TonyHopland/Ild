@@ -6,6 +6,7 @@ import { pressEscapeUntil } from "../../test-support";
 import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { stageParkedNode } from "../../test-support.parkedNode";
 
 afterEach(() => {
   cleanup();
@@ -60,10 +61,7 @@ function mockServices(item: WorkItem) {
     nextCursor: 0,
     hasMore: false,
   });
-  vi.spyOn(authServices.loopRunService, "getById").mockRejectedValue({
-    status: 404,
-    message: "no run",
-  });
+  stageParkedNode();
   const limits = vi.spyOn(authServices.settingsService, "getAttachmentLimits").mockResolvedValue({
     maxBytesPerFile: 25 * MB,
     maxFilesPerRequest: 10,
@@ -161,7 +159,7 @@ describe("the Action tab's feedback pane carries no attachment control", () => {
 
     expectNoAttachmentControl();
     if (textarea) expect(feedbackTextarea()).not.toBeNull();
-    for (const name of buttons) expect(screen.getByRole("button", { name })).toBeTruthy();
+    for (const name of buttons) expect(await screen.findByRole("button", { name })).toBeTruthy();
   });
 });
 
@@ -183,7 +181,7 @@ describe("pasting a file into the Action tab's feedback pane", () => {
     expectNoAttachmentControl();
 
     await type("Looks good");
-    await click(screen.getByRole("button", { name: "Approve" }));
+    await click(await screen.findByRole("button", { name: "Approve" }));
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
     expect(answer).toHaveBeenCalledWith("wi-1", "Looks good");
@@ -273,7 +271,7 @@ describe("answering from the Action tab submits exactly what was typed", () => {
     await settle(limits);
 
     if (typed !== null) await type(typed);
-    await click(screen.getByRole("button", { name: button }));
+    await click(await screen.findByRole("button", { name: button }));
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
     expect(answer).toHaveBeenCalledWith(...sent);

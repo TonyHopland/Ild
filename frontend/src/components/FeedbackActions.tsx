@@ -13,6 +13,8 @@ interface FeedbackActionsProps {
   onMerge?: (deleteBranch: boolean) => void;
   /** An answer is in flight; pressing again would submit it a second time. */
   busy?: boolean;
+  /** Whether the parked node offers the output of that name to the person answering. */
+  isVisible?: (name: string) => boolean;
 }
 
 // Tokens in the comma-separated actions string that map to the fixed
@@ -23,7 +25,8 @@ const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
  * Renders the Approve / Merge / named-output / Reject buttons based on the
  * comma-separated <c>humanFeedbackActions</c> string from the work item.
  * Each wired named output surfaces as its own button (its name is the output
- * sent back to the engine). Defaults to Approve + Reject when empty.
+ * sent back to the engine). Defaults to Approve + Reject when empty. An output
+ * the node hides has no button; Merge is not an output and is always offered.
  */
 export default function FeedbackActions({
   actions,
@@ -32,16 +35,19 @@ export default function FeedbackActions({
   onEdge,
   onMerge,
   busy = false,
+  isVisible = () => true,
 }: FeedbackActionsProps) {
   const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(true);
 
-  const actionList = actions
-    ? actions
-        .split(",")
-        .map((a) => a.trim())
-        .filter(Boolean)
-    : ["OnSuccess", "OnFailure"];
+  const actionList = (
+    actions
+      ? actions
+          .split(",")
+          .map((a) => a.trim())
+          .filter(Boolean)
+      : ["OnSuccess", "OnFailure"]
+  ).filter((name) => isVisible(name));
 
   const customNames = actionList.filter((a) => !ROLE_TOKENS.has(a));
 

@@ -140,4 +140,52 @@ public class EngineFeedbackResumeTransitionTests
             It.IsAny<string>(), RemoteWorkItemStatus.Running,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
     }
+
+    [Theory]
+    [InlineData("{\"outputs\":[{\"name\":\"on_ci_failed\",\"reserved\":true}]}")]
+    [InlineData("{\"outputs\":[{\"name\":\"on_ci_failed\",\"reserved\":true,\"visible\":false}]}")]
+    public async Task PrStatusPoll_fires_a_reserved_output_that_is_hidden_from_the_person_answering(string prConfig)
+    {
+        using var h = new LoopEngineHarness();
+        var pr = h.AddNode("pr", NodeType.PR);
+        pr.Config = prConfig;
+        h.Db.Context.SaveChanges();
+        h.AddNode("coder", NodeType.Cmd);
+        h.AddEdge("pr", "coder", EdgeType.Custom, LoopOutputs.OnCiFailed);
+
+        var prExec = new ScriptedExecutor(NodeType.PR,
+            new NodeOutcome.NodeStarting("open pr"),
+            new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, "prompt"));
+        prExec.Then(
+            new NodeOutcome.NodeStarting("re-entry"),
+            new NodeOutcome.Success(EdgeType.Custom, "ci-failed", LoopOutputs.OnCiFailed));
+        h.Registry.Register(prExec);
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
+            new NodeOutcome.NodeStarting("coder"),
+            new NodeOutcome.Terminal("done")));
+
+        h.SeedRun("pr");
+        await h.RunAsync();
+        var tracked = h.Db.Context.LoopRuns.First(r => r.Id == h.RunId);
+        tracked.PrUrl = PrUrl;
+        h.Db.Context.SaveChanges();
+
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7"))
+            .ReturnsAsync(CiFailedSnapshot());
+        var poller = new PrStatusPollService(
+            h.Db.LoopRuns, remote.Object, h.Engine, new Mock<IRunNotifier>().Object,
+            NullLogger<PrStatusPollService>.Instance);
+
+        await poller.PollOnceAsync(TestContext.Current.CancellationToken);
+        await h.WaitUntilIdleAsync();
+
+        h.WorkItemsMock.Verify(m => m.TransitionAsync(
+            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<string?>(), LoopOutputs.OnCiFailed,
+            It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
+        var last = h.ReloadRunNodes().OrderBy(n => n.StartedAt).Last();
+        Assert.Equal(h.NodesById["coder"].Id, last.LoopNodeId);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+    }
 }

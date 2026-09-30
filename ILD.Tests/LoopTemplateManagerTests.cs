@@ -295,4 +295,45 @@ public class LoopTemplateManagerTests
         Assert.Contains(OutputsOf(first["h"]), o => (string)o["name"]! == "approve" && (bool)o["visible"]! == false);
         Assert.Contains(OutputsOf(first["pr"]), o => (string)o["name"]! == "deploy" && (string)o["color"]! == "x");
     }
+
+    /// <summary>The outputs of a stored config that carry a <c>visible</c> key, with its value.</summary>
+    private static Dictionary<string, bool> VisibleOf(string config)
+        => OutputsOf(config).Where(o => o.ContainsKey("visible"))
+            .ToDictionary(o => (string)o["name"]!, o => (bool)o["visible"]!);
+
+    [Fact]
+    public async Task Visible_on_any_output_is_stored_as_written_and_never_added_through_save_new_version_and_clone()
+    {
+        using var db = new TestDb();
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
+        var graph = AllTypesGraph(
+            prConfig: "{\"outputs\":[{\"name\":\"on_merged\",\"reserved\":true,\"visible\":true},{\"name\":\"on_ci_failed\",\"visible\":false},{\"name\":\"OnSuccess\",\"visible\":true}]}",
+            humanConfig: "{\"prompt\":\"ok?\",\"outputs\":[{\"name\":\"OnSuccess\",\"visible\":false},{\"name\":\"OnFailure\",\"visible\":false},{\"name\":\"later\",\"visible\":false}]}");
+        graph.Nodes.Single(n => n.Id == "build").Config =
+            Cfg("{\"command\":\"echo hi\",\"outputs\":[{\"name\":\"OnFailure\",\"visible\":false}]}");
+        graph.Edges.Add(E("h", "c", "Custom", "later"));
+        var expected = new Dictionary<string, Dictionary<string, bool>>
+        {
+            ["pr"] = new() { ["on_merged"] = true, ["on_ci_failed"] = false, ["OnSuccess"] = true },
+            ["h"] = new() { ["OnSuccess"] = false, ["OnFailure"] = false, ["later"] = false },
+            ["build"] = new() { ["OnFailure"] = false },
+        };
+
+        var id = await mgr.CreateLoopTemplateAsync("outputs", "", graph);
+        var reloaded = await mgr.GetVersionGraphAsync(id, 1);
+        await mgr.UpdateLoopTemplateAsync(id, "outputs", "", reloaded!);
+        var cloneId = await mgr.CloneLoopTemplateAsync(id, "outputs copy");
+
+        foreach (var node in reloaded!.Nodes)
+            Assert.Equal(
+                expected.GetValueOrDefault(node.Label, new()),
+                VisibleOf(System.Text.Json.JsonSerializer.Serialize(node.Config)));
+        foreach (var (templateId, version) in new[] { (id, 1), (id, 2), (cloneId, 1) })
+        {
+            var configs = await StoredConfigs(db, templateId, version);
+            Assert.Equal(8, configs.Count);
+            foreach (var (label, config) in configs)
+                Assert.Equal(expected.GetValueOrDefault(label, new()), VisibleOf(config));
+        }
+    }
 }
