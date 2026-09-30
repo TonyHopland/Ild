@@ -5,6 +5,7 @@ import {
   Repository,
   LoopTemplate,
   LoopRun,
+  LoopNode,
   WorktreePreview,
   AiProvider,
 } from "../../types";
@@ -18,6 +19,25 @@ import {
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
+import { outputVisibilityOf, readFixedOutputs, type FixedOutputs } from "../../utils/nodeOutputs";
+
+/**
+ * Which outputs of the node a work item is parked on are offered to the person
+ * answering. Never guessed: nothing is known while the node is being read, and
+ * a node that cannot be read is an error.
+ */
+export type FeedbackOutputs =
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "ready"; isVisible: (name: string) => boolean };
+
+const FEEDBACK_OUTPUTS_LOADING: FeedbackOutputs = { status: "loading" };
+
+/** The nodes of one template version, and the fixed outputs their types hold. */
+interface VersionOutputs {
+  nodes: LoopNode[];
+  fixed: FixedOutputs;
+}
 
 /**
  * Shared data + actions for the V2 work item dialog. Loads the runs, repositories,
@@ -29,6 +49,15 @@ import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStagin
 export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkItem) => void) {
   const [runs, setRuns] = useState<LoopRun[]>([]);
   const [currentRun, setCurrentRun] = useState<LoopRun | null>(null);
+  // Kept with the work item object it was read for: the item's actions are only
+  // ever filtered with the node read for that same state of the item.
+  const [parkedOutputs, setParkedOutputs] = useState<{
+    forWorkItem: WorkItem;
+    outputs: FeedbackOutputs;
+  } | null>(null);
+  // A template version never changes, and neither do the fixed outputs, so each
+  // version is read once. A failed read is forgotten, and the next one asks again.
+  const versionOutputs = useRef(new Map<string, Promise<VersionOutputs>>());
   const [dependencies, setDependencies] = useState<WorkItem[]>([]);
   const [allWorkItems, setAllWorkItems] = useState<WorkItem[]>([]);
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -135,21 +164,58 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   // The parent refetches the work item on every node state change, so depending
   // on workItem identity keeps the current node fresh as the run advances.
+  // The parked node's outputs come from the run this effect read itself, never
+  // from `currentRun`, which refreshCurrentRun also writes in no set order.
   useEffect(() => {
     let cancelled = false;
     const runId = workItem?.currentLoopRunId;
+    const parked = workItem?.status === WorkItemStatus.HumanFeedback;
+    const settle = (outputs: FeedbackOutputs) => {
+      if (workItem && parked && !cancelled) setParkedOutputs({ forWorkItem: workItem, outputs });
+    };
+    const readVersionOutputs = (run: LoopRun) => {
+      const reads = versionOutputs.current;
+      const version = `${run.loopTemplateId}:${run.templateVersion}`;
+      const known = reads.get(version);
+      if (known) return known;
+      const read = Promise.all([
+        loopTemplateService.getVersionGraph(run.loopTemplateId, run.templateVersion),
+        loopTemplateService.getNodeOutputs(),
+      ]).then(([graph, fixed]) => ({ nodes: graph.nodes, fixed: readFixedOutputs(fixed) }));
+      reads.set(version, read);
+      read.catch(() => {
+        if (reads.get(version) === read) reads.delete(version);
+      });
+      return read;
+    };
+    const readParkedOutputs = async (run: LoopRun): Promise<FeedbackOutputs> => {
+      if (!run.currentNodeId) return { status: "error" };
+      const { nodes, fixed } = await readVersionOutputs(run);
+      const node = nodes.find((candidate) => candidate.id === run.currentNodeId);
+      return node
+        ? { status: "ready", isVisible: outputVisibilityOf(node.type, node.config, fixed) }
+        : { status: "error" };
+    };
     if (!runId) {
       setCurrentRun(null);
+      settle({ status: "error" });
       return;
     }
     loopRunService
       .getById(runId)
-      .then((r) => {
-        if (!cancelled) setCurrentRun(r);
-      })
-      .catch(() => {
-        if (!cancelled) setCurrentRun(null);
-      });
+      .then(
+        (r) => {
+          if (cancelled) return;
+          setCurrentRun(r);
+          if (parked) return readParkedOutputs(r).then(settle);
+        },
+        () => {
+          if (cancelled) return;
+          setCurrentRun(null);
+          settle({ status: "error" });
+        },
+      )
+      .catch(() => settle({ status: "error" }));
     return () => {
       cancelled = true;
     };
@@ -713,9 +779,15 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     }
   };
 
+  const feedbackOutputs =
+    workItem && parkedOutputs?.forWorkItem === workItem
+      ? parkedOutputs.outputs
+      : FEEDBACK_OUTPUTS_LOADING;
+
   return {
     runs,
     currentRun,
+    feedbackOutputs,
     refreshRuns,
     refreshCurrentRun,
     dependencies,

@@ -1005,6 +1005,20 @@
   min-width: 0;
 }
 
+.match-rule-row .output-visible-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.match-rule-row .output-visible-toggle input {
+  flex: 0 0 auto;
+}
+
+.match-rule-row .output-name {
+  flex: 1;
+  min-width: 0;
+}
+
 .match-rule-remove {
   flex: 0 0 auto;
   width: 1.75rem;

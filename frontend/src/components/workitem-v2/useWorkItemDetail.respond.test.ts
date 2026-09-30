@@ -68,7 +68,8 @@ describe("answering a parked run", () => {
     const upload = vi.spyOn(workItemService, "uploadAttachment").mockResolvedValue([]);
     const answer = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
 
-    const { result } = renderHook(() => useWorkItemDetail(makeParkedWorkItem(), vi.fn()));
+    const workItem = makeParkedWorkItem();
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
       result.current.setFeedbackInput("Looks good");
@@ -89,7 +90,8 @@ describe("answering a parked run", () => {
     stubServices();
     const answer = vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
 
-    const { result } = renderHook(() => useWorkItemDetail(makeParkedWorkItem(), vi.fn()));
+    const workItem = makeParkedWorkItem();
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
     await act(async () => await result.current.handleApprove());
@@ -105,7 +107,8 @@ describe("answering a parked run", () => {
       .spyOn(workItemService, "humanFeedbackInput")
       .mockRejectedValue({ status: 400, message: "Input is too long." });
 
-    const { result } = renderHook(() => useWorkItemDetail(makeParkedWorkItem(), vi.fn()));
+    const workItem = makeParkedWorkItem();
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
     await act(async () => await result.current.handleApprove());
