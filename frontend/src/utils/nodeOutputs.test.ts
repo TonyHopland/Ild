@@ -8,6 +8,8 @@ import {
   namedOutputNames,
   outputRenames,
   outputRowProblems,
+  applyOutputChoices,
+  outputConfirmationOf,
   outputVisibilityOf,
   readFixedOutputs,
   wiredOutputsOf,
@@ -382,5 +384,79 @@ describe("namedOutputNames", () => {
       },
     } as Node;
     expect(namedOutputNames(node, new Map())).toEqual(["later", "now"]);
+  });
+});
+
+describe("outputConfirmationOf", () => {
+  test("only an output whose confirm is true asks, by exact name", () => {
+    const asks = outputConfirmationOf({
+      outputs: [
+        { name: "cleanup", confirm: true },
+        { name: "later", confirm: "yes" },
+        { name: "OnSuccess" },
+        { name: "cleanup", confirm: false },
+      ],
+    });
+    expect(["cleanup", "later", "OnSuccess", "OnFailure", "Cleanup"].map(asks)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  test("a config with no outputs asks for nothing", () => {
+    expect(outputConfirmationOf(undefined)("OnSuccess")).toBe(false);
+    expect(outputConfirmationOf({})("OnSuccess")).toBe(false);
+  });
+});
+
+describe("applyOutputChoices", () => {
+  const fixed = [
+    { name: "OnSuccess" },
+    { name: "OnFailure" },
+    { name: "on_merged", reserved: true },
+  ];
+
+  test("writes each choice onto its entry and leaves the rest in place", () => {
+    const outputs = [
+      { name: "OnSuccess", visible: false, note: "kept" },
+      { name: "deploy", confirm: true },
+      "not an output",
+    ];
+    expect(
+      applyOutputChoices(
+        outputs,
+        NodeType.PR,
+        fixed,
+        new Map([
+          ["OnSuccess", { confirm: true }],
+          ["deploy", { confirm: false, visible: true }],
+        ]),
+      ),
+    ).toEqual([
+      { name: "OnSuccess", visible: false, note: "kept", confirm: true },
+      { name: "deploy" },
+      "not an output",
+    ]);
+  });
+
+  test("declares an output with no entry only when a choice differs from the default", () => {
+    expect(
+      applyOutputChoices(
+        [],
+        NodeType.PR,
+        fixed,
+        new Map([
+          ["OnSuccess", { confirm: false, visible: true }],
+          ["OnFailure", { confirm: true }],
+          ["on_merged", { visible: true, confirm: true }],
+        ]),
+      ),
+    ).toEqual([
+      { name: "OnFailure", confirm: true },
+      { name: "on_merged", reserved: true, visible: true, confirm: true },
+    ]);
   });
 });

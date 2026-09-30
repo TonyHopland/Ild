@@ -1,5 +1,5 @@
 import { describe, expect, test, vi, afterEach } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import FeedbackActions from "./FeedbackActions";
 
 afterEach(cleanup);
@@ -203,5 +203,76 @@ describe("FeedbackActions", () => {
     expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByText("Confirm Merge"));
     expect(onMerge).toHaveBeenCalledWith(true);
+  });
+
+  test.each([
+    ["Approve", "OnSuccess", "onApprove"],
+    ["Reject", "OnFailure", "onReject"],
+    ["Escalate", "Escalate", "onEdge"],
+  ] as const)(
+    "%s on an output that asks to confirm sends nothing until confirmed",
+    (label, output, handler) => {
+      const handlers = { onApprove: vi.fn(), onReject: vi.fn(), onEdge: vi.fn() };
+      render(
+        <FeedbackActions
+          actions="OnSuccess,Escalate,OnFailure"
+          {...handlers}
+          needsConfirm={(name) => name === output}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      const dialog = screen.getByRole("dialog", { name: `Confirm ${label}` });
+      expect(dialog.textContent).toContain(`"${label}"`);
+      for (const called of Object.values(handlers)) expect(called).not.toHaveBeenCalled();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: label }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(handlers[handler]).toHaveBeenCalledTimes(1);
+      if (handler === "onEdge") expect(handlers.onEdge).toHaveBeenCalledWith("Escalate");
+      for (const [name, called] of Object.entries(handlers)) {
+        if (name !== handler) expect(called).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  test("cancelling the confirmation sends nothing", () => {
+    const onEdge = vi.fn();
+    render(
+      <FeedbackActions
+        actions="OnSuccess,Escalate,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={onEdge}
+        needsConfirm={(name) => name === "Escalate"}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Escalate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onEdge).not.toHaveBeenCalled();
+  });
+
+  test("outputs that do not ask to confirm send at once", () => {
+    const onApprove = vi.fn();
+    const onEdge = vi.fn();
+    render(
+      <FeedbackActions
+        actions="OnSuccess,Escalate,OnFailure"
+        onApprove={onApprove}
+        onReject={vi.fn()}
+        onEdge={onEdge}
+        needsConfirm={(name) => name === "OnFailure"}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Approve"));
+    fireEvent.click(screen.getByText("Escalate"));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(onEdge).toHaveBeenCalledWith("Escalate");
   });
 });

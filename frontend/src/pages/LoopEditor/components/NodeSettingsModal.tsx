@@ -16,12 +16,15 @@ import ConfirmModal from "../../../components/ConfirmModal";
 import {
   isOutputVisible,
   isReservedOutput,
+  needsConfirmation,
   outputsAreDerived,
   routedOutputNames,
   unroutedRows,
+  withConfirmation,
   withVisibility,
   hasSettingsProblems,
   nodeSettingsProblems,
+  type OutputChoice,
   type OutputRow,
   type WiredOutput,
 } from "../../../utils/nodeOutputs";
@@ -47,6 +50,8 @@ interface NodeSettingsModalProps {
   wiredSuccessFailure: string[];
   /** Whether an output that has no row — success, failure, an undeclared fixed one — is visible. */
   isOutputVisible: (name: string) => boolean;
+  /** Whether an output that has no row asks the person answering to confirm before taking it. */
+  isOutputConfirmed: (name: string) => boolean;
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   aiForkFromPlaceholder: string;
@@ -74,7 +79,7 @@ interface NodeSettingsModalProps {
   onAiToolsChange: (value: string[]) => void;
   onAiMatchRulesChange: (value: AiMatchRule[]) => void;
   onOutputRowsChange: (value: OutputRow[]) => void;
-  onOutputVisibleChange: (name: string, visible: boolean) => void;
+  onOutputChoiceChange: (name: string, choice: OutputChoice) => void;
   onAiUseSessionChange: (value: boolean) => void;
   onAiSessionPlaceholderChange: (value: string) => void;
   onAiForkFromPlaceholderChange: (value: string) => void;
@@ -143,15 +148,65 @@ function VisibleToUserToggle({
   );
 }
 
+/**
+ * Whether the run asks the person answering to confirm before taking the
+ * output called `name`. The choice is closed while the output is not offered.
+ */
+function ConfirmToggle({
+  name,
+  confirm,
+  closedReason,
+  onChange,
+}: {
+  name: string;
+  confirm: boolean;
+  /** Why the output is not offered to the person answering, if it is not. */
+  closedReason: string | null;
+  onChange: (confirm: boolean) => void;
+}) {
+  const state = `${confirm ? "Asks to confirm" : "Does not ask to confirm"}: ${name}`;
+  const label = closedReason ? `${state} (${closedReason})` : state;
+  return (
+    <button
+      type="button"
+      className="output-visible-toggle output-confirm-toggle"
+      aria-pressed={confirm}
+      aria-label={label}
+      title={label}
+      disabled={closedReason !== null}
+      onClick={() => onChange(!confirm)}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="16"
+        height="16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M12 2.5 4 5.5v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10v-6Z" />
+        {confirm && <path d="m8.5 12 2.5 2.5 4.5-5" />}
+      </svg>
+    </button>
+  );
+}
+
 const outputRowClass = (visible: boolean) =>
   visible ? "match-rule-row" : "match-rule-row output-row-hidden";
+
+const closedReasonOf = (wired: boolean, visible: boolean) =>
+  !wired ? "no edge connected" : visible ? null : "hidden from user";
 
 /**
  * A node's outputs, rendered for Human and PR nodes. Each
  * row edits one output object, so fields the editor does not show are kept.
  * Reserved outputs — the declared ones and the fixed ones of the node's type
  * the config does not list yet — are shown read-only and cannot be removed.
- * Every output, reserved or not, can be hidden from the person answering. A
+ * Every output, reserved or not, can be hidden from the person answering, and
+ * one that is offered can ask them to confirm before it is taken. A
  * row with a blank or taken name shows why, and the settings cannot be saved
  * until it is fixed.
  */
@@ -163,8 +218,9 @@ function OutputsEditor({
   nodeType,
   problems,
   isVisible,
+  isConfirmed,
   onChange,
-  onVisibleChange,
+  onChoiceChange,
   onRemove,
 }: {
   rows: OutputRow[];
@@ -175,8 +231,9 @@ function OutputsEditor({
   nodeType: NodeType;
   problems: (string | null)[];
   isVisible: (name: string) => boolean;
+  isConfirmed: (name: string) => boolean;
   onChange: (value: OutputRow[]) => void;
-  onVisibleChange: (name: string, visible: boolean) => void;
+  onChoiceChange: (name: string, choice: OutputChoice) => void;
   onRemove: (row: OutputRow) => void;
 }) {
   // By the name it was loaded under: typing a reserved name into a row does not reserve it.
@@ -197,7 +254,7 @@ function OutputsEditor({
       <small className="config-help-text">
         The outlets this node can take. Add named ones here, then connect each from the node's top
         handle. An output hidden with the eye is not offered to the person answering in the run; it
-        still routes as usual.
+        still routes as usual. One marked with the shield asks them to confirm before it is taken.
       </small>
       {successFailure.map((name) => {
         const wired = wiredSuccessFailure.includes(name);
@@ -209,7 +266,13 @@ function OutputsEditor({
               name={name}
               visible={visible}
               unwired={!wired}
-              onChange={(next) => onVisibleChange(name, next)}
+              onChange={(next) => onChoiceChange(name, { visible: next })}
+            />
+            <ConfirmToggle
+              name={name}
+              confirm={isConfirmed(name)}
+              closedReason={closedReasonOf(wired, visible)}
+              onChange={(next) => onChoiceChange(name, { confirm: next })}
             />
             <span className="match-rule-remove-spacer" />
           </div>
@@ -241,6 +304,12 @@ function OutputsEditor({
                   updateRow(index, (output) => withVisibility(output, next, reserved))
                 }
               />
+              <ConfirmToggle
+                name={row.output.name}
+                confirm={needsConfirmation(row.output)}
+                closedReason={closedReasonOf(true, visible)}
+                onChange={(next) => updateRow(index, (output) => withConfirmation(output, next))}
+              />
               {reserved ? (
                 <span className="match-rule-remove-spacer" />
               ) : (
@@ -258,22 +327,31 @@ function OutputsEditor({
           </div>
         );
       })}
-      {undeclaredFixed.map((output) => (
-        <div key={output.name} className={outputRowClass(isVisible(output.name))}>
-          <input
-            type="text"
-            aria-label={`Reserved output ${output.name}`}
-            value={output.name}
-            readOnly
-          />
-          <VisibleToUserToggle
-            name={output.name}
-            visible={isVisible(output.name)}
-            onChange={(visible) => onVisibleChange(output.name, visible)}
-          />
-          <span className="match-rule-remove-spacer" />
-        </div>
-      ))}
+      {undeclaredFixed.map((output) => {
+        const visible = isVisible(output.name);
+        return (
+          <div key={output.name} className={outputRowClass(visible)}>
+            <input
+              type="text"
+              aria-label={`Reserved output ${output.name}`}
+              value={output.name}
+              readOnly
+            />
+            <VisibleToUserToggle
+              name={output.name}
+              visible={visible}
+              onChange={(next) => onChoiceChange(output.name, { visible: next })}
+            />
+            <ConfirmToggle
+              name={output.name}
+              confirm={isConfirmed(output.name)}
+              closedReason={closedReasonOf(true, visible)}
+              onChange={(next) => onChoiceChange(output.name, { confirm: next })}
+            />
+            <span className="match-rule-remove-spacer" />
+          </div>
+        );
+      })}
       <button
         type="button"
         className="match-rule-add"
@@ -451,6 +529,7 @@ export function NodeSettingsModal({
   successFailureOutputs,
   wiredSuccessFailure,
   isOutputVisible: isUnlistedOutputVisible,
+  isOutputConfirmed: isUnlistedOutputConfirmed,
   aiUseSession,
   aiSessionPlaceholder,
   aiForkFromPlaceholder,
@@ -478,7 +557,7 @@ export function NodeSettingsModal({
   onAiToolsChange,
   onAiMatchRulesChange,
   onOutputRowsChange,
-  onOutputVisibleChange,
+  onOutputChoiceChange,
   onAiUseSessionChange,
   onAiSessionPlaceholderChange,
   onAiForkFromPlaceholderChange,
@@ -549,8 +628,9 @@ export function NodeSettingsModal({
       nodeType={selectedNodeType}
       problems={problems.outputs}
       isVisible={isUnlistedOutputVisible}
+      isConfirmed={isUnlistedOutputConfirmed}
       onChange={onOutputRowsChange}
-      onVisibleChange={onOutputVisibleChange}
+      onChoiceChange={onOutputChoiceChange}
       onRemove={requestDelete}
     />
   );

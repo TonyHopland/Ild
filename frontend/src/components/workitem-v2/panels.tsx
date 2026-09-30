@@ -183,6 +183,11 @@ export function FeedbackBanner({
         isVisible={
           detail.feedbackOutputs.status === "ready" ? detail.feedbackOutputs.isVisible : () => false
         }
+        needsConfirm={
+          detail.feedbackOutputs.status === "ready"
+            ? detail.feedbackOutputs.needsConfirm
+            : undefined
+        }
       />
       {detail.feedbackOutputs.status === "error" && (
         <div className="preview-message preview-error">

@@ -1,4 +1,11 @@
 import { useState } from "react";
+import ConfirmModal from "./ConfirmModal";
+
+/** An answer waiting on the person to confirm it: the button they pressed and what it sends. */
+interface PendingAnswer {
+  label: string;
+  send: () => void;
+}
 
 interface FeedbackActionsProps {
   actions: string | null | undefined;
@@ -15,6 +22,8 @@ interface FeedbackActionsProps {
   busy?: boolean;
   /** Whether the parked node offers the output of that name to the person answering. */
   isVisible?: (name: string) => boolean;
+  /** Whether the parked node asks the person answering to confirm before taking the output of that name. */
+  needsConfirm?: (name: string) => boolean;
 }
 
 // Tokens in the comma-separated actions string that map to the fixed
@@ -26,7 +35,8 @@ const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
  * comma-separated <c>humanFeedbackActions</c> string from the work item.
  * Each wired named output surfaces as its own button (its name is the output
  * sent back to the engine). Defaults to Approve + Reject when empty. An output
- * the node hides has no button; Merge is not an output and is always offered.
+ * the node hides has no button, and one it marks for confirmation asks first.
+ * Merge is not an output and is always offered, behind its own confirmation.
  */
 export default function FeedbackActions({
   actions,
@@ -36,7 +46,9 @@ export default function FeedbackActions({
   onMerge,
   busy = false,
   isVisible = () => true,
+  needsConfirm = () => false,
 }: FeedbackActionsProps) {
+  const [pending, setPending] = useState<PendingAnswer | null>(null);
   const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(true);
 
@@ -51,13 +63,18 @@ export default function FeedbackActions({
 
   const customNames = actionList.filter((a) => !ROLE_TOKENS.has(a));
 
+  const answer = (name: string, label: string, send: () => void) => () => {
+    if (needsConfirm(name)) setPending({ label, send });
+    else send();
+  };
+
   return (
     <div className="feedback-actions">
       {actionList.includes("OnSuccess") && (
         <button
           type="button"
           className="btn btn-sm btn-primary"
-          onClick={onApprove}
+          onClick={answer("OnSuccess", "Approve", onApprove)}
           disabled={busy}
         >
           Approve
@@ -77,14 +94,19 @@ export default function FeedbackActions({
           key={name}
           type="button"
           className="btn btn-sm btn-warning"
-          onClick={() => onEdge(name)}
+          onClick={answer(name, name, () => onEdge(name))}
           disabled={busy}
         >
           {name}
         </button>
       ))}
       {actionList.includes("OnFailure") && (
-        <button type="button" className="btn btn-sm btn-danger" onClick={onReject} disabled={busy}>
+        <button
+          type="button"
+          className="btn btn-sm btn-danger"
+          onClick={answer("OnFailure", "Reject", onReject)}
+          disabled={busy}
+        >
           Reject
         </button>
       )}
@@ -118,6 +140,19 @@ export default function FeedbackActions({
             </button>
           </div>
         </div>
+      )}
+      {pending && (
+        <ConfirmModal
+          isOpen
+          title={`Confirm ${pending.label}`}
+          message={`Are you sure you want to take "${pending.label}"? The run moves on as soon as you confirm.`}
+          confirmText={pending.label}
+          onConfirm={() => {
+            setPending(null);
+            pending.send();
+          }}
+          onCancel={() => setPending(null)}
+        />
       )}
     </div>
   );

@@ -19,17 +19,26 @@ import {
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
-import { outputVisibilityOf, readFixedOutputs, type FixedOutputs } from "../../utils/nodeOutputs";
+import {
+  outputConfirmationOf,
+  outputVisibilityOf,
+  readFixedOutputs,
+  type FixedOutputs,
+} from "../../utils/nodeOutputs";
 
 /**
  * Which outputs of the node a work item is parked on are offered to the person
- * answering. Never guessed: nothing is known while the node is being read, and
+ * answering, and which of those ask them to confirm. Never guessed: nothing is known while the node is being read, and
  * a node that cannot be read is an error.
  */
 export type FeedbackOutputs =
   | { status: "loading" }
   | { status: "error" }
-  | { status: "ready"; isVisible: (name: string) => boolean };
+  | {
+      status: "ready";
+      isVisible: (name: string) => boolean;
+      needsConfirm: (name: string) => boolean;
+    };
 
 const FEEDBACK_OUTPUTS_LOADING: FeedbackOutputs = { status: "loading" };
 
@@ -193,7 +202,11 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       const { nodes, fixed } = await readVersionOutputs(run);
       const node = nodes.find((candidate) => candidate.id === run.currentNodeId);
       return node
-        ? { status: "ready", isVisible: outputVisibilityOf(node.type, node.config, fixed) }
+        ? {
+            status: "ready",
+            isVisible: outputVisibilityOf(node.type, node.config, fixed),
+            needsConfirm: outputConfirmationOf(node.config),
+          }
         : { status: "error" };
     };
     if (!runId) {

@@ -46,7 +46,7 @@ import {
   LOOP_EDGE_TYPE,
 } from "../../utils/edgeUtils";
 import {
-  applyOutputVisibility,
+  applyOutputChoices,
   fixedNamedOutputs,
   hasSettingsProblems,
   initialOutputs,
@@ -58,12 +58,14 @@ import {
   outputsAreDerived,
   routedOutputNames,
   unroutedRows,
+  outputConfirmationOf,
   outputVisibilityOf,
   readFixedOutputs,
   successFailureOutputs,
   wiredOutputsOf,
   wiredSuccessFailureOf,
   type FixedOutputs,
+  type OutputChoice,
   type OutputRow,
 } from "../../utils/nodeOutputs";
 import {
@@ -246,9 +248,9 @@ export default function LoopEditor() {
   const [aiTools, setAiTools] = useState<string[]>([]);
   const [aiMatchRules, setAiMatchRules] = useState<AiMatchRule[]>([]);
   const [outputRows, setOutputRows] = useState<OutputRow[]>([]);
-  // The visibility chosen in this edit for outputs that have no row: success,
+  // The choices made in this edit for outputs that have no row: success,
   // failure and the fixed outputs the node does not declare yet.
-  const [outputVisibility, setOutputVisibility] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const [outputChoices, setOutputChoices] = useState<ReadonlyMap<string, OutputChoice>>(new Map());
   const [aiUseSession, setAiUseSession] = useState(false);
   const [aiSessionPlaceholder, setAiSessionPlaceholder] = useState("");
   const [aiForkFromPlaceholder, setAiForkFromPlaceholder] = useState("");
@@ -1090,7 +1092,7 @@ export default function LoopEditor() {
       setAiTools(resolvedAiTools);
       setAiMatchRules(readMatchRules(config));
       setOutputRows(nodeOutputRows);
-      setOutputVisibility(new Map());
+      setOutputChoices(new Map());
       setAiUseSession((config.useSession as boolean | undefined) ?? false);
       setAiSessionPlaceholder((config.sessionPlaceholder as string) || "");
       setAiForkFromPlaceholder((config.forkFromPlaceholder as string) || "");
@@ -1265,11 +1267,11 @@ export default function LoopEditor() {
         const current = (node.data as { config?: Record<string, unknown> }).config;
         const type = selectedNodeType as NodeType;
         const named = nodeHasNamedOutputs(type);
-        const chosen = applyOutputVisibility(
+        const chosen = applyOutputChoices(
           named ? mergeOutputs(current?.outputs, savedRows, referenced) : current?.outputs,
           type,
           fixedOutputs.get(type) ?? [],
-          outputVisibility,
+          outputChoices,
         );
         const outputs =
           named || Array.isArray(current?.outputs) || chosen.length > 0 ? { outputs: chosen } : {};
@@ -1290,7 +1292,7 @@ export default function LoopEditor() {
     aiPrompt,
     aiMatchRules,
     outputRows,
-    outputVisibility,
+    outputChoices,
     originalNodeConfig,
     fixedOutputs,
     aiSessionPlaceholder,
@@ -1733,11 +1735,17 @@ export default function LoopEditor() {
                         fixedOutputs,
                       )}
                       isOutputVisible={(name) =>
-                        outputVisibility.get(name) ??
+                        outputChoices.get(name)?.visible ??
                         outputVisibilityOf(
                           (selectedNode.data as { type: NodeType }).type,
                           (selectedNode.data as { config?: Record<string, unknown> }).config,
                           fixedOutputs,
+                        )(name)
+                      }
+                      isOutputConfirmed={(name) =>
+                        outputChoices.get(name)?.confirm ??
+                        outputConfirmationOf(
+                          (selectedNode.data as { config?: Record<string, unknown> }).config,
                         )(name)
                       }
                       aiUseSession={aiUseSession}
@@ -1767,8 +1775,10 @@ export default function LoopEditor() {
                       onAiToolsChange={setAiTools}
                       onAiMatchRulesChange={setAiMatchRules}
                       onOutputRowsChange={setOutputRows}
-                      onOutputVisibleChange={(name, visible) =>
-                        setOutputVisibility((choices) => new Map(choices).set(name, visible))
+                      onOutputChoiceChange={(name, choice) =>
+                        setOutputChoices((choices) =>
+                          new Map(choices).set(name, { ...choices.get(name), ...choice }),
+                        )
                       }
                       onAiUseSessionChange={setAiUseSession}
                       onAiSessionPlaceholderChange={setAiSessionPlaceholder}

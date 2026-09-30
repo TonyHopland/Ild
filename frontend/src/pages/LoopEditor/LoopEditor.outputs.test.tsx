@@ -1057,7 +1057,7 @@ describe("Loop Editor — visible to user", () => {
     expect(within(dialog).queryAllByDisplayValue("OnFailure")).toHaveLength(0);
   });
 
-  test("the eye names its state and the exact output, sits before the remove button, and mutes a hidden row", async () => {
+  test("the eye names its state and the exact output, sits before the shield and the remove button, and mutes a hidden row", async () => {
     const human = node(NodeType.Human, "Sign Off", {
       outputs: [{ name: "later", visible: false }],
     });
@@ -1072,9 +1072,9 @@ describe("Loop Editor — visible to user", () => {
     const row = later.closest(".match-rule-row") as HTMLElement;
     expect(row.classList.contains("output-row-hidden")).toBe(true);
     const buttons = within(row).getAllByRole("button");
-    expect(buttons.indexOf(later)).toBe(
-      buttons.indexOf(removeButtonFor(outputField(dialog, "later"))) - 1,
-    );
+    const remove = buttons.indexOf(removeButtonFor(outputField(dialog, "later")));
+    expect(buttons.indexOf(later)).toBe(remove - 2);
+    expect(buttons[remove - 1].classList.contains("output-confirm-toggle")).toBe(true);
 
     fireEvent.click(later);
     expect(later.getAttribute("aria-label")).toBe("Visible to user: later");
@@ -1368,5 +1368,144 @@ describe("Loop Editor — visible to user", () => {
       { name: "OnFailure" },
       { name: "success" },
     ]);
+  });
+});
+
+/** The shield button of the output called exactly `name`. */
+function shield(dialog: HTMLElement, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const label = new RegExp(`^(Asks|Does not ask) to confirm: ${escaped}( \\(.*\\))?$`);
+  const found = within(dialog).queryAllByRole("button", { name: label });
+  expect(found, name).toHaveLength(1);
+  return found[0] as HTMLButtonElement;
+}
+
+function shields(dialog: HTMLElement) {
+  return within(dialog).queryAllByRole("button", {
+    name: /^(Asks|Does not ask) to confirm: /,
+  }) as HTMLButtonElement[];
+}
+
+describe("Loop Editor — asks to confirm", () => {
+  const human = (config: Record<string, unknown>): TemplateNode => ({
+    id: "n-node",
+    type: NodeType.Human,
+    label: "Sign Off",
+    config,
+  });
+
+  test("every output starts not asking, and a hidden or unwired one cannot be switched on", async () => {
+    const { dialog } = await openNode(
+      {
+        template: templateWith(
+          human({ outputs: [{ name: "later" }, { name: "never", visible: false }] }),
+        ),
+      },
+      "Sign Off",
+    );
+
+    await waitFor(() => expect(shields(dialog)).toHaveLength(4));
+    for (const button of shields(dialog)) expect(isOn(button)).toBe(false);
+    expect(shield(dialog, "OnSuccess").disabled).toBe(false);
+    expect(shield(dialog, "later").disabled).toBe(false);
+    expect(shield(dialog, "never").title).toBe("Does not ask to confirm: never (hidden from user)");
+    expect(shield(dialog, "never").disabled).toBe(true);
+    expect(shield(dialog, "OnFailure").title).toBe(
+      "Does not ask to confirm: OnFailure (no edge connected)",
+    );
+    expect(shield(dialog, "OnFailure").disabled).toBe(true);
+
+    fireEvent.click(toggle(dialog, "later"));
+    expect(shield(dialog, "later").disabled).toBe(true);
+  });
+
+  test("switching the shield on saves confirm onto that output alone, declaring success if it must", async () => {
+    const { calls, dialog } = await openNode(
+      {
+        template: templateWith(
+          human({ outputs: [{ name: "cleanup", note: "kept" }, { name: "later" }] }),
+        ),
+      },
+      "Sign Off",
+    );
+    await waitFor(() => expect(shields(dialog)).toHaveLength(4));
+
+    fireEvent.click(shield(dialog, "cleanup"));
+    fireEvent.click(shield(dialog, "OnSuccess"));
+    expect(shield(dialog, "cleanup").title).toBe("Asks to confirm: cleanup");
+    expect(isOn(shield(dialog, "OnSuccess"))).toBe(true);
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "cleanup", note: "kept", confirm: true },
+      { name: "later" },
+      { name: "OnSuccess", confirm: true },
+    ]);
+  });
+
+  test("switching it off again removes confirm, and hiding an output keeps it", async () => {
+    const { calls, dialog } = await openNode(
+      {
+        template: templateWith(
+          human({
+            outputs: [
+              { name: "OnSuccess", confirm: true },
+              { name: "cleanup", confirm: true },
+              { name: "pr", confirm: true },
+            ],
+          }),
+        ),
+      },
+      "Sign Off",
+    );
+    await waitFor(() => expect(isOn(shield(dialog, "cleanup"))).toBe(true));
+
+    fireEvent.click(shield(dialog, "OnSuccess"));
+    fireEvent.click(shield(dialog, "cleanup"));
+    fireEvent.click(toggle(dialog, "pr"));
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "OnSuccess" },
+      { name: "cleanup" },
+      { name: "pr", confirm: true, visible: false },
+    ]);
+  });
+
+  test("cancelling the settings discards the shield changes", async () => {
+    const { dialog } = await openNode(
+      { template: templateWith(human({ outputs: [{ name: "cleanup" }] })) },
+      "Sign Off",
+    );
+    await waitFor(() => expect(shields(dialog)).toHaveLength(3));
+
+    fireEvent.click(shield(dialog, "cleanup"));
+    fireEvent.click(shield(dialog, "OnSuccess"));
+    fireEvent.click(dialog.querySelector(".node-settings-btn-cancel") as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
+    fireEvent.click(screen.getByText("Sign Off"));
+    const reopened = await screen.findByRole("dialog", { name: "Node Settings" });
+
+    for (const button of shields(reopened)) expect(isOn(button)).toBe(false);
+  });
+
+  test.each([
+    [
+      "a Cmd node",
+      { id: "n-node", type: NodeType.Cmd, label: "Build", config: { command: "make" } },
+    ],
+    [
+      "an AI node",
+      {
+        id: "n-node",
+        type: NodeType.AI,
+        label: "Reviewer",
+        config: { prompt: "p", outputs: [{ name: "x", confirm: true }] },
+      },
+    ],
+  ] as Array<[string, TemplateNode]>)("%s has no shield", async (_, opened) => {
+    const { dialog } = await openNode({ template: templateWith(opened) }, opened.label);
+
+    expect(shields(dialog)).toHaveLength(0);
   });
 });

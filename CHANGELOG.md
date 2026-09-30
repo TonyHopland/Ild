@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An eye beside each output of a Human or pull request node hides it from the person answering the run; a pull request node's reserved outputs start hidden.**
 
+- **A shield beside each output of a Human or pull request node makes the run ask for confirmation before that answer is taken.**
+
 ### Changed
 
 - **AI and Condition node settings no longer list outputs: they come from the match rules, cases and default.**
