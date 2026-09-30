@@ -62,7 +62,9 @@ interface ColumnFetch {
  * membership sequence (bumped by a live change to its membership) and the
  * content clock at issue. A read from an older generation is dropped; one
  * whose column's membership changed in flight would undo that change, so it
- * is discarded and the column's window is read again. Every live change to an
+ * is discarded and the column's window is read again; so is a read of a
+ * column's first cards that lands on a column a Load more has since made
+ * longer, which it would cut short. Every live change to an
  * item is recorded, held by a column or not, with its live copy or its removal.
  * A read that lands after one no longer speaks for that item: it takes the
  * live copy while that still belongs in this column, and otherwise leaves the
@@ -88,7 +90,6 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   const settledRef = useRef(new Set<WorkItemStatus>());
   const countsRef = useRef({ inFlight: false, dirty: false });
   const refillingRef = useRef(new Set<WorkItemStatus>());
-  // Set once `fetchColumn` exists: the reads it starts are what ask for a refill.
   const fetchColumnRef = useRef<(status: WorkItemStatus, request: ColumnFetch) => void>(() => {});
 
   const show = useCallback((next: TaskboardColumns) => {
@@ -203,6 +204,7 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
       const generation = generationRef.current;
       const seq = seqRef.current[status] ?? 0;
       const issuedAt = clockRef.current;
+      const shown = boardRef.current[status].items.length;
       const stale = () => generation !== generationRef.current;
       const moved = () => (seqRef.current[status] ?? 0) !== seq;
       readWindow(status, request.skip, request.take, () => stale() || moved())
@@ -210,7 +212,8 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
           if (stale()) return;
           const board = boardRef.current;
           const column = board[status];
-          if (moved()) {
+          const outgrown = !request.append && column.items.length > shown;
+          if (moved() || outgrown) {
             const loaded = column.items.length + (request.append ? TASKBOARD_PAGE_SIZE : 0);
             fetchColumn(status, {
               skip: 0,

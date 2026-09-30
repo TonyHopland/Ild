@@ -355,6 +355,30 @@ describe("useTaskboardColumns", () => {
     expect(backlog(result).total).toBe(44);
   });
 
+  test("a Load more that lands while its short column is being re-read keeps its cards when the read lands", async () => {
+    const server = mockTaskboardServer(Array.from({ length: 45 }, (_, n) => backlogItem(n)));
+    const { result } = renderColumns();
+    await waitFor(() => expect(backlog(result).items).toHaveLength(20));
+    const removed = backlog(result).items[0];
+    const release = holdNextRead(server, WorkItemStatus.Backlog);
+
+    server.items.splice(
+      server.items.findIndex((item) => item.id === removed.id),
+      1,
+    );
+    act(() => result.current.removeItem(removed.id));
+    act(() => result.current.loadMore(WorkItemStatus.Backlog));
+    await waitFor(() => expect(backlog(result).items).toHaveLength(39));
+    await release();
+
+    await waitFor(() => expect(backlog(result).loadingMore).toBe(false));
+    expect(backlog(result).items).toHaveLength(39);
+    expect(backlog(result).total).toBe(44);
+    expect(backlog(result).items.map((item) => item.id)).toEqual(
+      server.page({ status: WorkItemStatus.Backlog, skip: 0, take: 39 }).items.map((i) => i.id),
+    );
+  });
+
   test("a re-read of a short column that a reload overtook neither alters the board nor blocks the next re-read", async () => {
     const { server, result } = await runningColumnBehindItsServer();
     const release = holdNextRead(server, WorkItemStatus.Running);
