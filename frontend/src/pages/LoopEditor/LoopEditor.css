@@ -1005,13 +1005,16 @@
   min-width: 0;
 }
 
-.match-rule-row .output-visible-toggle {
+.config-field .match-rule-row label.output-visible-toggle {
+  display: flex;
   flex: 0 0 auto;
+  margin-bottom: 0;
   white-space: nowrap;
 }
 
-.match-rule-row .output-visible-toggle input {
+.config-field .match-rule-row .output-visible-toggle input {
   flex: 0 0 auto;
+  width: auto;
 }
 
 .match-rule-row .output-name {
