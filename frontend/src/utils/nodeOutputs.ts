@@ -30,14 +30,6 @@ export interface WiredOutput {
   targetLabel: string;
 }
 
-/** Everything on a node that uses one of its outputs, as positions in the lists it came from. */
-export interface OutputReferences {
-  wired: WiredOutput[];
-  matchRules: number[];
-  cases: number[];
-  defaultEdge: boolean;
-}
-
 /** Success and failure are routed by edge type, never listed or referred to by name. */
 function isSuccessOrFailure(name: string): boolean {
   return name === EdgeType.OnSuccess || name === EdgeType.OnFailure;
@@ -262,7 +254,7 @@ export function nodeSettingsProblems(
       : null;
   };
   return {
-    outputs: outputRowProblems(settings.rows, settings.fixed),
+    outputs: outputsAreDerived(type) ? [] : outputRowProblems(settings.rows, settings.fixed),
     matchRules:
       type === NodeType.AI
         ? settings.matchRules.map((rule) =>
@@ -309,47 +301,6 @@ export function outputRenames(rows: OutputRow[]): Map<string, string> {
     }
   }
   return renames;
-}
-
-/**
- * Everything that uses `row`: the Custom edges wired from the name it was
- * loaded under, and the match rules, cases and default whose name — once this
- * edit's renames are applied, as they are on save — is the row's name.
- */
-export function outputReferences(
-  row: OutputRow,
-  rows: OutputRow[],
-  node: {
-    wired: WiredOutput[];
-    matchRules: AiMatchRule[];
-    cases: ConditionCase[];
-    defaultEdge: string | null;
-  },
-): OutputReferences {
-  const renames = outputRenames(rows);
-  // A row blanked in this edit still answers to the name it was loaded under.
-  const name = row.output.name.trim() || row.originalName;
-  const routesHere = (reference: string) =>
-    !!name && (renames.get(reference.trim()) ?? reference.trim()) === name;
-  const indexesOf = <T>(items: T[], referenceOf: (item: T) => string) =>
-    items.flatMap((item, index) => (routesHere(referenceOf(item)) ? [index] : []));
-  return {
-    wired:
-      row.originalName === null ? [] : node.wired.filter((edge) => edge.name === row.originalName),
-    matchRules: indexesOf(node.matchRules, (rule) => rule.edgeName),
-    cases: indexesOf(node.cases, (c) => c.edgeName),
-    defaultEdge: node.defaultEdge !== null && routesHere(node.defaultEdge),
-  };
-}
-
-/** Whether anything uses the output, so deleting it has to be confirmed. */
-export function isReferenced(references: OutputReferences): boolean {
-  return (
-    references.wired.length > 0 ||
-    references.matchRules.length > 0 ||
-    references.cases.length > 0 ||
-    references.defaultEdge
-  );
 }
 
 /**
@@ -403,4 +354,43 @@ export function readFixedOutputs(value: unknown): FixedOutputs {
     if (Array.isArray(outputs)) fixed.set(type, readOutputs({ outputs }));
   }
   return fixed;
+}
+
+/**
+ * Whether a node type's named outputs are not edited as a list but derived on
+ * save from what routes to them: an AI node's match rules, a Condition node's
+ * cases and default.
+ */
+export function outputsAreDerived(type: NodeType): boolean {
+  return type === NodeType.AI || type === NodeType.Condition;
+}
+
+/**
+ * The output names a node's settings route to, as they are saved: those of an
+ * AI node's finished match rules, or of a Condition node's cases and default.
+ */
+export function routedOutputNames(
+  type: NodeType,
+  settings: { matchRules: AiMatchRule[]; cases: ConditionCase[]; defaultEdge: string },
+): string[] {
+  if (type === NodeType.AI)
+    return settings.matchRules
+      .filter((rule) => rule.pattern.trim() !== "" && rule.edgeName.trim() !== "")
+      .map((rule) => rule.edgeName.trim());
+  if (type === NodeType.Condition)
+    return [...settings.cases.map((c) => c.edgeName.trim()), settings.defaultEdge.trim()];
+  return [];
+}
+
+/** The loaded rows nothing routes to any more, which saving a derived node drops. */
+export function unroutedRows(rows: OutputRow[], routed: string[]): OutputRow[] {
+  return rows.filter((row) => !routed.includes(row.output.name));
+}
+
+/** Which of success and failure have an edge wired from `sourceId`. */
+export function wiredSuccessFailureOf(sourceId: string, edges: Edge[]): string[] {
+  return edges.flatMap((edge) => {
+    const edgeType = (edge.data as { edgeType?: EdgeType } | undefined)?.edgeType;
+    return edge.source === sourceId && edgeType && isSuccessOrFailure(edgeType) ? [edgeType] : [];
+  });
 }

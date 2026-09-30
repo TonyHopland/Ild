@@ -11,16 +11,17 @@ import {
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
 import { resolveProviderForTag } from "../../../utils/providerTags";
+import { nodeStyleOf } from "../../../utils/nodeStyles";
 import ConfirmModal from "../../../components/ConfirmModal";
 import {
   isOutputVisible,
-  isReferenced,
   isReservedOutput,
-  outputReferences,
+  outputsAreDerived,
+  routedOutputNames,
+  unroutedRows,
   withVisibility,
   hasSettingsProblems,
   nodeSettingsProblems,
-  type OutputReferences,
   type OutputRow,
   type WiredOutput,
 } from "../../../utils/nodeOutputs";
@@ -42,6 +43,8 @@ interface NodeSettingsModalProps {
   wiredOutputs: WiredOutput[];
   /** The success and failure outputs the node has, by name. */
   successFailureOutputs: string[];
+  /** Which of success and failure have an edge wired from the node. */
+  wiredSuccessFailure: string[];
   /** Whether an output that has no row — success, failure, an undeclared fixed one — is visible. */
   isOutputVisible: (name: string) => boolean;
   aiUseSession: boolean;
@@ -53,7 +56,6 @@ interface NodeSettingsModalProps {
   humanPrompt: string;
   promptNodePrompt: string;
   prDescriptionTemplate: string;
-  prCommentTemplate: string;
   conditionCases: ConditionCase[];
   conditionDefaultEdge: string;
   conditionOutput: string;
@@ -82,7 +84,6 @@ interface NodeSettingsModalProps {
   onHumanPromptChange: (value: string) => void;
   onPromptNodePromptChange: (value: string) => void;
   onPrDescriptionTemplateChange: (value: string) => void;
-  onPrCommentTemplateChange: (value: string) => void;
   onConditionCasesChange: (value: ConditionCase[]) => void;
   onConditionDefaultEdgeChange: (value: string) => void;
   onConditionOutputChange: (value: string) => void;
@@ -101,60 +102,52 @@ function ConfigSection({ title, children }: { title: string; children: ReactNode
 /** Whether the output called `name` is offered to the person answering in the run. */
 function VisibleToUserToggle({
   name,
-  checked,
+  visible,
+  unwired = false,
   onChange,
 }: {
   name: string;
-  checked: boolean;
+  visible: boolean;
+  /** No edge leaves the output, so it cannot be offered and the choice is not open. */
+  unwired?: boolean;
   onChange: (visible: boolean) => void;
 }) {
+  const state = `${visible ? "Visible to user" : "Hidden from user"}: ${name}`;
+  const label = unwired ? `${state} (no edge connected)` : state;
   return (
-    <label className="checkbox-label output-visible-toggle">
-      <input
-        type="checkbox"
-        aria-label={`Visible to user: ${name}`}
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
-      Visible to user
-    </label>
+    <button
+      type="button"
+      className="output-visible-toggle"
+      aria-pressed={visible}
+      aria-label={label}
+      title={label}
+      disabled={unwired}
+      onClick={() => onChange(!visible)}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="16"
+        height="16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12Z" />
+        <circle cx="12" cy="12" r="3" />
+        {!visible && <path d="M4 20 20 4" />}
+      </svg>
+    </button>
   );
 }
 
-/** The node's success and failure outputs, which have no name field: they are routed by edge type. */
-function SuccessFailureOutputs({
-  names,
-  isVisible,
-  onVisibleChange,
-}: {
-  names: string[];
-  isVisible: (name: string) => boolean;
-  onVisibleChange: (name: string, visible: boolean) => void;
-}) {
-  if (names.length === 0) return null;
-  return (
-    <div className="config-field">
-      <label>Success and failure</label>
-      <small className="config-help-text">
-        An output that is not visible to the user is not offered to the person answering in the run.
-        It still routes as usual.
-      </small>
-      {names.map((name) => (
-        <div key={name} className="match-rule-row">
-          <div className="config-read-only output-name">{name}</div>
-          <VisibleToUserToggle
-            name={name}
-            checked={isVisible(name)}
-            onChange={(visible) => onVisibleChange(name, visible)}
-          />
-        </div>
-      ))}
-    </div>
-  );
-}
+const outputRowClass = (visible: boolean) =>
+  visible ? "match-rule-row" : "match-rule-row output-row-hidden";
 
 /**
- * A node's named outputs, rendered for Human, AI, PR and Condition nodes. Each
+ * A node's outputs, rendered for Human and PR nodes. Each
  * row edits one output object, so fields the editor does not show are kept.
  * Reserved outputs — the declared ones and the fixed ones of the node's type
  * the config does not list yet — are shown read-only and cannot be removed.
@@ -165,6 +158,8 @@ function SuccessFailureOutputs({
 function OutputsEditor({
   rows,
   fixed,
+  successFailure,
+  wiredSuccessFailure,
   nodeType,
   problems,
   isVisible,
@@ -174,6 +169,9 @@ function OutputsEditor({
 }: {
   rows: OutputRow[];
   fixed: NodeOutput[];
+  /** The success and failure outputs to list; they have no name field, being routed by edge type. */
+  successFailure: string[];
+  wiredSuccessFailure: string[];
   nodeType: NodeType;
   problems: (string | null)[];
   isVisible: (name: string) => boolean;
@@ -197,15 +195,33 @@ function OutputsEditor({
     <div className="config-field">
       <label>Outputs</label>
       <small className="config-help-text">
-        The named outlets this node can take besides success and failure. Declare them here, then
-        connect each from the node's top handle.
+        The outlets this node can take. Add named ones here, then connect each from the node's top
+        handle. An output hidden with the eye is not offered to the person answering in the run; it
+        still routes as usual.
       </small>
+      {successFailure.map((name) => {
+        const wired = wiredSuccessFailure.includes(name);
+        const visible = wired && isVisible(name);
+        return (
+          <div key={name} className={outputRowClass(visible)}>
+            <input type="text" aria-label={`Output ${name}`} value={name} readOnly />
+            <VisibleToUserToggle
+              name={name}
+              visible={visible}
+              unwired={!wired}
+              onChange={(next) => onVisibleChange(name, next)}
+            />
+            <span className="match-rule-remove-spacer" />
+          </div>
+        );
+      })}
       {rows.map((row, index) => {
         const reserved = isReserved(row);
         const problem = problems[index];
+        const visible = isOutputVisible(row.output, reserved);
         return (
           <div key={index}>
-            <div className="match-rule-row">
+            <div className={outputRowClass(visible)}>
               <input
                 type="text"
                 aria-label={`Output ${index + 1}`}
@@ -220,12 +236,14 @@ function OutputsEditor({
               />
               <VisibleToUserToggle
                 name={row.output.name}
-                checked={isOutputVisible(row.output, reserved)}
-                onChange={(visible) =>
-                  updateRow(index, (output) => withVisibility(output, visible, reserved))
+                visible={visible}
+                onChange={(next) =>
+                  updateRow(index, (output) => withVisibility(output, next, reserved))
                 }
               />
-              {!reserved && (
+              {reserved ? (
+                <span className="match-rule-remove-spacer" />
+              ) : (
                 <button
                   type="button"
                   className="match-rule-remove"
@@ -241,7 +259,7 @@ function OutputsEditor({
         );
       })}
       {undeclaredFixed.map((output) => (
-        <div key={output.name} className="match-rule-row">
+        <div key={output.name} className={outputRowClass(isVisible(output.name))}>
           <input
             type="text"
             aria-label={`Reserved output ${output.name}`}
@@ -250,9 +268,10 @@ function OutputsEditor({
           />
           <VisibleToUserToggle
             name={output.name}
-            checked={isVisible(output.name)}
+            visible={isVisible(output.name)}
             onChange={(visible) => onVisibleChange(output.name, visible)}
           />
+          <span className="match-rule-remove-spacer" />
         </div>
       ))}
       <button
@@ -430,6 +449,7 @@ export function NodeSettingsModal({
   fixedOutputs,
   wiredOutputs,
   successFailureOutputs,
+  wiredSuccessFailure,
   isOutputVisible: isUnlistedOutputVisible,
   aiUseSession,
   aiSessionPlaceholder,
@@ -440,7 +460,6 @@ export function NodeSettingsModal({
   humanPrompt,
   promptNodePrompt,
   prDescriptionTemplate,
-  prCommentTemplate,
   conditionCases,
   conditionDefaultEdge,
   conditionOutput,
@@ -469,12 +488,12 @@ export function NodeSettingsModal({
   onHumanPromptChange,
   onPromptNodePromptChange,
   onPrDescriptionTemplateChange,
-  onPrCommentTemplateChange,
   onConditionCasesChange,
   onConditionDefaultEdgeChange,
   onConditionOutputChange,
 }: NodeSettingsModalProps) {
   const selectedNodeType = (selectedNode.data as { type: NodeType }).type;
+  const typeStyle = nodeStyleOf(selectedNodeType);
   const problems = nodeSettingsProblems(selectedNodeType, {
     rows: outputRows,
     fixed: fixedOutputs,
@@ -482,50 +501,51 @@ export function NodeSettingsModal({
     cases: conditionCases,
     defaultEdge: conditionDefaultEdge,
   });
+  const parksForAPerson = selectedNodeType === NodeType.Human || selectedNodeType === NodeType.PR;
   const [pendingDelete, setPendingDelete] = useState<OutputRow | null>(null);
+  const [confirmingSave, setConfirmingSave] = useState(false);
 
-  const referencesOf = (row: OutputRow): OutputReferences =>
-    outputReferences(row, outputRows, {
-      wired: wiredOutputs,
-      matchRules: selectedNodeType === NodeType.AI ? aiMatchRules : [],
-      cases: selectedNodeType === NodeType.Condition ? conditionCases : [],
-      defaultEdge: selectedNodeType === NodeType.Condition ? conditionDefaultEdge : null,
-    });
-
-  // Deleting an output takes everything that uses it along: the rules and
-  // cases routing to it here, its Custom edges when the settings are saved,
-  // and the default edge, which is left blank for the author to choose again.
-  const deleteOutput = (row: OutputRow) => {
-    const references = referencesOf(row);
-    onOutputRowsChange(outputRows.filter((existing) => existing !== row));
-    if (references.matchRules.length > 0)
-      onAiMatchRulesChange(aiMatchRules.filter((_, i) => !references.matchRules.includes(i)));
-    if (references.cases.length > 0)
-      onConditionCasesChange(conditionCases.filter((_, i) => !references.cases.includes(i)));
-    if (references.defaultEdge) onConditionDefaultEdgeChange("");
+  // Saving a node whose outputs are derived drops the ones nothing routes to
+  // any more, and the edges wired from them.
+  const unrouted = outputsAreDerived(selectedNodeType)
+    ? unroutedRows(
+        outputRows,
+        routedOutputNames(selectedNodeType, {
+          matchRules: aiMatchRules,
+          cases: conditionCases,
+          defaultEdge: conditionDefaultEdge,
+        }),
+      )
+    : [];
+  const edgesLostOnSave = wiredOutputs.filter((edge) =>
+    unrouted.some((row) => row.originalName === edge.name),
+  );
+  const requestSave = () => {
+    if (edgesLostOnSave.length > 0 && !hasSettingsProblems(problems)) setConfirmingSave(true);
+    else onSave();
   };
 
+  const wiredFrom = (row: OutputRow) =>
+    wiredOutputs.filter((edge) => row.originalName !== null && edge.name === row.originalName);
+
+  const deleteOutput = (row: OutputRow) =>
+    onOutputRowsChange(outputRows.filter((existing) => existing !== row));
+
   const requestDelete = (row: OutputRow) => {
-    if (isReferenced(referencesOf(row))) setPendingDelete(row);
+    if (wiredFrom(row).length > 0) setPendingDelete(row);
     else deleteOutput(row);
   };
 
-  const pendingReferences = pendingDelete ? referencesOf(pendingDelete) : null;
-  const pendingItems = pendingReferences
-    ? [
-        ...pendingReferences.wired.map((edge) => `The edge to ${edge.targetLabel}`),
-        ...pendingReferences.matchRules.map(
-          (i) => `Match rule ${i + 1} (${aiMatchRules[i].pattern || "no pattern"})`,
-        ),
-        ...pendingReferences.cases.map((i) => `Case ${i + 1} (${conditionCases[i].variant})`),
-        ...(pendingReferences.defaultEdge ? ["The default output (you will pick a new one)"] : []),
-      ]
+  const pendingItems = pendingDelete
+    ? wiredFrom(pendingDelete).map((edge) => `The edge to ${edge.targetLabel}`)
     : [];
 
   const outputsEditor = (
     <OutputsEditor
       rows={outputRows}
       fixed={fixedOutputs}
+      successFailure={parksForAPerson ? successFailureOutputs : []}
+      wiredSuccessFailure={wiredSuccessFailure}
       nodeType={selectedNodeType}
       problems={problems.outputs}
       isVisible={isUnlistedOutputVisible}
@@ -545,7 +565,12 @@ export function NodeSettingsModal({
     >
       <div className="node-settings-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="node-settings-modal-header">
-          <h2>Node Settings</h2>
+          <h2 className="node-settings-type">
+            <span className="node-settings-type-icon" aria-hidden="true">
+              {typeStyle.icon}
+            </span>
+            {selectedNodeType}
+          </h2>
           <button className="node-settings-modal-close" onClick={onClose} aria-label="Close">
             ×
           </button>
@@ -562,11 +587,6 @@ export function NodeSettingsModal({
               className={labelError ? "input-error" : ""}
             />
             {labelError && <div className="validation-error">{labelError}</div>}
-          </div>
-
-          <div className="config-field">
-            <label>Type</label>
-            <div className="config-read-only">{selectedNodeType}</div>
           </div>
 
           {selectedNodeType === NodeType.Cmd && (
@@ -640,13 +660,13 @@ export function NodeSettingsModal({
               </ConfigSection>
 
               <ConfigSection title="Routing">
-                {outputsEditor}
                 <div className="config-field">
                   <label>Match Rules</label>
                   <small className="config-help-text">
                     Each rule's pattern is matched case-insensitively against the AI output. The
                     rule matching latest in the output routes to the output it names; no match takes
-                    the success edge. A name not yet in Outputs is added on save.
+                    the success edge. Once saved, connect each output named here from the node's top
+                    handle.
                   </small>
                   {aiMatchRules.map((rule, index) => (
                     <div key={index}>
@@ -781,23 +801,6 @@ export function NodeSettingsModal({
                   onChange={onPrDescriptionTemplateChange}
                 />
               </div>
-              <div className="config-field">
-                <label htmlFor="pr-comment-template">PR Comment Template (no longer posted)</label>
-                <PromptEditor
-                  id="pr-comment-template"
-                  rows={4}
-                  value={prCommentTemplate}
-                  onChange={onPrCommentTemplateChange}
-                />
-                <small className="config-help-text">
-                  The node no longer posts this. It used to go out on every re-visit, which meant a
-                  round that had already answered on the threads announced itself a second time
-                  carrying nothing. The round decides now: an agent calls{" "}
-                  <strong>comment_on_pr</strong> when it has something general to say, and a round
-                  with nothing to add leaves the pull request quiet. Existing templates keep this
-                  field; it simply does nothing.
-                </small>
-              </div>
               <small className="config-help-text">
                 The PR heartbeat fires the reserved outputs listed below on PR state changes; they
                 are always present and cannot be renamed or removed. Only wired outputs route; there
@@ -814,12 +817,10 @@ export function NodeSettingsModal({
           {selectedNodeType === NodeType.Condition && (
             <>
               <small className="config-help-text">
-                A switch: each case routes to one of the node's outputs when its predicate holds,
-                and the default output is taken when none match. No AI, command, or worktree access.
-                Wire each output from the node's top handle.
+                A switch: each case routes to the output it names when its predicate holds, and the
+                default output is taken when none match. No AI, command, or worktree access. Once
+                saved, connect each output named here from the node's top handle.
               </small>
-
-              {outputsEditor}
 
               <ConditionCasesEditor
                 cases={conditionCases}
@@ -860,12 +861,6 @@ export function NodeSettingsModal({
               </div>
             </>
           )}
-
-          <SuccessFailureOutputs
-            names={successFailureOutputs}
-            isVisible={isUnlistedOutputVisible}
-            onVisibleChange={onOutputVisibleChange}
-          />
         </div>
         <div className="node-settings-modal-footer">
           <button className="node-settings-btn-delete" onClick={onDeleteNode}>
@@ -877,7 +872,7 @@ export function NodeSettingsModal({
             </button>
             <button
               className="node-settings-btn-save"
-              onClick={onSave}
+              onClick={requestSave}
               aria-disabled={hasSettingsProblems(problems)}
             >
               Save
@@ -895,6 +890,18 @@ export function NodeSettingsModal({
             setPendingDelete(null);
           }}
           onCancel={() => setPendingDelete(null)}
+        />
+        <ConfirmModal
+          isOpen={confirmingSave}
+          title="Remove edges"
+          message="Nothing routes to these outputs any more. Saving also removes:"
+          items={edgesLostOnSave.map((edge) => `The edge '${edge.name}' to ${edge.targetLabel}`)}
+          confirmText="Save and remove"
+          onConfirm={() => {
+            setConfirmingSave(false);
+            onSave();
+          }}
+          onCancel={() => setConfirmingSave(false)}
         />
       </div>
     </div>

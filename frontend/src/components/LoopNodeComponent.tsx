@@ -1,49 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { NodeType } from "../types";
 import { nodeHasNamedOutputs } from "../utils/edgeUtils";
-
-const nodeStyles: Record<string, { bg: string; border: string; icon: string }> = {
-  [NodeType.Start]: {
-    bg: "#064e3b",
-    border: "#10b981",
-    icon: "\u25B6",
-  },
-  [NodeType.Cmd]: {
-    bg: "#1e1b4b",
-    border: "#6366f1",
-    icon: "\u2699",
-  },
-  [NodeType.AI]: {
-    bg: "#1c1917",
-    border: "#f59e0b",
-    icon: "\uD83E\uDD16",
-  },
-  [NodeType.Human]: {
-    bg: "#1e1b4b",
-    border: "#a855f7",
-    icon: "\uD83D\uDC64",
-  },
-  [NodeType.Prompt]: {
-    bg: "#172554",
-    border: "#38bdf8",
-    icon: "\u270E",
-  },
-  [NodeType.PR]: {
-    bg: "#0c4a6e",
-    border: "#0ea5e9",
-    icon: "\uD83D\uDD01",
-  },
-  [NodeType.Condition]: {
-    bg: "#042f2e",
-    border: "#14b8a6",
-    icon: "\u25C7",
-  },
-  [NodeType.Cleanup]: {
-    bg: "#4c0519",
-    border: "#ef4444",
-    icon: "\uD83E\uDDD9",
-  },
-};
+import { nodeStyleOf } from "../utils/nodeStyles";
 
 const handleStyles = {
   success: { background: "#10b981", borderColor: "#059669" },
@@ -53,7 +11,7 @@ const handleStyles = {
 
 export default function LoopNodeComponent({ data }: NodeProps) {
   const nodeData = data as { label: string; type: string };
-  const style = nodeStyles[nodeData.type] || nodeStyles[NodeType.Cmd];
+  const style = nodeStyleOf(nodeData.type);
   // The top handle is the single "custom" outlet; the Custom edge of every named
   // output the node declares leaves it. Human, AI, PR and Condition nodes have
   // named outputs (a Condition switch routes its cases and default through it).

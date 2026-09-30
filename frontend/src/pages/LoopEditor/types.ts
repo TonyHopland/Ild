@@ -32,7 +32,6 @@ export interface NodeSettingsSnapshot {
   humanPrompt: string;
   promptNodePrompt: string;
   prDescriptionTemplate: string;
-  prCommentTemplate: string;
   conditionCases: ConditionCase[];
   conditionDefaultEdge: string;
   conditionOutput: string;

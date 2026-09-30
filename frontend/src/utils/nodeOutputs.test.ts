@@ -5,7 +5,6 @@ import {
   hasSettingsProblems,
   mergeOutputs,
   nodeSettingsProblems,
-  outputReferences,
   namedOutputNames,
   outputRenames,
   outputRowProblems,
@@ -137,53 +136,6 @@ describe("outputRowProblems", () => {
 
   test("a swap is fine once both rows have distinct names", () => {
     expect(outputRowProblems([row("b", "a"), row("a", "b")], [])).toEqual([null, null]);
-  });
-});
-
-describe("outputReferences", () => {
-  const node = {
-    wired: [
-      { name: "a", targetLabel: "Fix" },
-      { name: "b", targetLabel: "Ship" },
-    ],
-    matchRules: [
-      { pattern: "A", edgeName: "a" },
-      { pattern: "B", edgeName: " b " },
-    ],
-    cases: [],
-    defaultEdge: null,
-  };
-
-  test("finds the edges wired from the loaded name and the rules routing to the row", () => {
-    const rows = [row("a", "a"), row("b", "b")];
-    expect(outputReferences(rows[1], rows, node)).toEqual({
-      wired: [{ name: "b", targetLabel: "Ship" }],
-      matchRules: [1],
-      cases: [],
-      defaultEdge: false,
-    });
-  });
-
-  test("follows this edit's renames, as saving does", () => {
-    const rows = [row("b", "a"), row("a", "b")];
-    const references = outputReferences(rows[0], rows, node);
-    expect(references.wired).toEqual([{ name: "a", targetLabel: "Fix" }]);
-    expect(references.matchRules).toEqual([0]);
-  });
-
-  test("a blanked row still answers to the name it was loaded under, and never to a blank reference", () => {
-    const rows = [row("", "a")];
-    const references = outputReferences(rows[0], rows, {
-      ...node,
-      matchRules: [
-        { pattern: "A", edgeName: "a" },
-        { pattern: "", edgeName: "" },
-      ],
-      defaultEdge: "",
-    });
-    expect(references.matchRules).toEqual([0]);
-    expect(references.defaultEdge).toBe(false);
-    expect(references.wired).toEqual([{ name: "a", targetLabel: "Fix" }]);
   });
 });
 

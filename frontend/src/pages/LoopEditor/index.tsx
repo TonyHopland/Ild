@@ -55,10 +55,14 @@ import {
   nodeSettingsProblems,
   outputRenames,
   outputRowsOf,
+  outputsAreDerived,
+  routedOutputNames,
+  unroutedRows,
   outputVisibilityOf,
   readFixedOutputs,
   successFailureOutputs,
   wiredOutputsOf,
+  wiredSuccessFailureOf,
   type FixedOutputs,
   type OutputRow,
 } from "../../utils/nodeOutputs";
@@ -254,7 +258,6 @@ export default function LoopEditor() {
   const [humanPrompt, setHumanPrompt] = useState("");
   const [promptNodePrompt, setPromptNodePrompt] = useState("");
   const [prDescriptionTemplate, setPrDescriptionTemplate] = useState("");
-  const [prCommentTemplate, setPrCommentTemplate] = useState("");
   const [conditionCases, setConditionCases] = useState<ConditionCase[]>([]);
   const [conditionDefaultEdge, setConditionDefaultEdge] = useState("");
   const [conditionOutput, setConditionOutput] = useState(CONDITION_DEFAULT_TEMPLATE);
@@ -1097,7 +1100,6 @@ export default function LoopEditor() {
       setHumanPrompt((config.prompt as string) || "");
       setPromptNodePrompt((config.prompt as string) || "");
       setPrDescriptionTemplate((config.prDescriptionTemplate as string) || "");
-      setPrCommentTemplate((config.prCommentTemplate as string) || "");
       setConditionCases(readConditionCases(config));
       setConditionDefaultEdge(readConditionDefaultEdge(config));
       setConditionOutput((config.output as string) ?? CONDITION_DEFAULT_TEMPLATE);
@@ -1119,7 +1121,6 @@ export default function LoopEditor() {
         humanPrompt: (config.prompt as string) || "",
         promptNodePrompt: (config.prompt as string) || "",
         prDescriptionTemplate: (config.prDescriptionTemplate as string) || "",
-        prCommentTemplate: (config.prCommentTemplate as string) || "",
         conditionCases: readConditionCases(config),
         conditionDefaultEdge: readConditionDefaultEdge(config),
         conditionOutput: (config.output as string) ?? CONDITION_DEFAULT_TEMPLATE,
@@ -1178,14 +1179,25 @@ export default function LoopEditor() {
     // cases and default, and the Custom edges wired from it. A deleted one
     // takes its Custom edges with it; the dialog that confirmed the delete has
     // already removed its rules and cases.
-    const renames = outputRenames(outputRows);
-    const kept = new Set(outputRows.map((row) => row.originalName));
+    const derived = outputsAreDerived(selectedNodeType as NodeType);
+    const dropped = derived
+      ? unroutedRows(
+          outputRows,
+          routedOutputNames(selectedNodeType as NodeType, {
+            matchRules: aiMatchRules,
+            cases: conditionCases,
+            defaultEdge: conditionDefaultEdge,
+          }),
+        )
+      : [];
+    const savedRows = outputRows.filter((row) => !dropped.includes(row));
+    const renames = outputRenames(savedRows);
+    const kept = new Set(savedRows.map((row) => row.originalName));
     const deleted = new Set(
       (originalNodeConfig?.outputRows ?? [])
         .map((row) => row.originalName)
         .filter((name): name is string => name !== null && !kept.has(name)),
     );
-    const renamed = (name: string) => renames.get(name.trim()) ?? name.trim();
     let referenced: string[] = [];
 
     const config: Record<string, unknown> = {};
@@ -1199,7 +1211,7 @@ export default function LoopEditor() {
       config.toolAllowlist = aiTools;
       config.adapterConfig = undefined;
       const cleanRules = aiMatchRules
-        .map((rule) => ({ pattern: rule.pattern.trim(), edgeName: renamed(rule.edgeName) }))
+        .map((rule) => ({ pattern: rule.pattern.trim(), edgeName: rule.edgeName.trim() }))
         .filter((rule) => rule.pattern !== "" && rule.edgeName !== "");
       config.matchRules = cleanRules;
       referenced = cleanRules.map((rule) => rule.edgeName);
@@ -1218,7 +1230,7 @@ export default function LoopEditor() {
       if (promptNodePrompt) config.prompt = promptNodePrompt;
     } else if (selectedNodeType === NodeType.PR) {
       if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
-      if (prCommentTemplate) config.prCommentTemplate = prCommentTemplate;
+      config.prCommentTemplate = undefined;
     } else if (selectedNodeType === NodeType.Condition) {
       // Persist the switch: each case keeps only the params its variant uses,
       // plus the default edge and pass-through output. Clear the legacy
@@ -1226,7 +1238,7 @@ export default function LoopEditor() {
       // variant/subject/pattern/tag behind.
       config.cases = conditionCases.map((c) => {
         const variant = c.variant.trim() || CONDITION_DEFAULT_CASE.variant;
-        const persisted: Record<string, unknown> = { variant, edgeName: renamed(c.edgeName) };
+        const persisted: Record<string, unknown> = { variant, edgeName: c.edgeName.trim() };
         // Include only the params the chosen variant uses (PrExists uses none),
         // matching the shape the backend migrator writes and the executor reads.
         if (variant === "TextMatches") {
@@ -1237,9 +1249,9 @@ export default function LoopEditor() {
         }
         return persisted;
       });
-      const defaultEdge = renamed(conditionDefaultEdge);
+      const defaultEdge = conditionDefaultEdge.trim();
       config.defaultEdge = defaultEdge;
-      referenced = [...conditionCases.map((c) => renamed(c.edgeName)), defaultEdge];
+      referenced = [...conditionCases.map((c) => c.edgeName.trim()), defaultEdge];
       config.output = conditionOutput.trim() || CONDITION_DEFAULT_TEMPLATE;
       config.variant = undefined;
       config.subject = undefined;
@@ -1254,7 +1266,7 @@ export default function LoopEditor() {
         const type = selectedNodeType as NodeType;
         const named = nodeHasNamedOutputs(type);
         const chosen = applyOutputVisibility(
-          named ? mergeOutputs(current?.outputs, outputRows, referenced) : current?.outputs,
+          named ? mergeOutputs(current?.outputs, savedRows, referenced) : current?.outputs,
           type,
           fixedOutputs.get(type) ?? [],
           outputVisibility,
@@ -1290,7 +1302,6 @@ export default function LoopEditor() {
     humanPrompt,
     nodeLabel,
     prDescriptionTemplate,
-    prCommentTemplate,
     promptNodePrompt,
     conditionCases,
     conditionDefaultEdge,
@@ -1319,7 +1330,6 @@ export default function LoopEditor() {
       setHumanPrompt(originalNodeConfig.humanPrompt);
       setPromptNodePrompt(originalNodeConfig.promptNodePrompt);
       setPrDescriptionTemplate(originalNodeConfig.prDescriptionTemplate);
-      setPrCommentTemplate(originalNodeConfig.prCommentTemplate);
       setConditionCases(originalNodeConfig.conditionCases);
       setConditionDefaultEdge(originalNodeConfig.conditionDefaultEdge);
       setConditionOutput(originalNodeConfig.conditionOutput);
@@ -1716,6 +1726,7 @@ export default function LoopEditor() {
                         fixedOutputs,
                       )}
                       wiredOutputs={wiredOutputsOf(selectedNode.id, edges, nodes)}
+                      wiredSuccessFailure={wiredSuccessFailureOf(selectedNode.id, edges)}
                       successFailureOutputs={successFailureOutputs(
                         (selectedNode.data as { type: NodeType }).type,
                         (selectedNode.data as { config?: Record<string, unknown> }).config,
@@ -1738,7 +1749,6 @@ export default function LoopEditor() {
                       humanPrompt={humanPrompt}
                       promptNodePrompt={promptNodePrompt}
                       prDescriptionTemplate={prDescriptionTemplate}
-                      prCommentTemplate={prCommentTemplate}
                       conditionCases={conditionCases}
                       conditionDefaultEdge={conditionDefaultEdge}
                       conditionOutput={conditionOutput}
@@ -1769,7 +1779,6 @@ export default function LoopEditor() {
                       onHumanPromptChange={setHumanPrompt}
                       onPromptNodePromptChange={setPromptNodePrompt}
                       onPrDescriptionTemplateChange={setPrDescriptionTemplate}
-                      onPrCommentTemplateChange={setPrCommentTemplate}
                       onConditionCasesChange={setConditionCases}
                       onConditionDefaultEdgeChange={setConditionDefaultEdge}
                       onConditionOutputChange={setConditionOutput}
