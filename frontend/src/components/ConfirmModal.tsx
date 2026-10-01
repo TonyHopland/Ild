@@ -10,6 +10,8 @@ interface ConfirmModalProps {
   onCancel: () => void;
   /** Label for the confirm button. Defaults to "Delete". */
   confirmText?: string;
+  /** Colour class for the confirm button. Defaults to "btn-danger". */
+  confirmClassName?: string;
 }
 
 export default function ConfirmModal({
@@ -20,6 +22,7 @@ export default function ConfirmModal({
   onCancel,
   items = [],
   confirmText = "Delete",
+  confirmClassName = "btn-danger",
 }: ConfirmModalProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -60,7 +63,7 @@ export default function ConfirmModal({
           <button type="button" className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" className="btn btn-danger" onClick={onConfirm}>
+          <button type="button" className={`btn ${confirmClassName}`} onClick={onConfirm}>
             {confirmText}
           </button>
         </div>

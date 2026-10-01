@@ -115,31 +115,72 @@ export function successFailureOutputs(
   return [EdgeType.OnSuccess, EdgeType.OnFailure].filter((name) => names.has(name));
 }
 
+/** Whether the run asks the person answering to confirm before taking the output. */
+export function needsConfirmation(output: NodeOutput): boolean {
+  return output.confirm === true;
+}
+
+/** The output with `confirm` stored only when it is on. */
+export function withConfirmation(output: NodeOutput, confirm: boolean): NodeOutput {
+  const next = { ...output };
+  if (confirm) next.confirm = true;
+  else delete next.confirm;
+  return next;
+}
+
 /**
- * `outputs` with each visibility choice written onto the first entry of that
- * name ({@link withVisibility}); every other entry stays as it is, in place. A
- * chosen output with no entry is declared — as its type's fixed output when it
- * is one — only when the choice differs from the default.
+ * Looks up, by exact name, whether an output of a node asks for confirmation
+ * ({@link needsConfirmation}). The first declared entry of that name decides; a
+ * name the config does not declare does not ask.
  */
-export function applyOutputVisibility(
+export function outputConfirmationOf(
+  config: Record<string, unknown> | undefined,
+): (name: string) => boolean {
+  const declared = readOutputs(config);
+  return (name) => {
+    const output = declared.find((entry) => entry.name === name);
+    return output !== undefined && needsConfirmation(output);
+  };
+}
+
+/** A choice made in the node settings for an output that has no row of its own. */
+export interface OutputChoice {
+  visible?: boolean;
+  confirm?: boolean;
+}
+
+function withChoice(output: NodeOutput, choice: OutputChoice, reserved: boolean): NodeOutput {
+  const shown =
+    choice.visible === undefined ? output : withVisibility(output, choice.visible, reserved);
+  return choice.confirm === undefined ? shown : withConfirmation(shown, choice.confirm);
+}
+
+/**
+ * `outputs` with each choice written onto the first entry of that name
+ * ({@link withVisibility}, {@link withConfirmation}); every other entry stays
+ * as it is, in place. A chosen output with no entry is declared — as its
+ * type's fixed output when it is one — only when a choice differs from the
+ * default.
+ */
+export function applyOutputChoices(
   outputs: unknown,
   type: NodeType,
   fixed: NodeOutput[],
-  choices: ReadonlyMap<string, boolean>,
+  choices: ReadonlyMap<string, OutputChoice>,
 ): unknown[] {
   const pending = new Map(choices);
   const result = (Array.isArray(outputs) ? outputs : []).map((entry: unknown) => {
     const name = nameOf(entry);
-    const visible = name === null ? undefined : pending.get(name);
-    if (name === null || visible === undefined) return entry;
+    const choice = name === null ? undefined : pending.get(name);
+    if (name === null || choice === undefined) return entry;
     pending.delete(name);
     const output = entry as NodeOutput;
-    return withVisibility(output, visible, isReservedOutput(type, output, fixed));
+    return withChoice(output, choice, isReservedOutput(type, output, fixed));
   });
-  for (const [name, visible] of pending) {
+  for (const [name, choice] of pending) {
     const output = fixed.find((entry) => entry.name === name) ?? { name };
-    const declared = withVisibility(output, visible, isReservedOutput(type, output, fixed));
-    if ("visible" in declared) result.push(declared);
+    const declared = withChoice(output, choice, isReservedOutput(type, output, fixed));
+    if ("visible" in declared || "confirm" in declared) result.push(declared);
   }
   return result;
 }
