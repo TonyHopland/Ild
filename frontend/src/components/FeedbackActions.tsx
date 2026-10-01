@@ -2,11 +2,12 @@ import { useState } from "react";
 import ConfirmModal from "./ConfirmModal";
 
 /**
- * An answer waiting on the person to confirm it: the button they pressed, what
- * it sends, and the `needsConfirm` it was asked under.
+ * An answer waiting on the person to confirm it: the button they pressed and
+ * its colour, what it sends, and the `needsConfirm` it was asked under.
  */
 interface PendingAnswer {
   label: string;
+  tone: string;
   send: () => void;
   askedUnder: (name: string) => boolean;
 }
@@ -37,6 +38,10 @@ interface FeedbackActionsProps {
 // Tokens in the comma-separated actions string that map to the fixed
 // success/failure roles; everything else names one of the node's outputs.
 const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
+
+const APPROVE_TONE = "btn-primary";
+const OUTPUT_TONE = "btn-warning";
+const REJECT_TONE = "btn-danger";
 
 /**
  * Renders the Approve / Merge / named-output / Reject buttons based on the
@@ -73,8 +78,8 @@ export default function FeedbackActions({
 
   const customNames = actionList.filter((a) => !ROLE_TOKENS.has(a));
 
-  const answer = (name: string, label: string, send: () => void) => () => {
-    if (needsConfirm?.(name)) setAsked({ label, send, askedUnder: needsConfirm });
+  const answer = (name: string, label: string, tone: string, send: () => void) => () => {
+    if (needsConfirm?.(name)) setAsked({ label, tone, send, askedUnder: needsConfirm });
     else send();
   };
 
@@ -83,8 +88,8 @@ export default function FeedbackActions({
       {actionList.includes("OnSuccess") && (
         <button
           type="button"
-          className="btn btn-sm btn-primary"
-          onClick={answer("OnSuccess", "Approve", onApprove)}
+          className={`btn btn-sm ${APPROVE_TONE}`}
+          onClick={answer("OnSuccess", "Approve", APPROVE_TONE, onApprove)}
           disabled={busy}
         >
           Approve
@@ -103,8 +108,8 @@ export default function FeedbackActions({
         <button
           key={name}
           type="button"
-          className="btn btn-sm btn-warning"
-          onClick={answer(name, name, () => onEdge(name))}
+          className={`btn btn-sm ${OUTPUT_TONE}`}
+          onClick={answer(name, name, OUTPUT_TONE, () => onEdge(name))}
           disabled={busy}
         >
           {name}
@@ -113,8 +118,8 @@ export default function FeedbackActions({
       {actionList.includes("OnFailure") && (
         <button
           type="button"
-          className="btn btn-sm btn-danger"
-          onClick={answer("OnFailure", "Reject", onReject)}
+          className={`btn btn-sm ${REJECT_TONE}`}
+          onClick={answer("OnFailure", "Reject", REJECT_TONE, onReject)}
           disabled={busy}
         >
           Reject
@@ -157,6 +162,7 @@ export default function FeedbackActions({
           title={`Confirm ${pending.label}`}
           message={`Are you sure you want to take "${pending.label}"? The run moves on as soon as you confirm.`}
           confirmText={pending.label}
+          confirmClassName={pending.tone}
           onConfirm={() => {
             setAsked(null);
             pending.send();

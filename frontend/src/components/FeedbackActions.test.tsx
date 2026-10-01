@@ -210,7 +210,7 @@ describe("FeedbackActions", () => {
     ["Reject", "OnFailure", "onReject"],
     ["Escalate", "Escalate", "onEdge"],
   ] as const)(
-    "%s on an output that asks to confirm sends nothing until confirmed",
+    "%s on an output that asks to confirm sends nothing until confirmed, in the button's colour",
     (label, output, handler) => {
       const handlers = { onApprove: vi.fn(), onReject: vi.fn(), onEdge: vi.fn() };
       render(
@@ -221,9 +221,14 @@ describe("FeedbackActions", () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole("button", { name: label }));
+      const pressed = screen.getByRole("button", { name: label });
+      const tone = [...pressed.classList].find((name) =>
+        /^btn-(primary|warning|danger)$/.test(name),
+      );
+      fireEvent.click(pressed);
       const dialog = screen.getByRole("dialog", { name: `Confirm ${label}` });
       expect(dialog.textContent).toContain(`"${label}"`);
+      expect(within(dialog).getByRole("button", { name: label }).className).toBe(`btn ${tone}`);
       for (const called of Object.values(handlers)) expect(called).not.toHaveBeenCalled();
 
       fireEvent.click(within(dialog).getByRole("button", { name: label }));
