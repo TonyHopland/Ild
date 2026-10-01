@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type CSSProperties } from "react";
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -12,6 +12,8 @@ interface ConfirmModalProps {
   confirmText?: string;
   /** Colour class for the confirm button. Defaults to "btn-danger". */
   confirmClassName?: string;
+  /** Inline style for the confirm button, such as a colour of its own. */
+  confirmStyle?: CSSProperties;
 }
 
 export default function ConfirmModal({
@@ -23,6 +25,7 @@ export default function ConfirmModal({
   items = [],
   confirmText = "Delete",
   confirmClassName = "btn-danger",
+  confirmStyle,
 }: ConfirmModalProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -63,7 +66,12 @@ export default function ConfirmModal({
           <button type="button" className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
-          <button type="button" className={`btn ${confirmClassName}`} onClick={onConfirm}>
+          <button
+            type="button"
+            className={`btn ${confirmClassName}`}
+            style={confirmStyle}
+            onClick={onConfirm}
+          >
             {confirmText}
           </button>
         </div>

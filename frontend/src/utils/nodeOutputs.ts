@@ -143,21 +143,73 @@ export function outputConfirmationOf(
   };
 }
 
-/** A choice made in the node settings for an output that has no row of its own. */
+/**
+ * The colour of the output's button in the run, lowercased; null for the
+ * default, which is also what a stored value that is not "#rrggbb" gets.
+ */
+export function buttonColorOf(output: NodeOutput): string | null {
+  const color: unknown = output.color;
+  return typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : null;
+}
+
+/** The output with `color` stored in lowercase, or left out for the default (null). */
+export function withColor(output: NodeOutput, color: string | null): NodeOutput {
+  const next = { ...output };
+  if (color === null) delete next.color;
+  else next.color = color.toLowerCase();
+  return next;
+}
+
+/**
+ * Looks up, by exact name, the colour of an output's button
+ * ({@link buttonColorOf}). The first declared entry of that name decides; a
+ * name the config does not declare has the default.
+ */
+export function outputColorOf(
+  config: Record<string, unknown> | undefined,
+): (name: string) => string | null {
+  const declared = readOutputs(config);
+  return (name) => {
+    const output = declared.find((entry) => entry.name === name);
+    return output === undefined ? null : buttonColorOf(output);
+  };
+}
+
+/** The relative luminance of a "#rrggbb" colour, as WCAG 2 defines it. */
+function luminanceOf(color: string): number {
+  const [r, g, b] = [1, 3, 5].map((start) => {
+    const channel = parseInt(color.slice(start, start + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** Black or white, whichever has the higher WCAG contrast on a "#rrggbb" background. */
+export function readableTextOn(color: string): "#000" | "#fff" {
+  const luminance = luminanceOf(color);
+  return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) ? "#000" : "#fff";
+}
+
+/**
+ * A choice made in the node settings for an output that has no row of its
+ * own. A `color` of null chooses the default; left out, the colour is untouched.
+ */
 export interface OutputChoice {
   visible?: boolean;
   confirm?: boolean;
+  color?: string | null;
 }
 
 function withChoice(output: NodeOutput, choice: OutputChoice, reserved: boolean): NodeOutput {
   const shown =
     choice.visible === undefined ? output : withVisibility(output, choice.visible, reserved);
-  return choice.confirm === undefined ? shown : withConfirmation(shown, choice.confirm);
+  const confirmed = choice.confirm === undefined ? shown : withConfirmation(shown, choice.confirm);
+  return choice.color === undefined ? confirmed : withColor(confirmed, choice.color);
 }
 
 /**
  * `outputs` with each choice written onto the first entry of that name
- * ({@link withVisibility}, {@link withConfirmation}); every other entry stays
+ * ({@link withVisibility}, {@link withConfirmation}, {@link withColor}); every other entry stays
  * as it is, in place. A chosen output with no entry is declared — as its
  * type's fixed output when it is one — only when a choice differs from the
  * default.
@@ -180,7 +232,9 @@ export function applyOutputChoices(
   for (const [name, choice] of pending) {
     const output = fixed.find((entry) => entry.name === name) ?? { name };
     const declared = withChoice(output, choice, isReservedOutput(type, output, fixed));
-    if ("visible" in declared || "confirm" in declared) result.push(declared);
+    if ("visible" in declared || "confirm" in declared || "color" in declared) {
+      result.push(declared);
+    }
   }
   return result;
 }

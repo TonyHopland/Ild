@@ -58,6 +58,7 @@ import {
   outputsAreDerived,
   routedOutputNames,
   unroutedRows,
+  outputColorOf,
   outputConfirmationOf,
   outputVisibilityOf,
   readFixedOutputs,
@@ -1748,6 +1749,15 @@ export default function LoopEditor() {
                           (selectedNode.data as { config?: Record<string, unknown> }).config,
                         )(name)
                       }
+                      outputColor={(name) => {
+                        // null is a chosen default, so it must not fall through to the config.
+                        const chosen = outputChoices.get(name)?.color;
+                        return chosen !== undefined
+                          ? chosen
+                          : outputColorOf(
+                              (selectedNode.data as { config?: Record<string, unknown> }).config,
+                            )(name);
+                      }}
                       aiUseSession={aiUseSession}
                       aiSessionPlaceholder={aiSessionPlaceholder}
                       aiForkFromPlaceholder={aiForkFromPlaceholder}

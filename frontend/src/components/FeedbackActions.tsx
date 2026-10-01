@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import ConfirmModal from "./ConfirmModal";
+import { readableTextOn } from "../utils/nodeOutputs";
 
 /**
  * An answer waiting on the person to confirm it: the button they pressed and
@@ -8,6 +9,7 @@ import ConfirmModal from "./ConfirmModal";
 interface PendingAnswer {
   label: string;
   tone: string;
+  style: CSSProperties | undefined;
   send: () => void;
   askedUnder: (name: string) => boolean;
 }
@@ -33,6 +35,8 @@ interface FeedbackActionsProps {
    * node: a confirmation still open from before it is dropped unsent.
    */
   needsConfirm?: (name: string) => boolean;
+  /** The "#rrggbb" colour of the button for the output of that name, or null for its tone. */
+  colorOf?: (name: string) => string | null;
 }
 
 // Tokens in the comma-separated actions string that map to the fixed
@@ -48,7 +52,8 @@ const REJECT_TONE = "btn-danger";
  * comma-separated <c>humanFeedbackActions</c> string from the work item.
  * Each wired named output surfaces as its own button (its name is the output
  * sent back to the engine). Defaults to Approve + Reject when empty. An output
- * the node hides has no button, and one it marks for confirmation asks first.
+ * the node hides has no button, one it marks for confirmation asks first, and
+ * one it colours has its button in that colour.
  * Merge is not an output and is always offered, behind its own confirmation.
  */
 export default function FeedbackActions({
@@ -60,6 +65,7 @@ export default function FeedbackActions({
   busy = false,
   isVisible = () => true,
   needsConfirm,
+  colorOf,
 }: FeedbackActionsProps) {
   const [asked, setAsked] = useState<PendingAnswer | null>(null);
   // The answer was for the node as it was then; confirming it now could send it to another one.
@@ -78,8 +84,16 @@ export default function FeedbackActions({
 
   const customNames = actionList.filter((a) => !ROLE_TOKENS.has(a));
 
+  const styleOf = (name: string): CSSProperties | undefined => {
+    const color = colorOf?.(name);
+    return color
+      ? { backgroundColor: color, borderColor: color, color: readableTextOn(color) }
+      : undefined;
+  };
+
   const answer = (name: string, label: string, tone: string, send: () => void) => () => {
-    if (needsConfirm?.(name)) setAsked({ label, tone, send, askedUnder: needsConfirm });
+    if (needsConfirm?.(name))
+      setAsked({ label, tone, style: styleOf(name), send, askedUnder: needsConfirm });
     else send();
   };
 
@@ -89,6 +103,7 @@ export default function FeedbackActions({
         <button
           type="button"
           className={`btn btn-sm ${APPROVE_TONE}`}
+          style={styleOf("OnSuccess")}
           onClick={answer("OnSuccess", "Approve", APPROVE_TONE, onApprove)}
           disabled={busy}
         >
@@ -109,6 +124,7 @@ export default function FeedbackActions({
           key={name}
           type="button"
           className={`btn btn-sm ${OUTPUT_TONE}`}
+          style={styleOf(name)}
           onClick={answer(name, name, OUTPUT_TONE, () => onEdge(name))}
           disabled={busy}
         >
@@ -119,6 +135,7 @@ export default function FeedbackActions({
         <button
           type="button"
           className={`btn btn-sm ${REJECT_TONE}`}
+          style={styleOf("OnFailure")}
           onClick={answer("OnFailure", "Reject", REJECT_TONE, onReject)}
           disabled={busy}
         >
@@ -163,6 +180,7 @@ export default function FeedbackActions({
           message={`Are you sure you want to take "${pending.label}"? The run moves on as soon as you confirm.`}
           confirmText={pending.label}
           confirmClassName={pending.tone}
+          confirmStyle={pending.style}
           onConfirm={() => {
             setAsked(null);
             pending.send();

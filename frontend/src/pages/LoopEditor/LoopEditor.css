@@ -1045,6 +1045,60 @@
   opacity: 0.55;
 }
 
+/* The default colour shows as an empty, dashed square. */
+.output-color-swatch {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 1px dashed currentColor;
+  border-radius: 0.125rem;
+}
+
+.output-color-swatch[style] {
+  border-style: solid;
+  border-color: #e0e0f0;
+}
+
+.output-color-toggle:disabled .output-color-swatch {
+  opacity: 0.55;
+}
+
+.output-color-toggle[aria-expanded="true"] {
+  border-color: #e0e0f0;
+}
+
+.output-color-picker {
+  display: flex;
+  gap: 0.375rem;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 0.375rem;
+}
+
+.output-color-picker input[type="color"] {
+  width: 2.5rem;
+  height: 1.75rem;
+  padding: 0.125rem;
+  background: #1a1a2e;
+  border: 1px solid #707090;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.output-color-default {
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  background: #1a1a2e;
+  border: 1px solid #707090;
+  border-radius: 0.25rem;
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.output-color-default:hover {
+  border-color: #e0e0f0;
+}
+
 .match-rule-remove-spacer {
   flex: 0 0 auto;
   width: 1.75rem;
