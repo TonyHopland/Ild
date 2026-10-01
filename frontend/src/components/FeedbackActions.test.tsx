@@ -275,4 +275,27 @@ describe("FeedbackActions", () => {
     expect(onApprove).toHaveBeenCalledTimes(1);
     expect(onEdge).toHaveBeenCalledWith("Escalate");
   });
+
+  test("a confirmation still open when the parked node is read anew is dropped unsent", () => {
+    const onEdge = vi.fn();
+    const asks = (name: string) => name === "Escalate";
+    const actions = (needsConfirm: (name: string) => boolean) => (
+      <FeedbackActions
+        actions="OnSuccess,Escalate,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={onEdge}
+        needsConfirm={needsConfirm}
+      />
+    );
+    const { rerender } = render(actions(asks));
+
+    fireEvent.click(screen.getByRole("button", { name: "Escalate" }));
+    rerender(actions(asks));
+    expect(screen.getByRole("dialog", { name: "Confirm Escalate" })).toBeTruthy();
+
+    rerender(actions((name) => name === "Escalate"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(onEdge).not.toHaveBeenCalled();
+  });
 });

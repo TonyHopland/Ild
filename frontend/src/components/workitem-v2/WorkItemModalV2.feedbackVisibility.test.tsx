@@ -316,6 +316,28 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
     expect(answer).toHaveBeenCalledWith("wi-1", "Clean up", "");
   });
 
+  test("a confirmation open when the work item changes is dropped, and nothing is sent", async () => {
+    mockDialogServices();
+    stageParkedNode(
+      human([{ name: "OnSuccess" }, { name: "OnFailure" }, { name: "Clean up", confirm: true }]),
+    );
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackEdge")
+      .mockResolvedValue(undefined);
+    const item = makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Clean up,OnFailure" });
+    const { rerender } = await renderDialog(item);
+
+    fireEvent.click(within(pane()).getByRole("button", { name: "Clean up" }));
+    expect(within(pane()).getByRole("dialog", { name: "Confirm Clean up" })).toBeTruthy();
+
+    rerender(dialogFor({ ...item }));
+    await settled();
+
+    expect(within(pane()).queryByRole("dialog")).toBeNull();
+    expectButtons(["Approve", "Clean up", "Reject"]);
+    expect(answer).not.toHaveBeenCalled();
+  });
+
   test("Merge asks for confirmation and merges, whatever the outputs show", async () => {
     mockDialogServices();
     stageParkedNode(pr(STORED_PR_OUTPUTS.map((output) => ({ ...output, visible: false }))));

@@ -215,6 +215,7 @@ function OutputsEditor({
   fixed,
   successFailure,
   wiredSuccessFailure,
+  wiredNames,
   nodeType,
   problems,
   isVisible,
@@ -228,6 +229,8 @@ function OutputsEditor({
   /** The success and failure outputs to list; they have no name field, being routed by edge type. */
   successFailure: string[];
   wiredSuccessFailure: string[];
+  /** The named outputs a Custom edge leaves, by the name the node was opened with. */
+  wiredNames: string[];
   nodeType: NodeType;
   problems: (string | null)[];
   isVisible: (name: string) => boolean;
@@ -307,7 +310,10 @@ function OutputsEditor({
               <ConfirmToggle
                 name={row.output.name}
                 confirm={needsConfirmation(row.output)}
-                closedReason={closedReasonOf(true, visible)}
+                closedReason={closedReasonOf(
+                  row.originalName !== null && wiredNames.includes(row.originalName),
+                  visible,
+                )}
                 onChange={(next) => updateRow(index, (output) => withConfirmation(output, next))}
               />
               {reserved ? (
@@ -345,7 +351,7 @@ function OutputsEditor({
             <ConfirmToggle
               name={output.name}
               confirm={isConfirmed(output.name)}
-              closedReason={closedReasonOf(true, visible)}
+              closedReason={closedReasonOf(wiredNames.includes(output.name), visible)}
               onChange={(next) => onChoiceChange(output.name, { confirm: next })}
             />
             <span className="match-rule-remove-spacer" />
@@ -625,6 +631,7 @@ export function NodeSettingsModal({
       fixed={fixedOutputs}
       successFailure={parksForAPerson ? successFailureOutputs : []}
       wiredSuccessFailure={wiredSuccessFailure}
+      wiredNames={wiredOutputs.map((edge) => edge.name)}
       nodeType={selectedNodeType}
       problems={problems.outputs}
       isVisible={isUnlistedOutputVisible}

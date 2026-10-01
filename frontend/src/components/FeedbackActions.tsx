@@ -1,10 +1,14 @@
 import { useState } from "react";
 import ConfirmModal from "./ConfirmModal";
 
-/** An answer waiting on the person to confirm it: the button they pressed and what it sends. */
+/**
+ * An answer waiting on the person to confirm it: the button they pressed, what
+ * it sends, and the `needsConfirm` it was asked under.
+ */
 interface PendingAnswer {
   label: string;
   send: () => void;
+  askedUnder: (name: string) => boolean;
 }
 
 interface FeedbackActionsProps {
@@ -22,7 +26,11 @@ interface FeedbackActionsProps {
   busy?: boolean;
   /** Whether the parked node offers the output of that name to the person answering. */
   isVisible?: (name: string) => boolean;
-  /** Whether the parked node asks the person answering to confirm before taking the output of that name. */
+  /**
+   * Whether the parked node asks the person answering to confirm before taking
+   * the output of that name. A new function means a new state of the parked
+   * node: a confirmation still open from before it is dropped unsent.
+   */
   needsConfirm?: (name: string) => boolean;
 }
 
@@ -46,9 +54,11 @@ export default function FeedbackActions({
   onMerge,
   busy = false,
   isVisible = () => true,
-  needsConfirm = () => false,
+  needsConfirm,
 }: FeedbackActionsProps) {
-  const [pending, setPending] = useState<PendingAnswer | null>(null);
+  const [asked, setAsked] = useState<PendingAnswer | null>(null);
+  // The answer was for the node as it was then; confirming it now could send it to another one.
+  const pending = asked?.askedUnder === needsConfirm ? asked : null;
   const [confirmingMerge, setConfirmingMerge] = useState(false);
   const [deleteBranch, setDeleteBranch] = useState(true);
 
@@ -64,7 +74,7 @@ export default function FeedbackActions({
   const customNames = actionList.filter((a) => !ROLE_TOKENS.has(a));
 
   const answer = (name: string, label: string, send: () => void) => () => {
-    if (needsConfirm(name)) setPending({ label, send });
+    if (needsConfirm?.(name)) setAsked({ label, send, askedUnder: needsConfirm });
     else send();
   };
 
@@ -148,10 +158,10 @@ export default function FeedbackActions({
           message={`Are you sure you want to take "${pending.label}"? The run moves on as soon as you confirm.`}
           confirmText={pending.label}
           onConfirm={() => {
-            setPending(null);
+            setAsked(null);
             pending.send();
           }}
-          onCancel={() => setPending(null)}
+          onCancel={() => setAsked(null)}
         />
       )}
     </div>

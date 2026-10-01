@@ -1398,18 +1398,25 @@ describe("Loop Editor — asks to confirm", () => {
     const { dialog } = await openNode(
       {
         template: templateWith(
-          human({ outputs: [{ name: "later" }, { name: "never", visible: false }] }),
+          human({
+            outputs: [{ name: "later" }, { name: "never", visible: false }, { name: "spare" }],
+          }),
+          ["later", "never"],
         ),
       },
       "Sign Off",
     );
 
-    await waitFor(() => expect(shields(dialog)).toHaveLength(4));
+    await waitFor(() => expect(shields(dialog)).toHaveLength(5));
     for (const button of shields(dialog)) expect(isOn(button)).toBe(false);
     expect(shield(dialog, "OnSuccess").disabled).toBe(false);
     expect(shield(dialog, "later").disabled).toBe(false);
     expect(shield(dialog, "never").title).toBe("Does not ask to confirm: never (hidden from user)");
     expect(shield(dialog, "never").disabled).toBe(true);
+    expect(shield(dialog, "spare").title).toBe(
+      "Does not ask to confirm: spare (no edge connected)",
+    );
+    expect(shield(dialog, "spare").disabled).toBe(true);
     expect(shield(dialog, "OnFailure").title).toBe(
       "Does not ask to confirm: OnFailure (no edge connected)",
     );
@@ -1419,11 +1426,31 @@ describe("Loop Editor — asks to confirm", () => {
     expect(shield(dialog, "later").disabled).toBe(true);
   });
 
+  test("an output added in this edit has no edge yet, and a renamed one keeps its edge", async () => {
+    const { dialog } = await openNode(
+      { template: templateWith(human({ outputs: [{ name: "later" }] }), ["later"]) },
+      "Sign Off",
+    );
+    await waitFor(() => expect(shields(dialog)).toHaveLength(3));
+
+    fireEvent.change(outputField(dialog, "later"), { target: { value: "afterwards" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "+ Add output" }));
+    const added = within(dialog).getAllByPlaceholderText("Output name").at(-1)!;
+    fireEvent.change(added, { target: { value: "fresh" } });
+
+    expect(shield(dialog, "afterwards").disabled).toBe(false);
+    expect(shield(dialog, "fresh").title).toBe(
+      "Does not ask to confirm: fresh (no edge connected)",
+    );
+    expect(shield(dialog, "fresh").disabled).toBe(true);
+  });
+
   test("switching the shield on saves confirm onto that output alone, declaring success if it must", async () => {
     const { calls, dialog } = await openNode(
       {
         template: templateWith(
           human({ outputs: [{ name: "cleanup", note: "kept" }, { name: "later" }] }),
+          ["cleanup", "later"],
         ),
       },
       "Sign Off",
@@ -1454,6 +1481,7 @@ describe("Loop Editor — asks to confirm", () => {
               { name: "pr", confirm: true },
             ],
           }),
+          ["cleanup", "pr"],
         ),
       },
       "Sign Off",
@@ -1474,7 +1502,7 @@ describe("Loop Editor — asks to confirm", () => {
 
   test("cancelling the settings discards the shield changes", async () => {
     const { dialog } = await openNode(
-      { template: templateWith(human({ outputs: [{ name: "cleanup" }] })) },
+      { template: templateWith(human({ outputs: [{ name: "cleanup" }] }), ["cleanup"]) },
       "Sign Off",
     );
     await waitFor(() => expect(shields(dialog)).toHaveLength(3));
