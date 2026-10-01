@@ -403,7 +403,7 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
-    public Stream? OpenWorktreeFile(string worktreePath, string relativePath)
+    public FileStream? OpenWorktreeFile(string worktreePath, string relativePath)
     {
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
