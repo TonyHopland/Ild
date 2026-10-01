@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, cleanup, fireEvent, within, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  cleanup,
+  fireEvent,
+  within,
+  act,
+  isInaccessible,
+} from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { EdgeType, NodeType, RecoveryPolicy } from "../../types";
@@ -266,13 +275,25 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * The accessible buttons in `dialog` whose aria-label matches `label`. Every
+ * output control is named by its aria-label, and a plain selector keeps these
+ * lookups cheap: a role query works out the role of every button in the
+ * dialog each time, and a PR node's settings hold dozens of them.
+ */
+function buttonsLabelled(dialog: HTMLElement, label: RegExp) {
+  return Array.from(dialog.querySelectorAll<HTMLButtonElement>("button[aria-label]")).filter(
+    (button) => label.test(button.getAttribute("aria-label")!) && !isInaccessible(button),
+  );
+}
+
 /** The eye button of the output called exactly `name`, or null when it has none. */
 function queryToggle(dialog: HTMLElement, name: string) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const label = new RegExp(
     `^(Visible to|Hidden from) user: ${escaped}( \\(no edge connected\\))?$`,
   );
-  const found = within(dialog).queryAllByRole("button", { name: label });
+  const found = buttonsLabelled(dialog, label);
   expect(found.length).toBeLessThanOrEqual(1);
   return (found[0] as HTMLButtonElement | undefined) ?? null;
 }
@@ -284,9 +305,7 @@ function toggle(dialog: HTMLElement, name: string) {
 }
 
 function toggles(dialog: HTMLElement) {
-  return within(dialog).queryAllByRole("button", {
-    name: /^(Visible to|Hidden from) user: /,
-  }) as HTMLButtonElement[];
+  return buttonsLabelled(dialog, /^(Visible to|Hidden from) user: /);
 }
 
 function isOn(button: HTMLElement) {
@@ -1375,15 +1394,13 @@ describe("Loop Editor — visible to user", () => {
 function shield(dialog: HTMLElement, name: string) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const label = new RegExp(`^(Asks|Does not ask) to confirm: ${escaped}( \\(.*\\))?$`);
-  const found = within(dialog).queryAllByRole("button", { name: label });
+  const found = buttonsLabelled(dialog, label);
   expect(found, name).toHaveLength(1);
   return found[0] as HTMLButtonElement;
 }
 
 function shields(dialog: HTMLElement) {
-  return within(dialog).queryAllByRole("button", {
-    name: /^(Asks|Does not ask) to confirm: /,
-  }) as HTMLButtonElement[];
+  return buttonsLabelled(dialog, /^(Asks|Does not ask) to confirm: /);
 }
 
 describe("Loop Editor — asks to confirm", () => {
@@ -1543,15 +1560,13 @@ describe("Loop Editor — asks to confirm", () => {
 function square(dialog: HTMLElement, name: string) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const label = new RegExp(`^Button colour (default|#[0-9a-f]{6}): ${escaped}( \\(.*\\))?$`);
-  const found = within(dialog).queryAllByRole("button", { name: label });
+  const found = buttonsLabelled(dialog, label);
   expect(found, name).toHaveLength(1);
   return found[0] as HTMLButtonElement;
 }
 
 function squares(dialog: HTMLElement) {
-  return within(dialog).queryAllByRole("button", {
-    name: /^Button colour (default|#[0-9a-f]{6}): /,
-  }) as HTMLButtonElement[];
+  return buttonsLabelled(dialog, /^Button colour (default|#[0-9a-f]{6}): /);
 }
 
 /** `color` as the browser stores it in an inline style, so values can be compared. */
