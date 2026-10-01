@@ -1435,7 +1435,8 @@ describe("Loop Editor — asks to confirm", () => {
 
     fireEvent.change(outputField(dialog, "later"), { target: { value: "afterwards" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "+ Add output" }));
-    const added = within(dialog).getAllByPlaceholderText("Output name").at(-1)!;
+    const fields = within(dialog).getAllByPlaceholderText("Output name");
+    const added = fields[fields.length - 1];
     fireEvent.change(added, { target: { value: "fresh" } });
 
     expect(shield(dialog, "afterwards").disabled).toBe(false);
