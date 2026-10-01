@@ -56,6 +56,7 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     onAiMatchRulesChange: vi.fn(),
     onOutputRowsChange: vi.fn(),
     isOutputConfirmed: () => false,
+    outputColor: () => null,
     onOutputChoiceChange: vi.fn(),
     onAiUseSessionChange: vi.fn(),
     onAiSessionPlaceholderChange: vi.fn(),

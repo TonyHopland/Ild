@@ -304,3 +304,132 @@ describe("FeedbackActions", () => {
     expect(onEdge).not.toHaveBeenCalled();
   });
 });
+
+/** `color` as the browser stores it in an inline style, so values can be compared. */
+function cssColor(color: string) {
+  const probe = document.createElement("span");
+  probe.style.color = color;
+  return probe.style.color;
+}
+
+const BLACK = new Set([cssColor("#000"), cssColor("black")]);
+const WHITE = new Set([cssColor("#fff"), cssColor("white")]);
+
+const PURPLE = "#7e22ce";
+const YELLOW = "#fde047";
+
+function expectColoured(button: HTMLElement, color: string, text: Set<string>) {
+  expect(button.style.backgroundColor).toBe(cssColor(color));
+  expect(text.has(button.style.color), button.style.color).toBe(true);
+}
+
+function expectUncoloured(button: HTMLElement) {
+  expect(button.style.backgroundColor).toBe("");
+  expect(button.style.color).toBe("");
+}
+
+describe("FeedbackActions — button colours", () => {
+  test.each([
+    ["Approve", "OnSuccess", "btn-primary", "onApprove"],
+    ["Reject", "OnFailure", "btn-danger", "onReject"],
+    ["Escalate", "Escalate", "btn-warning", "onEdge"],
+  ] as const)(
+    "%s takes its output's colour with readable text, keeps its class, and still sends the same output",
+    (label, output, tone, handler) => {
+      const handlers = { onApprove: vi.fn(), onReject: vi.fn(), onEdge: vi.fn() };
+      render(
+        <FeedbackActions
+          actions="OnSuccess,Escalate,Respond,OnFailure"
+          {...handlers}
+          colorOf={(name) => (name === output ? PURPLE : name === "Respond" ? YELLOW : null)}
+        />,
+      );
+
+      const pressed = screen.getByRole("button", { name: label });
+      expectColoured(pressed, PURPLE, WHITE);
+      expect(pressed.classList.contains("btn")).toBe(true);
+      expect(pressed.classList.contains(tone)).toBe(true);
+      expectColoured(screen.getByRole("button", { name: "Respond" }), YELLOW, BLACK);
+      for (const other of ["Approve", "Escalate", "Reject"].filter((name) => name !== label)) {
+        expectUncoloured(screen.getByRole("button", { name: other }));
+      }
+
+      fireEvent.click(pressed);
+      expect(handlers[handler]).toHaveBeenCalledTimes(1);
+      if (handler === "onEdge") expect(handlers.onEdge).toHaveBeenCalledWith("Escalate");
+    },
+  );
+
+  test("with no colour every button renders as it always has", () => {
+    render(
+      <FeedbackActions
+        actions="OnSuccess,Escalate,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        onMerge={vi.fn()}
+        colorOf={() => null}
+      />,
+    );
+
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.getAttribute("style"), button.textContent ?? "").toBeNull();
+    }
+    expect(screen.getByRole("button", { name: "Approve" }).className).toBe(
+      "btn btn-sm btn-primary",
+    );
+    expect(screen.getByRole("button", { name: "Escalate" }).className).toBe(
+      "btn btn-sm btn-warning",
+    );
+    expect(screen.getByRole("button", { name: "Reject" }).className).toBe("btn btn-sm btn-danger");
+  });
+
+  test.each([
+    ["Approve", "OnSuccess", "btn-primary", YELLOW, BLACK],
+    ["Escalate", "Escalate", "btn-warning", PURPLE, WHITE],
+    ["Reject", "OnFailure", "btn-danger", PURPLE, WHITE],
+  ] as const)(
+    "confirming %s offers a confirm button in the pressed button's colour",
+    (label, output, tone, color, text) => {
+      const handlers = { onApprove: vi.fn(), onReject: vi.fn(), onEdge: vi.fn() };
+      render(
+        <FeedbackActions
+          actions="OnSuccess,Escalate,OnFailure"
+          {...handlers}
+          needsConfirm={(name) => name === output}
+          colorOf={(name) => (name === output ? color : null)}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      const dialog = screen.getByRole("dialog", { name: `Confirm ${label}` });
+      const confirm = within(dialog).getByRole("button", { name: label });
+      expect(confirm.className).toBe(`btn ${tone}`);
+      expectColoured(confirm, color, text);
+      expectUncoloured(within(dialog).getByRole("button", { name: "Cancel" }));
+
+      fireEvent.click(confirm);
+      const sent = { OnSuccess: "onApprove", OnFailure: "onReject", Escalate: "onEdge" } as const;
+      expect(handlers[sent[output]]).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  test("confirming an uncoloured output offers the confirm button with no inline colour", () => {
+    render(
+      <FeedbackActions
+        actions="OnSuccess,Escalate,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+        needsConfirm={(name) => name === "Escalate"}
+        colorOf={(name) => (name === "OnSuccess" ? PURPLE : null)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Escalate" }));
+    const dialog = screen.getByRole("dialog", { name: "Confirm Escalate" });
+    expect(
+      within(dialog).getByRole("button", { name: "Escalate" }).getAttribute("style"),
+    ).toBeNull();
+  });
+});
