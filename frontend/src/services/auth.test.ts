@@ -132,6 +132,23 @@ describe("workItemService URL contract", () => {
     expect(url).toBe("/api/v1/workitems/wi-1/dependencies/wi-2");
     expect(init?.method).toBe("DELETE");
   });
+
+  test("downloadFile GETs the raw file, path encoded, and hands back its bytes untouched", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x0a]);
+    fetchSpy.mockResolvedValue(
+      new Response(bytes, {
+        status: 200,
+        headers: { "Content-Type": "application/octet-stream" },
+      }),
+    );
+
+    const blob = await workItemService.downloadFile("wi-1", "src/a b/#1?.png");
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe("/api/v1/workitems/wi-1/files/raw?path=src%2Fa%20b%2F%231%3F.png");
+    expect(init?.method).toBe("GET");
+    expect(Array.from(new Uint8Array(await blob.arrayBuffer()))).toEqual(Array.from(bytes));
+  });
 });
 
 describe("workItemService taskboard listing URL contract", () => {

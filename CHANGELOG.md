@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A colour square beside each output of a Human or pull request node sets the colour of its button in the run.**
 
+- **The file viewer has a Download button that saves the open file as it is on disk.**
+
 ### Changed
 
 - **AI and Condition node settings no longer list outputs: they come from the match rules, cases and default.**

@@ -531,6 +531,25 @@ public class WorkItemsController : ControllerBase
         return Ok(content);
     }
 
+    // The file exactly as it is on disk, for the Files tab's Download. Served as
+    // an attachment so a page in the worktree cannot run on ILD's origin;
+    // nosniff comes from the security-headers middleware. The name is the opened
+    // file's: "a.html/" reaches it too, and an empty name drops the attachment.
+    [HttpGet("{id}/files/raw")]
+    public async Task<IActionResult> GetFileRaw(string id, [FromQuery] string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return BadRequest(new { error = "path is required." });
+
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        var stream = _repositoryManager.OpenWorktreeFile(workItem!.WorktreePath!, path);
+        if (stream == null)
+            return NotFound(new { error = "File not found in worktree." });
+        return File(stream, "application/octet-stream", Path.GetFileName(stream.Name));
+    }
+
     // Writes land in the worktree and stop there — git is left alone, so an edit
     // saved here reaches a branch the same way the run's own edits do.
     [HttpPut("{id}/files/content")]

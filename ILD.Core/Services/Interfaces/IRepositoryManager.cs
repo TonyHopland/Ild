@@ -111,6 +111,17 @@ public interface IRepositoryManager
     Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null);
 
     /// <summary>
+    /// Open a single worktree file for reading exactly as it is stored, for a
+    /// caller that wants its bytes rather than a description of them. Returns
+    /// null when the path leads outside the worktree or names no regular file
+    /// there — the same answer either way, as for the read and the write. The
+    /// stream's <see cref="FileStream.Name"/> is where the path led, so a caller
+    /// naming the file names what was opened, not how the path was spelled. The
+    /// caller owns the stream.
+    /// </summary>
+    FileStream? OpenWorktreeFile(string worktreePath, string relativePath);
+
+    /// <summary>
     /// Replace a single worktree file's contents with <paramref name="content"/>
     /// and read it straight back, so the answer carries the change status and
     /// diff the write produced rather than the ones the caller started from.

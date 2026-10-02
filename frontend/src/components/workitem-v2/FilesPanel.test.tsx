@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import FilesPanel from "./FilesPanel";
 import { WorkItem, WorkItemStatus, WorkItemPriority, WorktreeFileContent } from "../../types";
 import * as authServices from "../../services/auth";
@@ -1330,5 +1330,394 @@ describe("FilesPanel editing", () => {
 
     await click("Diff");
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+});
+
+describe("FilesPanel download", () => {
+  function file(path: string, overrides: Partial<WorktreeFileContent> = {}): WorktreeFileContent {
+    return {
+      path,
+      changeStatus: "none",
+      content: "hello",
+      diff: null,
+      isBinary: false,
+      imageMimeType: null,
+      imageBase64: null,
+      ...overrides,
+    };
+  }
+
+  /** A tree of top-level files whose content is built per path. */
+  function mockFiles(
+    paths: string[],
+    contentFor: (path: string) => Partial<WorktreeFileContent> = () => ({}),
+  ) {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: paths.map((path) => ({ path, changeStatus: "none" as const })),
+    });
+    return vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockImplementation(async (_id: string, path: string) => file(path, contentFor(path)));
+  }
+
+  type HeldDownload = {
+    id: string;
+    path: string;
+    resolve: (blob: Blob) => void;
+    reject: (error: unknown) => void;
+  };
+
+  /** Every download stays in flight until the test settles it. */
+  function holdDownloads() {
+    const held: HeldDownload[] = [];
+    const spy = vi
+      .spyOn(authServices.workItemService, "downloadFile")
+      .mockImplementation(
+        (id: string, path: string) =>
+          new Promise<Blob>((resolve, reject) => held.push({ id, path, resolve, reject })),
+      );
+    return { held, spy };
+  }
+
+  /** What the browser was asked to save: the anchor clicks and the object URLs. */
+  function captureSaves() {
+    // jsdom only turns its own Blob implementation into an object URL, so the
+    // URL is stubbed: what is under test is that the saved link carries it.
+    const objectUrl = "blob:http://localhost/raw-file";
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue(objectUrl);
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const clicks: { download: string; href: string }[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicks.push({ download: this.download, href: this.href });
+    });
+    return { objectUrl, createObjectURL, revokeObjectURL, clicks };
+  }
+
+  async function renderView(workItem: WorkItem) {
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+    });
+    return view;
+  }
+
+  async function switchTo(view: ReturnType<typeof render>, workItem: WorkItem) {
+    await act(async () => {
+      view.rerender(<FilesPanel workItem={workItem} />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  /** Opens a file from the tree — its row, not the toolbar's copy of the path. */
+  async function open(path: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: path }));
+      await Promise.resolve();
+    });
+  }
+
+  async function clickButton(name: string) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name }));
+      await Promise.resolve();
+    });
+  }
+
+  /** Settles a held download and lets everything that follows it run out. */
+  async function settle(run: () => void) {
+    await act(async () => {
+      run();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  const downloadButton = () =>
+    screen.queryByRole("button", { name: "Download" }) as HTMLButtonElement | null;
+
+  /** The viewer toolbar's buttons, in order — the one the mode toggle sits in. */
+  const toolbarButtons = () =>
+    Array.from(
+      screen.getByRole("group", { name: "Viewer mode" }).parentElement!.querySelectorAll("button"),
+    );
+
+  test("offers Download at the end of the toolbar for every kind of file, in every mode", async () => {
+    const cases: { path: string; content: Partial<WorktreeFileContent>; shown: () => unknown }[] = [
+      { path: "a.ts", content: {}, shown: () => screen.getByText("hello") },
+      {
+        path: "logo.png",
+        content: {
+          content: null,
+          isBinary: true,
+          imageMimeType: "image/png",
+          imageBase64: "iVBORw0KGgo=",
+        },
+        shown: () => screen.getByRole("img"),
+      },
+      {
+        path: "blob.bin",
+        content: { content: null, isBinary: true },
+        shown: () => screen.getByText(/Binary file/),
+      },
+      {
+        // Past the inlining cap an image arrives in the plain binary shape.
+        path: "huge.png",
+        content: { content: null, isBinary: true },
+        shown: () => screen.getByText(/Binary file/),
+      },
+      { path: "notes.md", content: {}, shown: () => screen.getByText("hello") },
+    ];
+
+    for (const { path, content, shown } of cases) {
+      mockFiles([path], () => content);
+      // Parked, so a text file also has its Edit — Download still comes last.
+      await renderView(makeWorkItem({ status: WorkItemStatus.HumanFeedback }));
+      await open(path);
+      expect(shown(), path).toBeTruthy();
+
+      for (const mode of ["Code", "Diff", ...(path.endsWith(".md") ? ["Preview"] : [])]) {
+        await clickButton(mode);
+        const buttons = toolbarButtons();
+        expect(downloadButton(), `${path} ${mode}`).toBeTruthy();
+        expect(buttons[buttons.length - 1], `${path} ${mode}`).toBe(downloadButton());
+        expect(downloadButton()!.disabled, `${path} ${mode}`).toBe(false);
+      }
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  test("offers no Download with no file open, while it loads, when it failed, or once deleted", async () => {
+    mockFiles(["a.ts"]);
+    await renderView(makeWorkItem());
+    expect(screen.getByText("No file selected")).toBeTruthy();
+    expect(downloadButton()).toBeNull();
+    cleanup();
+    vi.restoreAllMocks();
+
+    mockFiles(["a.ts"]);
+    vi.spyOn(authServices.workItemService, "getFileContent").mockReturnValue(
+      new Promise<WorktreeFileContent>(() => {}),
+    );
+    await renderView(makeWorkItem());
+    await open("a.ts");
+    expect(screen.getByText("Loading…")).toBeTruthy();
+    expect(downloadButton()).toBeNull();
+    cleanup();
+    vi.restoreAllMocks();
+
+    mockFiles(["a.ts"]);
+    vi.spyOn(authServices.workItemService, "getFileContent").mockRejectedValue({
+      message: "File not found in worktree.",
+    });
+    await renderView(makeWorkItem());
+    await open("a.ts");
+    expect(screen.getByText("File not found in worktree.")).toBeTruthy();
+    expect(downloadButton()).toBeNull();
+    cleanup();
+    vi.restoreAllMocks();
+
+    // Deleted on the branch: the viewer has something to show — the diff —
+    // but there is nothing on disk to save.
+    mockFiles(["a.ts"], () => ({
+      changeStatus: "deleted",
+      content: null,
+      diff: "@@ -1 +0,0 @@\n-gone",
+    }));
+    await renderView(makeWorkItem());
+    await open("a.ts");
+    expect(screen.getByText(/no content to display/)).toBeTruthy();
+    expect(downloadButton()).toBeNull();
+    await clickButton("Diff");
+    expect(screen.getByText("-gone")).toBeTruthy();
+    expect(downloadButton()).toBeNull();
+  });
+
+  test("Download is withdrawn while the editor is open, so a draft is never what gets saved", async () => {
+    mockFiles(["a.ts"]);
+    const { spy } = holdDownloads();
+
+    await renderView(makeWorkItem({ status: WorkItemStatus.HumanFeedback }));
+    await open("a.ts");
+    await clickButton("Edit");
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Contents of a.ts"), {
+        target: { value: "unsaved" },
+      });
+      await Promise.resolve();
+    });
+
+    expect(downloadButton()!.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(downloadButton()!);
+      await Promise.resolve();
+    });
+    expect(spy).not.toHaveBeenCalled();
+
+    await clickButton("Cancel");
+    expect(downloadButton()!.disabled).toBe(false);
+  });
+
+  test("saves the server's bytes under the file's own name and leaves the viewer as it was", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "src/a/b.png", changeStatus: "none" }],
+    });
+    const getFileContent = vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockResolvedValue(
+        file("src/a/b.png", {
+          changeStatus: "modified",
+          content: null,
+          isBinary: true,
+          diff: "Binary files differ",
+        }),
+      );
+    const { held, spy } = holdDownloads();
+    const { objectUrl, createObjectURL, revokeObjectURL, clicks } = captureSaves();
+
+    await renderView(makeWorkItem());
+    for (const folder of ["src", "a"]) {
+      await act(async () => {
+        fireEvent.click(screen.getByText(folder));
+        await Promise.resolve();
+      });
+    }
+    await open("b.png");
+    await clickButton("Diff");
+    await clickButton("Download");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith("wi-1", "src/a/b.png");
+    const blob = new Blob([new Uint8Array([0x89, 0x50, 0x00, 0xff])]);
+    await settle(() => held[0].resolve(blob));
+
+    // The very bytes the server answered with, under the path's last segment.
+    expect(createObjectURL).toHaveBeenCalledWith(blob);
+    expect(clicks).toEqual([{ download: "b.png", href: objectUrl }]);
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl));
+
+    // Saving a copy is not a navigation: same file, same mode, same pane.
+    expect(screen.getByRole("button", { name: "Diff" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("src/a/b.png")).toBeTruthy();
+    expect(screen.getByText("Binary files differ")).toBeTruthy();
+    expect(getFileContent).toHaveBeenCalledTimes(1);
+  });
+
+  test("Download is held while it runs and offered again once it settles, either way", async () => {
+    mockFiles(["a.ts"]);
+    const { held } = holdDownloads();
+    captureSaves();
+
+    await renderView(makeWorkItem());
+    await open("a.ts");
+
+    await clickButton("Download");
+    expect(downloadButton()!.disabled).toBe(true);
+    await settle(() => held[0].resolve(new Blob(["x"])));
+    expect(downloadButton()!.disabled).toBe(false);
+
+    await clickButton("Download");
+    expect(downloadButton()!.disabled).toBe(true);
+    await settle(() => held[1].reject({ status: 500, message: "boom" }));
+    expect(downloadButton()!.disabled).toBe(false);
+  });
+
+  test("a failed download says why, and the message goes with the file and the item", async () => {
+    mockFiles(["a.ts", "b.ts"]);
+    const { held } = holdDownloads();
+    captureSaves();
+
+    const view = await renderView(makeWorkItem());
+    await open("a.ts");
+    await clickButton("Download");
+    await settle(() => held[0].reject({ status: 404, message: "File not found in worktree." }));
+
+    const shown = screen.getByText("File not found in worktree.");
+    expect(shown.classList.contains("preview-error")).toBe(true);
+    // The file itself is still on screen; only the download failed.
+    expect(screen.getByText("hello")).toBeTruthy();
+
+    await open("b.ts");
+    expect(screen.queryByText("File not found in worktree.")).toBeNull();
+
+    // With nothing to say, the error still says something.
+    await clickButton("Download");
+    await settle(() => held[1].reject({}));
+    expect(screen.getByText("Failed to download file.")).toBeTruthy();
+
+    await switchTo(view, makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
+    expect(screen.queryByText("Failed to download file.")).toBeNull();
+  });
+
+  test("a download that fails after the user moved on says nothing on the new file or item", async () => {
+    mockFiles(["a.ts", "b.ts"]);
+    const { held } = holdDownloads();
+    captureSaves();
+
+    const view = await renderView(makeWorkItem());
+    await open("a.ts");
+    await clickButton("Download");
+    await open("b.ts");
+    await settle(() => held[0].reject({ message: "left behind on a.ts" }));
+    expect(screen.queryByText("left behind on a.ts")).toBeNull();
+
+    await clickButton("Download");
+    await switchTo(view, makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
+    await settle(() => held[1].reject({ message: "left behind on wi-1" }));
+    expect(screen.queryByText("left behind on wi-1")).toBeNull();
+  });
+
+  test("another item's download of the same path neither holds nor frees this one's", async () => {
+    mockFiles(["README.md"]);
+    const { held, spy } = holdDownloads();
+    captureSaves();
+
+    const view = await renderView(makeWorkItem());
+    await open("README.md");
+    await clickButton("Download");
+
+    await switchTo(view, makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
+    await open("README.md");
+    // wi-1's README.md is still in flight, but this is wi-2's.
+    expect(downloadButton()!.disabled).toBe(false);
+
+    await clickButton("Download");
+    expect(spy).toHaveBeenLastCalledWith("wi-2", "README.md");
+    expect(downloadButton()!.disabled).toBe(true);
+
+    await settle(() => held[0].reject({ message: "wi-1 failed" }));
+    expect(downloadButton()!.disabled).toBe(true);
+    expect(screen.queryByText("wi-1 failed")).toBeNull();
+
+    await settle(() => held[1].resolve(new Blob(["readme"])));
+    expect(downloadButton()!.disabled).toBe(false);
+  });
+
+  test("another file's download neither holds nor frees this one's", async () => {
+    mockFiles(["x.ts", "y.ts"]);
+    const { held } = holdDownloads();
+    captureSaves();
+
+    await renderView(makeWorkItem());
+    await open("x.ts");
+    await clickButton("Download");
+
+    await open("y.ts");
+    expect(downloadButton()!.disabled).toBe(false);
+    await clickButton("Download");
+
+    await open("x.ts");
+    expect(downloadButton()!.disabled).toBe(true);
+
+    await settle(() => held[1].resolve(new Blob(["y"])));
+    expect(downloadButton()!.disabled).toBe(true);
+
+    await settle(() => held[0].resolve(new Blob(["x"])));
+    expect(downloadButton()!.disabled).toBe(false);
   });
 });
