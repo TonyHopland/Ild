@@ -152,6 +152,16 @@ public interface IWorkItemManager
     /// </para>
     /// </summary>
     Task<PullBranchResult> PullBranchAsync(string workItemId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The forge web page of <paramref name="workItem"/>'s run branch, or null
+    /// when the branch has not been pushed (its worktree has no remote-tracking
+    /// ref for it), the repository or its provider is gone, or the forge type or
+    /// clone URL cannot give an exact link. Local git only: no fetch and no
+    /// credentials, so the answer reflects the worktree's last fetch or push.
+    /// A failing check yields null rather than an exception.
+    /// </summary>
+    Task<string?> GetBranchUrlAsync(WorkItemView workItem);
     Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input);
     Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input);
 

@@ -74,6 +74,13 @@ public sealed class WorkItemView
     public DateTime? CompletedAt { get; set; }
     public string? WorktreePath { get; set; }
     public string? BranchName { get; set; }
+
+    /// <summary>
+    /// The forge web page of <see cref="BranchName"/>. Set only by the single
+    /// work item read, and null unless the worktree has the branch's
+    /// remote-tracking ref and the repository's forge type gives an exact link.
+    /// </summary>
+    public string? BranchUrl { get; set; }
     public string? PrUrl { get; set; }
     public bool IsPrMerged { get; set; }
     public string? HumanFeedbackReason { get; set; }
