@@ -6,6 +6,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -27,8 +28,8 @@ public class WorkItemsControllerDiffBaseTests
 
         await controller.GetFiles(WorkItemId);
 
-        repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "release/1.0"), Times.Once);
-        repoManager.Verify(m => m.ListWorktreeFilesAsync(It.IsAny<string>(), "main"), Times.Never);
+        repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "release/1.0", It.IsAny<WorktreeDiffRange?>()), Times.Once);
+        repoManager.Verify(m => m.ListWorktreeFilesAsync(It.IsAny<string>(), "main", It.IsAny<WorktreeDiffRange?>()), Times.Never);
     }
 
     [Fact]
@@ -41,7 +42,7 @@ public class WorkItemsControllerDiffBaseTests
 
         await controller.GetFileContent(WorkItemId, "src/app.ts");
 
-        repoManager.Verify(m => m.ReadWorktreeFileAsync(WorktreePath, "src/app.ts", "release/1.0"), Times.Once);
+        repoManager.Verify(m => m.ReadWorktreeFileAsync(WorktreePath, "src/app.ts", "release/1.0", It.IsAny<WorktreeDiffRange?>()), Times.Once);
     }
 
     [Fact]
@@ -52,7 +53,7 @@ public class WorkItemsControllerDiffBaseTests
 
         await controller.GetFiles(WorkItemId);
 
-        repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "main"), Times.Once);
+        repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "main", It.IsAny<WorktreeDiffRange?>()), Times.Once);
     }
 
     [Fact]
@@ -68,7 +69,7 @@ public class WorkItemsControllerDiffBaseTests
             WorkItemId,
             new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" });
 
-        repoManager.Verify(m => m.WriteWorktreeFileAsync(WorktreePath, "src/app.ts", "edited", "release/1.0"), Times.Once);
+        repoManager.Verify(m => m.WriteWorktreeFileAsync(WorktreePath, "src/app.ts", "edited", "release/1.0", It.IsAny<WorktreeDiffRange?>()), Times.Once);
         var saved = Assert.IsType<WorktreeFileContentResponse>(Assert.IsType<OkObjectResult>(result).Value);
         Assert.Equal("edited", saved.Content);
         Assert.Equal("modified", saved.ChangeStatus);
@@ -90,7 +91,7 @@ public class WorkItemsControllerDiffBaseTests
             await controller.SaveFileContent(WorkItemId, new WorktreeFileSaveRequest { Path = "a.ts", Content = "" }));
 
         repoManager.Verify(
-            m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()),
+            m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()),
             Times.Once);
     }
 
@@ -110,7 +111,7 @@ public class WorkItemsControllerDiffBaseTests
 
         Assert.IsType<ConflictObjectResult>(result);
         repoManager.Verify(
-            m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()),
+            m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()),
             Times.Never);
     }
 
@@ -127,8 +128,8 @@ public class WorkItemsControllerDiffBaseTests
         await controller.GetFiles(WorkItemId);
         await controller.GetFileContent(WorkItemId, "src/app.ts");
 
-        repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "main"), Times.Once);
-        repoManager.Verify(m => m.ReadWorktreeFileAsync(WorktreePath, "src/app.ts", "main"), Times.Once);
+        repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "main", It.IsAny<WorktreeDiffRange?>()), Times.Once);
+        repoManager.Verify(m => m.ReadWorktreeFileAsync(WorktreePath, "src/app.ts", "main", It.IsAny<WorktreeDiffRange?>()), Times.Once);
     }
 
     [Fact]
@@ -148,7 +149,7 @@ public class WorkItemsControllerDiffBaseTests
         async Task<IActionResult> SaveRefusedWith(WorktreeFileWriteResult refusal)
         {
             repoManager
-                .Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+                .Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
                 .ReturnsAsync(refusal);
             return await controller.SaveFileContent(
                 WorkItemId,
@@ -156,12 +157,129 @@ public class WorkItemsControllerDiffBaseTests
         }
     }
 
+    // A run branch of two commits on Base: C1 then C2, so C2 is HEAD.
+    private const string Base = "ba5eba5eba5eba5eba5eba5eba5eba5eba5eba5e";
+    private const string C1 = "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1";
+    private const string C2 = "c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2";
+
+    private static WorktreeCommitsResponse ListedCommits() => new()
+    {
+        BaseSha = Base,
+        Commits =
+        [
+            new WorktreeCommit { Sha = C2, ParentSha = C1, Subject = "Second change" },
+            new WorktreeCommit { Sha = C1, ParentSha = Base, Subject = "First change" },
+        ],
+    };
+
+    [Fact]
+    public async Task The_commit_list_is_taken_on_the_same_base_as_the_files()
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: "release/1.0");
+        using var _db = db;
+        var listed = ListedCommits();
+        repoManager.Setup(m => m.ListWorktreeCommitsAsync(WorktreePath, "release/1.0")).ReturnsAsync(listed);
+
+        var result = await controller.GetFileCommits(WorkItemId);
+
+        Assert.Same(listed, Assert.IsType<OkObjectResult>(result).Value);
+    }
+
+    [Fact]
+    public async Task The_commit_list_refuses_an_unknown_item_and_one_without_a_worktree()
+    {
+        var (controller, _, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+        Assert.Equal(404, Assert.IsAssignableFrom<IStatusCodeActionResult>(await controller.GetFileCommits("999")).StatusCode);
+
+        var (bare, _, bareDb, _) = await SetupAsync(runBaseBranchOverride: null, withWorktree: false);
+        using var _bareDb = bareDb;
+        Assert.IsType<BadRequestObjectResult>(await bare.GetFileCommits(WorkItemId));
+    }
+
+    [Theory]
+    [InlineData(Base, null)] // every commit plus what is not committed yet
+    [InlineData(C2, null)] // only what is not committed yet
+    [InlineData(C1, C2)] // the newest commit alone
+    [InlineData(Base, C1)] // the oldest commit alone
+    [InlineData(null, C1)] // from the base, without what came after C1
+    public async Task A_range_of_listed_commits_reaches_all_three_file_endpoints(string? from, string? to)
+    {
+        // Listed only under the run's own base: a range checked against the
+        // repository default's list would be checked against other commits.
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: "release/1.0");
+        using var _db = db;
+        repoManager.Setup(m => m.ListWorktreeCommitsAsync(It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync(new WorktreeCommitsResponse { BaseSha = null, Commits = [] });
+        repoManager.Setup(m => m.ListWorktreeCommitsAsync(WorktreePath, "release/1.0")).ReturnsAsync(ListedCommits());
+
+        Assert.IsType<OkObjectResult>(await controller.GetFiles(WorkItemId, from: from, to: to));
+        await controller.GetFileContent(WorkItemId, "src/app.ts", from: from, to: to);
+        Assert.IsType<OkObjectResult>(await controller.SaveFileContent(
+            WorkItemId, new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" }, from: from, to: to));
+
+        repoManager.Verify(m => m.ListWorktreeFilesAsync(WorktreePath, "release/1.0", It.Is<WorktreeDiffRange?>(r => Asks(r, from, to))), Times.Once);
+        repoManager.Verify(m => m.ReadWorktreeFileAsync(WorktreePath, "src/app.ts", "release/1.0", It.Is<WorktreeDiffRange?>(r => Asks(r, from, to))), Times.Once);
+        repoManager.Verify(m => m.WriteWorktreeFileAsync(WorktreePath, "src/app.ts", "edited", "release/1.0", It.Is<WorktreeDiffRange?>(r => Asks(r, from, to))), Times.Once);
+    }
+
+    // An absent `from` may travel as null or as the base it defaults to.
+    private static bool Asks(WorktreeDiffRange? range, string? from, string? to) =>
+        range != null && range.To == to && (range.From == from || (from == null && range.From == Base));
+
+    [Theory]
+    [InlineData("3333333333333333333333333333333333333333", null)] // a commit not on this branch
+    [InlineData("c1c1c1c", null)] // abbreviated
+    [InlineData("HEAD", null)]
+    [InlineData("origin/HEAD", null)]
+    [InlineData("--output=/tmp/x", null)]
+    [InlineData("text", null)]
+    [InlineData(null, Base)] // the base is a start, never an end
+    [InlineData(null, "HEAD")]
+    [InlineData(Base, "c2c2c2c")]
+    [InlineData(C1, "-p")]
+    public async Task A_range_outside_the_listed_commits_is_refused_before_git_sees_it(string? from, string? to)
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+        repoManager.Setup(m => m.ListWorktreeCommitsAsync(It.IsAny<string>(), It.IsAny<string?>())).ReturnsAsync(ListedCommits());
+
+        await AssertEveryEndpointRefusesAsync(controller, repoManager, from, to);
+    }
+
+    [Theory]
+    [InlineData(Base, null)]
+    [InlineData(null, C1)]
+    public async Task Without_a_resolved_base_every_range_is_refused(string? from, string? to)
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+        repoManager.Setup(m => m.ListWorktreeCommitsAsync(It.IsAny<string>(), It.IsAny<string?>()))
+            .ReturnsAsync(new WorktreeCommitsResponse { BaseSha = null, Commits = [] });
+
+        await AssertEveryEndpointRefusesAsync(controller, repoManager, from, to);
+    }
+
+    private static async Task AssertEveryEndpointRefusesAsync(
+        WorkItemsController controller, Mock<IRepositoryManager> repoManager, string? from, string? to)
+    {
+        Assert.IsType<BadRequestObjectResult>(await controller.GetFiles(WorkItemId, from: from, to: to));
+        Assert.IsType<BadRequestObjectResult>(await controller.GetFileContent(WorkItemId, "src/app.ts", from: from, to: to));
+        Assert.IsType<BadRequestObjectResult>(await controller.SaveFileContent(
+            WorkItemId, new WorktreeFileSaveRequest { Path = "src/app.ts", Content = "edited" }, from: from, to: to));
+
+        repoManager.Verify(m => m.ListWorktreeFilesAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()), Times.Never);
+        repoManager.Verify(m => m.ReadWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()), Times.Never);
+        repoManager.Verify(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()), Times.Never);
+    }
+
     private const string WorkItemId = "1";
     private const string WorktreePath = "/tmp/ild-difftest-worktree";
 
     private static async Task<(WorkItemsController Controller, Mock<IRepositoryManager> RepoManager, TestDb Db, string Id)> SetupAsync(
         string? runBaseBranchOverride,
-        RemoteWorkItemStatus status = RemoteWorkItemStatus.HumanFeedback)
+        RemoteWorkItemStatus status = RemoteWorkItemStatus.HumanFeedback,
+        bool withWorktree = true)
     {
         var db = new TestDb();
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
@@ -186,12 +304,12 @@ public class WorkItemsControllerDiffBaseTests
             .ReturnsAsync(1L);
 
         var repoManager = new Mock<IRepositoryManager>();
-        repoManager.Setup(m => m.ListWorktreeFilesAsync(It.IsAny<string>(), It.IsAny<string?>()))
+        repoManager.Setup(m => m.ListWorktreeFilesAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
             .ReturnsAsync(new List<WorktreeFileEntry>());
-        repoManager.Setup(m => m.ReadWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
+        repoManager.Setup(m => m.ReadWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
             .ReturnsAsync((WorktreeFileContentResponse?)null);
-        repoManager.Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>()))
-            .ReturnsAsync((string _, string path, string content, string? __) => WorktreeFileWriteResult.Saved(
+        repoManager.Setup(m => m.WriteWorktreeFileAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
+            .ReturnsAsync((string _, string path, string content, string? __, WorktreeDiffRange? ___) => WorktreeFileWriteResult.Saved(
                 new WorktreeFileContentResponse { Path = path, ChangeStatus = "modified", Content = content }));
 
         var mgr = new WorkItemManager(
@@ -219,7 +337,7 @@ public class WorkItemsControllerDiffBaseTests
             Status = LoopRunStatus.Running,
             StartedAt = DateTime.UtcNow,
             RepositoryId = repo.Id,
-            WorktreePath = WorktreePath,
+            WorktreePath = withWorktree ? WorktreePath : null,
             BranchName = "ild/wi-1-run-x",
             BaseBranchOverride = runBaseBranchOverride,
         });

@@ -1,8 +1,26 @@
-import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+import { render, screen, fireEvent, cleanup, act, waitFor, within } from "@testing-library/react";
 import FilesPanel from "./FilesPanel";
-import { WorkItem, WorkItemStatus, WorkItemPriority, WorktreeFileContent } from "../../types";
+import {
+  WorkItem,
+  WorkItemStatus,
+  WorkItemPriority,
+  WorktreeCommits,
+  WorktreeDiffRange,
+  WorktreeFileContent,
+  WorktreeFileEntry,
+  WorktreeFiles,
+} from "../../types";
 import * as authServices from "../../services/auth";
+
+// Every panel asks for the commit list it offers ranges from; one with no
+// commits of its own leaves the rest of the panel exactly as it was.
+beforeEach(() => {
+  vi.spyOn(authServices.workItemService, "getFileCommits").mockResolvedValue({
+    baseSha: "ba5e".repeat(10),
+    commits: [],
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -1719,5 +1737,534 @@ describe("FilesPanel download", () => {
 
     await settle(() => held[0].resolve(new Blob(["x"])));
     expect(downloadButton()!.disabled).toBe(false);
+  });
+});
+
+describe("FilesPanel diff range", () => {
+  const BASE = "ba5e".repeat(10);
+  const C1 = "c1".repeat(20);
+  const C2 = "c2".repeat(20);
+  const C3 = "c3".repeat(20);
+  /** Three commits on the run branch, newest first, as the server lists them. */
+  const COMMITS: WorktreeCommits = {
+    baseSha: BASE,
+    commits: [
+      { sha: C3, parentSha: C2, subject: "Third change" },
+      { sha: C2, parentSha: C1, subject: "Second change" },
+      { sha: C1, parentSha: BASE, subject: "First change" },
+    ],
+  };
+
+  const FILE: WorktreeFileContent = {
+    path: "a.ts",
+    changeStatus: "modified",
+    content: "text",
+    diff: null,
+    isBinary: false,
+    imageMimeType: null,
+    imageBase64: null,
+  };
+
+  function listing(...files: WorktreeFileEntry[]): WorktreeFiles {
+    return { worktreePath: "/tmp/wt", files };
+  }
+
+  function mockCommits(list: () => Promise<WorktreeCommits>) {
+    return vi
+      .spyOn(authServices.workItemService, "getFileCommits")
+      .mockImplementation(async () => list());
+  }
+
+  function mockFiles(files: (range?: WorktreeDiffRange) => WorktreeFileEntry[]) {
+    return vi
+      .spyOn(authServices.workItemService, "getFiles")
+      .mockImplementation(async (_id: string, range?: WorktreeDiffRange) =>
+        listing(...files(range)),
+      );
+  }
+
+  /** Calls that only answer when the test says so, each with the arguments it was made with. */
+  function held<T>() {
+    const calls: { args: unknown[]; resolve: (value: T) => void; settled: boolean }[] = [];
+    const impl = (...args: unknown[]) =>
+      new Promise<T>((resolve) => {
+        calls.push({ args, resolve, settled: false });
+      });
+    const answer = async (match: (args: unknown[]) => boolean, value: T) => {
+      for (const call of calls) {
+        if (call.settled || !match(call.args)) continue;
+        call.settled = true;
+        call.resolve(value);
+      }
+      await settle();
+    };
+    return { calls, impl, answer };
+  }
+
+  /** Lets every answer already given land, along with whatever it sets off. */
+  async function settle() {
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+  }
+
+  async function mount(workItem: WorkItem) {
+    let view!: ReturnType<typeof render>;
+    await act(async () => {
+      view = render(<FilesPanel workItem={workItem} />);
+    });
+    await settle();
+    return {
+      /** The parent hands down a fresh copy of the same item, as it does when the run advances. */
+      refresh: async () => {
+        await act(async () => {
+          view.rerender(<FilesPanel workItem={{ ...workItem }} />);
+        });
+        await settle();
+      },
+      switchTo: async (next: WorkItem) => {
+        await act(async () => {
+          view.rerender(<FilesPanel workItem={next} />);
+        });
+        await settle();
+      },
+    };
+  }
+
+  /** The control named for the range — a `<details>` or the button that opens it. */
+  function rangeControl(): HTMLElement {
+    return screen.getByLabelText(/diff range/i);
+  }
+
+  function rangeToggle(): HTMLElement {
+    const control = rangeControl();
+    return control instanceof HTMLDetailsElement ? control.querySelector("summary")! : control;
+  }
+
+  /** What the closed dropdown says it is showing. */
+  function rangeLabel(): string {
+    return rangeToggle().textContent ?? "";
+  }
+
+  async function openRange() {
+    const control = rangeControl();
+    if (
+      control instanceof HTMLDetailsElement
+        ? control.open
+        : control.getAttribute("aria-expanded") === "true"
+    )
+      return;
+    await act(async () => {
+      fireEvent.click(rangeToggle());
+    });
+    await settle();
+  }
+
+  function box(name: RegExp): HTMLInputElement {
+    return screen.getByRole("checkbox", { name }) as HTMLInputElement;
+  }
+  const allBox = () => box(/all changes/i);
+  const pendingBox = () => box(/pending/i);
+  const commitBox = (subject: string) => box(new RegExp(subject));
+
+  async function tick(checkbox: HTMLInputElement) {
+    await openRange();
+    await act(async () => {
+      fireEvent.click(checkbox);
+    });
+    await settle();
+  }
+
+  const checked = () =>
+    [pendingBox(), commitBox("Third"), commitBox("Second"), commitBox("First")].map(
+      (b) => b.checked,
+    );
+  const disabled = (b: HTMLInputElement) => b.matches(":disabled");
+
+  function expectLabel(expected: "all" | "pending" | { commits: number; pending: boolean }) {
+    const label = rangeLabel();
+    if (expected === "all") {
+      expect(label).toMatch(/all/i);
+      expect(label).not.toMatch(/pending|\d+ commit/i);
+    } else if (expected === "pending") {
+      expect(label).toMatch(/pending/i);
+      expect(label).not.toMatch(/all|\d+ commit/i);
+    } else {
+      const { commits, pending } = expected;
+      expect(label).toMatch(
+        new RegExp(`\\b${commits} commit${commits === 1 ? "(?!s)" : "s"}`, "i"),
+      );
+      if (pending) expect(label).toMatch(/pending/i);
+      else expect(label).not.toMatch(/pending/i);
+      expect(label).not.toMatch(/all/i);
+    }
+  }
+
+  /** The range the latest file list was asked for; undefined is All. */
+  function lastListRange(getFiles: { mock: { lastCall?: unknown[] } }) {
+    return getFiles.mock.lastCall?.[1];
+  }
+
+  function commitsUnavailableMessage(): HTMLElement | undefined {
+    return screen
+      .queryAllByText(/load/i)
+      .find(
+        (el) =>
+          /commit/i.test(el.textContent ?? "") && /not|n't|fail|unable/i.test(el.textContent ?? ""),
+      );
+  }
+
+  test("offers All, Pending and each commit newest first, and starts on All at no extra cost", async () => {
+    mockCommits(async () => COMMITS);
+    const getFiles = mockFiles(() => [{ path: "a.ts", changeStatus: "modified" }]);
+    const getFileContent = vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockResolvedValue(FILE);
+
+    const panel = await mount(makeWorkItem());
+    expectLabel("all");
+    await openRange();
+
+    const boxes = [
+      allBox(),
+      pendingBox(),
+      commitBox("Third"),
+      commitBox("Second"),
+      commitBox("First"),
+    ];
+    for (let i = 1; i < boxes.length; i++) {
+      expect(
+        boxes[i - 1].compareDocumentPosition(boxes[i]) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+    expect(screen.getByRole("checkbox", { name: new RegExp(C3.slice(0, 7)) })).toBe(
+      commitBox("Third"),
+    );
+    expect(allBox().checked).toBe(true);
+    expect(checked()).toEqual([false, false, false, false]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("a.ts"));
+    });
+    await settle();
+    await panel.refresh();
+
+    // The dropdown on its default costs nothing: one list per load, nothing
+    // ranged, and the item's refresh re-pulls the commits with the files.
+    expect(getFiles.mock.calls).toEqual([["wi-1"], ["wi-1"]]);
+    expect(getFileContent.mock.calls.every((call) => call.length === 2)).toBe(true);
+    expect(authServices.workItemService.getFileCommits).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps the selection one unbroken run from Pending through the commits", async () => {
+    mockCommits(async () => COMMITS);
+    const getFiles = mockFiles(() => [{ path: "a.ts", changeStatus: "modified" }]);
+    await mount(makeWorkItem());
+
+    await tick(pendingBox());
+    expect(allBox().checked).toBe(false);
+    expect(checked()).toEqual([true, false, false, false]);
+    expectLabel("pending");
+    expect(lastListRange(getFiles)).toEqual({ from: C3 });
+
+    // Second is not next to Pending, so Third comes with it.
+    await tick(commitBox("Second"));
+    expect(checked()).toEqual([true, true, true, false]);
+    expectLabel({ commits: 2, pending: true });
+    expect(lastListRange(getFiles)).toEqual({ from: C1 });
+    // Only the run's ends can come off; the interior box would split it.
+    expect(disabled(commitBox("Third"))).toBe(true);
+    expect(disabled(pendingBox())).toBe(false);
+    expect(disabled(commitBox("Second"))).toBe(false);
+    expect(disabled(commitBox("First"))).toBe(false);
+
+    await tick(pendingBox());
+    expect(checked()).toEqual([false, true, true, false]);
+    expectLabel({ commits: 2, pending: false });
+    expect(lastListRange(getFiles)).toEqual({ from: C1, to: C3 });
+    expect(disabled(commitBox("Third"))).toBe(false);
+
+    await tick(commitBox("Third"));
+    expect(checked()).toEqual([false, false, true, false]);
+    expectLabel({ commits: 1, pending: false });
+    expect(lastListRange(getFiles)).toEqual({ from: C1, to: C2 });
+
+    // Unticking the last narrower box is All again.
+    await tick(commitBox("Second"));
+    expect(allBox().checked).toBe(true);
+    expect(checked()).toEqual([false, false, false, false]);
+    expectLabel("all");
+    expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
+
+    await tick(commitBox("First"));
+    expect(lastListRange(getFiles)).toEqual({ from: BASE, to: C1 });
+    await tick(pendingBox());
+    expect(checked()).toEqual([true, true, true, true]);
+    expectLabel({ commits: 3, pending: true });
+    expect(lastListRange(getFiles)).toEqual({ from: BASE });
+    expect(disabled(commitBox("Third"))).toBe(true);
+    expect(disabled(commitBox("Second"))).toBe(true);
+
+    // All clears every other box.
+    await tick(allBox());
+    expect(allBox().checked).toBe(true);
+    expect(checked()).toEqual([false, false, false, false]);
+    expectLabel("all");
+    expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
+  });
+
+  test("a chosen range drives the tree, its count and filter, and the open file's diff", async () => {
+    mockCommits(async () => COMMITS);
+    mockFiles((range) => {
+      if (!range) {
+        return [
+          { path: "a.ts", changeStatus: "modified" },
+          { path: "b.ts", changeStatus: "modified" },
+        ];
+      }
+      if (range.to === C3) {
+        return [
+          { path: "a.ts", changeStatus: "modified" },
+          { path: "b.ts", changeStatus: "none" },
+        ];
+      }
+      return [
+        { path: "a.ts", changeStatus: "none" },
+        { path: "b.ts", changeStatus: "none" },
+      ];
+    });
+    const getFileContent = vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockImplementation(async (_id: string, path: string, range?: WorktreeDiffRange) =>
+        range
+          ? { ...FILE, path, changeStatus: "none", diff: null }
+          : { ...FILE, path, diff: "@@ -1 +1 @@\n-old b\n+new b" },
+      );
+
+    await mount(makeWorkItem());
+    await act(async () => {
+      fireEvent.click(screen.getByText("b.ts"));
+    });
+    await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Diff" }));
+    });
+    expect(screen.getByText("+new b")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Changes \(2\)/ })).toBeTruthy();
+
+    await tick(commitBox("Third"));
+
+    expect(getFileContent).toHaveBeenLastCalledWith("wi-1", "b.ts", { from: C2, to: C3 });
+    expect(screen.queryByText("+new b")).toBeNull();
+    expect(screen.getByText("No changes in this file.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Changes \(1\)/ })).toBeTruthy();
+    const tree = () => within(document.querySelector<HTMLElement>(".wiv2-files-tree")!);
+    expect(tree().getByText("b.ts").closest("button")!.textContent).toBe("b.ts");
+    expect(tree().getByText("a.ts").closest("button")!.textContent).toContain("M");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Changes \(1\)/ }));
+    });
+    expect(tree().getByText("a.ts")).toBeTruthy();
+    expect(tree().queryByText("b.ts")).toBeNull();
+
+    // Pending on top of Third changed nothing at all here.
+    await tick(pendingBox());
+    const list = document.querySelector(".wiv2-files-list")!;
+    expect(list.textContent).not.toMatch(/base branch/i);
+    expect(list.textContent).toMatch(/\b(no|nothing)\b/i);
+    expect(list.textContent).toMatch(/select|range|commit|pending/i);
+  });
+
+  test("a file list answered for a range or item no longer chosen is never shown", async () => {
+    mockCommits(async () => COMMITS);
+    const list = held<WorktreeFiles>();
+    vi.spyOn(authServices.workItemService, "getFiles").mockImplementation(list.impl);
+    const range = (args: unknown[]) => args[1] as WorktreeDiffRange | undefined;
+    const file = (path: string) => listing({ path, changeStatus: "modified" });
+
+    const workItem = makeWorkItem();
+    const panel = await mount(workItem);
+    await list.answer(() => true, file("everything.ts"));
+    expect(screen.getByText("everything.ts")).toBeTruthy();
+
+    // Pending is asked for, then All before Pending answers.
+    await tick(pendingBox());
+    await tick(allBox());
+    await list.answer((args) => range(args) === undefined, file("everything-again.ts"));
+    await list.answer((args) => range(args) !== undefined, file("pending-only.ts"));
+    expect(screen.queryByText("pending-only.ts")).toBeNull();
+    expect(screen.getByText("everything-again.ts")).toBeTruthy();
+
+    // A background refresh under Third is overtaken by a change to Pending + Third.
+    await tick(commitBox("Third"));
+    await list.answer((args) => range(args)?.to === C3, file("third-only.ts"));
+    expect(screen.getByText("third-only.ts")).toBeTruthy();
+    await panel.refresh();
+    await tick(pendingBox());
+    await list.answer(
+      (args) => range(args)?.from === C2 && range(args)?.to === undefined,
+      file("third-and-pending.ts"),
+    );
+    await list.answer((args) => range(args)?.to === C3, file("stale-refresh.ts"));
+    expect(screen.queryByText("stale-refresh.ts")).toBeNull();
+    expect(screen.getByText("third-and-pending.ts")).toBeTruthy();
+
+    // The dialog moves to another item while this one's list is still out.
+    await tick(pendingBox());
+    await panel.switchTo(makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
+    await list.answer((args) => args[0] === "wi-2", file("other-item.ts"));
+    await list.answer((args) => args[0] === "wi-1", file("left-behind.ts"));
+    expect(screen.queryByText("left-behind.ts")).toBeNull();
+    expect(screen.getByText("other-item.ts")).toBeTruthy();
+  });
+
+  test("a file answered for a range no longer chosen is never shown", async () => {
+    mockCommits(async () => COMMITS);
+    mockFiles(() => [{ path: "a.ts", changeStatus: "modified" }]);
+    const content = held<WorktreeFileContent>();
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(content.impl);
+    const range = (args: unknown[]) => args[2] as WorktreeDiffRange | undefined;
+
+    await mount(makeWorkItem());
+    await act(async () => {
+      fireEvent.click(screen.getByText("a.ts"));
+    });
+    await content.answer(() => true, { ...FILE, content: "the whole branch" });
+    expect(screen.getByText("the whole branch")).toBeTruthy();
+
+    await tick(pendingBox());
+    await tick(allBox());
+    await content.answer((args) => range(args) === undefined, {
+      ...FILE,
+      content: "the whole branch again",
+    });
+    await content.answer((args) => range(args) !== undefined, { ...FILE, content: "pending only" });
+
+    expect(screen.queryByText("pending only")).toBeNull();
+    expect(screen.getByText("the whole branch again")).toBeTruthy();
+  });
+
+  test("the range is held while a draft is open, and a save is made under it", async () => {
+    mockCommits(async () => COMMITS);
+    mockFiles(() => [{ path: "a.ts", changeStatus: "modified" }]);
+    const getFileContent = vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockResolvedValue({ ...FILE, content: "before" });
+    const save = vi
+      .spyOn(authServices.workItemService, "saveFileContent")
+      .mockResolvedValue({ ...FILE, changeStatus: "none", content: "after" });
+
+    await mount(makeWorkItem({ status: WorkItemStatus.HumanFeedback }));
+    await tick(commitBox("Third"));
+    await act(async () => {
+      fireEvent.click(screen.getByText("a.ts"));
+    });
+    await settle();
+    expect(getFileContent).toHaveBeenLastCalledWith("wi-1", "a.ts", { from: C2, to: C3 });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    });
+    await openRange();
+    // Whatever of the dropdown is still on screen offers nothing to change.
+    const boxes = screen.queryAllByRole("checkbox") as HTMLInputElement[];
+    expect(boxes.every(disabled)).toBe(true);
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Contents of a.ts"), { target: { value: "after" } });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    await settle();
+
+    expect(save).toHaveBeenCalledWith("wi-1", "a.ts", "after", { from: C2, to: C3 });
+    expect(disabled(pendingBox())).toBe(false);
+  });
+
+  test("the commit list follows the item: vanished commits drop, gaps fill, and a new item starts on All", async () => {
+    let commits = COMMITS;
+    mockCommits(async () => commits);
+    const getFiles = mockFiles(() => [{ path: "a.ts", changeStatus: "modified" }]);
+    const panel = await mount(makeWorkItem());
+
+    await tick(commitBox("Third"));
+    await tick(commitBox("Second"));
+    expectLabel({ commits: 2, pending: false });
+
+    // Third is rewritten away.
+    commits = { baseSha: BASE, commits: COMMITS.commits.slice(1) };
+    await panel.refresh();
+    expect(screen.queryByRole("checkbox", { name: /Third change/ })).toBeNull();
+    expect(commitBox("Second").checked).toBe(true);
+    expectLabel({ commits: 1, pending: false });
+    expect(lastListRange(getFiles)).toEqual({ from: C1, to: C2 });
+
+    // Third lands on top of a selection that ran from Pending into Second.
+    await tick(pendingBox());
+    expectLabel({ commits: 1, pending: true });
+    commits = COMMITS;
+    await panel.refresh();
+    expect(checked()).toEqual([true, true, true, false]);
+    expectLabel({ commits: 2, pending: true });
+    expect(lastListRange(getFiles)).toEqual({ from: C1 });
+
+    // Every chosen commit gone: back to All.
+    await tick(pendingBox());
+    commits = { baseSha: BASE, commits: [] };
+    await panel.refresh();
+    expectLabel("all");
+    expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
+    // With no commits of its own, Pending is measured from the base.
+    await tick(pendingBox());
+    expect(lastListRange(getFiles)).toEqual({ from: BASE });
+
+    const callsBefore = getFiles.mock.calls.length;
+    await panel.switchTo(makeWorkItem({ id: "wi-2", worktreePath: "/tmp/wt-2" }));
+    expectLabel("all");
+    const forNewItem = getFiles.mock.calls.slice(callsBefore);
+    expect(forNewItem.length).toBeGreaterThan(0);
+    expect(forNewItem.every((call) => call.length === 1 && call[0] === "wi-2")).toBe(true);
+  });
+
+  test.each([
+    ["the commit list fails to load", () => Promise.reject(new Error("boom"))],
+    ["no merge-base resolves", async () => ({ baseSha: null, commits: [] }) as WorktreeCommits],
+  ])("without a commit list only All is offered: %s", async (_case, unavailable) => {
+    let available = false;
+    mockCommits(() => (available ? Promise.resolve(COMMITS) : unavailable()));
+    const getFiles = mockFiles(() => [{ path: "a.ts", changeStatus: "modified" }]);
+    const panel = await mount(makeWorkItem());
+
+    // The rest of the panel works as ever.
+    expect(screen.getByText("a.ts")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Changes \(1\)/ })).toBeTruthy();
+    await openRange();
+    expectLabel("all");
+    expect(allBox().checked).toBe(true);
+    expect(disabled(allBox())).toBe(false);
+    expect(disabled(pendingBox())).toBe(true);
+    expect(commitsUnavailableMessage()).toBeTruthy();
+
+    available = true;
+    await panel.refresh();
+    expect(disabled(pendingBox())).toBe(false);
+    expect(disabled(commitBox("Third"))).toBe(false);
+    expect(commitsUnavailableMessage()).toBeUndefined();
+
+    await tick(pendingBox());
+    expect(lastListRange(getFiles)).toEqual({ from: C3 });
+
+    // Losing the list again takes the selection back to All with it.
+    available = false;
+    await panel.refresh();
+    expectLabel("all");
+    expect(allBox().checked).toBe(true);
+    expect(disabled(pendingBox())).toBe(true);
+    expect(commitsUnavailableMessage()).toBeTruthy();
+    expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
   });
 });

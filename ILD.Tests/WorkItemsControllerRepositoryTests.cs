@@ -143,7 +143,7 @@ public class WorkItemsControllerRepositoryTests
 
         await s.Controller.GetFiles(id);
 
-        s.RepoManager.Verify(r => r.ListWorktreeFilesAsync(WorktreePath, "main-a"), Times.Once);
+        s.RepoManager.Verify(r => r.ListWorktreeFilesAsync(WorktreePath, "main-a", It.IsAny<WorktreeDiffRange?>()), Times.Once);
     }
 
     private static void SeedRun(TestDb db, string workItemId, LoopRunStatus status, Guid repositoryId)
@@ -215,7 +215,7 @@ public class WorkItemsControllerRepositoryTests
         preview.Setup(p => p.StartServiceAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
         var repoManager = new Mock<IRepositoryManager>();
-        repoManager.Setup(r => r.ListWorktreeFilesAsync(It.IsAny<string>(), It.IsAny<string?>()))
+        repoManager.Setup(r => r.ListWorktreeFilesAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
             .ReturnsAsync(Array.Empty<WorktreeFileEntry>());
 
         var controller = new WorkItemsController(
