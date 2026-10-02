@@ -241,18 +241,20 @@ function ColorSquare({
 /**
  * Picks the colour of the run's button for the output called `name`, or its
  * default. The default shows as black, which the input cannot report as a
- * change, so the colour it shows can also be taken as it is.
+ * change, so the colour it shows can also be taken as it is. Taking it or the
+ * default also closes the picker.
  */
 function ColorPicker({
   name,
   color,
   onChange,
-  onDefault,
+  onChoose,
 }: {
   name: string;
   color: string | null;
   onChange: (color: string) => void;
-  onDefault: () => void;
+  /** The chosen colour, or null for the default. */
+  onChoose: (color: string | null) => void;
 }) {
   const shown = color ?? "#000000";
   return (
@@ -267,11 +269,11 @@ function ColorPicker({
         type="button"
         className="output-color-action"
         aria-label={`Use this colour for ${name}`}
-        onClick={() => onChange(shown)}
+        onClick={() => onChoose(shown)}
       >
         Use this colour
       </button>
-      <button type="button" className="output-color-action" onClick={onDefault}>
+      <button type="button" className="output-color-action" onClick={() => onChoose(null)}>
         Default
       </button>
     </div>
@@ -360,8 +362,8 @@ function OutputsEditor({
           name={name}
           color={color}
           onChange={onColor}
-          onDefault={() => {
-            onColor(null);
+          onChoose={(chosen) => {
+            onColor(chosen);
             setOpenColorFor(null);
           }}
         />
