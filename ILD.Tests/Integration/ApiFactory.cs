@@ -68,8 +68,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         _readVariable = name => variables.GetValueOrDefault(name);
         _serverHarness = new FakeWorkItemServerHarness(
             limits: ILD.WorkItemServer.Attachments.AttachmentLimits.FromEnvironment(_readVariable));
-        _connection = new SqliteConnection("DataSource=:memory:");
-        _connection.Open();
+        _connection = SqliteSchemaTemplate<AppDbContext>.OpenCopy(options => new AppDbContext(options));
         _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dataRoot);
         Environment.SetEnvironmentVariable("ILD_DATA_PATH", null);
