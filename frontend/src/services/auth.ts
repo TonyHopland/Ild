@@ -37,6 +37,8 @@ import {
   WorktreePreviewLog,
   WorktreePreviewServiceConfig,
   WorktreeFiles,
+  WorktreeCommits,
+  WorktreeDiffRange,
   WorktreeFileContent,
   WorktreeFileSaveRequest,
   AppSetting,
@@ -65,6 +67,14 @@ function pageQuery(opts?: { skip?: number; take?: number }): string {
   if (opts.skip !== undefined) params.push(`skip=${opts.skip}`);
   if (opts.take !== undefined) params.push(`take=${opts.take}`);
   return params.length ? `?${params.join("&")}` : "";
+}
+
+/** `params` plus a diff range's from/to, each only when set, as a query string ("" when empty). */
+function diffRangeQuery(params: string[], range?: WorktreeDiffRange): string {
+  const all = [...params];
+  if (range?.from) all.push(`from=${encodeURIComponent(range.from)}`);
+  if (range?.to) all.push(`to=${encodeURIComponent(range.to)}`);
+  return all.length ? `?${all.join("&")}` : "";
 }
 
 /** The most a skip/take list endpoint returns for one request. */
@@ -422,13 +432,22 @@ export const workItemService = {
     );
   },
 
-  getFiles: async (id: string): Promise<WorktreeFiles> => {
-    return api.get<WorktreeFiles>(`/workitems/${id}/files`);
+  /** The run branch's own commits, for choosing which of them the Files tab diffs. */
+  getFileCommits: async (id: string): Promise<WorktreeCommits> => {
+    return api.get<WorktreeCommits>(`/workitems/${id}/files/commits`);
   },
 
-  getFileContent: async (id: string, path: string): Promise<WorktreeFileContent> => {
+  getFiles: async (id: string, range?: WorktreeDiffRange): Promise<WorktreeFiles> => {
+    return api.get<WorktreeFiles>(`/workitems/${id}/files${diffRangeQuery([], range)}`);
+  },
+
+  getFileContent: async (
+    id: string,
+    path: string,
+    range?: WorktreeDiffRange,
+  ): Promise<WorktreeFileContent> => {
     return api.get<WorktreeFileContent>(
-      `/workitems/${id}/files/content?path=${encodeURIComponent(path)}`,
+      `/workitems/${id}/files/content${diffRangeQuery([`path=${encodeURIComponent(path)}`], range)}`,
     );
   },
 
@@ -441,9 +460,13 @@ export const workItemService = {
     id: string,
     path: string,
     content: string,
+    range?: WorktreeDiffRange,
   ): Promise<WorktreeFileContent> => {
     const body: WorktreeFileSaveRequest = { path, content };
-    return api.put<WorktreeFileContent>(`/workitems/${id}/files/content`, body);
+    return api.put<WorktreeFileContent>(
+      `/workitems/${id}/files/content${diffRangeQuery([], range)}`,
+      body,
+    );
   },
 
   /**

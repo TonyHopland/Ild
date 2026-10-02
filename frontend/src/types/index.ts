@@ -289,6 +289,35 @@ export interface WorktreeFiles {
   files: WorktreeFileEntry[];
 }
 
+/** One of the run branch's own commits. Every SHA is a full one. */
+export interface WorktreeCommit {
+  sha: string;
+  /** The first parent: the commit this one follows on the branch. */
+  parentSha: string;
+  subject: string;
+}
+
+/**
+ * The run branch's first-parent commits after its fork point, newest first.
+ * `baseSha` is that fork point; it is null, with no commits, when the server
+ * could not resolve one — no diff range can be asked for then.
+ */
+export interface WorktreeCommits {
+  baseSha: string | null;
+  commits: WorktreeCommit[];
+}
+
+/**
+ * The span of history the Files tab diffs. `from` (exclusive) defaults to the
+ * fork point; without `to` the span ends at the working tree, uncommitted and
+ * untracked files included, and with it at that commit. Only SHAs from
+ * {@link WorktreeCommits} are accepted.
+ */
+export interface WorktreeDiffRange {
+  from?: string;
+  to?: string;
+}
+
 /**
  * What a pull of the run branch did, or why it could not. `DirtyWorktree` and
  * `Conflict` come back on a 200 with `success: false` — they are answers the

@@ -1214,6 +1214,67 @@
   color: #fff;
 }
 
+.wiv2-files-tree .wiv2-files-toolbar {
+  flex-wrap: wrap;
+}
+
+.wiv2-range {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  color: #c0c0d0;
+}
+
+.wiv2-range-summary {
+  cursor: pointer;
+  color: #a0a0b0;
+}
+
+.wiv2-range-summary:hover {
+  color: #e0e0e0;
+}
+
+.wiv2-range-summary[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.wiv2-range-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.35rem;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.wiv2-range-option {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.wiv2-range-option:has(input:disabled) {
+  color: #707088;
+}
+
+.wiv2-range-sha {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #8080a0;
+}
+
+.wiv2-range-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wiv2-range-note {
+  color: #a0a0b0;
+  font-style: italic;
+  white-space: normal;
+}
+
 .wiv2-files-list {
   flex: 1;
   min-height: 0;
