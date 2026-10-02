@@ -3,12 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
 
-/// <summary>
-/// Opens private in-memory SQLite databases that already hold
-/// <typeparamref name="TContext"/>'s schema. The schema is built with
-/// <c>EnsureCreated</c> once per test process and each new database is a page
-/// copy of it, which is far cheaper than running <c>EnsureCreated</c> per test.
-/// </summary>
+/// <summary>Opens private in-memory SQLite databases that already hold <typeparamref name="TContext"/>'s schema.</summary>
 public static class SqliteSchemaTemplate<TContext> where TContext : DbContext
 {
     private static readonly Lock Gate = new();
@@ -18,7 +13,8 @@ public static class SqliteSchemaTemplate<TContext> where TContext : DbContext
     {
         var copy = new SqliteConnection("Filename=:memory:");
         copy.Open();
-        // A SqliteConnection is not thread-safe, so parallel tests take turns reading the template.
+        // A SqliteConnection cannot be used from several threads at once:
+        // https://learn.microsoft.com/dotnet/standard/data/sqlite/database-errors#locking-retries-and-timeouts
         lock (Gate)
         {
             _template ??= Build(createContext);
