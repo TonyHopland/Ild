@@ -76,6 +76,9 @@ public class WorkItemPageApiTests
             entity.UpdatedAt = createdAt ?? Epoch;
             if (id is not null) entity.Id = id;
             await Server.ServerDb.SaveChangesAsync(TestContext.Current.CancellationToken);
+            // The harness keeps one context for the whole test, where the server has one per
+            // request; left tracked, every seed re-scans all the earlier ones on save.
+            Server.ServerDb.ChangeTracker.Clear();
             return entity.Id;
         }
 
