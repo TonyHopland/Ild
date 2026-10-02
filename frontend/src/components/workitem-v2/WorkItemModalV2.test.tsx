@@ -150,6 +150,9 @@ function mockServices(runs: LoopRun[] = [makeRun()]) {
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(runs[0] ?? makeRun());
+  vi.spyOn(authServices.workItemService, "getById").mockImplementation(async (id: string) =>
+    makeWorkItem({ id, branchUrl: null }),
+  );
 }
 
 async function renderDialog(
@@ -641,6 +644,194 @@ describe("WorkItemModalV2", () => {
         "Cannot pull 'ild/wi-1-run-1': the worktree has uncommitted changes to src/App.tsx.",
       ),
     ).toBeTruthy();
+  });
+
+  // The branch link comes only from the single work item read, and only for
+  // the item and branch name the dialog is showing right now.
+  const LINKED_BRANCH = "ild/wi-1-run-1";
+  const LINKED_BRANCH_URL = "https://git.example.com/acme/app/src/branch/ild/wi-1-run-1";
+
+  function branchItem(overrides: Partial<WorkItem> = {}): WorkItem {
+    return makeWorkItem({ branchName: LINKED_BRANCH, worktreePath: "/tmp/wt/wi-1", ...overrides });
+  }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  async function settle() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
+
+  function expectPlainBranch(name: string) {
+    expect(screen.queryByRole("link", { name })).toBeNull();
+    expect(screen.getByText(name)).toBeTruthy();
+  }
+
+  test("overview links a pushed branch to its forge", async () => {
+    mockServices();
+    const getById = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockResolvedValue(branchItem({ branchUrl: LINKED_BRANCH_URL }));
+    await renderDialog(branchItem());
+
+    const link = await screen.findByRole("link", { name: LINKED_BRANCH });
+    expect(getById).toHaveBeenCalledWith("wi-1");
+    expect(link.getAttribute("href")).toBe(LINKED_BRANCH_URL);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link.classList.contains("pr-link")).toBe(true);
+    expect(screen.getByRole("button", { name: "Push branch" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pull branch" })).toBeTruthy();
+  });
+
+  const UNLINKED_BRANCH_CASES: { name: string; read: () => Promise<WorkItem> }[] = [
+    {
+      name: "the branch is not pushed",
+      read: async () => branchItem({ branchUrl: null }),
+    },
+    { name: "the read carries no branchUrl", read: async () => branchItem() },
+    {
+      name: "the read failed",
+      read: () => Promise.reject({ message: "boom" }),
+    },
+    { name: "the read is still pending", read: () => new Promise<WorkItem>(() => {}) },
+    {
+      name: "the read was for a different branch",
+      read: async () => branchItem({ branchName: "ild/wi-1-run-0", branchUrl: LINKED_BRANCH_URL }),
+    },
+    {
+      name: "the url is not a web url",
+      read: async () => branchItem({ branchUrl: "javascript:alert(1)" }),
+    },
+  ];
+
+  test.each(UNLINKED_BRANCH_CASES)(
+    "overview shows the branch as plain text when $name",
+    async ({ read }) => {
+      mockServices();
+      const getById = vi.spyOn(authServices.workItemService, "getById").mockImplementation(read);
+      await renderDialog(branchItem());
+
+      await waitFor(() => expect(getById).toHaveBeenCalledWith("wi-1"));
+      await settle();
+
+      expectPlainBranch(LINKED_BRANCH);
+      expect(screen.queryByRole("link", { name: /ild\// })).toBeNull();
+    },
+  );
+
+  test("overview links the branch once Push branch has pushed it", async () => {
+    mockServices();
+    const getById = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockResolvedValueOnce(branchItem({ branchUrl: null }))
+      .mockResolvedValue(branchItem({ branchUrl: LINKED_BRANCH_URL }));
+    vi.spyOn(authServices.workItemService, "pushBranch").mockResolvedValue({
+      branch: LINKED_BRANCH,
+    });
+    await renderDialog(branchItem());
+    await waitFor(() => expect(getById).toHaveBeenCalledTimes(1));
+    await settle();
+    expectPlainBranch(LINKED_BRANCH);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Push branch" }));
+      await Promise.resolve();
+    });
+
+    const link = await screen.findByRole("link", { name: LINKED_BRANCH });
+    expect(link.getAttribute("href")).toBe(LINKED_BRANCH_URL);
+    expect(screen.getByText(`Pushed ${LINKED_BRANCH} to origin.`)).toBeTruthy();
+  });
+
+  test("overview keeps the link when the read from before the push answers last", async () => {
+    mockServices();
+    const beforePush = deferred<WorkItem>();
+    const afterPush = deferred<WorkItem>();
+    const getById = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockReturnValueOnce(beforePush.promise)
+      .mockReturnValueOnce(afterPush.promise);
+    vi.spyOn(authServices.workItemService, "pushBranch").mockResolvedValue({
+      branch: LINKED_BRANCH,
+    });
+    await renderDialog(branchItem());
+    await waitFor(() => expect(getById).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Push branch" }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(getById).toHaveBeenCalledTimes(2));
+
+    afterPush.resolve(branchItem({ branchUrl: LINKED_BRANCH_URL }));
+    expect(await screen.findByRole("link", { name: LINKED_BRANCH })).toBeTruthy();
+
+    beforePush.resolve(branchItem({ branchUrl: null }));
+    await settle();
+
+    expect(screen.getByRole("link", { name: LINKED_BRANCH }).getAttribute("href")).toBe(
+      LINKED_BRANCH_URL,
+    );
+  });
+
+  test("overview ignores a late read for the branch the item used to have", async () => {
+    mockServices();
+    const oldRead = deferred<WorkItem>();
+    const newRead = deferred<WorkItem>();
+    const getById = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockReturnValueOnce(oldRead.promise)
+      .mockReturnValueOnce(newRead.promise);
+    const { rerender } = await renderDialog(branchItem());
+    await waitFor(() => expect(getById).toHaveBeenCalledTimes(1));
+
+    await rerenderDialog(
+      rerender,
+      branchItem({ branchName: "ild/wi-1-run-2", currentLoopRunId: "run-2" }),
+    );
+    await waitFor(() => expect(getById).toHaveBeenCalledTimes(2));
+
+    newRead.resolve(branchItem({ branchName: "ild/wi-1-run-2", branchUrl: null }));
+    await settle();
+    oldRead.resolve(branchItem({ branchUrl: LINKED_BRANCH_URL }));
+    await settle();
+
+    expectPlainBranch("ild/wi-1-run-2");
+    expect(screen.queryByRole("link", { name: /ild\// })).toBeNull();
+  });
+
+  test("overview ignores a late read for another item", async () => {
+    mockServices();
+    const reads: Record<string, ReturnType<typeof deferred<WorkItem>>> = {
+      "wi-1": deferred<WorkItem>(),
+      "wi-2": deferred<WorkItem>(),
+    };
+    const getById = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockImplementation((id: string) => reads[id].promise);
+    const { rerender } = await renderDialog(branchItem());
+    await waitFor(() => expect(getById).toHaveBeenCalledWith("wi-1"));
+
+    await rerenderDialog(rerender, branchItem({ id: "wi-2", title: "Other item" }));
+    await waitFor(() => expect(getById).toHaveBeenCalledWith("wi-2"));
+
+    reads["wi-1"].resolve(branchItem({ branchUrl: LINKED_BRANCH_URL }));
+    await settle();
+
+    expectPlainBranch(LINKED_BRANCH);
+
+    reads["wi-2"].resolve(branchItem({ id: "wi-2", branchUrl: null }));
+    await settle();
+
+    expectPlainBranch(LINKED_BRANCH);
   });
 
   test("feedback pane lives in the Action tab while waiting on a human", async () => {

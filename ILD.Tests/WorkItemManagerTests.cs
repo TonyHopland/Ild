@@ -2314,4 +2314,110 @@ public class WorkItemManagerTests
         Assert.Equal("https://forgejo/repo/pulls/99", pr.Url);
         Assert.Equal(afterFirstRead, (await db.Server.Service.GetAsync(id, TestContext.Current.CancellationToken))!.UpdatedAt);
     }
+
+    // ── Branch web link ──
+    //
+    // Read off local git only: the worktree's remote-tracking ref says the
+    // branch is on origin, and the repository's clone URL plus its forge type
+    // say where. Every missing piece yields no link rather than a guess.
+
+    [Fact]
+    public async Task GetBranchUrl_links_a_pushed_branch_on_its_forge_without_touching_the_network()
+    {
+        var remote = new Mock<IRemoteProvider>(MockBehavior.Strict);
+        var (mgr, db, repoId, repoMgr, _) = SetupCore(out var engine, remote);
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            repoMgr.Setup(r => r.RemoteBranchExistsAsync(worktree, PullBranchName)).ReturnsAsync(true);
+
+            var url = await mgr.GetBranchUrlAsync((await mgr.GetWorkItemAsync(id))!);
+
+            Assert.Equal("https://example/repo/src/branch/" + PullBranchName, url);
+            repoMgr.Verify(r => r.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+            repoMgr.Verify(r => r.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+        }
+        finally
+        {
+            Directory.Delete(worktree, recursive: true);
+        }
+    }
+
+    public static TheoryData<string> UnlinkableBranches() => new()
+    {
+        "not pushed",
+        "no branch name",
+        "no worktree path",
+        "worktree gone",
+        "repository gone",
+        "provider gone",
+        "unknown provider type",
+        "ssh clone url",
+        "git fails",
+    };
+
+    [Theory]
+    [MemberData(nameof(UnlinkableBranches))]
+    public async Task GetBranchUrl_is_null_unless_every_piece_is_there(string scenario)
+    {
+        var (mgr, db, repoId, repoMgr, _) = Setup();
+        using var _ = db;
+        var (id, worktree) = await SeedWorktreeWorkItemAsync(mgr, db, repoId);
+        try
+        {
+            repoMgr.Setup(r => r.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(true);
+            var view = (await mgr.GetWorkItemAsync(id))!;
+            Assert.NotNull(await mgr.GetBranchUrlAsync(view));
+
+            switch (scenario)
+            {
+                case "not pushed":
+                    repoMgr.Setup(r => r.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false);
+                    break;
+                case "no branch name":
+                    // The link must match the name the Overview shows, so a
+                    // missing name is not filled in from the run id.
+                    view.BranchName = null;
+                    break;
+                case "no worktree path":
+                    view.WorktreePath = "  ";
+                    break;
+                case "worktree gone":
+                    Directory.Delete(worktree, recursive: true);
+                    break;
+                case "repository gone":
+                    view.RunRepositoryId = Guid.NewGuid();
+                    break;
+                case "provider gone":
+                    await db.Context.Database.ExecuteSqlRawAsync("PRAGMA foreign_keys = OFF", TestContext.Current.CancellationToken);
+                    var orphan = new Repository { Id = Guid.NewGuid(), Name = "orphan", RemoteProviderId = Guid.NewGuid(), CloneUrl = "https://example/orphan.git" };
+                    db.Context.Repositories.Add(orphan);
+                    await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+                    view.RunRepositoryId = orphan.Id;
+                    break;
+                case "unknown provider type":
+                    var provider = await db.Context.RemoteProviders.SingleAsync(TestContext.Current.CancellationToken);
+                    provider.Type = "GitLab";
+                    await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+                    break;
+                case "ssh clone url":
+                    var repo = await db.Context.Repositories.SingleAsync(r => r.Id == repoId, TestContext.Current.CancellationToken);
+                    repo.CloneUrl = "git@example:acme/repo.git";
+                    await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+                    break;
+                case "git fails":
+                    repoMgr.Setup(r => r.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>()))
+                        .ThrowsAsync(new InvalidOperationException("git exploded"));
+                    break;
+            }
+
+            Assert.Null(await mgr.GetBranchUrlAsync(view));
+        }
+        finally
+        {
+            if (Directory.Exists(worktree))
+                Directory.Delete(worktree, recursive: true);
+        }
+    }
 }
