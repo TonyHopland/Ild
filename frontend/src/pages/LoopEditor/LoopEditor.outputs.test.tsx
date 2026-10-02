@@ -1620,6 +1620,12 @@ function chooseDefault(name: string) {
   fireEvent.click(screen.getByRole("button", { name: "Default" }));
 }
 
+/** Takes the colour the open picker shows, without changing it. */
+function applyShown(name: string) {
+  picker(name);
+  fireEvent.click(screen.getByRole("button", { name: `Use this colour for ${name}` }));
+}
+
 describe("Loop Editor — button colour", () => {
   const human = (config: Record<string, unknown>): TemplateNode => ({
     id: "n-node",
@@ -1719,6 +1725,43 @@ describe("Loop Editor — button colour", () => {
     expect(colorInputs()).toHaveLength(0);
     expectSquare(dialog, "cleanup", "Button colour default: cleanup", true);
     expect(fillOf(square(dialog, "cleanup"))).toEqual([]);
+  });
+
+  test("black, which the picker shows for the default, can be taken as it is, before and after Default", async () => {
+    const { calls, dialog } = await openNode(
+      {
+        template: templateWith(
+          human({ outputs: [{ name: "cleanup" }, { name: "later", color: "#7e22ce" }] }),
+          ["cleanup", "later"],
+        ),
+      },
+      "Sign Off",
+    );
+    await waitFor(() => expect(squares(dialog)).toHaveLength(4));
+
+    fireEvent.click(square(dialog, "OnSuccess"));
+    expect(picker("OnSuccess").value).toBe("#000000");
+    fireEvent.click(square(dialog, "OnSuccess"));
+    expectSquare(dialog, "OnSuccess", "Button colour default: OnSuccess", true);
+
+    fireEvent.click(square(dialog, "cleanup"));
+    expect(picker("cleanup").value).toBe("#000000");
+    applyShown("cleanup");
+    expectSquare(dialog, "cleanup", "Button colour #000000: cleanup", true);
+    expect(fillOf(square(dialog, "cleanup"))).toContain(cssColor("#000000"));
+
+    fireEvent.click(square(dialog, "later"));
+    chooseDefault("later");
+    fireEvent.click(square(dialog, "later"));
+    expect(picker("later").value).toBe("#000000");
+    applyShown("later");
+    expectSquare(dialog, "later", "Button colour #000000: later", true);
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "cleanup", color: "#000000" },
+      { name: "later", color: "#000000" },
+    ]);
   });
 
   test("saving stores the colour on that output alone, Default removes it, and reopening shows it", async () => {
