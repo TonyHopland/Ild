@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
+  scripts:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,9 +33,10 @@ jobs:
       - name: Compose credential tests
         run: .github/scripts/compose-credentials.test.sh
 
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: voidzero-dev/setup-vp@v1
         with:
@@ -48,6 +49,20 @@ jobs:
       - name: Frontend tests
         run: vp test --run
         working-directory: frontend
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # The preview-service and MCP-bridge tests spawn node themselves.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
 
       - name: Backend restore
         run: dotnet restore
@@ -96,7 +111,7 @@ jobs:
   # Publish to GHCR only on a release tag, after the build is green. Merges to
   # main build and test but never publish.
   publish:
-    needs: [build-and-test, image-build]
+    needs: [scripts, frontend, backend, image-build]
     if: github.ref_type == 'tag'
     permissions:
       contents: read
