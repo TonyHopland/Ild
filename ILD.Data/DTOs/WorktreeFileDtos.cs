@@ -130,3 +130,42 @@ public readonly record struct WorktreeFileWriteResult
     /// <summary>The file is there but is binary.</summary>
     public static WorktreeFileWriteResult NotText { get; } = new(WorktreeFileWriteOutcome.NotText, null);
 }
+
+/// <summary>
+/// One of the run branch's own commits, as the Files tab offers it for a diff
+/// range. Every SHA is the full one git printed.
+/// </summary>
+public sealed class WorktreeCommit
+{
+    public string Sha { get; set; } = string.Empty;
+
+    /// <summary>The first parent: the commit this one follows on the branch.</summary>
+    public string ParentSha { get; set; } = string.Empty;
+
+    public string Subject { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// The run branch's first-parent commits after its fork point, newest first.
+/// <see cref="BaseSha"/> is that fork point — the base the Files tab diffs
+/// against — and is null, with no commits, when no fork point resolves or the
+/// worktree is gone; no diff range can be asked for then.
+/// </summary>
+public sealed class WorktreeCommitsResponse
+{
+    public string? BaseSha { get; set; }
+    public List<WorktreeCommit> Commits { get; set; } = new();
+}
+
+/// <summary>
+/// The span of history a worktree diff covers. <see cref="From"/> is the
+/// exclusive start and defaults to the fork point. A null <see cref="To"/>
+/// ends at the working tree, so uncommitted and untracked files count; a
+/// commit there ends at that commit, so only committed history does. Both are
+/// full commit SHAs.
+/// </summary>
+public sealed class WorktreeDiffRange
+{
+    public string? From { get; set; }
+    public string? To { get; set; }
+}
