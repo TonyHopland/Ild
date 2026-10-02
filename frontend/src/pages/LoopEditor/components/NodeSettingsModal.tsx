@@ -14,12 +14,14 @@ import { resolveProviderForTag } from "../../../utils/providerTags";
 import { nodeStyleOf } from "../../../utils/nodeStyles";
 import ConfirmModal from "../../../components/ConfirmModal";
 import {
+  buttonColorOf,
   isOutputVisible,
   isReservedOutput,
   needsConfirmation,
   outputsAreDerived,
   routedOutputNames,
   unroutedRows,
+  withColor,
   withConfirmation,
   withVisibility,
   hasSettingsProblems,
@@ -52,6 +54,8 @@ interface NodeSettingsModalProps {
   isOutputVisible: (name: string) => boolean;
   /** Whether an output that has no row asks the person answering to confirm before taking it. */
   isOutputConfirmed: (name: string) => boolean;
+  /** The button colour of an output that has no row, or null for the default. */
+  outputColor: (name: string) => string | null;
   aiUseSession: boolean;
   aiSessionPlaceholder: string;
   aiForkFromPlaceholder: string;
@@ -194,6 +198,88 @@ function ConfirmToggle({
   );
 }
 
+/**
+ * The colour of the run's button for the output called `name`; pressing it
+ * opens or closes its picker. The choice is closed while the output is not offered.
+ */
+function ColorSquare({
+  name,
+  color,
+  closedReason,
+  open,
+  onToggle,
+}: {
+  name: string;
+  /** The "#rrggbb" colour, or null for the default. */
+  color: string | null;
+  /** Why the output is not offered to the person answering, if it is not. */
+  closedReason: string | null;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const state = `Button colour ${color ?? "default"}: ${name}`;
+  const label = closedReason ? `${state} (${closedReason})` : state;
+  return (
+    <button
+      type="button"
+      className="output-visible-toggle output-color-toggle"
+      aria-expanded={open}
+      aria-label={label}
+      title={label}
+      disabled={closedReason !== null}
+      onClick={onToggle}
+    >
+      <span
+        className={color ? "output-color-swatch output-color-swatch-set" : "output-color-swatch"}
+        style={color ? { backgroundColor: color } : undefined}
+        aria-hidden="true"
+      />
+    </button>
+  );
+}
+
+/**
+ * Picks the colour of the run's button for the output called `name`, or its
+ * default. The default shows as black, which the input cannot report as a
+ * change, so the colour it shows can also be taken as it is. Taking it or the
+ * default also closes the picker.
+ */
+function ColorPicker({
+  name,
+  color,
+  onChange,
+  onChoose,
+}: {
+  name: string;
+  color: string | null;
+  onChange: (color: string) => void;
+  /** The chosen colour, or null for the default. */
+  onChoose: (color: string | null) => void;
+}) {
+  const shown = color ?? "#000000";
+  return (
+    <div className="output-color-picker">
+      <input
+        type="color"
+        aria-label={`Button colour for ${name}`}
+        value={shown}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <button
+        type="button"
+        className="output-color-action"
+        aria-label={`Use this colour for ${name}`}
+        onClick={() => onChoose(shown)}
+      >
+        Use this colour
+      </button>
+      <button type="button" className="output-color-action" onClick={() => onChoose(null)}>
+        Default
+      </button>
+    </div>
+  );
+}
+
 const outputRowClass = (visible: boolean) =>
   visible ? "match-rule-row" : "match-rule-row output-row-hidden";
 
@@ -206,7 +292,8 @@ const closedReasonOf = (wired: boolean, visible: boolean) =>
  * Reserved outputs — the declared ones and the fixed ones of the node's type
  * the config does not list yet — are shown read-only and cannot be removed.
  * Every output, reserved or not, can be hidden from the person answering, and
- * one that is offered can ask them to confirm before it is taken. A
+ * one that is offered can ask them to confirm before it is taken and can have
+ * its button coloured; one colour picker is open at a time. A
  * row with a blank or taken name shows why, and the settings cannot be saved
  * until it is fixed.
  */
@@ -220,6 +307,7 @@ function OutputsEditor({
   problems,
   isVisible,
   isConfirmed,
+  colorOf,
   onChange,
   onChoiceChange,
   onRemove,
@@ -235,6 +323,7 @@ function OutputsEditor({
   problems: (string | null)[];
   isVisible: (name: string) => boolean;
   isConfirmed: (name: string) => boolean;
+  colorOf: (name: string) => string | null;
   onChange: (value: OutputRow[]) => void;
   onChoiceChange: (name: string, choice: OutputChoice) => void;
   onRemove: (row: OutputRow) => void;
@@ -248,6 +337,39 @@ function OutputsEditor({
         i === index ? { ...existing, output: update(existing.output) } : existing,
       ),
     );
+  // By the row's key: an output's own name, or "row-<index>" for a declared row.
+  const [openColorFor, setOpenColorFor] = useState<string | null>(null);
+  const colorControls = (
+    key: string,
+    name: string,
+    color: string | null,
+    closedReason: string | null,
+    onColor: (color: string | null) => void,
+  ) => {
+    const open = openColorFor === key && closedReason === null;
+    return {
+      square: (
+        <ColorSquare
+          name={name}
+          color={color}
+          closedReason={closedReason}
+          open={open}
+          onToggle={() => setOpenColorFor(open ? null : key)}
+        />
+      ),
+      picker: open && (
+        <ColorPicker
+          name={name}
+          color={color}
+          onChange={onColor}
+          onChoose={(chosen) => {
+            onColor(chosen);
+            setOpenColorFor(null);
+          }}
+        />
+      ),
+    };
+  };
   const undeclaredFixed = fixed.filter(
     (output) => !rows.some((row) => row.originalName === output.name),
   );
@@ -258,26 +380,35 @@ function OutputsEditor({
         The outlets this node can take. Add named ones here, then connect each from the node's top
         handle. An output hidden with the eye is not offered to the person answering in the run; it
         still routes as usual. One marked with the shield asks them to confirm before it is taken.
+        The square sets the colour of its button.
       </small>
       {successFailure.map((name) => {
         const wired = wiredSuccessFailure.includes(name);
         const visible = wired && isVisible(name);
+        const closedReason = closedReasonOf(wired, visible);
+        const color = colorControls(name, name, colorOf(name), closedReason, (next) =>
+          onChoiceChange(name, { color: next }),
+        );
         return (
-          <div key={name} className={outputRowClass(visible)}>
-            <input type="text" aria-label={`Output ${name}`} value={name} readOnly />
-            <VisibleToUserToggle
-              name={name}
-              visible={visible}
-              unwired={!wired}
-              onChange={(next) => onChoiceChange(name, { visible: next })}
-            />
-            <ConfirmToggle
-              name={name}
-              confirm={isConfirmed(name)}
-              closedReason={closedReasonOf(wired, visible)}
-              onChange={(next) => onChoiceChange(name, { confirm: next })}
-            />
-            <span className="match-rule-remove-spacer" />
+          <div key={name}>
+            <div className={outputRowClass(visible)}>
+              <input type="text" aria-label={`Output ${name}`} value={name} readOnly />
+              <VisibleToUserToggle
+                name={name}
+                visible={visible}
+                unwired={!wired}
+                onChange={(next) => onChoiceChange(name, { visible: next })}
+              />
+              <ConfirmToggle
+                name={name}
+                confirm={isConfirmed(name)}
+                closedReason={closedReason}
+                onChange={(next) => onChoiceChange(name, { confirm: next })}
+              />
+              {color.square}
+              <span className="match-rule-remove-spacer" />
+            </div>
+            {color.picker}
           </div>
         );
       })}
@@ -285,6 +416,17 @@ function OutputsEditor({
         const reserved = isReserved(row);
         const problem = problems[index];
         const visible = isOutputVisible(row.output, reserved);
+        const closedReason = closedReasonOf(
+          row.originalName !== null && wiredNames.includes(row.originalName),
+          visible,
+        );
+        const color = colorControls(
+          `row-${index}`,
+          row.output.name,
+          buttonColorOf(row.output),
+          closedReason,
+          (next) => updateRow(index, (output) => withColor(output, next)),
+        );
         return (
           <div key={index}>
             <div className={outputRowClass(visible)}>
@@ -310,12 +452,10 @@ function OutputsEditor({
               <ConfirmToggle
                 name={row.output.name}
                 confirm={needsConfirmation(row.output)}
-                closedReason={closedReasonOf(
-                  row.originalName !== null && wiredNames.includes(row.originalName),
-                  visible,
-                )}
+                closedReason={closedReason}
                 onChange={(next) => updateRow(index, (output) => withConfirmation(output, next))}
               />
+              {color.square}
               {reserved ? (
                 <span className="match-rule-remove-spacer" />
               ) : (
@@ -323,38 +463,54 @@ function OutputsEditor({
                   type="button"
                   className="match-rule-remove"
                   aria-label={`Remove output ${index + 1}`}
-                  onClick={() => onRemove(row)}
+                  onClick={() => {
+                    setOpenColorFor(null);
+                    onRemove(row);
+                  }}
                 >
                   ×
                 </button>
               )}
             </div>
+            {color.picker}
             {problem && <div className="validation-error">{problem}</div>}
           </div>
         );
       })}
       {undeclaredFixed.map((output) => {
         const visible = isVisible(output.name);
+        const closedReason = closedReasonOf(wiredNames.includes(output.name), visible);
+        const color = colorControls(
+          output.name,
+          output.name,
+          colorOf(output.name),
+          closedReason,
+          (next) => onChoiceChange(output.name, { color: next }),
+        );
         return (
-          <div key={output.name} className={outputRowClass(visible)}>
-            <input
-              type="text"
-              aria-label={`Reserved output ${output.name}`}
-              value={output.name}
-              readOnly
-            />
-            <VisibleToUserToggle
-              name={output.name}
-              visible={visible}
-              onChange={(next) => onChoiceChange(output.name, { visible: next })}
-            />
-            <ConfirmToggle
-              name={output.name}
-              confirm={isConfirmed(output.name)}
-              closedReason={closedReasonOf(wiredNames.includes(output.name), visible)}
-              onChange={(next) => onChoiceChange(output.name, { confirm: next })}
-            />
-            <span className="match-rule-remove-spacer" />
+          <div key={output.name}>
+            <div className={outputRowClass(visible)}>
+              <input
+                type="text"
+                aria-label={`Reserved output ${output.name}`}
+                value={output.name}
+                readOnly
+              />
+              <VisibleToUserToggle
+                name={output.name}
+                visible={visible}
+                onChange={(next) => onChoiceChange(output.name, { visible: next })}
+              />
+              <ConfirmToggle
+                name={output.name}
+                confirm={isConfirmed(output.name)}
+                closedReason={closedReason}
+                onChange={(next) => onChoiceChange(output.name, { confirm: next })}
+              />
+              {color.square}
+              <span className="match-rule-remove-spacer" />
+            </div>
+            {color.picker}
           </div>
         );
       })}
@@ -536,6 +692,7 @@ export function NodeSettingsModal({
   wiredSuccessFailure,
   isOutputVisible: isUnlistedOutputVisible,
   isOutputConfirmed: isUnlistedOutputConfirmed,
+  outputColor,
   aiUseSession,
   aiSessionPlaceholder,
   aiForkFromPlaceholder,
@@ -636,6 +793,7 @@ export function NodeSettingsModal({
       problems={problems.outputs}
       isVisible={isUnlistedOutputVisible}
       isConfirmed={isUnlistedOutputConfirmed}
+      colorOf={outputColor}
       onChange={onOutputRowsChange}
       onChoiceChange={onOutputChoiceChange}
       onRemove={requestDelete}

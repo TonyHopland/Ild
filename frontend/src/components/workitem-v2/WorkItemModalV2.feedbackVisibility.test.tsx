@@ -316,6 +316,41 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
     expect(answer).toHaveBeenCalledWith("wi-1", "Clean up", "");
   });
 
+  test("a valid colour stored on the parked node's output colours its button, and nothing else does", async () => {
+    mockDialogServices();
+    stageParkedNode(
+      human([
+        { name: "OnSuccess", color: "#7E22CE" },
+        { name: "OnFailure", color: "red" },
+        { name: "Needs work", color: "#fde047" },
+        { name: "Later" },
+      ]),
+    );
+    const answer = vi
+      .spyOn(authServices.workItemService, "humanFeedbackEdge")
+      .mockResolvedValue(undefined);
+    await renderDialog(
+      makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,Later,OnFailure" }),
+    );
+
+    const cssColor = (color: string) => {
+      const probe = document.createElement("span");
+      probe.style.color = color;
+      return probe.style.color;
+    };
+    const button = (name: string) => within(pane()).getByRole("button", { name });
+    expect(button("Approve").style.backgroundColor).toBe(cssColor("#7e22ce"));
+    expect(button("Needs work").style.backgroundColor).toBe(cssColor("#fde047"));
+    expect(button("Reject").getAttribute("style")).toBeNull();
+    expect(button("Later").getAttribute("style")).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(button("Needs work"));
+    });
+    await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
+    expect(answer).toHaveBeenCalledWith("wi-1", "Needs work", "");
+  });
+
   test("a confirmation open when the work item changes is dropped, and nothing is sent", async () => {
     mockDialogServices();
     stageParkedNode(

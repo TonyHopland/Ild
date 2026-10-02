@@ -188,6 +188,9 @@ export function FeedbackBanner({
             ? detail.feedbackOutputs.needsConfirm
             : undefined
         }
+        colorOf={
+          detail.feedbackOutputs.status === "ready" ? detail.feedbackOutputs.colorOf : undefined
+        }
       />
       {detail.feedbackOutputs.status === "error" && (
         <div className="preview-message preview-error">

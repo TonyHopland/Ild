@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, cleanup, fireEvent, within, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  cleanup,
+  fireEvent,
+  within,
+  act,
+  isInaccessible,
+} from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { EdgeType, NodeType, RecoveryPolicy } from "../../types";
@@ -266,13 +275,25 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/**
+ * The accessible buttons in `dialog` whose aria-label matches `label`. Every
+ * output control is named by its aria-label, and a plain selector keeps these
+ * lookups cheap: a role query works out the role of every button in the
+ * dialog each time, and a PR node's settings hold dozens of them.
+ */
+function buttonsLabelled(dialog: HTMLElement, label: RegExp) {
+  return Array.from(dialog.querySelectorAll<HTMLButtonElement>("button[aria-label]")).filter(
+    (button) => label.test(button.getAttribute("aria-label")!) && !isInaccessible(button),
+  );
+}
+
 /** The eye button of the output called exactly `name`, or null when it has none. */
 function queryToggle(dialog: HTMLElement, name: string) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const label = new RegExp(
     `^(Visible to|Hidden from) user: ${escaped}( \\(no edge connected\\))?$`,
   );
-  const found = within(dialog).queryAllByRole("button", { name: label });
+  const found = buttonsLabelled(dialog, label);
   expect(found.length).toBeLessThanOrEqual(1);
   return (found[0] as HTMLButtonElement | undefined) ?? null;
 }
@@ -284,9 +305,7 @@ function toggle(dialog: HTMLElement, name: string) {
 }
 
 function toggles(dialog: HTMLElement) {
-  return within(dialog).queryAllByRole("button", {
-    name: /^(Visible to|Hidden from) user: /,
-  }) as HTMLButtonElement[];
+  return buttonsLabelled(dialog, /^(Visible to|Hidden from) user: /);
 }
 
 function isOn(button: HTMLElement) {
@@ -1057,7 +1076,7 @@ describe("Loop Editor — visible to user", () => {
     expect(within(dialog).queryAllByDisplayValue("OnFailure")).toHaveLength(0);
   });
 
-  test("the eye names its state and the exact output, sits before the shield and the remove button, and mutes a hidden row", async () => {
+  test("the eye names its state and the exact output, sits before the shield, the colour square and the remove button, and mutes a hidden row", async () => {
     const human = node(NodeType.Human, "Sign Off", {
       outputs: [{ name: "later", visible: false }],
     });
@@ -1073,8 +1092,8 @@ describe("Loop Editor — visible to user", () => {
     expect(row.classList.contains("output-row-hidden")).toBe(true);
     const buttons = within(row).getAllByRole("button");
     const remove = buttons.indexOf(removeButtonFor(outputField(dialog, "later")));
-    expect(buttons.indexOf(later)).toBe(remove - 2);
-    expect(buttons[remove - 1].classList.contains("output-confirm-toggle")).toBe(true);
+    expect(buttons.indexOf(later)).toBe(remove - 3);
+    expect(buttons[remove - 2].classList.contains("output-confirm-toggle")).toBe(true);
 
     fireEvent.click(later);
     expect(later.getAttribute("aria-label")).toBe("Visible to user: later");
@@ -1375,15 +1394,13 @@ describe("Loop Editor — visible to user", () => {
 function shield(dialog: HTMLElement, name: string) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const label = new RegExp(`^(Asks|Does not ask) to confirm: ${escaped}( \\(.*\\))?$`);
-  const found = within(dialog).queryAllByRole("button", { name: label });
+  const found = buttonsLabelled(dialog, label);
   expect(found, name).toHaveLength(1);
   return found[0] as HTMLButtonElement;
 }
 
 function shields(dialog: HTMLElement) {
-  return within(dialog).queryAllByRole("button", {
-    name: /^(Asks|Does not ask) to confirm: /,
-  }) as HTMLButtonElement[];
+  return buttonsLabelled(dialog, /^(Asks|Does not ask) to confirm: /);
 }
 
 describe("Loop Editor — asks to confirm", () => {
@@ -1536,5 +1553,349 @@ describe("Loop Editor — asks to confirm", () => {
     const { dialog } = await openNode({ template: templateWith(opened) }, opened.label);
 
     expect(shields(dialog)).toHaveLength(0);
+  });
+});
+
+/** The colour square of the output called exactly `name`. */
+function square(dialog: HTMLElement, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const label = new RegExp(`^Button colour (default|#[0-9a-f]{6}): ${escaped}( \\(.*\\))?$`);
+  const found = buttonsLabelled(dialog, label);
+  expect(found, name).toHaveLength(1);
+  return found[0] as HTMLButtonElement;
+}
+
+function squares(dialog: HTMLElement) {
+  return buttonsLabelled(dialog, /^Button colour (default|#[0-9a-f]{6}): /);
+}
+
+/** `color` as the browser stores it in an inline style, so values can be compared. */
+function cssColor(color: string) {
+  const probe = document.createElement("span");
+  probe.style.backgroundColor = color;
+  return probe.style.backgroundColor;
+}
+
+/** The background colours the square, or anything inside it, is filled with. */
+function fillOf(button: HTMLElement) {
+  return [button, ...Array.from(button.querySelectorAll<HTMLElement>("*"))]
+    .map((el) => el.style.backgroundColor)
+    .filter((color) => color !== "" && color !== "transparent");
+}
+
+/** The square's label and title, checked to agree, and whether it can be pressed. */
+function expectSquare(dialog: HTMLElement, name: string, label: string, enabled: boolean) {
+  const button = square(dialog, name);
+  expect(button.getAttribute("aria-label"), name).toBe(label);
+  expect(button.title, name).toBe(label);
+  expect(button.disabled, name).toBe(!enabled);
+  return button;
+}
+
+/** The open colour pickers, wherever they are rendered. */
+function colorInputs() {
+  return Array.from(document.querySelectorAll<HTMLInputElement>('input[type="color"]'));
+}
+
+/** The one open picker, checked to be for the output called `name`. */
+function picker(name: string) {
+  const inputs = colorInputs();
+  expect(inputs).toHaveLength(1);
+  const input = inputs[0];
+  const label =
+    input.getAttribute("aria-label") ??
+    Array.from(input.labels ?? [])
+      .map((l) => l.textContent)
+      .join(" ");
+  expect(label).toContain(name);
+  return input;
+}
+
+function pick(name: string, color: string) {
+  fireEvent.change(picker(name), { target: { value: color } });
+}
+
+function chooseDefault(name: string) {
+  picker(name);
+  fireEvent.click(screen.getByRole("button", { name: "Default" }));
+}
+
+/** Takes the colour the open picker shows, without changing it. */
+function applyShown(name: string) {
+  picker(name);
+  fireEvent.click(screen.getByRole("button", { name: `Use this colour for ${name}` }));
+}
+
+describe("Loop Editor — button colour", () => {
+  const human = (config: Record<string, unknown>): TemplateNode => ({
+    id: "n-node",
+    type: NodeType.Human,
+    label: "Sign Off",
+    config,
+  });
+
+  test("every output with an eye has one square after its shield, naming its colour and why it is closed", async () => {
+    const { dialog } = await openNode(
+      {
+        template: templateWith(
+          human({
+            outputs: [
+              { name: "later", color: "#7e22ce" },
+              { name: "never", visible: false, color: "#16a34a" },
+              { name: "spare" },
+              { name: "odd", color: "purple" },
+            ],
+          }),
+          ["later", "never", "odd"],
+        ),
+      },
+      "Sign Off",
+    );
+
+    await waitFor(() => expect(squares(dialog)).toHaveLength(6));
+    expect(squares(dialog)).toHaveLength(toggles(dialog).length);
+
+    const later = expectSquare(dialog, "later", "Button colour #7e22ce: later", true);
+    expect(later.tagName).toBe("BUTTON");
+    expect(later.type).toBe("button");
+    expect(fillOf(later)).toContain(cssColor("#7e22ce"));
+    expectSquare(dialog, "never", "Button colour #16a34a: never (hidden from user)", false);
+    const spare = expectSquare(
+      dialog,
+      "spare",
+      "Button colour default: spare (no edge connected)",
+      false,
+    );
+    expect(fillOf(spare)).toEqual([]);
+    expectSquare(
+      dialog,
+      "OnFailure",
+      "Button colour default: OnFailure (no edge connected)",
+      false,
+    );
+    expect(
+      fillOf(expectSquare(dialog, "OnSuccess", "Button colour default: OnSuccess", true)),
+    ).toEqual([]);
+    expect(fillOf(expectSquare(dialog, "odd", "Button colour default: odd", true))).toEqual([]);
+
+    const row = later.closest(".match-rule-row") as HTMLElement;
+    const buttons = within(row).getAllByRole("button");
+    const remove = buttons.indexOf(removeButtonFor(outputField(dialog, "later")));
+    expect(buttons.indexOf(later)).toBe(remove - 1);
+    expect(buttons.indexOf(shield(dialog, "later"))).toBe(remove - 2);
+    const success = square(dialog, "OnSuccess");
+    const successButtons = within(success.closest(".match-rule-row") as HTMLElement).getAllByRole(
+      "button",
+    );
+    expect(successButtons.indexOf(success)).toBe(successButtons.length - 1);
+    expect(successButtons.indexOf(shield(dialog, "OnSuccess"))).toBe(successButtons.length - 2);
+
+    fireEvent.click(toggle(dialog, "later"));
+    expectSquare(dialog, "later", "Button colour #7e22ce: later (hidden from user)", false);
+  });
+
+  test("a square opens its own picker; picking colours it at once, and Default clears it and closes", async () => {
+    const { dialog } = await openNode(
+      {
+        template: templateWith(human({ outputs: [{ name: "cleanup" }, { name: "later" }] }), [
+          "cleanup",
+          "later",
+        ]),
+      },
+      "Sign Off",
+    );
+    await waitFor(() => expect(squares(dialog)).toHaveLength(4));
+    expect(colorInputs()).toHaveLength(0);
+
+    fireEvent.click(square(dialog, "cleanup"));
+    pick("cleanup", "#16a34a");
+    expectSquare(dialog, "cleanup", "Button colour #16a34a: cleanup", true);
+    expect(fillOf(square(dialog, "cleanup"))).toContain(cssColor("#16a34a"));
+
+    fireEvent.click(square(dialog, "later"));
+    pick("later", "#7e22ce");
+    expectSquare(dialog, "later", "Button colour #7e22ce: later", true);
+    expectSquare(dialog, "cleanup", "Button colour #16a34a: cleanup", true);
+
+    fireEvent.click(square(dialog, "later"));
+    expect(colorInputs()).toHaveLength(0);
+
+    fireEvent.click(square(dialog, "cleanup"));
+    chooseDefault("cleanup");
+    expect(colorInputs()).toHaveLength(0);
+    expectSquare(dialog, "cleanup", "Button colour default: cleanup", true);
+    expect(fillOf(square(dialog, "cleanup"))).toEqual([]);
+  });
+
+  test("black, which the picker shows for the default, can be taken as it is, before and after Default", async () => {
+    const { calls, dialog } = await openNode(
+      {
+        template: templateWith(
+          human({ outputs: [{ name: "cleanup" }, { name: "later", color: "#7e22ce" }] }),
+          ["cleanup", "later"],
+        ),
+      },
+      "Sign Off",
+    );
+    await waitFor(() => expect(squares(dialog)).toHaveLength(4));
+
+    fireEvent.click(square(dialog, "OnSuccess"));
+    expect(picker("OnSuccess").value).toBe("#000000");
+    fireEvent.click(square(dialog, "OnSuccess"));
+    expectSquare(dialog, "OnSuccess", "Button colour default: OnSuccess", true);
+
+    fireEvent.click(square(dialog, "cleanup"));
+    expect(picker("cleanup").value).toBe("#000000");
+    applyShown("cleanup");
+    expect(colorInputs()).toHaveLength(0);
+    expectSquare(dialog, "cleanup", "Button colour #000000: cleanup", true);
+    expect(fillOf(square(dialog, "cleanup"))).toContain(cssColor("#000000"));
+
+    fireEvent.click(square(dialog, "later"));
+    chooseDefault("later");
+    fireEvent.click(square(dialog, "later"));
+    expect(picker("later").value).toBe("#000000");
+    applyShown("later");
+    expect(colorInputs()).toHaveLength(0);
+    expectSquare(dialog, "later", "Button colour #000000: later", true);
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "cleanup", color: "#000000" },
+      { name: "later", color: "#000000" },
+    ]);
+  });
+
+  test("saving stores the colour on that output alone, Default removes it, and reopening shows it", async () => {
+    const { calls, dialog } = await openNode(
+      {
+        template: templateWith(
+          human({
+            outputs: [
+              { name: "cleanup", note: "kept", confirm: true, visible: true },
+              { name: "later", color: "#7e22ce", confirm: true },
+              { name: "odd", color: "purple", note: 1 },
+            ],
+          }),
+          ["cleanup", "later", "odd"],
+          { failureWired: true },
+        ),
+      },
+      "Sign Off",
+    );
+    await waitFor(() => expect(squares(dialog)).toHaveLength(5));
+
+    fireEvent.click(square(dialog, "cleanup"));
+    pick("cleanup", "#16a34a");
+    fireEvent.click(square(dialog, "OnSuccess"));
+    pick("OnSuccess", "#22c55e");
+    fireEvent.click(square(dialog, "later"));
+    chooseDefault("later");
+    fireEvent.click(square(dialog, "OnFailure"));
+    chooseDefault("OnFailure");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
+    fireEvent.click(screen.getByText("Sign Off"));
+    const reopened = await screen.findByRole("dialog", { name: "Node Settings" });
+    expectSquare(reopened, "cleanup", "Button colour #16a34a: cleanup", true);
+    expectSquare(reopened, "OnSuccess", "Button colour #22c55e: OnSuccess", true);
+    expectSquare(reopened, "later", "Button colour default: later", true);
+    expectSquare(reopened, "OnFailure", "Button colour default: OnFailure", true);
+    expectSquare(reopened, "odd", "Button colour default: odd", true);
+    fireEvent.click(reopened.querySelector(".node-settings-btn-cancel") as HTMLElement);
+
+    const saved = await saveTemplate(calls);
+    const outputs = outputsOf(saved, "n-node");
+    expect(outputs).toEqual([
+      { name: "cleanup", note: "kept", confirm: true, visible: true, color: "#16a34a" },
+      { name: "later", confirm: true },
+      { name: "odd", color: "purple", note: 1 },
+      { name: "OnSuccess", color: "#22c55e" },
+    ]);
+    expect("color" in outputs[1]).toBe(false);
+  });
+
+  test("a PR node's reserved output, once shown, takes a colour and is declared as reserved", async () => {
+    const pr: TemplateNode = {
+      id: "n-node",
+      type: NodeType.PR,
+      label: "Pull Request",
+      config: { outputs: [] },
+    };
+    const { calls, dialog } = await openNode(
+      { template: templateWith(pr, ["on_merged"]) },
+      "Pull Request",
+    );
+    await waitFor(() => expect(squares(dialog)).toHaveLength(2 + RESERVED.length));
+    expect(squares(dialog)).toHaveLength(toggles(dialog).length);
+    expectSquare(dialog, "on_merged", "Button colour default: on_merged (hidden from user)", false);
+
+    fireEvent.click(toggle(dialog, "on_merged"));
+    fireEvent.click(square(dialog, "on_merged"));
+    pick("on_merged", "#dc2626");
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "on_merged", reserved: true, visible: true, color: "#dc2626" },
+    ]);
+  });
+
+  test("cancelling the settings discards the colour changes", async () => {
+    const { dialog } = await openNode(
+      {
+        template: templateWith(human({ outputs: [{ name: "cleanup", color: "#7e22ce" }] }), [
+          "cleanup",
+        ]),
+      },
+      "Sign Off",
+    );
+    await waitFor(() => expect(squares(dialog)).toHaveLength(3));
+
+    fireEvent.click(square(dialog, "cleanup"));
+    chooseDefault("cleanup");
+    fireEvent.click(square(dialog, "OnSuccess"));
+    pick("OnSuccess", "#16a34a");
+    fireEvent.click(dialog.querySelector(".node-settings-btn-cancel") as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Node Settings" })).toBeNull());
+    fireEvent.click(screen.getByText("Sign Off"));
+    const reopened = await screen.findByRole("dialog", { name: "Node Settings" });
+
+    expectSquare(reopened, "cleanup", "Button colour #7e22ce: cleanup", true);
+    expectSquare(reopened, "OnSuccess", "Button colour default: OnSuccess", true);
+  });
+
+  test.each([
+    [
+      "a Cmd node",
+      { id: "n-node", type: NodeType.Cmd, label: "Build", config: { command: "make" } },
+    ],
+    [
+      "an AI node",
+      {
+        id: "n-node",
+        type: NodeType.AI,
+        label: "Reviewer",
+        config: { prompt: "p", outputs: [{ name: "x", color: "#7e22ce" }] },
+      },
+    ],
+    [
+      "a Condition node",
+      {
+        id: "n-node",
+        type: NodeType.Condition,
+        label: "Gate",
+        config: {
+          cases: [{ variant: "PrExists", edgeName: "has-pr" }],
+          defaultEdge: "otherwise",
+          outputs: [{ name: "has-pr", color: "#7e22ce" }, { name: "otherwise" }],
+        },
+      },
+    ],
+  ] as Array<[string, TemplateNode]>)("%s has no colour square", async (_, opened) => {
+    const { dialog } = await openNode({ template: templateWith(opened) }, opened.label);
+
+    expect(squares(dialog)).toHaveLength(0);
+    expect(colorInputs()).toHaveLength(0);
   });
 });

@@ -400,6 +400,8 @@ export interface NodeOutput {
   reserved?: boolean;
   visible?: boolean;
   confirm?: boolean;
+  /** The "#rrggbb" colour of the output's button in the run; left out for the default. */
+  color?: string;
   [key: string]: unknown;
 }
 

@@ -9,7 +9,11 @@ import {
   outputRenames,
   outputRowProblems,
   applyOutputChoices,
+  buttonColorOf,
+  outputColorOf,
   outputConfirmationOf,
+  readableTextOn,
+  withColor,
   outputVisibilityOf,
   readFixedOutputs,
   wiredOutputsOf,
@@ -458,5 +462,130 @@ describe("applyOutputChoices", () => {
       { name: "OnFailure", confirm: true },
       { name: "on_merged", reserved: true, visible: true, confirm: true },
     ]);
+  });
+});
+
+describe("buttonColorOf", () => {
+  test.each([
+    ["#16a34a", "#16a34a"],
+    ["#7E22CE", "#7e22ce"],
+    ["#abc", null],
+    ["#12345g", null],
+    ["#1234567", null],
+    [" #123456", null],
+    ["123456", null],
+    ["purple", null],
+    ["", null],
+    [null, null],
+    [123456, null],
+    [undefined, null],
+  ])("a stored color of %j is %j", (color, expected) => {
+    expect(buttonColorOf({ name: "deploy", color } as never)).toBe(expected);
+  });
+});
+
+describe("withColor", () => {
+  test("stores the colour in lowercase and keeps every other field", () => {
+    const output = { name: "deploy", reserved: true, visible: true, confirm: true, note: "kept" };
+    expect(withColor(output, "#7E22CE")).toEqual({ ...output, color: "#7e22ce" });
+    expect(output).not.toHaveProperty("color");
+  });
+
+  test("the default removes the key and keeps every other field", () => {
+    const output = { name: "deploy", confirm: true, note: "kept", color: "#7e22ce" };
+    const cleared = withColor(output, null);
+    expect(cleared).toEqual({ name: "deploy", confirm: true, note: "kept" });
+    expect("color" in cleared).toBe(false);
+    expect(output.color).toBe("#7e22ce");
+  });
+});
+
+describe("outputColorOf", () => {
+  test("the first entry of that exact name decides, and only a valid colour counts", () => {
+    const colorOf = outputColorOf({
+      outputs: [
+        { name: "deploy", color: "#16A34A" },
+        { name: "later", color: "purple" },
+        { name: "OnSuccess" },
+        { name: "deploy", color: "#7e22ce" },
+        { name: "later", color: "#7e22ce" },
+      ],
+    });
+    expect(["deploy", "later", "OnSuccess", "OnFailure", "Deploy"].map(colorOf)).toEqual([
+      "#16a34a",
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  test("a config with no outputs colours nothing", () => {
+    expect(outputColorOf(undefined)("OnSuccess")).toBeNull();
+    expect(outputColorOf({})("OnSuccess")).toBeNull();
+  });
+});
+
+describe("applyOutputChoices with a colour", () => {
+  const fixed = [
+    { name: "OnSuccess" },
+    { name: "OnFailure" },
+    { name: "on_merged", reserved: true },
+  ];
+
+  test("writes the colour onto its entry, and the default removes it, keeping the rest", () => {
+    expect(
+      applyOutputChoices(
+        [
+          { name: "OnSuccess", confirm: true, note: "kept" },
+          { name: "deploy", color: "#7e22ce", visible: false },
+          { name: "later", color: "purple" },
+        ],
+        NodeType.PR,
+        fixed,
+        new Map([
+          ["OnSuccess", { color: "#16A34A" }],
+          ["deploy", { color: null }],
+        ]),
+      ),
+    ).toEqual([
+      { name: "OnSuccess", confirm: true, note: "kept", color: "#16a34a" },
+      { name: "deploy", visible: false },
+      { name: "later", color: "purple" },
+    ]);
+  });
+
+  test("a colour declares an output with no entry, as its fixed output; the default declares nothing", () => {
+    expect(
+      applyOutputChoices(
+        [],
+        NodeType.PR,
+        fixed,
+        new Map([
+          ["OnSuccess", { color: null }],
+          ["OnFailure", { color: "#16a34a" }],
+          ["on_merged", { visible: true, color: "#7e22ce" }],
+          ["deploy", { color: null, visible: true }],
+        ]),
+      ),
+    ).toEqual([
+      { name: "OnFailure", color: "#16a34a" },
+      { name: "on_merged", reserved: true, visible: true, color: "#7e22ce" },
+    ]);
+  });
+});
+
+describe("readableTextOn", () => {
+  test.each([
+    ["#ffffff", "#000"],
+    ["#000000", "#fff"],
+    ["#fde047", "#000"],
+    ["#7e22ce", "#fff"],
+    ["#ff0000", "#000"],
+    ["#0000ff", "#fff"],
+    ["#767676", "#000"],
+    ["#757575", "#fff"],
+  ])("on %s the text with the higher WCAG contrast is %s", (color, text) => {
+    expect(readableTextOn(color)).toBe(text);
   });
 });
