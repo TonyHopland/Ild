@@ -379,6 +379,55 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     }
   }, [workItem?.id]);
 
+  // The branch's forge link is computed only by the single work item read, and
+  // the item the dialog shows usually comes from a board list, so the dialog
+  // reads it itself. A read applies only while it is the latest one started,
+  // and the link shows only for the item and branch name that read answered.
+  // A latest read that fails drops the link rather than keep an unconfirmed one.
+  const [branchLink, setBranchLink] = useState<{
+    workItemId: string;
+    branchName: string | null | undefined;
+    url: string | null;
+  } | null>(null);
+  const branchLinkGeneration = useRef(0);
+  const [pushCount, setPushCount] = useState(0);
+
+  useEffect(() => {
+    const generation = ++branchLinkGeneration.current;
+    const workItemId = workItem?.id;
+    if (!workItemId || !workItem?.branchName) return;
+    workItemService
+      .getById(workItemId)
+      .then((read) => {
+        if (generation !== branchLinkGeneration.current) return;
+        setBranchLink({
+          workItemId,
+          branchName: read.branchName,
+          url: read.branchUrl ?? null,
+        });
+      })
+      .catch(() => {
+        if (generation === branchLinkGeneration.current) setBranchLink(null);
+      });
+  }, [
+    workItem?.id,
+    workItem?.branchName,
+    workItem?.worktreePath,
+    workItem?.currentLoopRunId,
+    workItem?.currentNodeLabel,
+    workItem?.status,
+    pushCount,
+  ]);
+
+  const branchUrl =
+    workItem?.branchName &&
+    branchLink?.workItemId === workItem.id &&
+    branchLink.branchName === workItem.branchName &&
+    branchLink.url &&
+    (branchLink.url.startsWith("https://") || branchLink.url.startsWith("http://"))
+      ? branchLink.url
+      : null;
+
   // Commit all changes and push the branch to origin — for keeping work from
   // a loop that has no PR node. Mirrors the preview action shape.
   const handlePushBranch = useCallback(async () => {
@@ -389,6 +438,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     try {
       const result = await workItemService.pushBranch(workItem.id);
       setPushBranchMessage(`Pushed ${result.branch} to origin.`);
+      setPushCount((count) => count + 1);
     } catch (error) {
       setPushBranchError((error as { message?: string })?.message ?? "Failed to push branch.");
     } finally {
@@ -832,6 +882,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     pushBranchError,
     pushBranchMessage,
     handlePushBranch,
+    branchUrl,
     pullBranchLoading,
     pullBranchError,
     pullBranchMessage,

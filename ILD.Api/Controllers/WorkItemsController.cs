@@ -227,6 +227,7 @@ public class WorkItemsController : ControllerBase
         if (workItem == null)
             return NotFound();
 
+        workItem.BranchUrl = await _workItemManager.GetBranchUrlAsync(workItem);
         return Ok(workItem);
     }
 

@@ -1052,7 +1052,18 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
       {workItem.branchName && (
         <div className="wiv2-meta-row wiv2-meta-col">
           <span className="detail-label">Branch</span>
-          <span className="detail-value wiv2-meta-mono">{workItem.branchName}</span>
+          {detail.branchUrl ? (
+            <a
+              href={detail.branchUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="detail-value wiv2-meta-mono pr-link"
+            >
+              {workItem.branchName}
+            </a>
+          ) : (
+            <span className="detail-value wiv2-meta-mono">{workItem.branchName}</span>
+          )}
           {workItem.worktreePath && (
             <>
               <button

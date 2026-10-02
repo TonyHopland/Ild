@@ -111,6 +111,11 @@ export interface WorkItem {
   currentNodeLabel?: string | null;
   worktreePath?: string | null;
   branchName?: string | null;
+  /**
+   * Forge web page of {@link branchName}, set only by the single work item read
+   * and only once the branch has been pushed. Null or absent otherwise.
+   */
+  branchUrl?: string | null;
   dependencyIds: string[];
   dependentIds: string[];
   isPreviewRunning?: boolean;

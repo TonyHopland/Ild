@@ -1,10 +1,13 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Implementations.Executors;
+using ILD.Core.Services.Implementations.RemoteProviders;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -27,6 +30,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly ILoopEngine? _engine;
     private readonly IRunReclaimer _runReclaimer;
     private readonly IRemoteProvider? _remoteProvider;
+    private readonly ILogger<WorkItemManager> _logger;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -40,7 +44,8 @@ public class WorkItemManager : IWorkItemManager
         IWorkItemScheduler? scheduler = null,
         ILoopEngine? engine = null,
         IRunReclaimer? runReclaimer = null,
-        IRemoteProvider? remoteProvider = null)
+        IRemoteProvider? remoteProvider = null,
+        ILogger<WorkItemManager>? logger = null)
     {
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -54,6 +59,7 @@ public class WorkItemManager : IWorkItemManager
         _engine = engine;
         _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _previewService, _notifier);
         _remoteProvider = remoteProvider;
+        _logger = logger ?? NullLogger<WorkItemManager>.Instance;
     }
 
     /// <summary>
@@ -1062,6 +1068,37 @@ public class WorkItemManager : IWorkItemManager
             : new GitAuthOptions(repo.CloneUrl, remoteProvider.ApiKey, remoteProvider.Type);
 
         return (new BranchContext(wi, wi.WorktreePath, branch, gitAuth), null);
+    }
+
+    public async Task<string?> GetBranchUrlAsync(WorkItemView workItem)
+    {
+        // No run-id fallback for the branch, unlike ResolveBranchContextAsync:
+        // the link must open the branch the Overview names.
+        var branch = workItem.BranchName;
+        var worktreePath = workItem.WorktreePath;
+        if (string.IsNullOrWhiteSpace(branch)
+            || string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath)
+            || workItem.RunRepositoryId is not { } repositoryId)
+            return null;
+
+        try
+        {
+            var repo = await _providerStore.GetRepositoryByIdAsync(repositoryId);
+            if (repo is null)
+                return null;
+            var remoteProvider = await _providerStore.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
+            if (remoteProvider is null)
+                return null;
+            if (!await _repoManager.RemoteBranchExistsAsync(worktreePath, branch))
+                return null;
+
+            return BranchWebUrl.For(remoteProvider.Type, repo.CloneUrl, branch);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not work out the branch link for work item {WorkItemId}", workItem.Id);
+            return null;
+        }
     }
 
     public async Task<(bool Success, string? Branch, string? Error)> CommitAndPushBranchAsync(string workItemId)

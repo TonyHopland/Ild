@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The file viewer has a Download button that saves the open file as it is on disk.**
 
+- **A pushed branch's name on a work item's Overview opens the branch on its forge.**
+
 ### Changed
 
 - **AI and Condition node settings no longer list outputs: they come from the match rules, cases and default.**
