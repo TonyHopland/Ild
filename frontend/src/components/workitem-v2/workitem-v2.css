@@ -1220,6 +1220,7 @@
 
 .wiv2-range {
   flex-basis: 100%;
+  min-width: 0;
   font-size: 0.78rem;
   color: #c0c0d0;
 }
@@ -1252,7 +1253,12 @@
   align-items: center;
   gap: 0.35rem;
   min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
+}
+
+.wiv2-range-option input {
+  flex-shrink: 0;
 }
 
 .wiv2-range-option:has(input:disabled) {
@@ -1262,9 +1268,11 @@
 .wiv2-range-sha {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: #8080a0;
+  flex-shrink: 0;
 }
 
 .wiv2-range-subject {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
