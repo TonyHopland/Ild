@@ -1053,7 +1053,7 @@
   border-radius: 0.125rem;
 }
 
-.output-color-swatch[style] {
+.output-color-swatch-set {
   border-style: solid;
   border-color: #e0e0f0;
 }

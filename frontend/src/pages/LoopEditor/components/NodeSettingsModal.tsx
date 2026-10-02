@@ -230,7 +230,7 @@ function ColorSquare({
       onClick={onToggle}
     >
       <span
-        className="output-color-swatch"
+        className={color ? "output-color-swatch output-color-swatch-set" : "output-color-swatch"}
         style={color ? { backgroundColor: color } : undefined}
         aria-hidden="true"
       />
