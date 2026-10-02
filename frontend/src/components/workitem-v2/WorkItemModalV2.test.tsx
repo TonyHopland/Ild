@@ -782,6 +782,28 @@ describe("WorkItemModalV2", () => {
     );
   });
 
+  test("overview drops the link when the latest read fails", async () => {
+    mockServices();
+    const getById = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockResolvedValueOnce(branchItem({ branchUrl: LINKED_BRANCH_URL }))
+      .mockRejectedValueOnce({ message: "boom" });
+    vi.spyOn(authServices.workItemService, "pushBranch").mockResolvedValue({
+      branch: LINKED_BRANCH,
+    });
+    await renderDialog(branchItem());
+    expect(await screen.findByRole("link", { name: LINKED_BRANCH })).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Push branch" }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(getById).toHaveBeenCalledTimes(2));
+    await settle();
+
+    expectPlainBranch(LINKED_BRANCH);
+  });
+
   test("overview ignores a late read for the branch the item used to have", async () => {
     mockServices();
     const oldRead = deferred<WorkItem>();

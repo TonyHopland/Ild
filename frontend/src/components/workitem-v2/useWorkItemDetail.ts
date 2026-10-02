@@ -383,6 +383,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // the item the dialog shows usually comes from a board list, so the dialog
   // reads it itself. A read applies only while it is the latest one started,
   // and the link shows only for the item and branch name that read answered.
+  // A latest read that fails drops the link rather than keep an unconfirmed one.
   const [branchLink, setBranchLink] = useState<{
     workItemId: string;
     branchName: string | null | undefined;
@@ -405,7 +406,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
           url: read.branchUrl ?? null,
         });
       })
-      .catch(() => {});
+      .catch(() => {
+        if (generation === branchLinkGeneration.current) setBranchLink(null);
+      });
   }, [
     workItem?.id,
     workItem?.branchName,
