@@ -432,6 +432,11 @@ export const workItemService = {
     );
   },
 
+  /** The file's bytes exactly as they are on disk in the worktree. */
+  downloadFile: async (id: string, path: string): Promise<Blob> => {
+    return api.getBlob(`/workitems/${id}/files/raw?path=${encodeURIComponent(path)}`);
+  },
+
   saveFileContent: async (
     id: string,
     path: string,

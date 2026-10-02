@@ -70,6 +70,11 @@ function workItemKey(workItem: WorkItem): string {
   return `${workItem.id}:${workItem.worktreePath ?? ""}`;
 }
 
+/** One file of one work item, as a running download is tracked. */
+function downloadEntry(itemKey: string, path: string): string {
+  return `${itemKey}\u0000${path}`;
+}
+
 /**
  * The editing half of the viewer's state, passed as one thing so the read-only
  * viewer keeps a signature about the file it draws rather than about the editor
@@ -157,6 +162,13 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // reach the editor they open on the next one.
   const [savingPath, setSavingPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Every download still running, one entry per item and file (see
+  // {@link downloadEntry}). Each is added by its own click and removed only by
+  // its own request, so no download — on any item or file — can hold or free
+  // another's button, and none is dropped on a switch: a download the user
+  // asked for still saves after they move on.
+  const [downloading, setDownloading] = useState<ReadonlySet<string>>(new Set());
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   // The key the panel is currently loaded for, set by the effect below and
   // read by everything that resolves after it — see {@link workItemKey}.
@@ -233,6 +245,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       setDraft(null);
       setSaveError(null);
       setSavingPath(null);
+      setDownloadError(null);
       return;
     }
     // An open editor holds text that exists nowhere else yet, so the silent
@@ -262,6 +275,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       selectedPathRef.current = path;
       setDraft(null);
       setSaveError(null);
+      setDownloadError(null);
       void loadContent(path, true);
     },
     [loadContent],
@@ -298,6 +312,34 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     }
   }, [draft, selectedPath, itemKey, workItem.id, refresh]);
 
+  const download = useCallback(async () => {
+    if (!selectedPath) return;
+    const path = selectedPath;
+    const entry = downloadEntry(itemKey, path);
+    setDownloading((prev) => new Set(prev).add(entry));
+    setDownloadError(null);
+    try {
+      const blob = await workItemService.downloadFile(workItem.id, path);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = path.slice(path.lastIndexOf("/") + 1);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      if (lastKeyRef.current !== itemKey || selectedPathRef.current !== path) return;
+      setDownloadError((e as { message?: string })?.message ?? "Failed to download file.");
+    } finally {
+      setDownloading((prev) => {
+        const next = new Set(prev);
+        next.delete(entry);
+        return next;
+      });
+    }
+  }, [selectedPath, itemKey, workItem.id]);
+
   const toggleFolder = useCallback((path: string) => {
     setToggledFolders((prev) => {
       const next = new Set(prev);
@@ -328,6 +370,15 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const idle = isWorktreeIdle(workItem);
   const editable = idle && isEditable(content, mode) && !contentLoading && !contentError;
   const saving = savingPath !== null && savingPath === selectedPath;
+  // A deleted file still has a diff to show, but nothing on disk to save.
+  const downloadable =
+    selectedPath !== null &&
+    content !== null &&
+    !contentLoading &&
+    !contentError &&
+    content.changeStatus !== "deleted";
+  const downloadingThis =
+    selectedPath !== null && downloading.has(downloadEntry(itemKey, selectedPath));
 
   if (!workItem.worktreePath) {
     return (
@@ -469,6 +520,18 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               </button>
             )
           )}
+          {/* What is saved is the file on disk, so it is withheld while a draft
+              says otherwise. */}
+          {downloadable && (
+            <button
+              type="button"
+              className="wiv2-files-edit"
+              onClick={() => void download()}
+              disabled={draft !== null || downloadingThis}
+            >
+              Download
+            </button>
+          )}
         </div>
         {/* The run can pick back up while the editor is open. The draft is the
             only copy of what the user typed, so it stays on screen with Save
@@ -480,6 +543,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
           </div>
         )}
         {saveError && <div className="preview-message preview-error">{saveError}</div>}
+        {downloadError && <div className="preview-message preview-error">{downloadError}</div>}
         <div className="wiv2-files-content">
           <FileViewer
             selectedPath={selectedPath}

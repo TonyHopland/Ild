@@ -403,6 +403,26 @@ public class RepositoryManager : IRepositoryManager
         return response;
     }
 
+    public FileStream? OpenWorktreeFile(string worktreePath, string relativePath)
+    {
+        var full = ResolveSafePath(worktreePath, relativePath);
+        if (full == null) return null;
+
+        try
+        {
+            // Opened rather than checked for first, as the write is: the handle
+            // is the answer, so a file that goes between a check and the open
+            // cannot surface as an exception further down.
+            return new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
+        {
+            // Not there, or a directory — which is what opening one for reading
+            // raises on Linux. Neither is a file to hand back.
+            return null;
+        }
+    }
+
     public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null)
     {
         if (!await ValidateWorktreeHealthAsync(worktreePath))
