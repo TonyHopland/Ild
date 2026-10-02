@@ -76,8 +76,11 @@ public class WorkItemPageApiTests
             entity.UpdatedAt = createdAt ?? Epoch;
             if (id is not null) entity.Id = id;
             await Server.ServerDb.SaveChangesAsync(TestContext.Current.CancellationToken);
+            EndSeedRequestLikeTheServersPerRequestContext();
             return entity.Id;
         }
+
+        private void EndSeedRequestLikeTheServersPerRequestContext() => Server.ServerDb.ChangeTracker.Clear();
 
         /// <summary>A run of <paramref name="workItemId"/> that names <paramref name="createdByLoopRunId"/> as the item's creator.</summary>
         public async Task SeedRunAsync(string workItemId, LoopRunStatus status, Guid? createdByLoopRunId)

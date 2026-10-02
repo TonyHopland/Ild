@@ -51,10 +51,15 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// limits, which reach the fake WorkItem server too. A name not given reads as
     /// unset, whatever the test process has.
     /// </param>
+    /// <param name="emptyDatabase">
+    /// Start on a database with no tables, so the API has to create its own schema,
+    /// instead of on a copy of the prebuilt one.
+    /// </param>
     public ApiFactory(
         IReadOnlyDictionary<string, string?>? extraConfiguration = null,
         Action<IServiceCollection>? configureServices = null,
-        IReadOnlyDictionary<string, string?>? environment = null)
+        IReadOnlyDictionary<string, string?>? environment = null,
+        bool emptyDatabase = false)
     {
         _extraConfiguration = extraConfiguration ?? new Dictionary<string, string?>();
         _configureServices = configureServices;
@@ -68,8 +73,15 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         _readVariable = name => variables.GetValueOrDefault(name);
         _serverHarness = new FakeWorkItemServerHarness(
             limits: ILD.WorkItemServer.Attachments.AttachmentLimits.FromEnvironment(_readVariable));
-        _connection = new SqliteConnection("DataSource=:memory:");
-        _connection.Open();
+        if (emptyDatabase)
+        {
+            _connection = new SqliteConnection("DataSource=:memory:");
+            _connection.Open();
+        }
+        else
+        {
+            _connection = SqliteSchemaTemplate<AppDbContext>.OpenCopy(options => new AppDbContext(options));
+        }
         _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dataRoot);
         Environment.SetEnvironmentVariable("ILD_DATA_PATH", null);

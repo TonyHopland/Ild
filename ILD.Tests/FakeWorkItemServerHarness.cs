@@ -30,13 +30,11 @@ public sealed class FakeWorkItemServerHarness : IDisposable
     /// </param>
     public FakeWorkItemServerHarness(TimeProvider? clock = null, AttachmentLimits? limits = null)
     {
-        _connection = new SqliteConnection("Filename=:memory:");
-        _connection.Open();
+        _connection = SqliteSchemaTemplate<WorkItemServerDbContext>.OpenCopy(options => new WorkItemServerDbContext(options));
         var opts = new DbContextOptionsBuilder<WorkItemServerDbContext>()
             .UseSqlite(_connection)
             .Options;
         ServerDb = new WorkItemServerDbContext(opts);
-        ServerDb.Database.EnsureCreated();
         Service = new WorkItemService(ServerDb, clock ?? TimeProvider.System);
         Attachments = new WorkItemAttachmentService(
             ServerDb, limits ?? AttachmentLimits.FromEnvironment(), clock ?? TimeProvider.System);
