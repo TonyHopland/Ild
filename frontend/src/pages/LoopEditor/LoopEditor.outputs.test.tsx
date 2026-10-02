@@ -1747,6 +1747,7 @@ describe("Loop Editor — button colour", () => {
     fireEvent.click(square(dialog, "cleanup"));
     expect(picker("cleanup").value).toBe("#000000");
     applyShown("cleanup");
+    expect(colorInputs()).toHaveLength(0);
     expectSquare(dialog, "cleanup", "Button colour #000000: cleanup", true);
     expect(fillOf(square(dialog, "cleanup"))).toContain(cssColor("#000000"));
 
@@ -1755,6 +1756,7 @@ describe("Loop Editor — button colour", () => {
     fireEvent.click(square(dialog, "later"));
     expect(picker("later").value).toBe("#000000");
     applyShown("later");
+    expect(colorInputs()).toHaveLength(0);
     expectSquare(dialog, "later", "Button colour #000000: later", true);
 
     const saved = await saveLoop(dialog, calls);
