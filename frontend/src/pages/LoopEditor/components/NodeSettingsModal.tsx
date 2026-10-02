@@ -238,7 +238,11 @@ function ColorSquare({
   );
 }
 
-/** Picks the colour of the run's button for the output called `name`, or its default. */
+/**
+ * Picks the colour of the run's button for the output called `name`, or its
+ * default. The default shows as black, which the input cannot report as a
+ * change, so the colour it shows can also be taken as it is.
+ */
 function ColorPicker({
   name,
   color,
@@ -250,15 +254,24 @@ function ColorPicker({
   onChange: (color: string) => void;
   onDefault: () => void;
 }) {
+  const shown = color ?? "#000000";
   return (
     <div className="output-color-picker">
       <input
         type="color"
         aria-label={`Button colour for ${name}`}
-        value={color ?? "#000000"}
+        value={shown}
         onChange={(event) => onChange(event.target.value)}
       />
-      <button type="button" className="output-color-default" onClick={onDefault}>
+      <button
+        type="button"
+        className="output-color-action"
+        aria-label={`Use this colour for ${name}`}
+        onClick={() => onChange(shown)}
+      >
+        Use this colour
+      </button>
+      <button type="button" className="output-color-action" onClick={onDefault}>
         Default
       </button>
     </div>

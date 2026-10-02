@@ -1084,7 +1084,7 @@
   cursor: pointer;
 }
 
-.output-color-default {
+.output-color-action {
   height: 1.75rem;
   padding: 0 0.5rem;
   background: #1a1a2e;
@@ -1095,7 +1095,7 @@
   cursor: pointer;
 }
 
-.output-color-default:hover {
+.output-color-action:hover {
   border-color: #e0e0f0;
 }
 
