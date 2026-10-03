@@ -127,8 +127,7 @@ export default function FeedbackActions({
       : null;
 
   const onInputKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    const plainEnter =
-      e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !e.repeat;
+    const plainEnter = e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !e.repeat;
     if (!plainEnter || busy || enterTarget === null) return;
     e.preventDefault();
     answerFor(enterTarget)();
