@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../../../hooks/useAuth";
 import { useChatEnabled, setChatEnabled } from "../../../hooks/useChatEnabled";
+import {
+  useSubmitDefaultOnEnter,
+  setSubmitDefaultOnEnter,
+} from "../../../hooks/useSubmitDefaultOnEnter";
 import { authService, SessionSettingKeys } from "../../../services/auth";
 import { UserSession } from "../../../types";
 import { NumericSettingField, SettingRow, Switch } from "../controls";
@@ -36,6 +40,7 @@ export function describeDevice(userAgent: string | null | undefined): string {
 export default function UserSettings() {
   const { user } = useAuth();
   const chatEnabled = useChatEnabled();
+  const submitDefaultOnEnter = useSubmitDefaultOnEnter();
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [sessions, setSessions] = useState<UserSession[]>([]);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -125,6 +130,16 @@ export default function UserSettings() {
           help="Shows the floating chat bubble in the lower corner. Turn it off to hide the bubble entirely so it cannot obstruct the view."
         >
           <Switch checked={chatEnabled} onChange={setChatEnabled} label="Enable AI chat bubble" />
+        </SettingRow>
+        <SettingRow
+          label="Submit default on Enter"
+          help="In a run's feedback box, Enter takes the node's default output and Shift+Enter adds a new line. Turn it off to have Enter always add a new line."
+        >
+          <Switch
+            checked={submitDefaultOnEnter}
+            onChange={setSubmitDefaultOnEnter}
+            label="Enable submit default on Enter"
+          />
         </SettingRow>
       </section>
 
