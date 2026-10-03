@@ -40,6 +40,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly string? _agentHome;
     private readonly string? _egressProxy;
     private readonly IProcessEnvironment _environment;
+    private readonly Func<int, bool> _isPortAvailable;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -69,6 +70,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <paramref name="environment"/> is where our own <c>HOME</c> and <c>PATH</c>
     /// are read, and where an install puts the npm global bin on <c>PATH</c>: the
     /// process environment unless a test supplies its own.
+    /// <paramref name="isPortAvailable"/> is how a port is probed before it is
+    /// handed out: binding it on loopback unless a test supplies its own.
     /// </summary>
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
@@ -79,7 +82,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         string? agentGroup,
         string? agentHome,
         string? egressProxy = null,
-        IProcessEnvironment? environment = null)
+        IProcessEnvironment? environment = null,
+        Func<int, bool>? isPortAvailable = null)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
@@ -92,6 +96,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _agentHome = NonEmpty(agentHome);
         _egressProxy = NonEmpty(egressProxy);
         _environment = environment ?? ProcessEnvironment.Current;
+        _isPortAvailable = isPortAvailable ?? IsPortAvailable;
     }
 
     /// <summary>
@@ -700,7 +705,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException($"Preview service '{service.Name}' has invalid suggestedPort '{service.SuggestedPort}'.");
     }
 
-    private static Dictionary<string, int> AllocatePorts(PreviewProfileConfig profile, IReadOnlyDictionary<string, int>? overrides)
+    /// <summary>
+    /// Allocates every profile service's port: an override where the caller gave one,
+    /// otherwise one the preview chooses (<see cref="ChoosePort"/>). Each is probed once.
+    /// </summary>
+    private Dictionary<string, int> AllocatePorts(PreviewProfileConfig profile, IReadOnlyDictionary<string, int>? overrides)
     {
         var ports = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var reservedPorts = new HashSet<int>();
@@ -723,26 +732,40 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
             if (overrides != null && overrides.TryGetValue(service.Port, out var overriddenPort))
             {
-                ports[service.Port] = overriddenPort;
+                ports[service.Port] = ClaimRequestedPort(service.Port, overriddenPort);
                 continue;
             }
 
-            var suggested = service.SuggestedPort;
-            var port = suggested is > 0 && !reservedPorts.Contains(suggested.Value) && IsPortAvailable(suggested.Value)
-                ? suggested.Value
-                : FindFreePort(reservedPorts);
-
+            var port = ChoosePort(service, reservedPorts);
             ports[service.Port] = port;
             reservedPorts.Add(port);
         }
 
-        foreach (var (alias, port) in ports)
-        {
-            if (!IsPortAvailable(port))
-                throw new InvalidOperationException($"Preview port '{port}' for alias '{alias}' is already in use.");
-        }
-
         return ports;
+    }
+
+    /// <summary>
+    /// A port the caller asked for by name, refused when something already holds it.
+    /// </summary>
+    private int ClaimRequestedPort(string alias, int port)
+    {
+        if (!_isPortAvailable(port))
+            throw new InvalidOperationException($"Preview port '{port}' for alias '{alias}' is already in use.");
+        return port;
+    }
+
+    /// <summary>
+    /// A port the preview chooses for a service: its suggested port when that is free
+    /// and not <paramref name="reserved"/>, otherwise a free one. The probe that chose it
+    /// is the only one: once released, any socket on the host may be handed the port, so
+    /// probing it again can only fail the start over a port that was free when chosen.
+    /// </summary>
+    private int ChoosePort(PreviewServiceConfig service, ISet<int> reserved)
+    {
+        var suggested = service.SuggestedPort;
+        return suggested is > 0 && !reserved.Contains(suggested.Value) && _isPortAvailable(suggested.Value)
+            ? suggested.Value
+            : FindFreePort(reserved);
     }
 
     private static bool IsPortAvailable(int port)
@@ -832,7 +855,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// runtime was created. Honours an explicit override, otherwise prefers the
     /// service's suggested port and falls back to a free one.
     /// </summary>
-    private static void EnsureServicePortAllocated(PreviewServiceConfig service, PreviewRuntime runtime, IReadOnlyDictionary<string, int>? overrides)
+    private void EnsureServicePortAllocated(PreviewServiceConfig service, PreviewRuntime runtime, IReadOnlyDictionary<string, int>? overrides)
     {
         if (runtime.Ports.ContainsKey(service.Port))
             return;
@@ -843,16 +866,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             if (overridden <= 0)
                 throw new InvalidOperationException($"Preview port override for alias '{service.Port}' must be greater than zero.");
-            if (reserved.Contains(overridden) || !IsPortAvailable(overridden))
+            if (reserved.Contains(overridden))
                 throw new InvalidOperationException($"Preview port '{overridden}' for alias '{service.Port}' is already in use.");
-            port = overridden;
+            port = ClaimRequestedPort(service.Port, overridden);
         }
         else
         {
-            var suggested = service.SuggestedPort;
-            port = suggested is > 0 && !reserved.Contains(suggested.Value) && IsPortAvailable(suggested.Value)
-                ? suggested.Value
-                : FindFreePort(reserved);
+            port = ChoosePort(service, reserved);
         }
 
         runtime.Ports[service.Port] = port;
