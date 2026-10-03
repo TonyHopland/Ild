@@ -7,6 +7,7 @@ export const SUBMIT_DEFAULT_ON_ENTER_KEY = "ild_submit_default_on_enter";
 
 // Fired on the same tab when the preference changes, since the native `storage`
 // event only reaches *other* tabs. Lets an open feedback box react without a reload.
+// https://developer.mozilla.org/en-US/docs/Web/API/Window/storage_event
 export const SUBMIT_DEFAULT_ON_ENTER_EVENT = "ild-submit-default-on-enter-changed";
 
 export function isSubmitDefaultOnEnter(): boolean {

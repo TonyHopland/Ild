@@ -31,8 +31,8 @@ import {
 /**
  * Which outputs of the node a work item is parked on are offered to the person
  * answering, which of those ask them to confirm, the colour of each one's
- * button, and which one is the node's default. Never guessed: nothing is known while the node is being read, and
- * a node that cannot be read is an error.
+ * button, and which one is the node's default. Never guessed: nothing is known
+ * while the node is being read, and a node that cannot be read is an error.
  */
 export type FeedbackOutputs =
   | { status: "loading" }
