@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An agent answering the same review comment again replaces its earlier pending answer, and can take back what it queued for the pull request before it is sent.**
 
+- **A fresh install ships two example loops, Simple and Advanced, in place of Development, DevTeam, Plan and Q&A.**
+
 ### Removed
 
 - **The pull request node's unused comment template setting.**

@@ -42,8 +42,7 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ![AI chat](docs/screenshots/ChatWorkItems.png)
 
-**Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Condition`, `Human`, and `Cleanup` nodes. This is the `DevTeam` loop: an orchestrator that routes to a spec analyst, an explorer, a developer, a QA engineer and a reviewer, with named edges — `qa_failed`, `on_merge_conflict`, `ask_human` — carrying the work back to whichever role should handle it.
-
+**Loop Editor** — build loop templates visually by wiring together `Start`, `Prompt`, `AI`, `PR`, `Condition`, `Human`, and `Cleanup` nodes.
 ![Loop Editor](docs/screenshots/LoopEditorExample.png)
 
 **Run timeline** — the Runs tab replays a run node by node: what each one was given, what it produced, how long it took, and what the AI nodes cost in tokens and dollars. Any node can be retried on its own without restarting the loop.

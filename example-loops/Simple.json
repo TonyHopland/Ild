@@ -1,0 +1,376 @@
+{
+  "$schema": "ild-loop-template/v2",
+  "name": "Simple",
+  "description": "One agent works the work item and stops after every turn for your reply: send it back with feedback, open a pull request, or finish without one. Review comments and change requests on the pull request are triaged first: clear, in-scope feedback goes straight back to the agent, anything that needs a decision comes to you, and bot noise is closed without waking anyone. CI failures and merge conflicts go straight to the agent, and while the pull request is open you can send the agent an instruction yourself with Instruct. Every reply the agent queues on the pull request goes out only after you approve the next round.",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "29434ebf-6935-400e-bec6-72928122e562",
+      "type": "PR",
+      "label": "PR",
+      "config": {
+        "__pos": {
+          "x": 120,
+          "y": 700
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "on_rejected",
+            "reserved": true
+          },
+          {
+            "name": "on_merge_conflict",
+            "reserved": true
+          },
+          {
+            "name": "on_ci_failed",
+            "reserved": true
+          },
+          {
+            "name": "on_comment",
+            "reserved": true
+          },
+          {
+            "name": "on_approved",
+            "reserved": true
+          },
+          {
+            "name": "on_ci_passed",
+            "reserved": true
+          },
+          {
+            "name": "on_merged",
+            "reserved": true
+          },
+          {
+            "name": "on_abandoned",
+            "reserved": true
+          },
+          {
+            "name": "Instruct"
+          }
+        ]
+      }
+    },
+    {
+      "id": "33ffb767-a7f3-4da3-a720-713ebe78983d",
+      "type": "Prompt",
+      "label": "PR Event",
+      "config": {
+        "__pos": {
+          "x": -190,
+          "y": 950
+        },
+        "prompt": "New pull request activity:\n\n{{PreviousNode.Output}}\n\nGet the facts rather than trusting the text above: get_pr_review for comments and reviews, get_ci_log for a CI failure.\n- Review feedback: handle each item as your instructions describe, and queue a reply for every one.\n- CI failure: fix the root cause. If it has nothing to do with this change, say so and change nothing.\n- Merge conflict: merge the upstream default branch into this branch and resolve every conflict, keeping the intent of both sides.\nCommit your fixes, then summarise for the human what you changed and what you queued.",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "574e015f-ac23-4ee6-b808-5d7ae4665863",
+      "type": "Cleanup",
+      "label": "Cleanup",
+      "config": {
+        "__pos": {
+          "x": 400,
+          "y": 700
+        },
+        "outputs": []
+      }
+    },
+    {
+      "id": "6891281c-38bc-43d8-bddd-0e134cd36909",
+      "type": "AI",
+      "label": "PR Triage",
+      "config": {
+        "__pos": {
+          "x": 120,
+          "y": 950
+        },
+        "aiProviderTag": "Reviewer",
+        "toolAllowlist": [
+          "read",
+          "execute",
+          "ild"
+        ],
+        "prompt": "You triage new pull request feedback for this work item. You change no code, commit nothing, and queue no replies.\n\nEvent:\n{{PreviousNode.Output}}\n\nRead every new item with the ild get_pr_review tool: inline comments, comments on the pull request, and each review's own body. It takes this work item's id, the number in the branch name (`git branch --show-current` gives ild/wi-<id>-run-...). Check each claim against the code. Then decide where this round goes:\n- TO_AGENT: every item is a clear, in-scope request or a defect you verified, and the agent can fix or answer it without a new decision.\n- TO_HUMAN: at least one item needs the human, because it conflicts with the work item, widens the scope, asks for a redesign, is ambiguous, is a security or data-loss trade-off, or re-raises a point the agent already answered.\n- NO_ACTION: nothing needs a change or a reply. That means only bot overviews with no finding of their own, items ILD posted itself, or items already handled. Close each such overview with close_pr_review_item.\n\nWrite one line per item: who wrote it (human or bot), what it asks, your call, and one sentence of why. For TO_HUMAN, start with the question, its options and your recommendation.\nEnd with exactly one of TO_AGENT, TO_HUMAN or NO_ACTION alone on the last line.",
+        "matchRules": [
+          {
+            "pattern": "(?m)^[*`\\s]*TO_AGENT([^\\w]|$)",
+            "edgeName": "to_agent"
+          },
+          {
+            "pattern": "(?m)^[*`\\s]*TO_HUMAN([^\\w]|$)",
+            "edgeName": "to_human"
+          },
+          {
+            "pattern": "(?m)^[*`\\s]*NO_ACTION([^\\w]|$)",
+            "edgeName": "no_action"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "to_agent"
+          },
+          {
+            "name": "to_human"
+          },
+          {
+            "name": "no_action"
+          }
+        ]
+      }
+    },
+    {
+      "id": "8c9811e1-a07e-48d6-8e89-3cc0e2c3a512",
+      "type": "Prompt",
+      "label": "Task",
+      "config": {
+        "__pos": {
+          "x": -470,
+          "y": 700
+        },
+        "prompt": "{{WorkItem.Title}}\n\n{{WorkItem.Description}}\n\n---\nHow to work:\n- You are in a git worktree on this work item's own branch. Commit your work as you go, with clear messages. Do not push and do not open a pull request yourself: the PR step does that when the human chooses it.\n- Follow the repository's own conventions. Before changing code, read its README and any contributor or agent docs (AGENTS.md, CLAUDE.md, CONTRIBUTING). Before you stop, run the checks its CI runs for what you touched.\n- Stop when the work is done or when you need a decision. End with a short summary for the human: what you changed, how you checked it, and what you suggest next. The human answers every turn, so ask rather than guess when something is unclear.\n- Pull request feedback may come back to you later. When it does:\n  - read the full review with the ild get_pr_review tool, since the event text can be partial;\n  - check each claim against the code before acting on it;\n  - answer every comment where it was made: reply_to_pr_review_comment saying fixed (with the commit) or rebutted (with the evidence), resolve_pr_review_thread once a point is fixed, and close_pr_review_item for one you deliberately leave unanswered.\n  - the human may also message you directly while the pull request is open. That message is not on the forge, so there is no thread to answer it on. It overrides your plan and any earlier answer you queued; if it refers to a review comment, queue a follow-up reply on that comment that replaces your earlier one.\n  These tools only queue: the PR step sends them after the human approves. You have no forge credentials, so use the ild tools, not gh or git push. The ild tools take this work item's id, the number in the branch name (`git branch --show-current` gives ild/wi-<id>-run-...). Anything you post is public: no account names, hostnames, credentials or local paths.",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cf203a34-aad9-4698-8691-3b9057e9360f",
+      "type": "AI",
+      "label": "Agent",
+      "config": {
+        "__pos": {
+          "x": -190,
+          "y": 700
+        },
+        "prompt": "{{Node.Input}}",
+        "aiProviderTag": "Developer",
+        "useSession": true,
+        "sessionPlaceholder": "agent",
+        "toolAllowlist": [
+          "read",
+          "write",
+          "execute",
+          "ild"
+        ],
+        "matchRules": [],
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    },
+    {
+      "id": "d1dd1bf3-3726-4f4d-b617-b0e21ae25c91",
+      "type": "Human",
+      "label": "Your Reply",
+      "config": {
+        "__pos": {
+          "x": -110,
+          "y": 480
+        },
+        "inputLabel": "Your reply to the agent",
+        "prompt": "{{Node.Input}}",
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          },
+          {
+            "name": "To PR",
+            "confirm": true,
+            "color": "#2126b0"
+          },
+          {
+            "name": "To AI",
+            "default": true,
+            "color": "#40006b"
+          },
+          {
+            "name": "Finish Without PR",
+            "confirm": true,
+            "color": "#ee4444"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ed391475-dbd2-42f0-8253-ba34d1178f43",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": -760,
+          "y": 700
+        },
+        "outputs": [
+          {
+            "name": "OnSuccess"
+          },
+          {
+            "name": "OnFailure"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "2f3417e9-d5a9-4254-beaf-570ea6d3ecc3",
+      "sourceNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "targetNodeId": "6891281c-38bc-43d8-bddd-0e134cd36909",
+      "edgeType": "Custom",
+      "name": "on_rejected"
+    },
+    {
+      "id": "603ce28e-b737-4201-85ba-306975b39474",
+      "sourceNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "targetNodeId": "6891281c-38bc-43d8-bddd-0e134cd36909",
+      "edgeType": "Custom",
+      "name": "on_comment"
+    },
+    {
+      "id": "6a09aab8-97f3-4bb0-81bb-a0df40120f7d",
+      "sourceNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "targetNodeId": "574e015f-ac23-4ee6-b808-5d7ae4665863",
+      "edgeType": "Custom",
+      "name": "on_merged"
+    },
+    {
+      "id": "82012779-ad78-4ba5-9d74-ca0f35b0e290",
+      "sourceNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "targetNodeId": "33ffb767-a7f3-4da3-a720-713ebe78983d",
+      "edgeType": "Custom",
+      "name": "on_merge_conflict"
+    },
+    {
+      "id": "b8344cfc-96fc-427d-a238-235d0d7d3b14",
+      "sourceNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "targetNodeId": "574e015f-ac23-4ee6-b808-5d7ae4665863",
+      "edgeType": "Custom",
+      "name": "on_abandoned"
+    },
+    {
+      "id": "cad92e74-756d-468f-9219-24c2ccf440ca",
+      "sourceNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "targetNodeId": "33ffb767-a7f3-4da3-a720-713ebe78983d",
+      "edgeType": "Custom",
+      "name": "on_ci_failed"
+    },
+    {
+      "id": "db3ee6e7-4076-4e2e-a0e9-0f4764eb991d",
+      "sourceNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "targetNodeId": "cf203a34-aad9-4698-8691-3b9057e9360f",
+      "edgeType": "Custom",
+      "name": "Instruct"
+    },
+    {
+      "id": "5c7823b3-d684-4515-a568-d1634e41cd94",
+      "sourceNodeId": "33ffb767-a7f3-4da3-a720-713ebe78983d",
+      "targetNodeId": "cf203a34-aad9-4698-8691-3b9057e9360f",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "62b473a2-f58e-46b1-8b5c-b5cebfe874d0",
+      "sourceNodeId": "6891281c-38bc-43d8-bddd-0e134cd36909",
+      "targetNodeId": "d1dd1bf3-3726-4f4d-b617-b0e21ae25c91",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "7e103407-24dc-4597-8396-bf1f3aae9620",
+      "sourceNodeId": "6891281c-38bc-43d8-bddd-0e134cd36909",
+      "targetNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "edgeType": "Custom",
+      "name": "no_action"
+    },
+    {
+      "id": "b409de74-26e7-49e6-99a0-7ffc18ac493e",
+      "sourceNodeId": "6891281c-38bc-43d8-bddd-0e134cd36909",
+      "targetNodeId": "d1dd1bf3-3726-4f4d-b617-b0e21ae25c91",
+      "edgeType": "Custom",
+      "name": "to_human"
+    },
+    {
+      "id": "d6b9d48c-42a5-4f09-b669-11cda3500ac5",
+      "sourceNodeId": "6891281c-38bc-43d8-bddd-0e134cd36909",
+      "targetNodeId": "33ffb767-a7f3-4da3-a720-713ebe78983d",
+      "edgeType": "Custom",
+      "name": "to_agent"
+    },
+    {
+      "id": "8fe9acb1-4581-43ba-9729-ad095bf5c3f9",
+      "sourceNodeId": "8c9811e1-a07e-48d6-8e89-3cc0e2c3a512",
+      "targetNodeId": "cf203a34-aad9-4698-8691-3b9057e9360f",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "1ed49c82-555d-4397-9e15-bc7ad1b8162e",
+      "sourceNodeId": "cf203a34-aad9-4698-8691-3b9057e9360f",
+      "targetNodeId": "d1dd1bf3-3726-4f4d-b617-b0e21ae25c91",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "97046ed0-bbde-423d-8a26-f31252f51ef3",
+      "sourceNodeId": "d1dd1bf3-3726-4f4d-b617-b0e21ae25c91",
+      "targetNodeId": "cf203a34-aad9-4698-8691-3b9057e9360f",
+      "edgeType": "Custom",
+      "name": "To AI"
+    },
+    {
+      "id": "9e2eb742-207c-48d3-ac7c-2163807ff45c",
+      "sourceNodeId": "d1dd1bf3-3726-4f4d-b617-b0e21ae25c91",
+      "targetNodeId": "29434ebf-6935-400e-bec6-72928122e562",
+      "edgeType": "Custom",
+      "name": "To PR"
+    },
+    {
+      "id": "a71244c5-f5f8-4b59-bf76-2240814d968f",
+      "sourceNodeId": "d1dd1bf3-3726-4f4d-b617-b0e21ae25c91",
+      "targetNodeId": "574e015f-ac23-4ee6-b808-5d7ae4665863",
+      "edgeType": "Custom",
+      "name": "Finish Without PR"
+    },
+    {
+      "id": "ad198e46-a3c2-4c56-bfc8-1d4364feedf5",
+      "sourceNodeId": "ed391475-dbd2-42f0-8253-ba34d1178f43",
+      "targetNodeId": "8c9811e1-a07e-48d6-8e89-3cc0e2c3a512",
+      "edgeType": "OnSuccess",
+      "name": null
+    }
+  ]
+}

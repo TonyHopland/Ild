@@ -11,10 +11,8 @@ public class ExampleLoopPrToolsTests
 {
     private static readonly string[] LoopFiles =
     {
-        "DevTeam.json",
-        "Development.json",
-        "Plan.json",
-        "Q&A.json",
+        "Advanced.json",
+        "Simple.json",
     };
 
     private static JsonDocument Loop(string name)

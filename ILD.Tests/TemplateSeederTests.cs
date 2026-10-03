@@ -19,7 +19,7 @@ public class TemplateSeederTests
 
         var templates = (await db.LoopTemplates.GetAllAsync()).ToList();
         var names = templates.Select(t => t.Name).OrderBy(n => n).ToArray();
-        Assert.Equal(new[] { "Development", "DevTeam", "Plan", "Q&A" }, names);
+        Assert.Equal(new[] { "Advanced", "Simple" }, names);
 
         // The pre-example seed loops must no longer be created.
         Assert.DoesNotContain("Simple Code Change", names);
@@ -34,33 +34,34 @@ public class TemplateSeederTests
 
         await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
 
-        var development = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == "Development");
-        Assert.Equal(RecoveryPolicy.AutoResume, development.RecoveryPolicy);
+        var advanced = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == "Advanced");
+        Assert.Equal(RecoveryPolicy.AutoResume, advanced.RecoveryPolicy);
 
-        var graph = await mgr.GetVersionGraphAsync(development.Id, 1);
+        var graph = await mgr.GetVersionGraphAsync(advanced.Id, 1);
         Assert.NotNull(graph);
 
-        // The strict reviewer keeps its named Reject custom edge wired to a match rule.
-        var review = graph!.Nodes.Single(n => n.Label == "Strict Code Review");
+        var review = graph!.Nodes.Single(n => n.Label == "Reviewer");
         Assert.Equal("AI", review.NodeType);
-        Assert.Contains("strict, independent code reviewer", ReadString(review.Config, "prompt"));
-        Assert.Contains(graph.Edges, e => e.SourceNodeId == review.Id && e.Name == "Reject");
+        Assert.Equal("{{PreviousNode.Output}}", ReadString(review.Config, "prompt"));
+        Assert.Contains(graph.Edges, e => e.SourceNodeId == review.Id && e.Name == "changes_requested");
 
         // The Start node's worktree flags survive the round-trip.
         var start = graph.Nodes.Single(n => n.NodeType == "Start");
         Assert.True(ReadBool(start.Config, "createWorktree"));
     }
 
-    [Fact]
-    public async Task Development_loop_wires_on_merged_to_cleanup_and_does_not_loop_pr_failure_back()
+    [Theory]
+    [InlineData("Advanced")]
+    [InlineData("Simple")]
+    public async Task Example_loop_wires_on_merged_to_cleanup_and_does_not_loop_pr_failure_back(string name)
     {
         using var db = new TestDb();
         var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
 
-        var development = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == "Development");
-        var graph = await mgr.GetVersionGraphAsync(development.Id, 1);
+        var template = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == name);
+        var graph = await mgr.GetVersionGraphAsync(template.Id, 1);
         Assert.NotNull(graph);
 
         var pr = graph!.Nodes.Single(n => n.NodeType == "PR");
@@ -96,10 +97,8 @@ public class TemplateSeederTests
     }
 
     [Theory]
-    [InlineData("DevTeam.json")]
-    [InlineData("Development.json")]
-    [InlineData("Plan.json")]
-    [InlineData("Q&A.json")]
+    [InlineData("Advanced.json")]
+    [InlineData("Simple.json")]
     public void Example_loop_is_a_v2_document_the_upgrader_has_nothing_left_to_add_to(string file)
     {
         // The example loops are the seed templates: a name they route by but do not
