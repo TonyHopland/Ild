@@ -11,7 +11,7 @@ import RunsPanel from "./RunsPanel";
 import ActionThread from "./ActionThread";
 import PendingEditProposals from "./PendingEditProposals";
 import EditPanel from "./EditPanel";
-import FilesPanel from "./FilesPanel";
+import FilesPanel, { workItemKey } from "./FilesPanel";
 
 type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal";
 
@@ -324,7 +324,7 @@ export default function WorkItemModalV2({
         className="wiv2-tabpanel wiv2-tabpanel-files"
         hidden={activeTab !== "files"}
       >
-        <FilesPanel workItem={workItem} />
+        <FilesPanel key={workItemKey(workItem)} workItem={workItem} />
       </section>
       <section
         role="tabpanel"

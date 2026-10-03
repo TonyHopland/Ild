@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, waitFor, within } from "@testing-library/react";
-import FilesPanel from "./FilesPanel";
+import FilesPanel, { workItemKey } from "./FilesPanel";
 import {
   WorkItem,
   WorkItemStatus,
@@ -26,6 +26,11 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+/** The panel as the dialog renders it: a fresh instance per item and worktree. */
+function panelFor(workItem: WorkItem) {
+  return <FilesPanel key={workItemKey(workItem)} workItem={workItem} />;
+}
 
 function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
@@ -1128,7 +1133,7 @@ describe("FilesPanel editing", () => {
     // The dialog is handed a different work item — a different worktree, a
     // different set of files — while the save is still out.
     await act(async () => {
-      view.rerender(<FilesPanel workItem={parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />);
+      view.rerender(panelFor(parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1164,7 +1169,7 @@ describe("FilesPanel editing", () => {
     expect(screen.getByText("before")).toBeTruthy();
 
     await act(async () => {
-      view.rerender(<FilesPanel workItem={parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />);
+      view.rerender(panelFor(parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1242,7 +1247,7 @@ describe("FilesPanel editing", () => {
 
     // The item changes while that file is still being fetched.
     await act(async () => {
-      view.rerender(<FilesPanel workItem={parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })} />);
+      view.rerender(panelFor(parked({ id: "wi-2", worktreePath: "/tmp/wt-2" })));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1425,7 +1430,7 @@ describe("FilesPanel download", () => {
 
   async function switchTo(view: ReturnType<typeof render>, workItem: WorkItem) {
     await act(async () => {
-      view.rerender(<FilesPanel workItem={workItem} />);
+      view.rerender(panelFor(workItem));
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1826,7 +1831,7 @@ describe("FilesPanel diff range", () => {
       },
       switchTo: async (next: WorkItem) => {
         await act(async () => {
-          view.rerender(<FilesPanel workItem={next} />);
+          view.rerender(panelFor(next));
         });
         await settle();
       },

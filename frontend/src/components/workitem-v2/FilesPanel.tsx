@@ -76,17 +76,11 @@ const PREVIEW_RENDERER: Record<PreviewKind, (content: string, path: string) => R
 
 /**
  * What makes the panel's contents a different thing to load: another work item,
- * or the same one on another worktree. Both the refresh below and a save in
- * flight measure against it, so neither can decide on its own that the panel is
- * still showing what it was.
+ * or the same one on another worktree. The dialog keys the panel by it, so each
+ * gets a fresh instance and nothing one started can reach the next.
  */
-function workItemKey(workItem: WorkItem): string {
+export function workItemKey(workItem: WorkItem): string {
   return `${workItem.id}:${workItem.worktreePath ?? ""}`;
-}
-
-/** One file of one work item, as a running download is tracked. */
-function downloadEntry(itemKey: string, path: string): string {
-  return `${itemKey}\u0000${path}`;
 }
 
 /**
@@ -176,11 +170,9 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // reach the editor they open on the next one.
   const [savingPath, setSavingPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  // Every download still running, one entry per item and file (see
-  // {@link downloadEntry}). Each is added by its own click and removed only by
-  // its own request, so no download — on any item or file — can hold or free
-  // another's button, and none is dropped on a switch: a download the user
-  // asked for still saves after they move on.
+  // Every download still running, by path. Each is added by its own click and
+  // removed only by its own request, so no download can hold or free another
+  // file's button, and one the user asked for still saves after they move on.
   const [downloading, setDownloading] = useState<ReadonlySet<string>>(new Set());
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
@@ -190,9 +182,10 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const range = diffRangeOf(selection, commits);
   const rangeKey = diffRangeKey(range);
 
-  // The key the panel is currently loaded for, set by the effect below and
-  // read by everything that resolves after it — see {@link workItemKey}.
-  const lastKeyRef = useRef<string | null>(null);
+  // The first load shows the loading state; the background refreshes after it are silent.
+  const loadedRef = useRef(false);
+  // A save answered after the dialog moved on to another item starts no more reads.
+  const mountedRef = useRef(true);
   // The range the panel is loaded for; an answer read under any other is dropped.
   const activeRangeRef = useRef<{ key: string; range?: WorktreeDiffRange }>({ key: "" });
   // The range the open file's status and diff were read under.
@@ -246,12 +239,9 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
 
   const loadContent = useCallback(
     async (path: string, showLoading: boolean) => {
-      const key = workItemKey(workItem);
       const { key: rangeKey, range } = activeRangeRef.current;
       const isCurrent = () =>
-        lastKeyRef.current === key &&
-        selectedPathRef.current === path &&
-        activeRangeRef.current.key === rangeKey;
+        selectedPathRef.current === path && activeRangeRef.current.key === rangeKey;
       setContentError(null);
       if (showLoading) {
         setContent(null);
@@ -261,11 +251,10 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
         const result = await (range
           ? workItemService.getFileContent(workItem.id, path, range)
           : workItemService.getFileContent(workItem.id, path));
-        // Same reasoning as the save below: this is one worktree's file, and
-        // the panel may have been handed another item — or moved to another
-        // file or range — while it was in the air. Kept anyway it would sit
-        // behind a selection that no longer names it, which is enough to offer
-        // an Edit for a file the viewer is not even showing.
+        // The panel may have moved to another file or range while this was in
+        // the air. Kept anyway it would sit behind a selection that no longer
+        // names it, which is enough to offer an Edit for a file the viewer is
+        // not even showing.
         if (!isCurrent()) return;
         setContent(result);
         contentRangeKeyRef.current = rangeKey;
@@ -276,41 +265,24 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
         if (showLoading && isCurrent()) setContentLoading(false);
       }
     },
-    [workItem],
+    [workItem.id],
   );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // The parent refetches the work item every time the run advances (node/run
   // state changes) and passes down a fresh object, so re-pull the file list and
   // the open file whenever the work item updates. This keeps the explorer in
-  // sync with the worktree without a manual page refresh. The first load (and
-  // switching to a different item) shows the loading state; later background
-  // refreshes are silent so the tree and viewer don't flicker.
+  // sync with the worktree without a manual page refresh.
   useEffect(() => {
-    const key = workItemKey(workItem);
-    const isNewItem = lastKeyRef.current !== key;
-    lastKeyRef.current = key;
-    if (isNewItem) activeRangeRef.current = { key: "" };
-    void refresh(isNewItem);
+    void refresh(!loadedRef.current);
+    loadedRef.current = true;
     void loadCommits();
-    if (isNewItem) {
-      // Another item's worktree is another set of files. Whatever was open
-      // belonged to the item before it, so the viewer starts empty rather than
-      // keeping a path that may not exist here — and an edit of that file is
-      // certainly not an edit of this item's.
-      setSelection(ALL_CHANGES);
-      setCommits(null);
-      setCommitsFailed(false);
-      setSelectedPath(null);
-      selectedPathRef.current = null;
-      setContent(null);
-      setContentLoading(false);
-      setContentError(null);
-      setDraft(null);
-      setSaveError(null);
-      setSavingPath(null);
-      setDownloadError(null);
-      return;
-    }
     // An open editor holds text that exists nowhere else yet, so the silent
     // re-pull that keeps the viewer current is exactly what would destroy it.
     // The tree still refreshes above; only the open file is left alone.
@@ -355,8 +327,6 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     [loadContent],
   );
 
-  const itemKey = workItemKey(workItem);
-
   const save = useCallback(async () => {
     if (draft === null || !selectedPath) return;
     const { key: rangeKey, range } = activeRangeRef.current;
@@ -369,12 +339,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       const saved = await (range
         ? workItemService.saveFileContent(workItem.id, selectedPath, draft, range)
         : workItemService.saveFileContent(workItem.id, selectedPath, draft));
-      // Neither the panel's item nor its selection is pinned while a save is
-      // out: the dialog can be handed a different work item, and the tree stays
-      // clickable. This answer is one worktree's file, so a panel now showing
-      // another item's has no use for any of it — not the file, and not the
-      // list refresh, which would pull the previous item's tree into it.
-      if (lastKeyRef.current !== itemKey) return;
+      if (!mountedRef.current) return;
       // The badge on the file just written has to catch up even if the user
       // has moved off it, so the list refreshes before the narrower guard.
       void refresh(false);
@@ -388,18 +353,17 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
         void loadContent(selectedPath, false);
       }
     } catch (e) {
-      if (lastKeyRef.current !== itemKey || selectedPathRef.current !== selectedPath) return;
+      if (selectedPathRef.current !== selectedPath) return;
       setSaveError((e as { message?: string })?.message ?? "Failed to save file.");
     } finally {
       setSavingPath((current) => (current === selectedPath ? null : current));
     }
-  }, [draft, selectedPath, itemKey, workItem.id, refresh, loadContent]);
+  }, [draft, selectedPath, workItem.id, refresh, loadContent]);
 
   const download = useCallback(async () => {
     if (!selectedPath) return;
     const path = selectedPath;
-    const entry = downloadEntry(itemKey, path);
-    setDownloading((prev) => new Set(prev).add(entry));
+    setDownloading((prev) => new Set(prev).add(path));
     setDownloadError(null);
     try {
       const blob = await workItemService.downloadFile(workItem.id, path);
@@ -412,16 +376,16 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (e) {
-      if (lastKeyRef.current !== itemKey || selectedPathRef.current !== path) return;
+      if (selectedPathRef.current !== path) return;
       setDownloadError((e as { message?: string })?.message ?? "Failed to download file.");
     } finally {
       setDownloading((prev) => {
         const next = new Set(prev);
-        next.delete(entry);
+        next.delete(path);
         return next;
       });
     }
-  }, [selectedPath, itemKey, workItem.id]);
+  }, [selectedPath, workItem.id]);
 
   const toggleFolder = useCallback((path: string) => {
     setToggledFolders((prev) => {
@@ -460,8 +424,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     !contentLoading &&
     !contentError &&
     content.changeStatus !== "deleted";
-  const downloadingThis =
-    selectedPath !== null && downloading.has(downloadEntry(itemKey, selectedPath));
+  const downloadingThis = selectedPath !== null && downloading.has(selectedPath);
 
   if (!workItem.worktreePath) {
     return (
