@@ -507,6 +507,15 @@ describe("FeedbackActions — Enter in the feedback box", () => {
     if (props.onMerge) expect(props.onMerge).not.toHaveBeenCalled();
   });
 
+  test("the Enter that commits an IME composition after it has ended, as Safari sends it, sends nothing", () => {
+    const { box, sent } = renderBox();
+
+    expect(enter(box, { isComposing: false, keyCode: 229 })).toBe(true);
+
+    expect(sent()).toBe(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   test("with the preference on, the default output's button alone shows ⏎", () => {
     renderBox({ defaultOutput: "Escalate" });
 

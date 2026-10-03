@@ -127,7 +127,10 @@ export default function FeedbackActions({
       : null;
 
   const onInputKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    const plainEnter = e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && !e.repeat;
+    // Safari ends a composition before the Enter that commits it, which then
+    // arrives with isComposing false and only keyCode 229 to tell it apart.
+    const composing = e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
+    const plainEnter = e.key === "Enter" && !e.shiftKey && !composing && !e.repeat;
     if (!plainEnter || busy || enterTarget === null) return;
     e.preventDefault();
     answerFor(enterTarget)();
