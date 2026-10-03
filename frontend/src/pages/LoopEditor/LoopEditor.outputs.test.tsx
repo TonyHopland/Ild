@@ -1092,8 +1092,9 @@ describe("Loop Editor — visible to user", () => {
     expect(row.classList.contains("output-row-hidden")).toBe(true);
     const buttons = within(row).getAllByRole("button");
     const remove = buttons.indexOf(removeButtonFor(outputField(dialog, "later")));
-    expect(buttons.indexOf(later)).toBe(remove - 3);
-    expect(buttons[remove - 2].classList.contains("output-confirm-toggle")).toBe(true);
+    const shieldAt = buttons.findIndex((b) => b.classList.contains("output-confirm-toggle"));
+    expect(buttons.indexOf(later)).toBe(shieldAt - 1);
+    expect(shieldAt).toBeLessThan(remove - 1);
 
     fireEvent.click(later);
     expect(later.getAttribute("aria-label")).toBe("Visible to user: later");
@@ -1556,6 +1557,240 @@ describe("Loop Editor — asks to confirm", () => {
   });
 });
 
+/** The Default toggle of the output called exactly `name`. */
+function defaultToggle(dialog: HTMLElement, name: string) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const label = new RegExp(`^(Default output|Not the default output): ${escaped}( \\(.*\\))?$`);
+  const found = buttonsLabelled(dialog, label);
+  expect(found, name).toHaveLength(1);
+  return found[0] as HTMLButtonElement;
+}
+
+function defaultToggles(dialog: HTMLElement) {
+  return buttonsLabelled(dialog, /^(Default output|Not the default output): /);
+}
+
+describe("Loop Editor — default output", () => {
+  const human = (config: Record<string, unknown>): TemplateNode => ({
+    id: "n-node",
+    type: NodeType.Human,
+    label: "Sign Off",
+    config,
+  });
+
+  const pressed = (dialog: HTMLElement, names: string[]) =>
+    names.filter((name) => isOn(defaultToggle(dialog, name)));
+
+  test("every output has a Default toggle beside its eye and shield, off, and a hidden or unwired one cannot be switched on", async () => {
+    const { dialog } = await openNode(
+      {
+        template: templateWith(
+          human({
+            outputs: [{ name: "later" }, { name: "never", visible: false }, { name: "spare" }],
+          }),
+          ["later", "never"],
+        ),
+      },
+      "Sign Off",
+    );
+
+    await waitFor(() => expect(defaultToggles(dialog)).toHaveLength(5));
+    expect(defaultToggles(dialog)).toHaveLength(toggles(dialog).length);
+    for (const button of defaultToggles(dialog)) {
+      expect(button.tagName).toBe("BUTTON");
+      expect(button.getAttribute("aria-pressed")).toBe("false");
+    }
+    expect(defaultToggle(dialog, "OnSuccess").disabled).toBe(false);
+    expect(defaultToggle(dialog, "later").disabled).toBe(false);
+    const never = defaultToggle(dialog, "never");
+    expect(never.disabled).toBe(true);
+    expect(never.getAttribute("aria-label")).toContain("hidden from user");
+    for (const unwired of ["spare", "OnFailure"]) {
+      const button = defaultToggle(dialog, unwired);
+      expect(button.disabled, unwired).toBe(true);
+      expect(button.getAttribute("aria-label"), unwired).toContain("no edge connected");
+    }
+
+    const row = defaultToggle(dialog, "later").closest(".match-rule-row") as HTMLElement;
+    const buttons = within(row).getAllByRole("button");
+    const eyeAt = buttons.indexOf(toggle(dialog, "later"));
+    expect(buttons.indexOf(shield(dialog, "later"))).toBeGreaterThan(eyeAt);
+    expect(buttons.indexOf(defaultToggle(dialog, "later"))).toBeGreaterThan(eyeAt);
+    expect(buttons.indexOf(defaultToggle(dialog, "later"))).toBeLessThan(
+      buttons.indexOf(removeButtonFor(outputField(dialog, "later"))),
+    );
+
+    fireEvent.click(toggle(dialog, "later"));
+    expect(defaultToggle(dialog, "later").disabled).toBe(true);
+    expect(defaultToggle(dialog, "later").getAttribute("aria-label")).toContain("hidden from user");
+  });
+
+  test("only one output is the default: switching one on switches the others off, and it saves on that output alone", async () => {
+    const { calls, dialog } = await openNode(
+      {
+        template: templateWith(
+          human({ outputs: [{ name: "cleanup", note: "kept" }, { name: "later" }] }),
+          ["cleanup", "later"],
+          { failureWired: true },
+        ),
+      },
+      "Sign Off",
+    );
+    const names = ["OnSuccess", "OnFailure", "cleanup", "later"];
+    await waitFor(() => expect(defaultToggles(dialog)).toHaveLength(4));
+
+    fireEvent.click(defaultToggle(dialog, "cleanup"));
+    expect(pressed(dialog, names)).toEqual(["cleanup"]);
+    fireEvent.click(defaultToggle(dialog, "OnSuccess"));
+    expect(pressed(dialog, names)).toEqual(["OnSuccess"]);
+    fireEvent.click(defaultToggle(dialog, "OnFailure"));
+    expect(pressed(dialog, names)).toEqual(["OnFailure"]);
+    fireEvent.click(defaultToggle(dialog, "later"));
+    expect(pressed(dialog, names)).toEqual(["later"]);
+    fireEvent.click(defaultToggle(dialog, "later"));
+    expect(pressed(dialog, names)).toEqual([]);
+    fireEvent.click(defaultToggle(dialog, "OnSuccess"));
+    expect(pressed(dialog, names)).toEqual(["OnSuccess"]);
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "cleanup", note: "kept" },
+      { name: "later" },
+      { name: "OnSuccess", default: true },
+    ]);
+
+    fireEvent.click(screen.getByText("Sign Off"));
+    const reopened = await screen.findByRole("dialog", { name: "Node Settings" });
+    await waitFor(() => expect(defaultToggles(reopened)).toHaveLength(4));
+    expect(pressed(reopened, names)).toEqual(["OnSuccess"]);
+  });
+
+  test("a stored default shows pressed, and switching on another clears every stored one and keeps their other fields", async () => {
+    const { calls, dialog } = await openNode(
+      {
+        template: templateWith(
+          human({
+            outputs: [
+              { name: "OnSuccess", default: true, note: "kept" },
+              { name: "cleanup", confirm: true, color: "#7e22ce" },
+              { name: "later", default: true, visible: true },
+            ],
+          }),
+          ["cleanup", "later"],
+        ),
+      },
+      "Sign Off",
+    );
+    const names = ["OnSuccess", "OnFailure", "cleanup", "later"];
+    await waitFor(() => expect(defaultToggles(dialog)).toHaveLength(4));
+    expect(pressed(dialog, names)).toEqual(["OnSuccess", "later"]);
+
+    fireEvent.click(defaultToggle(dialog, "cleanup"));
+    expect(pressed(dialog, names)).toEqual(["cleanup"]);
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "OnSuccess", note: "kept" },
+      { name: "cleanup", confirm: true, color: "#7e22ce", default: true },
+      { name: "later", visible: true },
+    ]);
+  });
+
+  test("saving without touching the toggle keeps the config as it was", async () => {
+    const stored = [{ name: "OnSuccess" }, { name: "cleanup", default: true, note: "kept" }];
+    const { calls, dialog } = await openNode(
+      { template: templateWith(human({ outputs: stored }), ["cleanup"]) },
+      "Sign Off",
+    );
+    await waitFor(() => expect(isOn(defaultToggle(dialog, "cleanup"))).toBe(true));
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual(stored);
+  });
+
+  test("switching the stored default off leaves no output the default", async () => {
+    const { calls, dialog } = await openNode(
+      {
+        template: templateWith(human({ outputs: [{ name: "OnSuccess", default: true }] }), []),
+      },
+      "Sign Off",
+    );
+    await waitFor(() => expect(isOn(defaultToggle(dialog, "OnSuccess"))).toBe(true));
+
+    fireEvent.click(defaultToggle(dialog, "OnSuccess"));
+    expect(isOn(defaultToggle(dialog, "OnSuccess"))).toBe(false);
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([{ name: "OnSuccess" }]);
+  });
+
+  test("on a PR node the default moves between success, a declared reserved output and an undeclared one, which is declared as reserved", async () => {
+    const pr: TemplateNode = {
+      id: "n-node",
+      type: NodeType.PR,
+      label: "Pull Request",
+      config: {
+        outputs: [
+          { name: "OnSuccess", default: true },
+          { name: "on_merged", reserved: true, visible: true },
+        ],
+      },
+    };
+    const { calls, dialog } = await openNode(
+      { template: templateWith(pr, ["on_merged", "on_ci_failed"]) },
+      "Pull Request",
+    );
+    const names = ["OnSuccess", "on_merged", "on_ci_failed"];
+    await waitFor(() => expect(defaultToggles(dialog)).toHaveLength(2 + RESERVED.length));
+    expect(defaultToggles(dialog)).toHaveLength(toggles(dialog).length);
+    expect(defaultToggle(dialog, "on_ci_failed").disabled).toBe(true);
+
+    fireEvent.click(toggle(dialog, "on_ci_failed"));
+    fireEvent.click(defaultToggle(dialog, "on_ci_failed"));
+    expect(pressed(dialog, names)).toEqual(["on_ci_failed"]);
+    fireEvent.click(defaultToggle(dialog, "on_merged"));
+    expect(pressed(dialog, names)).toEqual(["on_merged"]);
+    fireEvent.click(defaultToggle(dialog, "on_ci_failed"));
+    expect(pressed(dialog, names)).toEqual(["on_ci_failed"]);
+
+    const saved = await saveLoop(dialog, calls);
+    expect(outputsOf(saved, "n-node")).toEqual([
+      { name: "OnSuccess" },
+      { name: "on_merged", reserved: true, visible: true },
+      { name: "on_ci_failed", reserved: true, visible: true, default: true },
+    ]);
+  });
+
+  test.each([
+    [
+      "an AI node",
+      {
+        id: "n-node",
+        type: NodeType.AI,
+        label: "Reviewer",
+        config: { prompt: "p", outputs: [{ name: "x", default: true }] },
+      },
+    ],
+    [
+      "a Condition node",
+      {
+        id: "n-node",
+        type: NodeType.Condition,
+        label: "Gate",
+        config: {
+          cases: [{ variant: "PrExists", edgeName: "has-pr" }],
+          defaultEdge: "has-pr",
+          outputs: [{ name: "OnFailure" }, { name: "has-pr" }],
+        },
+      },
+    ],
+  ] as Array<[string, TemplateNode]>)("%s has no Default toggle", async (_, opened) => {
+    const { dialog } = await openNode({ template: templateWith(opened) }, opened.label);
+
+    expect(defaultToggles(dialog)).toHaveLength(0);
+  });
+});
+
 /** The colour square of the output called exactly `name`. */
 function square(dialog: HTMLElement, name: string) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1682,13 +1917,15 @@ describe("Loop Editor — button colour", () => {
     const buttons = within(row).getAllByRole("button");
     const remove = buttons.indexOf(removeButtonFor(outputField(dialog, "later")));
     expect(buttons.indexOf(later)).toBe(remove - 1);
-    expect(buttons.indexOf(shield(dialog, "later"))).toBe(remove - 2);
+    expect(buttons.indexOf(shield(dialog, "later"))).toBeLessThan(remove - 1);
     const success = square(dialog, "OnSuccess");
     const successButtons = within(success.closest(".match-rule-row") as HTMLElement).getAllByRole(
       "button",
     );
     expect(successButtons.indexOf(success)).toBe(successButtons.length - 1);
-    expect(successButtons.indexOf(shield(dialog, "OnSuccess"))).toBe(successButtons.length - 2);
+    expect(successButtons.indexOf(shield(dialog, "OnSuccess"))).toBeLessThan(
+      successButtons.length - 1,
+    );
 
     fireEvent.click(toggle(dialog, "later"));
     expectSquare(dialog, "later", "Button colour #7e22ce: later (hidden from user)", false);

@@ -203,6 +203,32 @@ describe("User settings preferences", () => {
     expect((toggle as HTMLInputElement).checked).toBe(false);
   });
 
+  test("submit default on Enter is off when nothing is stored, and toggling it stores true then false", () => {
+    render(<UserSettings />);
+
+    const toggle = screen.getByRole("checkbox", {
+      name: /submit default on enter/i,
+    }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+
+    fireEvent.click(toggle);
+    expect(localStorage.getItem("ild_submit_default_on_enter")).toBe("true");
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+    expect(localStorage.getItem("ild_submit_default_on_enter")).toBe("false");
+    expect(toggle.checked).toBe(false);
+  });
+
+  test("reads an enabled submit default on Enter preference from localStorage on mount", () => {
+    localStorage.setItem("ild_submit_default_on_enter", "true");
+
+    render(<UserSettings />);
+
+    const toggle = screen.getByRole("checkbox", { name: /submit default on enter/i });
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+  });
+
   test("reads a disabled chat preference from localStorage on mount", () => {
     localStorage.setItem("ild_chat_enabled", "false");
 

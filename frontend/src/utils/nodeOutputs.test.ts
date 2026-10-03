@@ -12,6 +12,7 @@ import {
   buttonColorOf,
   outputColorOf,
   outputConfirmationOf,
+  defaultOutputOf,
   readableTextOn,
   withColor,
   outputVisibilityOf,
@@ -587,5 +588,27 @@ describe("readableTextOn", () => {
     ["#757575", "#fff"],
   ])("on %s the text with the higher WCAG contrast is %s", (color, text) => {
     expect(readableTextOn(color)).toBe(text);
+  });
+});
+
+describe("defaultOutputOf", () => {
+  test("the first declared output whose default is exactly true is the default", () => {
+    expect(
+      defaultOutputOf({
+        outputs: [
+          { name: "later", default: "true" },
+          "not an output",
+          { name: "OnFailure", default: false },
+          { name: "cleanup", default: true },
+          { name: "OnSuccess", default: true },
+        ],
+      }),
+    ).toBe("cleanup");
+  });
+
+  test("a config with no output marked has no default", () => {
+    expect(defaultOutputOf(undefined)).toBeNull();
+    expect(defaultOutputOf({})).toBeNull();
+    expect(defaultOutputOf({ outputs: [{ name: "OnSuccess" }, { name: "later" }] })).toBeNull();
   });
 });
