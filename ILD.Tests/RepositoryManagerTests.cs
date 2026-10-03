@@ -658,6 +658,25 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task A_range_ending_at_a_commit_leaves_out_a_file_deleted_but_not_committed()
+    {
+        var (mgr, wt, forkPoint, first, second) = await BranchWithTwoCommitsAndPendingWorkAsync();
+        var secondOnly = new WorktreeDiffRange { From = first, To = second };
+
+        // a.txt is gone from disk without the deletion being committed: the
+        // second commit did not touch it, so there is nothing to show for it.
+        var listed = await mgr.ListWorktreeFilesAsync(wt, "main", secondOnly);
+        Assert.DoesNotContain(listed, f => f.Path == "a.txt");
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "a.txt", "main", secondOnly));
+
+        // Where the range did change it, it stays, as does the pending deletion.
+        var firstOnly = await mgr.ListWorktreeFilesAsync(wt, "main", new WorktreeDiffRange { From = forkPoint, To = first });
+        Assert.Equal("added", firstOnly.Single(f => f.Path == "a.txt").ChangeStatus);
+        var pending = await mgr.ListWorktreeFilesAsync(wt, "main", new WorktreeDiffRange { From = second });
+        Assert.Equal("deleted", pending.Single(f => f.Path == "a.txt").ChangeStatus);
+    }
+
+    [Fact]
     public async Task WriteWorktreeFile_answers_with_the_file_under_the_range_it_was_saved_in()
     {
         var (mgr, wt, _, first, second) = await BranchWithTwoCommitsAndPendingWorkAsync();

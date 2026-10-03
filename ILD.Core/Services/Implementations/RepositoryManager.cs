@@ -335,6 +335,16 @@ public class RepositoryManager : IRepositoryManager
             foreach (var path in await ListZeroSeparatedAsync(worktreePath, "ls-files", "--others", "--exclude-standard", "-z"))
                 statuses[path] = "added";
         }
+        else
+        {
+            // Nor is a deletion not yet committed: a file gone from disk that
+            // the range left alone has nothing to show, and reading it is a 404.
+            foreach (var path in await ListZeroSeparatedAsync(worktreePath, "ls-files", "--deleted", "-z"))
+            {
+                if (statuses.GetValueOrDefault(path) == "none")
+                    statuses.Remove(path);
+            }
+        }
 
         return statuses
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
