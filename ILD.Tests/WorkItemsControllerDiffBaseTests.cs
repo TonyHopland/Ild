@@ -248,6 +248,19 @@ public class WorkItemsControllerDiffBaseTests
     }
 
     [Theory]
+    [InlineData(C2, C1)] // newer start than end: git would report the change reversed
+    [InlineData(C2, C2)] // a range that starts where it ends
+    [InlineData(C1, C1)]
+    public async Task A_range_that_does_not_start_before_it_ends_is_refused(string from, string to)
+    {
+        var (controller, repoManager, db, _) = await SetupAsync(runBaseBranchOverride: null);
+        using var _db = db;
+        repoManager.Setup(m => m.ListWorktreeCommitsAsync(It.IsAny<string>(), It.IsAny<string?>())).ReturnsAsync(ListedCommits());
+
+        await AssertEveryEndpointRefusesAsync(controller, repoManager, from, to);
+    }
+
+    [Theory]
     [InlineData(Base, null)]
     [InlineData(null, C1)]
     public async Task Without_a_resolved_base_every_range_is_refused(string? from, string? to)

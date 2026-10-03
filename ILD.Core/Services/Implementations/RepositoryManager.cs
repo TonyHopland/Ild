@@ -368,7 +368,6 @@ public class RepositoryManager : IRepositoryManager
         {
             // git diff ignores untracked files, so a brand-new file shows no
             // status above — detect it and synthesize the "all added" diff.
-            // A range ending at a commit holds nothing untracked.
             var (othersCode, others, _) = await RunAsync(worktreePath, "ls-files", "--others", "--exclude-standard", "--", relativePath);
             if (othersCode == 0 && !string.IsNullOrWhiteSpace(others))
             {

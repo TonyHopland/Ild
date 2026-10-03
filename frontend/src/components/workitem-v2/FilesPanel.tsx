@@ -184,8 +184,6 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [downloading, setDownloading] = useState<ReadonlySet<string>>(new Set());
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  // The range dropdown: what is ticked, and the commit list it is ticked from —
-  // null until the item's list arrives, and after a failed load (`commitsFailed`).
   const [selection, setSelection] = useState<DiffSelection>(ALL_CHANGES);
   const [commits, setCommits] = useState<WorktreeCommits | null>(null);
   const [commitsFailed, setCommitsFailed] = useState(false);
@@ -195,9 +193,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // The key the panel is currently loaded for, set by the effect below and
   // read by everything that resolves after it — see {@link workItemKey}.
   const lastKeyRef = useRef<string | null>(null);
-  // The range the panel is loaded for, set by the effects below alongside the
-  // requests they make for it. Everything that reads files reads it here, and
-  // an answer for a range the panel has since left is dropped.
+  // The range the panel is loaded for; an answer read under any other is dropped.
   const activeRangeRef = useRef<{ key: string; range?: WorktreeDiffRange }>({ key: "" });
   // The range the open file's status and diff were read under.
   const contentRangeKeyRef = useRef("");
@@ -293,7 +289,6 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     const key = workItemKey(workItem);
     const isNewItem = lastKeyRef.current !== key;
     lastKeyRef.current = key;
-    // Another item's commits are not this one's, so it starts on All.
     if (isNewItem) activeRangeRef.current = { key: "" };
     void refresh(isNewItem);
     void loadCommits();
@@ -325,10 +320,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workItem]);
 
-  // A new range is a new list and a new diff of the open file. Keyed on the
-  // range rather than the selection, so a refresh that leaves the range as it
-  // was — or the default All on a new item, already loaded above — costs
-  // nothing. A draft keeps its file as read; Cancel catches it up.
+  // Keyed on the range, not the selection: a refresh that keeps the range must cost no extra read.
   useEffect(() => {
     if (activeRangeRef.current.key === rangeKey) return;
     activeRangeRef.current = { key: rangeKey, range };
@@ -388,9 +380,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       void refresh(false);
       if (selectedPathRef.current !== selectedPath) return;
       setDraft(null);
-      // The write landed either way; only its description is of a range the
-      // panel may have left since, and then the file is read again under the
-      // one it is on.
+      // The write landed either way; only its description can be of a range left since.
       if (activeRangeRef.current.key === rangeKey) {
         setContent(saved);
         contentRangeKeyRef.current = rangeKey;
@@ -545,8 +535,6 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               Changes{changedCount > 0 ? ` (${changedCount})` : ""}
             </button>
           </div>
-          {/* Held while a draft is open, as the viewer modes are: a draft's
-              file stays described by the range it was opened under. */}
           <DiffRangePicker
             selection={selection}
             commits={commits}

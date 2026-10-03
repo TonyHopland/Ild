@@ -513,7 +513,7 @@ public class WorkItemsController : ControllerBase
 
     // A diff range only ever names SHAs the commit list itself handed out, on a
     // base that resolved, so nothing a caller typed — a ref name, an
-    // abbreviation, an option — reaches git. No range asked for costs nothing.
+    // abbreviation, an option — reaches git.
     private async Task<(WorktreeDiffRange? Range, IActionResult? Error)> ResolveDiffRangeAsync(
         string worktreePath, string? diffBase, string? from, string? to)
     {
@@ -524,13 +524,24 @@ public class WorkItemsController : ControllerBase
         if (listed.BaseSha == null)
             return (null, BadRequest(new { error = "The worktree's base could not be resolved, so no diff range can be taken." }));
 
-        var ends = listed.Commits.Select(c => c.Sha).ToHashSet(StringComparer.Ordinal);
-        var starts = new HashSet<string>(ends, StringComparer.Ordinal) { listed.BaseSha };
-        starts.UnionWith(listed.Commits.Select(c => c.ParentSha));
-        if ((from != null && !starts.Contains(from)) || (to != null && !ends.Contains(to)))
-            return (null, BadRequest(new { error = "Unknown commit." }));
+        // Distance back from the newest commit: a range must start strictly
+        // behind where it ends, or git reports the change reversed.
+        var depth = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < listed.Commits.Count; i++)
+        {
+            depth.TryAdd(listed.Commits[i].Sha, i);
+            depth.TryAdd(listed.Commits[i].ParentSha, i + 1);
+        }
+        depth.TryAdd(listed.BaseSha, listed.Commits.Count);
 
-        return (new WorktreeDiffRange { From = from ?? listed.BaseSha, To = to }, null);
+        var start = from ?? listed.BaseSha;
+        var toIndex = to == null ? -1 : listed.Commits.FindIndex(c => c.Sha == to);
+        if (!depth.TryGetValue(start, out var startDepth) || (to != null && toIndex < 0))
+            return (null, BadRequest(new { error = "Unknown commit." }));
+        if (to != null && startDepth <= toIndex)
+            return (null, BadRequest(new { error = "A diff range has to start before it ends." }));
+
+        return (new WorktreeDiffRange { From = start, To = to }, null);
     }
 
     [HttpGet("{id}/files")]
