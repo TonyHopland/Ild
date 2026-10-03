@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A colour square beside each output of a Human or pull request node sets the colour of its button in the run.**
 
+- **A Default toggle beside each output of a Human or pull request node lets Enter in the feedback box take that answer, for people who turn on Submit default on Enter in Settings.**
+
 - **The file viewer has a Download button that saves the open file as it is on disk.**
 
 - **A pushed branch's name on a work item's Overview opens the branch on its forge.**

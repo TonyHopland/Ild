@@ -21,6 +21,7 @@ import { useSignalR } from "../../hooks/useSignalR";
 import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
 import {
   outputColorOf,
+  defaultOutputOf,
   outputConfirmationOf,
   outputVisibilityOf,
   readFixedOutputs,
@@ -29,8 +30,8 @@ import {
 
 /**
  * Which outputs of the node a work item is parked on are offered to the person
- * answering, which of those ask them to confirm, and the colour of each one's
- * button. Never guessed: nothing is known while the node is being read, and
+ * answering, which of those ask them to confirm, the colour of each one's
+ * button, and which one is the node's default. Never guessed: nothing is known while the node is being read, and
  * a node that cannot be read is an error.
  */
 export type FeedbackOutputs =
@@ -41,6 +42,7 @@ export type FeedbackOutputs =
       isVisible: (name: string) => boolean;
       needsConfirm: (name: string) => boolean;
       colorOf: (name: string) => string | null;
+      defaultOutput: string | null;
     };
 
 const FEEDBACK_OUTPUTS_LOADING: FeedbackOutputs = { status: "loading" };
@@ -210,6 +212,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
             isVisible: outputVisibilityOf(node.type, node.config, fixed),
             needsConfirm: outputConfirmationOf(node.config),
             colorOf: outputColorOf(node.config),
+            defaultOutput: defaultOutputOf(node.config),
           }
         : { status: "error" };
     };
