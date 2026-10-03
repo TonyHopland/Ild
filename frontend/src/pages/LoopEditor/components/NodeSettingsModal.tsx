@@ -18,11 +18,13 @@ import {
   isOutputVisible,
   isReservedOutput,
   needsConfirmation,
+  isDefaultOutput,
   outputsAreDerived,
   routedOutputNames,
   unroutedRows,
   withColor,
   withConfirmation,
+  withDefault,
   withVisibility,
   hasSettingsProblems,
   nodeSettingsProblems,
@@ -54,6 +56,8 @@ interface NodeSettingsModalProps {
   isOutputVisible: (name: string) => boolean;
   /** Whether an output that has no row asks the person answering to confirm before taking it. */
   isOutputConfirmed: (name: string) => boolean;
+  /** Whether an output that has no row is the node's default, which Enter in the run takes. */
+  isOutputDefault: (name: string) => boolean;
   /** The button colour of an output that has no row, or null for the default. */
   outputColor: (name: string) => string | null;
   aiUseSession: boolean;
@@ -199,6 +203,52 @@ function ConfirmToggle({
 }
 
 /**
+ * Whether Enter in the run's feedback box takes the output called `name`. The
+ * choice is closed while the output is not offered.
+ */
+function DefaultToggle({
+  name,
+  isDefault,
+  closedReason,
+  onChange,
+}: {
+  name: string;
+  isDefault: boolean;
+  /** Why the output is not offered to the person answering, if it is not. */
+  closedReason: string | null;
+  onChange: (isDefault: boolean) => void;
+}) {
+  const state = `${isDefault ? "Default output" : "Not the default output"}: ${name}`;
+  const label = closedReason ? `${state} (${closedReason})` : state;
+  return (
+    <button
+      type="button"
+      className="output-visible-toggle output-default-toggle"
+      aria-pressed={isDefault}
+      aria-label={label}
+      title={label}
+      disabled={closedReason !== null}
+      onClick={() => onChange(!isDefault)}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="16"
+        height="16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M20 5v7a3 3 0 0 1-3 3H5" />
+        <path d="m9 11-4 4 4 4" />
+      </svg>
+    </button>
+  );
+}
+
+/**
  * The colour of the run's button for the output called `name`; pressing it
  * opens or closes its picker. The choice is closed while the output is not offered.
  */
@@ -307,6 +357,7 @@ function OutputsEditor({
   problems,
   isVisible,
   isConfirmed,
+  isDefault,
   colorOf,
   onChange,
   onChoiceChange,
@@ -323,6 +374,7 @@ function OutputsEditor({
   problems: (string | null)[];
   isVisible: (name: string) => boolean;
   isConfirmed: (name: string) => boolean;
+  isDefault: (name: string) => boolean;
   colorOf: (name: string) => string | null;
   onChange: (value: OutputRow[]) => void;
   onChoiceChange: (name: string, choice: OutputChoice) => void;
@@ -373,6 +425,15 @@ function OutputsEditor({
   const undeclaredFixed = fixed.filter(
     (output) => !rows.some((row) => row.originalName === output.name),
   );
+  // A node has one default at most, so each switch leaves every other output off.
+  const changeDefault = (target: number | string, on: boolean) => {
+    onChange(
+      rows.map((row, i) => ({ ...row, output: withDefault(row.output, on && i === target) })),
+    );
+    for (const name of [...successFailure, ...undeclaredFixed.map((output) => output.name)]) {
+      onChoiceChange(name, { default: on && name === target });
+    }
+  };
   return (
     <div className="config-field">
       <label>Outputs</label>
@@ -380,7 +441,8 @@ function OutputsEditor({
         The outlets this node can take. Add named ones here, then connect each from the node's top
         handle. An output hidden with the eye is not offered to the person answering in the run; it
         still routes as usual. One marked with the shield asks them to confirm before it is taken.
-        The square sets the colour of its button.
+        The one marked with the arrow is the default: for people who turned on Submit default on
+        Enter, Enter in the feedback box takes it. The square sets the colour of its button.
       </small>
       {successFailure.map((name) => {
         const wired = wiredSuccessFailure.includes(name);
@@ -404,6 +466,12 @@ function OutputsEditor({
                 confirm={isConfirmed(name)}
                 closedReason={closedReason}
                 onChange={(next) => onChoiceChange(name, { confirm: next })}
+              />
+              <DefaultToggle
+                name={name}
+                isDefault={isDefault(name)}
+                closedReason={closedReason}
+                onChange={(next) => changeDefault(name, next)}
               />
               {color.square}
               <span className="match-rule-remove-spacer" />
@@ -454,6 +522,12 @@ function OutputsEditor({
                 confirm={needsConfirmation(row.output)}
                 closedReason={closedReason}
                 onChange={(next) => updateRow(index, (output) => withConfirmation(output, next))}
+              />
+              <DefaultToggle
+                name={row.output.name}
+                isDefault={isDefaultOutput(row.output)}
+                closedReason={closedReason}
+                onChange={(next) => changeDefault(index, next)}
               />
               {color.square}
               {reserved ? (
@@ -506,6 +580,12 @@ function OutputsEditor({
                 confirm={isConfirmed(output.name)}
                 closedReason={closedReason}
                 onChange={(next) => onChoiceChange(output.name, { confirm: next })}
+              />
+              <DefaultToggle
+                name={output.name}
+                isDefault={isDefault(output.name)}
+                closedReason={closedReason}
+                onChange={(next) => changeDefault(output.name, next)}
               />
               {color.square}
               <span className="match-rule-remove-spacer" />
@@ -692,6 +772,7 @@ export function NodeSettingsModal({
   wiredSuccessFailure,
   isOutputVisible: isUnlistedOutputVisible,
   isOutputConfirmed: isUnlistedOutputConfirmed,
+  isOutputDefault: isUnlistedOutputDefault,
   outputColor,
   aiUseSession,
   aiSessionPlaceholder,
@@ -793,6 +874,7 @@ export function NodeSettingsModal({
       problems={problems.outputs}
       isVisible={isUnlistedOutputVisible}
       isConfirmed={isUnlistedOutputConfirmed}
+      isDefault={isUnlistedOutputDefault}
       colorOf={outputColor}
       onChange={onOutputRowsChange}
       onChoiceChange={onOutputChoiceChange}

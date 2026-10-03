@@ -1041,6 +1041,16 @@
   color: #fbbf24;
 }
 
+.output-default-toggle[aria-pressed="false"] {
+  border-color: #4a4a60;
+  color: #707090;
+}
+
+.output-default-toggle[aria-pressed="true"]:not(:disabled) {
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
 .output-row-hidden input {
   opacity: 0.55;
 }
