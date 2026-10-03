@@ -133,6 +133,40 @@ describe("workItemService URL contract", () => {
     expect(init?.method).toBe("DELETE");
   });
 
+  test("file endpoints carry a diff range as from/to only when one is chosen", async () => {
+    const from = "c1".repeat(20);
+    const to = "c2".repeat(20);
+    const sent = (i: number) => new URL(fetchSpy.mock.calls[i][0] as string, "http://example.test");
+
+    fetchSpy.mockImplementation(async () => okJsonResponse({ baseSha: null, commits: [] }));
+    await workItemService.getFileCommits("wi-1");
+    await workItemService.getFiles("wi-1");
+    await workItemService.getFiles("wi-1", { from, to });
+    await workItemService.getFileContent("wi-1", "src/a b.ts", { from });
+    await workItemService.saveFileContent("wi-1", "src/a.ts", "text", { from, to });
+
+    expect(sent(0).pathname).toBe("/api/v1/workitems/wi-1/files/commits");
+    expect(fetchSpy.mock.calls[0][1]?.method).toBe("GET");
+    expect(fetchSpy.mock.calls[1][0]).toBe("/api/v1/workitems/wi-1/files");
+
+    expect(sent(2).pathname).toBe("/api/v1/workitems/wi-1/files");
+    expect(sent(2).searchParams.get("from")).toBe(from);
+    expect(sent(2).searchParams.get("to")).toBe(to);
+
+    expect(sent(3).searchParams.get("path")).toBe("src/a b.ts");
+    expect(sent(3).searchParams.get("from")).toBe(from);
+    expect(sent(3).searchParams.has("to")).toBe(false);
+
+    expect(sent(4).pathname).toBe("/api/v1/workitems/wi-1/files/content");
+    expect(fetchSpy.mock.calls[4][1]?.method).toBe("PUT");
+    expect(sent(4).searchParams.get("from")).toBe(from);
+    expect(sent(4).searchParams.get("to")).toBe(to);
+    expect(JSON.parse(fetchSpy.mock.calls[4][1]?.body as string)).toEqual({
+      path: "src/a.ts",
+      content: "text",
+    });
+  });
+
   test("downloadFile GETs the raw file, path encoded, and hands back its bytes untouched", async () => {
     const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x0a]);
     fetchSpy.mockResolvedValue(

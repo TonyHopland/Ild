@@ -95,8 +95,9 @@ public interface IRepositoryManager
     /// empty list if <paramref name="worktreePath"/> is not a valid worktree.
     /// The diff is anchored on <paramref name="defaultBranch"/> (the repository's
     /// stored default branch) when supplied, falling back to <c>origin/HEAD</c>.
+    /// A <paramref name="range"/> narrows the statuses to the changes it spans.
     /// </summary>
-    Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath, string? defaultBranch = null);
+    Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath, string? defaultBranch = null, WorktreeDiffRange? range = null);
 
     /// <summary>
     /// Read a single worktree file's full content together with its unified
@@ -106,9 +107,19 @@ public interface IRepositoryManager
     /// render it; the diff is null when the file is unchanged. Returns
     /// null if the path escapes the worktree. The diff is anchored on
     /// <paramref name="defaultBranch"/> (the repository's stored default branch)
-    /// when supplied, falling back to <c>origin/HEAD</c>.
+    /// when supplied, falling back to <c>origin/HEAD</c>. A <paramref name="range"/>
+    /// narrows the status and diff to the changes it spans; a file it changed
+    /// that is no longer on disk still answers, with null content.
     /// </summary>
-    Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null);
+    Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null, WorktreeDiffRange? range = null);
+
+    /// <summary>
+    /// The run branch's own first-parent commits after its fork point with
+    /// <paramref name="defaultBranch"/>, newest first, together with that fork
+    /// point — the same one the file diffs anchor on. When no fork point
+    /// resolves or the worktree is not healthy the base is null and the list empty.
+    /// </summary>
+    Task<WorktreeCommitsResponse> ListWorktreeCommitsAsync(string worktreePath, string? defaultBranch);
 
     /// <summary>
     /// Open a single worktree file for reading exactly as it is stored, for a
@@ -131,9 +142,10 @@ public interface IRepositoryManager
     /// differently from bytes that cannot take text. A file that goes away
     /// underneath the write is refused too rather than raised, so no caller has
     /// to catch to be correct. The write lands on disk and nowhere else;
-    /// committing it stays the run's business.
+    /// committing it stays the run's business. The file read back is described
+    /// under <paramref name="range"/>.
     /// </summary>
-    Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null);
+    Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null, WorktreeDiffRange? range = null);
 
     /// <summary>
     /// Inspect a remote without cloning to infer the default branch (from the

@@ -527,6 +527,203 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
+    public async Task ListWorktreeCommits_lists_the_run_branch_first_parent_commits_newest_first()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-commits");
+        var forkPoint = GitOut(wt, "rev-parse", "HEAD");
+
+        var none = await mgr.ListWorktreeCommitsAsync(wt, "main");
+        Assert.Equal(forkPoint, none.BaseSha);
+        Assert.Empty(none.Commits);
+
+        File.WriteAllText(Path.Combine(wt, "a.txt"), "alpha\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "Add a", "-m", "A body line that is not the subject.");
+        var first = GitOut(wt, "rev-parse", "HEAD");
+
+        // A side branch merged in: its own commit is not one of the run's steps.
+        Git(wt, "checkout", "-b", "side");
+        File.WriteAllText(Path.Combine(wt, "side.txt"), "side\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "Side work");
+        Git(wt, "checkout", "feature-commits");
+        Git(wt, "merge", "--no-ff", "side", "-m", "Merge side");
+        var merge = GitOut(wt, "rev-parse", "HEAD");
+
+        File.WriteAllText(Path.Combine(wt, "b.txt"), "beta\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "Add b");
+        var last = GitOut(wt, "rev-parse", "HEAD");
+
+        var listed = await mgr.ListWorktreeCommitsAsync(wt, "main");
+
+        Assert.Equal(forkPoint, listed.BaseSha);
+        Assert.Equal(
+            new[] { (last, merge, "Add b"), (merge, first, "Merge side"), (first, forkPoint, "Add a") },
+            listed.Commits.Select(c => (c.Sha, c.ParentSha, c.Subject)).ToArray());
+    }
+
+    [Fact]
+    public async Task ListWorktreeCommits_answers_no_base_when_none_resolves_or_the_worktree_is_not_one()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        Git(work, "symbolic-ref", "-d", "refs/remotes/origin/HEAD");
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-no-base");
+        File.WriteAllText(Path.Combine(wt, "a.txt"), "alpha\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "Add a");
+
+        var unresolved = await mgr.ListWorktreeCommitsAsync(wt, "no-such-branch");
+        Assert.Null(unresolved.BaseSha);
+        Assert.Empty(unresolved.Commits);
+
+        var notAWorktree = Path.Combine(_tmp, "plain-directory");
+        Directory.CreateDirectory(notAWorktree);
+        var unhealthy = await mgr.ListWorktreeCommitsAsync(notAWorktree, "main");
+        Assert.Null(unhealthy.BaseSha);
+        Assert.Empty(unhealthy.Commits);
+    }
+
+    [Fact]
+    public async Task ListWorktreeFiles_reports_only_what_the_range_changed()
+    {
+        var (mgr, wt, forkPoint, first, second) = await BranchWithTwoCommitsAndPendingWorkAsync();
+
+        var secondOnly = await StatusesAsync(new WorktreeDiffRange { From = first, To = second });
+        Assert.Equal("added", secondOnly["b.txt"]);
+        Assert.Equal("modified", secondOnly["mod.txt"]);
+        Assert.Equal("none", secondOnly.GetValueOrDefault("a.txt", "none"));
+        // A range ending at a commit is committed history only.
+        Assert.Equal("none", secondOnly["c.txt"]);
+        Assert.Equal("none", secondOnly["keep.txt"]);
+
+        // a.txt is gone from disk since, but it is what this commit changed.
+        var firstOnly = await StatusesAsync(new WorktreeDiffRange { From = forkPoint, To = first });
+        Assert.Equal("added", firstOnly["a.txt"]);
+        Assert.Equal("none", firstOnly["b.txt"]);
+        Assert.Equal("none", firstOnly["mod.txt"]);
+        Assert.Equal("none", firstOnly["c.txt"]);
+
+        var pending = await StatusesAsync(new WorktreeDiffRange { From = second });
+        Assert.Equal("added", pending["c.txt"]);
+        Assert.Equal("modified", pending["keep.txt"]);
+        Assert.Equal("deleted", pending["a.txt"]);
+        Assert.Equal("none", pending["b.txt"]);
+        Assert.Equal("none", pending["mod.txt"]);
+
+        async Task<Dictionary<string, string>> StatusesAsync(WorktreeDiffRange range) =>
+            (await mgr.ListWorktreeFilesAsync(wt, "main", range)).ToDictionary(f => f.Path, f => f.ChangeStatus);
+    }
+
+    [Fact]
+    public async Task ReadWorktreeFile_diffs_only_across_the_range()
+    {
+        var (mgr, wt, forkPoint, first, second) = await BranchWithTwoCommitsAndPendingWorkAsync();
+        var firstOnly = new WorktreeDiffRange { From = forkPoint, To = first };
+        var secondOnly = new WorktreeDiffRange { From = first, To = second };
+        var pending = new WorktreeDiffRange { From = second };
+
+        var gone = await mgr.ReadWorktreeFileAsync(wt, "a.txt", "main", firstOnly);
+        Assert.NotNull(gone);
+        Assert.Equal("added", gone!.ChangeStatus);
+        Assert.Null(gone.Content);
+        Assert.Contains("+alpha", gone.Diff);
+
+        var later = await mgr.ReadWorktreeFileAsync(wt, "b.txt", "main", firstOnly);
+        Assert.Equal("none", later!.ChangeStatus);
+        Assert.Null(later.Diff);
+        Assert.Equal("beta\n", later.Content);
+
+        var modified = await mgr.ReadWorktreeFileAsync(wt, "mod.txt", "main", secondOnly);
+        Assert.Equal("modified", modified!.ChangeStatus);
+        Assert.Contains("+changed", modified.Diff);
+
+        var untrackedInCommits = await mgr.ReadWorktreeFileAsync(wt, "c.txt", "main", secondOnly);
+        Assert.Equal("none", untrackedInCommits!.ChangeStatus);
+        Assert.Null(untrackedInCommits.Diff);
+        Assert.Equal("scratch\n", untrackedInCommits.Content);
+
+        var untrackedPending = await mgr.ReadWorktreeFileAsync(wt, "c.txt", "main", pending);
+        Assert.Equal("added", untrackedPending!.ChangeStatus);
+        Assert.Contains("+scratch", untrackedPending.Diff);
+
+        var editedPending = await mgr.ReadWorktreeFileAsync(wt, "keep.txt", "main", pending);
+        Assert.Equal("modified", editedPending!.ChangeStatus);
+        Assert.Contains("+keep edited", editedPending.Diff);
+
+        var committedPending = await mgr.ReadWorktreeFileAsync(wt, "b.txt", "main", pending);
+        Assert.Equal("none", committedPending!.ChangeStatus);
+        Assert.Null(committedPending.Diff);
+    }
+
+    [Fact]
+    public async Task A_range_ending_at_a_commit_leaves_out_a_file_deleted_but_not_committed()
+    {
+        var (mgr, wt, forkPoint, first, second) = await BranchWithTwoCommitsAndPendingWorkAsync();
+        var secondOnly = new WorktreeDiffRange { From = first, To = second };
+
+        // a.txt is gone from disk without the deletion being committed: the
+        // second commit did not touch it, so there is nothing to show for it.
+        var listed = await mgr.ListWorktreeFilesAsync(wt, "main", secondOnly);
+        Assert.DoesNotContain(listed, f => f.Path == "a.txt");
+        Assert.Null(await mgr.ReadWorktreeFileAsync(wt, "a.txt", "main", secondOnly));
+
+        // Where the range did change it, it stays, as does the pending deletion.
+        var firstOnly = await mgr.ListWorktreeFilesAsync(wt, "main", new WorktreeDiffRange { From = forkPoint, To = first });
+        Assert.Equal("added", firstOnly.Single(f => f.Path == "a.txt").ChangeStatus);
+        var pending = await mgr.ListWorktreeFilesAsync(wt, "main", new WorktreeDiffRange { From = second });
+        Assert.Equal("deleted", pending.Single(f => f.Path == "a.txt").ChangeStatus);
+    }
+
+    [Fact]
+    public async Task WriteWorktreeFile_answers_with_the_file_under_the_range_it_was_saved_in()
+    {
+        var (mgr, wt, _, first, second) = await BranchWithTwoCommitsAndPendingWorkAsync();
+
+        var inCommits = await mgr.WriteWorktreeFileAsync(wt, "mod.txt", "rewritten\n", "main", new WorktreeDiffRange { From = first, To = second });
+        Assert.Equal(WorktreeFileWriteOutcome.Saved, inCommits.Outcome);
+        Assert.Equal("rewritten\n", await File.ReadAllTextAsync(Path.Combine(wt, "mod.txt"), TestContext.Current.CancellationToken));
+        // The save is not committed, so the commit's own change is what shows.
+        Assert.Equal("modified", inCommits.File!.ChangeStatus);
+        Assert.Contains("+changed", inCommits.File.Diff);
+        Assert.DoesNotContain("rewritten", inCommits.File.Diff);
+
+        var inPending = await mgr.WriteWorktreeFileAsync(wt, "mod.txt", "again\n", "main", new WorktreeDiffRange { From = second });
+        Assert.Equal("modified", inPending.File!.ChangeStatus);
+        Assert.Contains("-changed", inPending.File.Diff);
+        Assert.Contains("+again", inPending.File.Diff);
+    }
+
+    /// <summary>
+    /// A run branch of two commits — the first adds a.txt, the second adds b.txt
+    /// and edits mod.txt — with work on top that is not committed: c.txt
+    /// untracked, keep.txt edited and a.txt deleted.
+    /// </summary>
+    private async Task<(RepositoryManager Mgr, string Wt, string ForkPoint, string First, string Second)> BranchWithTwoCommitsAndPendingWorkAsync()
+    {
+        var (work, mgr) = CloneWithOrigin();
+        var wt = await mgr.CreateWorktreeAsync(work, "feature-range");
+        var forkPoint = GitOut(wt, "rev-parse", "HEAD");
+
+        File.WriteAllText(Path.Combine(wt, "a.txt"), "alpha\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "Add a");
+        var first = GitOut(wt, "rev-parse", "HEAD");
+
+        File.WriteAllText(Path.Combine(wt, "b.txt"), "beta\n");
+        File.WriteAllText(Path.Combine(wt, "mod.txt"), "changed\n");
+        Git(wt, "add", "-A");
+        Git(wt, "commit", "-m", "Add b");
+        var second = GitOut(wt, "rev-parse", "HEAD");
+
+        File.WriteAllText(Path.Combine(wt, "c.txt"), "scratch\n");
+        File.WriteAllText(Path.Combine(wt, "keep.txt"), "keep edited\n");
+        File.Delete(Path.Combine(wt, "a.txt"));
+        return (mgr, wt, forkPoint, first, second);
+    }
+
+    [Fact]
     public async Task InspectRemoteAsync_reads_default_branch_from_symref_and_name_from_url()
     {
         var dir = Path.Combine(_tmp, "ins-" + Guid.NewGuid().ToString("N"));

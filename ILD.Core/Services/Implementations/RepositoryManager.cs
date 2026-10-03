@@ -289,12 +289,13 @@ public class RepositoryManager : IRepositoryManager
         return await File.ReadAllTextAsync(full);
     }
 
-    public async Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath, string? defaultBranch = null)
+    public async Task<IReadOnlyList<WorktreeFileEntry>> ListWorktreeFilesAsync(string worktreePath, string? defaultBranch = null, WorktreeDiffRange? range = null)
     {
+        RequireCommitShas(range);
         if (!await ValidateWorktreeHealthAsync(worktreePath))
             return Array.Empty<WorktreeFileEntry>();
 
-        var baseRef = await ResolveDiffBaseAsync(worktreePath, defaultBranch);
+        var baseRef = range?.From ?? await ResolveDiffBaseAsync(worktreePath, defaultBranch);
 
         // Present files (tracked + untracked), .gitignore honoured. Start every
         // one at "none"; the diff below promotes the ones that actually changed.
@@ -302,10 +303,11 @@ public class RepositoryManager : IRepositoryManager
         foreach (var path in await ListZeroSeparatedAsync(worktreePath, "ls-files", "--cached", "--others", "--exclude-standard", "-z"))
             statuses[path] = "none";
 
-        // Tracked changes against the fork point — working tree vs base, so
-        // uncommitted edits show up too. Parse the NUL-delimited name-status
+        // Tracked changes against the fork point (or the range's start) —
+        // working tree vs base, so uncommitted edits show up too, unless the
+        // range ends at a commit. Parse the NUL-delimited name-status
         // stream; renames/copies emit a source and a destination path.
-        var (code, diffOut, _) = await RunAsync(worktreePath, "diff", "--name-status", "-z", baseRef);
+        var (code, diffOut, _) = await RunAsync(worktreePath, ["diff", "--name-status", "-z", .. DiffRevisions(baseRef, range)]);
         if (code == 0)
         {
             var tokens = diffOut.Split('\0', StringSplitOptions.RemoveEmptyEntries);
@@ -326,9 +328,23 @@ public class RepositoryManager : IRepositoryManager
             }
         }
 
-        // git diff ignores untracked files, so tag them explicitly.
-        foreach (var path in await ListZeroSeparatedAsync(worktreePath, "ls-files", "--others", "--exclude-standard", "-z"))
-            statuses[path] = "added";
+        // git diff ignores untracked files, so tag them explicitly — unless the
+        // range ends at a commit, which nothing untracked is part of.
+        if (range?.To == null)
+        {
+            foreach (var path in await ListZeroSeparatedAsync(worktreePath, "ls-files", "--others", "--exclude-standard", "-z"))
+                statuses[path] = "added";
+        }
+        else
+        {
+            // Nor is a deletion not yet committed: a file gone from disk that
+            // the range left alone has nothing to show, and reading it is a 404.
+            foreach (var path in await ListZeroSeparatedAsync(worktreePath, "ls-files", "--deleted", "-z"))
+            {
+                if (statuses.GetValueOrDefault(path) == "none")
+                    statuses.Remove(path);
+            }
+        }
 
         return statuses
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
@@ -336,27 +352,29 @@ public class RepositoryManager : IRepositoryManager
             .ToList();
     }
 
-    public async Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null)
+    public async Task<WorktreeFileContentResponse?> ReadWorktreeFileAsync(string worktreePath, string relativePath, string? defaultBranch = null, WorktreeDiffRange? range = null)
     {
+        RequireCommitShas(range);
         var full = ResolveSafePath(worktreePath, relativePath);
         if (full == null) return null;
 
-        var baseRef = await ResolveDiffBaseAsync(worktreePath, defaultBranch);
+        var baseRef = range?.From ?? await ResolveDiffBaseAsync(worktreePath, defaultBranch);
+        var revisions = DiffRevisions(baseRef, range);
 
         var status = "none";
         string? diff = null;
 
-        var (nsCode, ns, _) = await RunAsync(worktreePath, "diff", "--name-status", "-z", baseRef, "--", relativePath);
+        var (nsCode, ns, _) = await RunAsync(worktreePath, ["diff", "--name-status", "-z", .. revisions, "--", relativePath]);
         var nsTokens = ns.Split('\0', StringSplitOptions.RemoveEmptyEntries);
         if (nsCode == 0 && nsTokens.Length > 0 && nsTokens[0].Length > 0)
         {
             status = MapDiffStatus(nsTokens[0][0]);
-            var (_, patch, _) = await RunAsync(worktreePath, "diff", baseRef, "--", relativePath);
+            var (_, patch, _) = await RunAsync(worktreePath, ["diff", .. revisions, "--", relativePath]);
             diff = string.IsNullOrEmpty(patch) ? null : patch;
         }
 
         var exists = File.Exists(full);
-        if (status == "none" && exists)
+        if (status == "none" && exists && range?.To == null)
         {
             // git diff ignores untracked files, so a brand-new file shows no
             // status above — detect it and synthesize the "all added" diff.
@@ -423,8 +441,9 @@ public class RepositoryManager : IRepositoryManager
         }
     }
 
-    public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null)
+    public async Task<WorktreeFileWriteResult> WriteWorktreeFileAsync(string worktreePath, string relativePath, string content, string? defaultBranch = null, WorktreeDiffRange? range = null)
     {
+        RequireCommitShas(range);
         if (!await ValidateWorktreeHealthAsync(worktreePath))
             return WorktreeFileWriteResult.WorktreeUnavailable;
 
@@ -465,8 +484,36 @@ public class RepositoryManager : IRepositoryManager
         // The run's agent works in this same worktree, so the file can be gone
         // again before the read that describes it — a save cannot answer with a
         // file it no longer holds, and says what a read of that path would now.
-        var written = await ReadWorktreeFileAsync(worktreePath, relativePath, defaultBranch);
+        var written = await ReadWorktreeFileAsync(worktreePath, relativePath, defaultBranch, range);
         return written == null ? WorktreeFileWriteResult.NotFound : WorktreeFileWriteResult.Saved(written);
+    }
+
+    public async Task<WorktreeCommitsResponse> ListWorktreeCommitsAsync(string worktreePath, string? defaultBranch)
+    {
+        if (!await ValidateWorktreeHealthAsync(worktreePath))
+            return new WorktreeCommitsResponse();
+
+        var baseSha = await TryResolveMergeBaseAsync(worktreePath, defaultBranch);
+        if (baseSha == null || !IsCommitSha(baseSha))
+            return new WorktreeCommitsResponse();
+
+        // First-parent only: a merged-in side branch is one step of the run,
+        // not several, and the steps stay a chain each a parent of the next.
+        var (code, stdout, _) = await RunAsync(worktreePath, "log", "--first-parent", "-z", "--format=%H%x1f%P%x1f%s", $"{baseSha}..HEAD");
+        if (code != 0)
+            return new WorktreeCommitsResponse();
+
+        var commits = stdout
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(record => record.Split('\x1f', 3))
+            .Select(fields => new WorktreeCommit
+            {
+                Sha = fields[0],
+                ParentSha = fields.Length > 1 ? fields[1].Split(' ')[0] : string.Empty,
+                Subject = fields.Length > 2 ? fields[2] : string.Empty,
+            })
+            .ToList();
+        return new WorktreeCommitsResponse { BaseSha = baseSha, Commits = commits };
     }
 
     /// <summary>
@@ -479,6 +526,13 @@ public class RepositoryManager : IRepositoryManager
     /// </summary>
     private async Task<string> ResolveDiffBaseAsync(string worktreePath, string? defaultBranch)
     {
+        // Nothing resolved (e.g. origin/HEAD unset in this worktree); keep the
+        // literal ref so the caller's diff fails loudly rather than silently.
+        return await TryResolveMergeBaseAsync(worktreePath, defaultBranch) ?? "origin/HEAD";
+    }
+
+    private async Task<string?> TryResolveMergeBaseAsync(string worktreePath, string? defaultBranch)
+    {
         foreach (var candidate in EnumerateBaseRefCandidates(defaultBranch))
         {
             var (code, stdout, _) = await RunAsync(worktreePath, "merge-base", "HEAD", candidate);
@@ -486,10 +540,24 @@ public class RepositoryManager : IRepositoryManager
                 return stdout.Trim();
         }
 
-        // Nothing resolved (e.g. origin/HEAD unset in this worktree); keep the
-        // literal ref so the caller's diff fails loudly rather than silently.
-        return "origin/HEAD";
+        return null;
     }
+
+    private static string[] DiffRevisions(string from, WorktreeDiffRange? range)
+        => range?.To is { } to ? [from, to] : [from];
+
+    // The controller only admits SHAs git itself listed, so this never fires
+    // from a request; it keeps anything else from reaching git as an option or
+    // a ref name.
+    private static void RequireCommitShas(WorktreeDiffRange? range)
+    {
+        if (range == null) return;
+        if ((range.From != null && !IsCommitSha(range.From)) || (range.To != null && !IsCommitSha(range.To)))
+            throw new ArgumentException("A diff range is made of full commit SHAs.", nameof(range));
+    }
+
+    private static bool IsCommitSha(string value)
+        => value.Length is 40 or 64 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static IEnumerable<string> EnumerateBaseRefCandidates(string? defaultBranch)
     {

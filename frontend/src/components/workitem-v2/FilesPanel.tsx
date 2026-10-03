@@ -2,12 +2,26 @@ import { CSSProperties, ReactNode, useCallback, useEffect, useMemo, useRef, useS
 import {
   WorkItem,
   WorkItemStatus,
+  WorktreeCommits,
   WorktreeFileChangeStatus,
   WorktreeFileContent,
   WorktreeFileEntry,
+  WorktreeDiffRange,
 } from "../../types";
 import { workItemService } from "../../services/auth";
 import { buildFileTree, FileTreeNode } from "../../utils/fileTree";
+import {
+  ALL_CHANGES,
+  canToggle,
+  DiffSelection,
+  diffRangeKey,
+  diffRangeOf,
+  diffSelectionLabel,
+  isCommitListAvailable,
+  PENDING,
+  reconcileDiffSelection,
+  toggleDiffSelection,
+} from "../../utils/diffSelection";
 import { parseUnifiedDiff } from "../../utils/unifiedDiff";
 import { highlightLines } from "../../utils/syntaxHighlight";
 import MarkdownRenderer from "../MarkdownRenderer";
@@ -62,17 +76,11 @@ const PREVIEW_RENDERER: Record<PreviewKind, (content: string, path: string) => R
 
 /**
  * What makes the panel's contents a different thing to load: another work item,
- * or the same one on another worktree. Both the refresh below and a save in
- * flight measure against it, so neither can decide on its own that the panel is
- * still showing what it was.
+ * or the same one on another worktree. The dialog keys the panel by it, so each
+ * gets a fresh instance and nothing one started can reach the next.
  */
-function workItemKey(workItem: WorkItem): string {
+export function workItemKey(workItem: WorkItem): string {
   return `${workItem.id}:${workItem.worktreePath ?? ""}`;
-}
-
-/** One file of one work item, as a running download is tracked. */
-function downloadEntry(itemKey: string, path: string): string {
-  return `${itemKey}\u0000${path}`;
 }
 
 /**
@@ -162,92 +170,117 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // reach the editor they open on the next one.
   const [savingPath, setSavingPath] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  // Every download still running, one entry per item and file (see
-  // {@link downloadEntry}). Each is added by its own click and removed only by
-  // its own request, so no download — on any item or file — can hold or free
-  // another's button, and none is dropped on a switch: a download the user
-  // asked for still saves after they move on.
+  // Every download still running, by path. Each is added by its own click and
+  // removed only by its own request, so no download can hold or free another
+  // file's button, and one the user asked for still saves after they move on.
   const [downloading, setDownloading] = useState<ReadonlySet<string>>(new Set());
   const [downloadError, setDownloadError] = useState<string | null>(null);
 
-  // The key the panel is currently loaded for, set by the effect below and
-  // read by everything that resolves after it — see {@link workItemKey}.
-  const lastKeyRef = useRef<string | null>(null);
+  const [selection, setSelection] = useState<DiffSelection>(ALL_CHANGES);
+  const [commits, setCommits] = useState<WorktreeCommits | null>(null);
+  const [commitsFailed, setCommitsFailed] = useState(false);
+  const range = diffRangeOf(selection, commits);
+  const rangeKey = diffRangeKey(range);
+
+  // The first load shows the loading state; the background refreshes after it are silent.
+  const loadedRef = useRef(false);
+  // A save answered after the dialog moved on to another item starts no more reads.
+  const mountedRef = useRef(true);
+  // The range the panel is loaded for; an answer read under any other is dropped.
+  const activeRangeRef = useRef<{ key: string; range?: WorktreeDiffRange }>({ key: "" });
+  // The range the open file's status and diff were read under.
+  const contentRangeKeyRef = useRef("");
+  // Only the newest request of each kind may land; each counts its own. A save
+  // counts as the open file's newest read, so no read started before it undoes it.
+  const listRequestRef = useRef(0);
+  const commitsRequestRef = useRef(0);
+  const contentRequestRef = useRef(0);
 
   const refresh = useCallback(
     async (showLoading: boolean) => {
+      const request = ++listRequestRef.current;
       if (!workItem.worktreePath) {
         setFiles([]);
         return;
       }
+      const { range } = activeRangeRef.current;
       if (showLoading) setLoading(true);
       setError(null);
       try {
-        const result = await workItemService.getFiles(workItem.id);
+        const result = await (range
+          ? workItemService.getFiles(workItem.id, range)
+          : workItemService.getFiles(workItem.id));
+        if (listRequestRef.current !== request) return;
         setFiles(Array.isArray(result?.files) ? result.files : []);
       } catch (e) {
+        if (listRequestRef.current !== request) return;
         setError((e as { message?: string })?.message ?? "Failed to load files.");
         setFiles([]);
       } finally {
-        if (showLoading) setLoading(false);
+        if (listRequestRef.current === request) setLoading(false);
       }
     },
     [workItem.id, workItem.worktreePath],
   );
 
+  const loadCommits = useCallback(async () => {
+    const request = ++commitsRequestRef.current;
+    if (!workItem.worktreePath) return;
+    let list: WorktreeCommits | null;
+    try {
+      list = await workItemService.getFileCommits(workItem.id);
+    } catch {
+      // Shown as the dropdown's own notice; All needs no list and goes on working.
+      list = null;
+    }
+    if (commitsRequestRef.current !== request) return;
+    setCommits(list);
+    setCommitsFailed(list === null);
+    setSelection((prev) => reconcileDiffSelection(prev, list));
+  }, [workItem.id, workItem.worktreePath]);
+
   const loadContent = useCallback(
     async (path: string, showLoading: boolean) => {
-      const key = workItemKey(workItem);
+      const request = ++contentRequestRef.current;
+      const { key: rangeKey, range } = activeRangeRef.current;
+      const isCurrent = () => contentRequestRef.current === request;
       setContentError(null);
       if (showLoading) {
         setContent(null);
         setContentLoading(true);
       }
       try {
-        const result = await workItemService.getFileContent(workItem.id, path);
-        // Same reasoning as the save below: this is one worktree's file, and
-        // the panel may have been handed another item — or moved to another
-        // file — while it was in the air. Kept anyway it would sit behind a
-        // selection that no longer names it, which is enough to offer an Edit
-        // for a file the viewer is not even showing.
-        if (lastKeyRef.current !== key || selectedPathRef.current !== path) return;
+        const result = await (range
+          ? workItemService.getFileContent(workItem.id, path, range)
+          : workItemService.getFileContent(workItem.id, path));
+        if (!isCurrent()) return;
         setContent(result);
+        contentRangeKeyRef.current = rangeKey;
       } catch (e) {
-        if (lastKeyRef.current !== key || selectedPathRef.current !== path) return;
+        if (!isCurrent()) return;
         setContentError((e as { message?: string })?.message ?? "Failed to load file.");
       } finally {
-        if (showLoading) setContentLoading(false);
+        if (isCurrent()) setContentLoading(false);
       }
     },
-    [workItem],
+    [workItem.id],
   );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // The parent refetches the work item every time the run advances (node/run
   // state changes) and passes down a fresh object, so re-pull the file list and
   // the open file whenever the work item updates. This keeps the explorer in
-  // sync with the worktree without a manual page refresh. The first load (and
-  // switching to a different item) shows the loading state; later background
-  // refreshes are silent so the tree and viewer don't flicker.
+  // sync with the worktree without a manual page refresh.
   useEffect(() => {
-    const key = workItemKey(workItem);
-    const isNewItem = lastKeyRef.current !== key;
-    lastKeyRef.current = key;
-    void refresh(isNewItem);
-    if (isNewItem) {
-      // Another item's worktree is another set of files. Whatever was open
-      // belonged to the item before it, so the viewer starts empty rather than
-      // keeping a path that may not exist here — and an edit of that file is
-      // certainly not an edit of this item's.
-      setSelectedPath(null);
-      selectedPathRef.current = null;
-      setContent(null);
-      setContentError(null);
-      setDraft(null);
-      setSaveError(null);
-      setSavingPath(null);
-      setDownloadError(null);
-      return;
-    }
+    void refresh(!loadedRef.current);
+    loadedRef.current = true;
+    void loadCommits();
     // An open editor holds text that exists nowhere else yet, so the silent
     // re-pull that keeps the viewer current is exactly what would destroy it.
     // The tree still refreshes above; only the open file is left alone.
@@ -256,6 +289,17 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workItem]);
+
+  // Keyed on the range, not the selection: a refresh that keeps the range must cost no extra read.
+  useEffect(() => {
+    if (activeRangeRef.current.key === rangeKey) return;
+    activeRangeRef.current = { key: rangeKey, range };
+    void refresh(true);
+    if (selectedPathRef.current && draft === null) {
+      void loadContent(selectedPathRef.current, true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rangeKey]);
 
   const changedCount = useMemo(
     () => files.filter((f) => f.changeStatus !== "none").length,
@@ -281,42 +325,44 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     [loadContent],
   );
 
-  const itemKey = workItemKey(workItem);
-
   const save = useCallback(async () => {
     if (draft === null || !selectedPath) return;
+    const { key: rangeKey, range } = activeRangeRef.current;
     setSavingPath(selectedPath);
     setSaveError(null);
     try {
       // The save answers with the file as it now stands, so the viewer's status
       // and diff come from the write itself; the list is re-pulled alongside it
       // for the tree badge the same write may have just changed.
-      const saved = await workItemService.saveFileContent(workItem.id, selectedPath, draft);
-      // Neither the panel's item nor its selection is pinned while a save is
-      // out: the dialog can be handed a different work item, and the tree stays
-      // clickable. This answer is one worktree's file, so a panel now showing
-      // another item's has no use for any of it — not the file, and not the
-      // list refresh, which would pull the previous item's tree into it.
-      if (lastKeyRef.current !== itemKey) return;
+      const saved = await (range
+        ? workItemService.saveFileContent(workItem.id, selectedPath, draft, range)
+        : workItemService.saveFileContent(workItem.id, selectedPath, draft));
+      if (!mountedRef.current) return;
       // The badge on the file just written has to catch up even if the user
       // has moved off it, so the list refreshes before the narrower guard.
       void refresh(false);
       if (selectedPathRef.current !== selectedPath) return;
-      setContent(saved);
       setDraft(null);
+      // The write landed either way; only its description can be of a range left since.
+      if (activeRangeRef.current.key === rangeKey) {
+        ++contentRequestRef.current;
+        setContent(saved);
+        contentRangeKeyRef.current = rangeKey;
+      } else {
+        void loadContent(selectedPath, false);
+      }
     } catch (e) {
-      if (lastKeyRef.current !== itemKey || selectedPathRef.current !== selectedPath) return;
+      if (selectedPathRef.current !== selectedPath) return;
       setSaveError((e as { message?: string })?.message ?? "Failed to save file.");
     } finally {
       setSavingPath((current) => (current === selectedPath ? null : current));
     }
-  }, [draft, selectedPath, itemKey, workItem.id, refresh]);
+  }, [draft, selectedPath, workItem.id, refresh, loadContent]);
 
   const download = useCallback(async () => {
     if (!selectedPath) return;
     const path = selectedPath;
-    const entry = downloadEntry(itemKey, path);
-    setDownloading((prev) => new Set(prev).add(entry));
+    setDownloading((prev) => new Set(prev).add(path));
     setDownloadError(null);
     try {
       const blob = await workItemService.downloadFile(workItem.id, path);
@@ -329,16 +375,16 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (e) {
-      if (lastKeyRef.current !== itemKey || selectedPathRef.current !== path) return;
+      if (selectedPathRef.current !== path) return;
       setDownloadError((e as { message?: string })?.message ?? "Failed to download file.");
     } finally {
       setDownloading((prev) => {
         const next = new Set(prev);
-        next.delete(entry);
+        next.delete(path);
         return next;
       });
     }
-  }, [selectedPath, itemKey, workItem.id]);
+  }, [selectedPath, workItem.id]);
 
   const toggleFolder = useCallback((path: string) => {
     setToggledFolders((prev) => {
@@ -377,8 +423,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     !contentLoading &&
     !contentError &&
     content.changeStatus !== "deleted";
-  const downloadingThis =
-    selectedPath !== null && downloading.has(downloadEntry(itemKey, selectedPath));
+  const downloadingThis = selectedPath !== null && downloading.has(selectedPath);
 
   if (!workItem.worktreePath) {
     return (
@@ -452,13 +497,24 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               Changes{changedCount > 0 ? ` (${changedCount})` : ""}
             </button>
           </div>
+          <DiffRangePicker
+            selection={selection}
+            commits={commits}
+            failed={commitsFailed}
+            locked={draft !== null}
+            onChange={setSelection}
+          />
         </div>
         <div className="wiv2-files-list">
           {loading && <div className="wiv2-empty">Loading files…</div>}
           {error && <div className="preview-message preview-error">{error}</div>}
           {!loading && !error && visibleFiles.length === 0 && (
             <div className="wiv2-empty">
-              {changesOnly ? "No files differ from the base branch." : "No files in this worktree."}
+              {!changesOnly
+                ? "No files in this worktree."
+                : range === undefined
+                  ? "No files differ from the base branch."
+                  : "The selected range changed no files."}
             </div>
           )}
           {!loading && !error && renderNodes(tree, 0)}
@@ -503,6 +559,10 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
                 onClick={() => {
                   setDraft(null);
                   setSaveError(null);
+                  // The range can move under a draft when the commit list does.
+                  if (selectedPath && contentRangeKeyRef.current !== activeRangeRef.current.key) {
+                    void loadContent(selectedPath, true);
+                  }
                 }}
                 disabled={saving}
               >
@@ -556,6 +616,82 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The tree's range dropdown: All, Pending, then the branch's commits newest
+ * first, each a checkbox over one unbroken run (see {@link toggleDiffSelection}).
+ * Without a usable commit list only All is offered, and the list says why.
+ */
+function DiffRangePicker({
+  selection,
+  commits,
+  failed,
+  locked,
+  onChange,
+}: {
+  selection: DiffSelection;
+  commits: WorktreeCommits | null;
+  failed: boolean;
+  locked: boolean;
+  onChange: (next: DiffSelection) => void;
+}) {
+  const available = isCommitListAvailable(commits);
+  const option = (item: string, label: ReactNode, title?: string) => (
+    <label key={item} className="wiv2-range-option" title={title}>
+      <input
+        type="checkbox"
+        checked={
+          selection.kind === "some" &&
+          (item === PENDING ? selection.pending : selection.commits.includes(item))
+        }
+        disabled={locked || !canToggle(selection, item, commits)}
+        onChange={() => available && onChange(toggleDiffSelection(selection, item, commits))}
+      />
+      {label}
+    </label>
+  );
+  return (
+    <details className="wiv2-range" aria-label="Diff range">
+      <summary
+        className="wiv2-range-summary"
+        aria-disabled={locked}
+        onClick={(e) => {
+          if (locked && !e.currentTarget.parentElement?.hasAttribute("open")) e.preventDefault();
+        }}
+      >
+        {diffSelectionLabel(selection)}
+      </summary>
+      <div className="wiv2-range-menu">
+        <label className="wiv2-range-option">
+          <input
+            type="checkbox"
+            checked={selection.kind === "all"}
+            disabled={locked}
+            onChange={() => onChange(ALL_CHANGES)}
+          />
+          All changes
+        </label>
+        {option(PENDING, "Pending changes")}
+        {available &&
+          commits.commits.map((commit) =>
+            option(
+              commit.sha,
+              <>
+                <code className="wiv2-range-sha">{commit.sha.slice(0, 7)}</code>
+                <span className="wiv2-range-subject">{commit.subject}</span>
+              </>,
+              commit.subject,
+            ),
+          )}
+        {(failed || (commits !== null && !available)) && (
+          <div className="wiv2-range-note">
+            Commits could not be loaded, so only All changes can be shown.
+          </div>
+        )}
+      </div>
+    </details>
   );
 }
 

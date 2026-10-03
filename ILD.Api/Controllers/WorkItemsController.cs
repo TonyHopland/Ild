@@ -501,14 +501,60 @@ public class WorkItemsController : ControllerBase
         }
     }
 
-    [HttpGet("{id}/files")]
-    public async Task<IActionResult> GetFiles(string id)
+    [HttpGet("{id}/files/commits")]
+    public async Task<IActionResult> GetFileCommits(string id)
     {
         var (workItem, error) = await GetPreviewableWorkItemAsync(id);
         if (error != null) return error;
 
         var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
-        var files = await _repositoryManager.ListWorktreeFilesAsync(workItem!.WorktreePath!, diffBase);
+        return Ok(await _repositoryManager.ListWorktreeCommitsAsync(workItem!.WorktreePath!, diffBase));
+    }
+
+    // A diff range only ever names SHAs the commit list itself handed out, on a
+    // base that resolved, so nothing a caller typed — a ref name, an
+    // abbreviation, an option — reaches git.
+    private async Task<(WorktreeDiffRange? Range, IActionResult? Error)> ResolveDiffRangeAsync(
+        string worktreePath, string? diffBase, string? from, string? to)
+    {
+        if (from == null && to == null)
+            return (null, null);
+
+        var listed = await _repositoryManager.ListWorktreeCommitsAsync(worktreePath, diffBase);
+        if (listed.BaseSha == null)
+            return (null, BadRequest(new { error = "The worktree's base could not be resolved, so no diff range can be taken." }));
+
+        // Distance back from the newest commit: a range must start strictly
+        // behind where it ends, or git reports the change reversed.
+        var depth = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < listed.Commits.Count; i++)
+        {
+            depth.TryAdd(listed.Commits[i].Sha, i);
+            depth.TryAdd(listed.Commits[i].ParentSha, i + 1);
+        }
+        depth.TryAdd(listed.BaseSha, listed.Commits.Count);
+
+        var start = from ?? listed.BaseSha;
+        var toIndex = to == null ? -1 : listed.Commits.FindIndex(c => c.Sha == to);
+        if (!depth.TryGetValue(start, out var startDepth) || (to != null && toIndex < 0))
+            return (null, BadRequest(new { error = "Unknown commit." }));
+        if (to != null && startDepth <= toIndex)
+            return (null, BadRequest(new { error = "A diff range has to start before it ends." }));
+
+        return (new WorktreeDiffRange { From = start, To = to }, null);
+    }
+
+    [HttpGet("{id}/files")]
+    public async Task<IActionResult> GetFiles(string id, [FromQuery] string? from = null, [FromQuery] string? to = null)
+    {
+        var (workItem, error) = await GetPreviewableWorkItemAsync(id);
+        if (error != null) return error;
+
+        var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
+        var (range, rangeError) = await ResolveDiffRangeAsync(workItem!.WorktreePath!, diffBase, from, to);
+        if (rangeError != null) return rangeError;
+
+        var files = await _repositoryManager.ListWorktreeFilesAsync(workItem.WorktreePath!, diffBase, range);
         return Ok(new WorktreeFilesResponse
         {
             WorktreePath = workItem.WorktreePath!,
@@ -517,7 +563,8 @@ public class WorkItemsController : ControllerBase
     }
 
     [HttpGet("{id}/files/content")]
-    public async Task<IActionResult> GetFileContent(string id, [FromQuery] string path)
+    public async Task<IActionResult> GetFileContent(
+        string id, [FromQuery] string path, [FromQuery] string? from = null, [FromQuery] string? to = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             return BadRequest(new { error = "path is required." });
@@ -526,7 +573,10 @@ public class WorkItemsController : ControllerBase
         if (error != null) return error;
 
         var diffBase = await ResolveDiffBaseBranchAsync(workItem!);
-        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem!.WorktreePath!, path, diffBase);
+        var (range, rangeError) = await ResolveDiffRangeAsync(workItem!.WorktreePath!, diffBase, from, to);
+        if (rangeError != null) return rangeError;
+
+        var content = await _repositoryManager.ReadWorktreeFileAsync(workItem.WorktreePath!, path, diffBase, range);
         if (content == null)
             return NotFound(new { error = "File not found in worktree." });
         return Ok(content);
@@ -554,7 +604,8 @@ public class WorkItemsController : ControllerBase
     // Writes land in the worktree and stop there — git is left alone, so an edit
     // saved here reaches a branch the same way the run's own edits do.
     [HttpPut("{id}/files/content")]
-    public async Task<IActionResult> SaveFileContent(string id, [FromBody] WorktreeFileSaveRequest? request)
+    public async Task<IActionResult> SaveFileContent(
+        string id, [FromBody] WorktreeFileSaveRequest? request, [FromQuery] string? from = null, [FromQuery] string? to = null)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Path))
             return BadRequest(new { error = "path is required." });
@@ -573,7 +624,10 @@ public class WorkItemsController : ControllerBase
             return Conflict(new { error = "Files can only be edited while the work item is waiting for human feedback." });
 
         var diffBase = await ResolveDiffBaseBranchAsync(workItem);
-        var result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase);
+        var (range, rangeError) = await ResolveDiffRangeAsync(workItem.WorktreePath!, diffBase, from, to);
+        if (rangeError != null) return rangeError;
+
+        var result = await _repositoryManager.WriteWorktreeFileAsync(workItem.WorktreePath!, request.Path, request.Content, diffBase, range);
         // A save that produced a file answers with it — asking for the file is
         // the same question as asking whether it saved, so there is no arm here
         // that could answer 200 with nothing in it. A file that is not there

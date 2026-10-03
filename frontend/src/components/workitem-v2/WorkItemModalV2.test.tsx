@@ -2192,3 +2192,61 @@ describe("WorkItemModalV2 creation", () => {
     expect(saveSpy).toHaveBeenCalledWith("wi-1", "web", edited);
   });
 });
+
+describe("WorkItemModalV2 files tab", () => {
+  test("the Files tab starts clean when the item moves to another worktree", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
+    const getFiles = vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt/a",
+      files: [{ path: "a.ts", changeStatus: "modified" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileCommits").mockResolvedValue({
+      baseSha: "ba5e".repeat(10),
+      commits: [{ sha: "c1".repeat(20), parentSha: "ba5e".repeat(10), subject: "First change" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockResolvedValue({
+      path: "a.ts",
+      changeStatus: "modified",
+      content: "on the first worktree",
+      diff: null,
+      isBinary: false,
+      imageMimeType: null,
+      imageBase64: null,
+    });
+    const { rerender } = await renderDialog(makeWorkItem({ worktreePath: "/tmp/wt/a" }));
+    const settle = () =>
+      act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Files" }));
+    });
+    await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByText("a.ts"));
+    });
+    await settle();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("checkbox", { name: /pending/i }));
+    });
+    await settle();
+    expect(screen.getByText("on the first worktree")).toBeTruthy();
+    expect(screen.getByLabelText(/diff range/i).querySelector("summary")!.textContent).toBe(
+      "Pending changes",
+    );
+
+    // Same item, another worktree: a different set of files.
+    await rerenderDialog(rerender, makeWorkItem({ worktreePath: "/tmp/wt/b" }));
+    await settle();
+
+    expect(screen.queryByText("on the first worktree")).toBeNull();
+    expect(screen.getByText("No file selected")).toBeTruthy();
+    expect(screen.getByLabelText(/diff range/i).querySelector("summary")!.textContent).toBe(
+      "All changes",
+    );
+    expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
+  });
+});
