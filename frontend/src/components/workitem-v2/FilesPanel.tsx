@@ -190,9 +190,11 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const activeRangeRef = useRef<{ key: string; range?: WorktreeDiffRange }>({ key: "" });
   // The range the open file's status and diff were read under.
   const contentRangeKeyRef = useRef("");
-  // Only the newest request of each kind may land; each counts its own.
+  // Only the newest request of each kind may land; each counts its own. A save
+  // counts as the open file's newest read, so no read started before it undoes it.
   const listRequestRef = useRef(0);
   const commitsRequestRef = useRef(0);
+  const contentRequestRef = useRef(0);
 
   const refresh = useCallback(
     async (showLoading: boolean) => {
@@ -239,9 +241,9 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
 
   const loadContent = useCallback(
     async (path: string, showLoading: boolean) => {
+      const request = ++contentRequestRef.current;
       const { key: rangeKey, range } = activeRangeRef.current;
-      const isCurrent = () =>
-        selectedPathRef.current === path && activeRangeRef.current.key === rangeKey;
+      const isCurrent = () => contentRequestRef.current === request;
       setContentError(null);
       if (showLoading) {
         setContent(null);
@@ -251,10 +253,6 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
         const result = await (range
           ? workItemService.getFileContent(workItem.id, path, range)
           : workItemService.getFileContent(workItem.id, path));
-        // The panel may have moved to another file or range while this was in
-        // the air. Kept anyway it would sit behind a selection that no longer
-        // names it, which is enough to offer an Edit for a file the viewer is
-        // not even showing.
         if (!isCurrent()) return;
         setContent(result);
         contentRangeKeyRef.current = rangeKey;
@@ -262,7 +260,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
         if (!isCurrent()) return;
         setContentError((e as { message?: string })?.message ?? "Failed to load file.");
       } finally {
-        if (showLoading && isCurrent()) setContentLoading(false);
+        if (isCurrent()) setContentLoading(false);
       }
     },
     [workItem.id],
@@ -347,6 +345,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
       setDraft(null);
       // The write landed either way; only its description can be of a range left since.
       if (activeRangeRef.current.key === rangeKey) {
+        ++contentRequestRef.current;
         setContent(saved);
         contentRangeKeyRef.current = rangeKey;
       } else {

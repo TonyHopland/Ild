@@ -202,3 +202,67 @@ describe("FilesPanel diff range moved by the commit list", () => {
     expect(commitBox(/Third change/).checked).toBe(true);
   });
 });
+
+describe("FilesPanel reads of the open file", () => {
+  test("an older read of the open file answering last does not replace a newer one", async () => {
+    vi.spyOn(authServices.workItemService, "getFileCommits").mockResolvedValue(COMMITS);
+    mockFiles();
+    const answers: ((file: WorktreeFileContent) => void)[] = [];
+    vi.spyOn(authServices.workItemService, "getFileContent").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const refresh = await mount();
+
+    await click(screen.getByText("a.ts"));
+    // The run advances while the file is still loading: the same file is read again.
+    await refresh();
+    expect(answers).toHaveLength(2);
+
+    await act(async () => answers[1]({ ...fileUnder(), content: "the newer read" }));
+    await settle();
+    await act(async () => answers[0]({ ...fileUnder(), content: "the older read" }));
+    await settle();
+
+    expect(screen.queryByText("the older read")).toBeNull();
+    expect(screen.getByText("the newer read")).toBeTruthy();
+  });
+
+  test("a read started before a save answers after it and does not undo the save", async () => {
+    vi.spyOn(authServices.workItemService, "getFileCommits").mockResolvedValue(COMMITS);
+    mockFiles();
+    const answers: ((file: WorktreeFileContent) => void)[] = [];
+    const getFileContent = vi
+      .spyOn(authServices.workItemService, "getFileContent")
+      .mockResolvedValue({ ...fileUnder(), content: "before" });
+    vi.spyOn(authServices.workItemService, "saveFileContent").mockResolvedValue({
+      ...fileUnder(),
+      content: "saved",
+    });
+    const refresh = await mount();
+    await click(screen.getByText("a.ts"));
+
+    // A background read is out when the user starts editing and saves.
+    getFileContent.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    await refresh();
+    await click(screen.getByRole("button", { name: "Edit" }));
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Contents of a.ts"), { target: { value: "saved" } });
+    });
+    await click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByText("saved")).toBeTruthy();
+
+    await act(async () => answers[0]({ ...fileUnder(), content: "read before the save" }));
+    await settle();
+
+    expect(screen.queryByText("read before the save")).toBeNull();
+    expect(screen.getByText("saved")).toBeTruthy();
+  });
+});
