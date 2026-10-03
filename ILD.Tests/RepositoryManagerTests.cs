@@ -527,7 +527,7 @@ public class RepositoryManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task ListWorktreeCommits_lists_the_branchs_own_first_parent_commits_newest_first()
+    public async Task ListWorktreeCommits_lists_the_run_branch_first_parent_commits_newest_first()
     {
         var (work, mgr) = CloneWithOrigin();
         var wt = await mgr.CreateWorktreeAsync(work, "feature-commits");
