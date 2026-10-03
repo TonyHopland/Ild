@@ -434,6 +434,8 @@ export interface NodeOutput {
   reserved?: boolean;
   visible?: boolean;
   confirm?: boolean;
+  /** Whether Enter in the run's feedback box takes this output; left out when it does not. */
+  default?: boolean;
   /** The "#rrggbb" colour of the output's button in the run; left out for the default. */
   color?: string;
   [key: string]: unknown;

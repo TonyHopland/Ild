@@ -14,6 +14,7 @@ import { makeLoopTagMatcher, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
+import { useSubmitDefaultOnEnter } from "../../hooks/useSubmitDefaultOnEnter";
 import AttachmentList from "./AttachmentList";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
@@ -138,6 +139,8 @@ export function FeedbackBanner({
   detail: WorkItemDetail;
   prompt: string | null;
 }) {
+  const submitDefaultOnEnter = useSubmitDefaultOnEnter();
+
   if (workItem.status !== WorkItemStatus.HumanFeedback || !workItem.humanFeedbackReason) {
     return null;
   }
@@ -164,16 +167,15 @@ export function FeedbackBanner({
           </div>
         </div>
       )}
-      <textarea
-        className="feedback-textarea"
-        value={detail.feedbackInput}
-        onChange={(e) => detail.setFeedbackInput(e.target.value)}
-        placeholder={
-          isPr ? "Optional feedback for the next node..." : "Optional input or context..."
-        }
-        rows={isPr ? 5 : 3}
-      />
       <FeedbackActions
+        input={{
+          value: detail.feedbackInput,
+          onChange: detail.setFeedbackInput,
+          placeholder: isPr
+            ? "Optional feedback for the next node..."
+            : "Optional input or context...",
+          rows: isPr ? 5 : 3,
+        }}
         actions={workItem.humanFeedbackActions}
         onApprove={detail.handleApprove}
         onReject={detail.handleReject}
@@ -191,6 +193,10 @@ export function FeedbackBanner({
         colorOf={
           detail.feedbackOutputs.status === "ready" ? detail.feedbackOutputs.colorOf : undefined
         }
+        defaultOutput={
+          detail.feedbackOutputs.status === "ready" ? detail.feedbackOutputs.defaultOutput : null
+        }
+        submitDefaultOnEnter={submitDefaultOnEnter}
       />
       {detail.feedbackOutputs.status === "error" && (
         <div className="preview-message preview-error">

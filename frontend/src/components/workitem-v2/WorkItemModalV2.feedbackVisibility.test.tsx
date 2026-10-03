@@ -6,6 +6,7 @@ import { NodeType, WorkItem, WorkItemStatus, WorkItemPriority } from "../../type
 import type { LoopRun } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { setSubmitDefaultOnEnter } from "../../hooks/useSubmitDefaultOnEnter";
 import {
   FIXED_NODE_OUTPUTS,
   PINNED_VERSION,
@@ -645,4 +646,141 @@ describe("a work item's actions are filtered only with the node read for that sa
     expectButtons(["Approve", "Merge", "Reject"]);
     expect(pane().textContent).not.toMatch(LOAD_ERROR);
   });
+});
+
+describe("Enter in the feedback box takes the parked node's default output", () => {
+  const box = () => pane().querySelector("textarea") as HTMLTextAreaElement;
+  const enter = (el: HTMLElement, init: Record<string, unknown> = {}) =>
+    fireEvent.keyDown(el, { key: "Enter", code: "Enter", ...init });
+
+  async function type(text: string) {
+    await act(async () => {
+      fireEvent.change(box(), { target: { value: text } });
+    });
+  }
+
+  function spyAnswers() {
+    return {
+      approve: vi
+        .spyOn(authServices.workItemService, "humanFeedbackInput")
+        .mockResolvedValue(undefined),
+      reject: vi
+        .spyOn(authServices.workItemService, "humanFeedbackReject")
+        .mockResolvedValue(undefined),
+      edge: vi
+        .spyOn(authServices.workItemService, "humanFeedbackEdge")
+        .mockResolvedValue(undefined),
+    };
+  }
+
+  test("switching the preference in the same tab turns the ⏎ marker and Enter on and off", async () => {
+    mockDialogServices();
+    stageParkedNode(human([{ name: "OnSuccess", default: true }, { name: "OnFailure" }]));
+    const answers = spyAnswers();
+    await renderDialog(makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,OnFailure" }));
+    await type("Looks good");
+
+    expect(pane().textContent).not.toContain("⏎");
+    expect(enter(box())).toBe(true);
+    await settled();
+    expect(answers.approve).not.toHaveBeenCalled();
+
+    act(() => setSubmitDefaultOnEnter(true));
+    expect(pane().textContent).toContain("⏎");
+
+    await act(async () => {
+      expect(enter(box())).toBe(false);
+    });
+    await waitFor(() => expect(answers.approve).toHaveBeenCalledTimes(1));
+    expect(answers.approve).toHaveBeenCalledWith("wi-1", "Looks good");
+    expect(answers.reject).not.toHaveBeenCalled();
+    expect(answers.edge).not.toHaveBeenCalled();
+
+    act(() => setSubmitDefaultOnEnter(false));
+    expect(pane().textContent).not.toContain("⏎");
+  });
+
+  test.each<[string, (staged: ReturnType<typeof stageParkedNode>) => void]>([
+    ["still being read", (staged) => staged.getRun.mockReturnValue(new Promise<LoopRun>(() => {}))],
+    [
+      "could not be read",
+      (staged) => staged.getVersionGraph.mockRejectedValue({ status: 500, message: "down" }),
+    ],
+  ])("while the node's outputs are %s, Enter types a new line", async (_, breakRead) => {
+    setSubmitDefaultOnEnter(true);
+    mockDialogServices();
+    breakRead(
+      stageParkedNode(human([{ name: "OnSuccess", default: true }, { name: "OnFailure" }])),
+    );
+    const answers = spyAnswers();
+    await renderDialog(makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,OnFailure" }));
+    await type("Looks good");
+
+    expect(enter(box())).toBe(true);
+    await settled();
+
+    expect(pane().textContent).not.toContain("⏎");
+    for (const answer of Object.values(answers)) expect(answer).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["an empty box", ""],
+    ["a box with text", "Some notes"],
+  ])(
+    "with %s, Escape on the confirm dialog cancels only that dialog, and Enter twice then sends the answer once",
+    async (_, text) => {
+      setSubmitDefaultOnEnter(true);
+      mockDialogServices();
+      stageParkedNode(
+        human([
+          { name: "OnSuccess" },
+          { name: "OnFailure" },
+          { name: "Clean up", confirm: true, default: true },
+        ]),
+      );
+      const answers = spyAnswers();
+      const onClose = vi.fn();
+      render(
+        <MemoryRouter>
+          <WorkItemModalV2
+            workItem={makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Clean up,OnFailure" })}
+            onClose={onClose}
+            onSave={vi.fn()}
+          />
+        </MemoryRouter>,
+      );
+      await settled();
+      if (text) await type(text);
+
+      expect(enter(box())).toBe(false);
+      const dialog = within(pane()).getByRole("dialog", { name: "Confirm Clean up" });
+      const confirm = within(dialog).getByRole("button", { name: "Clean up" });
+      expect(document.activeElement).toBe(confirm);
+
+      fireEvent.keyDown(confirm, { key: "Escape", code: "Escape" });
+      await settled();
+
+      expect(within(pane()).queryByRole("dialog")).toBeNull();
+      expect(document.body.textContent).not.toContain("Discard unsaved changes?");
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(box());
+      for (const answer of Object.values(answers)) expect(answer).not.toHaveBeenCalled();
+
+      expect(enter(box())).toBe(false);
+      const again = within(
+        within(pane()).getByRole("dialog", { name: "Confirm Clean up" }),
+      ).getByRole("button", { name: "Clean up" });
+      expect(document.activeElement).toBe(again);
+      await act(async () => {
+        enter(again);
+      });
+
+      await waitFor(() => expect(answers.edge).toHaveBeenCalledTimes(1));
+      expect(answers.edge).toHaveBeenCalledWith("wi-1", "Clean up", text);
+      expect(answers.approve).not.toHaveBeenCalled();
+      expect(answers.reject).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(box());
+    },
+  );
 });

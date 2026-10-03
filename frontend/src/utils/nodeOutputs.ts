@@ -143,6 +143,39 @@ export function outputConfirmationOf(
   };
 }
 
+/** Whether the output is the one Enter in the run's feedback box takes. */
+export function isDefaultOutput(output: NodeOutput): boolean {
+  return output.default === true;
+}
+
+/** The output with `default` stored only when it is on. */
+export function withDefault(output: NodeOutput, isDefault: boolean): NodeOutput {
+  const next = { ...output };
+  if (isDefault) next.default = true;
+  else delete next.default;
+  return next;
+}
+
+/**
+ * Looks up, by exact name, whether an output of a node is marked the default
+ * ({@link isDefaultOutput}). The first declared entry of that name decides; a
+ * name the config does not declare is not.
+ */
+export function outputDefaultOf(
+  config: Record<string, unknown> | undefined,
+): (name: string) => boolean {
+  const declared = readOutputs(config);
+  return (name) => {
+    const output = declared.find((entry) => entry.name === name);
+    return output !== undefined && isDefaultOutput(output);
+  };
+}
+
+/** The node's default output: the first declared entry marked {@link isDefaultOutput}, or null. */
+export function defaultOutputOf(config: Record<string, unknown> | undefined): string | null {
+  return readOutputs(config).find(isDefaultOutput)?.name ?? null;
+}
+
 /**
  * The colour of the output's button in the run, lowercased; null for the
  * default, which is also what a stored value that is not "#rrggbb" gets.
@@ -197,6 +230,7 @@ export function readableTextOn(color: string): "#000" | "#fff" {
 export interface OutputChoice {
   visible?: boolean;
   confirm?: boolean;
+  default?: boolean;
   color?: string | null;
 }
 
@@ -204,13 +238,14 @@ function withChoice(output: NodeOutput, choice: OutputChoice, reserved: boolean)
   const shown =
     choice.visible === undefined ? output : withVisibility(output, choice.visible, reserved);
   const confirmed = choice.confirm === undefined ? shown : withConfirmation(shown, choice.confirm);
-  return choice.color === undefined ? confirmed : withColor(confirmed, choice.color);
+  const marked = choice.default === undefined ? confirmed : withDefault(confirmed, choice.default);
+  return choice.color === undefined ? marked : withColor(marked, choice.color);
 }
 
 /**
  * `outputs` with each choice written onto the first entry of that name
- * ({@link withVisibility}, {@link withConfirmation}, {@link withColor}); every other entry stays
- * as it is, in place. A chosen output with no entry is declared — as its
+ * ({@link withVisibility}, {@link withConfirmation}, {@link withDefault}, {@link withColor});
+ * every other entry stays as it is, in place. A chosen output with no entry is declared — as its
  * type's fixed output when it is one — only when a choice differs from the
  * default.
  */
@@ -232,7 +267,7 @@ export function applyOutputChoices(
   for (const [name, choice] of pending) {
     const output = fixed.find((entry) => entry.name === name) ?? { name };
     const declared = withChoice(output, choice, isReservedOutput(type, output, fixed));
-    if ("visible" in declared || "confirm" in declared || "color" in declared) {
+    if (["visible", "confirm", "default", "color"].some((key) => key in declared)) {
       result.push(declared);
     }
   }

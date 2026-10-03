@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import ConfirmModal from "./ConfirmModal";
 import { readableTextOn } from "../utils/nodeOutputs";
 
@@ -37,6 +37,17 @@ interface FeedbackActionsProps {
   needsConfirm?: (name: string) => boolean;
   /** The "#rrggbb" colour of the button for the output of that name, or null for its tone. */
   colorOf?: (name: string) => string | null;
+  /** The feedback box, rendered above the buttons; what it holds is sent with the answer. */
+  input?: {
+    value: string;
+    onChange: (value: string) => void;
+    placeholder: string;
+    rows: number;
+  };
+  /** The parked node's default output, or null when it has none or it is not known yet. */
+  defaultOutput?: string | null;
+  /** Whether Enter in the feedback box takes the default output, as its button would. */
+  submitDefaultOnEnter?: boolean;
 }
 
 // Tokens in the comma-separated actions string that map to the fixed
@@ -55,6 +66,8 @@ const REJECT_TONE = "btn-danger";
  * the node hides has no button, one it marks for confirmation asks first, and
  * one it colours has its button in that colour.
  * Merge is not an output and is always offered, behind its own confirmation.
+ * With submitDefaultOnEnter, Enter in the feedback box presses the default
+ * output's button, which is marked ⏎; Shift+Enter still adds a new line.
  */
 export default function FeedbackActions({
   actions,
@@ -66,7 +79,11 @@ export default function FeedbackActions({
   isVisible = () => true,
   needsConfirm,
   colorOf,
+  input,
+  defaultOutput = null,
+  submitDefaultOnEnter = false,
 }: FeedbackActionsProps) {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [asked, setAsked] = useState<PendingAnswer | null>(null);
   // The answer was for the node as it was then; confirming it now could send it to another one.
   const pending = asked?.askedUnder === needsConfirm ? asked : null;
@@ -97,97 +114,147 @@ export default function FeedbackActions({
     else send();
   };
 
+  const answerFor = (name: string) => {
+    if (name === "OnSuccess") return answer(name, "Approve", APPROVE_TONE, onApprove);
+    if (name === "OnFailure") return answer(name, "Reject", REJECT_TONE, onReject);
+    return answer(name, name, OUTPUT_TONE, () => onEdge(name));
+  };
+
+  // Only an output with a button: a default that is hidden or has no edge is not offered.
+  const enterTarget =
+    submitDefaultOnEnter && defaultOutput !== null && actionList.includes(defaultOutput)
+      ? defaultOutput
+      : null;
+
+  const onInputKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    // Safari ends a composition before the Enter that commits it, which then
+    // arrives with isComposing false and only keyCode 229 to tell it apart:
+    // https://developer.mozilla.org/en-US/docs/Web/API/Element/keydown_event#keydown_events_with_ime
+    const composing = e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
+    const plainEnter = e.key === "Enter" && !e.shiftKey && !composing && !e.repeat;
+    if (!plainEnter || busy || enterTarget === null) return;
+    e.preventDefault();
+    answerFor(enterTarget)();
+  };
+
+  const enterMarker = (name: string) => name === enterTarget && <span aria-hidden="true"> ⏎</span>;
+
+  const closeConfirmation = () => {
+    setAsked(null);
+    inputRef.current?.focus();
+  };
+
   return (
-    <div className="feedback-actions">
-      {actionList.includes("OnSuccess") && (
-        <button
-          type="button"
-          className={`btn btn-sm ${APPROVE_TONE}`}
-          style={styleOf("OnSuccess")}
-          onClick={answer("OnSuccess", "Approve", APPROVE_TONE, onApprove)}
-          disabled={busy}
-        >
-          Approve
-        </button>
-      )}
-      {onMerge && (
-        <button
-          type="button"
-          className="btn btn-sm btn-success"
-          onClick={() => setConfirmingMerge(true)}
-        >
-          Merge
-        </button>
-      )}
-      {customNames.map((name) => (
-        <button
-          key={name}
-          type="button"
-          className={`btn btn-sm ${OUTPUT_TONE}`}
-          style={styleOf(name)}
-          onClick={answer(name, name, OUTPUT_TONE, () => onEdge(name))}
-          disabled={busy}
-        >
-          {name}
-        </button>
-      ))}
-      {actionList.includes("OnFailure") && (
-        <button
-          type="button"
-          className={`btn btn-sm ${REJECT_TONE}`}
-          style={styleOf("OnFailure")}
-          onClick={answer("OnFailure", "Reject", REJECT_TONE, onReject)}
-          disabled={busy}
-        >
-          Reject
-        </button>
-      )}
-      {onMerge && confirmingMerge && (
-        <div className="merge-confirm" role="dialog" aria-label="Confirm merge">
-          <label className="merge-confirm-option">
-            <input
-              type="checkbox"
-              checked={deleteBranch}
-              onChange={(e) => setDeleteBranch(e.target.checked)}
-            />
-            Delete branch after merge
-          </label>
-          <div className="merge-confirm-actions">
-            <button
-              type="button"
-              className="btn btn-sm btn-success"
-              onClick={() => {
-                setConfirmingMerge(false);
-                onMerge(deleteBranch);
-              }}
-            >
-              Confirm Merge
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              onClick={() => setConfirmingMerge(false)}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      {pending && (
-        <ConfirmModal
-          isOpen
-          title={`Confirm ${pending.label}`}
-          message={`Are you sure you want to take "${pending.label}"? The run moves on as soon as you confirm.`}
-          confirmText={pending.label}
-          confirmClassName={pending.tone}
-          confirmStyle={pending.style}
-          onConfirm={() => {
-            setAsked(null);
-            pending.send();
-          }}
-          onCancel={() => setAsked(null)}
+    <>
+      {input && (
+        <textarea
+          ref={inputRef}
+          className="feedback-textarea"
+          value={input.value}
+          onChange={(e) => input.onChange(e.target.value)}
+          onKeyDown={onInputKeyDown}
+          placeholder={input.placeholder}
+          rows={input.rows}
         />
       )}
-    </div>
+      <div className="feedback-actions">
+        {actionList.includes("OnSuccess") && (
+          <button
+            type="button"
+            className={`btn btn-sm ${APPROVE_TONE}`}
+            style={styleOf("OnSuccess")}
+            onClick={answerFor("OnSuccess")}
+            disabled={busy}
+            aria-keyshortcuts={enterTarget === "OnSuccess" ? "Enter" : undefined}
+          >
+            Approve
+            {enterMarker("OnSuccess")}
+          </button>
+        )}
+        {onMerge && (
+          <button
+            type="button"
+            className="btn btn-sm btn-success"
+            onClick={() => setConfirmingMerge(true)}
+          >
+            Merge
+          </button>
+        )}
+        {customNames.map((name) => (
+          <button
+            key={name}
+            type="button"
+            className={`btn btn-sm ${OUTPUT_TONE}`}
+            style={styleOf(name)}
+            onClick={answerFor(name)}
+            disabled={busy}
+            aria-keyshortcuts={enterTarget === name ? "Enter" : undefined}
+          >
+            {name}
+            {enterMarker(name)}
+          </button>
+        ))}
+        {actionList.includes("OnFailure") && (
+          <button
+            type="button"
+            className={`btn btn-sm ${REJECT_TONE}`}
+            style={styleOf("OnFailure")}
+            onClick={answerFor("OnFailure")}
+            disabled={busy}
+            aria-keyshortcuts={enterTarget === "OnFailure" ? "Enter" : undefined}
+          >
+            Reject
+            {enterMarker("OnFailure")}
+          </button>
+        )}
+        {onMerge && confirmingMerge && (
+          <div className="merge-confirm" role="dialog" aria-label="Confirm merge">
+            <label className="merge-confirm-option">
+              <input
+                type="checkbox"
+                checked={deleteBranch}
+                onChange={(e) => setDeleteBranch(e.target.checked)}
+              />
+              Delete branch after merge
+            </label>
+            <div className="merge-confirm-actions">
+              <button
+                type="button"
+                className="btn btn-sm btn-success"
+                onClick={() => {
+                  setConfirmingMerge(false);
+                  onMerge(deleteBranch);
+                }}
+              >
+                Confirm Merge
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                onClick={() => setConfirmingMerge(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {pending && (
+          <ConfirmModal
+            isOpen
+            title={`Confirm ${pending.label}`}
+            message={`Are you sure you want to take "${pending.label}"? The run moves on as soon as you confirm.`}
+            confirmText={pending.label}
+            confirmClassName={pending.tone}
+            confirmStyle={pending.style}
+            focusConfirm
+            onConfirm={() => {
+              closeConfirmation();
+              pending.send();
+            }}
+            onCancel={closeConfirmation}
+          />
+        )}
+      </div>
+    </>
   );
 }

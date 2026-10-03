@@ -1031,7 +1031,8 @@
   color: #707090;
 }
 
-.output-confirm-toggle[aria-pressed="false"] {
+.output-confirm-toggle[aria-pressed="false"],
+.output-confirm-toggle:disabled {
   border-color: #4a4a60;
   color: #707090;
 }
@@ -1039,6 +1040,17 @@
 .output-confirm-toggle[aria-pressed="true"]:not(:disabled) {
   border-color: #fbbf24;
   color: #fbbf24;
+}
+
+.output-default-toggle[aria-pressed="false"],
+.output-default-toggle:disabled {
+  border-color: #4a4a60;
+  color: #707090;
+}
+
+.output-default-toggle[aria-pressed="true"]:not(:disabled) {
+  border-color: #38bdf8;
+  color: #38bdf8;
 }
 
 .output-row-hidden input {

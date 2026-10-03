@@ -60,6 +60,7 @@ import {
   unroutedRows,
   outputColorOf,
   outputConfirmationOf,
+  outputDefaultOf,
   outputVisibilityOf,
   readFixedOutputs,
   successFailureOutputs,
@@ -1746,6 +1747,12 @@ export default function LoopEditor() {
                       isOutputConfirmed={(name) =>
                         outputChoices.get(name)?.confirm ??
                         outputConfirmationOf(
+                          (selectedNode.data as { config?: Record<string, unknown> }).config,
+                        )(name)
+                      }
+                      isOutputDefault={(name) =>
+                        outputChoices.get(name)?.default ??
+                        outputDefaultOf(
                           (selectedNode.data as { config?: Record<string, unknown> }).config,
                         )(name)
                       }

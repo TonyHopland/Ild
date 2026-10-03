@@ -433,3 +433,182 @@ describe("FeedbackActions — button colours", () => {
     ).toBeNull();
   });
 });
+
+describe("FeedbackActions — Enter in the feedback box", () => {
+  type Props = Parameters<typeof FeedbackActions>[0];
+
+  function renderBox(props: Partial<Props> = {}) {
+    const handlers = { onApprove: vi.fn(), onReject: vi.fn(), onEdge: vi.fn() };
+    render(
+      <FeedbackActions
+        actions="OnSuccess,Escalate,OnFailure"
+        {...handlers}
+        input={{ value: "Ship it", onChange: vi.fn(), placeholder: "Optional input...", rows: 3 }}
+        defaultOutput="OnSuccess"
+        submitDefaultOnEnter
+        {...props}
+      />,
+    );
+    const sent = () =>
+      Object.values(handlers).reduce((count, handler) => count + handler.mock.calls.length, 0);
+    return { handlers, sent, box: screen.getByRole("textbox") };
+  }
+
+  /** Presses Enter on `el`; true when the press was left to its default, a new line in a text box. */
+  const enter = (el: HTMLElement, init: Record<string, unknown> = {}) =>
+    fireEvent.keyDown(el, { key: "Enter", code: "Enter", ...init });
+
+  /** The output button whose text, ignoring any ⏎ marker, is `label`. */
+  const outputButton = (label: string) => {
+    const found = screen
+      .getAllByRole("button")
+      .filter((button) => (button.textContent ?? "").replace("⏎", "").trim() === label);
+    expect(found, label).toHaveLength(1);
+    return found[0];
+  };
+
+  test.each([
+    ["OnSuccess", "onApprove"],
+    ["OnFailure", "onReject"],
+    ["Escalate", "onEdge"],
+  ] as const)(
+    "Enter takes the default output %s, as its button would, and types no new line",
+    (output, handler) => {
+      const { box, handlers } = renderBox({ defaultOutput: output });
+
+      expect(enter(box)).toBe(false);
+
+      expect(handlers[handler]).toHaveBeenCalledTimes(1);
+      if (handler === "onEdge") expect(handlers.onEdge).toHaveBeenCalledWith("Escalate");
+      for (const [name, called] of Object.entries(handlers)) {
+        if (name !== handler) expect(called).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  test.each<[string, Partial<Props>, Record<string, unknown>]>([
+    ["Shift+Enter", {}, { shiftKey: true }],
+    ["Enter while an IME is composing", {}, { isComposing: true }],
+    ["a held-down Enter", {}, { repeat: true }],
+    ["Enter while an answer is being sent", { busy: true }, {}],
+    ["Enter with the preference off", { submitDefaultOnEnter: false }, {}],
+    ["Enter on a node with no default", { defaultOutput: null }, {}],
+    ["Enter when the default is hidden", { isVisible: (name: string) => name !== "OnSuccess" }, {}],
+    ["Enter when the default has no edge", { defaultOutput: "Later" }, {}],
+    ["Enter when every output is hidden", { isVisible: () => false }, {}],
+    ["Enter when Merge is named the default", { defaultOutput: "Merge", onMerge: vi.fn() }, {}],
+  ])("%s types a new line and sends nothing", (_, props, init) => {
+    const { box, sent } = renderBox(props);
+
+    expect(enter(box, init)).toBe(true);
+
+    expect(sent()).toBe(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    if (props.onMerge) expect(props.onMerge).not.toHaveBeenCalled();
+  });
+
+  test("the Enter that commits an IME composition after it has ended, as Safari sends it, sends nothing", () => {
+    const { box, sent } = renderBox();
+
+    expect(enter(box, { isComposing: false, keyCode: 229 })).toBe(true);
+
+    expect(sent()).toBe(0);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  test("with the preference on, the default output's button alone shows ⏎", () => {
+    renderBox({ defaultOutput: "Escalate" });
+
+    expect(outputButton("Escalate").textContent).toContain("⏎");
+    expect(outputButton("Approve").textContent).not.toContain("⏎");
+    expect(outputButton("Reject").textContent).not.toContain("⏎");
+  });
+
+  test.each<[string, Partial<Props>]>([
+    ["the preference is off", { submitDefaultOnEnter: false }],
+    ["the node has no default", { defaultOutput: null }],
+    ["the default is hidden", { isVisible: (name: string) => name !== "OnSuccess" }],
+  ])("no button shows ⏎ when %s", (_, props) => {
+    renderBox(props);
+
+    expect(document.body.textContent).not.toContain("⏎");
+  });
+
+  test("Enter on a default that asks to confirm opens the dialog with its confirm button focused, and a second Enter confirms it once", () => {
+    const { box, handlers, sent } = renderBox({
+      defaultOutput: "Escalate",
+      needsConfirm: (name) => name === "Escalate",
+    });
+
+    expect(enter(box)).toBe(false);
+    const dialog = screen.getByRole("dialog", { name: "Confirm Escalate" });
+    const confirm = within(dialog).getByRole("button", { name: "Escalate" });
+    expect(sent()).toBe(0);
+    expect(document.activeElement).toBe(confirm);
+
+    enter(confirm);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(handlers.onEdge).toHaveBeenCalledTimes(1);
+    expect(handlers.onEdge).toHaveBeenCalledWith("Escalate");
+    expect(sent()).toBe(1);
+    expect(document.activeElement).toBe(box);
+  });
+
+  test("a held-down Enter on the focused confirm button does not confirm", () => {
+    const { box, handlers, sent } = renderBox({
+      needsConfirm: (name) => name === "OnSuccess",
+    });
+
+    enter(box);
+    const confirm = within(screen.getByRole("dialog", { name: "Confirm Approve" })).getByRole(
+      "button",
+      { name: "Approve" },
+    );
+    enter(confirm, { repeat: true });
+
+    expect(screen.getByRole("dialog", { name: "Confirm Approve" })).toBeTruthy();
+    expect(sent()).toBe(0);
+
+    enter(confirm);
+    expect(handlers.onApprove).toHaveBeenCalledTimes(1);
+    expect(sent()).toBe(1);
+  });
+
+  test("Escape on the confirm dialog cancels it, sends nothing and gives focus back to the box", () => {
+    const { box, sent } = renderBox({
+      defaultOutput: "Escalate",
+      needsConfirm: (name) => name === "Escalate",
+    });
+
+    enter(box);
+    const confirm = within(screen.getByRole("dialog", { name: "Confirm Escalate" })).getByRole(
+      "button",
+      { name: "Escalate" },
+    );
+    fireEvent.keyDown(confirm, { key: "Escape", code: "Escape" });
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(sent()).toBe(0);
+    expect(document.activeElement).toBe(box);
+  });
+
+  test.each([true, false])(
+    "clicking an output that asks to confirm focuses the confirm button, with the preference %s, and Cancel gives focus back to the box",
+    (preference) => {
+      const { box, sent } = renderBox({
+        submitDefaultOnEnter: preference,
+        needsConfirm: (name) => name === "OnFailure",
+      });
+
+      fireEvent.click(outputButton("Reject"));
+      const dialog = screen.getByRole("dialog", { name: "Confirm Reject" });
+      expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "Reject" }));
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(sent()).toBe(0);
+      expect(document.activeElement).toBe(box);
+    },
+  );
+});

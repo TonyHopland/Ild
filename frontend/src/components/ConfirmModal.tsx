@@ -1,4 +1,4 @@
-import { useEffect, type CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties } from "react";
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -14,6 +14,12 @@ interface ConfirmModalProps {
   confirmClassName?: string;
   /** Inline style for the confirm button, such as a colour of its own. */
   confirmStyle?: CSSProperties;
+  /**
+   * Focus the confirm button once the dialog opens, so Enter confirms; a
+   * held-down Enter does not. Escape then cancels this dialog alone, before any
+   * other listener sees it.
+   */
+  focusConfirm?: boolean;
 }
 
 export default function ConfirmModal({
@@ -26,17 +32,34 @@ export default function ConfirmModal({
   confirmText = "Delete",
   confirmClassName = "btn-danger",
   confirmStyle,
+  focusConfirm = false,
 }: ConfirmModalProps) {
+  const confirmRef = useRef<HTMLButtonElement>(null);
+
   useEffect(() => {
+    if (!isOpen) return;
+    if (focusConfirm) {
+      // Capturing on window runs before every document and React listener, so
+      // a dialog this one opens over does not take the Escape as its own.
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key !== "Escape") return;
+        e.stopPropagation();
+        e.preventDefault();
+        onCancel();
+      };
+      window.addEventListener("keydown", onKey, true);
+      return () => window.removeEventListener("keydown", onKey, true);
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCancel();
     };
-    if (isOpen) {
-      document.addEventListener("keydown", onKey);
-      return () => document.removeEventListener("keydown", onKey);
-    }
-    return;
-  }, [isOpen, onCancel]);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [isOpen, onCancel, focusConfirm]);
+
+  useEffect(() => {
+    if (isOpen && focusConfirm) confirmRef.current?.focus();
+  }, [isOpen, focusConfirm]);
 
   if (!isOpen) return null;
 
@@ -67,10 +90,20 @@ export default function ConfirmModal({
             Cancel
           </button>
           <button
+            ref={confirmRef}
             type="button"
             className={`btn ${confirmClassName}`}
             style={confirmStyle}
             onClick={onConfirm}
+            onKeyDown={
+              focusConfirm
+                ? (e) => {
+                    if (e.key !== "Enter") return;
+                    e.preventDefault();
+                    if (!e.repeat) onConfirm();
+                  }
+                : undefined
+            }
           >
             {confirmText}
           </button>
