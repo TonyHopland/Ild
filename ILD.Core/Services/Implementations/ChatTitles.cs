@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -26,7 +27,7 @@ public static partial class ChatTitles
     {
         var text = string.Join(' ', PlainLines(firstMessage));
         if (text.Length == 0) return NoTitle;
-        return text.Length <= MaxLength ? text : text[..MaxLength].TrimEnd() + "…";
+        return text.Length <= MaxLength ? text : Prefix(text, MaxLength).TrimEnd() + "…";
     }
 
     /// <summary>
@@ -52,7 +53,7 @@ public static partial class ChatTitles
         if (line.Length > MaxLength)
         {
             var lastSpace = line.LastIndexOf(' ', MaxLength);
-            line = (lastSpace > 0 ? line[..lastSpace] : line[..MaxLength]).TrimEnd().TrimEnd('.');
+            line = (lastSpace > 0 ? line[..lastSpace] : Prefix(line, MaxLength)).TrimEnd().TrimEnd('.');
         }
 
         return line.Length == 0 ? null : line;
@@ -87,7 +88,26 @@ public static partial class ChatTitles
             .ToString();
     }
 
-    private static string Cap(string text, int length) => text.Length <= length ? text : text[..length];
+    private static string Cap(string text, int length) => text.Length <= length ? text : Prefix(text, length);
+
+    /// <summary>
+    /// The longest start of <paramref name="text"/> that is whole characters as a
+    /// reader sees them (text elements: an emoji, a letter with its accents) and at
+    /// most <paramref name="maxLength"/> UTF-16 units — the measure the stored name's
+    /// length is held to — so a cut never leaves half a surrogate pair behind.
+    /// </summary>
+    private static string Prefix(string text, int maxLength)
+    {
+        var end = 0;
+        var elements = StringInfo.GetTextElementEnumerator(text);
+        while (elements.MoveNext())
+        {
+            var next = elements.ElementIndex + elements.GetTextElement().Length;
+            if (next > maxLength) break;
+            end = next;
+        }
+        return text[..end];
+    }
 
     private static bool IsQuote(char c) => c is '"' or '\'' or '`' or '“' or '”' or '‘' or '’' or '«' or '»';
 
