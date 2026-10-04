@@ -68,14 +68,13 @@ describe("Header nav overflow", () => {
 });
 
 describe("Header nav items", () => {
-  test("has no WorkItem Server link and keeps every other item in order", () => {
+  test("has no WorkItem Server or Loop Runs link and keeps every other item in order", () => {
     renderHeader();
 
     const nav = within(screen.getByRole("navigation"));
     expect(nav.getAllByRole("link").map((l) => l.textContent)).toEqual([
       "Taskboard",
       "Loop Editor",
-      "Loop Runs",
       "Analytics",
       "Settings",
       "Repositories",

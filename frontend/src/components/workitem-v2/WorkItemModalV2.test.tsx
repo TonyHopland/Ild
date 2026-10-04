@@ -2250,3 +2250,95 @@ describe("WorkItemModalV2 files tab", () => {
     expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
   });
 });
+
+// The Runs tab's run actions reach the server through the dialog's hook, which
+// refreshes the run list and the work item afterwards.
+describe("WorkItemModalV2 Runs tab run actions", () => {
+  async function openRunsTab(runs: LoopRun[], workItem: WorkItem) {
+    mockServices(runs);
+    const onSave = vi.fn();
+    await renderDialog(workItem, { onSave });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+    return { onSave };
+  }
+
+  test.each([
+    ["pause", false, /pause run/i, "pause"],
+    ["resume", true, /resume run/i, "resume"],
+    ["cancel", false, /cancel run/i, "cancel"],
+  ] as const)(
+    "%s calls the run's endpoint and refreshes runs and work item",
+    async (_l, isPaused, name, method) => {
+      const running = makeRun({ status: LoopRunStatus.Running, isPaused, completedAt: null });
+      const { onSave } = await openRunsTab(
+        [running],
+        makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }),
+      );
+      const spy = vi.spyOn(authServices.loopRunService, method).mockResolvedValue(undefined);
+      const getRunsSpy = vi.mocked(authServices.workItemService.getRuns);
+      const workItemSpy = vi.mocked(authServices.workItemService.getById);
+
+      const button = await screen.findByRole("button", { name });
+      const runsBefore = getRunsSpy.mock.calls.length;
+      const itemBefore = workItemSpy.mock.calls.length;
+      await act(async () => {
+        fireEvent.click(button);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(spy).toHaveBeenCalledWith("run-1"));
+      await waitFor(() => expect(getRunsSpy.mock.calls.length).toBeGreaterThan(runsBefore));
+      await waitFor(() => expect(workItemSpy.mock.calls.length).toBeGreaterThan(itemBefore));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+    },
+  );
+
+  test("delete removes the run after confirming and refreshes runs and work item", async () => {
+    const { onSave } = await openRunsTab([makeRun()], makeWorkItem({ currentLoopRunId: "run-1" }));
+    const deleteSpy = vi.spyOn(authServices.loopRunService, "delete").mockResolvedValue(undefined);
+    const getRunsSpy = vi.mocked(authServices.workItemService.getRuns);
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    expect(deleteSpy).not.toHaveBeenCalled();
+    getRunsSpy.mockResolvedValue([]);
+    const runsBefore = getRunsSpy.mock.calls.length;
+    const group = screen.getByRole("group", { name: /delete/i });
+    const confirm = within(group)
+      .getAllByRole("button")
+      .find((b) => !/^\s*cancel\s*$/i.test(b.textContent ?? ""))!;
+    await act(async () => {
+      fireEvent.click(confirm);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(getRunsSpy.mock.calls.length).toBeGreaterThan(runsBefore));
+    await screen.findByText("No runs yet for this work item.");
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+  });
+
+  test("a refused delete shows the server's message in the Runs tab", async () => {
+    await openRunsTab([makeRun()], makeWorkItem({ currentLoopRunId: "run-1" }));
+    // The shape services/api.ts throws for a non-2xx answer.
+    vi.spyOn(authServices.loopRunService, "delete").mockRejectedValue({
+      status: 409,
+      message: "Could not reclaim the run's worktree/branch; the run was not deleted.",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    const group = screen.getByRole("group", { name: /delete/i });
+    const confirm = within(group)
+      .getAllByRole("button")
+      .find((b) => !/^\s*cancel\s*$/i.test(b.textContent ?? ""))!;
+    await act(async () => {
+      fireEvent.click(confirm);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.getByText(/the run was not deleted/)).not.toBeNull());
+    expect(screen.getByText("Implement")).toBeTruthy();
+  });
+});

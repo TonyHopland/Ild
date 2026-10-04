@@ -390,11 +390,21 @@ describe("EventLogViewer", () => {
     expect(screen.getByText(/"role": "user"/)).toBeTruthy();
   });
 
-  test("renders back link to loop runs overview", async () => {
+  test("back link returns to the run's work item", async () => {
     renderComponent();
-    await waitFor(() => {
-      expect(screen.getByText(/Back to all runs/)).toBeTruthy();
+    const link = await screen.findByRole("link", { name: /back to (the )?work item/i });
+    expect(link.getAttribute("href")).toBe("/taskboard/work-1");
+  });
+
+  test("back link of a run that is not found returns to the taskboard", async () => {
+    (loopRunService.getById as ReturnType<typeof vi.fn>).mockRejectedValue({
+      status: 404,
+      message: "Not Found",
     });
+    renderComponent();
+    await screen.findByText(/run not found/i);
+    const links = screen.getAllByRole("link");
+    expect(links.map((l) => l.getAttribute("href"))).toEqual(["/taskboard"]);
   });
 
   test("renders run metadata with start time and execution count", async () => {
