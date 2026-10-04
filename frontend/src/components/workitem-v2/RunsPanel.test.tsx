@@ -476,3 +476,66 @@ describe("RunsPanel run actions", () => {
     expect(actionButton(PAUSE)).not.toBeNull();
   });
 });
+
+describe("RunsPanel overlapping run actions", () => {
+  test("one run's action finishing leaves another run's in-flight action blocked", async () => {
+    const first = deferred();
+    const second = deferred();
+    const { handlers } = renderActionPanel(
+      [
+        runWithNode(RUN_A, { status: LoopRunStatus.Running, completedAt: null }),
+        runWithNode(RUN_B, { status: LoopRunStatus.Running, completedAt: null }),
+      ],
+      {
+        workItem: workItem({ currentLoopRunId: RUN_A }),
+        handlers: {
+          onPauseRun: vi.fn((id: string) => (id === RUN_A ? first.promise : second.promise)),
+        },
+      },
+    );
+    await screen.findByText("Node of aaaaaaaa");
+    fireEvent.click(actionButton(PAUSE)!);
+    fireEvent.click(runEntry(RUN_B)!);
+    await screen.findByText("Node of bbbbbbbb");
+    fireEvent.click(actionButton(PAUSE)!);
+    await waitFor(() => expect(handlers.onPauseRun).toHaveBeenCalledWith(RUN_B));
+
+    await act(async () => {
+      first.resolve();
+      await first.promise;
+    });
+
+    expect(isDisabled(actionButton(PAUSE))).toBe(true);
+    expect(isDisabled(actionButton(CANCEL_RUN))).toBe(true);
+    await act(async () => {
+      second.resolve();
+      await second.promise;
+    });
+    await waitFor(() => expect(isDisabled(actionButton(CANCEL_RUN))).toBe(false));
+  });
+
+  test("a delete finishing after another run was selected keeps that run shown", async () => {
+    const pending = deferred();
+    const { handlers } = renderActionPanel(
+      [runWithNode(RUN_A), runWithNode(RUN_B, { status: LoopRunStatus.Failed })],
+      {
+        workItem: workItem({ currentLoopRunId: RUN_A }),
+        handlers: { onDeleteRun: vi.fn(() => pending.promise) },
+      },
+    );
+    await screen.findByText("Node of aaaaaaaa");
+    await confirmDelete();
+    fireEvent.click(runEntry(RUN_B)!);
+    await screen.findByText("Node of bbbbbbbb");
+
+    await act(async () => {
+      pending.resolve();
+      await pending.promise;
+    });
+
+    expect(handlers.onDeleteRun).toHaveBeenCalledWith(RUN_A);
+    await waitFor(() => expect(runEntry(RUN_A)).toBeNull());
+    expect(screen.getByText("Node of bbbbbbbb")).not.toBeNull();
+    expect(isDisabled(actionButton(DELETE_RUN))).toBe(false);
+  });
+});

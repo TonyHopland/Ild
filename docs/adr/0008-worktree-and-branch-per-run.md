@@ -37,7 +37,7 @@ Everything above concerns the branch a run lands _on_. A work item can separatel
 
 ## Amendment: a run's git state may be reclaimed without deleting the run
 
-`POST /api/v1/loopruns/{id}/cleanup` reclaims a finished run's worktree and local branch and **keeps** the run row, its nodes, and its event log. It is offered per run on the work item's Runs tab and on the Loop Run Monitor. This exists because the two original paths both cost the run's history to get the branch back, and the case that needs the branch back — a work item with a `BranchNameOverride` whose previous run parked the next one on "already used locally" — is exactly the case where the human wants to read that history.
+`POST /api/v1/loopruns/{id}/cleanup` reclaims a finished run's worktree and local branch and **keeps** the run row, its nodes, and its event log. It is offered per run on the work item's Runs tab. This exists because the two original paths both cost the run's history to get the branch back, and the case that needs the branch back — a work item with a `BranchNameOverride` whose previous run parked the next one on "already used locally" — is exactly the case where the human wants to read that history.
 
 This is the one place the coupling above is broken deliberately: worktree and branch may now end before the row does, never after.
 

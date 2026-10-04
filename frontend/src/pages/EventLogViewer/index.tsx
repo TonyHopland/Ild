@@ -350,8 +350,8 @@ export default function EventLogViewer() {
     return (
       <div className="page-container">
         <p>Run not found.</p>
-        <Link to="/loop-runs" className="back-link">
-          &larr; Back to all runs
+        <Link to="/taskboard" className="back-link">
+          &larr; Back to taskboard
         </Link>
       </div>
     );
@@ -371,8 +371,8 @@ export default function EventLogViewer() {
     <div className="page-container run-details-page">
       <div className="run-details-header">
         <div className="run-details-header-left">
-          <Link to="/loop-runs" className="back-link">
-            &larr; Back to all runs
+          <Link to={`/taskboard/${run.workItemId}`} className="back-link">
+            &larr; Back to work item
           </Link>
           <h1 className="page-title">Run {run.id.slice(0, 8)}</h1>
         </div>

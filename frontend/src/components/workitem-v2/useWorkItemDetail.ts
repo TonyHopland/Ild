@@ -813,16 +813,42 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleCleanupBacklog = () =>
     runAction((id) => workItemService.cleanupToBacklog(id), "cleanup to backlog");
 
-  // Reclaims a finished run's worktree and branch. Unlike the actions above it
-  // lets the failure through: reclaiming can legitimately be refused (409), and
-  // the panel that offered the action is where that has to be read.
-  const handleReclaimRun = useCallback(
-    async (runId: string) => {
-      await loopRunService.cleanup(runId);
+  // The Runs tab's actions on one run. Unlike the actions above they let the
+  // failure through: each can legitimately be refused (reclaiming 409, deleting
+  // 400/409/503, ...), and the panel that offered the action is where that has
+  // to be read.
+  const settleRunAction = useCallback(
+    async (action: Promise<void>) => {
+      await action;
       void refetchWorkItem();
       refreshRuns();
     },
     [refetchWorkItem, refreshRuns],
+  );
+
+  const handleReclaimRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.cleanup(runId)),
+    [settleRunAction],
+  );
+
+  const handlePauseRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.pause(runId)),
+    [settleRunAction],
+  );
+
+  const handleResumeRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.resume(runId)),
+    [settleRunAction],
+  );
+
+  const handleCancelRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.cancel(runId)),
+    [settleRunAction],
+  );
+
+  const handleDeleteRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.delete(runId)),
+    [settleRunAction],
   );
 
   const handleLinkPr = async (prUrl: string) =>
@@ -908,6 +934,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleCleanupDone,
     handleCleanupBacklog,
     handleReclaimRun,
+    handlePauseRun,
+    handleResumeRun,
+    handleCancelRun,
+    handleDeleteRun,
     handleLinkPr,
     handleAddDependency,
     handleRemoveDependency,

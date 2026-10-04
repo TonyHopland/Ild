@@ -62,6 +62,12 @@ function normalizeRun(data: LoopRun): LoopRun {
   };
 }
 
+// The API client rejects with a plain { status, message } object, not an Error.
+function failureMessage(error: unknown, fallback: string): string {
+  const message = (error as { message?: unknown } | null)?.message;
+  return typeof message === "string" && message ? message : fallback;
+}
+
 function parseEffectiveInput(node: LoopRunNode): EffectiveInput | null {
   if (!node.effectiveInput) return null;
   try {
@@ -174,6 +180,17 @@ interface RunsPanelProps {
    * Rejects (409) when the git state survives, so its error is shown.
    */
   onReclaimRun?: (runId: string) => Promise<unknown>;
+  /** Pause a running run. Rejects when refused, so its error is shown. */
+  onPauseRun?: (runId: string) => Promise<unknown>;
+  /** Resume a paused run. Rejects when refused, so its error is shown. */
+  onResumeRun?: (runId: string) => Promise<unknown>;
+  /** Cancel a running run. Rejects when refused, so its error is shown. */
+  onCancelRun?: (runId: string) => Promise<unknown>;
+  /**
+   * Delete a run that is not running, with its event history. Rejects when
+   * refused (400/409/503), so its error is shown.
+   */
+  onDeleteRun?: (runId: string) => Promise<unknown>;
 }
 
 /**
@@ -191,6 +208,10 @@ export default function RunsPanel({
   onCleanupDone,
   onCleanupBacklog,
   onReclaimRun,
+  onPauseRun,
+  onResumeRun,
+  onCancelRun,
+  onDeleteRun,
 }: RunsPanelProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
@@ -199,8 +220,19 @@ export default function RunsPanel({
   const [reclaiming, setReclaiming] = useState(false);
   const [confirmingReclaim, setConfirmingReclaim] = useState(false);
   const [errorText, setErrorText] = useState("");
+  // Runs with a pause/resume/cancel/delete in flight, so switching runs never
+  // frees or blocks another run's controls.
+  const [busyRunIds, setBusyRunIds] = useState<ReadonlySet<string>>(new Set());
+  const [confirmingDeleteRunId, setConfirmingDeleteRunId] = useState<string | null>(null);
+  // Hides a deleted run until the parent's refetched `runs` drop it, and keeps
+  // the selection from falling back to it. Run ids are never reused.
+  const [deletedRunIds, setDeletedRunIds] = useState<ReadonlySet<string>>(new Set());
 
-  const effectiveRunId = selectedRunId ?? workItem.currentLoopRunId ?? runs[0]?.id ?? null;
+  const visibleRuns = runs.filter((run) => !deletedRunIds.has(run.id));
+  const effectiveRunId =
+    [selectedRunId, workItem.currentLoopRunId, visibleRuns[0]?.id].find(
+      (id): id is string => !!id && !deletedRunIds.has(id),
+    ) ?? null;
 
   const reloadRunDetail = useCallback(async () => {
     if (!effectiveRunId) return;
@@ -216,6 +248,7 @@ export default function RunsPanel({
     let cancelled = false;
     setLoading(true);
     setConfirmingReclaim(false);
+    setConfirmingDeleteRunId(null);
     loopRunService
       .getById(effectiveRunId)
       .then((data) => {
@@ -244,7 +277,7 @@ export default function RunsPanel({
       await reloadRunDetail();
       onRunsChanged?.();
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : "Failed to retry from node.");
+      setErrorText(failureMessage(error, "Failed to retry from node."));
     } finally {
       setRetrying(false);
     }
@@ -260,15 +293,52 @@ export default function RunsPanel({
       await reloadRunDetail();
       onRunsChanged?.();
     } catch (error) {
-      setErrorText(
-        error instanceof Error ? error.message : "Failed to free the run's worktree and branch.",
-      );
+      setErrorText(failureMessage(error, "Failed to free the run's worktree and branch."));
     } finally {
       setReclaiming(false);
     }
   };
 
-  if (runs.length === 0) {
+  const actOnRun = async (
+    runId: string,
+    action: (runId: string) => Promise<unknown>,
+    fallback: string,
+    applied: () => void | Promise<void>,
+  ) => {
+    setErrorText("");
+    setBusyRunIds((prev) => new Set(prev).add(runId));
+    try {
+      await action(runId);
+      await applied();
+      onRunsChanged?.();
+    } catch (error) {
+      setErrorText(failureMessage(error, fallback));
+    } finally {
+      setBusyRunIds((prev) => {
+        const next = new Set(prev);
+        next.delete(runId);
+        return next;
+      });
+    }
+  };
+
+  // Re-reads the acted-on run, but only replaces the detail while that run is
+  // still the one shown: the user may have selected another run meanwhile.
+  const reloadIfShown = (runId: string) => async () => {
+    const data = normalizeRun(await loopRunService.getById(runId));
+    setRunDetail((prev) => (prev?.id === runId ? data : prev));
+  };
+
+  const handleDelete = async (runId: string, deleteRun: (runId: string) => Promise<unknown>) => {
+    await actOnRun(runId, deleteRun, "Failed to delete run.", () => {
+      setDeletedRunIds((prev) => new Set(prev).add(runId));
+      setSelectedRunId((prev) => (prev === runId ? null : prev));
+      setRunDetail((prev) => (prev?.id === runId ? null : prev));
+    });
+    setConfirmingDeleteRunId((prev) => (prev === runId ? null : prev));
+  };
+
+  if (visibleRuns.length === 0) {
     return <div className="wiv2-empty">No runs yet for this work item.</div>;
   }
 
@@ -291,10 +361,12 @@ export default function RunsPanel({
       runDetail.status === LoopRunStatus.Cancelled) &&
     !!runDetail.hasLocalGitState;
 
+  const runBusy = !!runDetail && busyRunIds.has(runDetail.id);
+
   return (
     <div className="wiv2-runs">
       <div className="wiv2-runs-list">
-        {runs.map((run) => {
+        {visibleRuns.map((run) => {
           const status = normalizeRunStatus(run.status);
           return (
             <button
@@ -306,7 +378,7 @@ export default function RunsPanel({
               <span className={`status-badge status-${status.toLowerCase()}`}>{status}</span>
               <span className="wiv2-run-item-time">{new Date(run.startedAt).toLocaleString()}</span>
               <span className="wiv2-run-item-sub">
-                {run.id === workItem.currentLoopRunId && "current · "}
+                Run {run.id.slice(0, 8)} · {run.id === workItem.currentLoopRunId && "current · "}
                 {run.retain && "📌 "}
                 {run.nodeExecutionCount} node executions
               </span>
@@ -383,6 +455,100 @@ export default function RunsPanel({
                     Clean up worktree
                   </button>
                 ))}
+              {runDetail.status === LoopRunStatus.Running ? (
+                <>
+                  {runDetail.isPaused
+                    ? onResumeRun && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          disabled={runBusy}
+                          onClick={() =>
+                            void actOnRun(
+                              runDetail.id,
+                              onResumeRun,
+                              "Failed to resume run.",
+                              reloadIfShown(runDetail.id),
+                            )
+                          }
+                        >
+                          Resume run
+                        </button>
+                      )
+                    : onPauseRun && (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          disabled={runBusy}
+                          onClick={() =>
+                            void actOnRun(
+                              runDetail.id,
+                              onPauseRun,
+                              "Failed to pause run.",
+                              reloadIfShown(runDetail.id),
+                            )
+                          }
+                        >
+                          Pause run
+                        </button>
+                      )}
+                  {onCancelRun && (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-danger"
+                      disabled={runBusy}
+                      onClick={() =>
+                        void actOnRun(
+                          runDetail.id,
+                          onCancelRun,
+                          "Failed to cancel run.",
+                          reloadIfShown(runDetail.id),
+                        )
+                      }
+                    >
+                      Cancel run
+                    </button>
+                  )}
+                </>
+              ) : (
+                onDeleteRun &&
+                (confirmingDeleteRunId === runDetail.id ? (
+                  <span
+                    className="wiv2-abandon-confirm"
+                    role="group"
+                    aria-label="Confirm delete run"
+                  >
+                    <span className="wiv2-abandon-prompt">
+                      Delete this loop run and all its event history?
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-danger"
+                      onClick={() => void handleDelete(runDetail.id, onDeleteRun)}
+                      disabled={runBusy}
+                    >
+                      {runBusy ? "Deleting…" : "Confirm delete"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-secondary"
+                      onClick={() => setConfirmingDeleteRunId(null)}
+                      disabled={runBusy}
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setConfirmingDeleteRunId(runDetail.id)}
+                    disabled={runBusy}
+                  >
+                    Delete run
+                  </button>
+                ))
+              )}
             </div>
             <RunCostSummary run={runDetail} />
             <HaltSteerControls

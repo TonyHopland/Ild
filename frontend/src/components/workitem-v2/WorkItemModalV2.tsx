@@ -315,6 +315,10 @@ export default function WorkItemModalV2({
           onCleanupDone={detail.handleCleanupDone}
           onCleanupBacklog={detail.handleCleanupBacklog}
           onReclaimRun={detail.handleReclaimRun}
+          onPauseRun={detail.handlePauseRun}
+          onResumeRun={detail.handleResumeRun}
+          onCancelRun={detail.handleCancelRun}
+          onDeleteRun={detail.handleDeleteRun}
         />
       </section>
       <section
