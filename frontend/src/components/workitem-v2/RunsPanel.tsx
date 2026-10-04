@@ -12,6 +12,7 @@ import { loopRunService } from "../../services/auth";
 import { formatDuration } from "../../utils/duration";
 import { nodeIconOf } from "../../utils/nodeStyles";
 import LiveStream from "../NodeTimeline/LiveStream";
+import MarkdownRenderer from "../MarkdownRenderer";
 import EdgeArrow from "../NodeTimeline/EdgeArrow";
 import {
   failureMessage,
@@ -92,6 +93,16 @@ function inputTextOf(node: LoopRunNode): string | null {
   return "nodeType" in input ? null : raw;
 }
 
+// An AI node's prompt and answer are Markdown. Rendered as such only when the
+// loop graph says the node is an AI node; otherwise shown as recorded.
+function NodeText({ text, nodeType }: { text: string; nodeType: NodeType | undefined }) {
+  return nodeType === NodeType.AI ? (
+    <MarkdownRenderer content={text} className="wiv2-node-markdown" />
+  ) : (
+    <pre className="wiv2-node-pre">{text}</pre>
+  );
+}
+
 function NodeRow({
   node,
   nodeType,
@@ -156,7 +167,7 @@ function NodeRow({
           <div className="wiv2-node-section">
             <span className="detail-label">Input</span>
             {inputText ? (
-              <pre className="wiv2-node-pre">{inputText}</pre>
+              <NodeText text={inputText} nodeType={nodeType} />
             ) : (
               <div className="wiv2-empty">No input recorded.</div>
             )}
@@ -169,7 +180,7 @@ function NodeRow({
             <div className="wiv2-node-section">
               <span className="detail-label">Output</span>
               {node.output ? (
-                <pre className="wiv2-node-pre">{node.output}</pre>
+                <NodeText text={node.output} nodeType={nodeType} />
               ) : (
                 <div className="wiv2-empty">No output recorded.</div>
               )}
@@ -226,11 +237,23 @@ interface RunsPanelProps {
   readVersionGraph?: (loopTemplateId: string, templateVersion: number) => Promise<VersionGraph>;
 }
 
+type RunAction =
+  | "pause"
+  | "resume"
+  | "cancel"
+  | "delete"
+  | "retain"
+  | "retry"
+  | "reclaim"
+  | "halt"
+  | "steer"
+  | "abandon";
+
 type RunDetailProps = Omit<RunsPanelProps, "runs"> & {
   runId: string;
-  /** Whether a pause/resume/cancel/delete/retain of this run is in flight. */
-  busy: boolean;
-  onBusyChange: (runId: string, busy: boolean) => void;
+  /** The action on this run in flight, if any; every action control waits for it. */
+  pending: RunAction | null;
+  onPendingChange: (runId: string, action: RunAction | null) => void;
   /** Called once a delete of this run went through. */
   onDeleted: (runId: string) => void;
 };
@@ -257,14 +280,12 @@ function RunDetail({
   onCancelRun,
   onDeleteRun,
   readVersionGraph,
-  busy,
-  onBusyChange,
+  pending,
+  onPendingChange,
   onDeleted,
 }: RunDetailProps) {
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
   const [loading, setLoading] = useState(true);
-  const [retrying, setRetrying] = useState(false);
-  const [reclaiming, setReclaiming] = useState(false);
   const [confirmingReclaim, setConfirmingReclaim] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [errorText, setErrorText] = useState("");
@@ -323,53 +344,53 @@ function RunDetail({
     return true;
   };
 
-  const handleRetry = async (runNodeId: string) => {
-    setErrorText("");
-    setRetrying(true);
-    try {
-      const done = await settleAction(
-        loopRunService.retryFromNode(runId, runNodeId),
-        "Failed to retry from node.",
-      );
-      if (done) await readRun();
-    } finally {
-      setRetrying(false);
-    }
-  };
-
-  const handleReclaim = async (reclaimRun: (runId: string) => Promise<unknown>) => {
-    setErrorText("");
-    setReclaiming(true);
-    try {
-      const done = await settleAction(
-        reclaimRun(runId),
-        "Failed to free the run's worktree and branch.",
-      );
-      if (done) {
-        setConfirmingReclaim(false);
-        await readRun();
-      }
-    } finally {
-      setReclaiming(false);
-    }
-  };
-
   const actOnRun = async (
+    kind: RunAction,
     action: (runId: string) => Promise<unknown>,
     fallback: string,
     applied: () => void | Promise<void> = readRun,
   ) => {
     setErrorText("");
-    onBusyChange(runId, true);
+    onPendingChange(runId, kind);
     try {
       if (await settleAction(action(runId), fallback)) await applied();
     } finally {
-      onBusyChange(runId, false);
+      onPendingChange(runId, null);
     }
   };
+  const busy = pending !== null;
+
+  // The halt/steer/abandon handlers come from the dialog and handle their own
+  // failures; they only take this run's one-action-at-a-time slot meanwhile.
+  const holding = <A extends unknown[]>(
+    kind: RunAction,
+    handler?: (...args: A) => void | Promise<unknown>,
+  ) =>
+    handler &&
+    (async (...args: A) => {
+      onPendingChange(runId, kind);
+      try {
+        return await handler(...args);
+      } finally {
+        onPendingChange(runId, null);
+      }
+    });
+
+  const handleRetry = (runNodeId: string) =>
+    actOnRun(
+      "retry",
+      (id) => loopRunService.retryFromNode(id, runNodeId),
+      "Failed to retry from node.",
+    );
+
+  const handleReclaim = (reclaimRun: (runId: string) => Promise<unknown>) =>
+    actOnRun("reclaim", reclaimRun, "Failed to free the run's worktree and branch.", async () => {
+      setConfirmingReclaim(false);
+      await readRun();
+    });
 
   const handleDelete = async (deleteRun: (runId: string) => Promise<unknown>) => {
-    await actOnRun(deleteRun, "Failed to delete run.", () => onDeleted(runId));
+    await actOnRun("delete", deleteRun, "Failed to delete run.", () => onDeleted(runId));
     setConfirmingDelete(false);
   };
 
@@ -382,9 +403,9 @@ function RunDetail({
   }
 
   // Retrying restarts the run, so it is blocked while the run is actively
-  // executing (a paused run can still be retried) or while a retry is in flight.
-  const retryDisabled =
-    retrying || (runDetail.status === LoopRunStatus.Running && !runDetail.isPaused);
+  // executing (a paused run can still be retried) or while any action on it is
+  // in flight.
+  const retryDisabled = busy || (runDetail.status === LoopRunStatus.Running && !runDetail.isPaused);
 
   const isLiveRun =
     runDetail.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
@@ -425,6 +446,7 @@ function RunDetail({
           disabled={busy}
           onClick={() =>
             void actOnRun(
+              "retain",
               (id) => loopRunService.setRetain(id, !runDetail.retain),
               "Failed to update retain.",
             )
@@ -448,15 +470,15 @@ function RunDetail({
                 type="button"
                 className="btn btn-sm btn-danger"
                 onClick={() => void handleReclaim(onReclaimRun)}
-                disabled={reclaiming}
+                disabled={busy}
               >
-                {reclaiming ? "Cleaning up…" : "Confirm clean up"}
+                {pending === "reclaim" ? "Cleaning up…" : "Confirm clean up"}
               </button>
               <button
                 type="button"
                 className="btn btn-sm btn-secondary"
                 onClick={() => setConfirmingReclaim(false)}
-                disabled={reclaiming}
+                disabled={busy}
               >
                 Cancel
               </button>
@@ -466,6 +488,7 @@ function RunDetail({
               type="button"
               className="btn btn-sm btn-secondary"
               onClick={() => setConfirmingReclaim(true)}
+              disabled={busy}
               title="Free this run's worktree and local branch so a new run can reuse the branch name. The run and its history are kept."
             >
               Clean up worktree
@@ -479,7 +502,7 @@ function RunDetail({
                     type="button"
                     className="btn btn-sm btn-primary"
                     disabled={busy}
-                    onClick={() => void actOnRun(onResumeRun, "Failed to resume run.")}
+                    onClick={() => void actOnRun("resume", onResumeRun, "Failed to resume run.")}
                   >
                     Resume run
                   </button>
@@ -489,7 +512,7 @@ function RunDetail({
                     type="button"
                     className="btn btn-sm btn-secondary"
                     disabled={busy}
-                    onClick={() => void actOnRun(onPauseRun, "Failed to pause run.")}
+                    onClick={() => void actOnRun("pause", onPauseRun, "Failed to pause run.")}
                   >
                     Pause run
                   </button>
@@ -499,7 +522,7 @@ function RunDetail({
                 type="button"
                 className="btn btn-sm btn-danger"
                 disabled={busy}
-                onClick={() => void actOnRun(onCancelRun, "Failed to cancel run.")}
+                onClick={() => void actOnRun("cancel", onCancelRun, "Failed to cancel run.")}
               >
                 Cancel run
               </button>
@@ -518,7 +541,7 @@ function RunDetail({
                 onClick={() => void handleDelete(onDeleteRun)}
                 disabled={busy}
               >
-                {busy ? "Deleting…" : "Confirm delete"}
+                {pending === "delete" ? "Deleting…" : "Confirm delete"}
               </button>
               <button
                 type="button"
@@ -547,10 +570,11 @@ function RunDetail({
       <HaltSteerControls
         run={runDetail}
         workItemStatus={workItem.status}
-        onHalt={onHalt}
-        onResumeSteer={onResumeSteer}
-        onCleanupDone={onCleanupDone}
-        onCleanupBacklog={onCleanupBacklog}
+        onHalt={holding("halt", onHalt)}
+        onResumeSteer={holding("steer", onResumeSteer)}
+        onCleanupDone={holding("abandon", onCleanupDone)}
+        onCleanupBacklog={holding("abandon", onCleanupBacklog)}
+        blocked={busy}
       />
       <div className="wiv2-node-list">
         {runDetail.nodes.length === 0 && <div className="wiv2-empty">No nodes executed yet.</div>}
@@ -595,10 +619,11 @@ function RunDetail({
 export default function RunsPanel({ runs, ...detailProps }: RunsPanelProps) {
   const { workItem } = detailProps;
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  // Runs with a pause/resume/cancel/delete/retain in flight, keyed by run id so
-  // a run's controls stay blocked until its own request settles, also when the
-  // user leaves the run and comes back to it meanwhile.
-  const [busyRunIds, setBusyRunIds] = useState<ReadonlySet<string>>(new Set());
+  // The action in flight on each run, keyed by run id: one at a time per run, so
+  // a retry, clean-up or delete can never overlap another action on the same
+  // run, and its controls stay blocked until its own request settles, also when
+  // the user leaves the run and comes back to it meanwhile.
+  const [pendingByRun, setPendingByRun] = useState<ReadonlyMap<string, RunAction>>(new Map());
   // Hides a deleted run until the parent's refetched `runs` drop it, and keeps
   // the selection from falling back to it. Run ids are never reused.
   const [deletedRunIds, setDeletedRunIds] = useState<ReadonlySet<string>>(new Set());
@@ -609,10 +634,10 @@ export default function RunsPanel({ runs, ...detailProps }: RunsPanelProps) {
       (id): id is string => !!id && !deletedRunIds.has(id),
     ) ?? null;
 
-  const handleBusyChange = useCallback((runId: string, busy: boolean) => {
-    setBusyRunIds((prev) => {
-      const next = new Set(prev);
-      if (busy) next.add(runId);
+  const handlePendingChange = useCallback((runId: string, action: RunAction | null) => {
+    setPendingByRun((prev) => {
+      const next = new Map(prev);
+      if (action) next.set(runId, action);
       else next.delete(runId);
       return next;
     });
@@ -656,8 +681,8 @@ export default function RunsPanel({ runs, ...detailProps }: RunsPanelProps) {
             key={effectiveRunId}
             {...detailProps}
             runId={effectiveRunId}
-            busy={busyRunIds.has(effectiveRunId)}
-            onBusyChange={handleBusyChange}
+            pending={pendingByRun.get(effectiveRunId) ?? null}
+            onPendingChange={handlePendingChange}
             onDeleted={handleDeleted}
           />
         ) : (

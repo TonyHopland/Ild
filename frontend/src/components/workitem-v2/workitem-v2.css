@@ -1153,6 +1153,17 @@
   overflow-y: auto;
 }
 
+.wiv2-node-markdown {
+  margin: 0.25rem 0 0;
+  padding: 0.5rem 0.75rem;
+  background-color: #14141f;
+  border: 1px solid #2d2d44;
+  border-radius: 0.375rem;
+  font-size: 0.8rem;
+  max-height: 18rem;
+  overflow-y: auto;
+}
+
 .wiv2-node-error {
   color: #f87171;
 }

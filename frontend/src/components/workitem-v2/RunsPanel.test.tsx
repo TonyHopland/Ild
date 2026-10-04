@@ -1054,3 +1054,140 @@ describe("RunsPanel live node", () => {
     expect(screen.queryByText("No output recorded.")).toBeNull();
   });
 });
+
+describe("RunsPanel one action per run", () => {
+  function renderFinished(handlers: { onReclaimRun?: () => Promise<unknown> } = {}) {
+    const detail = runWithNode(RUN_A, { status: LoopRunStatus.Failed, hasLocalGitState: true });
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    const onDeleteRun = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RunsPanel
+        workItem={workItem()}
+        runs={[detail]}
+        progressText=""
+        onDeleteRun={onDeleteRun}
+        onReclaimRun={handlers.onReclaimRun ?? vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    return { onDeleteRun };
+  }
+  const mutating = () => [
+    actionButton(DELETE_RUN),
+    screen.queryByRole("button", { name: /^retain$/i }),
+    cleanUpButton(),
+    screen.queryByRole("button", { name: /retry from this node/i }),
+  ];
+
+  test("a retry in flight blocks every other action on the run until it settles", async () => {
+    const pending = deferred();
+    vi.spyOn(loopRunService, "retryFromNode").mockImplementation(() => pending.promise);
+    renderFinished();
+    await screen.findByText("Node of aaaaaaaa");
+
+    fireEvent.click(screen.getByRole("button", { name: /retry from this node/i }));
+
+    await waitFor(() => expect(mutating().every((b) => isDisabled(b) === true)).toBe(true));
+    await act(async () => {
+      pending.resolve();
+      await pending.promise;
+    });
+    await waitFor(() => expect(mutating().every((b) => isDisabled(b) === false)).toBe(true));
+  });
+
+  test("a clean-up in flight blocks delete, retain and retry", async () => {
+    const pending = deferred();
+    renderFinished({ onReclaimRun: () => pending.promise });
+    await screen.findByText("Node of aaaaaaaa");
+
+    fireEvent.click(cleanUpButton()!);
+    fireEvent.click(screen.getByRole("button", { name: /confirm clean up/i }));
+
+    await screen.findByText("Cleaning up…");
+    expect(isDisabled(actionButton(DELETE_RUN))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /^retain$/i }))).toBe(true);
+    expect(isDisabled(screen.getByRole("button", { name: /retry from this node/i }))).toBe(true);
+    await act(async () => {
+      pending.resolve();
+      await pending.promise;
+    });
+  });
+});
+
+describe("RunsPanel AI node text", () => {
+  function renderAiNode(readVersionGraph?: () => Promise<unknown>) {
+    const detail = runWithNode(RUN_A);
+    detail.nodes[0] = {
+      ...detail.nodes[0],
+      nodeId: "n-ai",
+      effectiveInput: "# Plan\n\n- first step",
+      output: "## Done\n\nAll **good**",
+    };
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(
+      <RunsPanel
+        workItem={workItem()}
+        runs={[detail]}
+        progressText=""
+        readVersionGraph={readVersionGraph as never}
+      />,
+    );
+  }
+
+  test("an AI node's input and output render as Markdown", async () => {
+    renderAiNode(async () => ({
+      nodes: [{ id: "n-ai", type: NodeType.AI, label: "AI", config: {} }],
+      edges: [],
+    }));
+    fireEvent.click(await screen.findByRole("button", { name: /AI.*Node of aaaaaaaa/ }));
+
+    expect(screen.getByRole("heading", { name: "Plan" })).not.toBeNull();
+    expect(screen.getByRole("listitem").textContent).toBe("first step");
+    expect(screen.getByRole("heading", { name: "Done" })).not.toBeNull();
+    expect(screen.queryByText(/# Plan/)).toBeNull();
+  });
+
+  test("without the node's type from the graph the text is shown as recorded", async () => {
+    renderAiNode();
+    fireEvent.click(await screen.findByRole("button", { name: /Node of aaaaaaaa/ }));
+
+    expect(screen.queryByRole("heading", { name: "Plan" })).toBeNull();
+    expect(screen.getByText(/# Plan/)).not.toBeNull();
+  });
+});
+
+describe("RunsPanel abandon shares the run's action slot", () => {
+  test("an abandon in flight blocks delete, and a delete in flight blocks abandon", async () => {
+    const abandon = deferred();
+    const detail = runWithNode(RUN_A, { status: LoopRunStatus.WaitingHuman, completedAt: null });
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    const deletion = deferred();
+    render(
+      <RunsPanel
+        workItem={workItem({ currentLoopRunId: RUN_A, status: WorkItemStatus.HumanFeedback })}
+        runs={[detail]}
+        progressText=""
+        onCleanupBacklog={() => abandon.promise}
+        onDeleteRun={() => deletion.promise}
+      />,
+    );
+    await screen.findByText("Node of aaaaaaaa");
+
+    fireEvent.click(screen.getByRole("button", { name: /^abandon run$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm abandon/i }));
+    await waitFor(() => expect(isDisabled(actionButton(DELETE_RUN))).toBe(true));
+    await act(async () => {
+      abandon.resolve();
+      await abandon.promise;
+    });
+    await waitFor(() => expect(isDisabled(actionButton(DELETE_RUN))).toBe(false));
+
+    await confirmDelete();
+    await waitFor(() =>
+      expect(isDisabled(screen.getByRole("button", { name: /^abandon run$/i }))).toBe(true),
+    );
+    await act(async () => {
+      deletion.resolve();
+      await deletion.promise;
+    });
+  });
+});
