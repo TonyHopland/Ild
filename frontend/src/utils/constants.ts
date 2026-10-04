@@ -25,7 +25,6 @@ export const ROUTES = {
   LOGIN: "/login",
   TASKBOARD: "/taskboard",
   LOOP_EDITOR: "/loop-editor",
-  LOOP_RUNS: "/loop-runs",
   ANALYTICS: "/analytics",
   SETTINGS: "/settings",
   REPOSITORIES: "/repositories",
@@ -36,7 +35,6 @@ export const ROUTES = {
 export const NAV_ITEMS = [
   { label: "Taskboard", path: ROUTES.TASKBOARD },
   { label: "Loop Editor", path: ROUTES.LOOP_EDITOR },
-  { label: "Loop Runs", path: ROUTES.LOOP_RUNS },
   { label: "Analytics", path: ROUTES.ANALYTICS },
   { label: "Settings", path: ROUTES.SETTINGS },
   { label: "Repositories", path: ROUTES.REPOSITORIES },

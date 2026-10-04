@@ -616,7 +616,7 @@ public sealed class LoopEngine : ILoopEngine
                 _logger.LogError(ex, "Run {RunId} crashed", runId);
                 // Without this the run is left in the DB as Running forever with
                 // no task driving it: the work item hangs in the Running column
-                // and the run page shows RUNNING even though nothing will ever
+                // and its Runs tab shows RUNNING even though nothing will ever
                 // resume it. Park it for human review instead. (StuckRunWatchdog
                 // is the backstop for the exit paths this catch can't see.)
                 await TrySafe(() => MarkRunCrashedAsync(runId, DescribeException(ex)));

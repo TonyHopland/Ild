@@ -25,6 +25,8 @@ interface HaltSteerControlsProps {
    * only for steering the live run — abandoning lives on the run tab).
    */
   showAbandon?: boolean;
+  /** Another action on this run is in flight: every control here waits for it. */
+  blocked?: boolean;
 }
 
 // The run/node status fields arrive as strings from the API but can be numeric
@@ -104,6 +106,7 @@ export default function HaltSteerControls({
   onCleanupDone,
   onCleanupBacklog,
   showAbandon = true,
+  blocked = false,
 }: HaltSteerControlsProps) {
   const [halting, setHalting] = useState(false);
   const [resuming, setResuming] = useState(false);
@@ -190,7 +193,7 @@ export default function HaltSteerControls({
               type="button"
               className="btn btn-sm btn-warning"
               onClick={() => void handleHalt()}
-              disabled={halting}
+              disabled={halting || blocked}
               title="Interrupt this AI node now, then resume it with optional guidance"
             >
               {halting ? "Halting…" : "Halt AI node"}
@@ -206,7 +209,7 @@ export default function HaltSteerControls({
                   type="button"
                   className="btn btn-sm btn-danger"
                   onClick={() => void handleAbandon()}
-                  disabled={abandoning}
+                  disabled={abandoning || blocked}
                 >
                   {abandoning ? "Abandoning…" : "Confirm abandon"}
                 </button>
@@ -224,6 +227,7 @@ export default function HaltSteerControls({
                 type="button"
                 className="btn btn-sm btn-danger"
                 onClick={() => setConfirmingAbandon(true)}
+                disabled={blocked}
                 title="Stop this run and send the work item back to Backlog so you can edit the description and try again on a new run"
               >
                 Abandon run
@@ -264,7 +268,7 @@ export default function HaltSteerControls({
               type="button"
               className="btn btn-sm btn-primary"
               onClick={() => void handleResume()}
-              disabled={resuming}
+              disabled={resuming || blocked}
             >
               {resuming ? "Resuming…" : "Resume"}
             </button>
@@ -273,6 +277,7 @@ export default function HaltSteerControls({
                 type="button"
                 className="btn btn-sm btn-warning"
                 onClick={() => void onCleanupDone()}
+                disabled={blocked}
               >
                 Cleanup -&gt; Done
               </button>
@@ -282,6 +287,7 @@ export default function HaltSteerControls({
                 type="button"
                 className="btn btn-sm btn-secondary"
                 onClick={() => void onCleanupBacklog()}
+                disabled={blocked}
               >
                 Cleanup -&gt; Backlog
               </button>

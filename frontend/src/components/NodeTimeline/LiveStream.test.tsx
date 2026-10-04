@@ -69,6 +69,20 @@ describe("LiveStream", () => {
     expect(writes.join("")).toBe("new\n");
   });
 
+  // The stylesheet is the one LiveStream itself imports; nothing else loads it
+  // for the Runs and Action tabs, so the heading's rule has to live there.
+  test("its Live Output heading is styled by the stylesheet it imports", () => {
+    render(<LiveStream text="" />);
+    const heading = screen.getByRole("heading", { name: "Live Output" });
+    expect(heading.closest(".node-detail-section")).not.toBeNull();
+
+    const relPath = "src/components/NodeTimeline/NodeTimeline.css";
+    const cssPath = [`frontend/${relPath}`, relPath].find((p) => existsSync(p));
+    const css: string = readFileSync(cssPath!, "utf8");
+    expect(css).toMatch(/\.node-detail-section h4\s*\{/);
+    expect(css).toMatch(/\.node-detail-section\s*\{/);
+  });
+
   // Regression: xterm v6 wraps the viewport/screen in an extra
   // `.xterm-scrollable-element`. If only the viewport/screen are pinned to the
   // container height, that wrapper keeps its auto height and grows past the

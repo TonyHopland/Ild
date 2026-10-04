@@ -19,15 +19,6 @@ afterEach(() => {
 });
 
 describe("loopRunService URL contract", () => {
-  test("getAll calls GET /api/v1/loopruns", async () => {
-    await loopRunService.getAll();
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0];
-    expect(url).toBe("/api/v1/loopruns");
-    expect(init?.method).toBe("GET");
-  });
-
   test("getById calls GET /api/v1/loopruns/:id", async () => {
     fetchSpy.mockResolvedValue(okJsonResponse({}));
 

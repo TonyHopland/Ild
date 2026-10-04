@@ -31,7 +31,7 @@ A per-**run** git worktree on a per-run branch (`ild/wi-<workItemId>-run-<runId>
 _Avoid_: workspace, checkout
 
 **Run Cleanup**:
-Reclaiming a finished run's **Worktree** and local branch (`POST /api/v1/loopruns/{id}/cleanup`) while keeping the run row, its nodes and its event log — the non-destructive counterpart of deleting the run, for freeing a branch name a new run wants. It clears the run's `WorktreePath` and `BranchName` so the row stops claiming state it no longer has, and refuses a run that is still `Running` or `WaitingHuman` — a parked run's resume re-enters at `CurrentNodeId` without passing through Start, so nothing would re-create what was destroyed. Offered per run on the work item dialog's **Runs** tab and on the Loop Run Monitor. Distinct from the **Cleanup Node**, which ends a run and keeps its worktree. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
+Reclaiming a finished run's **Worktree** and local branch (`POST /api/v1/loopruns/{id}/cleanup`) while keeping the run row, its nodes and its event log — the non-destructive counterpart of deleting the run, for freeing a branch name a new run wants. It clears the run's `WorktreePath` and `BranchName` so the row stops claiming state it no longer has, and refuses a run that is still `Running` or `WaitingHuman` — a parked run's resume re-enters at `CurrentNodeId` without passing through Start, so nothing would re-create what was destroyed. Offered per run on the work item dialog's **Runs** tab. Distinct from the **Cleanup Node**, which ends a run and keeps its worktree. See [ADR-0008](docs/adr/0008-worktree-and-branch-per-run.md).
 _Avoid_: reset, purge, archive run
 
 **Worktree Preview**:
@@ -287,7 +287,7 @@ Delivery is best-effort. The client reconnects automatically (`withAutomaticReco
 
 ### Frontend route loading
 
-Routes in `frontend/src/App.tsx` are wrapped in a top-level `ErrorBoundary` so a render failure in one route can't take down the shell. The heavier editor and live-monitor pages (`LoopEditor`, `LoopRunMonitor`) are code-split via `React.lazy(() => import(...))` and wrapped in a `Suspense` boundary; the remaining pages (Login, Taskboard, EventLogViewer, Settings, Repositories, RemoteProviders, AiProviders) are imported eagerly because their footprint doesn't justify a separate chunk. Page-level errors surface through the shared `ErrorBanner` component (issue #036).
+Routes in `frontend/src/App.tsx` are wrapped in a top-level `ErrorBoundary` so a render failure in one route can't take down the shell. The heavier editor page (`LoopEditor`) is code-split via `React.lazy(() => import(...))` and wrapped in a `Suspense` boundary; the remaining pages (Login, Taskboard, Analytics, Settings, Repositories, RemoteProviders, AiProviders) are imported eagerly because their footprint doesn't justify a separate chunk. Page-level errors surface through the shared `ErrorBanner` component (issue #036).
 
 ### Frontend client state
 

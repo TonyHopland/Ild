@@ -1,4 +1,5 @@
 import { EventLogEntry } from "../../types";
+import "./NodeTimeline.css";
 
 const eventTypeColors: Record<string, string> = {
   NodeStarted: "#3b82f6",
@@ -20,24 +21,14 @@ interface NodeEventsSectionProps {
 }
 
 export default function NodeEventsSection({ events }: NodeEventsSectionProps) {
-  if (events.length === 0) {
-    return (
-      <div className="node-detail-section node-events-section">
-        <h4>Events</h4>
-        <div className="node-events-empty">No events</div>
-      </div>
-    );
-  }
+  if (events.length === 0) return <div className="node-events-empty">No events</div>;
 
   return (
-    <div className="node-detail-section node-events-section">
-      <h4>Events ({events.length})</h4>
-      <div className="node-events-list">
-        {events.map((event) => {
-          const color = eventTypeColors[event.eventType] ?? "#6b7280";
-          return <EventItem key={event.sequence} event={event} color={color} />;
-        })}
-      </div>
+    <div className="node-events-list">
+      {events.map((event) => {
+        const color = eventTypeColors[event.eventType] ?? "#6b7280";
+        return <EventItem key={event.sequence} event={event} color={color} />;
+      })}
     </div>
   );
 }

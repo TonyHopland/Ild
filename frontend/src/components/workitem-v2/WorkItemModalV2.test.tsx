@@ -371,7 +371,6 @@ describe("WorkItemModalV2", () => {
 
     expect(screen.getByText(/node executions/)).toBeTruthy();
     expect(screen.getByText("Implement")).toBeTruthy();
-    expect(screen.getByText("Open full run view ↗")).toBeTruthy();
 
     // Expanding a node reveals its input and output.
     await act(async () => {
@@ -2248,5 +2247,222 @@ describe("WorkItemModalV2 files tab", () => {
       "All changes",
     );
     expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
+  });
+});
+
+// The Runs tab's run actions reach the server through the dialog's hook, which
+// refreshes the run list and the work item afterwards.
+describe("WorkItemModalV2 Runs tab run actions", () => {
+  async function openRunsTab(runs: LoopRun[], workItem: WorkItem) {
+    mockServices(runs);
+    const onSave = vi.fn();
+    await renderDialog(workItem, { onSave });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+    return { onSave };
+  }
+
+  test.each([
+    ["pause", false, /pause run/i, "pause"],
+    ["resume", true, /resume run/i, "resume"],
+    ["cancel", false, /cancel run/i, "cancel"],
+  ] as const)(
+    "%s calls the run's endpoint and refreshes runs and work item",
+    async (_l, isPaused, name, method) => {
+      const running = makeRun({ status: LoopRunStatus.Running, isPaused, completedAt: null });
+      const { onSave } = await openRunsTab(
+        [running],
+        makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }),
+      );
+      const spy = vi.spyOn(authServices.loopRunService, method).mockResolvedValue(undefined);
+      const getRunsSpy = vi.mocked(authServices.workItemService.getRuns);
+      const workItemSpy = vi.mocked(authServices.workItemService.getById);
+
+      const button = await screen.findByRole("button", { name });
+      const runsBefore = getRunsSpy.mock.calls.length;
+      const itemBefore = workItemSpy.mock.calls.length;
+      await act(async () => {
+        fireEvent.click(button);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(spy).toHaveBeenCalledWith("run-1"));
+      await waitFor(() => expect(getRunsSpy.mock.calls.length).toBeGreaterThan(runsBefore));
+      await waitFor(() => expect(workItemSpy.mock.calls.length).toBeGreaterThan(itemBefore));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+    },
+  );
+
+  test("delete removes the run after confirming and refreshes runs and work item", async () => {
+    const { onSave } = await openRunsTab([makeRun()], makeWorkItem({ currentLoopRunId: "run-1" }));
+    const deleteSpy = vi.spyOn(authServices.loopRunService, "delete").mockResolvedValue(undefined);
+    const getRunsSpy = vi.mocked(authServices.workItemService.getRuns);
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    expect(deleteSpy).not.toHaveBeenCalled();
+    getRunsSpy.mockResolvedValue([]);
+    const runsBefore = getRunsSpy.mock.calls.length;
+    const group = screen.getByRole("group", { name: /delete/i });
+    const confirm = within(group)
+      .getAllByRole("button")
+      .find((b) => !/^\s*cancel\s*$/i.test(b.textContent ?? ""))!;
+    await act(async () => {
+      fireEvent.click(confirm);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith("run-1"));
+    await waitFor(() => expect(getRunsSpy.mock.calls.length).toBeGreaterThan(runsBefore));
+    await screen.findByText("No runs yet for this work item.");
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+  });
+
+  test("a refused delete shows the server's message in the Runs tab", async () => {
+    await openRunsTab([makeRun()], makeWorkItem({ currentLoopRunId: "run-1" }));
+    // The shape services/api.ts throws for a non-2xx answer.
+    vi.spyOn(authServices.loopRunService, "delete").mockRejectedValue({
+      status: 409,
+      message: "Could not reclaim the run's worktree/branch; the run was not deleted.",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    const group = screen.getByRole("group", { name: /delete/i });
+    const confirm = within(group)
+      .getAllByRole("button")
+      .find((b) => !/^\s*cancel\s*$/i.test(b.textContent ?? ""))!;
+    await act(async () => {
+      fireEvent.click(confirm);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.getByText(/the run was not deleted/)).not.toBeNull());
+    expect(screen.getByText("Implement")).toBeTruthy();
+  });
+});
+
+describe("WorkItemModalV2 Runs tab run action refresh", () => {
+  test.each([
+    ["pause", /pause run/i, "pause"],
+    ["delete", /delete run/i, "delete"],
+  ] as const)("a %s fetches the run list once", async (label, name, method) => {
+    const running = label === "pause";
+    mockServices([makeRun(running ? { status: LoopRunStatus.Running, completedAt: null } : {})]);
+    const onSave = vi.fn();
+    await renderDialog(
+      makeWorkItem({
+        status: running ? WorkItemStatus.Running : WorkItemStatus.Done,
+        currentLoopRunId: "run-1",
+      }),
+      { onSave },
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+    vi.spyOn(authServices.loopRunService, method).mockResolvedValue(undefined);
+    const getRuns = vi.mocked(authServices.workItemService.getRuns);
+
+    fireEvent.click(await screen.findByRole("button", { name }));
+    const before = getRuns.mock.calls.length;
+    await act(async () => {
+      if (label === "delete")
+        fireEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+
+    expect(getRuns.mock.calls.length - before).toBe(1);
+  });
+});
+
+// Every control in the dialog that acts on a run waits for any other action on
+// that run, whichever tab or footer started it.
+describe("WorkItemModalV2 one action at a time per run", () => {
+  function settle<T = void>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((res) => (resolve = res));
+    return { promise, resolve };
+  }
+
+  async function openRunsTab(run: LoopRun, item: Partial<WorkItem>) {
+    mockServices([run]);
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Run Cancelled",
+        currentLoopRunId: "run-1",
+        ...item,
+      }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+  }
+
+  const footerCleanup = () => screen.getByRole("button", { name: "Cleanup -> Done" });
+  const deleteRun = () => screen.getByRole("button", { name: /delete run/i });
+
+  test("a footer cleanup and a Runs-tab delete of the same run never overlap", async () => {
+    await openRunsTab(makeRun(), {});
+    const cleanupDone = settle();
+    vi.spyOn(authServices.workItemService, "cleanupToDone").mockReturnValue(cleanupDone.promise);
+    await screen.findByRole("button", { name: /delete run/i });
+
+    await act(async () => {
+      fireEvent.click(footerCleanup());
+      await Promise.resolve();
+    });
+    expect((deleteRun() as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      cleanupDone.resolve();
+      await cleanupDone.promise;
+    });
+    await waitFor(() => expect((deleteRun() as HTMLButtonElement).disabled).toBe(false));
+
+    const deletion = settle();
+    const remove = vi
+      .spyOn(authServices.loopRunService, "delete")
+      .mockReturnValue(deletion.promise);
+    fireEvent.click(deleteRun());
+    const group = screen.getByRole("group", { name: /delete/i });
+    await act(async () => {
+      fireEvent.click(within(group).getByRole("button", { name: /confirm delete/i }));
+      await Promise.resolve();
+    });
+    expect(remove).toHaveBeenCalledWith("run-1");
+    expect((footerCleanup() as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      deletion.resolve();
+      await deletion.promise;
+    });
+  });
+
+  test("a Runs-tab delete blocks the Action tab's steer controls for the same run", async () => {
+    const halted = makeRun({
+      status: LoopRunStatus.WaitingHuman,
+      completedAt: null,
+      isHalted: true,
+    });
+    await openRunsTab(halted, { humanFeedbackReason: "Human Input Needed" });
+    const deletion = settle();
+    vi.spyOn(authServices.loopRunService, "delete").mockReturnValue(deletion.promise);
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    const group = screen.getByRole("group", { name: /delete/i });
+    await act(async () => {
+      fireEvent.click(within(group).getByRole("button", { name: /confirm delete/i }));
+      await Promise.resolve();
+    });
+
+    const action = document.getElementById("wiv2-panel-action")!;
+    const resume = within(action).getAllByRole("button", { hidden: true, name: /^resume$/i })[0];
+    expect((resume as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      deletion.resolve();
+      await deletion.promise;
+    });
   });
 });

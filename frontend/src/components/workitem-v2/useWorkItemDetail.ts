@@ -6,6 +6,7 @@ import {
   LoopTemplate,
   LoopRun,
   LoopNode,
+  LoopNodeEdge,
   WorktreePreview,
   AiProvider,
 } from "../../types";
@@ -19,6 +20,7 @@ import {
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
+import { useRunActionLock } from "./useRunActionLock";
 import {
   outputColorOf,
   defaultOutputOf,
@@ -47,6 +49,12 @@ export type FeedbackOutputs =
 
 const FEEDBACK_OUTPUTS_LOADING: FeedbackOutputs = { status: "loading" };
 
+/** One template version's nodes and the edges between them. */
+export interface VersionGraph {
+  nodes: LoopNode[];
+  edges: LoopNodeEdge[];
+}
+
 /** The nodes of one template version, and the fixed outputs their types hold. */
 interface VersionOutputs {
   nodes: LoopNode[];
@@ -71,6 +79,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   } | null>(null);
   // A template version never changes, and neither do the fixed outputs, so each
   // version is read once. A failed read is forgotten, and the next one asks again.
+  const versionGraphs = useRef(new Map<string, Promise<VersionGraph>>());
+  const runLock = useRunActionLock();
   const versionOutputs = useRef(new Map<string, Promise<VersionOutputs>>());
   const [dependencies, setDependencies] = useState<WorkItem[]>([]);
   const [allWorkItems, setAllWorkItems] = useState<WorkItem[]>([]);
@@ -159,6 +169,22 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       .catch(() => {});
   }, [workItem?.id, refreshRuns]);
 
+  const readVersionGraph = useCallback(
+    (loopTemplateId: string, templateVersion: number): Promise<VersionGraph> => {
+      const reads = versionGraphs.current;
+      const version = `${loopTemplateId}:${templateVersion}`;
+      const known = reads.get(version);
+      if (known) return known;
+      const read = loopTemplateService.getVersionGraph(loopTemplateId, templateVersion);
+      reads.set(version, read);
+      read.catch(() => {
+        if (reads.get(version) === read) reads.delete(version);
+      });
+      return read;
+    },
+    [],
+  );
+
   // Detail for the work item's current run — its pinned template, the node the
   // engine is on, and the persisted PR snapshot. The run list endpoint omits
   // these, so the detail is fetched separately and refreshed live.
@@ -193,7 +219,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       const known = reads.get(version);
       if (known) return known;
       const read = Promise.all([
-        loopTemplateService.getVersionGraph(run.loopTemplateId, run.templateVersion),
+        readVersionGraph(run.loopTemplateId, run.templateVersion),
         loopTemplateService.getNodeOutputs(),
       ]).then(([graph, fixed]) => ({ nodes: graph.nodes, fixed: readFixedOutputs(fixed) }));
       reads.set(version, read);
@@ -240,7 +266,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workItem]);
+  }, [workItem, readVersionGraph]);
 
   useEffect(() => {
     setFeedbackInput("");
@@ -825,6 +851,36 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [refetchWorkItem, refreshRuns],
   );
 
+  // The Runs tab's other actions on one run let the failure through the same
+  // way. The panel refreshes the run list after them.
+  const settleRunAction = useCallback(
+    async (action: Promise<void>) => {
+      await action;
+      void refetchWorkItem();
+    },
+    [refetchWorkItem],
+  );
+
+  const handlePauseRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.pause(runId)),
+    [settleRunAction],
+  );
+
+  const handleResumeRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.resume(runId)),
+    [settleRunAction],
+  );
+
+  const handleCancelRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.cancel(runId)),
+    [settleRunAction],
+  );
+
+  const handleDeleteRun = useCallback(
+    (runId: string) => settleRunAction(loopRunService.delete(runId)),
+    [settleRunAction],
+  );
+
   const handleLinkPr = async (prUrl: string) =>
     runAction((id) => workItemService.linkPr(id, prUrl), "link PR");
 
@@ -907,7 +963,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleResumeSteer,
     handleCleanupDone,
     handleCleanupBacklog,
+    readVersionGraph,
+    runLock,
     handleReclaimRun,
+    handlePauseRun,
+    handleResumeRun,
+    handleCancelRun,
+    handleDeleteRun,
     handleLinkPr,
     handleAddDependency,
     handleRemoveDependency,

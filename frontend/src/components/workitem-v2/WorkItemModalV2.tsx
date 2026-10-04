@@ -244,6 +244,9 @@ export default function WorkItemModalV2({
     workItem.status === WorkItemStatus.HumanFeedback &&
     workItem.humanFeedbackReason !== "Human Input Needed" &&
     workItem.humanFeedbackReason !== "PR Awaiting Merge";
+  // The footer's cleanup acts on the current run, so it waits for any other
+  // action on that run, wherever in the dialog that was started.
+  const currentRunBlocked = detail.runLock.pendingOf(workItem.currentLoopRunId) !== null;
 
   const handleTabKeyDown = (e: React.KeyboardEvent, index: number) => {
     let nextIndex: number | null = null;
@@ -315,6 +318,12 @@ export default function WorkItemModalV2({
           onCleanupDone={detail.handleCleanupDone}
           onCleanupBacklog={detail.handleCleanupBacklog}
           onReclaimRun={detail.handleReclaimRun}
+          onPauseRun={detail.handlePauseRun}
+          onResumeRun={detail.handleResumeRun}
+          onCancelRun={detail.handleCancelRun}
+          onDeleteRun={detail.handleDeleteRun}
+          readVersionGraph={detail.readVersionGraph}
+          runLock={detail.runLock}
         />
       </section>
       <section
@@ -442,14 +451,28 @@ export default function WorkItemModalV2({
                     <button
                       type="button"
                       className="btn btn-sm btn-warning"
-                      onClick={() => void detail.handleCleanupDone()}
+                      onClick={() =>
+                        void detail.runLock.hold(
+                          workItem.currentLoopRunId,
+                          "abandon",
+                          detail.handleCleanupDone,
+                        )
+                      }
+                      disabled={currentRunBlocked}
                     >
                       Cleanup -&gt; Done
                     </button>
                     <button
                       type="button"
                       className="btn btn-sm btn-secondary"
-                      onClick={() => void detail.handleCleanupBacklog()}
+                      onClick={() =>
+                        void detail.runLock.hold(
+                          workItem.currentLoopRunId,
+                          "abandon",
+                          detail.handleCleanupBacklog,
+                        )
+                      }
+                      disabled={currentRunBlocked}
                     >
                       Cleanup -&gt; Backlog
                     </button>

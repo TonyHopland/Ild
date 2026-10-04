@@ -567,10 +567,6 @@ export const loopTemplateService = {
 };
 
 export const loopRunService = {
-  getAll: async (opts?: { skip?: number; take?: number }): Promise<LoopRun[]> => {
-    return api.get<LoopRun[]>(`/loopruns${pageQuery(opts)}`);
-  },
-
   getById: async (id: string): Promise<LoopRun> => {
     return api.get<LoopRun>(`/loopruns/${id}`);
   },

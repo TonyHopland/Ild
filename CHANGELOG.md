@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**
+
 ## [0.16.0] - 2026-10-04
 
 ### Added
