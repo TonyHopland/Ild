@@ -90,6 +90,9 @@ function RenameForm({
         aria-label="Chat name"
         maxLength={120}
         autoFocus
+        // What is saved is what was sent: an edit made mid-save would be closed
+        // away unsaved when the save comes back.
+        readOnly={rename.saving}
         value={rename.draft}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => {
@@ -195,6 +198,9 @@ export default function ChatBubble() {
   // row; every change of view throws it away unsaved.
   const [rename, setRename] = useState<RenameDraft | null>(null);
   const renameDraftRef = useRef(0);
+  // The draft whose save is out, read synchronously: two submits in one tick both
+  // see the same render, and only this can turn the second away.
+  const renameSavingRef = useRef<number | null>(null);
 
   // Start form
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -910,10 +916,12 @@ export default function ChatBubble() {
   };
 
   const saveRename = async () => {
-    if (!rename || rename.saving) return;
+    if (!rename) return;
     const name = rename.draft.trim();
     if (!name) return;
     const { draftId, chatSessionId } = rename;
+    if (renameSavingRef.current === draftId) return;
+    renameSavingRef.current = draftId;
     // Only the draft that sent the request is touched by its answer: one opened
     // since — on this chat or another — is the user's newer intent.
     const settle = (next: (draft: RenameDraft) => RenameDraft | null) =>
@@ -922,6 +930,7 @@ export default function ChatBubble() {
     try {
       await chatService.rename(chatSessionId, name);
     } catch (e) {
+      if (renameSavingRef.current === draftId) renameSavingRef.current = null;
       settle((current) => ({
         ...current,
         saving: false,
@@ -934,6 +943,7 @@ export default function ChatBubble() {
     historyEpochRef.current += 1;
     await refreshHistory().catch((err) => console.error(err));
     settle(() => null);
+    if (renameSavingRef.current === draftId) renameSavingRef.current = null;
   };
 
   const renameForm = (current: RenameDraft) => (

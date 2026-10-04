@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { settingsService } from "../../services/auth";
 
 interface SettingRowProps {
@@ -27,15 +27,17 @@ interface SwitchProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: string;
+  disabled?: boolean;
 }
 
-export function Switch({ checked, onChange, label }: SwitchProps) {
+export function Switch({ checked, onChange, label, disabled = false }: SwitchProps) {
   return (
     <span className="settings-switch">
       <input
         type="checkbox"
         checked={checked}
         aria-label={label}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="settings-switch-track" />
@@ -87,39 +89,67 @@ interface ToggleSettingFieldProps {
  * the user and the one bit they came to change. A save that fails puts the
  * switch back and says why, rather than leaving the page claiming a setting the
  * server never took.
+ *
+ * What it shows is the server's answer or the user's own act, never a mix of
+ * stale ones: a flip supersedes a read still on its way, so a slow first read
+ * cannot undo it, and the switch takes no second flip while a save is out, so
+ * two saves can never land in the wrong order. A read that fails says so.
  */
 export function useToggleSetting(settingKey: string) {
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const flippedRef = useRef(false);
+  const savingRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
+    flippedRef.current = false;
+    const current = () => !cancelled && !flippedRef.current;
     void settingsService
       .get(settingKey)
       // Case-insensitive because the API validates with bool.TryParse: a value
       // written as "True" is on to every backend reader, and a switch showing it
       // off would be the only thing in the system that disagrees.
-      .then((s) => setChecked(s.value.toLowerCase() === "true"))
-      // Unreachable API: leave it showing off rather than a value we invented.
-      .catch(() => {});
+      .then((s) => {
+        if (current()) setChecked(s.value.toLowerCase() === "true");
+      })
+      .catch((err: unknown) => {
+        if (current()) {
+          setError(
+            `Could not load this setting: ${err instanceof Error ? err.message : "request failed"}`,
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [settingKey]);
 
   const save = async (next: boolean) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    flippedRef.current = true;
     setChecked(next);
     setError(null);
+    setSaving(true);
     try {
       await settingsService.put(settingKey, next ? "true" : "false");
     } catch (err) {
       setChecked(!next);
       setError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   };
 
-  return { checked, error, save };
+  return { checked, error, saving, save };
 }
 
 /** A switch for one boolean app setting; see {@link useToggleSetting}. */
 export function ToggleSettingField({ settingKey, label, children }: ToggleSettingFieldProps) {
-  const { checked, error, save } = useToggleSetting(settingKey);
+  const { checked, error, saving, save } = useToggleSetting(settingKey);
 
   return (
     <SettingRow
@@ -131,7 +161,7 @@ export function ToggleSettingField({ settingKey, label, children }: ToggleSettin
         </>
       }
     >
-      <Switch checked={checked} onChange={(v) => void save(v)} label={label} />
+      <Switch checked={checked} onChange={(v) => void save(v)} label={label} disabled={saving} />
     </SettingRow>
   );
 }

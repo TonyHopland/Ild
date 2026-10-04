@@ -209,6 +209,12 @@
   background-color: #fff;
 }
 
+.settings-switch input:disabled,
+.settings-switch input:disabled + .settings-switch-track {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .settings-switch input:focus-visible + .settings-switch-track {
   outline: 2px solid #6366f1;
   outline-offset: 2px;

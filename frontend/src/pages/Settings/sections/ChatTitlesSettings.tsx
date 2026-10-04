@@ -2,9 +2,17 @@ import { useEffect, useState } from "react";
 import { AiProviderTagField } from "../../../components/AiProviderTagField";
 import { aiProviderService, ChatTitleSettingKeys, settingsService } from "../../../services/auth";
 import type { AiProvider } from "../../../types";
+import { resolveProviderForTag } from "../../../utils/providerTags";
 import { SettingRow, Switch, useToggleSetting } from "../controls";
 
 const SmartTitlesLabel = "Smart session titles";
+
+/**
+ * Copilot's CLI cannot turn its tools off, so the backend never asks it for a
+ * title (AiToolCatalog.SupportsNoTools): titles that would run on it stay the
+ * first-message ones.
+ */
+const cannotTitle = (provider: AiProvider) => provider.type.trim().toLowerCase() === "copilot";
 
 /**
  * Whether chats are titled by a model summarising their first exchange, and the
@@ -66,6 +74,7 @@ export default function ChatTitlesSettings() {
 
   const off = !smartTitles.checked;
   const loaded = providers !== null && saved !== null;
+  const resolved = providers ? resolveProviderForTag(providers, draft).provider : null;
 
   return (
     <section className="settings-card">
@@ -88,6 +97,7 @@ export default function ChatTitlesSettings() {
           checked={smartTitles.checked}
           onChange={(v) => void smartTitles.save(v)}
           label={SmartTitlesLabel}
+          disabled={smartTitles.saving}
         />
       </SettingRow>
       <div className="settings-row settings-provider-tag">
@@ -100,6 +110,12 @@ export default function ChatTitlesSettings() {
             disabled={off || !loaded}
             cannotRun="no title can be generated"
           />
+          {resolved && cannotTitle(resolved) && (
+            <span className="settings-error">
+              {resolved.name} is a Copilot provider, which cannot run without its tools, so it makes
+              no titles: chats keep the start of their first message.
+            </span>
+          )}
           {loadErrors.map((message) => (
             <span key={message} className="settings-error">
               {message}
