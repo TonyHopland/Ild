@@ -929,15 +929,17 @@ export default function ChatBubble() {
       }));
       return;
     }
-    settle(() => null);
+    // Closed once the list holds the new title, so the old one never shows again in
+    // between; a re-read that fails still closes it, the rename having been taken.
     historyEpochRef.current += 1;
     await refreshHistory().catch((err) => console.error(err));
+    settle(() => null);
   };
 
   const renameForm = (current: RenameDraft) => (
     <RenameForm
       rename={current}
-      onChange={(draft) => setRename((current) => current && { ...current, draft })}
+      onChange={(draft) => setRename((editing) => editing && { ...editing, draft })}
       onSave={() => void saveRename()}
       onCancel={() => setRename(null)}
     />
