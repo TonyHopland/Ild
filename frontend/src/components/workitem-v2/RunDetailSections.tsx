@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   EventLogEntry,
   LoopRun,
@@ -114,22 +114,36 @@ export function RunSessions({
   const [preview, setPreview] = useState<LoopRunSessionPreview | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [errorText, setErrorText] = useState("");
+  // Opening a preview and closing it each start a new generation; only the
+  // request of the current one may show its preview, error or loading state.
+  const generation = useRef(0);
 
   if (sessions.length === 0) return null;
 
   const openPreview = async (session: LoopRunAvailableSession) => {
+    const request = ++generation.current;
     const key = `${session.adapterName}:${session.sessionId}`;
     setErrorText("");
     setLoadingKey(key);
     try {
-      setPreview(
-        await loopRunService.getSessionPreview(runId, session.adapterName, session.sessionId),
+      const read = await loopRunService.getSessionPreview(
+        runId,
+        session.adapterName,
+        session.sessionId,
       );
+      if (request === generation.current) setPreview(read);
     } catch (error) {
-      setErrorText(failureMessage(error, "Failed to load session preview."));
+      if (request === generation.current)
+        setErrorText(failureMessage(error, "Failed to load session preview."));
     } finally {
-      setLoadingKey(null);
+      if (request === generation.current) setLoadingKey(null);
     }
+  };
+
+  const closePreview = () => {
+    generation.current++;
+    setPreview(null);
+    setLoadingKey(null);
   };
 
   return (
@@ -179,11 +193,7 @@ export function RunSessions({
         <div className="wiv2-session-preview" role="region" aria-label="Session preview">
           <div className="wiv2-run-entry-head">
             <span className="wiv2-run-entry-name">Session preview</span>
-            <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              onClick={() => setPreview(null)}
-            >
+            <button type="button" className="btn btn-sm btn-secondary" onClick={closePreview}>
               Close
             </button>
           </div>

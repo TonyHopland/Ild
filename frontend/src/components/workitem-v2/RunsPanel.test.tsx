@@ -1294,3 +1294,83 @@ describe("RunsPanel controls after an action", () => {
     expect(isDisabled(actionButton(CANCEL_RUN))).toBe(false);
   });
 });
+
+describe("RunsPanel session preview requests", () => {
+  test("a preview answered after the user closed the preview stays closed", async () => {
+    const second = deferred<{
+      adapterName: string;
+      sessionId: string;
+      createdAt: string;
+      updatedAt: string | null;
+      sessionJson: string;
+    }>();
+    vi.spyOn(loopRunService, "getSessionPreview").mockImplementation(async (_run, _a, id) =>
+      id === "sess-1"
+        ? {
+            adapterName: "claude",
+            sessionId: "sess-1",
+            createdAt: "2025-01-01T00:00:00Z",
+            updatedAt: null,
+            sessionJson: "{}",
+          }
+        : second.promise,
+    );
+    const session = (sessionId: string) => ({
+      adapterName: "claude",
+      sessionId,
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: null,
+      isCurrent: false,
+      placeholders: [],
+    });
+    const detail = runWithNode(RUN_A, {
+      availableSessions: [session("sess-1"), session("sess-2")],
+    });
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
+    fireEvent.click(await screen.findByRole("button", { name: /ai sessions \(2\)/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
+    const region = await screen.findByRole("region", { name: /session preview/i });
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-2/i }));
+    fireEvent.click(within(region).getByRole("button", { name: /close/i }));
+    await act(async () => {
+      second.resolve({
+        adapterName: "claude",
+        sessionId: "sess-2",
+        createdAt: "2025-01-01T00:00:00Z",
+        updatedAt: null,
+        sessionJson: "{}",
+      });
+      await second.promise;
+    });
+
+    expect(screen.queryByRole("region", { name: /session preview/i })).toBeNull();
+    expect(isDisabled(screen.getByRole("button", { name: /preview session sess-2/i }))).toBe(false);
+  });
+});
+
+describe("RunsPanel recorded node type", () => {
+  test("without the loop graph the node's recorded type still shows and formats it", async () => {
+    const detail = runWithNode(RUN_A);
+    detail.nodes[0] = {
+      ...detail.nodes[0],
+      nodeType: "AI",
+      effectiveInput: "# Plan",
+      output: null,
+    };
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(
+      <RunsPanel
+        workItem={workItem()}
+        runs={[detail]}
+        progressText=""
+        readVersionGraph={vi.fn().mockRejectedValue({ status: 500, message: "boom" })}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /AI.*Node of aaaaaaaa/ }));
+
+    expect(screen.getByRole("heading", { name: "Plan" })).not.toBeNull();
+  });
+});

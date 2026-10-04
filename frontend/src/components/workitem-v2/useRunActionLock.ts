@@ -23,9 +23,10 @@ export interface RunActionLock {
   settledOf: (runId: string | null | undefined) => number;
   /**
    * Runs `act` holding the run's one action slot until it settles, rethrowing
-   * its failure; once `act` went through, counts it in `settledOf`. While another action holds that run's slot it refuses:
-   * resolves false without running `act`. With no run id there is nothing to
-   * hold, and `act` simply runs.
+   * its failure; once `act` went through, counts it in `settledOf`. While
+   * another action holds that run's slot it refuses: resolves false without
+   * running `act`. With no run id there is nothing to hold, and `act` simply
+   * runs.
    */
   hold: (runId: string | null | undefined, kind: RunAction, act: () => unknown) => Promise<boolean>;
 }

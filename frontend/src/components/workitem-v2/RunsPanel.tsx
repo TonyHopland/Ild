@@ -94,8 +94,14 @@ function inputTextOf(node: LoopRunNode): string | null {
   return "nodeType" in input ? null : raw;
 }
 
+const NODE_TYPES: ReadonlySet<string> = new Set(Object.values(NodeType));
+
+function recordedNodeType(node: LoopRunNode): NodeType | undefined {
+  return node.nodeType && NODE_TYPES.has(node.nodeType) ? (node.nodeType as NodeType) : undefined;
+}
+
 // An AI node's prompt and answer are Markdown. Rendered as such only when the
-// loop graph says the node is an AI node; otherwise shown as recorded.
+// node's type is known to be AI; otherwise shown as recorded.
 function NodeText({ text, nodeType }: { text: string; nodeType: NodeType | undefined }) {
   return nodeType === NodeType.AI ? (
     <MarkdownRenderer content={text} className="wiv2-node-markdown" />
@@ -114,7 +120,10 @@ function NodeRow({
   retryDisabled,
 }: {
   node: LoopRunNode;
-  /** The node's type in the run's loop version; unknown when the graph is not loaded. */
+  /**
+   * The node's type as the run recorded it, or else from the loop version's
+   * graph; unknown when neither says.
+   */
   nodeType: NodeType | undefined;
   isLive: boolean;
   progressText: string;
@@ -232,8 +241,9 @@ interface RunsPanelProps {
    */
   onDeleteRun?: (runId: string) => Promise<unknown>;
   /**
-   * Read a loop version's graph, for each node's type and the edge a run
-   * recorded into it. Without it neither is shown.
+   * Read a loop version's graph, for the edge a run recorded into each node,
+   * and a node's type where the run did not record it. Without it no edges
+   * are shown.
    */
   readVersionGraph?: (loopTemplateId: string, templateVersion: number) => Promise<VersionGraph>;
   /**
@@ -581,7 +591,9 @@ function RunDetail({
               )}
               <NodeRow
                 node={node}
-                nodeType={graph?.nodes.find((n) => n.id === node.nodeId)?.type}
+                nodeType={
+                  recordedNodeType(node) ?? graph?.nodes.find((n) => n.id === node.nodeId)?.type
+                }
                 isLive={
                   isLiveRun &&
                   i === runDetail.nodes.length - 1 &&
