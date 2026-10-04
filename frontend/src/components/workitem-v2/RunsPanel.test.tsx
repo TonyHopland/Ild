@@ -191,7 +191,8 @@ const PAUSE = /pause run/i;
 const RESUME = /resume run/i;
 const CANCEL_RUN = /cancel run/i;
 const DELETE_RUN = /delete run/i;
-const runEntry = (id: string) => screen.queryByRole("button", { name: new RegExp(id.slice(0, 8)) });
+const runEntry = (id: string) =>
+  screen.queryByRole("button", { name: new RegExp(`Run ${id.slice(0, 8)}`) });
 const isDisabled = (el: HTMLElement | null) => (el as HTMLButtonElement | null)?.disabled;
 
 function deferred<T = void>() {
