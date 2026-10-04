@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import {
   WorkItem,
   WorkItemStatus,
@@ -153,37 +153,37 @@ function NodeRow({
       </div>
       {expanded && (
         <div className="wiv2-node-body">
+          <div className="wiv2-node-section">
+            <span className="detail-label">Input</span>
+            {inputText ? (
+              <pre className="wiv2-node-pre">{inputText}</pre>
+            ) : (
+              <div className="wiv2-empty">No input recorded.</div>
+            )}
+          </div>
           {isLive ? (
-            <LiveStream text={progressText} />
+            <div className="wiv2-node-section">
+              <LiveStream text={progressText} />
+            </div>
           ) : (
-            <>
-              <div className="wiv2-node-section">
-                <span className="detail-label">Input</span>
-                {inputText ? (
-                  <pre className="wiv2-node-pre">{inputText}</pre>
-                ) : (
-                  <div className="wiv2-empty">No input recorded.</div>
-                )}
-              </div>
-              <div className="wiv2-node-section">
-                <span className="detail-label">Output</span>
-                {node.output ? (
-                  <pre className="wiv2-node-pre">{node.output}</pre>
-                ) : (
-                  <div className="wiv2-empty">No output recorded.</div>
-                )}
-              </div>
-              {node.error && (
-                <div className="wiv2-node-section">
-                  <span className="detail-label">Error</span>
-                  <pre className="wiv2-node-pre wiv2-node-error">{node.error}</pre>
-                </div>
+            <div className="wiv2-node-section">
+              <span className="detail-label">Output</span>
+              {node.output ? (
+                <pre className="wiv2-node-pre">{node.output}</pre>
+              ) : (
+                <div className="wiv2-empty">No output recorded.</div>
               )}
-              <div className="wiv2-node-section">
-                <NodeEvents runNodeId={node.id} events={events} />
-              </div>
-            </>
+            </div>
           )}
+          {node.error && (
+            <div className="wiv2-node-section">
+              <span className="detail-label">Error</span>
+              <pre className="wiv2-node-pre wiv2-node-error">{node.error}</pre>
+            </div>
+          )}
+          <div className="wiv2-node-section">
+            <NodeEvents runNodeId={node.id} events={events} />
+          </div>
         </div>
       )}
     </div>
@@ -226,14 +226,25 @@ interface RunsPanelProps {
   readVersionGraph?: (loopTemplateId: string, templateVersion: number) => Promise<VersionGraph>;
 }
 
+type RunDetailProps = Omit<RunsPanelProps, "runs"> & {
+  runId: string;
+  /** Whether a pause/resume/cancel/delete/retain of this run is in flight. */
+  busy: boolean;
+  onBusyChange: (runId: string, busy: boolean) => void;
+  /** Called once a delete of this run went through. */
+  onDeleted: (runId: string) => void;
+};
+
 /**
- * Run history tab: run list on the left, the selected run on the right — its
- * actions, variables, AI sessions and node timeline with each node's events.
- * The only place runs are shown and managed.
+ * One run's detail, actions and node timeline. Rendered keyed by run id, so
+ * everything here (the run as read, loading, the error, the confirmations,
+ * the event log, the graph) belongs to that one run and is discarded when
+ * another run is shown; nothing of one run can be shown or acted on as
+ * another's (ADR-0021).
  */
-export default function RunsPanel({
+function RunDetail({
+  runId,
   workItem,
-  runs,
   progressText,
   onRunsChanged,
   onHalt,
@@ -246,26 +257,351 @@ export default function RunsPanel({
   onCancelRun,
   onDeleteRun,
   readVersionGraph,
-}: RunsPanelProps) {
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  busy,
+  onBusyChange,
+  onDeleted,
+}: RunDetailProps) {
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [retrying, setRetrying] = useState(false);
   const [reclaiming, setReclaiming] = useState(false);
   const [confirmingReclaim, setConfirmingReclaim] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [errorText, setErrorText] = useState("");
-  // Runs with a pause/resume/cancel/delete/retain in flight, so switching runs
-  // never frees or blocks another run's controls.
+  // Best effort: without the graph no node types or edges are shown.
+  const [graph, setGraph] = useState<VersionGraph | null>(null);
+  // Reads of this run, in the order they started: only the latest one started
+  // is applied, so a read begun before an action settled never overwrites the
+  // read made after it.
+  const reads = useRef(0);
+
+  const runEvents = useRunEvents(runDetail);
+
+  const readRun = useCallback(async () => {
+    const read = ++reads.current;
+    const data = await loopRunService.getById(runId).then(normalizeRun, () => null);
+    if (read !== reads.current) return;
+    setRunDetail(data);
+    setLoading(false);
+  }, [runId]);
+
+  // workItem identity doubles as a refresh trigger: the parent refetches the
+  // work item on every node/run state change, so the inline timeline stays
+  // current without its own SignalR subscription.
+  useEffect(() => {
+    void readRun();
+  }, [readRun, workItem]);
+
+  const templateId = runDetail?.loopTemplateId;
+  const templateVersion = runDetail?.templateVersion;
+  useEffect(() => {
+    if (!readVersionGraph || !templateId || !templateVersion) return;
+    let cancelled = false;
+    readVersionGraph(templateId, templateVersion).then(
+      (read) => {
+        if (!cancelled) setGraph(read);
+      },
+      () => {
+        if (!cancelled) setGraph(null);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [readVersionGraph, templateId, templateVersion]);
+
+  // Shows a refused action's reason. Once it went through, refreshes the run
+  // list and says so, for the caller to apply the action's effect.
+  const settleAction = async (action: Promise<unknown>, fallback: string) => {
+    try {
+      await action;
+    } catch (error) {
+      setErrorText(failureMessage(error, fallback));
+      return false;
+    }
+    onRunsChanged?.();
+    return true;
+  };
+
+  const handleRetry = async (runNodeId: string) => {
+    setErrorText("");
+    setRetrying(true);
+    try {
+      const done = await settleAction(
+        loopRunService.retryFromNode(runId, runNodeId),
+        "Failed to retry from node.",
+      );
+      if (done) await readRun();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const handleReclaim = async (reclaimRun: (runId: string) => Promise<unknown>) => {
+    setErrorText("");
+    setReclaiming(true);
+    try {
+      const done = await settleAction(
+        reclaimRun(runId),
+        "Failed to free the run's worktree and branch.",
+      );
+      if (done) {
+        setConfirmingReclaim(false);
+        await readRun();
+      }
+    } finally {
+      setReclaiming(false);
+    }
+  };
+
+  const actOnRun = async (
+    action: (runId: string) => Promise<unknown>,
+    fallback: string,
+    applied: () => void | Promise<void> = readRun,
+  ) => {
+    setErrorText("");
+    onBusyChange(runId, true);
+    try {
+      if (await settleAction(action(runId), fallback)) await applied();
+    } finally {
+      onBusyChange(runId, false);
+    }
+  };
+
+  const handleDelete = async (deleteRun: (runId: string) => Promise<unknown>) => {
+    await actOnRun(deleteRun, "Failed to delete run.", () => onDeleted(runId));
+    setConfirmingDelete(false);
+  };
+
+  if (!runDetail) {
+    return (
+      <div className="wiv2-empty">
+        {loading ? "Loading run..." : "This run could not be loaded."}
+      </div>
+    );
+  }
+
+  // Retrying restarts the run, so it is blocked while the run is actively
+  // executing (a paused run can still be retried) or while a retry is in flight.
+  const retryDisabled =
+    retrying || (runDetail.status === LoopRunStatus.Running && !runDetail.isPaused);
+
+  const isLiveRun =
+    runDetail.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
+
+  // A finished run keeps its worktree and branch so it stays inspectable
+  // (ADR-0008), which is what blocks a later run wanting the same branch name.
+  // Offered only once there is something left to reclaim.
+  const canReclaim =
+    (runDetail.status === LoopRunStatus.Completed ||
+      runDetail.status === LoopRunStatus.Failed ||
+      runDetail.status === LoopRunStatus.Cancelled) &&
+    !!runDetail.hasLocalGitState;
+
+  return (
+    <>
+      {errorText && (
+        <div className="wiv2-error" role="alert">
+          {errorText}
+          <button type="button" className="wiv2-error-close" onClick={() => setErrorText("")}>
+            ✕
+          </button>
+        </div>
+      )}
+      <div className="wiv2-runs-detail-header">
+        <span className={`status-badge status-${runDetail.status.toLowerCase()}`}>
+          {runDetail.status}
+          {runDetail.isPaused && " (Paused)"}
+        </span>
+        <span className="run-time">
+          Started {new Date(runDetail.startedAt).toLocaleString()}
+          {runDetail.completedAt &&
+            ` · finished ${new Date(runDetail.completedAt).toLocaleString()}`}
+        </span>
+        <button
+          type="button"
+          className={`btn btn-sm ${runDetail.retain ? "btn-primary" : "btn-secondary"}`}
+          aria-pressed={!!runDetail.retain}
+          disabled={busy}
+          onClick={() =>
+            void actOnRun(
+              (id) => loopRunService.setRetain(id, !runDetail.retain),
+              "Failed to update retain.",
+            )
+          }
+          title={
+            runDetail.retain
+              ? "Pinned: this run is kept and never auto-deleted. Click to unpin."
+              : "Pin this run so its worktree, branch, and history are never auto-deleted."
+          }
+        >
+          {runDetail.retain ? "📌 Retained" : "Retain"}
+        </button>
+        {onReclaimRun &&
+          canReclaim &&
+          (confirmingReclaim ? (
+            <span className="wiv2-abandon-confirm" role="group" aria-label="Confirm clean up run">
+              <span className="wiv2-abandon-prompt">
+                Delete this run&rsquo;s worktree and local branch? The run and its history are kept.
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm btn-danger"
+                onClick={() => void handleReclaim(onReclaimRun)}
+                disabled={reclaiming}
+              >
+                {reclaiming ? "Cleaning up…" : "Confirm clean up"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                onClick={() => setConfirmingReclaim(false)}
+                disabled={reclaiming}
+              >
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={() => setConfirmingReclaim(true)}
+              title="Free this run's worktree and local branch so a new run can reuse the branch name. The run and its history are kept."
+            >
+              Clean up worktree
+            </button>
+          ))}
+        {runDetail.status === LoopRunStatus.Running ? (
+          <>
+            {runDetail.isPaused
+              ? onResumeRun && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={busy}
+                    onClick={() => void actOnRun(onResumeRun, "Failed to resume run.")}
+                  >
+                    Resume run
+                  </button>
+                )
+              : onPauseRun && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    disabled={busy}
+                    onClick={() => void actOnRun(onPauseRun, "Failed to pause run.")}
+                  >
+                    Pause run
+                  </button>
+                )}
+            {onCancelRun && (
+              <button
+                type="button"
+                className="btn btn-sm btn-danger"
+                disabled={busy}
+                onClick={() => void actOnRun(onCancelRun, "Failed to cancel run.")}
+              >
+                Cancel run
+              </button>
+            )}
+          </>
+        ) : (
+          onDeleteRun &&
+          (confirmingDelete ? (
+            <span className="wiv2-abandon-confirm" role="group" aria-label="Confirm delete run">
+              <span className="wiv2-abandon-prompt">
+                Delete this loop run and all its event history?
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm btn-danger"
+                onClick={() => void handleDelete(onDeleteRun)}
+                disabled={busy}
+              >
+                {busy ? "Deleting…" : "Confirm delete"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-secondary"
+                onClick={() => setConfirmingDelete(false)}
+                disabled={busy}
+              >
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-sm btn-secondary"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={busy}
+            >
+              Delete run
+            </button>
+          ))
+        )}
+      </div>
+      <RunCostSummary run={runDetail} />
+      <RunVariables variables={runDetail.availableVariables ?? []} />
+      <RunSessions runId={runDetail.id} sessions={runDetail.availableSessions ?? []} />
+      <HaltSteerControls
+        run={runDetail}
+        workItemStatus={workItem.status}
+        onHalt={onHalt}
+        onResumeSteer={onResumeSteer}
+        onCleanupDone={onCleanupDone}
+        onCleanupBacklog={onCleanupBacklog}
+      />
+      <div className="wiv2-node-list">
+        {runDetail.nodes.length === 0 && <div className="wiv2-empty">No nodes executed yet.</div>}
+        {runDetail.nodes.map((node, i) => {
+          const incomingEdge =
+            i > 0
+              ? graph?.edges.find(
+                  (e) => e.id === node.incomingEdgeId && e.targetNodeId === node.nodeId,
+                )
+              : undefined;
+          return (
+            <Fragment key={node.id}>
+              {incomingEdge && (
+                <EdgeArrow edgeType={incomingEdge.edgeType} edgeName={incomingEdge.name} />
+              )}
+              <NodeRow
+                node={node}
+                nodeType={graph?.nodes.find((n) => n.id === node.nodeId)?.type}
+                isLive={
+                  isLiveRun &&
+                  i === runDetail.nodes.length - 1 &&
+                  normalizeNodeStatus(node.status) === LoopRunNodeStatus.Running
+                }
+                progressText={progressText}
+                events={runEvents}
+                onRetry={(runNodeId) => void handleRetry(runNodeId)}
+                retryDisabled={retryDisabled}
+              />
+            </Fragment>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+/**
+ * Run history tab: run list on the left, the selected run on the right — its
+ * actions, variables, AI sessions and node timeline with each node's events.
+ * The only place runs are shown and managed.
+ */
+export default function RunsPanel({ runs, ...detailProps }: RunsPanelProps) {
+  const { workItem } = detailProps;
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // Runs with a pause/resume/cancel/delete/retain in flight, keyed by run id so
+  // a run's controls stay blocked until its own request settles, also when the
+  // user leaves the run and comes back to it meanwhile.
   const [busyRunIds, setBusyRunIds] = useState<ReadonlySet<string>>(new Set());
-  const [confirmingDeleteRunId, setConfirmingDeleteRunId] = useState<string | null>(null);
   // Hides a deleted run until the parent's refetched `runs` drop it, and keeps
   // the selection from falling back to it. Run ids are never reused.
   const [deletedRunIds, setDeletedRunIds] = useState<ReadonlySet<string>>(new Set());
-  // The shown run's loop version graph. Best effort: without it no node types
-  // or edges are shown.
-  const [graph, setGraph] = useState<(VersionGraph & { version: string }) | null>(null);
-
-  const runEvents = useRunEvents(runDetail);
 
   const visibleRuns = runs.filter((run) => !deletedRunIds.has(run.id));
   const effectiveRunId =
@@ -273,171 +609,23 @@ export default function RunsPanel({
       (id): id is string => !!id && !deletedRunIds.has(id),
     ) ?? null;
 
-  useEffect(() => {
-    if (!effectiveRunId) {
-      setRunDetail(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setConfirmingReclaim(false);
-    setConfirmingDeleteRunId(null);
-    loopRunService
-      .getById(effectiveRunId)
-      .then((data) => {
-        if (!cancelled) setRunDetail(normalizeRun(data));
-      })
-      .catch(() => {
-        if (!cancelled) setRunDetail(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-    // workItem identity doubles as a refresh trigger: the parent refetches the
-    // work item on every node/run state change, so the inline timeline stays
-    // current without its own SignalR subscription.
-  }, [effectiveRunId, workItem]);
-
-  // Re-reads a run after an action on it. Best effort: the action already
-  // happened, so a failed read is not reported as its failure; like the detail
-  // effect's failed load it shows no detail rather than a stale one. Only
-  // touches the detail while that run is still the one shown, since the user
-  // may have selected another run meanwhile.
-  const rereadRun = async (runId: string) => {
-    try {
-      const data = normalizeRun(await loopRunService.getById(runId));
-      setRunDetail((prev) => (prev?.id === runId ? data : prev));
-    } catch {
-      setRunDetail((prev) => (prev?.id === runId ? null : prev));
-    }
-  };
-
-  // Shows a refused action's reason; once it went through, refreshes the run
-  // list and then applies its effect on the panel.
-  const settleAction = async (
-    action: Promise<unknown>,
-    fallback: string,
-    applied: () => void | Promise<void>,
-  ) => {
-    try {
-      await action;
-    } catch (error) {
-      setErrorText(failureMessage(error, fallback));
-      return;
-    }
-    onRunsChanged?.();
-    await applied();
-  };
-
-  const templateId = runDetail?.loopTemplateId;
-  const templateVersion = runDetail?.templateVersion;
-  useEffect(() => {
-    if (!readVersionGraph || !templateId || !templateVersion) return;
-    let cancelled = false;
-    readVersionGraph(templateId, templateVersion)
-      .then(({ nodes, edges }) => {
-        if (!cancelled) setGraph({ version: `${templateId}:${templateVersion}`, nodes, edges });
-      })
-      .catch(() => {
-        if (!cancelled) setGraph(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [readVersionGraph, templateId, templateVersion]);
-
-  const handleRetry = async (runNodeId: string) => {
-    if (!effectiveRunId) return;
-    const runId = effectiveRunId;
-    setErrorText("");
-    setRetrying(true);
-    try {
-      await settleAction(
-        loopRunService.retryFromNode(runId, runNodeId),
-        "Failed to retry from node.",
-        () => rereadRun(runId),
-      );
-    } finally {
-      setRetrying(false);
-    }
-  };
-
-  const handleReclaim = async () => {
-    if (!onReclaimRun || !effectiveRunId) return;
-    const runId = effectiveRunId;
-    setErrorText("");
-    setReclaiming(true);
-    try {
-      await settleAction(
-        onReclaimRun(runId),
-        "Failed to free the run's worktree and branch.",
-        async () => {
-          setConfirmingReclaim(false);
-          await rereadRun(runId);
-        },
-      );
-    } finally {
-      setReclaiming(false);
-    }
-  };
-
-  const actOnRun = async (
-    runId: string,
-    action: (runId: string) => Promise<unknown>,
-    fallback: string,
-    applied: () => void | Promise<void>,
-  ) => {
-    setErrorText("");
-    setBusyRunIds((prev) => new Set(prev).add(runId));
-    try {
-      await settleAction(action(runId), fallback, applied);
-    } finally {
-      setBusyRunIds((prev) => {
-        const next = new Set(prev);
-        next.delete(runId);
-        return next;
-      });
-    }
-  };
-
-  const handleDelete = async (runId: string, deleteRun: (runId: string) => Promise<unknown>) => {
-    await actOnRun(runId, deleteRun, "Failed to delete run.", () => {
-      setDeletedRunIds((prev) => new Set(prev).add(runId));
-      setSelectedRunId((prev) => (prev === runId ? null : prev));
-      setRunDetail((prev) => (prev?.id === runId ? null : prev));
+  const handleBusyChange = useCallback((runId: string, busy: boolean) => {
+    setBusyRunIds((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(runId);
+      else next.delete(runId);
+      return next;
     });
-    setConfirmingDeleteRunId((prev) => (prev === runId ? null : prev));
-  };
+  }, []);
+
+  const handleDeleted = useCallback((runId: string) => {
+    setDeletedRunIds((prev) => new Set(prev).add(runId));
+    setSelectedRunId((prev) => (prev === runId ? null : prev));
+  }, []);
 
   if (visibleRuns.length === 0) {
     return <div className="wiv2-empty">No runs yet for this work item.</div>;
   }
-
-  // Retrying restarts the run, so it is blocked while the run is actively
-  // executing (a paused run can still be retried) or while a retry is in flight.
-  const retryDisabled =
-    retrying || (runDetail?.status === LoopRunStatus.Running && !runDetail.isPaused);
-
-  const isLiveRun =
-    runDetail?.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
-
-  // A finished run keeps its worktree and branch so it stays inspectable
-  // (ADR-0008), which is what blocks a later run wanting the same branch name.
-  // Offered only once there is something left to reclaim.
-  const canReclaim =
-    !!onReclaimRun &&
-    !!runDetail &&
-    (runDetail.status === LoopRunStatus.Completed ||
-      runDetail.status === LoopRunStatus.Failed ||
-      runDetail.status === LoopRunStatus.Cancelled) &&
-    !!runDetail.hasLocalGitState;
-
-  const runBusy = !!runDetail && busyRunIds.has(runDetail.id);
-
-  const versionGraph = graph && graph.version === `${templateId}:${templateVersion}` ? graph : null;
 
   return (
     <div className="wiv2-runs">
@@ -463,222 +651,17 @@ export default function RunsPanel({
         })}
       </div>
       <div className="wiv2-runs-detail">
-        {errorText && (
-          <div className="wiv2-error" role="alert">
-            {errorText}
-            <button type="button" className="wiv2-error-close" onClick={() => setErrorText("")}>
-              ✕
-            </button>
-          </div>
-        )}
-        {loading && !runDetail && <div className="wiv2-empty">Loading run...</div>}
-        {!loading && !runDetail && <div className="wiv2-empty">Select a run.</div>}
-        {runDetail && (
-          <>
-            <div className="wiv2-runs-detail-header">
-              <span className={`status-badge status-${runDetail.status.toLowerCase()}`}>
-                {runDetail.status}
-                {runDetail.isPaused && " (Paused)"}
-              </span>
-              <span className="run-time">
-                Started {new Date(runDetail.startedAt).toLocaleString()}
-                {runDetail.completedAt &&
-                  ` · finished ${new Date(runDetail.completedAt).toLocaleString()}`}
-              </span>
-              <button
-                type="button"
-                className={`btn btn-sm ${runDetail.retain ? "btn-primary" : "btn-secondary"}`}
-                aria-pressed={!!runDetail.retain}
-                disabled={runBusy}
-                onClick={() =>
-                  void actOnRun(
-                    runDetail.id,
-                    (runId) => loopRunService.setRetain(runId, !runDetail.retain),
-                    "Failed to update retain.",
-                    () => rereadRun(runDetail.id),
-                  )
-                }
-                title={
-                  runDetail.retain
-                    ? "Pinned: this run is kept and never auto-deleted. Click to unpin."
-                    : "Pin this run so its worktree, branch, and history are never auto-deleted."
-                }
-              >
-                {runDetail.retain ? "📌 Retained" : "Retain"}
-              </button>
-              {canReclaim &&
-                (confirmingReclaim ? (
-                  <span
-                    className="wiv2-abandon-confirm"
-                    role="group"
-                    aria-label="Confirm clean up run"
-                  >
-                    <span className="wiv2-abandon-prompt">
-                      Delete this run&rsquo;s worktree and local branch? The run and its history are
-                      kept.
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-danger"
-                      onClick={() => void handleReclaim()}
-                      disabled={reclaiming}
-                    >
-                      {reclaiming ? "Cleaning up…" : "Confirm clean up"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => setConfirmingReclaim(false)}
-                      disabled={reclaiming}
-                    >
-                      Cancel
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => setConfirmingReclaim(true)}
-                    title="Free this run's worktree and local branch so a new run can reuse the branch name. The run and its history are kept."
-                  >
-                    Clean up worktree
-                  </button>
-                ))}
-              {runDetail.status === LoopRunStatus.Running ? (
-                <>
-                  {runDetail.isPaused
-                    ? onResumeRun && (
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-primary"
-                          disabled={runBusy}
-                          onClick={() =>
-                            void actOnRun(runDetail.id, onResumeRun, "Failed to resume run.", () =>
-                              rereadRun(runDetail.id),
-                            )
-                          }
-                        >
-                          Resume run
-                        </button>
-                      )
-                    : onPauseRun && (
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-secondary"
-                          disabled={runBusy}
-                          onClick={() =>
-                            void actOnRun(runDetail.id, onPauseRun, "Failed to pause run.", () =>
-                              rereadRun(runDetail.id),
-                            )
-                          }
-                        >
-                          Pause run
-                        </button>
-                      )}
-                  {onCancelRun && (
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-danger"
-                      disabled={runBusy}
-                      onClick={() =>
-                        void actOnRun(runDetail.id, onCancelRun, "Failed to cancel run.", () =>
-                          rereadRun(runDetail.id),
-                        )
-                      }
-                    >
-                      Cancel run
-                    </button>
-                  )}
-                </>
-              ) : (
-                onDeleteRun &&
-                (confirmingDeleteRunId === runDetail.id ? (
-                  <span
-                    className="wiv2-abandon-confirm"
-                    role="group"
-                    aria-label="Confirm delete run"
-                  >
-                    <span className="wiv2-abandon-prompt">
-                      Delete this loop run and all its event history?
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-danger"
-                      onClick={() => void handleDelete(runDetail.id, onDeleteRun)}
-                      disabled={runBusy}
-                    >
-                      {runBusy ? "Deleting…" : "Confirm delete"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() => setConfirmingDeleteRunId(null)}
-                      disabled={runBusy}
-                    >
-                      Cancel
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    onClick={() => setConfirmingDeleteRunId(runDetail.id)}
-                    disabled={runBusy}
-                  >
-                    Delete run
-                  </button>
-                ))
-              )}
-            </div>
-            <RunCostSummary run={runDetail} />
-            <RunVariables variables={runDetail.availableVariables ?? []} />
-            <RunSessions
-              key={runDetail.id}
-              runId={runDetail.id}
-              sessions={runDetail.availableSessions ?? []}
-            />
-            <HaltSteerControls
-              run={runDetail}
-              workItemStatus={workItem.status}
-              onHalt={onHalt}
-              onResumeSteer={onResumeSteer}
-              onCleanupDone={onCleanupDone}
-              onCleanupBacklog={onCleanupBacklog}
-            />
-            <div className="wiv2-node-list">
-              {runDetail.nodes.length === 0 && (
-                <div className="wiv2-empty">No nodes executed yet.</div>
-              )}
-              {runDetail.nodes.map((node, i) => {
-                const incomingEdge =
-                  i > 0
-                    ? versionGraph?.edges.find(
-                        (e) => e.id === node.incomingEdgeId && e.targetNodeId === node.nodeId,
-                      )
-                    : undefined;
-                return (
-                  <Fragment key={node.id}>
-                    {incomingEdge && (
-                      <EdgeArrow edgeType={incomingEdge.edgeType} edgeName={incomingEdge.name} />
-                    )}
-                    <NodeRow
-                      node={node}
-                      nodeType={versionGraph?.nodes.find((n) => n.id === node.nodeId)?.type}
-                      isLive={
-                        isLiveRun &&
-                        i === runDetail.nodes.length - 1 &&
-                        normalizeNodeStatus(node.status) === LoopRunNodeStatus.Running
-                      }
-                      progressText={progressText}
-                      events={runEvents}
-                      onRetry={handleRetry}
-                      retryDisabled={retryDisabled}
-                    />
-                  </Fragment>
-                );
-              })}
-            </div>
-          </>
+        {effectiveRunId ? (
+          <RunDetail
+            key={effectiveRunId}
+            {...detailProps}
+            runId={effectiveRunId}
+            busy={busyRunIds.has(effectiveRunId)}
+            onBusyChange={handleBusyChange}
+            onDeleted={handleDeleted}
+          />
+        ) : (
+          <div className="wiv2-empty">Select a run.</div>
         )}
       </div>
     </div>

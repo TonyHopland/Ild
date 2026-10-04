@@ -928,3 +928,129 @@ describe("RunsPanel node input", () => {
     expect(screen.getByText("No output recorded.")).not.toBeNull();
   });
 });
+
+describe("RunsPanel run scoping", () => {
+  test("while another run loads, the previous run's controls are gone", async () => {
+    const b = deferred<LoopRun>();
+    const getById = vi
+      .spyOn(loopRunService, "getById")
+      .mockImplementation(async (id: string) => (id === RUN_A ? runWithNode(RUN_A) : b.promise));
+    const onDeleteRun = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RunsPanel
+        workItem={workItem({ currentLoopRunId: RUN_A })}
+        runs={[runWithNode(RUN_A), runWithNode(RUN_B)]}
+        progressText=""
+        onDeleteRun={onDeleteRun}
+      />,
+    );
+    await screen.findByText("Node of aaaaaaaa");
+
+    fireEvent.click(runEntry(RUN_B)!);
+
+    await waitFor(() => expect(getById).toHaveBeenCalledWith(RUN_B));
+    expect(screen.getByText("Loading run...")).not.toBeNull();
+    expect(screen.queryByText("Node of aaaaaaaa")).toBeNull();
+    expect(actionButton(DELETE_RUN)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^retain$/i })).toBeNull();
+
+    await act(async () => {
+      b.resolve(runWithNode(RUN_B));
+      await b.promise;
+    });
+    await screen.findByText("Node of bbbbbbbb");
+    await confirmDelete();
+    await waitFor(() => expect(onDeleteRun).toHaveBeenCalledWith(RUN_B));
+    expect(onDeleteRun).not.toHaveBeenCalledWith(RUN_A);
+  });
+
+  test("a refusal for one run is never shown on another", async () => {
+    const pending = deferred();
+    renderActionPanel(
+      [
+        runWithNode(RUN_A, { status: LoopRunStatus.Running, completedAt: null }),
+        runWithNode(RUN_B, { status: LoopRunStatus.Running, completedAt: null }),
+      ],
+      {
+        workItem: workItem({ currentLoopRunId: RUN_A }),
+        handlers: { onPauseRun: vi.fn(() => pending.promise) },
+      },
+    );
+    await screen.findByText("Node of aaaaaaaa");
+    fireEvent.click(actionButton(PAUSE)!);
+    fireEvent.click(runEntry(RUN_B)!);
+    await screen.findByText("Node of bbbbbbbb");
+
+    await act(async () => {
+      pending.reject({ status: 409, message: "Run A refused" });
+      await pending.promise.catch(() => {});
+    });
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("Run A refused")).toBeNull();
+  });
+
+  test("a read started before an action settled never overwrites the read after it", async () => {
+    const stale = deferred<LoopRun>();
+    const running = runWithNode(RUN_A, { status: LoopRunStatus.Running, completedAt: null });
+    const getById = vi.spyOn(loopRunService, "getById").mockResolvedValue(running);
+    const onPauseRun = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <RunsPanel
+        workItem={workItem({ currentLoopRunId: RUN_A })}
+        runs={[running]}
+        progressText=""
+        onPauseRun={onPauseRun}
+      />,
+    );
+    await screen.findByText("Node of aaaaaaaa");
+
+    getById.mockImplementationOnce(() => stale.promise);
+    rerender(
+      <RunsPanel
+        workItem={workItem({ currentLoopRunId: RUN_A, title: "Refetched" })}
+        runs={[running]}
+        progressText=""
+        onPauseRun={onPauseRun}
+      />,
+    );
+    getById.mockResolvedValue({ ...running, isPaused: true });
+    fireEvent.click(actionButton(PAUSE)!);
+    await screen.findByText(/\(paused\)/i);
+
+    await act(async () => {
+      stale.resolve(running);
+      await stale.promise;
+    });
+
+    expect(screen.getByText(/\(paused\)/i)).not.toBeNull();
+    expect(actionButton(PAUSE)).toBeNull();
+  });
+});
+
+describe("RunsPanel live node", () => {
+  test("the running node shows its input and events next to its live output", async () => {
+    const detail = runWithNode(RUN_A, { status: LoopRunStatus.Running, completedAt: null });
+    detail.nodes[0] = {
+      ...detail.nodes[0],
+      status: LoopRunNodeStatus.Running,
+      completedAt: null,
+      effectiveInput: "Write the summary",
+    };
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(
+      <RunsPanel
+        workItem={workItem({ currentLoopRunId: RUN_A, status: WorkItemStatus.Running })}
+        runs={[detail]}
+        progressText=""
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /Node of aaaaaaaa/ }));
+
+    expect(screen.getByText("Write the summary")).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Live Output" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /events$/i })).not.toBeNull();
+    expect(screen.queryByText("No output recorded.")).toBeNull();
+  });
+});

@@ -101,8 +101,8 @@ export function RunVariables({ variables }: { variables: LoopRunVariable[] }) {
 }
 
 /**
- * The run's saved AI adapter sessions, each previewable inline. Keyed by run
- * by its parent, so a preview never outlives the run it was opened for.
+ * The run's saved AI adapter sessions, each previewable inline. Its owner is
+ * keyed by run, so a preview never outlives the run it was opened for.
  */
 export function RunSessions({
   runId,
@@ -222,39 +222,33 @@ export interface RunEvents {
 }
 
 /**
- * The shown run's event log, read once the first of its nodes' Events sections
- * is opened and shared by all of them. It is read again only when the run has
+ * A run's event log, read once the first of its nodes' Events sections is
+ * opened and shared by all of them. It is read again only when the run has
  * moved on (its status or node rows changed), so a finished run is read once,
- * or when a section is opened again after a failed read.
+ * or when a section is opened again after a failed read. Its owner is keyed by
+ * run, so the log never outlives the run it was read for.
  */
 export function useRunEvents(run: LoopRun | null): RunEvents {
-  const [wantedFor, setWantedFor] = useState<string | null>(null);
+  const [wanted, setWanted] = useState(false);
   const [attempt, setAttempt] = useState(0);
-  const [read, setRead] = useState<{
-    runId: string;
-    entries: EventLogEntry[] | null;
-    errorText: string;
-  } | null>(null);
+  const [read, setRead] = useState<{ entries: EventLogEntry[] | null; errorText: string } | null>(
+    null,
+  );
   const runId = run?.id ?? null;
   const progress = run
     ? `${run.status}|${run.nodes.length}|${run.nodes[run.nodes.length - 1]?.status ?? ""}`
     : null;
-  const wanted = runId !== null && wantedFor === runId;
 
   useEffect(() => {
     if (!wanted || !runId) return;
     let cancelled = false;
     readRunEvents(runId, () => cancelled).then(
       (entries) => {
-        if (!cancelled) setRead({ runId, entries, errorText: "" });
+        if (!cancelled) setRead({ entries, errorText: "" });
       },
       (error: unknown) => {
         if (!cancelled)
-          setRead({
-            runId,
-            entries: null,
-            errorText: failureMessage(error, "Failed to load events."),
-          });
+          setRead({ entries: null, errorText: failureMessage(error, "Failed to load events.") });
       },
     );
     return () => {
@@ -262,14 +256,12 @@ export function useRunEvents(run: LoopRun | null): RunEvents {
     };
   }, [wanted, runId, progress, attempt]);
 
-  const shown = read?.runId === runId ? read : null;
   return {
-    entries: shown?.entries ?? null,
-    errorText: shown?.errorText ?? "",
+    entries: read?.entries ?? null,
+    errorText: read?.errorText ?? "",
     request: () => {
-      if (!runId) return;
-      setWantedFor(runId);
-      if (shown?.errorText) {
+      setWanted(true);
+      if (read?.errorText) {
         setRead(null);
         setAttempt((n) => n + 1);
       }
