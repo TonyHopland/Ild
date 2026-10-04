@@ -91,6 +91,70 @@ describe("Chat titles card", () => {
     expect(field().save.disabled).toBe(true);
   });
 
+  describe("with a Copilot default, an unread tag is not taken for the empty one", () => {
+    const providers = [
+      {
+        id: "Gh",
+        name: "Gh",
+        type: "copilot",
+        isDefault: true,
+        tags: [],
+      } as unknown as AiProvider,
+      {
+        id: "Fast",
+        name: "Fast",
+        type: "claude-code",
+        isDefault: false,
+        tags: ["Fast"],
+      } as unknown as AiProvider,
+    ];
+
+    test("while the tag is being read, and once it lands", async () => {
+      let answer!: (value: { key: string; value: string }) => void;
+      vi.spyOn(authServices.settingsService, "get").mockImplementation((key: string) =>
+        key === authServices.ChatTitleSettingKeys.TitleProviderTag
+          ? new Promise((resolve) => {
+              answer = resolve;
+            })
+          : Promise.resolve({ key, value: "true" }),
+      );
+      const providersRead = vi
+        .spyOn(authServices.aiProviderService, "getAll")
+        .mockResolvedValue(providers);
+
+      render(<ChatTitlesSettings />);
+      await waitFor(() => expect(providersRead).toHaveBeenCalled());
+      await act(async () => {});
+
+      expect(providerStatement()).toBeNull();
+      expect(screen.queryByText(/is a Copilot provider/)).toBeNull();
+
+      await act(async () =>
+        answer({ key: authServices.ChatTitleSettingKeys.TitleProviderTag, value: "Fast" }),
+      );
+
+      await screen.findByText("Runs on Fast");
+      expect(screen.queryByText(/is a Copilot provider/)).toBeNull();
+    });
+
+    test("when the tag cannot be read", async () => {
+      vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => {
+        if (key === authServices.ChatTitleSettingKeys.TitleProviderTag) {
+          throw new Error("database down");
+        }
+        return { key, value: "true" };
+      });
+      vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue(providers);
+
+      render(<ChatTitlesSettings />);
+
+      await screen.findByText("Could not load the stored provider tag: database down");
+      await act(async () => {});
+      expect(providerStatement()).toBeNull();
+      expect(screen.queryByText(/is a Copilot provider/)).toBeNull();
+    });
+  });
+
   test("a provider the tag lands on that cannot make titles is said to make none", async () => {
     switchedOn();
     vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([

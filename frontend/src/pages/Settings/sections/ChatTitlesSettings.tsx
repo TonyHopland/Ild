@@ -74,7 +74,10 @@ export default function ChatTitlesSettings() {
 
   const off = !smartTitles.checked;
   const loaded = providers !== null && saved !== null;
-  const resolved = providers ? resolveProviderForTag(providers, draft).provider : null;
+  // An unread tag is not the empty tag: until both reads are back, the card says
+  // nothing about where titles run.
+  const known = loaded ? providers : null;
+  const resolved = known ? resolveProviderForTag(known, draft).provider : null;
 
   return (
     <section className="settings-card">
@@ -105,7 +108,7 @@ export default function ChatTitlesSettings() {
           <AiProviderTagField
             id="chat-title-provider-tag"
             tag={draft}
-            providers={providers}
+            providers={known}
             onChange={setDraft}
             disabled={off || !loaded}
             cannotRun="no title can be generated"
