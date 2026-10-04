@@ -2342,3 +2342,38 @@ describe("WorkItemModalV2 Runs tab run actions", () => {
     expect(screen.getByText("Implement")).toBeTruthy();
   });
 });
+
+describe("WorkItemModalV2 Runs tab run action refresh", () => {
+  test.each([
+    ["pause", /pause run/i, "pause"],
+    ["delete", /delete run/i, "delete"],
+  ] as const)("a %s fetches the run list once", async (label, name, method) => {
+    const running = label === "pause";
+    mockServices([makeRun(running ? { status: LoopRunStatus.Running, completedAt: null } : {})]);
+    const onSave = vi.fn();
+    await renderDialog(
+      makeWorkItem({
+        status: running ? WorkItemStatus.Running : WorkItemStatus.Done,
+        currentLoopRunId: "run-1",
+      }),
+      { onSave },
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+    vi.spyOn(authServices.loopRunService, method).mockResolvedValue(undefined);
+    const getRuns = vi.mocked(authServices.workItemService.getRuns);
+
+    fireEvent.click(await screen.findByRole("button", { name }));
+    const before = getRuns.mock.calls.length;
+    await act(async () => {
+      if (label === "delete")
+        fireEvent.click(screen.getByRole("button", { name: /confirm delete/i }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+
+    expect(getRuns.mock.calls.length - before).toBe(1);
+  });
+});

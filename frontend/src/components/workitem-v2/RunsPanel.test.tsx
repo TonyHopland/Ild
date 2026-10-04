@@ -539,3 +539,41 @@ describe("RunsPanel overlapping run actions", () => {
     expect(isDisabled(actionButton(DELETE_RUN))).toBe(false);
   });
 });
+
+describe("RunsPanel re-read after an action", () => {
+  test.each([
+    ["pause", { status: LoopRunStatus.Running, completedAt: null }, PAUSE],
+    ["clean up", {}, /confirm clean up/i],
+    ["retry", {}, /retry from this node/i],
+  ] as const)(
+    "a %s that went through is not reported as refused when re-reading the run fails",
+    async (label, state, name) => {
+      vi.spyOn(loopRunService, "retryFromNode").mockResolvedValue(undefined);
+      const onReclaimRun = vi.fn().mockResolvedValue(undefined);
+      const getById = vi.spyOn(loopRunService, "getById");
+      getById.mockResolvedValueOnce(runWithNode(RUN_A, state));
+      getById.mockRejectedValue({ status: 500, message: "Read failed" });
+      const onRunsChanged = vi.fn();
+      render(
+        <RunsPanel
+          workItem={workItem()}
+          runs={[runWithNode(RUN_A, state)]}
+          progressText=""
+          onRunsChanged={onRunsChanged}
+          onReclaimRun={onReclaimRun}
+          {...actions()}
+        />,
+      );
+      await screen.findByText("Node of aaaaaaaa");
+
+      if (label === "clean up") fireEvent.click(cleanUpButton()!);
+      fireEvent.click(screen.getByRole("button", { name }));
+
+      await waitFor(() => expect(onRunsChanged).toHaveBeenCalled());
+      await waitFor(() => expect(getById).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.queryByText("Node of aaaaaaaa")).toBeNull());
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(runEntry(RUN_A)).not.toBeNull();
+    },
+  );
+});

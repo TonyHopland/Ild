@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router";
 import {
   WorkItem,
@@ -234,12 +234,6 @@ export default function RunsPanel({
       (id): id is string => !!id && !deletedRunIds.has(id),
     ) ?? null;
 
-  const reloadRunDetail = useCallback(async () => {
-    if (!effectiveRunId) return;
-    const data = await loopRunService.getById(effectiveRunId);
-    setRunDetail(normalizeRun(data));
-  }, [effectiveRunId]);
-
   useEffect(() => {
     if (!effectiveRunId) {
       setRunDetail(null);
@@ -268,16 +262,48 @@ export default function RunsPanel({
     // current without its own SignalR subscription.
   }, [effectiveRunId, workItem]);
 
+  // Re-reads a run after an action on it. Best effort: the action already
+  // happened, so a failed read is not reported as its failure; like the detail
+  // effect's failed load it shows no detail rather than a stale one. Only
+  // touches the detail while that run is still the one shown, since the user
+  // may have selected another run meanwhile.
+  const rereadRun = async (runId: string) => {
+    try {
+      const data = normalizeRun(await loopRunService.getById(runId));
+      setRunDetail((prev) => (prev?.id === runId ? data : prev));
+    } catch {
+      setRunDetail((prev) => (prev?.id === runId ? null : prev));
+    }
+  };
+
+  // Shows a refused action's reason; once it went through, refreshes the run
+  // list and then applies its effect on the panel.
+  const settleAction = async (
+    action: Promise<unknown>,
+    fallback: string,
+    applied: () => void | Promise<void>,
+  ) => {
+    try {
+      await action;
+    } catch (error) {
+      setErrorText(failureMessage(error, fallback));
+      return;
+    }
+    onRunsChanged?.();
+    await applied();
+  };
+
   const handleRetry = async (runNodeId: string) => {
     if (!effectiveRunId) return;
+    const runId = effectiveRunId;
     setErrorText("");
     setRetrying(true);
     try {
-      await loopRunService.retryFromNode(effectiveRunId, runNodeId);
-      await reloadRunDetail();
-      onRunsChanged?.();
-    } catch (error) {
-      setErrorText(failureMessage(error, "Failed to retry from node."));
+      await settleAction(
+        loopRunService.retryFromNode(runId, runNodeId),
+        "Failed to retry from node.",
+        () => rereadRun(runId),
+      );
     } finally {
       setRetrying(false);
     }
@@ -285,15 +311,18 @@ export default function RunsPanel({
 
   const handleReclaim = async () => {
     if (!onReclaimRun || !effectiveRunId) return;
+    const runId = effectiveRunId;
     setErrorText("");
     setReclaiming(true);
     try {
-      await onReclaimRun(effectiveRunId);
-      setConfirmingReclaim(false);
-      await reloadRunDetail();
-      onRunsChanged?.();
-    } catch (error) {
-      setErrorText(failureMessage(error, "Failed to free the run's worktree and branch."));
+      await settleAction(
+        onReclaimRun(runId),
+        "Failed to free the run's worktree and branch.",
+        async () => {
+          setConfirmingReclaim(false);
+          await rereadRun(runId);
+        },
+      );
     } finally {
       setReclaiming(false);
     }
@@ -308,11 +337,7 @@ export default function RunsPanel({
     setErrorText("");
     setBusyRunIds((prev) => new Set(prev).add(runId));
     try {
-      await action(runId);
-      await applied();
-      onRunsChanged?.();
-    } catch (error) {
-      setErrorText(failureMessage(error, fallback));
+      await settleAction(action(runId), fallback, applied);
     } finally {
       setBusyRunIds((prev) => {
         const next = new Set(prev);
@@ -320,13 +345,6 @@ export default function RunsPanel({
         return next;
       });
     }
-  };
-
-  // Re-reads the acted-on run, but only replaces the detail while that run is
-  // still the one shown: the user may have selected another run meanwhile.
-  const reloadIfShown = (runId: string) => async () => {
-    const data = normalizeRun(await loopRunService.getById(runId));
-    setRunDetail((prev) => (prev?.id === runId ? data : prev));
   };
 
   const handleDelete = async (runId: string, deleteRun: (runId: string) => Promise<unknown>) => {
@@ -464,11 +482,8 @@ export default function RunsPanel({
                           className="btn btn-sm btn-primary"
                           disabled={runBusy}
                           onClick={() =>
-                            void actOnRun(
-                              runDetail.id,
-                              onResumeRun,
-                              "Failed to resume run.",
-                              reloadIfShown(runDetail.id),
+                            void actOnRun(runDetail.id, onResumeRun, "Failed to resume run.", () =>
+                              rereadRun(runDetail.id),
                             )
                           }
                         >
@@ -481,11 +496,8 @@ export default function RunsPanel({
                           className="btn btn-sm btn-secondary"
                           disabled={runBusy}
                           onClick={() =>
-                            void actOnRun(
-                              runDetail.id,
-                              onPauseRun,
-                              "Failed to pause run.",
-                              reloadIfShown(runDetail.id),
+                            void actOnRun(runDetail.id, onPauseRun, "Failed to pause run.", () =>
+                              rereadRun(runDetail.id),
                             )
                           }
                         >
@@ -498,11 +510,8 @@ export default function RunsPanel({
                       className="btn btn-sm btn-danger"
                       disabled={runBusy}
                       onClick={() =>
-                        void actOnRun(
-                          runDetail.id,
-                          onCancelRun,
-                          "Failed to cancel run.",
-                          reloadIfShown(runDetail.id),
+                        void actOnRun(runDetail.id, onCancelRun, "Failed to cancel run.", () =>
+                          rereadRun(runDetail.id),
                         )
                       }
                     >

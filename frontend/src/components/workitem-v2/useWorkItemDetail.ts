@@ -813,22 +813,26 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const handleCleanupBacklog = () =>
     runAction((id) => workItemService.cleanupToBacklog(id), "cleanup to backlog");
 
-  // The Runs tab's actions on one run. Unlike the actions above they let the
-  // failure through: each can legitimately be refused (reclaiming 409, deleting
-  // 400/409/503, ...), and the panel that offered the action is where that has
-  // to be read.
-  const settleRunAction = useCallback(
-    async (action: Promise<void>) => {
-      await action;
+  // Reclaims a finished run's worktree and branch. Unlike the actions above it
+  // lets the failure through: reclaiming can legitimately be refused (409), and
+  // the panel that offered the action is where that has to be read.
+  const handleReclaimRun = useCallback(
+    async (runId: string) => {
+      await loopRunService.cleanup(runId);
       void refetchWorkItem();
       refreshRuns();
     },
     [refetchWorkItem, refreshRuns],
   );
 
-  const handleReclaimRun = useCallback(
-    (runId: string) => settleRunAction(loopRunService.cleanup(runId)),
-    [settleRunAction],
+  // The Runs tab's other actions on one run let the failure through the same
+  // way. The panel refreshes the run list after them.
+  const settleRunAction = useCallback(
+    async (action: Promise<void>) => {
+      await action;
+      void refetchWorkItem();
+    },
+    [refetchWorkItem],
   );
 
   const handlePauseRun = useCallback(
