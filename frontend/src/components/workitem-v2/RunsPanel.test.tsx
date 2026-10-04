@@ -864,3 +864,40 @@ describe("RunsPanel run events", () => {
     expect(getEvents).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("RunsPanel run events retry", () => {
+  test("re-opening Events after a failed read reads the log again", async () => {
+    const getEvents = vi
+      .spyOn(loopRunService, "getEvents")
+      .mockRejectedValueOnce({ status: 503, message: "Events unavailable" })
+      .mockResolvedValue({
+        entries: [
+          {
+            sequence: 1,
+            runId: RUN_A,
+            eventType: "NodeStarted",
+            nodeId: "n-1",
+            runNodeId: `rn-${RUN_A}`,
+            payload: "node started",
+            timestamp: "2025-01-01T00:00:00Z",
+          },
+        ],
+        nextCursor: 1,
+        hasMore: false,
+      });
+    const detail = runWithNode(RUN_A);
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
+    fireEvent.click(await screen.findByRole("button", { name: /Node of aaaaaaaa/ }));
+    const events = screen.getByRole("button", { name: /events$/i });
+
+    fireEvent.click(events);
+    await screen.findByText("Events unavailable");
+    fireEvent.click(events);
+    fireEvent.click(events);
+
+    await screen.findByText("node started");
+    expect(screen.queryByText("Events unavailable")).toBeNull();
+    expect(getEvents).toHaveBeenCalledTimes(2);
+  });
+});

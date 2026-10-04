@@ -199,13 +199,13 @@ export function RunSessions({
   );
 }
 
-async function readRunEvents(runId: string): Promise<EventLogEntry[]> {
+async function readRunEvents(runId: string, cancelled: () => boolean): Promise<EventLogEntry[]> {
   const entries: EventLogEntry[] = [];
   let cursor = 0;
   for (;;) {
     const page = await loopRunService.getEvents(runId, cursor, 500);
     entries.push(...page.entries);
-    if (!page.hasMore) return entries;
+    if (!page.hasMore || cancelled()) return entries;
     cursor = page.nextCursor;
   }
 }
@@ -214,17 +214,22 @@ export interface RunEvents {
   /** The shown run's whole event log; null until it has been read. */
   entries: EventLogEntry[] | null;
   errorText: string;
-  /** Asks for the log; the first Events section opened for a run calls it. */
+  /**
+   * Asks for the log; every Events section calls it when opened. Only the
+   * first call for a run reads, unless the last read failed: then it retries.
+   */
   request: () => void;
 }
 
 /**
  * The shown run's event log, read once the first of its nodes' Events sections
  * is opened and shared by all of them. It is read again only when the run has
- * moved on (its status or node rows changed), so a finished run is read once.
+ * moved on (its status or node rows changed), so a finished run is read once,
+ * or when a section is opened again after a failed read.
  */
 export function useRunEvents(run: LoopRun | null): RunEvents {
   const [wantedFor, setWantedFor] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [read, setRead] = useState<{
     runId: string;
     entries: EventLogEntry[] | null;
@@ -239,7 +244,7 @@ export function useRunEvents(run: LoopRun | null): RunEvents {
   useEffect(() => {
     if (!wanted || !runId) return;
     let cancelled = false;
-    readRunEvents(runId).then(
+    readRunEvents(runId, () => cancelled).then(
       (entries) => {
         if (!cancelled) setRead({ runId, entries, errorText: "" });
       },
@@ -255,14 +260,19 @@ export function useRunEvents(run: LoopRun | null): RunEvents {
     return () => {
       cancelled = true;
     };
-  }, [wanted, runId, progress]);
+  }, [wanted, runId, progress, attempt]);
 
   const shown = read?.runId === runId ? read : null;
   return {
     entries: shown?.entries ?? null,
     errorText: shown?.errorText ?? "",
     request: () => {
-      if (runId) setWantedFor(runId);
+      if (!runId) return;
+      setWantedFor(runId);
+      if (shown?.errorText) {
+        setRead(null);
+        setAttempt((n) => n + 1);
+      }
     },
   };
 }
