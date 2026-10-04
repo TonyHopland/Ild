@@ -31,7 +31,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     {
         try
         {
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables, ctx.NoTools);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
@@ -204,6 +204,15 @@ public sealed class PiAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add("--tools");
             psi.ArgumentList.Add(string.Join(',', settings.ToolNames));
         }
+        else if (settings.NoTools)
+        {
+            // No allowlist would mean every built-in tool.
+            psi.ArgumentList.Add("--no-tools");
+        }
+
+        // A discovered extension runs code of its own, an MCP bridge among them.
+        if (settings.NoTools)
+            psi.ArgumentList.Add("--no-extensions");
 
         if (!string.IsNullOrWhiteSpace(settings.IldExtensionPath))
         {
@@ -566,7 +575,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
     private static PiAdapterSettings ResolveSettings(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId,
-        IProcessEnvironment environment)
+        IProcessEnvironment environment, bool noTools)
     {
         var loopRunId = runContext.LoopRunId;
         var config = AiProviderConfig.Parse(provider.Config);
@@ -576,7 +585,11 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var model = config.Model ?? provider.Model;
         var api = config.Api ?? "openai-completions";
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
-        var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
+        // ILD's tools reach pi through ILD's own extension; a call that must have
+        // no tools does without it and keeps the rest of its allowlist.
+        var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys)
+            .Where(key => !noTools || !string.Equals(key, AiToolCatalog.Ild, StringComparison.OrdinalIgnoreCase))
+            .ToList();
         var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
             ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
@@ -630,7 +643,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
             apiKeyEnvironmentVariableName,
             ildExtensionPath,
             ildExtensionContent,
-            toolNames);
+            toolNames,
+            noTools);
     }
 
     private static IReadOnlyList<string> BuildPiToolNames(IReadOnlyList<string> enabledToolKeys, string? ildServerDll)
@@ -761,7 +775,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
         string? ApiKeyEnvironmentVariableName,
         string? IldExtensionPath,
         string? IldExtensionContent,
-        IReadOnlyList<string> ToolNames);
+        IReadOnlyList<string> ToolNames,
+        bool NoTools);
 
     private sealed record PiExecutionOutput(string RawStdout, string Content, string? SessionId, bool SawJsonEvents, bool SawTurnEnd);
 

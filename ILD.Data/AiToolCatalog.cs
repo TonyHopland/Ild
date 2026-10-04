@@ -67,6 +67,15 @@ public static class AiToolCatalog
     private static bool EmptySelectionMeansNone(string? providerType)
         => NormalizeProviderType(providerType) is "copilot";
 
+    /// <summary>
+    /// Whether the provider's agent can run as a plain model call
+    /// (<see cref="DTOs.AgentExecutionContext.NoTools"/>). Copilot's CLI has no
+    /// way to turn its built-in tools off — an empty <c>--available-tools</c>
+    /// leaves them all on — so it cannot.
+    /// </summary>
+    public static bool SupportsNoTools(string? providerType)
+        => NormalizeProviderType(providerType) is not "copilot";
+
     private static string? NormalizeProviderType(string? providerType)
         => providerType?.Trim().ToLowerInvariant();
 }

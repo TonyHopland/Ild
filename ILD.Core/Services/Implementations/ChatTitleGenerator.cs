@@ -13,9 +13,11 @@ namespace ILD.Core.Services.Implementations;
 /// <summary>
 /// Summarises a chat's first exchange into its title, when smart titles are on.
 /// Runs on the provider the title tag resolves to — resolved exactly as an AI
-/// node's tag is — as a side call that neither resumes nor records an agent
-/// session, and saves the title only while the chat still carries its fallback,
-/// so a rename always wins. One job per scope, run by <see cref="ChatTitleScheduler"/>,
+/// node's tag is — as a plain model call: no MCP servers anywhere, no tools on
+/// Claude Code, read-only tools on OpenCode and pi, and no call at all on Copilot,
+/// whose tools cannot be turned off. The call neither resumes nor records an agent
+/// session, and the title is saved only while the chat still carries its
+/// fallback, so a rename always wins. One job per scope, run by <see cref="ChatTitleScheduler"/>,
 /// which is also where anything this throws is logged.
 /// </summary>
 public sealed class ChatTitleGenerator
@@ -83,6 +85,13 @@ public sealed class ChatTitleGenerator
             _log.LogWarning("Chat {ChatSessionId} keeps its title: {Error}", chatSessionId, providerError);
             return;
         }
+        if (!AiToolCatalog.SupportsNoTools(provider.Type))
+        {
+            _log.LogWarning(
+                "Chat {ChatSessionId} keeps its title: provider {Provider} ({ProviderType}) cannot run a call without tools",
+                chatSessionId, provider.Name, provider.Type);
+            return;
+        }
 
         var adapter = _registry.ResolveForProvider(provider)();
         var prompt = ChatTitles.BuildPrompt(first.Content, reply.Content, await WorkItemTitleAsync(openWorkItemId, ct));
@@ -138,9 +147,12 @@ public sealed class ChatTitleGenerator
                     PreviousNodeOutput: null),
                 ExecutionCount: 0,
                 Cancel: ct,
-                // Never null: that would hand the agent its default tools.
+                // Never null: that would hand the agent its default tools. Only the
+                // agents that enforce an allowlist apply it; under NoTools the rest
+                // get no tools at all.
                 ToolAllowlist: AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, [AiToolCatalog.Read]),
-                ManageSession: false));
+                ManageSession: false,
+                NoTools: true));
         }
         finally
         {

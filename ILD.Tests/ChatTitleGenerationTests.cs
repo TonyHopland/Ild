@@ -244,6 +244,8 @@ public sealed class ChatTitleGenerationTests : IDisposable
         Assert.NotEqual("agent-session-1", call.SessionId);
         Assert.NotEqual("agent-session-1", call.IncomingSessionId);
         Assert.Null(call.ChatSessionId);
+        // A plain model call: no MCP server, and no tool the agent can be kept from.
+        Assert.True(call.NoTools);
 
         var session = Read(id);
         Assert.Equal("Login page fix", session.Name);
@@ -271,9 +273,10 @@ public sealed class ChatTitleGenerationTests : IDisposable
     }
 
     [Theory]
-    [InlineData("claude-code", new[] { "read" })]
-    [InlineData("copilot", new string[0])]
-    public async Task The_title_call_gets_read_only_tools_or_none_where_ild_is_the_only_tool(string providerType, string[] expected)
+    [InlineData("claude-code")]
+    [InlineData("opencode")]
+    [InlineData("pi")]
+    public async Task The_title_call_gets_no_tools_beyond_read_and_no_mcp_servers(string providerType)
     {
         await SeedProviderAsync("Main", isDefault: true, type: providerType);
         await SmartTitlesAsync(on: true);
@@ -283,10 +286,29 @@ public sealed class ChatTitleGenerationTests : IDisposable
 
         await RunAsync(scheduler, id);
 
-        // An empty list must be explicit: null would hand the agent its default tools.
-        var tools = Assert.Single(_modelCalls).ToolAllowlist;
-        Assert.NotNull(tools);
-        Assert.Equal(expected, tools);
+        // NoTools: no MCP server anywhere and no tools on Claude Code; OpenCode and
+        // pi enforce the allowlist, which must be explicit, as null would hand the
+        // agent its default tools.
+        var call = Assert.Single(_modelCalls);
+        Assert.True(call.NoTools);
+        Assert.NotNull(call.ToolAllowlist);
+        Assert.Equal(new[] { "read" }, call.ToolAllowlist);
+    }
+
+    [Fact]
+    public async Task A_copilot_provider_whose_tools_cannot_be_turned_off_is_not_asked_and_the_fallback_stays()
+    {
+        await SeedProviderAsync("Main", isDefault: true, type: "copilot");
+        await SmartTitlesAsync(on: true);
+        var id = await SeedChatAsync();
+        using var services = BuildServices();
+        using var scheduler = NewScheduler(services);
+
+        await RunAsync(scheduler, id);
+
+        Assert.Empty(_modelCalls);
+        AssertUntouched(id);
+        Assert.Contains(LogLevel.Warning, _logs.Levels);
     }
 
     [Fact]

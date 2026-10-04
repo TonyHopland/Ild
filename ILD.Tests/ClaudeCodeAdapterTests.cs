@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -294,6 +295,56 @@ public class ClaudeCodeAdapterTests
 
             Assert.True(result.Success);
             Assert.DoesNotContain("--model", result.Output!.Split('\n'));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExecuteAsync_under_NoTools_launches_with_no_tools_and_no_mcp_servers_and_otherwise_as_before(bool noTools)
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = WriteArgvEcho(worktreeDir);
+        var config = JsonSerializer.Serialize(new
+        {
+            binaryPath = scriptPath,
+            customMcpServersJson = """{ "docs": { "command": ["docs-mcp"] } }""",
+        });
+
+        try
+        {
+            var result = await new ClaudeCodeAdapter().ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, config: config) with
+                {
+                    ToolAllowlist = ["read", "ild"],
+                    AdditionalAllowedDirectories = ["/data/worktrees/wi-99"],
+                    NoTools = noTools,
+                });
+
+            Assert.True(result.Success, result.Error);
+            // Empty lines kept: `--tools ""` is an empty argument.
+            var args = result.Output!.Split('\n');
+            if (noTools)
+            {
+                Assert.Equal("", args[Array.IndexOf(args, "--tools") + 1]);
+                Assert.Contains("--strict-mcp-config", args);
+                Assert.DoesNotContain("--mcp-config", args);
+                Assert.DoesNotContain("--add-dir", args);
+                Assert.DoesNotContain("--permission-mode", args);
+            }
+            else
+            {
+                Assert.DoesNotContain("--tools", args);
+                Assert.DoesNotContain("--strict-mcp-config", args);
+                Assert.Contains("--mcp-config", args);
+                Assert.Equal(2, args.Count(a => a == "--add-dir"));
+                Assert.Equal("bypassPermissions", args[Array.IndexOf(args, "--permission-mode") + 1]);
+            }
+            Assert.Equal("test prompt", args[Array.IndexOf(args, "--") + 1]);
         }
         finally
         {

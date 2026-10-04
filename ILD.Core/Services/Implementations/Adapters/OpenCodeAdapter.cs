@@ -53,7 +53,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools);
 
             Process? proc = null;
             try
@@ -630,7 +630,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null)
+    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null, bool noTools = false)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
@@ -674,10 +674,11 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // servers. The opencode child process inherits its *own* config via
         // OPENCODE_CONFIG_CONTENT, which means the user's
         // ~/.config/opencode/opencode.json (and any mcp entries it contains) is
-        // ignored — we have to add every entry here ourselves.
+        // ignored — we have to add every entry here ourselves. A call that must
+        // have no tools gets none of them: the allowlist above is all it has.
         var mcp = new Dictionary<string, object?>();
 
-        var ildMcp = enabled.Contains(AiToolCatalog.Ild)
+        var ildMcp = !noTools && enabled.Contains(AiToolCatalog.Ild)
             ? BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
         if (ildMcp != null)
@@ -686,7 +687,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // Provider-scoped custom MCP servers apply to every repo this provider
         // runs in. The parser reserves the "ild" name, so these can never clobber
         // the entry above.
-        foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
+        var customServers = noTools ? [] : CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson);
+        foreach (var server in customServers)
             mcp[server.Name] = BuildCustomMcpEntry(server);
 
         if (mcp.Count > 0)

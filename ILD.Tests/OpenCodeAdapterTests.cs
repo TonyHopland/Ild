@@ -624,6 +624,54 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_under_NoTools_injects_no_mcp_server_and_keeps_the_allowlist()
+    {
+        // The flag off is the test above: the custom server is injected.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-notools-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var result = await new OpenCodeAdapter().ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Name = "test-provider",
+                    Type = "opencode",
+                    BaseUrl = "https://api.example.test/v1",
+                    Model = "gpt-5",
+                    Config = JsonSerializer.Serialize(new
+                    {
+                        binaryPath = scriptPath,
+                        customMcpServersJson = """
+                        { "chrome-devtools": { "command": ["npx", "-y", "chrome-devtools-mcp@latest", "--headless"] } }
+                        """,
+                    }),
+                },
+                Prompt: "prompt",
+                RunContext: new LoopRunContext(Guid.NewGuid(), string.Empty, string.Empty, string.Empty, worktreeDir, string.Empty, new List<string>(), null),
+                ExecutionCount: 0,
+                Cancel: CancellationToken.None,
+                ToolAllowlist: ["read", "ild"],
+                NoTools: true));
+
+            Assert.True(result.Success, result.Error);
+            using var config = JsonDocument.Parse(result.Output!);
+            Assert.False(config.RootElement.TryGetProperty("mcp", out _));
+            var permission = config.RootElement.GetProperty("permission");
+            Assert.Equal("allow", permission.GetProperty("read").GetString());
+            Assert.Equal("deny", permission.GetProperty("edit").GetString());
+            Assert.Equal("deny", permission.GetProperty("bash").GetString());
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_allows_external_directory_when_extra_dirs_granted()
     {
         // ADR-0011 parity: opencode's equivalent of claude's --add-dir is flipping

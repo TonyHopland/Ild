@@ -69,6 +69,12 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
+        // See AiToolCatalog.SupportsNoTools: launching anyway would hand a caller
+        // that asked for no tools every tool the CLI has.
+        if (ctx.NoTools)
+            return NodeExecutionResult.Fail(
+                "[copilot-error] the Copilot CLI cannot run without its tools, so it cannot take a call that must have none.");
+
         string? mcpConfigPath = null;
         try
         {

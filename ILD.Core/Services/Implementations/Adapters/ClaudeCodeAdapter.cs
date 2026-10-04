@@ -64,7 +64,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // accepts a JSON config via `--mcp-config <file>`, which we merge
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
-            mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
+            if (!ctx.NoTools)
+                mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             // Fork: seed a copy of the source session's transcript under the
             // destination id (leaving the source file untouched) so the restore
@@ -83,7 +84,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model),
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools),
                     ctx.Provider.Id, ctx.Environment);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -175,7 +176,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         string? sessionId,
         string? mcpConfigPath = null,
         IReadOnlyList<string>? additionalAllowedDirectories = null,
-        string? model = null)
+        string? model = null,
+        bool noTools = false)
     {
         var psi = new ProcessStartInfo(binaryPath)
         {
@@ -191,27 +193,40 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         psi.ArgumentList.Add("--output-format");
         psi.ArgumentList.Add("stream-json");
         psi.ArgumentList.Add("--verbose");
-        psi.ArgumentList.Add("--add-dir");
-        psi.ArgumentList.Add(worktreePath);
 
-        // Per-turn extra grants (ADR-0011): e.g. the Chat Context's open work
-        // item active-run worktree. Each becomes its own `--add-dir` so the
-        // agent can reach the absolute path without changing its cwd. Skip the
-        // worktree itself (already added) and any non-existent path.
-        if (additionalAllowedDirectories is not null)
+        if (noTools)
         {
-            foreach (var dir in additionalAllowedDirectories)
-            {
-                if (string.IsNullOrWhiteSpace(dir)
-                    || string.Equals(dir, worktreePath, StringComparison.Ordinal))
-                    continue;
-                psi.ArgumentList.Add("--add-dir");
-                psi.ArgumentList.Add(dir);
-            }
+            // A plain model call: no built-in tool, and no MCP server from the
+            // user's or the project's config either. With nothing to call there is
+            // nothing to grant, so no directories and no permission bypass.
+            psi.ArgumentList.Add("--tools");
+            psi.ArgumentList.Add("");
+            psi.ArgumentList.Add("--strict-mcp-config");
         }
+        else
+        {
+            psi.ArgumentList.Add("--add-dir");
+            psi.ArgumentList.Add(worktreePath);
 
-        psi.ArgumentList.Add("--permission-mode");
-        psi.ArgumentList.Add("bypassPermissions");
+            // Per-turn extra grants (ADR-0011): e.g. the Chat Context's open work
+            // item active-run worktree. Each becomes its own `--add-dir` so the
+            // agent can reach the absolute path without changing its cwd. Skip the
+            // worktree itself (already added) and any non-existent path.
+            if (additionalAllowedDirectories is not null)
+            {
+                foreach (var dir in additionalAllowedDirectories)
+                {
+                    if (string.IsNullOrWhiteSpace(dir)
+                        || string.Equals(dir, worktreePath, StringComparison.Ordinal))
+                        continue;
+                    psi.ArgumentList.Add("--add-dir");
+                    psi.ArgumentList.Add(dir);
+                }
+            }
+
+            psi.ArgumentList.Add("--permission-mode");
+            psi.ArgumentList.Add("bypassPermissions");
+        }
 
         if (!string.IsNullOrWhiteSpace(model))
         {
