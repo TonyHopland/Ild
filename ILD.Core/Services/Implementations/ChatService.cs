@@ -518,7 +518,7 @@ public sealed class ChatService : IChatService
     /// An unreachable server, one that refused the call, one that timed out, or
     /// none configured at all — never the turn's own cancellation.
     /// </summary>
-    internal static bool IsWorkItemServerUnavailable(Exception ex, CancellationToken ct)
+    private static bool IsWorkItemServerUnavailable(Exception ex, CancellationToken ct)
         => ex is HttpRequestException or InvalidOperationException
             || (ex is TaskCanceledException && !ct.IsCancellationRequested);
 

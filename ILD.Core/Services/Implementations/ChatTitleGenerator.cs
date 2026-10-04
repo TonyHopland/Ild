@@ -86,25 +86,7 @@ public sealed class ChatTitleGenerator
 
         var adapter = _registry.ResolveForProvider(provider)();
         var prompt = ChatTitles.BuildPrompt(first.Content, reply.Content, await WorkItemTitleAsync(openWorkItemId, ct));
-        var result = await adapter.ExecuteAsync(new AgentExecutionContext(
-            provider,
-            prompt,
-            new LoopRunContext(
-                // Chat turns run under the session id too, so whatever the adapter
-                // keeps per run goes when the chat is deleted.
-                LoopRunId: chatSessionId,
-                WorkItemId: string.Empty,
-                WorkItemTitle: string.Empty,
-                WorkItemDescription: string.Empty,
-                WorktreePath: session.ScratchPath,
-                BranchName: string.Empty,
-                EventLogSummary: new List<string>(),
-                PreviousNodeOutput: null),
-            ExecutionCount: 0,
-            Cancel: ct,
-            // Never null: that would hand the agent its default tools.
-            ToolAllowlist: AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, [AiToolCatalog.Read]),
-            ManageSession: false));
+        var result = await AskAsync(adapter, provider, prompt, session.ScratchPath, ct);
 
         if (!result.Success)
         {
@@ -130,17 +112,63 @@ public sealed class ChatTitleGenerator
     }
 
     /// <summary>
+    /// One call to the title model, under a run id of its own rather than the
+    /// chat's: the chat's next turn may be running at the same time, and what an
+    /// adapter keeps per run id — pi's agent directory with its provider config —
+    /// must not be shared between two launches on different providers. Whatever
+    /// the call left under that id goes with it, however it ended.
+    /// </summary>
+    private async Task<NodeExecutionResult> AskAsync(
+        IAgentAdapter adapter, AiProvider provider, string prompt, string scratchPath, CancellationToken ct)
+    {
+        var runId = Guid.NewGuid();
+        try
+        {
+            return await adapter.ExecuteAsync(new AgentExecutionContext(
+                provider,
+                prompt,
+                new LoopRunContext(
+                    LoopRunId: runId,
+                    WorkItemId: string.Empty,
+                    WorkItemTitle: string.Empty,
+                    WorkItemDescription: string.Empty,
+                    WorktreePath: scratchPath,
+                    BranchName: string.Empty,
+                    EventLogSummary: new List<string>(),
+                    PreviousNodeOutput: null),
+                ExecutionCount: 0,
+                Cancel: ct,
+                // Never null: that would hand the agent its default tools.
+                ToolAllowlist: AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, [AiToolCatalog.Read]),
+                ManageSession: false));
+        }
+        finally
+        {
+            try
+            {
+                if (!await AgentRunFiles.DeleteAsync(runId, CancellationToken.None))
+                    _log.LogWarning("Could not remove everything the title model left under run {RunId}", runId);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _log.LogWarning(ex, "Could not remove the files of title run {RunId}", runId);
+            }
+        }
+    }
+
+    /// <summary>
     /// The title of the work item open when the chat started, as context only: a
-    /// WorkItem server that is down or not configured costs the title nothing more.
+    /// work item that cannot be read, for whatever reason, costs the title nothing
+    /// more. Bounded by the job's own timeout, which the lookup does not take.
     /// </summary>
     private async Task<string?> WorkItemTitleAsync(string? workItemId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(workItemId)) return null;
         try
         {
-            return (await _workItems.GetWorkItemAsync(workItemId))?.Title;
+            return (await _workItems.GetWorkItemAsync(workItemId).WaitAsync(ct))?.Title;
         }
-        catch (Exception ex) when (ChatService.IsWorkItemServerUnavailable(ex, ct))
+        catch (Exception ex) when (!ct.IsCancellationRequested)
         {
             _log.LogWarning(ex, "Could not read work item {WorkItemId} to title chat with", workItemId);
             return null;
