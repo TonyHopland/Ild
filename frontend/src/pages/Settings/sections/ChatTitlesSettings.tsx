@@ -13,26 +13,39 @@ const SmartTitlesLabel = "Smart session titles";
  */
 export default function ChatTitlesSettings() {
   const smartTitles = useToggleSetting(ChatTitleSettingKeys.SmartTitles);
-  const [providers, setProviders] = useState<AiProvider[]>([]);
-  const [saved, setSaved] = useState("");
+  // Null until read: the field states which provider a tag runs on, and edits the
+  // stored tag, only once it knows both.
+  const [providers, setProviders] = useState<AiProvider[] | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    const failed = (what: string) => (err: unknown) => {
+      if (cancelled) return;
+      const reason = err instanceof Error ? err.message : "request failed";
+      setLoadErrors((current) => [...current, `Could not load ${what}: ${reason}`]);
+    };
     void aiProviderService
       .getAll()
-      .then(setProviders)
-      // Unreachable API: no suggestions, and the field says nothing can run.
-      .catch(() => {});
+      .then((loaded) => {
+        if (!cancelled) setProviders(loaded);
+      })
+      .catch(failed("the AI providers"));
     void settingsService
       .get(ChatTitleSettingKeys.TitleProviderTag)
       .then((s) => {
+        if (cancelled) return;
         setSaved(s.value);
-        // Typed before the stored tag arrived: what was typed stays.
-        setDraft((current) => (current === "" ? s.value : current));
+        setDraft(s.value);
       })
-      .catch(() => {});
+      .catch(failed("the stored provider tag"));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const save = async () => {
@@ -52,6 +65,7 @@ export default function ChatTitlesSettings() {
   };
 
   const off = !smartTitles.checked;
+  const loaded = providers !== null && saved !== null;
 
   return (
     <section className="settings-card">
@@ -83,9 +97,14 @@ export default function ChatTitlesSettings() {
             tag={draft}
             providers={providers}
             onChange={setDraft}
-            disabled={off}
+            disabled={off || !loaded}
             cannotRun="no title can be generated"
           />
+          {loadErrors.map((message) => (
+            <span key={message} className="settings-error">
+              {message}
+            </span>
+          ))}
           {error && <span className="settings-error">{error}</span>}
         </div>
         <div className="settings-row-control">
@@ -93,7 +112,7 @@ export default function ChatTitlesSettings() {
             type="button"
             className="btn btn-primary"
             onClick={() => void save()}
-            disabled={off || saving || draft === saved}
+            disabled={off || !loaded || saving || draft === saved}
           >
             Save
           </button>

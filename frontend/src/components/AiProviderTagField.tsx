@@ -19,7 +19,8 @@ function describeProviderForTag(providers: AiProvider[], tag: string, cannotRun:
 /**
  * The provider tag an AI node runs on, and anything else that resolves a
  * provider the way a node does: suggestions from the tags providers hold, and
- * which provider the backend will pick for what is typed.
+ * which provider the backend will pick for what is typed. With no provider list
+ * (`null`: not loaded) it states nothing rather than guess.
  */
 export function AiProviderTagField({
   tag,
@@ -30,16 +31,16 @@ export function AiProviderTagField({
   cannotRun = "this node cannot run",
 }: {
   tag: string;
-  providers: AiProvider[];
+  providers: AiProvider[] | null;
   onChange: (value: string) => void;
   id?: string;
   disabled?: boolean;
   /** Ends the sentence shown when nothing can be resolved, e.g. "this node cannot run". */
   cannotRun?: string;
 }) {
-  const suggestions = [...new Set(providers.flatMap((provider) => provider.tags ?? []))].sort(
-    (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }),
-  );
+  const suggestions = [
+    ...new Set((providers ?? []).flatMap((provider) => provider.tags ?? [])),
+  ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   return (
     <div className="config-field">
       <label htmlFor={id}>Provider tag</label>
@@ -57,9 +58,11 @@ export function AiProviderTagField({
           <option key={suggestion} value={suggestion} />
         ))}
       </datalist>
-      <small className="config-help-text">
-        {describeProviderForTag(providers, tag, cannotRun)}
-      </small>
+      {providers && (
+        <small className="config-help-text">
+          {describeProviderForTag(providers, tag, cannotRun)}
+        </small>
+      )}
     </div>
   );
 }
