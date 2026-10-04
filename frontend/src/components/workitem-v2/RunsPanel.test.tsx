@@ -1229,3 +1229,68 @@ describe("RunsPanel halt/steer/abandon lock the run they act on", () => {
     await waitFor(() => expect(isDisabled(actionButton(DELETE_RUN))).toBe(false));
   });
 });
+
+describe("RunsPanel coming back to a run mid-action", () => {
+  test("a retain that settles after leaving the run and coming back shows on the run", async () => {
+    const pending = deferred<{ id: string; retain: boolean }>();
+    vi.spyOn(loopRunService, "setRetain").mockImplementation(() => pending.promise);
+    const server = new Map([
+      [RUN_A, runWithNode(RUN_A, { retain: false })],
+      [RUN_B, runWithNode(RUN_B)],
+    ]);
+    vi.spyOn(loopRunService, "getById").mockImplementation(async (id: string) => server.get(id)!);
+    render(
+      <RunsPanel
+        workItem={workItem({ currentLoopRunId: RUN_A })}
+        runs={[...server.values()]}
+        progressText=""
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /^retain$/i }));
+    fireEvent.click(runEntry(RUN_B)!);
+    await screen.findByText("Node of bbbbbbbb");
+    fireEvent.click(runEntry(RUN_A)!);
+    await screen.findByText("Node of aaaaaaaa");
+    expect(isDisabled(screen.getByRole("button", { name: /^retain$/i }))).toBe(true);
+
+    server.set(RUN_A, runWithNode(RUN_A, { retain: true }));
+    await act(async () => {
+      pending.resolve({ id: RUN_A, retain: true });
+      await pending.promise;
+    });
+
+    const pinned = await screen.findByRole("button", { name: /retained/i });
+    expect(pinned.getAttribute("aria-pressed")).toBe("true");
+    expect(isDisabled(pinned)).toBe(false);
+  });
+});
+
+describe("RunsPanel controls after an action", () => {
+  test("stay disabled until the run has been read again", async () => {
+    const running = runWithNode(RUN_A, { status: LoopRunStatus.Running, completedAt: null });
+    const reread = deferred<LoopRun>();
+    const getById = vi.spyOn(loopRunService, "getById").mockResolvedValue(running);
+    render(
+      <RunsPanel
+        workItem={workItem({ currentLoopRunId: RUN_A })}
+        runs={[running]}
+        progressText=""
+        onPauseRun={vi.fn().mockResolvedValue(undefined)}
+        onCancelRun={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    await screen.findByText("Node of aaaaaaaa");
+    getById.mockImplementation(() => reread.promise);
+
+    fireEvent.click(actionButton(PAUSE)!);
+
+    await waitFor(() => expect(getById).toHaveBeenCalledTimes(2));
+    expect(isDisabled(actionButton(PAUSE))).toBe(true);
+    expect(isDisabled(actionButton(CANCEL_RUN))).toBe(true);
+    await act(async () => {
+      reread.resolve({ ...running, isPaused: true });
+      await reread.promise;
+    });
+    expect(isDisabled(actionButton(CANCEL_RUN))).toBe(false);
+  });
+});

@@ -16,8 +16,14 @@ export interface RunActionLock {
   /** The action in flight on a run, if any. */
   pendingOf: (runId: string | null | undefined) => RunAction | null;
   /**
+   * How many actions on a run went through. A view of the run reads it again
+   * when this moves, whichever control the action came from and whether or not
+   * that view existed when it started.
+   */
+  settledOf: (runId: string | null | undefined) => number;
+  /**
    * Runs `act` holding the run's one action slot until it settles, rethrowing
-   * its failure. While another action holds that run's slot it refuses:
+   * its failure; once `act` went through, counts it in `settledOf`. While another action holds that run's slot it refuses:
    * resolves false without running `act`. With no run id there is nothing to
    * hold, and `act` simply runs.
    */
@@ -32,6 +38,7 @@ export interface RunActionLock {
  */
 export function useRunActionLock(): RunActionLock {
   const [pending, setPending] = useState<ReadonlyMap<string, RunAction>>(new Map());
+  const [settled, setSettled] = useState<ReadonlyMap<string, number>>(new Map());
   // The synchronous truth `hold` decides on; `pending` is its rendered copy.
   const held = useRef(new Map<string, RunAction>());
 
@@ -43,12 +50,15 @@ export function useRunActionLock(): RunActionLock {
     if (held.current.has(runId)) return false;
     held.current.set(runId, kind);
     setPending(new Map(held.current));
+    let wentThrough = false;
     try {
       await act();
+      wentThrough = true;
       return true;
     } finally {
       held.current.delete(runId);
       setPending(new Map(held.current));
+      if (wentThrough) setSettled((prev) => new Map(prev).set(runId, (prev.get(runId) ?? 0) + 1));
     }
   }, []);
 
@@ -57,5 +67,10 @@ export function useRunActionLock(): RunActionLock {
     [pending],
   );
 
-  return useMemo(() => ({ pendingOf, hold }), [pendingOf, hold]);
+  const settledOf = useCallback<RunActionLock["settledOf"]>(
+    (runId) => (runId ? (settled.get(runId) ?? 0) : 0),
+    [settled],
+  );
+
+  return useMemo(() => ({ pendingOf, settledOf, hold }), [pendingOf, settledOf, hold]);
 }

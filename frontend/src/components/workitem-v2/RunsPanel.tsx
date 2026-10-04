@@ -289,20 +289,31 @@ function RunDetail({
 
   const runEvents = useRunEvents(runDetail);
 
-  const readRun = useCallback(async () => {
-    const read = ++reads.current;
-    const data = await loopRunService.getById(runId).then(normalizeRun, () => null);
-    if (read !== reads.current) return;
-    setRunDetail(data);
-    setLoading(false);
-  }, [runId]);
+  // How many actions on this run went through, and how many of them the run as
+  // shown was read after. An action that settles re-reads the run here even if
+  // it was started from another tab, or by an earlier view of this run the
+  // user left and came back from mid-request.
+  const settled = runLock.settledOf(runId);
+  const [readAfter, setReadAfter] = useState(-1);
+
+  const readRun = useCallback(
+    async (settledBefore: number) => {
+      const read = ++reads.current;
+      const data = await loopRunService.getById(runId).then(normalizeRun, () => null);
+      if (read !== reads.current) return;
+      setRunDetail(data);
+      setLoading(false);
+      setReadAfter(settledBefore);
+    },
+    [runId],
+  );
 
   // workItem identity doubles as a refresh trigger: the parent refetches the
   // work item on every node/run state change, so the inline timeline stays
   // current without its own SignalR subscription.
   useEffect(() => {
-    void readRun();
-  }, [readRun, workItem]);
+    void readRun(settled);
+  }, [readRun, workItem, settled]);
 
   const templateId = runDetail?.loopTemplateId;
   const templateVersion = runDetail?.templateVersion;
@@ -323,31 +334,28 @@ function RunDetail({
   }, [readVersionGraph, templateId, templateVersion]);
 
   // Shows a refused action's reason. Once it went through, refreshes the run
-  // list and says so, for the caller to apply the action's effect.
-  const settleAction = async (action: Promise<unknown>, fallback: string) => {
-    try {
-      await action;
-    } catch (error) {
-      setErrorText(failureMessage(error, fallback));
-      return false;
-    }
-    onRunsChanged?.();
-    return true;
-  };
-
+  // list and applies its effect here; the run is re-read through `settled`.
   const actOnRun = async (
     kind: RunAction,
     action: (runId: string) => Promise<unknown>,
     fallback: string,
-    applied: () => void | Promise<void> = readRun,
+    applied?: () => void,
   ) => {
     setErrorText("");
-    await runLock.hold(runId, kind, async () => {
-      if (await settleAction(action(runId), fallback)) await applied();
-    });
+    try {
+      await runLock.hold(runId, kind, async () => {
+        await action(runId);
+        onRunsChanged?.();
+        applied?.();
+      });
+    } catch (error) {
+      setErrorText(failureMessage(error, fallback));
+    }
   };
   const pending = runLock.pendingOf(runId);
-  const busy = pending !== null;
+  // Controls wait for the action in flight, and after it for a read of the run
+  // that shows what it did.
+  const busy = pending !== null || readAfter < settled;
 
   // Halt, steer and abandon act on the work item's current run, which need not
   // be the run shown here; they hold that run's slot. Their handlers come from
@@ -366,10 +374,9 @@ function RunDetail({
     );
 
   const handleReclaim = (reclaimRun: (runId: string) => Promise<unknown>) =>
-    actOnRun("reclaim", reclaimRun, "Failed to free the run's worktree and branch.", async () => {
-      setConfirmingReclaim(false);
-      await readRun();
-    });
+    actOnRun("reclaim", reclaimRun, "Failed to free the run's worktree and branch.", () =>
+      setConfirmingReclaim(false),
+    );
 
   const handleDelete = async (deleteRun: (runId: string) => Promise<unknown>) => {
     await actOnRun("delete", deleteRun, "Failed to delete run.", () => onDeleted(runId));
