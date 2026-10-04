@@ -39,6 +39,14 @@ public interface IChatService
     Task<bool> MarkReadAsync(string userId, Guid sessionId, int sequence, CancellationToken ct = default);
 
     /// <summary>
+    /// Give one of the user's chats the title they chose. A renamed chat is never
+    /// titled automatically again, neither from its first message nor by a title
+    /// model. Returns false when the chat does not exist or belongs to another
+    /// user. A rename hints the owner's inbox.
+    /// </summary>
+    Task<bool> RenameAsync(string userId, Guid sessionId, string name, CancellationToken ct = default);
+
+    /// <summary>
     /// Start a new chat session for the user. Provider + tools are fixed for its
     /// life. A user may hold many retained chats (ADR-0013), so this no longer
     /// rejects a second session. Throws <see cref="InvalidOperationException"/>

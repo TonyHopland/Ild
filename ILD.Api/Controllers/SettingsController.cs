@@ -40,6 +40,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SessionMaxDays,
         AppSettingKeys.NetworkMode,
         AppSettingKeys.NetworkLogRetentionDays,
+        AppSettingKeys.ChatSmartTitles,
+        AppSettingKeys.ChatTitleProviderTag,
     };
 
     public SettingsController(
@@ -64,7 +66,9 @@ public class SettingsController : ControllerBase
 
     public sealed class UpdateSettingRequest
     {
-        [Required]
+        // Empty gets through to the per-key check: it clears the title provider tag,
+        // and every other key refuses it there.
+        [Required(AllowEmptyStrings = true)]
         public string Value { get; set; } = string.Empty;
     }
 
@@ -99,6 +103,10 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.NetworkMode] = AppSettingKeys.DefaultNetworkMode;
         if (!map.ContainsKey(AppSettingKeys.NetworkLogRetentionDays))
             map[AppSettingKeys.NetworkLogRetentionDays] = AppSettingKeys.DefaultNetworkLogRetentionDays.ToString();
+        if (!map.ContainsKey(AppSettingKeys.ChatSmartTitles))
+            map[AppSettingKeys.ChatSmartTitles] = AppSettingKeys.DefaultChatSmartTitles.ToString().ToLowerInvariant();
+        if (!map.ContainsKey(AppSettingKeys.ChatTitleProviderTag))
+            map[AppSettingKeys.ChatTitleProviderTag] = AppSettingKeys.DefaultChatTitleProviderTag;
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
 
@@ -173,6 +181,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.SessionMaxDays => AppSettingKeys.DefaultSessionMaxDays.ToString(),
         AppSettingKeys.NetworkMode => AppSettingKeys.DefaultNetworkMode,
         AppSettingKeys.NetworkLogRetentionDays => AppSettingKeys.DefaultNetworkLogRetentionDays.ToString(),
+        AppSettingKeys.ChatSmartTitles => AppSettingKeys.DefaultChatSmartTitles.ToString().ToLowerInvariant(),
+        AppSettingKeys.ChatTitleProviderTag => AppSettingKeys.DefaultChatTitleProviderTag,
         _ => string.Empty,
     };
 
@@ -270,6 +280,22 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var logDays) || logDays < 0 || logDays > AppSettingKeys.MaxNetworkLogRetentionDays)
                 {
                     error = $"network.logRetentionDays must be an integer between 0 (never) and {AppSettingKeys.MaxNetworkLogRetentionDays}";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.ChatSmartTitles:
+                if (!bool.TryParse(value, out var smartTitles))
+                {
+                    error = "chat.smartTitles must be 'true' or 'false'";
+                    return false;
+                }
+                canonical = smartTitles ? "true" : "false";
+                break;
+            case AppSettingKeys.ChatTitleProviderTag:
+                canonical = value.Trim();
+                if (AiProviderTag.Problem(canonical) is { } tagProblem)
+                {
+                    error = $"chat.titleProviderTag {tagProblem}";
                     return false;
                 }
                 break;

@@ -55,4 +55,12 @@ public interface IChatNotifier
     /// only: it carries no state.
     /// </summary>
     Task UnreadChangedAsync(string userId, Guid chatSessionId);
+
+    /// <summary>
+    /// The chat's title changed — it was generated or renamed — so the owner's
+    /// bubbles re-read their history. Goes to the owner's inbox, like
+    /// <see cref="UnreadChangedAsync"/>, since the history list shows every chat.
+    /// A hint only: it carries no state.
+    /// </summary>
+    Task TitleChangedAsync(string userId, Guid chatSessionId);
 }

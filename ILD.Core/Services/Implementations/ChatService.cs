@@ -4,6 +4,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -43,6 +44,7 @@ public sealed class ChatService : IChatService
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IWorkItemManager? _workItems;
     private readonly ILogger<ChatService> _log;
+    private readonly IChatTitleScheduler? _titles;
 
     public ChatService(
         AppDbContext db,
@@ -53,7 +55,8 @@ public sealed class ChatService : IChatService
         ILoopRunStore runs,
         IChatLoopScratchpad loopScratchpad,
         IWorkItemManager? workItems = null,
-        ILogger<ChatService>? log = null)
+        ILogger<ChatService>? log = null,
+        IChatTitleScheduler? titles = null)
     {
         _db = db;
         _providers = providers;
@@ -64,6 +67,7 @@ public sealed class ChatService : IChatService
         _loopScratchpad = loopScratchpad;
         _workItems = workItems;
         _log = log ?? NullLogger<ChatService>.Instance;
+        _titles = titles;
     }
 
     public async Task<IReadOnlyList<ChatSessionSummaryView>> ListForUserAsync(string userId, CancellationToken ct = default)
@@ -101,6 +105,17 @@ public sealed class ChatService : IChatService
                 && c.UserId == userId
                 && (c.LastReadSequence == null || c.LastReadSequence < sequence))
             .ExecuteUpdateAsync(s => s.SetProperty(c => c.LastReadSequence, sequence), ct) > 0;
+
+    public async Task<bool> RenameAsync(string userId, Guid sessionId, string name, CancellationToken ct = default)
+    {
+        var renamed = await _db.ChatSessions
+            .Where(c => c.Id == sessionId && c.UserId == userId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.Name, name)
+                .SetProperty(c => c.TitleSource, ChatTitleSource.Manual), ct) > 0;
+        if (renamed) await _notifier.TitleChangedAsync(userId, sessionId);
+        return renamed;
+    }
 
     public async Task<ChatSessionView?> GetByIdAsync(string userId, Guid sessionId, CancellationToken ct = default)
     {
@@ -166,10 +181,23 @@ public sealed class ChatService : IChatService
         var nextSeq = await NextSequenceAsync(chatSessionId, ct);
 
         // Name the chat from its first user message (ADR-0013) so the history list
-        // shows something meaningful without asking the user to type a title. The
-        // session is tracked, so the name persists with the turn's SaveChanges.
-        if (nextSeq == 0 && string.IsNullOrEmpty(session.Name))
-            session.Name = DeriveName(userMessage);
+        // shows something meaningful without asking the user to type a title —
+        // unless it was renamed first. Written straight to the database, and the
+        // tracked copy only told what is stored: were the name marked modified, the
+        // turn's SaveChanges would write it back over a rename landing mid-turn.
+        if (nextSeq == 0)
+        {
+            var name = ChatTitles.Fallback(userMessage);
+            var named = await _db.ChatSessions
+                .Where(c => c.Id == chatSessionId && c.Name == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(c => c.Name, name), ct) > 0;
+            if (named)
+            {
+                var stored = _db.Entry(session).Property(c => c.Name);
+                stored.CurrentValue = name;
+                stored.OriginalValue = name;
+            }
+        }
 
         // Persist the human's verbatim message only — the Chat Context preamble is
         // never part of OUR transcript. It is not transient for the model, though:
@@ -319,6 +347,12 @@ public sealed class ChatService : IChatService
             await MarkProposalDecisionsDeliveredAsync(decidedProposals);
 
         await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct);
+
+        // The first exchange is complete only with a reply worth summarising. The
+        // job is not awaited: the turn is over, and a title model is never allowed
+        // to hold it up.
+        if (nextSeq == 0 && !interrupted && result.Success)
+            _ = _titles?.Schedule(session.Id, openWorkItemId);
     }
 
     /// <summary>
@@ -484,7 +518,7 @@ public sealed class ChatService : IChatService
     /// An unreachable server, one that refused the call, one that timed out, or
     /// none configured at all — never the turn's own cancellation.
     /// </summary>
-    private static bool IsWorkItemServerUnavailable(Exception ex, CancellationToken ct)
+    internal static bool IsWorkItemServerUnavailable(Exception ex, CancellationToken ct)
         => ex is HttpRequestException or InvalidOperationException
             || (ex is TaskCanceledException && !ct.IsCancellationRequested);
 
@@ -534,19 +568,6 @@ public sealed class ChatService : IChatService
             await DeleteSessionAsync(session, ct);
         }
         return sessions.Count;
-    }
-
-    /// <summary>
-    /// Derive a short, meaningful chat name from the first user message (ADR-0013):
-    /// collapse whitespace and truncate to a sensible length, appending an ellipsis
-    /// when trimmed. Falls back to a generic label for an empty/whitespace message.
-    /// </summary>
-    private static string DeriveName(string firstMessage)
-    {
-        const int maxLength = 60;
-        var collapsed = string.Join(' ', firstMessage.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        if (collapsed.Length == 0) return "New chat";
-        return collapsed.Length <= maxLength ? collapsed : collapsed[..maxLength].TrimEnd() + "…";
     }
 
     private async Task DeleteSessionAsync(ChatSession session, CancellationToken ct)
