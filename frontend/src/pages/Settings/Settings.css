@@ -251,6 +251,36 @@
   font-size: 0.85rem;
 }
 
+/* The loop node's provider tag field, laid out as a settings row. */
+.settings-provider-tag .config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.settings-provider-tag .config-field label {
+  font-size: 0.85rem;
+  color: #e0e0e0;
+}
+
+.settings-provider-tag .config-field input {
+  padding: 0.4rem 0.5rem;
+  background-color: #2a2a40;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.375rem;
+  color: #e0e0e0;
+  font-size: 0.85rem;
+}
+
+.settings-provider-tag .config-field input:disabled {
+  opacity: 0.5;
+}
+
+.settings-provider-tag .config-help-text {
+  font-size: 0.78rem;
+  color: #707090;
+}
+
 .settings-error {
   color: #f87171;
   font-size: 0.78rem;

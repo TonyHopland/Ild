@@ -816,6 +816,11 @@ export const chatService = {
     await api.post<void>(`/chat/${id}/read`, { sequence });
   },
 
+  /** Give one of the user's chats the title they chose; it is never retitled automatically after. */
+  rename: async (id: string, name: string): Promise<void> => {
+    await api.put<void>(`/chat/${id}/name`, { name });
+  },
+
   /** Hard-delete one retained chat. */
   deleteOne: async (id: string): Promise<void> => {
     await api.delete<void>(`/chat/${id}`);
@@ -900,6 +905,12 @@ export const SchedulerSettingKeys = {
   /** Minutes between those automatic retries, and how many a run may spend. */
   ThrottleRetryDelayMinutes: "throttle.retryDelayMinutes",
   ThrottleMaxRetries: "throttle.maxRetries",
+} as const;
+
+/** Smart chat session titles, and the provider tag they run on (resolved like an AI node's). */
+export const ChatTitleSettingKeys = {
+  SmartTitles: "chat.smartTitles",
+  TitleProviderTag: "chat.titleProviderTag",
 } as const;
 
 /** How long a sign-in survives. `0` disables that limit. */

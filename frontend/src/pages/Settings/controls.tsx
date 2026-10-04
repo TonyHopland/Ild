@@ -88,7 +88,7 @@ interface ToggleSettingFieldProps {
  * switch back and says why, rather than leaving the page claiming a setting the
  * server never took.
  */
-export function ToggleSettingField({ settingKey, label, children }: ToggleSettingFieldProps) {
+export function useToggleSetting(settingKey: string) {
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -113,6 +113,13 @@ export function ToggleSettingField({ settingKey, label, children }: ToggleSettin
       setError(err instanceof Error ? err.message : "Failed to save.");
     }
   };
+
+  return { checked, error, save };
+}
+
+/** A switch for one boolean app setting; see {@link useToggleSetting}. */
+export function ToggleSettingField({ settingKey, label, children }: ToggleSettingFieldProps) {
+  const { checked, error, save } = useToggleSetting(settingKey);
 
   return (
     <SettingRow
