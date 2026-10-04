@@ -6,6 +6,7 @@ import {
   LoopTemplate,
   LoopRun,
   LoopNode,
+  LoopNodeEdge,
   WorktreePreview,
   AiProvider,
 } from "../../types";
@@ -48,6 +49,11 @@ export type FeedbackOutputs =
 const FEEDBACK_OUTPUTS_LOADING: FeedbackOutputs = { status: "loading" };
 
 /** The nodes of one template version, and the fixed outputs their types hold. */
+export interface VersionGraph {
+  nodes: LoopNode[];
+  edges: LoopNodeEdge[];
+}
+
 interface VersionOutputs {
   nodes: LoopNode[];
   fixed: FixedOutputs;
@@ -71,6 +77,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   } | null>(null);
   // A template version never changes, and neither do the fixed outputs, so each
   // version is read once. A failed read is forgotten, and the next one asks again.
+  const versionGraphs = useRef(new Map<string, Promise<VersionGraph>>());
   const versionOutputs = useRef(new Map<string, Promise<VersionOutputs>>());
   const [dependencies, setDependencies] = useState<WorkItem[]>([]);
   const [allWorkItems, setAllWorkItems] = useState<WorkItem[]>([]);
@@ -162,6 +169,22 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // Detail for the work item's current run — its pinned template, the node the
   // engine is on, and the persisted PR snapshot. The run list endpoint omits
   // these, so the detail is fetched separately and refreshed live.
+  const readVersionGraph = useCallback(
+    (loopTemplateId: string, templateVersion: number): Promise<VersionGraph> => {
+      const reads = versionGraphs.current;
+      const version = `${loopTemplateId}:${templateVersion}`;
+      const known = reads.get(version);
+      if (known) return known;
+      const read = loopTemplateService.getVersionGraph(loopTemplateId, templateVersion);
+      reads.set(version, read);
+      read.catch(() => {
+        if (reads.get(version) === read) reads.delete(version);
+      });
+      return read;
+    },
+    [],
+  );
+
   // Rejects when the run cannot be re-read. A caller that only wants the view
   // kept fresh can ignore that, but one acting on what it reads back — the
   // queued-writes panel, which tells a person whether their drop took — cannot
@@ -193,7 +216,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       const known = reads.get(version);
       if (known) return known;
       const read = Promise.all([
-        loopTemplateService.getVersionGraph(run.loopTemplateId, run.templateVersion),
+        readVersionGraph(run.loopTemplateId, run.templateVersion),
         loopTemplateService.getNodeOutputs(),
       ]).then(([graph, fixed]) => ({ nodes: graph.nodes, fixed: readFixedOutputs(fixed) }));
       reads.set(version, read);
@@ -240,7 +263,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workItem]);
+  }, [workItem, readVersionGraph]);
 
   useEffect(() => {
     setFeedbackInput("");
@@ -937,6 +960,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleResumeSteer,
     handleCleanupDone,
     handleCleanupBacklog,
+    readVersionGraph,
     handleReclaimRun,
     handlePauseRun,
     handleResumeRun,

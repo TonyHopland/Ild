@@ -9,11 +9,9 @@ import {
   LoopRun,
   LoopRunStatus,
   LoopRunNodeStatus,
+  NodeType,
+  EdgeType,
 } from "../../types";
-
-vi.mock("react-router", () => ({
-  Link: ({ children, ...rest }: { children: React.ReactNode }) => <a {...rest}>{children}</a>,
-}));
 
 afterEach(() => {
   cleanup();
@@ -121,7 +119,7 @@ describe("RunsPanel cleanup action", () => {
 
   test("is not offered once the run holds no local git state", async () => {
     renderPanel(run({ hasLocalGitState: false }));
-    await waitFor(() => expect(screen.getByText(/open full run view/i)).not.toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: /retain/i })).not.toBeNull());
     expect(cleanUpButton()).toBeNull();
   });
 });
@@ -576,4 +574,234 @@ describe("RunsPanel re-read after an action", () => {
       expect(runEntry(RUN_A)).not.toBeNull();
     },
   );
+});
+
+describe("RunsPanel run details", () => {
+  function twoNodeRun(overrides: Partial<LoopRun> = {}): LoopRun {
+    const node = (id: string, nodeId: string, label: string, incomingEdgeId: string | null) => ({
+      id,
+      nodeId,
+      nodeLabel: label,
+      status: LoopRunNodeStatus.Succeeded,
+      effectiveInput: null,
+      output: null,
+      error: null,
+      startedAt: "2025-01-01T00:00:00Z",
+      completedAt: "2025-01-01T00:10:00Z",
+      executionCount: 1,
+      incomingEdgeId,
+    });
+    return run({
+      id: RUN_A,
+      nodes: [node("rn-1", "n-build", "Build", null), node("rn-2", "n-review", "Review", "e-1")],
+      ...overrides,
+    });
+  }
+
+  const graph = {
+    nodes: [
+      { id: "n-build", type: NodeType.Cmd, label: "Build", config: {} },
+      { id: "n-review", type: NodeType.AI, label: "Review", config: {} },
+    ],
+    edges: [
+      {
+        id: "e-1",
+        sourceNodeId: "n-build",
+        targetNodeId: "n-review",
+        edgeType: EdgeType.Custom,
+        name: "Respond",
+      },
+    ],
+  };
+
+  function renderDetails(detail: LoopRun, readVersionGraph = vi.fn().mockResolvedValue(graph)) {
+    const getById = vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    const onRunsChanged = vi.fn();
+    render(
+      <RunsPanel
+        workItem={workItem()}
+        runs={[detail]}
+        progressText=""
+        onRunsChanged={onRunsChanged}
+        readVersionGraph={readVersionGraph}
+      />,
+    );
+    return { getById, onRunsChanged, readVersionGraph };
+  }
+
+  const toggle = (name: RegExp) => screen.getByRole("button", { name });
+
+  test("shows each node's type and the edge the run recorded into it", async () => {
+    const { readVersionGraph } = renderDetails(twoNodeRun());
+
+    await screen.findByText("Respond");
+    expect(readVersionGraph).toHaveBeenCalledWith("tmpl-1", 1);
+    expect(screen.getByRole("button", { name: /Cmd.*Build/ })).not.toBeNull();
+    expect(screen.getByRole("button", { name: /AI.*Review/ })).not.toBeNull();
+  });
+
+  test("shows no edge where the run recorded none or one into another node", async () => {
+    const detail = twoNodeRun();
+    detail.nodes[1] = { ...detail.nodes[1], incomingEdgeId: null };
+    renderDetails(detail, vi.fn().mockResolvedValue({ ...graph, edges: [] }));
+    await screen.findByRole("button", { name: /AI.*Review/ });
+    expect(screen.queryByText("Respond")).toBeNull();
+    cleanup();
+
+    const elsewhere = twoNodeRun();
+    elsewhere.nodes[1] = { ...elsewhere.nodes[1], nodeId: "n-build" };
+    renderDetails(elsewhere);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: /Cmd/ }).length).toBe(2));
+    expect(screen.queryByText("Respond")).toBeNull();
+  });
+
+  test("without the loop graph no node type or edge is shown", async () => {
+    renderDetails(twoNodeRun(), vi.fn().mockRejectedValue({ status: 500, message: "boom" }));
+    await screen.findByText("Review");
+    expect(screen.queryByText("Respond")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Cmd|AI/ })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  test("retain pins and unpins the run", async () => {
+    const setRetain = vi
+      .spyOn(loopRunService, "setRetain")
+      .mockResolvedValue({ id: RUN_A, retain: true });
+    const { getById, onRunsChanged } = renderDetails(twoNodeRun({ retain: false }));
+    const retain = await screen.findByRole("button", { name: /^retain$/i });
+    expect(retain.getAttribute("aria-pressed")).toBe("false");
+
+    getById.mockResolvedValue(twoNodeRun({ retain: true }));
+    fireEvent.click(retain);
+
+    await waitFor(() => expect(setRetain).toHaveBeenCalledWith(RUN_A, true));
+    const pinned = await screen.findByRole("button", { name: /retained/i });
+    expect(pinned.getAttribute("aria-pressed")).toBe("true");
+    expect(onRunsChanged).toHaveBeenCalled();
+  });
+
+  test("a refused retain shows the server's message", async () => {
+    vi.spyOn(loopRunService, "setRetain").mockRejectedValue({ status: 404, message: "Gone" });
+    renderDetails(twoNodeRun());
+    fireEvent.click(await screen.findByRole("button", { name: /^retain$/i }));
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Gone"));
+  });
+
+  test("variables stay collapsed until expanded", async () => {
+    renderDetails(
+      twoNodeRun({
+        availableVariables: [
+          {
+            name: "summary",
+            value: "All done",
+            createdAt: "2025-01-01T00:00:00Z",
+            updatedAt: null,
+          },
+        ],
+      }),
+    );
+    const section = await screen.findByRole("button", { name: /variables \(1\)/i });
+    expect(section.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText("summary")).toBeNull();
+
+    fireEvent.click(section);
+
+    expect(section.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("summary")).not.toBeNull();
+    expect(screen.getByText("All done")).not.toBeNull();
+  });
+
+  test("sessions stay collapsed until expanded, and a session previews inline", async () => {
+    const preview = vi.spyOn(loopRunService, "getSessionPreview").mockResolvedValue({
+      adapterName: "claude",
+      sessionId: "sess-1",
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: null,
+      sessionJson: JSON.stringify({ messages: [{}, {}] }),
+    });
+    renderDetails(
+      twoNodeRun({
+        availableSessions: [
+          {
+            adapterName: "claude",
+            sessionId: "sess-1",
+            createdAt: "2025-01-01T00:00:00Z",
+            updatedAt: null,
+            isCurrent: true,
+            placeholders: [],
+          },
+        ],
+      }),
+    );
+    const section = await screen.findByRole("button", { name: /ai sessions \(1\)/i });
+    expect(screen.queryByText("sess-1")).toBeNull();
+
+    fireEvent.click(section);
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
+
+    const region = await screen.findByRole("region", { name: /session preview/i });
+    expect(preview).toHaveBeenCalledWith(RUN_A, "claude", "sess-1");
+    expect(within(region).getByText("Messages: 2")).not.toBeNull();
+    fireEvent.click(within(region).getByRole("button", { name: /close/i }));
+    expect(screen.queryByRole("region", { name: /session preview/i })).toBeNull();
+  });
+
+  test("a node's events are read only once expanded, and only its own", async () => {
+    const getEvents = vi
+      .spyOn(loopRunService, "getEvents")
+      .mockImplementation(async (_r, cursor) =>
+        cursor === 0
+          ? {
+              entries: [
+                {
+                  sequence: 1,
+                  runId: RUN_A,
+                  eventType: "NodeStarted",
+                  nodeId: "n-build",
+                  runNodeId: "rn-1",
+                  payload: "build started",
+                  timestamp: "2025-01-01T00:00:00Z",
+                },
+                {
+                  sequence: 2,
+                  runId: RUN_A,
+                  eventType: "NodeStarted",
+                  nodeId: "n-review",
+                  runNodeId: "rn-2",
+                  payload: "review started",
+                  timestamp: "2025-01-01T00:00:00Z",
+                },
+              ],
+              nextCursor: 2,
+              hasMore: true,
+            }
+          : {
+              entries: [
+                {
+                  sequence: 3,
+                  runId: RUN_A,
+                  eventType: "NodeCompleted",
+                  nodeId: "n-build",
+                  runNodeId: "rn-1",
+                  payload: "build done",
+                  timestamp: "2025-01-01T00:01:00Z",
+                },
+              ],
+              nextCursor: 3,
+              hasMore: false,
+            },
+      );
+    renderDetails(twoNodeRun());
+    fireEvent.click(await screen.findByRole("button", { name: /Build/ }));
+    const events = toggle(/^▸\s*events$/i);
+    expect(events.getAttribute("aria-expanded")).toBe("false");
+    expect(getEvents).not.toHaveBeenCalled();
+
+    fireEvent.click(events);
+
+    await screen.findByText("build done");
+    expect(screen.getByText("build started")).not.toBeNull();
+    expect(screen.queryByText("review started")).toBeNull();
+    expect(getEvents.mock.calls.map((c) => c[1])).toEqual([0, 2]);
+  });
 });

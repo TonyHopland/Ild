@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The Loop Runs page is gone; a work item's Runs tab now pauses, resumes, cancels and deletes its runs.**
+- **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**
 
 ## [0.16.0] - 2026-10-04
 

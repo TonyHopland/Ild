@@ -371,7 +371,6 @@ describe("WorkItemModalV2", () => {
 
     expect(screen.getByText(/node executions/)).toBeTruthy();
     expect(screen.getByText("Implement")).toBeTruthy();
-    expect(screen.getByText("Open full run view ↗")).toBeTruthy();
 
     // Expanding a node reveals its input and output.
     await act(async () => {

@@ -1,5 +1,4 @@
-import { useState, useEffect } from "react";
-import { Link } from "react-router";
+import { Fragment, useState, useEffect } from "react";
 import {
   WorkItem,
   WorkItemStatus,
@@ -7,10 +6,15 @@ import {
   LoopRunNode,
   LoopRunStatus,
   LoopRunNodeStatus,
+  NodeType,
 } from "../../types";
 import { loopRunService } from "../../services/auth";
 import { formatDuration } from "../../utils/duration";
+import { nodeIconOf } from "../../utils/nodeStyles";
 import LiveStream from "../NodeTimeline/LiveStream";
+import EdgeArrow from "../NodeTimeline/EdgeArrow";
+import { failureMessage, NodeEvents, RunSessions, RunVariables } from "./RunDetailSections";
+import type { VersionGraph } from "./useWorkItemDetail";
 import HaltSteerControls from "./HaltSteerControls";
 import RunCostSummary from "./RunCostSummary";
 
@@ -62,12 +66,6 @@ function normalizeRun(data: LoopRun): LoopRun {
   };
 }
 
-// The API client rejects with a plain { status, message } object, not an Error.
-function failureMessage(error: unknown, fallback: string): string {
-  const message = (error as { message?: unknown } | null)?.message;
-  return typeof message === "string" && message ? message : fallback;
-}
-
 function parseEffectiveInput(node: LoopRunNode): EffectiveInput | null {
   if (!node.effectiveInput) return null;
   try {
@@ -78,13 +76,18 @@ function parseEffectiveInput(node: LoopRunNode): EffectiveInput | null {
 }
 
 function NodeRow({
+  runId,
   node,
+  nodeType,
   isLive,
   progressText,
   onRetry,
   retryDisabled,
 }: {
+  runId: string;
   node: LoopRunNode;
+  /** The node's type in the run's loop version; unknown when the graph is not loaded. */
+  nodeType: NodeType | undefined;
   isLive: boolean;
   progressText: string;
   onRetry: (runNodeId: string) => void;
@@ -104,6 +107,11 @@ function NodeRow({
             className={`wiv2-node-dot wiv2-node-dot-${status.toLowerCase()}`}
             aria-hidden="true"
           />
+          {nodeType && (
+            <span className="wiv2-node-type" title={nodeType}>
+              {nodeIconOf(nodeType)} {nodeType}
+            </span>
+          )}
           <span className="wiv2-node-label">{node.nodeLabel}</span>
           {node.executionCount > 1 && (
             <span className="wiv2-node-count">×{node.executionCount}</span>
@@ -154,6 +162,9 @@ function NodeRow({
               {!inputText && !node.output && !node.error && (
                 <div className="wiv2-empty">No input or output recorded.</div>
               )}
+              <div className="wiv2-node-section">
+                <NodeEvents runId={runId} runNodeId={node.id} />
+              </div>
             </>
           )}
         </div>
@@ -191,12 +202,17 @@ interface RunsPanelProps {
    * refused (400/409/503), so its error is shown.
    */
   onDeleteRun?: (runId: string) => Promise<unknown>;
+  /**
+   * Read a loop version's graph, for each node's type and the edge a run
+   * recorded into it. Without it neither is shown.
+   */
+  readVersionGraph?: (loopTemplateId: string, templateVersion: number) => Promise<VersionGraph>;
 }
 
 /**
- * Run history tab: run list on the left, the selected run's node timeline
- * inline on the right — no navigation to a separate page needed. A link to
- * the full run page is kept for the deep-dive cases (events, sessions).
+ * Run history tab: run list on the left, the selected run on the right — its
+ * actions, variables, AI sessions and node timeline with each node's events.
+ * The only place runs are shown and managed.
  */
 export default function RunsPanel({
   workItem,
@@ -212,6 +228,7 @@ export default function RunsPanel({
   onResumeRun,
   onCancelRun,
   onDeleteRun,
+  readVersionGraph,
 }: RunsPanelProps) {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
@@ -227,6 +244,9 @@ export default function RunsPanel({
   // Hides a deleted run until the parent's refetched `runs` drop it, and keeps
   // the selection from falling back to it. Run ids are never reused.
   const [deletedRunIds, setDeletedRunIds] = useState<ReadonlySet<string>>(new Set());
+  // The shown run's loop version graph. Best effort: without it no node types
+  // or edges are shown.
+  const [graph, setGraph] = useState<(VersionGraph & { version: string }) | null>(null);
 
   const visibleRuns = runs.filter((run) => !deletedRunIds.has(run.id));
   const effectiveRunId =
@@ -292,6 +312,23 @@ export default function RunsPanel({
     onRunsChanged?.();
     await applied();
   };
+
+  const templateId = runDetail?.loopTemplateId;
+  const templateVersion = runDetail?.templateVersion;
+  useEffect(() => {
+    if (!readVersionGraph || !templateId || !templateVersion) return;
+    let cancelled = false;
+    readVersionGraph(templateId, templateVersion)
+      .then(({ nodes, edges }) => {
+        if (!cancelled) setGraph({ version: `${templateId}:${templateVersion}`, nodes, edges });
+      })
+      .catch(() => {
+        if (!cancelled) setGraph(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [readVersionGraph, templateId, templateVersion]);
 
   const handleRetry = async (runNodeId: string) => {
     if (!effectiveRunId) return;
@@ -381,6 +418,8 @@ export default function RunsPanel({
 
   const runBusy = !!runDetail && busyRunIds.has(runDetail.id);
 
+  const versionGraph = graph && graph.version === `${templateId}:${templateVersion}` ? graph : null;
+
   return (
     <div className="wiv2-runs">
       <div className="wiv2-runs-list">
@@ -427,14 +466,27 @@ export default function RunsPanel({
                 {runDetail.completedAt &&
                   ` · finished ${new Date(runDetail.completedAt).toLocaleString()}`}
               </span>
-              <Link
-                to={`/loop-runs/${runDetail.id}`}
-                className="wiv2-run-full-link"
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                className={`btn btn-sm ${runDetail.retain ? "btn-primary" : "btn-secondary"}`}
+                aria-pressed={!!runDetail.retain}
+                disabled={runBusy}
+                onClick={() =>
+                  void actOnRun(
+                    runDetail.id,
+                    (runId) => loopRunService.setRetain(runId, !runDetail.retain),
+                    "Failed to update retain.",
+                    () => rereadRun(runDetail.id),
+                  )
+                }
+                title={
+                  runDetail.retain
+                    ? "Pinned: this run is kept and never auto-deleted. Click to unpin."
+                    : "Pin this run so its worktree, branch, and history are never auto-deleted."
+                }
               >
-                Open full run view ↗
-              </Link>
+                {runDetail.retain ? "📌 Retained" : "Retain"}
+              </button>
               {canReclaim &&
                 (confirmingReclaim ? (
                   <span
@@ -560,6 +612,12 @@ export default function RunsPanel({
               )}
             </div>
             <RunCostSummary run={runDetail} />
+            <RunVariables variables={runDetail.availableVariables ?? []} />
+            <RunSessions
+              key={runDetail.id}
+              runId={runDetail.id}
+              sessions={runDetail.availableSessions ?? []}
+            />
             <HaltSteerControls
               run={runDetail}
               workItemStatus={workItem.status}
@@ -572,20 +630,34 @@ export default function RunsPanel({
               {runDetail.nodes.length === 0 && (
                 <div className="wiv2-empty">No nodes executed yet.</div>
               )}
-              {runDetail.nodes.map((node, i) => (
-                <NodeRow
-                  key={node.id}
-                  node={node}
-                  isLive={
-                    isLiveRun &&
-                    i === runDetail.nodes.length - 1 &&
-                    normalizeNodeStatus(node.status) === LoopRunNodeStatus.Running
-                  }
-                  progressText={progressText}
-                  onRetry={handleRetry}
-                  retryDisabled={retryDisabled}
-                />
-              ))}
+              {runDetail.nodes.map((node, i) => {
+                const incomingEdge =
+                  i > 0
+                    ? versionGraph?.edges.find(
+                        (e) => e.id === node.incomingEdgeId && e.targetNodeId === node.nodeId,
+                      )
+                    : undefined;
+                return (
+                  <Fragment key={node.id}>
+                    {incomingEdge && (
+                      <EdgeArrow edgeType={incomingEdge.edgeType} edgeName={incomingEdge.name} />
+                    )}
+                    <NodeRow
+                      runId={runDetail.id}
+                      node={node}
+                      nodeType={versionGraph?.nodes.find((n) => n.id === node.nodeId)?.type}
+                      isLive={
+                        isLiveRun &&
+                        i === runDetail.nodes.length - 1 &&
+                        normalizeNodeStatus(node.status) === LoopRunNodeStatus.Running
+                      }
+                      progressText={progressText}
+                      onRetry={handleRetry}
+                      retryDisabled={retryDisabled}
+                    />
+                  </Fragment>
+                );
+              })}
             </div>
           </>
         )}

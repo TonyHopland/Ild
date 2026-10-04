@@ -891,15 +891,97 @@
   flex-wrap: wrap;
 }
 
-.wiv2-run-full-link {
-  margin-left: auto;
-  color: #818cf8;
-  font-size: 0.78rem;
-  text-decoration: none;
+.wiv2-collapsible-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0;
+  background: none;
+  border: none;
+  color: #c0c0d0;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: inherit;
 }
 
-.wiv2-run-full-link:hover {
-  color: #a5b4fc;
+.wiv2-collapsible-toggle:hover {
+  color: #f0f0f5;
+}
+
+.wiv2-collapsible-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.25rem 0 0.5rem;
+}
+
+.wiv2-run-hint {
+  font-size: 0.75rem;
+  color: #808090;
+}
+
+.wiv2-run-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  background-color: #1a1a2a;
+  border: 1px solid #2d2d44;
+  border-radius: 0.375rem;
+}
+
+.wiv2-run-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.wiv2-run-entry-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.wiv2-run-entry-current {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #22c55e;
+}
+
+.wiv2-run-entry-meta {
+  font-size: 0.72rem;
+  color: #808090;
+}
+
+.wiv2-run-entry-head > .wiv2-run-entry-meta {
+  margin-left: auto;
+}
+
+.wiv2-run-entry-id {
+  font-size: 0.78rem;
+  color: #cbd5e1;
+  word-break: break-all;
+}
+
+.wiv2-session-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.375rem;
+}
+
+.wiv2-session-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+  color: #cbd5e1;
 }
 
 .wiv2-node-list {
@@ -986,6 +1068,17 @@
 .wiv2-node-dot-interrupted,
 .wiv2-node-dot-skipped {
   background-color: #d97706;
+}
+
+.wiv2-node-type {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  padding: 0 0.3rem;
+  border-radius: 0.25rem;
+  background: #2d2d44;
+  color: #a0a0b0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .wiv2-node-label {

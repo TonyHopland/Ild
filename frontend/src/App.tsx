@@ -8,7 +8,6 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import Login from "./pages/Login";
 import Taskboard from "./pages/Taskboard";
 const LoopEditor = lazy(() => import("./pages/LoopEditor"));
-import EventLogViewer from "./pages/EventLogViewer";
 import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
 import Repositories from "./pages/Repositories";
@@ -95,22 +94,6 @@ function AppRoutes() {
                 >
                   <LoopEditor />
                 </Suspense>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/loop-runs/:runId"
-            element={
-              <ProtectedRoute>
-                <EventLogViewer />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/loop-runs/:runId/events"
-            element={
-              <ProtectedRoute>
-                <EventLogViewer />
               </ProtectedRoute>
             }
           />

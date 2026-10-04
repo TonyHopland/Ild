@@ -287,7 +287,7 @@ Delivery is best-effort. The client reconnects automatically (`withAutomaticReco
 
 ### Frontend route loading
 
-Routes in `frontend/src/App.tsx` are wrapped in a top-level `ErrorBoundary` so a render failure in one route can't take down the shell. The heavier editor page (`LoopEditor`) is code-split via `React.lazy(() => import(...))` and wrapped in a `Suspense` boundary; the remaining pages (Login, Taskboard, EventLogViewer, Settings, Repositories, RemoteProviders, AiProviders) are imported eagerly because their footprint doesn't justify a separate chunk. Page-level errors surface through the shared `ErrorBanner` component (issue #036).
+Routes in `frontend/src/App.tsx` are wrapped in a top-level `ErrorBoundary` so a render failure in one route can't take down the shell. The heavier editor page (`LoopEditor`) is code-split via `React.lazy(() => import(...))` and wrapped in a `Suspense` boundary; the remaining pages (Login, Taskboard, Analytics, Settings, Repositories, RemoteProviders, AiProviders) are imported eagerly because their footprint doesn't justify a separate chunk. Page-level errors surface through the shared `ErrorBanner` component (issue #036).
 
 ### Frontend client state
 

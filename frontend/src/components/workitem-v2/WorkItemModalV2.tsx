@@ -319,6 +319,7 @@ export default function WorkItemModalV2({
           onResumeRun={detail.handleResumeRun}
           onCancelRun={detail.handleCancelRun}
           onDeleteRun={detail.handleDeleteRun}
+          readVersionGraph={detail.readVersionGraph}
         />
       </section>
       <section
