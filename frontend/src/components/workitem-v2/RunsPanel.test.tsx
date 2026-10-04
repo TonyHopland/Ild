@@ -901,3 +901,30 @@ describe("RunsPanel run events retry", () => {
     expect(getEvents).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("RunsPanel node input", () => {
+  test.each([
+    ["plain text, as nodes record it now", "Summarise the change", "Summarise the change"],
+    [
+      "an older run's JSON with the text",
+      JSON.stringify({ nodeType: "AI", prompt: "Old prompt" }),
+      "Old prompt",
+    ],
+    ["an older run's JSON with only the node type", JSON.stringify({ nodeType: "Start" }), null],
+    ["nothing", null, null],
+    ["text that only looks like JSON", "[1, 2]", "[1, 2]"],
+  ])("shows the input recorded as %s", async (_label, effectiveInput, shown) => {
+    const detail = runWithNode(RUN_A);
+    detail.nodes[0] = { ...detail.nodes[0], effectiveInput, output: null };
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Node of aaaaaaaa/ }));
+
+    expect(screen.getByText("Input")).not.toBeNull();
+    if (shown) expect(screen.getByText(shown)).not.toBeNull();
+    else expect(screen.getByText("No input recorded.")).not.toBeNull();
+    expect(screen.getByText("Output")).not.toBeNull();
+    expect(screen.getByText("No output recorded.")).not.toBeNull();
+  });
+});

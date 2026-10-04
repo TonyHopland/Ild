@@ -73,13 +73,23 @@ function normalizeRun(data: LoopRun): LoopRun {
   };
 }
 
-function parseEffectiveInput(node: LoopRunNode): EffectiveInput | null {
-  if (!node.effectiveInput) return null;
+// Nodes record the plain text they started with (the rendered prompt, the
+// command, the message shown). Older runs recorded a JSON object carrying that
+// text, or only the node type when there was none.
+function inputTextOf(node: LoopRunNode): string | null {
+  const raw = node.effectiveInput;
+  if (!raw) return null;
+  let parsed: unknown;
   try {
-    return JSON.parse(node.effectiveInput) as EffectiveInput;
+    parsed = JSON.parse(raw);
   } catch {
-    return null;
+    return raw;
   }
+  if (!parsed || typeof parsed !== "object") return raw;
+  const input = parsed as EffectiveInput;
+  const text = input.resolvedPrompt ?? input.prompt ?? input.command ?? input.message;
+  if (text !== undefined) return text;
+  return "nodeType" in input ? null : raw;
 }
 
 function NodeRow({
@@ -101,8 +111,7 @@ function NodeRow({
   retryDisabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const input = parseEffectiveInput(node);
-  const inputText = input?.resolvedPrompt ?? input?.prompt ?? input?.command ?? input?.message;
+  const inputText = inputTextOf(node);
   const duration = formatDuration(node.startedAt, node.completedAt);
   const status = normalizeNodeStatus(node.status);
 
@@ -148,26 +157,27 @@ function NodeRow({
             <LiveStream text={progressText} />
           ) : (
             <>
-              {inputText && (
-                <div className="wiv2-node-section">
-                  <span className="detail-label">Input</span>
+              <div className="wiv2-node-section">
+                <span className="detail-label">Input</span>
+                {inputText ? (
                   <pre className="wiv2-node-pre">{inputText}</pre>
-                </div>
-              )}
-              {node.output && (
-                <div className="wiv2-node-section">
-                  <span className="detail-label">Output</span>
+                ) : (
+                  <div className="wiv2-empty">No input recorded.</div>
+                )}
+              </div>
+              <div className="wiv2-node-section">
+                <span className="detail-label">Output</span>
+                {node.output ? (
                   <pre className="wiv2-node-pre">{node.output}</pre>
-                </div>
-              )}
+                ) : (
+                  <div className="wiv2-empty">No output recorded.</div>
+                )}
+              </div>
               {node.error && (
                 <div className="wiv2-node-section">
                   <span className="detail-label">Error</span>
                   <pre className="wiv2-node-pre wiv2-node-error">{node.error}</pre>
                 </div>
-              )}
-              {!inputText && !node.output && !node.error && (
-                <div className="wiv2-empty">No input or output recorded.</div>
               )}
               <div className="wiv2-node-section">
                 <NodeEvents runNodeId={node.id} events={events} />
