@@ -805,3 +805,62 @@ describe("RunsPanel run details", () => {
     expect(getEvents.mock.calls.map((c) => c[1])).toEqual([0, 2]);
   });
 });
+
+describe("RunsPanel run events", () => {
+  test("the run's event log is read once for all its nodes", async () => {
+    const getEvents = vi.spyOn(loopRunService, "getEvents").mockResolvedValue({
+      entries: [
+        {
+          sequence: 1,
+          runId: RUN_A,
+          eventType: "NodeStarted",
+          nodeId: "n-1",
+          runNodeId: "rn-a",
+          payload: "a started",
+          timestamp: "2025-01-01T00:00:00Z",
+        },
+        {
+          sequence: 2,
+          runId: RUN_A,
+          eventType: "NodeStarted",
+          nodeId: "n-2",
+          runNodeId: "rn-b",
+          payload: "b started",
+          timestamp: "2025-01-01T00:00:00Z",
+        },
+      ],
+      nextCursor: 2,
+      hasMore: false,
+    });
+    const node = (id: string, label: string) => ({
+      id,
+      nodeId: `n-${id}`,
+      nodeLabel: label,
+      status: LoopRunNodeStatus.Succeeded,
+      effectiveInput: null,
+      output: null,
+      error: null,
+      startedAt: "2025-01-01T00:00:00Z",
+      completedAt: "2025-01-01T00:10:00Z",
+      executionCount: 1,
+    });
+    const detail = run({ id: RUN_A, nodes: [node("rn-a", "First"), node("rn-b", "Second")] });
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /First/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Second/ }));
+    const [first, second] = screen.getAllByRole("button", { name: /^▸\s*events$/i });
+    fireEvent.click(first);
+    fireEvent.click(second);
+    await screen.findByText("a started");
+    await screen.findByText("b started");
+
+    const [firstOpen] = screen.getAllByRole("button", { name: /events$/i });
+    fireEvent.click(firstOpen);
+    fireEvent.click(firstOpen);
+    await screen.findByText("a started");
+
+    expect(getEvents).toHaveBeenCalledTimes(1);
+  });
+});

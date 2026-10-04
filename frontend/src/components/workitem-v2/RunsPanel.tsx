@@ -13,7 +13,14 @@ import { formatDuration } from "../../utils/duration";
 import { nodeIconOf } from "../../utils/nodeStyles";
 import LiveStream from "../NodeTimeline/LiveStream";
 import EdgeArrow from "../NodeTimeline/EdgeArrow";
-import { failureMessage, NodeEvents, RunSessions, RunVariables } from "./RunDetailSections";
+import {
+  failureMessage,
+  NodeEvents,
+  RunSessions,
+  RunVariables,
+  useRunEvents,
+  type RunEvents,
+} from "./RunDetailSections";
 import type { VersionGraph } from "./useWorkItemDetail";
 import HaltSteerControls from "./HaltSteerControls";
 import RunCostSummary from "./RunCostSummary";
@@ -76,20 +83,20 @@ function parseEffectiveInput(node: LoopRunNode): EffectiveInput | null {
 }
 
 function NodeRow({
-  runId,
   node,
   nodeType,
   isLive,
   progressText,
+  events,
   onRetry,
   retryDisabled,
 }: {
-  runId: string;
   node: LoopRunNode;
   /** The node's type in the run's loop version; unknown when the graph is not loaded. */
   nodeType: NodeType | undefined;
   isLive: boolean;
   progressText: string;
+  events: RunEvents;
   onRetry: (runNodeId: string) => void;
   retryDisabled: boolean;
 }) {
@@ -163,7 +170,7 @@ function NodeRow({
                 <div className="wiv2-empty">No input or output recorded.</div>
               )}
               <div className="wiv2-node-section">
-                <NodeEvents runId={runId} runNodeId={node.id} />
+                <NodeEvents runNodeId={node.id} events={events} />
               </div>
             </>
           )}
@@ -237,8 +244,8 @@ export default function RunsPanel({
   const [reclaiming, setReclaiming] = useState(false);
   const [confirmingReclaim, setConfirmingReclaim] = useState(false);
   const [errorText, setErrorText] = useState("");
-  // Runs with a pause/resume/cancel/delete in flight, so switching runs never
-  // frees or blocks another run's controls.
+  // Runs with a pause/resume/cancel/delete/retain in flight, so switching runs
+  // never frees or blocks another run's controls.
   const [busyRunIds, setBusyRunIds] = useState<ReadonlySet<string>>(new Set());
   const [confirmingDeleteRunId, setConfirmingDeleteRunId] = useState<string | null>(null);
   // Hides a deleted run until the parent's refetched `runs` drop it, and keeps
@@ -247,6 +254,8 @@ export default function RunsPanel({
   // The shown run's loop version graph. Best effort: without it no node types
   // or edges are shown.
   const [graph, setGraph] = useState<(VersionGraph & { version: string }) | null>(null);
+
+  const runEvents = useRunEvents(runDetail);
 
   const visibleRuns = runs.filter((run) => !deletedRunIds.has(run.id));
   const effectiveRunId =
@@ -643,7 +652,6 @@ export default function RunsPanel({
                       <EdgeArrow edgeType={incomingEdge.edgeType} edgeName={incomingEdge.name} />
                     )}
                     <NodeRow
-                      runId={runDetail.id}
                       node={node}
                       nodeType={versionGraph?.nodes.find((n) => n.id === node.nodeId)?.type}
                       isLive={
@@ -652,6 +660,7 @@ export default function RunsPanel({
                         normalizeNodeStatus(node.status) === LoopRunNodeStatus.Running
                       }
                       progressText={progressText}
+                      events={runEvents}
                       onRetry={handleRetry}
                       retryDisabled={retryDisabled}
                     />

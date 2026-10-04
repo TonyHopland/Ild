@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   EventLogEntry,
+  LoopRun,
   LoopRunAvailableSession,
   LoopRunSessionPreview,
   LoopRunVariable,
@@ -46,7 +47,15 @@ function buildSessionSummary(preview: LoopRunSessionPreview): string[] {
 }
 
 /** A section that shows only its title until the user expands it. */
-function Collapsible({ title, children }: { title: string; children: React.ReactNode }) {
+function Collapsible({
+  title,
+  onOpen,
+  children,
+}: {
+  title: string;
+  onOpen?: () => void;
+  children: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="wiv2-collapsible">
@@ -54,7 +63,10 @@ function Collapsible({ title, children }: { title: string; children: React.React
         type="button"
         className="wiv2-collapsible-toggle"
         aria-expanded={open}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          if (!open) onOpen?.();
+          setOpen(!open);
+        }}
       >
         <span className="wiv2-node-chevron">{open ? "▾" : "▸"}</span>
         {title}
@@ -187,45 +199,85 @@ export function RunSessions({
   );
 }
 
-async function readNodeEvents(runId: string, runNodeId: string): Promise<EventLogEntry[]> {
+async function readRunEvents(runId: string): Promise<EventLogEntry[]> {
   const entries: EventLogEntry[] = [];
   let cursor = 0;
   for (;;) {
     const page = await loopRunService.getEvents(runId, cursor, 500);
-    entries.push(...page.entries.filter((e) => e.runNodeId === runNodeId));
+    entries.push(...page.entries);
     if (!page.hasMore) return entries;
     cursor = page.nextCursor;
   }
 }
 
-function NodeEventsBody({ runId, runNodeId }: { runId: string; runNodeId: string }) {
-  const [events, setEvents] = useState<EventLogEntry[] | null>(null);
-  const [errorText, setErrorText] = useState("");
+export interface RunEvents {
+  /** The shown run's whole event log; null until it has been read. */
+  entries: EventLogEntry[] | null;
+  errorText: string;
+  /** Asks for the log; the first Events section opened for a run calls it. */
+  request: () => void;
+}
+
+/**
+ * The shown run's event log, read once the first of its nodes' Events sections
+ * is opened and shared by all of them. It is read again only when the run has
+ * moved on (its status or node rows changed), so a finished run is read once.
+ */
+export function useRunEvents(run: LoopRun | null): RunEvents {
+  const [wantedFor, setWantedFor] = useState<string | null>(null);
+  const [read, setRead] = useState<{
+    runId: string;
+    entries: EventLogEntry[] | null;
+    errorText: string;
+  } | null>(null);
+  const runId = run?.id ?? null;
+  const progress = run
+    ? `${run.status}|${run.nodes.length}|${run.nodes[run.nodes.length - 1]?.status ?? ""}`
+    : null;
+  const wanted = runId !== null && wantedFor === runId;
 
   useEffect(() => {
+    if (!wanted || !runId) return;
     let cancelled = false;
-    readNodeEvents(runId, runNodeId)
-      .then((entries) => {
-        if (!cancelled) setEvents(entries);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setErrorText(failureMessage(error, "Failed to load events."));
-      });
+    readRunEvents(runId).then(
+      (entries) => {
+        if (!cancelled) setRead({ runId, entries, errorText: "" });
+      },
+      (error: unknown) => {
+        if (!cancelled)
+          setRead({
+            runId,
+            entries: null,
+            errorText: failureMessage(error, "Failed to load events."),
+          });
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [runId, runNodeId]);
+  }, [wanted, runId, progress]);
 
-  if (errorText) return <div className="wiv2-node-error">{errorText}</div>;
-  if (!events) return <div className="wiv2-empty">Loading events…</div>;
-  return <NodeEventsSection events={events} />;
+  const shown = read?.runId === runId ? read : null;
+  return {
+    entries: shown?.entries ?? null,
+    errorText: shown?.errorText ?? "",
+    request: () => {
+      if (runId) setWantedFor(runId);
+    },
+  };
 }
 
-/** One node execution's event log, read only once the user expands it. */
-export function NodeEvents({ runId, runNodeId }: { runId: string; runNodeId: string }) {
+/** One node execution's events, from its run's shared log, once expanded. */
+export function NodeEvents({ runNodeId, events }: { runNodeId: string; events: RunEvents }) {
   return (
-    <Collapsible title="Events">
-      <NodeEventsBody runId={runId} runNodeId={runNodeId} />
+    <Collapsible title="Events" onOpen={events.request}>
+      {events.errorText ? (
+        <div className="wiv2-node-error">{events.errorText}</div>
+      ) : events.entries ? (
+        <NodeEventsSection events={events.entries.filter((e) => e.runNodeId === runNodeId)} />
+      ) : (
+        <div className="wiv2-empty">Loading events…</div>
+      )}
     </Collapsible>
   );
 }

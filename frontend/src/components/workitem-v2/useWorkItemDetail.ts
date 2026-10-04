@@ -48,12 +48,13 @@ export type FeedbackOutputs =
 
 const FEEDBACK_OUTPUTS_LOADING: FeedbackOutputs = { status: "loading" };
 
-/** The nodes of one template version, and the fixed outputs their types hold. */
+/** One template version's nodes and the edges between them. */
 export interface VersionGraph {
   nodes: LoopNode[];
   edges: LoopNodeEdge[];
 }
 
+/** The nodes of one template version, and the fixed outputs their types hold. */
 interface VersionOutputs {
   nodes: LoopNode[];
   fixed: FixedOutputs;
@@ -166,9 +167,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       .catch(() => {});
   }, [workItem?.id, refreshRuns]);
 
-  // Detail for the work item's current run — its pinned template, the node the
-  // engine is on, and the persisted PR snapshot. The run list endpoint omits
-  // these, so the detail is fetched separately and refreshed live.
   const readVersionGraph = useCallback(
     (loopTemplateId: string, templateVersion: number): Promise<VersionGraph> => {
       const reads = versionGraphs.current;
@@ -185,6 +183,9 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [],
   );
 
+  // Detail for the work item's current run — its pinned template, the node the
+  // engine is on, and the persisted PR snapshot. The run list endpoint omits
+  // these, so the detail is fetched separately and refreshed live.
   // Rejects when the run cannot be re-read. A caller that only wants the view
   // kept fresh can ignore that, but one acting on what it reads back — the
   // queued-writes panel, which tells a person whether their drop took — cannot
