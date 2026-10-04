@@ -2376,3 +2376,93 @@ describe("WorkItemModalV2 Runs tab run action refresh", () => {
     expect(getRuns.mock.calls.length - before).toBe(1);
   });
 });
+
+// Every control in the dialog that acts on a run waits for any other action on
+// that run, whichever tab or footer started it.
+describe("WorkItemModalV2 one action at a time per run", () => {
+  function settle<T = void>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((res) => (resolve = res));
+    return { promise, resolve };
+  }
+
+  async function openRunsTab(run: LoopRun, item: Partial<WorkItem>) {
+    mockServices([run]);
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Run Cancelled",
+        currentLoopRunId: "run-1",
+        ...item,
+      }),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));
+      await Promise.resolve();
+    });
+  }
+
+  const footerCleanup = () => screen.getByRole("button", { name: "Cleanup -> Done" });
+  const deleteRun = () => screen.getByRole("button", { name: /delete run/i });
+
+  test("a footer cleanup and a Runs-tab delete of the same run never overlap", async () => {
+    await openRunsTab(makeRun(), {});
+    const cleanupDone = settle();
+    vi.spyOn(authServices.workItemService, "cleanupToDone").mockReturnValue(cleanupDone.promise);
+    await screen.findByRole("button", { name: /delete run/i });
+
+    await act(async () => {
+      fireEvent.click(footerCleanup());
+      await Promise.resolve();
+    });
+    expect((deleteRun() as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      cleanupDone.resolve();
+      await cleanupDone.promise;
+    });
+    await waitFor(() => expect((deleteRun() as HTMLButtonElement).disabled).toBe(false));
+
+    const deletion = settle();
+    const remove = vi
+      .spyOn(authServices.loopRunService, "delete")
+      .mockReturnValue(deletion.promise);
+    fireEvent.click(deleteRun());
+    const group = screen.getByRole("group", { name: /delete/i });
+    await act(async () => {
+      fireEvent.click(within(group).getByRole("button", { name: /confirm delete/i }));
+      await Promise.resolve();
+    });
+    expect(remove).toHaveBeenCalledWith("run-1");
+    expect((footerCleanup() as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      deletion.resolve();
+      await deletion.promise;
+    });
+  });
+
+  test("a Runs-tab delete blocks the Action tab's steer controls for the same run", async () => {
+    const halted = makeRun({
+      status: LoopRunStatus.WaitingHuman,
+      completedAt: null,
+      isHalted: true,
+    });
+    await openRunsTab(halted, { humanFeedbackReason: "Human Input Needed" });
+    const deletion = settle();
+    vi.spyOn(authServices.loopRunService, "delete").mockReturnValue(deletion.promise);
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    const group = screen.getByRole("group", { name: /delete/i });
+    await act(async () => {
+      fireEvent.click(within(group).getByRole("button", { name: /confirm delete/i }));
+      await Promise.resolve();
+    });
+
+    const action = document.getElementById("wiv2-panel-action")!;
+    const resume = within(action).getAllByRole("button", { hidden: true, name: /^resume$/i })[0];
+    expect((resume as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      deletion.resolve();
+      await deletion.promise;
+    });
+  });
+});

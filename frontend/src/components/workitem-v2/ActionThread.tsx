@@ -248,6 +248,9 @@ export default function ActionThread({
     live.length === 0 &&
     end.length === 0;
 
+  // Halt, steer and cleanup act on the current run, and wait for any other
+  // action on it, wherever in the dialog that was started.
+  const currentRunId = workItem.currentLoopRunId;
   // One keyed list, so a card that moves to a new slot (its step's turn
   // arriving) is moved rather than remounted, and keeps a decision in progress.
   const entries: ReactNode[] = [];
@@ -275,11 +278,16 @@ export default function ActionThread({
       <HaltSteerControls
         run={detail.currentRun}
         workItemStatus={workItem.status}
-        onHalt={detail.handleHalt}
-        onResumeSteer={detail.handleResumeSteer}
-        onCleanupDone={detail.handleCleanupDone}
-        onCleanupBacklog={detail.handleCleanupBacklog}
+        onHalt={() => detail.runLock.hold(currentRunId, "halt", detail.handleHalt)}
+        onResumeSteer={(note) =>
+          detail.runLock.hold(currentRunId, "steer", () => detail.handleResumeSteer(note))
+        }
+        onCleanupDone={() => detail.runLock.hold(currentRunId, "abandon", detail.handleCleanupDone)}
+        onCleanupBacklog={() =>
+          detail.runLock.hold(currentRunId, "abandon", detail.handleCleanupBacklog)
+        }
         showAbandon={false}
+        blocked={detail.runLock.pendingOf(currentRunId) !== null}
       />
     </Bubble>,
     ...cards(live),

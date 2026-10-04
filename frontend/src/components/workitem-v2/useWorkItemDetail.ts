@@ -20,6 +20,7 @@ import {
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 import { useAttachmentLimits, useAttachmentStaging } from "./useAttachmentStaging";
+import { useRunActionLock } from "./useRunActionLock";
 import {
   outputColorOf,
   defaultOutputOf,
@@ -79,6 +80,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   // A template version never changes, and neither do the fixed outputs, so each
   // version is read once. A failed read is forgotten, and the next one asks again.
   const versionGraphs = useRef(new Map<string, Promise<VersionGraph>>());
+  const runLock = useRunActionLock();
   const versionOutputs = useRef(new Map<string, Promise<VersionOutputs>>());
   const [dependencies, setDependencies] = useState<WorkItem[]>([]);
   const [allWorkItems, setAllWorkItems] = useState<WorkItem[]>([]);
@@ -962,6 +964,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleCleanupDone,
     handleCleanupBacklog,
     readVersionGraph,
+    runLock,
     handleReclaimRun,
     handlePauseRun,
     handleResumeRun,

@@ -1191,3 +1191,41 @@ describe("RunsPanel abandon shares the run's action slot", () => {
     });
   });
 });
+
+describe("RunsPanel halt/steer/abandon lock the run they act on", () => {
+  test("an abandon started while another run is shown holds the current run", async () => {
+    const abandon = deferred();
+    const current = runWithNode(RUN_A, { status: LoopRunStatus.Completed });
+    const shown = runWithNode(RUN_B, { status: LoopRunStatus.WaitingHuman, completedAt: null });
+    const server = new Map([
+      [RUN_A, current],
+      [RUN_B, shown],
+    ]);
+    vi.spyOn(loopRunService, "getById").mockImplementation(async (id: string) => server.get(id)!);
+    render(
+      <RunsPanel
+        workItem={workItem({ currentLoopRunId: RUN_A, status: WorkItemStatus.HumanFeedback })}
+        runs={[current, shown]}
+        progressText=""
+        onCleanupBacklog={() => abandon.promise}
+        onDeleteRun={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    await screen.findByText("Node of aaaaaaaa");
+    fireEvent.click(runEntry(RUN_B)!);
+    await screen.findByText("Node of bbbbbbbb");
+
+    fireEvent.click(screen.getByRole("button", { name: /^abandon run$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm abandon/i }));
+    await waitFor(() => expect(isDisabled(actionButton(DELETE_RUN))).toBe(false));
+
+    fireEvent.click(runEntry(RUN_A)!);
+    await screen.findByText("Node of aaaaaaaa");
+    expect(isDisabled(actionButton(DELETE_RUN))).toBe(true);
+    await act(async () => {
+      abandon.resolve();
+      await abandon.promise;
+    });
+    await waitFor(() => expect(isDisabled(actionButton(DELETE_RUN))).toBe(false));
+  });
+});

@@ -23,6 +23,7 @@ import {
   type RunEvents,
 } from "./RunDetailSections";
 import type { VersionGraph } from "./useWorkItemDetail";
+import { useRunActionLock, type RunAction, type RunActionLock } from "./useRunActionLock";
 import HaltSteerControls from "./HaltSteerControls";
 import RunCostSummary from "./RunCostSummary";
 
@@ -235,25 +236,16 @@ interface RunsPanelProps {
    * recorded into it. Without it neither is shown.
    */
   readVersionGraph?: (loopTemplateId: string, templateVersion: number) => Promise<VersionGraph>;
+  /**
+   * The dialog's one-action-at-a-time-per-run lock, shared with its other
+   * controls that act on a run. Without it the panel keeps a lock of its own.
+   */
+  runLock?: RunActionLock;
 }
 
-type RunAction =
-  | "pause"
-  | "resume"
-  | "cancel"
-  | "delete"
-  | "retain"
-  | "retry"
-  | "reclaim"
-  | "halt"
-  | "steer"
-  | "abandon";
-
-type RunDetailProps = Omit<RunsPanelProps, "runs"> & {
+type RunDetailProps = Omit<RunsPanelProps, "runs" | "runLock"> & {
   runId: string;
-  /** The action on this run in flight, if any; every action control waits for it. */
-  pending: RunAction | null;
-  onPendingChange: (runId: string, action: RunAction | null) => void;
+  runLock: RunActionLock;
   /** Called once a delete of this run went through. */
   onDeleted: (runId: string) => void;
 };
@@ -280,8 +272,7 @@ function RunDetail({
   onCancelRun,
   onDeleteRun,
   readVersionGraph,
-  pending,
-  onPendingChange,
+  runLock,
   onDeleted,
 }: RunDetailProps) {
   const [runDetail, setRunDetail] = useState<LoopRun | null>(null);
@@ -351,30 +342,21 @@ function RunDetail({
     applied: () => void | Promise<void> = readRun,
   ) => {
     setErrorText("");
-    onPendingChange(runId, kind);
-    try {
+    await runLock.hold(runId, kind, async () => {
       if (await settleAction(action(runId), fallback)) await applied();
-    } finally {
-      onPendingChange(runId, null);
-    }
+    });
   };
+  const pending = runLock.pendingOf(runId);
   const busy = pending !== null;
 
-  // The halt/steer/abandon handlers come from the dialog and handle their own
-  // failures; they only take this run's one-action-at-a-time slot meanwhile.
-  const holding = <A extends unknown[]>(
+  // Halt, steer and abandon act on the work item's current run, which need not
+  // be the run shown here; they hold that run's slot. Their handlers come from
+  // the dialog and handle their own failures.
+  const currentRunId = workItem.currentLoopRunId;
+  const holdingCurrentRun = <A extends unknown[]>(
     kind: RunAction,
     handler?: (...args: A) => void | Promise<unknown>,
-  ) =>
-    handler &&
-    (async (...args: A) => {
-      onPendingChange(runId, kind);
-      try {
-        return await handler(...args);
-      } finally {
-        onPendingChange(runId, null);
-      }
-    });
+  ) => handler && ((...args: A) => runLock.hold(currentRunId, kind, () => handler(...args)));
 
   const handleRetry = (runNodeId: string) =>
     actOnRun(
@@ -570,11 +552,11 @@ function RunDetail({
       <HaltSteerControls
         run={runDetail}
         workItemStatus={workItem.status}
-        onHalt={holding("halt", onHalt)}
-        onResumeSteer={holding("steer", onResumeSteer)}
-        onCleanupDone={holding("abandon", onCleanupDone)}
-        onCleanupBacklog={holding("abandon", onCleanupBacklog)}
-        blocked={busy}
+        onHalt={holdingCurrentRun("halt", onHalt)}
+        onResumeSteer={holdingCurrentRun("steer", onResumeSteer)}
+        onCleanupDone={holdingCurrentRun("abandon", onCleanupDone)}
+        onCleanupBacklog={holdingCurrentRun("abandon", onCleanupBacklog)}
+        blocked={busy || runLock.pendingOf(currentRunId) !== null}
       />
       <div className="wiv2-node-list">
         {runDetail.nodes.length === 0 && <div className="wiv2-empty">No nodes executed yet.</div>}
@@ -616,14 +598,10 @@ function RunDetail({
  * actions, variables, AI sessions and node timeline with each node's events.
  * The only place runs are shown and managed.
  */
-export default function RunsPanel({ runs, ...detailProps }: RunsPanelProps) {
+export default function RunsPanel({ runs, runLock, ...detailProps }: RunsPanelProps) {
   const { workItem } = detailProps;
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  // The action in flight on each run, keyed by run id: one at a time per run, so
-  // a retry, clean-up or delete can never overlap another action on the same
-  // run, and its controls stay blocked until its own request settles, also when
-  // the user leaves the run and comes back to it meanwhile.
-  const [pendingByRun, setPendingByRun] = useState<ReadonlyMap<string, RunAction>>(new Map());
+  const ownRunLock = useRunActionLock();
   // Hides a deleted run until the parent's refetched `runs` drop it, and keeps
   // the selection from falling back to it. Run ids are never reused.
   const [deletedRunIds, setDeletedRunIds] = useState<ReadonlySet<string>>(new Set());
@@ -633,15 +611,6 @@ export default function RunsPanel({ runs, ...detailProps }: RunsPanelProps) {
     [selectedRunId, workItem.currentLoopRunId, visibleRuns[0]?.id].find(
       (id): id is string => !!id && !deletedRunIds.has(id),
     ) ?? null;
-
-  const handlePendingChange = useCallback((runId: string, action: RunAction | null) => {
-    setPendingByRun((prev) => {
-      const next = new Map(prev);
-      if (action) next.set(runId, action);
-      else next.delete(runId);
-      return next;
-    });
-  }, []);
 
   const handleDeleted = useCallback((runId: string) => {
     setDeletedRunIds((prev) => new Set(prev).add(runId));
@@ -681,8 +650,7 @@ export default function RunsPanel({ runs, ...detailProps }: RunsPanelProps) {
             key={effectiveRunId}
             {...detailProps}
             runId={effectiveRunId}
-            pending={pendingByRun.get(effectiveRunId) ?? null}
-            onPendingChange={handlePendingChange}
+            runLock={runLock ?? ownRunLock}
             onDeleted={handleDeleted}
           />
         ) : (
