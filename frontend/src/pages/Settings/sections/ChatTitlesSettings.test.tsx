@@ -297,3 +297,39 @@ describe("Smart session titles switch", () => {
     });
   });
 });
+
+describe("Title attempts", () => {
+  test("are shut while the switch is off, and save once it is on", async () => {
+    vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
+      key,
+      value:
+        key === authServices.ChatTitleSettingKeys.SmartTitles
+          ? "false"
+          : key === authServices.ChatTitleSettingKeys.TitleMaxAttempts
+            ? "3"
+            : "",
+    }));
+    const put = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockImplementation(async (key: string, value: string) => ({ key, value }));
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
+
+    render(<ChatTitlesSettings />);
+
+    const attempts = screen.getByLabelText("Title attempts") as HTMLInputElement;
+    const save = () =>
+      screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement;
+    await waitFor(() => expect(attempts.value).toBe("3"));
+    expect(attempts.disabled).toBe(true);
+    expect(save().disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /smart session titles/i }));
+    await waitFor(() => expect(attempts.disabled).toBe(false));
+
+    fireEvent.change(attempts, { target: { value: "5" } });
+    fireEvent.click(save());
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.TitleMaxAttempts, "5"),
+    );
+  });
+});

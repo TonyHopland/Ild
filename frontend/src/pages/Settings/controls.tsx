@@ -184,6 +184,9 @@ interface NumericSettingFieldProps {
   unit?: string;
   /** Help text beside the field. */
   children?: React.ReactNode;
+  disabled?: boolean;
+  /** The Save button's accessible name, where a card holds more than one Save. */
+  saveLabel?: string;
 }
 
 /**
@@ -202,6 +205,8 @@ export function NumericSettingField({
   minLabel,
   unit,
   children,
+  disabled = false,
+  saveLabel,
 }: NumericSettingFieldProps) {
   const [saved, setSaved] = useState<number>(fallback);
   const [draft, setDraft] = useState<string>(String(fallback));
@@ -258,14 +263,16 @@ export function NumericSettingField({
         max={max}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
+        disabled={disabled}
         style={{ width: "5rem" }}
       />
       {unit && <span className="settings-row-help">{unit}</span>}
       <button
         type="button"
         className="btn btn-primary"
+        aria-label={saveLabel}
         onClick={() => void save()}
-        disabled={saving || draft === String(saved)}
+        disabled={disabled || saving || draft === String(saved)}
       >
         Save
       </button>

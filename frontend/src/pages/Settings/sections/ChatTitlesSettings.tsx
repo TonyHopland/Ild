@@ -3,7 +3,7 @@ import { AiProviderTagField } from "../../../components/AiProviderTagField";
 import { aiProviderService, ChatTitleSettingKeys, settingsService } from "../../../services/auth";
 import type { AiProvider } from "../../../types";
 import { resolveProviderForTag } from "../../../utils/providerTags";
-import { SettingRow, Switch, useToggleSetting } from "../controls";
+import { NumericSettingField, SettingRow, Switch, useToggleSetting } from "../controls";
 
 const SmartTitlesLabel = "Smart session titles";
 
@@ -138,6 +138,17 @@ export default function ChatTitlesSettings() {
           </button>
         </div>
       </div>
+      <NumericSettingField
+        settingKey={ChatTitleSettingKeys.TitleMaxAttempts}
+        label="Title attempts"
+        min={1}
+        max={10}
+        fallback={3}
+        disabled={off}
+        saveLabel="Save title attempts"
+      >
+        Try again after each reply until the chat has this many messages.
+      </NumericSettingField>
     </section>
   );
 }

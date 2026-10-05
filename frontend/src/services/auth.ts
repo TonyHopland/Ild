@@ -911,6 +911,8 @@ export const SchedulerSettingKeys = {
 export const ChatTitleSettingKeys = {
   SmartTitles: "chat.smartTitles",
   TitleProviderTag: "chat.titleProviderTag",
+  /** How many of a chat's messages may each be followed by a title attempt while it is untitled. */
+  TitleMaxAttempts: "chat.titleMaxAttempts",
 } as const;
 
 /** How long a sign-in survives. `0` disables that limit. */
