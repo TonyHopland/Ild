@@ -346,9 +346,19 @@ public sealed class ChatService : IChatService
         await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct);
 
         // Not awaited: a title model never holds up the turn.
-        if (nextSeq == 0 && !interrupted && result.Success)
-            _ = _titles?.Schedule(session.Id, openWorkItemId);
+        if (_titles is not null && !interrupted && result.Success
+            && await IsFirstUsableReplyOfUntitledChatAsync(session.Id, nextSeq + 1))
+            _ = _titles.Schedule(session.Id, openWorkItemId);
     }
+
+    /// <summary>Whether the reply at <paramref name="replySequence"/> is the chat's first successful one, on a chat still on its fallback title.</summary>
+    private async Task<bool> IsFirstUsableReplyOfUntitledChatAsync(Guid chatSessionId, int replySequence)
+        => await _db.ChatSessions.AsNoTracking()
+               .AnyAsync(c => c.Id == chatSessionId && c.TitleSource == ChatTitleSource.Fallback, CancellationToken.None)
+           && !await _db.ChatMessages.AsNoTracking()
+               .Where(m => m.ChatSessionId == chatSessionId && m.Sequence < replySequence)
+               .Where(ChatTitleGenerator.IsUsableReply)
+               .AnyAsync(CancellationToken.None);
 
     /// <summary>
     /// Build the per-turn Chat Context (ADR-0011): a small preamble pushed into the

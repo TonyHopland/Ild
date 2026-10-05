@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data;
@@ -10,9 +11,13 @@ using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
-/// <summary>Titles a chat from its first exchange; saved only over the fallback, so a rename always wins.</summary>
+/// <summary>Titles a chat from its first successful exchange; saved only over the fallback, so a rename always wins.</summary>
 public sealed class ChatTitleGenerator
 {
+    /// <summary>A reply worth titling a chat from: neither interrupted nor a chat error.</summary>
+    public static readonly Expression<Func<ChatMessage, bool>> IsUsableReply =
+        m => m.Role == "assistant" && !m.Interrupted && !m.Content.StartsWith("[chat-error]");
+
     private readonly AppDbContext _db;
     private readonly IProviderStore _providers;
     private readonly IAgentAdapterRegistry _registry;
@@ -57,14 +62,20 @@ public sealed class ChatTitleGenerator
         }
         if (session.TitleSource != ChatTitleSource.Fallback) return;
 
-        var firstExchange = await _db.ChatMessages.AsNoTracking()
-            .Where(m => m.ChatSessionId == chatSessionId && m.Sequence <= 1)
+        var first = await _db.ChatMessages.AsNoTracking()
+            .Where(m => m.ChatSessionId == chatSessionId && m.Role == "user")
             .OrderBy(m => m.Sequence)
-            .Select(m => new { m.Role, m.Content })
-            .ToListAsync(ct);
-        if (firstExchange is not [{ Role: "user" } first, { Role: "assistant" } reply])
+            .Select(m => m.Content)
+            .FirstOrDefaultAsync(ct);
+        var reply = await _db.ChatMessages.AsNoTracking()
+            .Where(m => m.ChatSessionId == chatSessionId)
+            .Where(IsUsableReply)
+            .OrderBy(m => m.Sequence)
+            .Select(m => m.Content)
+            .FirstOrDefaultAsync(ct);
+        if (first is null || reply is null)
         {
-            _log.LogWarning("Chat {ChatSessionId} has no first exchange to title it from", chatSessionId);
+            _log.LogWarning("Chat {ChatSessionId} has no successful exchange to title it from", chatSessionId);
             return;
         }
 
@@ -85,7 +96,7 @@ public sealed class ChatTitleGenerator
         }
 
         var adapter = _registry.ResolveForProvider(provider)();
-        var prompt = ChatTitles.BuildPrompt(first.Content, reply.Content, await WorkItemTitleAsync(openWorkItemId, ct));
+        var prompt = ChatTitles.BuildPrompt(first, reply, await WorkItemTitleAsync(openWorkItemId, ct));
         var result = await AskAsync(adapter, provider, prompt, session.ScratchPath, ct);
 
         if (!result.Success)
