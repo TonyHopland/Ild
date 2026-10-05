@@ -109,17 +109,25 @@ public static partial class ChatTitles
         return text[..end];
     }
 
+    /// <summary>
+    /// <paramref name="text"/> without NUL characters, which PostgreSQL text cannot
+    /// hold. Every title is written by a conditional update, past the save-time
+    /// scrub in AppDbContext, so each one is cleaned here first.
+    /// </summary>
+    public static string WithoutNul(string text) => text.Replace("\0", string.Empty);
+
     private static bool IsQuote(char c) => c is '"' or '\'' or '`' or '“' or '”' or '‘' or '’' or '«' or '»';
 
     /// <summary>
     /// The non-empty lines of <paramref name="markdown"/> as plain text, each with
     /// its whitespace collapsed: code fences dropped (their contents kept), block
     /// markers taken off the front of each line, images and links reduced to their
-    /// text, and emphasis and code markers removed.
+    /// text, and emphasis and code markers removed. NUL characters go too; see
+    /// <see cref="WithoutNul"/>.
     /// </summary>
     private static IEnumerable<string> PlainLines(string markdown)
     {
-        foreach (var raw in markdown.Split('\n'))
+        foreach (var raw in WithoutNul(markdown).Split('\n'))
         {
             if (CodeFence().IsMatch(raw)) continue;
 

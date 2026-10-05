@@ -1,4 +1,5 @@
 using ILD.Data.DTOs;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -122,7 +123,9 @@ public class ChatController : ControllerBase
     public async Task<IActionResult> Rename(Guid id, [FromBody] RenameChatRequest request, CancellationToken ct)
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
-        var name = request.Name?.Trim();
+        // NUL goes before the length is judged: the rename is a conditional update,
+        // which the save-time scrub never sees.
+        var name = request.Name is null ? null : ChatTitles.WithoutNul(request.Name).Trim();
         if (string.IsNullOrEmpty(name) || name.Length > RenameChatRequest.MaxNameLength)
             return BadRequest(new { error = $"A name of 1 to {RenameChatRequest.MaxNameLength} characters is required." });
 
