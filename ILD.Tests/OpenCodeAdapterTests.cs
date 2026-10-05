@@ -662,9 +662,11 @@ public class OpenCodeAdapterTests
             Assert.True(result.Success, result.Error);
             using var config = JsonDocument.Parse(result.Output!);
             Assert.False(config.RootElement.TryGetProperty("mcp", out _));
-            Assert.All(
-                config.RootElement.GetProperty("permission").EnumerateObject(),
-                permission => Assert.Equal("deny", permission.Value.GetString()));
+            var permissions = config.RootElement.GetProperty("permission").EnumerateObject().ToList();
+            Assert.All(permissions, permission => Assert.Equal("deny", permission.Value.GetString()));
+            // opencode applies the last matching rule, so a wildcard deny first leaves no
+            // unnamed tool (todowrite, among others) on its default.
+            Assert.Equal("*", permissions[0].Name);
         }
         finally
         {

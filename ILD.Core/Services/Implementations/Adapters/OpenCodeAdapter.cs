@@ -728,7 +728,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     },
                 },
             },
-            ["permission"] = BuildPermissions(enabled, grantExternalDirectory),
+            ["permission"] = noTools ? BuildNoToolPermissions() : BuildPermissions(enabled, grantExternalDirectory),
         };
 
         // Inject MCP server entries so agents can reach tools they otherwise
@@ -758,6 +758,17 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         var configJson = JsonSerializer.Serialize(config);
         var modelRef = $"{providerId}/{modelId}";
         return (modelRef, configJson);
+    }
+
+    // opencode applies the last rule that matches, so the wildcard comes first: it
+    // reaches tools the named list does not (todowrite, among others) and the named
+    // denies after it change nothing.
+    private static Dictionary<string, object?> BuildNoToolPermissions()
+    {
+        var permissions = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["*"] = "deny" };
+        foreach (var name in BuildPermissions([]).Keys)
+            permissions[name] = "deny";
+        return permissions;
     }
 
     private static Dictionary<string, object?> BuildPermissions(HashSet<string> enabled, bool grantExternalDirectory = false)
