@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
@@ -724,6 +725,69 @@ public class OpenCodeAdapterTests
                 Assert.Equal(["delete ses_plain"], File.ReadAllLines(deleted));
             else
                 Assert.False(File.Exists(deleted));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_deletes_the_session_of_a_NoTools_call_whose_id_was_printed_but_unread_at_the_timeout()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-unread-session-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var deleted = Path.Combine(worktreeDir, "deleted");
+        var go = Path.Combine(worktreeDir, "go");
+        using (var mkfifo = Process.Start("mkfifo", go)) mkfifo.WaitForExit();
+        var scriptPath = Path.Combine(worktreeDir, "opencode.sh");
+        // The id line is written only once the reader has taken the first line and is
+        // held in the progress callback, so it is still unread when the call times out.
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            $"if [ \"$1\" = session ]; then echo \"$2 $3\" >> '{deleted}'; exit 0; fi\n" +
+            "echo '{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"first\"}}'\n" +
+            $"read released < '{go}'\n" +
+            "echo '{\"type\":\"step_start\",\"sessionID\":\"ses_unread\"}'\n" +
+            "echo '{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"id printed\"}}' >&2\n" +
+            "exec sleep 30\n");
+        MakeExecutable(scriptPath);
+        using var timeout = new CancellationTokenSource();
+        var idPrinted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        try
+        {
+            var result = await new OpenCodeAdapter().ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Name = "test-provider",
+                    Type = "opencode",
+                    BaseUrl = "https://api.example.test/v1",
+                    Model = "gpt-5",
+                    Config = JsonSerializer.Serialize(new { binaryPath = scriptPath }),
+                },
+                Prompt: "prompt",
+                RunContext: new LoopRunContext(Guid.NewGuid(), string.Empty, string.Empty, string.Empty, worktreeDir, string.Empty, new List<string>(), null),
+                ExecutionCount: 0,
+                Cancel: timeout.Token,
+                ProgressCallback: async text =>
+                {
+                    if (text.Contains("id printed"))
+                    {
+                        idPrinted.TrySetResult();
+                    }
+                    else if (text.Contains("first"))
+                    {
+                        await File.WriteAllTextAsync(go, "go\n");
+                        await idPrinted.Task;
+                        timeout.Cancel();
+                    }
+                },
+                ToolAllowlist: ["read"],
+                NoTools: true));
+
+            Assert.False(result.Success);
+            Assert.Equal(["delete ses_unread"], File.ReadAllLines(deleted));
         }
         finally
         {

@@ -72,6 +72,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     }
 
     private static readonly TimeSpan SessionDeleteTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan StdoutDrainTimeout = TimeSpan.FromSeconds(5);
 
     private string ResolveBinaryPath(AgentExecutionContext ctx)
         => AiProviderConfig.Parse(ctx.Provider.Config)
@@ -160,7 +161,10 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     FireSessionId(ctx.OnSessionId, sid);
                 };
 
-            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, reportSessionId, ctx.Cancel);
+            // A plain call's session is deleted afterwards, so its stdout outlives the
+            // call's token: a session id printed before a timeout is still read.
+            using var drain = onSessionSeen is null ? null : new CancellationTokenSource();
+            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, reportSessionId, drain?.Token ?? ctx.Cancel);
             var stderrTask = ReadAndStreamLinesAsync(p.StandardError, stderrLines, stderrLock, ctx.ProgressCallback, null, ctx.Cancel);
 
             try
@@ -169,7 +173,14 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                return NodeExecutionResult.Fail(KillAndDescribe(p, "opencode timed out"));
+                var timedOut = KillAndDescribe(p, "opencode timed out");
+                if (drain is not null)
+                {
+                    drain.CancelAfter(StdoutDrainTimeout);
+                    try { await stdoutTask; }
+                    catch (OperationCanceledException) { }
+                }
+                return NodeExecutionResult.Fail(timedOut);
             }
 
             string stdout, stderr;
