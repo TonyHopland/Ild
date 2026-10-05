@@ -253,3 +253,27 @@ describe("a rename being saved", () => {
     await screen.findByText("Deploy loop");
   });
 });
+
+describe("a rename draft", () => {
+  test("cancelled with Escape leaves the page's own Escape alone, so an open work item stays open", async () => {
+    server = [summary("a", "Alpha")];
+    const pageEscape = vi.fn();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") pageEscape();
+    };
+    document.addEventListener("keydown", onKey);
+    try {
+      render(bubble());
+      await openPanel();
+      await screen.findByText("Alpha");
+
+      fireEvent.keyDown(startRenamingRow("Alpha"), { key: "Escape", code: "Escape" });
+
+      expect(renameInput()).toBeUndefined();
+      expect(pageEscape).not.toHaveBeenCalled();
+      expect(chatService.rename).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", onKey);
+    }
+  });
+});

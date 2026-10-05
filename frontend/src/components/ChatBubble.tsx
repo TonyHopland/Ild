@@ -112,7 +112,10 @@ function RenameForm({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
+          if (e.key !== "Escape") return;
+          // A page under the chat, such as an open work item, closes on Escape too.
+          e.stopPropagation();
+          onClose();
         }}
       />
       <button type="submit" className="chat-link-btn" disabled={empty || saving || blocked}>
