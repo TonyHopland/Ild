@@ -215,4 +215,41 @@ describe("a rename being saved", () => {
     await waitFor(() => expect(chatService.rename).toHaveBeenCalledTimes(2));
     expect(chatService.rename).toHaveBeenLastCalledWith("a", "Second name");
   });
+
+  test.each([
+    ["stalls", () => new Promise<ChatSessionSummary[]>(() => {})],
+    ["fails", () => Promise.reject(new Error("history unavailable"))],
+  ])(
+    "taken by the server is shown at once, even when the re-read after it %s",
+    async (_, reread) => {
+      server = [summary("a", "Alpha")];
+      render(bubble());
+      await openPanel();
+      await screen.findByText("Alpha");
+      chatService.listHistory.mockImplementation(reread);
+
+      const input = startRenamingRow("Alpha");
+      fireEvent.change(input, { target: { value: "Deploy loop wiring" } });
+      pressEnter(input);
+
+      await screen.findByText("Deploy loop wiring");
+      await waitFor(() => expect(renameInput()).toBeUndefined());
+      expect(screen.queryByText("Alpha")).toBeNull();
+    },
+  );
+
+  test("is sent and shown as the server stores it: trimmed, without NUL characters", async () => {
+    server = [summary("a", "Alpha")];
+    render(bubble());
+    await openPanel();
+    await screen.findByText("Alpha");
+    chatService.listHistory.mockImplementation(() => new Promise<ChatSessionSummary[]>(() => {}));
+
+    const input = startRenamingRow("Alpha");
+    fireEvent.change(input, { target: { value: "  Deploy\u0000 loop  " } });
+    pressEnter(input);
+
+    await waitFor(() => expect(chatService.rename).toHaveBeenCalledWith("a", "Deploy loop"));
+    await screen.findByText("Deploy loop");
+  });
 });

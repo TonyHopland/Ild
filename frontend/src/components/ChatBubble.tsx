@@ -58,6 +58,9 @@ function UnreadDot() {
 /** Renames a chat; false when another rename of it is still on its way. */
 type RenameChat = (chatSessionId: string, name: string) => Promise<boolean>;
 
+/** The name the server stores for a rename: without NUL characters, trimmed. */
+const storedName = (draft: string) => draft.replace(/\0/g, "").trim();
+
 /** One edit of a chat's title: its draft, save and error go with it when it closes. */
 function RenameForm({
   chatSessionId,
@@ -75,10 +78,10 @@ function RenameForm({
   const [draft, setDraft] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const empty = draft.trim() === "";
+  const empty = storedName(draft) === "";
 
   const save = async () => {
-    const name = draft.trim();
+    const name = storedName(draft);
     if (!name || saving || blocked) return;
     setSaving(true);
     setError(null);
@@ -1029,8 +1032,9 @@ export default function ChatBubble() {
     setHistory([]);
   };
 
-  // The edit's own form closes once the list holds the new title; a re-read that
-  // fails still closes it, the rename having been taken.
+  // A rename the server took is shown at once, like a delete; the re-read that
+  // follows only reconciles, so one that fails or stalls cannot hold the form open
+  // or leave the old title on screen.
   const renameChat = useCallback<RenameChat>(
     async (chatSessionId, name) => {
       if (renamesInFlightRef.current.has(chatSessionId)) return false;
@@ -1041,7 +1045,9 @@ export default function ChatBubble() {
         markRenameInFlight(chatSessionId, false);
       }
       historyEpochRef.current += 1;
-      await refreshHistory().catch((err) => console.error(err));
+      setHistory((rows) => rows.map((c) => (c.id === chatSessionId ? { ...c, name } : c)));
+      setSession((open) => (open?.id === chatSessionId ? { ...open, name } : open));
+      void refreshHistory().catch((err) => console.error(err));
       return true;
     },
     [markRenameInFlight, refreshHistory],
