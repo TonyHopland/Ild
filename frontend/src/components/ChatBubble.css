@@ -94,6 +94,14 @@
   cursor: pointer;
 }
 
+.chat-panel-heading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .chat-panel-title {
   font-weight: 600;
   color: #e0e0e0;

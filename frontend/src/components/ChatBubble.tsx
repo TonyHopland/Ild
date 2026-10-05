@@ -55,37 +55,48 @@ function UnreadDot() {
   return <span className="chat-unread-dot" role="img" aria-label="New messages" />;
 }
 
-/** A chat's title being edited in place, in the header or in its Past-chats row. */
-interface RenameDraft {
-  /** Which draft this is: a request answering an earlier one leaves this one alone. */
-  draftId: number;
-  chatSessionId: string;
-  draft: string;
-  saving: boolean;
-  error: string | null;
-}
+/** Renames a chat; false when another rename of it is still on its way. */
+type RenameChat = (chatSessionId: string, name: string) => Promise<boolean>;
 
+/** One edit of a chat's title: its draft, save and error go with it when it closes. */
 function RenameForm({
-  rename,
-  onChange,
-  onSave,
-  onCancel,
+  chatSessionId,
+  initial,
+  renameChat,
   blocked,
+  onClose,
 }: {
-  rename: RenameDraft;
-  onChange: (draft: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
-  /** Another rename of the same chat is still on its way. */
+  chatSessionId: string;
+  initial: string;
+  renameChat: RenameChat;
   blocked: boolean;
+  onClose: () => void;
 }) {
-  const empty = rename.draft.trim() === "";
+  const [draft, setDraft] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const empty = draft.trim() === "";
+
+  const save = async () => {
+    const name = draft.trim();
+    if (!name || saving || blocked) return;
+    setSaving(true);
+    setError(null);
+    try {
+      if (await renameChat(chatSessionId, name)) onClose();
+      else setSaving(false);
+    } catch (e) {
+      setSaving(false);
+      setError((e as { message?: string })?.message ?? "Could not rename chat.");
+    }
+  };
+
   return (
     <form
       className="chat-rename"
       onSubmit={(e) => {
         e.preventDefault();
-        onSave();
+        void save();
       }}
     >
       <input
@@ -94,25 +105,135 @@ function RenameForm({
         maxLength={120}
         autoFocus
         // An edit made mid-save would be closed away unsaved when the save returns.
-        readOnly={rename.saving}
-        value={rename.draft}
-        onChange={(e) => onChange(e.target.value)}
+        readOnly={saving}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Escape") onCancel();
+          if (e.key === "Escape") onClose();
         }}
       />
-      <button type="submit" className="chat-link-btn" disabled={empty || rename.saving || blocked}>
+      <button type="submit" className="chat-link-btn" disabled={empty || saving || blocked}>
         Save
       </button>
-      <button type="button" className="chat-link-btn" onClick={onCancel}>
+      <button type="button" className="chat-link-btn" onClick={onClose}>
         Cancel
       </button>
-      {rename.error && (
+      {error && (
         <span className="chat-rename-error" role="alert">
-          {rename.error}
+          {error}
         </span>
       )}
     </form>
+  );
+}
+
+/**
+ * Which edit of a title is open, if any. Each edit is a fresh form keyed by its
+ * generation, and only that edit can close itself.
+ */
+function useTitleEdit() {
+  const [editing, setEditing] = useState<number | null>(null);
+  const generation = useRef(0);
+  return {
+    editing,
+    begin: () => setEditing(++generation.current),
+    closer: (edit: number) => () => setEditing((current) => (current === edit ? null : current)),
+  };
+}
+
+/** The open chat's title in the header, renamable in place. Keyed by the chat. */
+function ChatHeaderTitle({
+  chatSessionId,
+  title,
+  renameChat,
+  blocked,
+}: {
+  chatSessionId: string;
+  title: string | null;
+  renameChat: RenameChat;
+  blocked: boolean;
+}) {
+  const { editing, begin, closer } = useTitleEdit();
+  return (
+    <div className="chat-panel-heading">
+      {editing !== null ? (
+        <RenameForm
+          key={editing}
+          chatSessionId={chatSessionId}
+          initial={title ?? ""}
+          renameChat={renameChat}
+          blocked={blocked}
+          onClose={closer(editing)}
+        />
+      ) : (
+        <>
+          <span className="chat-panel-title">{title ?? "AI Chat"}</span>
+          <button type="button" className="chat-link-btn" onClick={begin}>
+            Rename
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** One Past-chats row, renamable in place. Keyed by the chat. */
+function PastChatRow({
+  chat,
+  onOpen,
+  onDelete,
+  renameChat,
+  blocked,
+}: {
+  chat: ChatSessionSummary;
+  onOpen: () => void;
+  onDelete: () => void;
+  renameChat: RenameChat;
+  blocked: boolean;
+}) {
+  const { editing, begin, closer } = useTitleEdit();
+  const name = chat.name ?? "New chat";
+  return (
+    <li className="chat-history-row">
+      {editing !== null ? (
+        <RenameForm
+          key={editing}
+          chatSessionId={chat.id}
+          initial={chat.name ?? ""}
+          renameChat={renameChat}
+          blocked={blocked}
+          onClose={closer(editing)}
+        />
+      ) : (
+        <>
+          <button type="button" className="chat-history-open" onClick={onOpen}>
+            <span className="chat-history-title">
+              <span className="chat-history-name">{name}</span>
+              {chat.hasUnread && <UnreadDot />}
+            </span>
+            <span className="chat-history-date">
+              {new Date(chat.updatedAt ?? chat.createdAt).toLocaleString()}
+            </span>
+          </button>
+          <button
+            type="button"
+            className="chat-link-btn"
+            aria-label={`Rename chat ${name}`}
+            onClick={begin}
+          >
+            ✎
+          </button>
+          <button
+            type="button"
+            className="chat-link-btn chat-danger"
+            aria-label={`Delete chat ${name}`}
+            onClick={onDelete}
+          >
+            ✕
+          </button>
+        </>
+      )}
+    </li>
   );
 }
 
@@ -200,18 +321,15 @@ export default function ChatBubble() {
   // chat. `confirmDeleteAll` gates the wipe-all action behind a confirmation.
   const [history, setHistory] = useState<ChatSessionSummary[]>([]);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
-  // One title edited at a time; every change of view throws it away unsaved.
-  const [rename, setRename] = useState<RenameDraft | null>(null);
-  const renameDraftRef = useRef(0);
   // Per chat, not per draft: a draft cancelled mid-save leaves its request running.
   // The ref is the synchronous check; the state disables Save.
   const renamesInFlightRef = useRef(new Set<string>());
   const [renamesInFlight, setRenamesInFlight] = useState<ReadonlySet<string>>(new Set());
-  const markRenameInFlight = (chatSessionId: string, inFlight: boolean) => {
+  const markRenameInFlight = useCallback((chatSessionId: string, inFlight: boolean) => {
     if (inFlight) renamesInFlightRef.current.add(chatSessionId);
     else renamesInFlightRef.current.delete(chatSessionId);
     setRenamesInFlight(new Set(renamesInFlightRef.current));
-  };
+  }, []);
 
   // Start form
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -712,7 +830,6 @@ export default function ChatBubble() {
       return;
     }
     const visit = ++visitRef.current;
-    setRename(null);
     setError(null);
     try {
       const created = await chatService.start(providerId, Array.from(tools));
@@ -855,7 +972,6 @@ export default function ChatBubble() {
   // chat re-sorts to the top with its freshly-derived name.
   const backToList = useCallback(() => {
     visitRef.current += 1;
-    setRename(null);
     setSession(null);
     setMessages([]);
     clearStream();
@@ -870,7 +986,6 @@ export default function ChatBubble() {
   // Resume a past chat: load its transcript and continue the same agent session.
   const resumeChat = async (id: string) => {
     const visit = ++visitRef.current;
-    setRename(null);
     setError(null);
     try {
       const resumed = await chatService.getById(id);
@@ -901,7 +1016,6 @@ export default function ChatBubble() {
     }
     historyEpochRef.current += 1;
     setHistory((prev) => prev.filter((c) => c.id !== id));
-    setRename((current) => (current?.chatSessionId === id ? null : current));
   };
 
   const deleteAllChats = async () => {
@@ -913,58 +1027,24 @@ export default function ChatBubble() {
     }
     historyEpochRef.current += 1;
     setHistory([]);
-    setRename(null);
   };
 
-  const beginRename = (chatSessionId: string, name: string) => {
-    setRename({
-      draftId: ++renameDraftRef.current,
-      chatSessionId,
-      draft: name,
-      saving: false,
-      error: null,
-    });
-  };
-
-  const saveRename = async () => {
-    if (!rename) return;
-    const name = rename.draft.trim();
-    if (!name) return;
-    const { draftId, chatSessionId } = rename;
-    if (renamesInFlightRef.current.has(chatSessionId)) return;
-    markRenameInFlight(chatSessionId, true);
-    // Only the draft that sent the request is touched by its answer: one opened
-    // since — on this chat or another — is the user's newer intent.
-    const settle = (next: (draft: RenameDraft) => RenameDraft | null) =>
-      setRename((current) => (current?.draftId === draftId ? next(current) : current));
-    settle((current) => ({ ...current, saving: true, error: null }));
-    try {
-      await chatService.rename(chatSessionId, name);
-    } catch (e) {
-      settle((current) => ({
-        ...current,
-        saving: false,
-        error: (e as { message?: string })?.message ?? "Could not rename chat.",
-      }));
-      return;
-    } finally {
-      markRenameInFlight(chatSessionId, false);
-    }
-    // Closed once the list holds the new title, so the old one never shows again in
-    // between; a re-read that fails still closes it, the rename having been taken.
-    historyEpochRef.current += 1;
-    await refreshHistory().catch((err) => console.error(err));
-    settle(() => null);
-  };
-
-  const renameForm = (current: RenameDraft) => (
-    <RenameForm
-      rename={current}
-      onChange={(draft) => setRename((editing) => editing && { ...editing, draft })}
-      onSave={() => void saveRename()}
-      onCancel={() => setRename(null)}
-      blocked={renamesInFlight.has(current.chatSessionId)}
-    />
+  // The edit's own form closes once the list holds the new title; a re-read that
+  // fails still closes it, the rename having been taken.
+  const renameChat = useCallback<RenameChat>(
+    async (chatSessionId, name) => {
+      if (renamesInFlightRef.current.has(chatSessionId)) return false;
+      markRenameInFlight(chatSessionId, true);
+      try {
+        await chatService.rename(chatSessionId, name);
+      } finally {
+        markRenameInFlight(chatSessionId, false);
+      }
+      historyEpochRef.current += 1;
+      await refreshHistory().catch((err) => console.error(err));
+      return true;
+    },
+    [markRenameInFlight, refreshHistory],
   );
 
   // The server's current title for the open chat: the history row, which every
@@ -1007,21 +1087,18 @@ export default function ChatBubble() {
       }}
     >
       <div className="chat-panel-header" onPointerDown={startHeaderDrag}>
-        {session && rename?.chatSessionId === session.id ? (
-          renameForm(rename)
+        {session ? (
+          <ChatHeaderTitle
+            key={session.id}
+            chatSessionId={session.id}
+            title={sessionTitle}
+            renameChat={renameChat}
+            blocked={renamesInFlight.has(session.id)}
+          />
         ) : (
-          <span className="chat-panel-title">{sessionTitle ?? "AI Chat"}</span>
+          <span className="chat-panel-title">AI Chat</span>
         )}
         <div className="chat-panel-header-actions">
-          {session && rename?.chatSessionId !== session.id && (
-            <button
-              type="button"
-              className="chat-link-btn"
-              onClick={() => beginRename(session.id, sessionTitle ?? "")}
-            >
-              Rename
-            </button>
-          )}
           {session && (
             <button type="button" className="chat-link-btn" onClick={backToList}>
               ← Back
@@ -1116,45 +1193,16 @@ export default function ChatBubble() {
                 )}
               </div>
               <ul className="chat-history-list">
-                {history.map((c) =>
-                  rename?.chatSessionId === c.id ? (
-                    <li key={c.id} className="chat-history-row">
-                      {renameForm(rename)}
-                    </li>
-                  ) : (
-                    <li key={c.id} className="chat-history-row">
-                      <button
-                        type="button"
-                        className="chat-history-open"
-                        onClick={() => void resumeChat(c.id)}
-                      >
-                        <span className="chat-history-title">
-                          <span className="chat-history-name">{c.name ?? "New chat"}</span>
-                          {c.hasUnread && <UnreadDot />}
-                        </span>
-                        <span className="chat-history-date">
-                          {new Date(c.updatedAt ?? c.createdAt).toLocaleString()}
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        className="chat-link-btn"
-                        aria-label={`Rename chat ${c.name ?? "New chat"}`}
-                        onClick={() => beginRename(c.id, c.name ?? "")}
-                      >
-                        ✎
-                      </button>
-                      <button
-                        type="button"
-                        className="chat-link-btn chat-danger"
-                        aria-label={`Delete chat ${c.name ?? "New chat"}`}
-                        onClick={() => void deleteChat(c.id)}
-                      >
-                        ✕
-                      </button>
-                    </li>
-                  ),
-                )}
+                {history.map((c) => (
+                  <PastChatRow
+                    key={c.id}
+                    chat={c}
+                    onOpen={() => void resumeChat(c.id)}
+                    onDelete={() => void deleteChat(c.id)}
+                    renameChat={renameChat}
+                    blocked={renamesInFlight.has(c.id)}
+                  />
+                ))}
               </ul>
             </div>
           )}
