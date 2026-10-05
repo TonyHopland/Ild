@@ -212,18 +212,26 @@ export function NumericSettingField({
   const [draft, setDraft] = useState<string>(String(fallback));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // An edit or a save outranks a first read still on its way, which would put back
+  // an older value over it.
+  const touchedRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
+    touchedRef.current = false;
     void settingsService
       .get(settingKey)
       .then((s) => {
         const n = parseInt(s.value, 10);
-        if (Number.isNaN(n)) return;
+        if (cancelled || touchedRef.current || Number.isNaN(n)) return;
         setSaved(n);
         setDraft(String(n));
       })
       // Unreachable API: leave the default showing rather than an empty box.
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [settingKey]);
 
   const save = async () => {
@@ -234,6 +242,7 @@ export function NumericSettingField({
     }
     setError(null);
     setSaving(true);
+    touchedRef.current = true;
     try {
       await settingsService.put(settingKey, String(n));
       setSaved(n);
@@ -262,7 +271,10 @@ export function NumericSettingField({
         min={min}
         max={max}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          touchedRef.current = true;
+          setDraft(e.target.value);
+        }}
         disabled={disabled}
         style={{ width: "5rem" }}
       />

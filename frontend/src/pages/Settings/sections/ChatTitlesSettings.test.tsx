@@ -332,4 +332,39 @@ describe("Title attempts", () => {
       expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.TitleMaxAttempts, "5"),
     );
   });
+
+  test("keep a value saved before their first read arrives", async () => {
+    let answer!: () => void;
+    vi.spyOn(authServices.settingsService, "get").mockImplementation((key: string) =>
+      key === authServices.ChatTitleSettingKeys.TitleMaxAttempts
+        ? new Promise((resolve) => {
+            answer = () => resolve({ key, value: "3" });
+          })
+        : Promise.resolve({
+            key,
+            value: key === authServices.ChatTitleSettingKeys.SmartTitles ? "true" : "",
+          }),
+    );
+    const put = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockImplementation(async (key: string, value: string) => ({ key, value }));
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
+
+    render(<ChatTitlesSettings />);
+
+    const attempts = screen.getByLabelText("Title attempts") as HTMLInputElement;
+    await waitFor(() => expect(attempts.disabled).toBe(false));
+    fireEvent.change(attempts, { target: { value: "5" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save title attempts" }));
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.TitleMaxAttempts, "5"),
+    );
+
+    await act(async () => answer());
+
+    expect(attempts.value).toBe("5");
+    expect(
+      (screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
 });
