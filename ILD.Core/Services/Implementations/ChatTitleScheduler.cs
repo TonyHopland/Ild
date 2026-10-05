@@ -1,11 +1,13 @@
-using System.Collections.Concurrent;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
-/// <summary>Runs each title job in its own scope, off the turn, within a timeout.</summary>
+/// <summary>
+/// Runs each title job in its own scope, off the turn, within a timeout. One job runs
+/// per chat; a reply arriving meanwhile waits, the newest one only, and runs next.
+/// </summary>
 public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
@@ -14,7 +16,17 @@ public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
     private readonly ILogger<ChatTitleScheduler> _log;
     private readonly TimeSpan _timeout;
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly ConcurrentDictionary<Guid, Task> _running = new();
+    private readonly object _gate = new();
+    // A chat is a key while its job runs; the value is the reply waiting to run next.
+    private readonly Dictionary<Guid, Job?> _chats = new();
+    private bool _disposed;
+
+    private sealed class Job(string? openWorkItemId, int replySequence)
+    {
+        public string? OpenWorkItemId { get; set; } = openWorkItemId;
+        public int ReplySequence { get; set; } = replySequence;
+        public TaskCompletionSource Done { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
     public ChatTitleScheduler(IServiceScopeFactory scopes, ILogger<ChatTitleScheduler> log, TimeSpan? timeout = null)
     {
@@ -25,23 +37,45 @@ public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
 
     public Task Schedule(Guid chatSessionId, string? openWorkItemId, int replySequence)
     {
-        var job = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var running = _running.GetOrAdd(chatSessionId, job.Task);
-        if (running != job.Task) return running;
-
-        _ = Task.Run(async () =>
+        lock (_gate)
         {
-            try
+            if (_chats.TryGetValue(chatSessionId, out var waiting))
             {
-                await GenerateAsync(chatSessionId, openWorkItemId, replySequence).ConfigureAwait(false);
+                // Callers whose reply was overtaken share the newer reply's job.
+                waiting ??= new Job(openWorkItemId, replySequence);
+                waiting.OpenWorkItemId = openWorkItemId;
+                waiting.ReplySequence = replySequence;
+                _chats[chatSessionId] = waiting;
+                return waiting.Done.Task;
             }
-            finally
+
+            var job = new Job(openWorkItemId, replySequence);
+            _chats[chatSessionId] = null;
+            _ = Task.Run(() => RunAsync(chatSessionId, job));
+            return job.Done.Task;
+        }
+    }
+
+    private async Task RunAsync(Guid chatSessionId, Job job)
+    {
+        while (true)
+        {
+            await GenerateAsync(chatSessionId, job.OpenWorkItemId, job.ReplySequence).ConfigureAwait(false);
+            job.Done.SetResult();
+
+            lock (_gate)
             {
-                _running.TryRemove(new KeyValuePair<Guid, Task>(chatSessionId, job.Task));
-                job.SetResult();
+                var next = _chats[chatSessionId];
+                if (next is null || _disposed)
+                {
+                    _chats.Remove(chatSessionId);
+                    next?.Done.SetResult();
+                    return;
+                }
+                _chats[chatSessionId] = null;
+                job = next;
             }
-        });
-        return job.Task;
+        }
     }
 
     private async Task GenerateAsync(Guid chatSessionId, string? openWorkItemId, int replySequence)
@@ -66,6 +100,7 @@ public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
 
     public void Dispose()
     {
+        lock (_gate) _disposed = true;
         _shutdown.Cancel();
         _shutdown.Dispose();
     }
