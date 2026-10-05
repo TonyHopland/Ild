@@ -367,4 +367,58 @@ describe("Title attempts", () => {
       (screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
+
+  function attemptsReadHeld() {
+    let answer!: (value: string) => void;
+    vi.spyOn(authServices.settingsService, "get").mockImplementation((key: string) =>
+      key === authServices.ChatTitleSettingKeys.TitleMaxAttempts
+        ? new Promise((resolve) => {
+            answer = (value) => resolve({ key, value });
+          })
+        : Promise.resolve({
+            key,
+            value: key === authServices.ChatTitleSettingKeys.SmartTitles ? "true" : "",
+          }),
+    );
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
+    return (value: string) => answer(value);
+  }
+
+  test("still learn the stored value from a late first read when typed in, so Save can tell them apart", async () => {
+    const answer = attemptsReadHeld();
+
+    render(<ChatTitlesSettings />);
+
+    const attempts = screen.getByLabelText("Title attempts") as HTMLInputElement;
+    await waitFor(() => expect(attempts.disabled).toBe(false));
+    // The default, retyped before the read says 5 is stored.
+    fireEvent.change(attempts, { target: { value: "" } });
+    fireEvent.change(attempts, { target: { value: "3" } });
+    await act(async () => answer("5"));
+
+    expect(attempts.value).toBe("3");
+    expect(
+      (screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  test("learn the stored value from a late first read after a save that failed", async () => {
+    const answer = attemptsReadHeld();
+    vi.spyOn(authServices.settingsService, "put").mockRejectedValue(new Error("database down"));
+
+    render(<ChatTitlesSettings />);
+
+    const attempts = screen.getByLabelText("Title attempts") as HTMLInputElement;
+    await waitFor(() => expect(attempts.disabled).toBe(false));
+    fireEvent.change(attempts, { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save title attempts" }));
+    await screen.findByText(/database down/);
+    // The server holds what the box shows, so there is nothing to save.
+    await act(async () => answer("4"));
+
+    expect(attempts.value).toBe("4");
+    expect(
+      (screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
 });

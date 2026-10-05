@@ -212,20 +212,23 @@ export function NumericSettingField({
   const [draft, setDraft] = useState<string>(String(fallback));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // An edit or a save outranks a first read still on its way, which would put back
-  // an older value over it.
-  const touchedRef = useRef(false);
+  // A first read still on its way is the stored value until a save of ours lands,
+  // after which it is older than what is stored; it fills the box only while the
+  // user has not typed in it.
+  const editedRef = useRef(false);
+  const savedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    touchedRef.current = false;
+    editedRef.current = false;
+    savedRef.current = false;
     void settingsService
       .get(settingKey)
       .then((s) => {
         const n = parseInt(s.value, 10);
-        if (cancelled || touchedRef.current || Number.isNaN(n)) return;
+        if (cancelled || savedRef.current || Number.isNaN(n)) return;
         setSaved(n);
-        setDraft(String(n));
+        if (!editedRef.current) setDraft(String(n));
       })
       // Unreachable API: leave the default showing rather than an empty box.
       .catch(() => {});
@@ -242,9 +245,9 @@ export function NumericSettingField({
     }
     setError(null);
     setSaving(true);
-    touchedRef.current = true;
     try {
       await settingsService.put(settingKey, String(n));
+      savedRef.current = true;
       setSaved(n);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save.");
@@ -272,7 +275,7 @@ export function NumericSettingField({
         max={max}
         value={draft}
         onChange={(e) => {
-          touchedRef.current = true;
+          editedRef.current = true;
           setDraft(e.target.value);
         }}
         disabled={disabled}
