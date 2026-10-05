@@ -625,7 +625,7 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_under_NoTools_injects_no_mcp_server_and_keeps_the_allowlist()
+    public async Task ExecuteAsync_under_NoTools_injects_no_mcp_server_and_denies_every_tool_whatever_the_allowlist()
     {
         // The flag off is the test above: the custom server is injected.
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-notools-{Guid.NewGuid():N}");
@@ -655,16 +655,16 @@ public class OpenCodeAdapterTests
                 RunContext: new LoopRunContext(Guid.NewGuid(), string.Empty, string.Empty, string.Empty, worktreeDir, string.Empty, new List<string>(), null),
                 ExecutionCount: 0,
                 Cancel: CancellationToken.None,
-                ToolAllowlist: ["read", "ild"],
+                ToolAllowlist: ["read", "write", "execute", "ild"],
+                AdditionalAllowedDirectories: ["/data/worktrees/wi-99"],
                 NoTools: true));
 
             Assert.True(result.Success, result.Error);
             using var config = JsonDocument.Parse(result.Output!);
             Assert.False(config.RootElement.TryGetProperty("mcp", out _));
-            var permission = config.RootElement.GetProperty("permission");
-            Assert.Equal("allow", permission.GetProperty("read").GetString());
-            Assert.Equal("deny", permission.GetProperty("edit").GetString());
-            Assert.Equal("deny", permission.GetProperty("bash").GetString());
+            Assert.All(
+                config.RootElement.GetProperty("permission").EnumerateObject(),
+                permission => Assert.Equal("deny", permission.Value.GetString()));
         }
         finally
         {

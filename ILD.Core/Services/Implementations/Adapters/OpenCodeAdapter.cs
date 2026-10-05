@@ -696,7 +696,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
-        var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
+        var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
         var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
 
         var baseUrl = provider.BaseUrl.TrimEnd('/');
@@ -706,7 +706,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // claude's `--add-dir` (ADR-0011 parity): when the Chat Context grants an
         // extra worktree path, allow external-directory access so the agent can
         // reach that absolute path. With no grant it stays denied (scratch only).
-        var grantExternalDirectory = additionalAllowedDirectories is { Count: > 0 }
+        var grantExternalDirectory = !noTools && additionalAllowedDirectories is { Count: > 0 }
             && additionalAllowedDirectories.Any(d => !string.IsNullOrWhiteSpace(d));
 
         var config = new Dictionary<string, object?>

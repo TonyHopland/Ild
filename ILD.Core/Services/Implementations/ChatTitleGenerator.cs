@@ -133,7 +133,7 @@ public sealed class ChatTitleGenerator
                     PreviousNodeOutput: null),
                 ExecutionCount: 0,
                 Cancel: ct,
-                // Never null: that would hand the agent its default tools.
+                // The adapters ignore this under NoTools: the call gets no tools at all.
                 ToolAllowlist: AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, [AiToolCatalog.Read]),
                 ManageSession: false,
                 NoTools: true));

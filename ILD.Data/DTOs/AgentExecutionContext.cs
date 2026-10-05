@@ -35,6 +35,7 @@ public record AgentExecutionContext(
     // starts for this execution: the run's package feed credentials. Null when
     // there is nothing to add.
     IReadOnlyDictionary<string, string>? Environment = null,
-    // No MCP servers and no unenforced tools; check AiToolCatalog.SupportsNoTools first.
+    // No tools at all and no MCP servers, whatever ToolAllowlist says; check
+    // AiToolCatalog.SupportsNoTools first.
     bool NoTools = false
 );

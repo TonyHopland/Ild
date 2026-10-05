@@ -61,10 +61,17 @@ public sealed class PiAdapterToolListTests : IDisposable
         Assert.DoesNotContain("--no-extensions", argv);
     }
 
+    public static TheoryData<string[]> Allowlists => new()
+    {
+        new[] { "read", "ild" },
+        new[] { "read", "write", "execute", "ild" },
+        new[] { "ild" },
+        Array.Empty<string>(),
+    };
+
     [Theory]
-    [InlineData(new[] { "read", "ild" }, "read,grep,find,ls")]
-    [InlineData(new[] { "ild" }, null)]
-    public async Task Under_NoTools_pi_gets_its_allowlist_without_ild_and_no_extensions(string[] allowlist, string? tools)
+    [MemberData(nameof(Allowlists))]
+    public async Task Under_NoTools_pi_gets_its_allowlist_without_ild_and_no_extensions(string[] allowlist)
     {
         var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
             Provider: new AiProvider
@@ -84,16 +91,9 @@ public sealed class PiAdapterToolListTests : IDisposable
 
         Assert.True(result.Success, result.Error);
         var argv = File.ReadAllLines(Path.Combine(_worktree, "argv.txt"));
-        if (tools is null)
-        {
-            // An empty allowlist would otherwise mean every built-in tool.
-            Assert.DoesNotContain("--tools", argv);
-            Assert.Contains("--no-tools", argv);
-        }
-        else
-        {
-            Assert.Equal(tools, argv[Array.IndexOf(argv, "--tools") + 1]);
-        }
+        // pi's file tools reach any path its user can read, so no allowlist survives.
+        Assert.Contains("--no-tools", argv);
+        Assert.DoesNotContain("--tools", argv);
         Assert.Contains("--no-extensions", argv);
         Assert.DoesNotContain("-e", argv);
         Assert.False(Directory.Exists(Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", _runId.ToString("N"))));

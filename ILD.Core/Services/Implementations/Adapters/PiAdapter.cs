@@ -199,15 +199,16 @@ public sealed class PiAdapter : CliAgentAdapterBase
         psi.ArgumentList.Add("--session-dir");
         psi.ArgumentList.Add(sessionDirectory);
 
-        if (settings.ToolNames.Count > 0)
+        // pi's file tools are not confined to its working directory, so a call that
+        // must have no tools gets none, whatever allowlist it was handed.
+        if (settings.NoTools)
+        {
+            psi.ArgumentList.Add("--no-tools");
+        }
+        else if (settings.ToolNames.Count > 0)
         {
             psi.ArgumentList.Add("--tools");
             psi.ArgumentList.Add(string.Join(',', settings.ToolNames));
-        }
-        else if (settings.NoTools)
-        {
-            // No allowlist would mean every built-in tool.
-            psi.ArgumentList.Add("--no-tools");
         }
 
         // A discovered extension runs code of its own, an MCP bridge among them.
@@ -585,11 +586,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var model = config.Model ?? provider.Model;
         var api = config.Api ?? "openai-completions";
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
-        // ILD's tools reach pi through ILD's own extension; a call that must have
-        // no tools does without it and keeps the rest of its allowlist.
-        var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys)
-            .Where(key => !noTools || !string.Equals(key, AiToolCatalog.Ild, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
         var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
             ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
