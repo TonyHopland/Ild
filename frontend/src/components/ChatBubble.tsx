@@ -70,11 +70,14 @@ function RenameForm({
   onChange,
   onSave,
   onCancel,
+  blocked,
 }: {
   rename: RenameDraft;
   onChange: (draft: string) => void;
   onSave: () => void;
   onCancel: () => void;
+  /** Another rename of the same chat is still on its way. */
+  blocked: boolean;
 }) {
   const empty = rename.draft.trim() === "";
   return (
@@ -99,7 +102,7 @@ function RenameForm({
           if (e.key === "Escape") onCancel();
         }}
       />
-      <button type="submit" className="chat-link-btn" disabled={empty || rename.saving}>
+      <button type="submit" className="chat-link-btn" disabled={empty || rename.saving || blocked}>
         Save
       </button>
       <button type="button" className="chat-link-btn" onClick={onCancel}>
@@ -198,9 +201,17 @@ export default function ChatBubble() {
   // row; every change of view throws it away unsaved.
   const [rename, setRename] = useState<RenameDraft | null>(null);
   const renameDraftRef = useRef(0);
-  // The draft whose save is out, read synchronously: two submits in one tick both
-  // see the same render, and only this can turn the second away.
-  const renameSavingRef = useRef<number | null>(null);
+  // The chats with a rename on its way to the server, by chat rather than by
+  // draft: a draft cancelled mid-save leaves its request running, and a second
+  // rename of the same chat must not race it. The ref is the synchronous check —
+  // two submits in one tick see the same render — and the state shows it.
+  const renamesInFlightRef = useRef(new Set<string>());
+  const [renamesInFlight, setRenamesInFlight] = useState<ReadonlySet<string>>(new Set());
+  const markRenameInFlight = (chatSessionId: string, inFlight: boolean) => {
+    if (inFlight) renamesInFlightRef.current.add(chatSessionId);
+    else renamesInFlightRef.current.delete(chatSessionId);
+    setRenamesInFlight(new Set(renamesInFlightRef.current));
+  };
 
   // Start form
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -920,8 +931,8 @@ export default function ChatBubble() {
     const name = rename.draft.trim();
     if (!name) return;
     const { draftId, chatSessionId } = rename;
-    if (renameSavingRef.current === draftId) return;
-    renameSavingRef.current = draftId;
+    if (renamesInFlightRef.current.has(chatSessionId)) return;
+    markRenameInFlight(chatSessionId, true);
     // Only the draft that sent the request is touched by its answer: one opened
     // since — on this chat or another — is the user's newer intent.
     const settle = (next: (draft: RenameDraft) => RenameDraft | null) =>
@@ -930,20 +941,20 @@ export default function ChatBubble() {
     try {
       await chatService.rename(chatSessionId, name);
     } catch (e) {
-      if (renameSavingRef.current === draftId) renameSavingRef.current = null;
       settle((current) => ({
         ...current,
         saving: false,
         error: (e as { message?: string })?.message ?? "Could not rename chat.",
       }));
       return;
+    } finally {
+      markRenameInFlight(chatSessionId, false);
     }
     // Closed once the list holds the new title, so the old one never shows again in
     // between; a re-read that fails still closes it, the rename having been taken.
     historyEpochRef.current += 1;
     await refreshHistory().catch((err) => console.error(err));
     settle(() => null);
-    if (renameSavingRef.current === draftId) renameSavingRef.current = null;
   };
 
   const renameForm = (current: RenameDraft) => (
@@ -952,6 +963,7 @@ export default function ChatBubble() {
       onChange={(draft) => setRename((editing) => editing && { ...editing, draft })}
       onSave={() => void saveRename()}
       onCancel={() => setRename(null)}
+      blocked={renamesInFlight.has(current.chatSessionId)}
     />
   );
 

@@ -171,4 +171,47 @@ describe("a rename being saved", () => {
     await within(panel()).findByText("Name is taken");
     expect(renameInput()!.readOnly).toBe(false);
   });
+
+  test("cancelled mid-save still holds its chat: a new rename of it waits for the first to settle", async () => {
+    server = [summary("a", "Alpha")];
+    const answers: (() => void)[] = [];
+    chatService.rename.mockImplementation(
+      (id: string, name: string) =>
+        new Promise<void>((resolve) => {
+          answers.push(() => {
+            setName(id, name);
+            resolve();
+          });
+        }),
+    );
+    render(bubble());
+    await openPanel();
+    await screen.findByText("Alpha");
+
+    let input = startRenamingRow("Alpha");
+    fireEvent.change(input, { target: { value: "First name" } });
+    pressEnter(input);
+    await waitFor(() => expect(chatService.rename).toHaveBeenCalledTimes(1));
+    fireEvent.click(within(panel()).getByRole("button", { name: "Cancel" }));
+
+    input = startRenamingRow("Alpha");
+    fireEvent.change(input, { target: { value: "Second name" } });
+    expect(
+      (within(panel()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    pressEnter(input);
+    await act(async () => {});
+    expect(chatService.rename).toHaveBeenCalledTimes(1);
+
+    await act(async () => answers[0]());
+    await waitFor(() =>
+      expect(
+        (within(panel()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(renameInput()!.value).toBe("Second name");
+    pressEnter(renameInput()!);
+    await waitFor(() => expect(chatService.rename).toHaveBeenCalledTimes(2));
+    expect(chatService.rename).toHaveBeenLastCalledWith("a", "Second name");
+  });
 });
