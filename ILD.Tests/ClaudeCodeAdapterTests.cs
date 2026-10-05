@@ -332,6 +332,7 @@ public class ClaudeCodeAdapterTests
             {
                 Assert.Equal("", args[Array.IndexOf(args, "--tools") + 1]);
                 Assert.Contains("--strict-mcp-config", args);
+                Assert.Contains("--no-session-persistence", args);
                 Assert.DoesNotContain("--mcp-config", args);
                 Assert.DoesNotContain("--add-dir", args);
                 Assert.DoesNotContain("--permission-mode", args);
@@ -340,6 +341,7 @@ public class ClaudeCodeAdapterTests
             {
                 Assert.DoesNotContain("--tools", args);
                 Assert.DoesNotContain("--strict-mcp-config", args);
+                Assert.DoesNotContain("--no-session-persistence", args);
                 Assert.Contains("--mcp-config", args);
                 Assert.Equal(2, args.Count(a => a == "--add-dir"));
                 Assert.Equal("bypassPermissions", args[Array.IndexOf(args, "--permission-mode") + 1]);

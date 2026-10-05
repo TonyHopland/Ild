@@ -7,19 +7,26 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
 public class OpenCodeAdapter : CliAgentAdapterBase
 {
-    public OpenCodeAdapter(IProcessEnvironment? environment = null)
+    private readonly ILogger _logger;
+
+    public OpenCodeAdapter(ILogger<OpenCodeAdapter>? logger = null, IProcessEnvironment? environment = null)
         : base(environment)
     {
+        _logger = logger ?? NullLogger<OpenCodeAdapter>.Instance;
     }
 
-    public OpenCodeAdapter(IServiceScopeFactory scopeFactory, IProcessEnvironment? environment = null)
+    public OpenCodeAdapter(
+        IServiceScopeFactory scopeFactory, ILogger<OpenCodeAdapter>? logger = null, IProcessEnvironment? environment = null)
         : base(scopeFactory, environment)
     {
+        _logger = logger ?? NullLogger<OpenCodeAdapter>.Instance;
     }
 
     public override string Name => "OpenCode";
@@ -29,10 +36,54 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
+        if (!ctx.NoTools)
+            return await RunAsync(ctx, onSessionSeen: null);
+
+        // A plain call is never resumed, so the session opencode stored for it goes
+        // with it, however the call ended — a timeout included, which is why the
+        // id is taken from the stream rather than from the finished output.
+        string? sessionId = null;
         try
         {
-            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
-                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode, EnvironmentVariables));
+            return await RunAsync(ctx, sid => sessionId ??= sid);
+        }
+        finally
+        {
+            if (sessionId is not null)
+                await DeleteSessionAsync(ctx, sessionId);
+        }
+    }
+
+    private async Task DeleteSessionAsync(AgentExecutionContext ctx, string sessionId)
+    {
+        try
+        {
+            // The call's own token may be what ended it, so the delete gets its own.
+            using var timeout = new CancellationTokenSource(SessionDeleteTimeout);
+            var result = await RunOpencodeCommandAsync(
+                ResolveBinaryPath(ctx), ctx.RunContext.WorktreePath, ctx with { Cancel = timeout.Token },
+                ["session", "delete", sessionId]);
+            if (result.ExitCode != 0)
+                _logger.LogWarning("Could not delete opencode session {SessionId}: exit {ExitCode} {Stderr}",
+                    sessionId, result.ExitCode, result.Stderr.Trim());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not delete opencode session {SessionId}", sessionId);
+        }
+    }
+
+    private static readonly TimeSpan SessionDeleteTimeout = TimeSpan.FromSeconds(30);
+
+    private string ResolveBinaryPath(AgentExecutionContext ctx)
+        => AiProviderConfig.Parse(ctx.Provider.Config)
+            .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode, EnvironmentVariables));
+
+    private async Task<NodeExecutionResult> RunAsync(AgentExecutionContext ctx, Action<string>? onSessionSeen)
+    {
+        try
+        {
+            var binaryPath = ResolveBinaryPath(ctx);
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
@@ -101,11 +152,12 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             // Fire OnSessionId at most once, the first time the session id
             // surfaces on stdout, so the run can be halted/resumed mid-stream.
             var sessionIdReported = false;
-            Action<string>? reportSessionId = ctx.OnSessionId is null
+            Action<string>? reportSessionId = ctx.OnSessionId is null && onSessionSeen is null
                 ? null
                 : sid =>
                 {
-                    if (sessionIdReported) return;
+                    onSessionSeen?.Invoke(sid);
+                    if (sessionIdReported || ctx.OnSessionId is null) return;
                     sessionIdReported = true;
                     FireSessionId(ctx.OnSessionId, sid);
                 };
@@ -143,6 +195,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             // a clear diagnostic instead and propagate session errors. When
             // stdout is not JSON at all (e.g. tests using a stub binary), keep
             // the raw stdout as the response.
+            if (sessionId is not null) onSessionSeen?.Invoke(sessionId);
             var effectiveSessionId = sessionId ?? sessionIdToUse;
             string? exportedSessionJson = null;
             if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))

@@ -202,6 +202,9 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add("--tools");
             psi.ArgumentList.Add("");
             psi.ArgumentList.Add("--strict-mcp-config");
+            // Nothing resumes a plain call, so its prompt is not left in the CLI's
+            // own session store either.
+            psi.ArgumentList.Add("--no-session-persistence");
         }
         else
         {

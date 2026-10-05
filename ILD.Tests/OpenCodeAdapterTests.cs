@@ -671,6 +671,64 @@ public class OpenCodeAdapterTests
         }
     }
 
+    public enum PlainCallEnd { Answers, Fails, TimesOut }
+
+    [Theory]
+    [InlineData(PlainCallEnd.Answers, true)]
+    [InlineData(PlainCallEnd.Fails, true)]
+    [InlineData(PlainCallEnd.TimesOut, true)]
+    [InlineData(PlainCallEnd.Answers, false)]
+    public async Task ExecuteAsync_deletes_the_session_of_a_NoTools_call_however_it_ends_and_no_other(PlainCallEnd end, bool noTools)
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-plain-session-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var deleted = Path.Combine(worktreeDir, "deleted");
+        var scriptPath = Path.Combine(worktreeDir, "opencode.sh");
+        var ending = end switch
+        {
+            PlainCallEnd.Answers => "echo '{\"type\":\"text\",\"sessionID\":\"ses_plain\",\"part\":{\"type\":\"text\",\"text\":\"Login page fix\"}}'\n",
+            PlainCallEnd.Fails => "exit 3\n",
+            _ => "exec sleep 30\n",
+        };
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            $"if [ \"$1\" = session ]; then echo \"$2 $3\" >> '{deleted}'; exit 0; fi\n" +
+            "echo '{\"type\":\"step_start\",\"sessionID\":\"ses_plain\"}'\n" +
+            ending);
+        MakeExecutable(scriptPath);
+        using var timeout = new CancellationTokenSource(
+            end == PlainCallEnd.TimesOut ? TimeSpan.FromSeconds(2) : TimeSpan.FromSeconds(30));
+
+        try
+        {
+            var result = await new OpenCodeAdapter().ExecuteAsync(new AgentExecutionContext(
+                Provider: new AiProvider
+                {
+                    Name = "test-provider",
+                    Type = "opencode",
+                    BaseUrl = "https://api.example.test/v1",
+                    Model = "gpt-5",
+                    Config = JsonSerializer.Serialize(new { binaryPath = scriptPath }),
+                },
+                Prompt: "prompt",
+                RunContext: new LoopRunContext(Guid.NewGuid(), string.Empty, string.Empty, string.Empty, worktreeDir, string.Empty, new List<string>(), null),
+                ExecutionCount: 0,
+                Cancel: timeout.Token,
+                ToolAllowlist: ["read"],
+                NoTools: noTools));
+
+            Assert.Equal(end == PlainCallEnd.Answers, result.Success);
+            if (noTools)
+                Assert.Equal(["delete ses_plain"], File.ReadAllLines(deleted));
+            else
+                Assert.False(File.Exists(deleted));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_allows_external_directory_when_extra_dirs_granted()
     {

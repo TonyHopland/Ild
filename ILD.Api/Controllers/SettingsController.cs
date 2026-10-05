@@ -66,10 +66,10 @@ public class SettingsController : ControllerBase
 
     public sealed class UpdateSettingRequest
     {
-        // Empty gets through to the per-key check: it clears the title provider tag,
-        // and every other key refuses it there.
+        // Missing is refused here; empty gets through to the per-key check, where it
+        // clears the title provider tag and every other key refuses it.
         [Required(AllowEmptyStrings = true)]
-        public string Value { get; set; } = string.Empty;
+        public string? Value { get; set; }
     }
 
     [HttpGet]
@@ -137,7 +137,8 @@ public class SettingsController : ControllerBase
     public async Task<IActionResult> Put(string key, [FromBody] UpdateSettingRequest request, CancellationToken ct)
     {
         if (!KnownKeys.Contains(key)) return NotFound(new { error = $"Unknown setting key '{key}'" });
-        if (!TryCanonicalize(key, request.Value, out var value, out var error)) return BadRequest(new { error });
+        if (request.Value is not { } sent) return BadRequest(new { error = "A value is required." });
+        if (!TryCanonicalize(key, sent, out var value, out var error)) return BadRequest(new { error });
 
         await _store.UpsertAsync(key, value, ct);
 
