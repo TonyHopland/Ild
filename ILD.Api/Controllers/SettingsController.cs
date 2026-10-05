@@ -42,6 +42,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.NetworkLogRetentionDays,
         AppSettingKeys.ChatSmartTitles,
         AppSettingKeys.ChatTitleProviderTag,
+        AppSettingKeys.ChatTitleMaxAttempts,
     };
 
     public SettingsController(
@@ -107,6 +108,8 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.ChatSmartTitles] = AppSettingKeys.DefaultChatSmartTitles.ToString().ToLowerInvariant();
         if (!map.ContainsKey(AppSettingKeys.ChatTitleProviderTag))
             map[AppSettingKeys.ChatTitleProviderTag] = AppSettingKeys.DefaultChatTitleProviderTag;
+        if (!map.ContainsKey(AppSettingKeys.ChatTitleMaxAttempts))
+            map[AppSettingKeys.ChatTitleMaxAttempts] = AppSettingKeys.DefaultChatTitleMaxAttempts.ToString();
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
 
@@ -184,6 +187,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.NetworkLogRetentionDays => AppSettingKeys.DefaultNetworkLogRetentionDays.ToString(),
         AppSettingKeys.ChatSmartTitles => AppSettingKeys.DefaultChatSmartTitles.ToString().ToLowerInvariant(),
         AppSettingKeys.ChatTitleProviderTag => AppSettingKeys.DefaultChatTitleProviderTag,
+        AppSettingKeys.ChatTitleMaxAttempts => AppSettingKeys.DefaultChatTitleMaxAttempts.ToString(),
         _ => string.Empty,
     };
 
@@ -291,6 +295,13 @@ public class SettingsController : ControllerBase
                     return false;
                 }
                 canonical = smartTitles ? "true" : "false";
+                break;
+            case AppSettingKeys.ChatTitleMaxAttempts:
+                if (!int.TryParse(value, out var attempts) || attempts < 1 || attempts > AppSettingKeys.MaxChatTitleMaxAttempts)
+                {
+                    error = $"chat.titleMaxAttempts must be an integer between 1 and {AppSettingKeys.MaxChatTitleMaxAttempts}";
+                    return false;
+                }
                 break;
             case AppSettingKeys.ChatTitleProviderTag:
                 canonical = value.Trim();

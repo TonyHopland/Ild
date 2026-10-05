@@ -121,7 +121,7 @@ public sealed class ChatTitleRunFilesTests : IDisposable
         using var provider = services.BuildServiceProvider();
         using var scheduler = ActivatorUtilities.CreateInstance<ChatTitleScheduler>(provider);
 
-        await scheduler.Schedule(_chatId, null).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await scheduler.Schedule(_chatId, null, replySequence: 1).WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         var runId = Assert.Single(_runIds);
         Assert.NotEqual(_chatId, runId);

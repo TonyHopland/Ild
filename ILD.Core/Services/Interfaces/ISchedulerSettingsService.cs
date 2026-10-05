@@ -114,6 +114,11 @@ public static class AppSettingKeys
     /// <summary>The provider tag chat titles run on, resolved as an AI node's tag is.</summary>
     public const string ChatTitleProviderTag = "chat.titleProviderTag";
     public const string DefaultChatTitleProviderTag = "";
+
+    /// <summary>How many of a chat's messages may each be followed by a title attempt while it is untitled.</summary>
+    public const string ChatTitleMaxAttempts = "chat.titleMaxAttempts";
+    public const int DefaultChatTitleMaxAttempts = 3;
+    public const int MaxChatTitleMaxAttempts = 10;
 }
 
 /// <summary>

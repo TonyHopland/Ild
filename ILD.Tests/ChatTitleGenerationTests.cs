@@ -206,7 +206,7 @@ public sealed class ChatTitleGenerationTests : IDisposable
     }
 
     private async Task RunAsync(ChatTitleScheduler scheduler, Guid id, string? openWorkItemId = null)
-        => await scheduler.Schedule(id, openWorkItemId).WaitAsync(Patience, TestContext.Current.CancellationToken);
+        => await scheduler.Schedule(id, openWorkItemId, replySequence: 1).WaitAsync(Patience, TestContext.Current.CancellationToken);
 
     private void AssertUntouched(Guid id, string name = "Can you look at why the login page breaks?")
     {

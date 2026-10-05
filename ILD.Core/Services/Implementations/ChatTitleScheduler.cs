@@ -23,7 +23,7 @@ public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
         _timeout = timeout ?? DefaultTimeout;
     }
 
-    public Task Schedule(Guid chatSessionId, string? openWorkItemId)
+    public Task Schedule(Guid chatSessionId, string? openWorkItemId, int replySequence)
     {
         var job = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var running = _running.GetOrAdd(chatSessionId, job.Task);
@@ -33,7 +33,7 @@ public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
         {
             try
             {
-                await GenerateAsync(chatSessionId, openWorkItemId).ConfigureAwait(false);
+                await GenerateAsync(chatSessionId, openWorkItemId, replySequence).ConfigureAwait(false);
             }
             finally
             {
@@ -44,7 +44,7 @@ public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
         return job.Task;
     }
 
-    private async Task GenerateAsync(Guid chatSessionId, string? openWorkItemId)
+    private async Task GenerateAsync(Guid chatSessionId, string? openWorkItemId, int replySequence)
     {
         try
         {
@@ -52,7 +52,7 @@ public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
             timeout.CancelAfter(_timeout);
             await using var scope = _scopes.CreateAsyncScope();
             await scope.ServiceProvider.GetRequiredService<ChatTitleGenerator>()
-                .GenerateAsync(chatSessionId, openWorkItemId, timeout.Token).ConfigureAwait(false);
+                .GenerateAsync(chatSessionId, openWorkItemId, replySequence, timeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException ex)
         {

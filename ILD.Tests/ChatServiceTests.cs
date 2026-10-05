@@ -127,12 +127,12 @@ public sealed class ChatServiceTests : IDisposable
     private sealed class RecordingTitleScheduler(Func<(bool ReplyStored, int RepliesAnnounced)> observe) : IChatTitleScheduler
     {
         private readonly TaskCompletionSource _never = new();
-        public List<(Guid ChatSessionId, string? OpenWorkItemId, bool ReplyStored, int RepliesAnnounced)> Scheduled { get; } = new();
+        public List<(Guid ChatSessionId, string? OpenWorkItemId, int ReplySequence, bool ReplyStored, int RepliesAnnounced)> Scheduled { get; } = new();
 
-        public Task Schedule(Guid chatSessionId, string? openWorkItemId)
+        public Task Schedule(Guid chatSessionId, string? openWorkItemId, int replySequence)
         {
             var (stored, announced) = observe();
-            Scheduled.Add((chatSessionId, openWorkItemId, stored, announced));
+            Scheduled.Add((chatSessionId, openWorkItemId, replySequence, stored, announced));
             return _never.Task;
         }
     }
@@ -717,7 +717,7 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task The_first_exchange_hands_a_title_job_off_once_after_its_reply_is_stored_and_announced_without_waiting_for_it()
+    public async Task Each_successful_turn_of_an_untitled_chat_hands_a_title_job_off_after_its_reply_is_stored_and_announced_without_waiting_for_it()
     {
         var provider = await SeedProviderAsync();
         var titles = NewTitleScheduler();
@@ -732,7 +732,8 @@ public sealed class ChatServiceTests : IDisposable
         await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "second", openWorkItemId: "WI-7", openLoopDocument: null, CancellationToken.None)
             .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        Assert.Equal(new[] { (chat.Id, (string?)"WI-7", true, 1) }, titles.Scheduled);
+        // The jobs never title the chat, so the second turn tries again, with its own reply.
+        Assert.Equal(new[] { (chat.Id, (string?)"WI-7", 1, true, 1), (chat.Id, (string?)"WI-7", 3, true, 2) }, titles.Scheduled);
     }
 
     [Theory]
