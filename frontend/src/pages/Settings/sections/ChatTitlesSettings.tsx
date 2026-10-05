@@ -92,7 +92,12 @@ export default function ChatTitlesSettings() {
             is about. While this is off, a chat is titled with the start of its first message and no
             model is asked. Titles already made stay when it is turned off, and a chat you renamed
             is never retitled.
-            {smartTitles.error && <span className="settings-error"> {smartTitles.error}</span>}
+            {smartTitles.error && (
+              <span className="settings-error" role="alert">
+                {" "}
+                {smartTitles.error}
+              </span>
+            )}
           </>
         }
       >
@@ -120,11 +125,15 @@ export default function ChatTitlesSettings() {
             </span>
           )}
           {loadErrors.map((message) => (
-            <span key={message} className="settings-error">
+            <span key={message} className="settings-error" role="alert">
               {message}
             </span>
           ))}
-          {error && <span className="settings-error">{error}</span>}
+          {error && (
+            <span className="settings-error" role="alert">
+              {error}
+            </span>
+          )}
         </div>
         <div className="settings-row-control">
           <button

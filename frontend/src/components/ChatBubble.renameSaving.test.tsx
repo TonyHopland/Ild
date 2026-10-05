@@ -170,6 +170,7 @@ describe("a rename being saved", () => {
 
     await within(panel()).findByText("Name is taken");
     expect(renameInput()!.readOnly).toBe(false);
+    expect(within(panel()).getByRole("alert").textContent).toBe("Name is taken");
   });
 
   test("cancelled mid-save still holds its chat: a new rename of it waits for the first to settle", async () => {

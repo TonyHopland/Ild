@@ -398,7 +398,6 @@
   font-size: 0.75rem;
 }
 
-/* A chat's title being edited in place, in the header or in its history row. */
 .chat-rename {
   flex: 1;
   display: flex;

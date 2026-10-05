@@ -90,29 +90,36 @@ interface ToggleSettingFieldProps {
  * switch back and says why, rather than leaving the page claiming a setting the
  * server never took.
  *
- * What it shows is the server's answer or the user's own act, never a mix of
- * stale ones: a flip supersedes a read still on its way, so a slow first read
- * cannot undo it, and the switch takes no second flip while a save is out, so
- * two saves can never land in the wrong order. A read that fails says so.
+ * What it shows is the server's answer or the user's own act, never a stale mix:
+ * it keeps the value the server last confirmed, and a failed save puts that back
+ * rather than the opposite of the flip. A first read still on its way is the
+ * server's answer until one of our saves lands — after that it is older than what
+ * is stored — and it waits out a save in flight rather than undoing the flip
+ * mid-save. The switch takes no second flip while a save is out, so two saves can
+ * never land in the wrong order. A read that fails says so.
  */
 export function useToggleSetting(settingKey: string) {
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const flippedRef = useRef(false);
+  const confirmedRef = useRef<boolean | null>(null);
+  const savedRef = useRef(false);
   const savingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    flippedRef.current = false;
-    const current = () => !cancelled && !flippedRef.current;
+    confirmedRef.current = null;
+    savedRef.current = false;
+    const current = () => !cancelled && !savedRef.current;
     void settingsService
       .get(settingKey)
       // Case-insensitive because the API validates with bool.TryParse: a value
       // written as "True" is on to every backend reader, and a switch showing it
       // off would be the only thing in the system that disagrees.
       .then((s) => {
-        if (current()) setChecked(s.value.toLowerCase() === "true");
+        if (!current()) return;
+        confirmedRef.current = s.value.toLowerCase() === "true";
+        if (!savingRef.current) setChecked(confirmedRef.current);
       })
       .catch((err: unknown) => {
         if (current()) {
@@ -129,14 +136,16 @@ export function useToggleSetting(settingKey: string) {
   const save = async (next: boolean) => {
     if (savingRef.current) return;
     savingRef.current = true;
-    flippedRef.current = true;
     setChecked(next);
     setError(null);
     setSaving(true);
     try {
       await settingsService.put(settingKey, next ? "true" : "false");
+      confirmedRef.current = next;
+      savedRef.current = true;
+      setError(null);
     } catch (err) {
-      setChecked(!next);
+      setChecked(confirmedRef.current ?? false);
       setError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
       savingRef.current = false;

@@ -247,5 +247,53 @@ describe("Smart session titles switch", () => {
     render(<ChatTitlesSettings />);
 
     await screen.findByText(/Could not load this setting: database down/);
+    expect(screen.getByRole("alert").textContent).toMatch(/Could not load this setting/);
+  });
+
+  describe("a failed save puts back what the server stores, not the opposite of the flip", () => {
+    function storedOnButSlow() {
+      let answer!: () => void;
+      vi.spyOn(authServices.settingsService, "get").mockImplementation((key: string) =>
+        key === authServices.ChatTitleSettingKeys.SmartTitles
+          ? new Promise((resolve) => {
+              answer = () => resolve({ key, value: "true" });
+            })
+          : Promise.resolve({ key, value: "" }),
+      );
+      vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
+      return () => answer();
+    }
+
+    test("when the first read lands after the failure", async () => {
+      const answer = storedOnButSlow();
+      vi.spyOn(authServices.settingsService, "put").mockRejectedValue(new Error("database down"));
+
+      render(<ChatTitlesSettings />);
+      fireEvent.click(toggle());
+      await screen.findByText("database down");
+      await act(async () => answer());
+
+      expect(toggle().checked).toBe(true);
+    });
+
+    test("when the first read lands while the save is out", async () => {
+      const answer = storedOnButSlow();
+      let fail!: () => void;
+      vi.spyOn(authServices.settingsService, "put").mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            fail = () => reject(new Error("database down"));
+          }),
+      );
+
+      render(<ChatTitlesSettings />);
+      fireEvent.click(toggle());
+      fireEvent.click(toggle());
+      await act(async () => answer());
+      await act(async () => fail());
+
+      await screen.findByText("database down");
+      expect(toggle().checked).toBe(true);
+    });
   });
 });

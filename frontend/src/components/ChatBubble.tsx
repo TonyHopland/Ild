@@ -108,7 +108,11 @@ function RenameForm({
       <button type="button" className="chat-link-btn" onClick={onCancel}>
         Cancel
       </button>
-      {rename.error && <span className="chat-rename-error">{rename.error}</span>}
+      {rename.error && (
+        <span className="chat-rename-error" role="alert">
+          {rename.error}
+        </span>
+      )}
     </form>
   );
 }

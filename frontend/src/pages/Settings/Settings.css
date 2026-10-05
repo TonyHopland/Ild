@@ -257,7 +257,6 @@
   font-size: 0.85rem;
 }
 
-/* The loop node's provider tag field, laid out as a settings row. */
 .settings-provider-tag .config-field {
   display: flex;
   flex-direction: column;
