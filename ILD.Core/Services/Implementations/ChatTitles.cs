@@ -4,12 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace ILD.Core.Services.Implementations;
 
-/// <summary>
-/// The text side of chat titles: the fallback a chat is named with from its first
-/// message, what a title model is asked, and what its answer is reduced to before
-/// it may become the title. Both titles are plain text, so the markdown a message
-/// or a model writes is taken out of them the same way.
-/// </summary>
+/// <summary>The text of chat titles: the first-message fallback, the title prompt, and the model's answer cleaned up.</summary>
 public static partial class ChatTitles
 {
     public const int MaxLength = 60;
@@ -18,11 +13,7 @@ public static partial class ChatTitles
 
     private const string NoTitle = "New chat";
 
-    /// <summary>
-    /// The chat's title until a better one exists (ADR-0013): the first message
-    /// without its markdown, whitespace collapsed, its first <see cref="MaxLength"/>
-    /// characters and an ellipsis when longer.
-    /// </summary>
+    /// <summary>The first message as a title (ADR-0013): plain text, cut to <see cref="MaxLength"/> with an ellipsis.</summary>
     public static string Fallback(string firstMessage)
     {
         var text = string.Join(' ', PlainLines(firstMessage));
@@ -30,11 +21,7 @@ public static partial class ChatTitles
         return text.Length <= MaxLength ? text : Prefix(text, MaxLength).TrimEnd() + "…";
     }
 
-    /// <summary>
-    /// A model's answer as a title: its first line without markdown, surrounding
-    /// quotes or trailing periods, cut at the last word that fits. Null when
-    /// nothing is left, which counts as the model not answering.
-    /// </summary>
+    /// <summary>A model's answer as a title, or null when nothing usable is left.</summary>
     public static string? CleanGenerated(string output)
     {
         var line = PlainLines(output).FirstOrDefault();
@@ -59,11 +46,7 @@ public static partial class ChatTitles
         return line.Length == 0 ? null : line;
     }
 
-    /// <summary>
-    /// What the title model is asked: the rules, the work item the chat was about
-    /// when it has one, and the start of the first message and of the first reply.
-    /// Nothing later in the chat is sent.
-    /// </summary>
+    /// <summary>The title model's prompt; nothing after the first exchange is sent.</summary>
     public static string BuildPrompt(string firstMessage, string firstReply, string? workItemTitle)
     {
         var prompt = new StringBuilder()
@@ -90,12 +73,8 @@ public static partial class ChatTitles
 
     private static string Cap(string text, int length) => text.Length <= length ? text : Prefix(text, length);
 
-    /// <summary>
-    /// The longest start of <paramref name="text"/> that is whole characters as a
-    /// reader sees them (text elements: an emoji, a letter with its accents) and at
-    /// most <paramref name="maxLength"/> UTF-16 units — the measure the stored name's
-    /// length is held to — so a cut never leaves half a surrogate pair behind.
-    /// </summary>
+    // Whole text elements only, so a cut never splits a surrogate pair; measured in
+    // UTF-16 units, as the stored name's length is.
     private static string Prefix(string text, int maxLength)
     {
         var end = 0;
@@ -109,22 +88,13 @@ public static partial class ChatTitles
         return text[..end];
     }
 
-    /// <summary>
-    /// <paramref name="text"/> without NUL characters, which PostgreSQL text cannot
-    /// hold. Every title is written by a conditional update, past the save-time
-    /// scrub in AppDbContext, so each one is cleaned here first.
-    /// </summary>
+    // Titles are written by conditional updates, past AppDbContext's save-time NUL
+    // scrub, and PostgreSQL text cannot hold NUL.
     public static string WithoutNul(string text) => text.Replace("\0", string.Empty);
 
     private static bool IsQuote(char c) => c is '"' or '\'' or '`' or '“' or '”' or '‘' or '’' or '«' or '»';
 
-    /// <summary>
-    /// The non-empty lines of <paramref name="markdown"/> as plain text, each with
-    /// its whitespace collapsed: code fences dropped (their contents kept), block
-    /// markers taken off the front of each line, images and links reduced to their
-    /// text, and emphasis and code markers removed. NUL characters go too; see
-    /// <see cref="WithoutNul"/>.
-    /// </summary>
+    /// <summary>The non-empty lines of <paramref name="markdown"/> as plain text, without NUL.</summary>
     private static IEnumerable<string> PlainLines(string markdown)
     {
         foreach (var raw in WithoutNul(markdown).Split('\n'))

@@ -35,10 +35,6 @@ public record AgentExecutionContext(
     // starts for this execution: the run's package feed credentials. Null when
     // there is nothing to add.
     IReadOnlyDictionary<string, string>? Environment = null,
-    // A plain model call: the agent gets no MCP server at all — neither the ILD
-    // one nor the provider's custom ones — and no built-in tools where its CLI
-    // can turn them off (Claude Code). OpenCode and pi still apply ToolAllowlist,
-    // which they enforce. Copilot cannot turn its tools off, so it refuses to run;
-    // check AiToolCatalog.SupportsNoTools before asking for this. Chat titles do.
+    // No MCP servers and no unenforced tools; check AiToolCatalog.SupportsNoTools first.
     bool NoTools = false
 );

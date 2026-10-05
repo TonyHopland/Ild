@@ -9,12 +9,7 @@ using Moq;
 
 namespace ILD.Tests;
 
-/// <summary>
-/// A title call runs while the chat's own next turn may be running, so it must not
-/// share the chat's run id — an adapter keeps per-run files, pi its agent directory
-/// with the provider's config — and whatever it leaves under its own id goes with
-/// the job, whether the model answered or not.
-/// </summary>
+/// <summary>A title call runs under its own run id, and its run files go with the job.</summary>
 public sealed class ChatTitleRunFilesTests : IDisposable
 {
     private readonly TestDb _db = new();

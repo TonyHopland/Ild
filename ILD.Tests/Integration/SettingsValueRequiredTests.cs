@@ -4,10 +4,7 @@ using System.Text.Json;
 
 namespace ILD.Tests.Integration;
 
-/// <summary>
-/// A settings write must name its value: a body without one is refused, never
-/// read as the empty value that clears the title provider tag.
-/// </summary>
+/// <summary>A settings write with no value is refused, never read as the empty value.</summary>
 public class SettingsValueRequiredTests
 {
     [Fact]

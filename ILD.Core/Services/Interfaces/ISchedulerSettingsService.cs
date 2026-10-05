@@ -107,18 +107,11 @@ public static class AppSettingKeys
     public const int DefaultNetworkLogRetentionDays = 30;
     public const int MaxNetworkLogRetentionDays = 3650;
 
-    /// <summary>
-    /// Whether a chat's first exchange is summarised into its title by a model.
-    /// Off by default, and while it is off no model is ever asked: chats keep the
-    /// cleaned-up start of their first message.
-    /// </summary>
+    /// <summary>Whether a model titles each chat from its first exchange; off by default.</summary>
     public const string ChatSmartTitles = "chat.smartTitles";
     public const bool DefaultChatSmartTitles = false;
 
-    /// <summary>
-    /// The provider tag chat titles run on, resolved exactly as an AI node's tag
-    /// is: empty, or a tag no provider holds, means the default provider.
-    /// </summary>
+    /// <summary>The provider tag chat titles run on, resolved as an AI node's tag is.</summary>
     public const string ChatTitleProviderTag = "chat.titleProviderTag";
     public const string DefaultChatTitleProviderTag = "";
 }

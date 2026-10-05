@@ -1,9 +1,6 @@
 namespace ILD.Data.Enums;
 
-/// <summary>
-/// Where a chat's title came from, so a title someone chose is never replaced by
-/// one ILD made up.
-/// </summary>
+/// <summary>Where a chat's title came from.</summary>
 public enum ChatTitleSource
 {
     /// <summary>The cleaned-up start of the first message, or no title yet.</summary>

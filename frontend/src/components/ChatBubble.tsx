@@ -93,8 +93,7 @@ function RenameForm({
         aria-label="Chat name"
         maxLength={120}
         autoFocus
-        // What is saved is what was sent: an edit made mid-save would be closed
-        // away unsaved when the save comes back.
+        // An edit made mid-save would be closed away unsaved when the save returns.
         readOnly={rename.saving}
         value={rename.draft}
         onChange={(e) => onChange(e.target.value)}
@@ -201,14 +200,11 @@ export default function ChatBubble() {
   // chat. `confirmDeleteAll` gates the wipe-all action behind a confirmation.
   const [history, setHistory] = useState<ChatSessionSummary[]>([]);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
-  // The one title being edited, in the open chat's header or in its Past-chats
-  // row; every change of view throws it away unsaved.
+  // One title edited at a time; every change of view throws it away unsaved.
   const [rename, setRename] = useState<RenameDraft | null>(null);
   const renameDraftRef = useRef(0);
-  // The chats with a rename on its way to the server, by chat rather than by
-  // draft: a draft cancelled mid-save leaves its request running, and a second
-  // rename of the same chat must not race it. The ref is the synchronous check —
-  // two submits in one tick see the same render — and the state shows it.
+  // Per chat, not per draft: a draft cancelled mid-save leaves its request running.
+  // The ref is the synchronous check; the state disables Save.
   const renamesInFlightRef = useRef(new Set<string>());
   const [renamesInFlight, setRenamesInFlight] = useState<ReadonlySet<string>>(new Set());
   const markRenameInFlight = (chatSessionId: string, inFlight: boolean) => {

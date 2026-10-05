@@ -3,10 +3,7 @@ using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
 
-/// <summary>
-/// Every cut a title makes lands between whole characters: an emoji is two UTF-16
-/// units, and a cut between them would store half of one.
-/// </summary>
+/// <summary>Every cut a title makes lands between whole characters.</summary>
 public class ChatTitlesUnicodeTests
 {
     private const string Emoji = "😀";

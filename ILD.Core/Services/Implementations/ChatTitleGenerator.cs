@@ -10,16 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
-/// <summary>
-/// Summarises a chat's first exchange into its title, when smart titles are on.
-/// Runs on the provider the title tag resolves to — resolved exactly as an AI
-/// node's tag is — as a plain model call: no MCP servers anywhere, no tools on
-/// Claude Code, read-only tools on OpenCode and pi, and no call at all on Copilot,
-/// whose tools cannot be turned off. The call neither resumes nor records an agent
-/// session, and the title is saved only while the chat still carries its
-/// fallback, so a rename always wins. One job per scope, run by <see cref="ChatTitleScheduler"/>,
-/// which is also where anything this throws is logged.
-/// </summary>
+/// <summary>Titles a chat from its first exchange; saved only over the fallback, so a rename always wins.</summary>
 public sealed class ChatTitleGenerator
 {
     private readonly AppDbContext _db;
@@ -120,13 +111,8 @@ public sealed class ChatTitleGenerator
             _log.LogWarning("Chat {ChatSessionId} was deleted while its title was generated", chatSessionId);
     }
 
-    /// <summary>
-    /// One call to the title model, under a run id of its own rather than the
-    /// chat's: the chat's next turn may be running at the same time, and what an
-    /// adapter keeps per run id — pi's agent directory with its provider config —
-    /// must not be shared between two launches on different providers. Whatever
-    /// the call left under that id goes with it, however it ended.
-    /// </summary>
+    // A run id of its own: the chat's next turn may run meanwhile, and adapters keep
+    // per-run files (pi's provider config) that two providers must not share.
     private async Task<NodeExecutionResult> AskAsync(
         IAgentAdapter adapter, AiProvider provider, string prompt, string scratchPath, CancellationToken ct)
     {
@@ -147,9 +133,7 @@ public sealed class ChatTitleGenerator
                     PreviousNodeOutput: null),
                 ExecutionCount: 0,
                 Cancel: ct,
-                // Never null: that would hand the agent its default tools. Only the
-                // agents that enforce an allowlist apply it; under NoTools the rest
-                // get no tools at all.
+                // Never null: that would hand the agent its default tools.
                 ToolAllowlist: AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, [AiToolCatalog.Read]),
                 ManageSession: false,
                 NoTools: true));
@@ -168,11 +152,7 @@ public sealed class ChatTitleGenerator
         }
     }
 
-    /// <summary>
-    /// The title of the work item open when the chat started, as context only: a
-    /// work item that cannot be read, for whatever reason, costs the title nothing
-    /// more. Bounded by the job's own timeout, which the lookup does not take.
-    /// </summary>
+    // Context only: a work item that cannot be read costs the title nothing more.
     private async Task<string?> WorkItemTitleAsync(string? workItemId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(workItemId)) return null;

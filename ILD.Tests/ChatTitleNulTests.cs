@@ -8,11 +8,7 @@ using Moq;
 
 namespace ILD.Tests;
 
-/// <summary>
-/// Every chat title is written by a conditional update, which the save-time NUL
-/// scrub never sees, and PostgreSQL refuses a NUL in text. So none may carry one:
-/// not the first-message fallback, not a model's title, not a rename.
-/// </summary>
+/// <summary>No chat title carries NUL, which the conditional updates writing it would not scrub.</summary>
 public class ChatTitleNulTests
 {
     [Theory]

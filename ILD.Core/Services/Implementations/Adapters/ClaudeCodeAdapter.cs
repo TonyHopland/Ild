@@ -196,14 +196,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         if (noTools)
         {
-            // A plain model call: no built-in tool, and no MCP server from the
-            // user's or the project's config either. With nothing to call there is
-            // nothing to grant, so no directories and no permission bypass.
+            // With no tools there is nothing to grant: no --add-dir, no permission bypass.
             psi.ArgumentList.Add("--tools");
             psi.ArgumentList.Add("");
             psi.ArgumentList.Add("--strict-mcp-config");
-            // Nothing resumes a plain call, so its prompt is not left in the CLI's
-            // own session store either.
             psi.ArgumentList.Add("--no-session-persistence");
         }
         else

@@ -90,13 +90,8 @@ interface ToggleSettingFieldProps {
  * switch back and says why, rather than leaving the page claiming a setting the
  * server never took.
  *
- * What it shows is the server's answer or the user's own act, never a stale mix:
- * it keeps the value the server last confirmed, and a failed save puts that back
- * rather than the opposite of the flip. A first read still on its way is the
- * server's answer until one of our saves lands — after that it is older than what
- * is stored — and it waits out a save in flight rather than undoing the flip
- * mid-save. The switch takes no second flip while a save is out, so two saves can
- * never land in the wrong order. A read that fails says so.
+ * A failed save restores the last value the server confirmed; a first read that
+ * lands after one of our saves succeeded is older than what is stored.
  */
 export function useToggleSetting(settingKey: string) {
   const [checked, setChecked] = useState(false);

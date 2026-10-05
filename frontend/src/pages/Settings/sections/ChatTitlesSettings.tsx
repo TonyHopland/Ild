@@ -7,18 +7,10 @@ import { SettingRow, Switch, useToggleSetting } from "../controls";
 
 const SmartTitlesLabel = "Smart session titles";
 
-/**
- * Copilot's CLI cannot turn its tools off, so the backend never asks it for a
- * title (AiToolCatalog.SupportsNoTools): titles that would run on it stay the
- * first-message ones.
- */
+// Mirrors AiToolCatalog.SupportsNoTools: the backend never asks Copilot for a title.
 const cannotTitle = (provider: AiProvider) => provider.type.trim().toLowerCase() === "copilot";
 
-/**
- * Whether chats are titled by a model summarising their first exchange, and the
- * provider tag that model runs on — the loop node's own field, resolved the same
- * way. The tag only matters while the switch is on, so it is shut while it is off.
- */
+/** The smart chat titles switch and the provider tag its titles run on. */
 export default function ChatTitlesSettings() {
   const smartTitles = useToggleSetting(ChatTitleSettingKeys.SmartTitles);
   // Null until read: the field states which provider a tag runs on, and edits the

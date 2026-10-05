@@ -180,11 +180,8 @@ public sealed class ChatService : IChatService
 
         var nextSeq = await NextSequenceAsync(chatSessionId, ct);
 
-        // Name the chat from its first user message (ADR-0013) so the history list
-        // shows something meaningful without asking the user to type a title —
-        // unless it was renamed first. Written straight to the database, and the
-        // tracked copy only told what is stored: were the name marked modified, the
-        // turn's SaveChanges would write it back over a rename landing mid-turn.
+        // The tracked copy is only told what is stored: were Name marked modified,
+        // the turn's SaveChanges would write it back over a rename landing mid-turn.
         if (nextSeq == 0)
         {
             var name = ChatTitles.Fallback(userMessage);
@@ -348,9 +345,7 @@ public sealed class ChatService : IChatService
 
         await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct);
 
-        // The first exchange is complete only with a reply worth summarising. The
-        // job is not awaited: the turn is over, and a title model is never allowed
-        // to hold it up.
+        // Not awaited: a title model never holds up the turn.
         if (nextSeq == 0 && !interrupted && result.Success)
             _ = _titles?.Schedule(session.Id, openWorkItemId);
     }

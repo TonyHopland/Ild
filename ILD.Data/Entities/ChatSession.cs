@@ -24,19 +24,12 @@ public class ChatSession : IHasUpdatedAt
     [MaxLength(128)]
     public string UserId { get; set; } = string.Empty;
 
-    /// <summary>
-    /// The display name for the history list: the cleaned-up first user message
-    /// (ADR-0013), a summary of the first exchange, or what the user renamed it to
-    /// — see <see cref="TitleSource"/>. Null until the first turn names the chat.
-    /// </summary>
+    /// <summary>The history list's name for the chat; null until the first turn names it.</summary>
     [MaxLength(120)]
     public string? Name { get; set; }
 
-    /// <summary>
-    /// Where <see cref="Name"/> came from. Like <see cref="LastReadSequence"/> it is
-    /// changed only by conditional updates, so a turn's tracked copy of the session
-    /// can never write a rename back over.
-    /// </summary>
+    // Changed only by conditional updates, like LastReadSequence, so a turn's tracked
+    // copy can never write a rename back over.
     public ChatTitleSource TitleSource { get; set; }
 
     /// <summary>The chosen <see cref="AiProvider"/>; fixed for the session's life.</summary>

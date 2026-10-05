@@ -16,12 +16,7 @@ function describeProviderForTag(providers: AiProvider[], tag: string, cannotRun:
     : `No default provider is configured, so ${cannotRun}.`;
 }
 
-/**
- * The provider tag an AI node runs on, and anything else that resolves a
- * provider the way a node does: suggestions from the tags providers hold, and
- * which provider the backend will pick for what is typed. With no provider list
- * (`null`: not loaded) it states nothing rather than guess.
- */
+/** A provider tag, resolved as an AI node's is; with `providers` null it states nothing. */
 export function AiProviderTagField({
   tag,
   providers,

@@ -39,9 +39,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         if (!ctx.NoTools)
             return await RunAsync(ctx, onSessionSeen: null);
 
-        // A plain call is never resumed, so the session opencode stored for it goes
-        // with it, however the call ended — a timeout included, which is why the
-        // id is taken from the stream rather than from the finished output.
+        // The id comes from the stream, so a call that timed out is cleaned up too.
         string? sessionId = null;
         try
         {
@@ -727,8 +725,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // servers. The opencode child process inherits its *own* config via
         // OPENCODE_CONFIG_CONTENT, which means the user's
         // ~/.config/opencode/opencode.json (and any mcp entries it contains) is
-        // ignored — we have to add every entry here ourselves. A call that must
-        // have no tools gets none of them: the allowlist above is all it has.
+        // ignored — we have to add every entry here ourselves.
         var mcp = new Dictionary<string, object?>();
 
         var ildMcp = !noTools && enabled.Contains(AiToolCatalog.Ild)

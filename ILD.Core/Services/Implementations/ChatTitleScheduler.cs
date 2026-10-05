@@ -5,11 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
-/// <summary>
-/// Runs each title job in its own DI scope, off the turn that scheduled it (like
-/// <see cref="ChatTurnRunner"/>'s turns), and gives up on a title model that has
-/// not answered within the timeout. Disposing it cancels the jobs still running.
-/// </summary>
+/// <summary>Runs each title job in its own scope, off the turn, within a timeout.</summary>
 public sealed class ChatTitleScheduler : IChatTitleScheduler, IDisposable
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
