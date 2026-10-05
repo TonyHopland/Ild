@@ -696,8 +696,9 @@ public class OpenCodeAdapterTests
             "echo '{\"type\":\"step_start\",\"sessionID\":\"ses_plain\"}'\n" +
             ending);
         MakeExecutable(scriptPath);
-        using var timeout = new CancellationTokenSource(
-            end == PlainCallEnd.TimesOut ? TimeSpan.FromSeconds(2) : TimeSpan.FromSeconds(30));
+        // The call is given up on once its session exists, the way a timeout ends one,
+        // with no clock to race the stand-in's first line.
+        using var timeout = new CancellationTokenSource();
 
         try
         {
@@ -714,6 +715,7 @@ public class OpenCodeAdapterTests
                 RunContext: new LoopRunContext(Guid.NewGuid(), string.Empty, string.Empty, string.Empty, worktreeDir, string.Empty, new List<string>(), null),
                 ExecutionCount: 0,
                 Cancel: timeout.Token,
+                OnSessionId: end == PlainCallEnd.TimesOut ? _ => timeout.Cancel() : null,
                 ToolAllowlist: ["read"],
                 NoTools: noTools));
 
