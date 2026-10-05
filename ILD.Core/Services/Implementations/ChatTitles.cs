@@ -46,7 +46,7 @@ public static partial class ChatTitles
         return line.Length == 0 ? null : line;
     }
 
-    /// <summary>The title model's prompt; nothing after the first exchange is sent.</summary>
+    /// <summary>The title model's prompt; nothing after the first successful exchange is sent.</summary>
     public static string BuildPrompt(string firstMessage, string firstReply, string? workItemTitle)
     {
         var prompt = new StringBuilder()
