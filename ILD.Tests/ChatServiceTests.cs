@@ -698,8 +698,7 @@ public sealed class ChatServiceTests : IDisposable
         await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), longMessage, CancellationToken.None);
 
         var name = _db.Context.ChatSessions.Single().Name!;
-        Assert.True(name.Length <= 61, "name should be truncated to a sensible length");
-        Assert.EndsWith("…", name);
+        Assert.Equal(new string('a', 119) + "…", name);
     }
 
     [Fact]

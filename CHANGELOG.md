@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A chat named from its first message keeps up to 120 characters of it instead of 60.**
+
 - **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**
 
 ## [0.16.0] - 2026-10-04

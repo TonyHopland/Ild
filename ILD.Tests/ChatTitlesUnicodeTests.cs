@@ -18,18 +18,18 @@ public class ChatTitlesUnicodeTests
     [Fact]
     public void A_fallback_cut_landing_inside_an_emoji_leaves_the_whole_emoji_out()
     {
-        var title = ChatTitles.Fallback(new string('a', 59) + Emoji + " and more words after it");
+        var title = ChatTitles.Fallback(new string('a', 118) + Emoji + " and more words after it");
 
         AssertWellFormed(title);
-        Assert.Equal(new string('a', 59) + "…", title);
+        Assert.Equal(new string('a', 118) + "…", title);
     }
 
     [Fact]
     public void A_fallback_keeps_an_emoji_that_fits_whole()
     {
-        var title = ChatTitles.Fallback(new string('a', 58) + Emoji + "bbbbbbbbbb");
+        var title = ChatTitles.Fallback(new string('a', 117) + Emoji + "bbbbbbbbbb");
 
-        Assert.Equal(new string('a', 58) + Emoji + "…", title);
+        Assert.Equal(new string('a', 117) + Emoji + "…", title);
     }
 
     [Fact]
