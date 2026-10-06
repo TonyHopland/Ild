@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Chats can be renamed, and an opt-in setting gives each new chat a short title that says what it is about.**
+
 ### Changed
 
 - **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**

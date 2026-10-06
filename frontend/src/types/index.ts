@@ -924,6 +924,10 @@ export interface ChatUnreadChangedPayload {
   chatSessionId: string;
 }
 
+export interface ChatTitleChangedPayload {
+  chatSessionId: string;
+}
+
 export interface DependencyResolvedPayload {
   workItemId: string;
 }

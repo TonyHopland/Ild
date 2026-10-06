@@ -67,6 +67,10 @@ public static class AiToolCatalog
     private static bool EmptySelectionMeansNone(string? providerType)
         => NormalizeProviderType(providerType) is "copilot";
 
+    // Copilot's CLI cannot turn its tools off: an empty --available-tools leaves them all on.
+    public static bool SupportsNoTools(string? providerType)
+        => NormalizeProviderType(providerType) is not "copilot";
+
     private static string? NormalizeProviderType(string? providerType)
         => providerType?.Trim().ToLowerInvariant();
 }

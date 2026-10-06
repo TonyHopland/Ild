@@ -38,6 +38,9 @@ public interface IChatService
     /// </summary>
     Task<bool> MarkReadAsync(string userId, Guid sessionId, int sequence, CancellationToken ct = default);
 
+    /// <summary>Renames one of the user's chats for good; false when it is not theirs or does not exist.</summary>
+    Task<bool> RenameAsync(string userId, Guid sessionId, string name, CancellationToken ct = default);
+
     /// <summary>
     /// Start a new chat session for the user. Provider + tools are fixed for its
     /// life. A user may hold many retained chats (ADR-0013), so this no longer

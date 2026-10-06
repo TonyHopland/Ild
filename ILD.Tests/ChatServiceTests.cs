@@ -110,6 +110,45 @@ public sealed class ChatServiceTests : IDisposable
             UnreadChanged.Add((userId, chatSessionId, Appended.Count(a => a.Message.Role == "assistant")));
             return Task.CompletedTask;
         }
+
+        public List<(string UserId, Guid ChatSessionId)> TitleChanged { get; } = new();
+
+        public Task TitleChangedAsync(string userId, Guid chatSessionId)
+        {
+            TitleChanged.Add((userId, chatSessionId));
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Records each title job the turn hands off, with what had been stored and
+    /// announced by then, and hands back a job that never finishes.
+    /// </summary>
+    private sealed class RecordingTitleScheduler(Func<(bool ReplyStored, int RepliesAnnounced)> observe) : IChatTitleScheduler
+    {
+        private readonly TaskCompletionSource _never = new();
+        public List<(Guid ChatSessionId, string? OpenWorkItemId, int ReplySequence, bool ReplyStored, int RepliesAnnounced)> Scheduled { get; } = new();
+
+        public Task Schedule(Guid chatSessionId, string? openWorkItemId, int replySequence)
+        {
+            var (stored, announced) = observe();
+            Scheduled.Add((chatSessionId, openWorkItemId, replySequence, stored, announced));
+            return _never.Task;
+        }
+    }
+
+    private RecordingTitleScheduler NewTitleScheduler()
+        => new(() =>
+        {
+            using var ctx = _db.Fresh();
+            return (ctx.ChatMessages.Any(m => m.Role == "assistant"),
+                _notifier.Appended.Count(a => a.Message.Role == "assistant"));
+        });
+
+    private ChatSession ReadSession(Guid id)
+    {
+        using var ctx = _db.Fresh();
+        return ctx.ChatSessions.AsNoTracking().Single(c => c.Id == id);
     }
 
     private static IAgentAdapterRegistry RegistryFor(IAgentAdapter adapter)
@@ -661,6 +700,123 @@ public sealed class ChatServiceTests : IDisposable
         var name = _db.Context.ChatSessions.Single().Name!;
         Assert.True(name.Length <= 61, "name should be truncated to a sensible length");
         Assert.EndsWith("…", name);
+    }
+
+    [Fact]
+    public async Task ExecuteTurnAsync_names_the_chat_from_its_first_message_without_the_markdown()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "## Fix the **login** page", CancellationToken.None);
+
+        var session = ReadSession(started.Id);
+        Assert.Equal("Fix the login page", session.Name);
+        Assert.Equal(ChatTitleSource.Fallback, session.TitleSource);
+    }
+
+    [Fact]
+    public async Task Each_successful_turn_of_an_untitled_chat_hands_a_title_job_off_after_its_reply_is_stored_and_announced_without_waiting_for_it()
+    {
+        var provider = await SeedProviderAsync();
+        var titles = NewTitleScheduler();
+        var svc = new ChatService(_db.Context, _db.Providers,
+            RegistryFor(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("reply")))),
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, titles: titles);
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        // The job handed off never finishes; the turn must end regardless.
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "first", openWorkItemId: "WI-7", openLoopDocument: null, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "second", openWorkItemId: "WI-7", openLoopDocument: null, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        // The jobs never title the chat, so the second turn tries again, with its own reply.
+        Assert.Equal(new[] { (chat.Id, (string?)"WI-7", 1, true, 1), (chat.Id, (string?)"WI-7", 3, true, 2) }, titles.Scheduled);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_first_reply_that_failed_or_was_interrupted_hands_off_no_title_job(bool interrupted)
+    {
+        var provider = await SeedProviderAsync();
+        var titles = NewTitleScheduler();
+        using var cts = new CancellationTokenSource();
+        var svc = new ChatService(_db.Context, _db.Providers,
+            RegistryFor(new FakeAdapter(_ =>
+            {
+                if (interrupted) cts.Cancel();
+                return Task.FromResult(NodeExecutionResult.Fail(interrupted ? "interrupted" : "provider unavailable"));
+            })),
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, titles: titles);
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "first", cts.Token);
+
+        Assert.Empty(titles.Scheduled);
+        Assert.Equal("first", ReadSession(chat.Id).Name);
+    }
+
+    [Fact]
+    public async Task RenameAsync_names_the_owners_chat_manually_and_hints_the_owner()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hello there", CancellationToken.None);
+
+        Assert.False(await svc.RenameAsync("bob", chat.Id, "Bob's name", TestContext.Current.CancellationToken));
+        Assert.False(await svc.RenameAsync("alice", Guid.NewGuid(), "Nobody's", TestContext.Current.CancellationToken));
+        Assert.Equal("hello there", ReadSession(chat.Id).Name);
+        Assert.Empty(_notifier.TitleChanged);
+
+        Assert.True(await svc.RenameAsync("alice", chat.Id, "Deploy loop wiring", TestContext.Current.CancellationToken));
+
+        var session = ReadSession(chat.Id);
+        Assert.Equal("Deploy loop wiring", session.Name);
+        Assert.Equal(ChatTitleSource.Manual, session.TitleSource);
+        Assert.Equal(new[] { ("alice", chat.Id) }, _notifier.TitleChanged);
+        Assert.Equal("Deploy loop wiring", (await svc.ListForUserAsync("alice", TestContext.Current.CancellationToken)).Single().Name);
+    }
+
+    [Fact]
+    public async Task A_chat_renamed_before_its_first_message_keeps_its_name()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        Assert.True(await svc.RenameAsync("alice", chat.Id, "My own name", TestContext.Current.CancellationToken));
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hello there", CancellationToken.None);
+
+        var session = ReadSession(chat.Id);
+        Assert.Equal("My own name", session.Name);
+        Assert.Equal(ChatTitleSource.Manual, session.TitleSource);
+    }
+
+    [Fact]
+    public async Task A_rename_landing_while_the_first_reply_is_written_survives_the_turn_saving_its_session()
+    {
+        var provider = await SeedProviderAsync();
+        // A concurrent PUT /name has its own request scope, so its own context.
+        using var otherContext = _db.Fresh();
+        var otherRequest = new ChatService(
+            otherContext, _db.Providers, RegistryFor(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok()))),
+            _notifier, Options, _db.LoopRuns, _loopScratchpad);
+        var svc = NewService(new FakeAdapter(async ctx =>
+        {
+            Assert.True(await otherRequest.RenameAsync("alice", ctx.ChatSessionId!.Value, "My own name", CancellationToken.None));
+            return NodeExecutionResult.Ok("reply");
+        }));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hello there", CancellationToken.None);
+
+        var session = ReadSession(chat.Id);
+        Assert.Equal("My own name", session.Name);
+        Assert.Equal(ChatTitleSource.Manual, session.TitleSource);
     }
 
     [Fact]

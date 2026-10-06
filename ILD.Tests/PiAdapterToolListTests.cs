@@ -58,6 +58,45 @@ public sealed class PiAdapterToolListTests : IDisposable
         var expected = new[] { "read", "grep", "find", "ls", "edit", "write", "bash" }
             .Concat(declared.Select(name => "ild_" + name));
         Assert.Equal(expected.OrderBy(n => n, StringComparer.Ordinal), tools.OrderBy(n => n, StringComparer.Ordinal));
+        Assert.DoesNotContain("--no-extensions", argv);
+    }
+
+    public static TheoryData<string[]> Allowlists => new()
+    {
+        new[] { "read", "ild" },
+        new[] { "read", "write", "execute", "ild" },
+        new[] { "ild" },
+        Array.Empty<string>(),
+    };
+
+    [Theory]
+    [MemberData(nameof(Allowlists))]
+    public async Task Under_NoTools_pi_gets_its_allowlist_without_ild_and_no_extensions(string[] allowlist)
+    {
+        var result = await new PiAdapter().ExecuteAsync(new AgentExecutionContext(
+            Provider: new AiProvider
+            {
+                Name = "pi-test",
+                Type = "pi",
+                BaseUrl = string.Empty,
+                Model = "openai/gpt-5",
+                Config = JsonSerializer.Serialize(new { binaryPath = WriteRecordingPi() }),
+            },
+            Prompt: "test prompt",
+            RunContext: new LoopRunContext(_runId, "", "", "", _worktree, "", new List<string>(), null),
+            ExecutionCount: 0,
+            Cancel: CancellationToken.None,
+            ToolAllowlist: allowlist,
+            NoTools: true));
+
+        Assert.True(result.Success, result.Error);
+        var argv = File.ReadAllLines(Path.Combine(_worktree, "argv.txt"));
+        // pi's file tools reach any path its user can read, so no allowlist survives.
+        Assert.Contains("--no-tools", argv);
+        Assert.DoesNotContain("--tools", argv);
+        Assert.Contains("--no-extensions", argv);
+        Assert.DoesNotContain("-e", argv);
+        Assert.False(Directory.Exists(Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", _runId.ToString("N"))));
     }
 
     /// <summary>A stand-in pi that records its argv and completes a turn.</summary>

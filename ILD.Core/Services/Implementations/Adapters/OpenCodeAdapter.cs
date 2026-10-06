@@ -7,19 +7,26 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
 public class OpenCodeAdapter : CliAgentAdapterBase
 {
-    public OpenCodeAdapter(IProcessEnvironment? environment = null)
+    private readonly ILogger _logger;
+
+    public OpenCodeAdapter(ILogger<OpenCodeAdapter>? logger = null, IProcessEnvironment? environment = null)
         : base(environment)
     {
+        _logger = logger ?? NullLogger<OpenCodeAdapter>.Instance;
     }
 
-    public OpenCodeAdapter(IServiceScopeFactory scopeFactory, IProcessEnvironment? environment = null)
+    public OpenCodeAdapter(
+        IServiceScopeFactory scopeFactory, ILogger<OpenCodeAdapter>? logger = null, IProcessEnvironment? environment = null)
         : base(scopeFactory, environment)
     {
+        _logger = logger ?? NullLogger<OpenCodeAdapter>.Instance;
     }
 
     public override string Name => "OpenCode";
@@ -29,10 +36,53 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
+        if (!ctx.NoTools)
+            return await RunAsync(ctx, onSessionSeen: null);
+
+        // The id comes from the stream, so a call that timed out is cleaned up too.
+        string? sessionId = null;
         try
         {
-            var binaryPath = AiProviderConfig.Parse(ctx.Provider.Config)
-                .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode, EnvironmentVariables));
+            return await RunAsync(ctx, sid => sessionId ??= sid);
+        }
+        finally
+        {
+            if (sessionId is not null)
+                await DeleteSessionAsync(ctx, sessionId);
+        }
+    }
+
+    private async Task DeleteSessionAsync(AgentExecutionContext ctx, string sessionId)
+    {
+        try
+        {
+            // The call's own token may be what ended it, so the delete gets its own.
+            using var timeout = new CancellationTokenSource(SessionDeleteTimeout);
+            var result = await RunOpencodeCommandAsync(
+                ResolveBinaryPath(ctx), ctx.RunContext.WorktreePath, ctx with { Cancel = timeout.Token },
+                ["session", "delete", sessionId]);
+            if (result.ExitCode != 0)
+                _logger.LogWarning("Could not delete opencode session {SessionId}: exit {ExitCode} {Stderr}",
+                    sessionId, result.ExitCode, result.Stderr.Trim());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not delete opencode session {SessionId}", sessionId);
+        }
+    }
+
+    private static readonly TimeSpan SessionDeleteTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan StdoutDrainTimeout = TimeSpan.FromSeconds(5);
+
+    private string ResolveBinaryPath(AgentExecutionContext ctx)
+        => AiProviderConfig.Parse(ctx.Provider.Config)
+            .BinaryPathOr(ManagedAgentInstall.ResolveCommand(ManagedAgentCatalog.OpenCode, EnvironmentVariables));
+
+    private async Task<NodeExecutionResult> RunAsync(AgentExecutionContext ctx, Action<string>? onSessionSeen)
+    {
+        try
+        {
+            var binaryPath = ResolveBinaryPath(ctx);
 
             var worktreePath = ctx.RunContext.WorktreePath;
             if (string.IsNullOrEmpty(worktreePath) || !Directory.Exists(worktreePath))
@@ -53,7 +103,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools);
 
             Process? proc = null;
             try
@@ -101,16 +151,20 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             // Fire OnSessionId at most once, the first time the session id
             // surfaces on stdout, so the run can be halted/resumed mid-stream.
             var sessionIdReported = false;
-            Action<string>? reportSessionId = ctx.OnSessionId is null
+            Action<string>? reportSessionId = ctx.OnSessionId is null && onSessionSeen is null
                 ? null
                 : sid =>
                 {
-                    if (sessionIdReported) return;
+                    onSessionSeen?.Invoke(sid);
+                    if (sessionIdReported || ctx.OnSessionId is null) return;
                     sessionIdReported = true;
                     FireSessionId(ctx.OnSessionId, sid);
                 };
 
-            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, reportSessionId, ctx.Cancel);
+            // A plain call's session is deleted afterwards, so its stdout outlives the
+            // call's token: a session id printed before a timeout is still read.
+            using var drain = onSessionSeen is null ? null : new CancellationTokenSource();
+            var stdoutTask = ReadAndStreamLinesAsync(p.StandardOutput, stdoutLines, stdoutLock, ctx.ProgressCallback, reportSessionId, drain?.Token ?? ctx.Cancel);
             var stderrTask = ReadAndStreamLinesAsync(p.StandardError, stderrLines, stderrLock, ctx.ProgressCallback, null, ctx.Cancel);
 
             try
@@ -119,7 +173,14 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
             catch (OperationCanceledException)
             {
-                return NodeExecutionResult.Fail(KillAndDescribe(p, "opencode timed out"));
+                var timedOut = KillAndDescribe(p, "opencode timed out");
+                if (drain is not null)
+                {
+                    drain.CancelAfter(StdoutDrainTimeout);
+                    try { await stdoutTask; }
+                    catch (OperationCanceledException) { }
+                }
+                return NodeExecutionResult.Fail(timedOut);
             }
 
             string stdout, stderr;
@@ -143,6 +204,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             // a clear diagnostic instead and propagate session errors. When
             // stdout is not JSON at all (e.g. tests using a stub binary), keep
             // the raw stdout as the response.
+            if (sessionId is not null) onSessionSeen?.Invoke(sessionId);
             var effectiveSessionId = sessionId ?? sessionIdToUse;
             string? exportedSessionJson = null;
             if (ctx.ManageSession && p.ExitCode == 0 && !string.IsNullOrEmpty(effectiveSessionId))
@@ -630,11 +692,11 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null)
+    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null, bool noTools = false)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
-        var enabledToolKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
+        var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
         var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
 
         var baseUrl = provider.BaseUrl.TrimEnd('/');
@@ -644,7 +706,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // claude's `--add-dir` (ADR-0011 parity): when the Chat Context grants an
         // extra worktree path, allow external-directory access so the agent can
         // reach that absolute path. With no grant it stays denied (scratch only).
-        var grantExternalDirectory = additionalAllowedDirectories is { Count: > 0 }
+        var grantExternalDirectory = !noTools && additionalAllowedDirectories is { Count: > 0 }
             && additionalAllowedDirectories.Any(d => !string.IsNullOrWhiteSpace(d));
 
         var config = new Dictionary<string, object?>
@@ -666,7 +728,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     },
                 },
             },
-            ["permission"] = BuildPermissions(enabled, grantExternalDirectory),
+            ["permission"] = noTools ? BuildNoToolPermissions() : BuildPermissions(enabled, grantExternalDirectory),
         };
 
         // Inject MCP server entries so agents can reach tools they otherwise
@@ -677,7 +739,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // ignored — we have to add every entry here ourselves.
         var mcp = new Dictionary<string, object?>();
 
-        var ildMcp = enabled.Contains(AiToolCatalog.Ild)
+        var ildMcp = !noTools && enabled.Contains(AiToolCatalog.Ild)
             ? BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
         if (ildMcp != null)
@@ -686,7 +748,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         // Provider-scoped custom MCP servers apply to every repo this provider
         // runs in. The parser reserves the "ild" name, so these can never clobber
         // the entry above.
-        foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
+        var customServers = noTools ? [] : CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson);
+        foreach (var server in customServers)
             mcp[server.Name] = BuildCustomMcpEntry(server);
 
         if (mcp.Count > 0)
@@ -695,6 +758,17 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         var configJson = JsonSerializer.Serialize(config);
         var modelRef = $"{providerId}/{modelId}";
         return (modelRef, configJson);
+    }
+
+    // opencode applies the last rule that matches, so the wildcard comes first: it
+    // reaches tools the named list does not (todowrite, among others) and the named
+    // denies after it change nothing.
+    private static Dictionary<string, object?> BuildNoToolPermissions()
+    {
+        var permissions = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase) { ["*"] = "deny" };
+        foreach (var name in BuildPermissions([]).Keys)
+            permissions[name] = "deny";
+        return permissions;
     }
 
     private static Dictionary<string, object?> BuildPermissions(HashSet<string> enabled, bool grantExternalDirectory = false)

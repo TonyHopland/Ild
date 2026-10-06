@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -314,6 +315,53 @@ public class CopilotAdapterTests
         Assert.Contains("/data/worktrees/wi-99", args);
         var extraIndex = args.IndexOf("/data/worktrees/wi-99");
         Assert.Equal("--add-dir", args[extraIndex - 1]);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExecuteAsync_under_NoTools_refuses_without_launching_and_otherwise_launches_as_before(bool noTools)
+    {
+        // The CLI has no way to turn its tools off, so a call that must have none
+        // is refused rather than handed all of them.
+        var worktreeDir = CreateWorktree();
+        var launched = Path.Combine(worktreeDir, "launched");
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath, $"#!/bin/sh\ntouch '{launched}'\nprintf '%s\\n' \"$@\"\n");
+        Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+        var config = JsonSerializer.Serialize(new
+        {
+            binaryPath = scriptPath,
+            customMcpServersJson = """{ "docs": { "command": ["docs-mcp"] } }""",
+        });
+
+        try
+        {
+            var result = await new CopilotAdapter().ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, config: config) with
+                {
+                    ToolAllowlist = ["ild"],
+                    NoTools = noTools,
+                });
+
+            if (noTools)
+            {
+                Assert.False(result.Success);
+                Assert.Contains("copilot-error", result.Error);
+                Assert.False(File.Exists(launched));
+            }
+            else
+            {
+                Assert.True(result.Success, result.Error);
+                var args = result.Output!.Split('\n');
+                Assert.Contains("--allow-all-tools", args);
+                Assert.Contains("--additional-mcp-config", args);
+            }
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
     }
 
     private static string CreateWorktree()

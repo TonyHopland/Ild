@@ -10,7 +10,7 @@ import {
   type NodeOutput,
 } from "../../../types";
 import { AiSessionControls } from "./AiSessionControls";
-import { resolveProviderForTag } from "../../../utils/providerTags";
+import { AiProviderTagField } from "../../../components/AiProviderTagField";
 import { nodeStyleOf } from "../../../utils/nodeStyles";
 import ConfirmModal from "../../../components/ConfirmModal";
 import {
@@ -704,54 +704,6 @@ function ConditionCasesEditor({
       >
         + Add case
       </button>
-    </div>
-  );
-}
-
-/** States the provider the backend will run the node on for `tag`. */
-function describeProviderForTag(providers: AiProvider[], tag: string): string {
-  const { provider, byTag } = resolveProviderForTag(providers, tag);
-  const tagSet = tag.trim() !== "";
-  if (byTag && provider) return `Runs on ${provider.name}`;
-  if (provider) {
-    return tagSet
-      ? `No provider has this tag — runs on the default provider (${provider.name})`
-      : `Runs on the default provider (${provider.name})`;
-  }
-  return tagSet
-    ? "No provider has this tag and no default provider is configured, so this node cannot run."
-    : "No default provider is configured, so this node cannot run.";
-}
-
-function AiProviderTagField({
-  tag,
-  providers,
-  onChange,
-}: {
-  tag: string;
-  providers: AiProvider[];
-  onChange: (value: string) => void;
-}) {
-  const suggestions = [...new Set(providers.flatMap((provider) => provider.tags ?? []))].sort(
-    (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }),
-  );
-  return (
-    <div className="config-field">
-      <label htmlFor="ai-provider-tag">Provider tag</label>
-      <input
-        id="ai-provider-tag"
-        type="text"
-        list="ai-provider-tag-suggestions"
-        value={tag}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder="Default provider"
-      />
-      <datalist id="ai-provider-tag-suggestions">
-        {suggestions.map((suggestion) => (
-          <option key={suggestion} value={suggestion} />
-        ))}
-      </datalist>
-      <small className="config-help-text">{describeProviderForTag(providers, tag)}</small>
     </div>
   );
 }

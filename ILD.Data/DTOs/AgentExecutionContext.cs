@@ -34,5 +34,8 @@ public record AgentExecutionContext(
     // Set over everything else in the environment of every process the adapter
     // starts for this execution: the run's package feed credentials. Null when
     // there is nothing to add.
-    IReadOnlyDictionary<string, string>? Environment = null
+    IReadOnlyDictionary<string, string>? Environment = null,
+    // No tools at all and no MCP servers, whatever ToolAllowlist says; check
+    // AiToolCatalog.SupportsNoTools first.
+    bool NoTools = false
 );

@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using ILD.Data.Enums;
 
 namespace ILD.Data.Entities;
 
@@ -23,12 +24,13 @@ public class ChatSession : IHasUpdatedAt
     [MaxLength(128)]
     public string UserId { get; set; } = string.Empty;
 
-    /// <summary>
-    /// A short, auto-generated display name for the history list, derived from the
-    /// first user message (ADR-0013). Null until the first turn names the chat.
-    /// </summary>
+    /// <summary>The history list's name for the chat; null until the first turn names it.</summary>
     [MaxLength(120)]
     public string? Name { get; set; }
+
+    // Changed only by conditional updates, like LastReadSequence, so a turn's tracked
+    // copy can never write a rename back over.
+    public ChatTitleSource TitleSource { get; set; }
 
     /// <summary>The chosen <see cref="AiProvider"/>; fixed for the session's life.</summary>
     [Required]

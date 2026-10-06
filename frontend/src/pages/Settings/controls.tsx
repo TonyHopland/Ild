@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { settingsService } from "../../services/auth";
 
 interface SettingRowProps {
@@ -27,15 +27,17 @@ interface SwitchProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: string;
+  disabled?: boolean;
 }
 
-export function Switch({ checked, onChange, label }: SwitchProps) {
+export function Switch({ checked, onChange, label, disabled = false }: SwitchProps) {
   return (
     <span className="settings-switch">
       <input
         type="checkbox"
         checked={checked}
         aria-label={label}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="settings-switch-track" />
@@ -87,32 +89,71 @@ interface ToggleSettingFieldProps {
  * the user and the one bit they came to change. A save that fails puts the
  * switch back and says why, rather than leaving the page claiming a setting the
  * server never took.
+ *
+ * A failed save restores the last value the server confirmed; a first read that
+ * lands after one of our saves succeeded is older than what is stored.
  */
-export function ToggleSettingField({ settingKey, label, children }: ToggleSettingFieldProps) {
+export function useToggleSetting(settingKey: string) {
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const confirmedRef = useRef<boolean | null>(null);
+  const savedRef = useRef(false);
+  const savingRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
+    confirmedRef.current = null;
+    savedRef.current = false;
+    const current = () => !cancelled && !savedRef.current;
     void settingsService
       .get(settingKey)
       // Case-insensitive because the API validates with bool.TryParse: a value
       // written as "True" is on to every backend reader, and a switch showing it
       // off would be the only thing in the system that disagrees.
-      .then((s) => setChecked(s.value.toLowerCase() === "true"))
-      // Unreachable API: leave it showing off rather than a value we invented.
-      .catch(() => {});
+      .then((s) => {
+        if (!current()) return;
+        confirmedRef.current = s.value.toLowerCase() === "true";
+        if (!savingRef.current) setChecked(confirmedRef.current);
+      })
+      .catch((err: unknown) => {
+        if (current()) {
+          setError(
+            `Could not load this setting: ${err instanceof Error ? err.message : "request failed"}`,
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [settingKey]);
 
   const save = async (next: boolean) => {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setChecked(next);
     setError(null);
+    setSaving(true);
     try {
       await settingsService.put(settingKey, next ? "true" : "false");
+      confirmedRef.current = next;
+      savedRef.current = true;
+      setError(null);
     } catch (err) {
-      setChecked(!next);
+      setChecked(confirmedRef.current ?? false);
       setError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   };
+
+  return { checked, error, saving, save };
+}
+
+/** A switch for one boolean app setting; see {@link useToggleSetting}. */
+export function ToggleSettingField({ settingKey, label, children }: ToggleSettingFieldProps) {
+  const { checked, error, saving, save } = useToggleSetting(settingKey);
 
   return (
     <SettingRow
@@ -124,7 +165,7 @@ export function ToggleSettingField({ settingKey, label, children }: ToggleSettin
         </>
       }
     >
-      <Switch checked={checked} onChange={(v) => void save(v)} label={label} />
+      <Switch checked={checked} onChange={(v) => void save(v)} label={label} disabled={saving} />
     </SettingRow>
   );
 }
@@ -143,6 +184,9 @@ interface NumericSettingFieldProps {
   unit?: string;
   /** Help text beside the field. */
   children?: React.ReactNode;
+  disabled?: boolean;
+  /** The Save button's accessible name, where a card holds more than one Save. */
+  saveLabel?: string;
 }
 
 /**
@@ -161,23 +205,36 @@ export function NumericSettingField({
   minLabel,
   unit,
   children,
+  disabled = false,
+  saveLabel,
 }: NumericSettingFieldProps) {
   const [saved, setSaved] = useState<number>(fallback);
   const [draft, setDraft] = useState<string>(String(fallback));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // A first read still on its way is the stored value until a save of ours lands,
+  // after which it is older than what is stored; it fills the box only while the
+  // user has not typed in it.
+  const editedRef = useRef(false);
+  const savedRef = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
+    editedRef.current = false;
+    savedRef.current = false;
     void settingsService
       .get(settingKey)
       .then((s) => {
         const n = parseInt(s.value, 10);
-        if (Number.isNaN(n)) return;
+        if (cancelled || savedRef.current || Number.isNaN(n)) return;
         setSaved(n);
-        setDraft(String(n));
+        if (!editedRef.current) setDraft(String(n));
       })
       // Unreachable API: leave the default showing rather than an empty box.
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [settingKey]);
 
   const save = async () => {
@@ -190,6 +247,7 @@ export function NumericSettingField({
     setSaving(true);
     try {
       await settingsService.put(settingKey, String(n));
+      savedRef.current = true;
       setSaved(n);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save.");
@@ -216,15 +274,20 @@ export function NumericSettingField({
         min={min}
         max={max}
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          editedRef.current = true;
+          setDraft(e.target.value);
+        }}
+        disabled={disabled}
         style={{ width: "5rem" }}
       />
       {unit && <span className="settings-row-help">{unit}</span>}
       <button
         type="button"
         className="btn btn-primary"
+        aria-label={saveLabel}
         onClick={() => void save()}
-        disabled={saving || draft === String(saved)}
+        disabled={disabled || saving || draft === String(saved)}
       >
         Save
       </button>

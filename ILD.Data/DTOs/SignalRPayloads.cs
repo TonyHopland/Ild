@@ -61,6 +61,8 @@ public record ChatEditProposalsChangedPayload(Guid ChatSessionId);
 
 public record ChatUnreadChangedPayload(Guid ChatSessionId);
 
+public record ChatTitleChangedPayload(Guid ChatSessionId);
+
 public record NetworkPolicyChangedPayload();
 
 /// <summary>

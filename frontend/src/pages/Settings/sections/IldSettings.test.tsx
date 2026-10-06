@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import IldSettings from "./IldSettings";
 import * as authServices from "../../../services/auth";
+import type { AiProvider } from "../../../types";
 
 afterEach(() => {
   cleanup();
@@ -143,5 +144,90 @@ describe("Ild settings", () => {
 
     expect(await screen.findByText("database down")).toBeTruthy();
     expect((toggle as HTMLInputElement).checked).toBe(false);
+  });
+});
+
+describe("Chat titles", () => {
+  const SmartTitles = "chat.smartTitles";
+  const TitleProviderTag = "chat.titleProviderTag";
+
+  const provider = (name: string, isDefault: boolean, tags: string[]) =>
+    ({ id: name, name, type: "claude-code", isDefault, tags }) as unknown as AiProvider;
+
+  function stored(values: Record<string, string>) {
+    vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
+      key,
+      value: values[key] ?? "5",
+    }));
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([
+      provider("Main", true, []),
+      provider("Fast", false, ["Fast", "Cheap"]),
+    ]);
+  }
+
+  function card() {
+    return screen.getByRole("heading", { name: "Chat titles" }).closest("section") as HTMLElement;
+  }
+
+  test("off on a fresh install keeps the provider tag shut; switching it on opens the tag, which saves", async () => {
+    stored({ [SmartTitles]: "false", [TitleProviderTag]: "" });
+    const put = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockImplementation(async (key: string, value: string) => ({ key, value }));
+
+    render(<IldSettings />);
+
+    const toggle = within(card()).getByRole("checkbox", {
+      name: /smart session titles/i,
+    }) as HTMLInputElement;
+    const tag = within(card()).getByLabelText("Provider tag") as HTMLInputElement;
+    const save = within(card()).getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    await within(card()).findByText("Runs on the default provider (Main)");
+    expect(toggle.checked).toBe(false);
+    expect(tag.disabled).toBe(true);
+    expect(save.disabled).toBe(true);
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(put).toHaveBeenCalledWith(SmartTitles, "true"));
+    await waitFor(() => expect(tag.disabled).toBe(false));
+
+    // The loop node's own field: suggestions from the providers' tags, and the
+    // provider the tag resolves to.
+    const suggestions = document.getElementById(tag.getAttribute("list")!)!;
+    expect(Array.from(suggestions.querySelectorAll("option"), (o) => o.value)).toEqual([
+      "Cheap",
+      "Fast",
+    ]);
+    fireEvent.change(tag, { target: { value: "Fast" } });
+    expect(within(card()).getByText("Runs on Fast")).toBeTruthy();
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(put).toHaveBeenCalledWith(TitleProviderTag, "Fast"));
+  });
+
+  test("shows what is stored, and switching it off shuts the tag again", async () => {
+    stored({ [SmartTitles]: "true", [TitleProviderTag]: "Nobody" });
+    vi.spyOn(authServices.settingsService, "put").mockImplementation(
+      async (key: string, value: string) => ({ key, value }),
+    );
+
+    render(<IldSettings />);
+
+    const toggle = within(card()).getByRole("checkbox", {
+      name: /smart session titles/i,
+    }) as HTMLInputElement;
+    const tag = within(card()).getByLabelText("Provider tag") as HTMLInputElement;
+    await waitFor(() => expect(toggle.checked).toBe(true));
+    await waitFor(() => expect(tag.value).toBe("Nobody"));
+    expect(tag.disabled).toBe(false);
+    expect(
+      within(card()).getByText("No provider has this tag — runs on the default provider (Main)"),
+    ).toBeTruthy();
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(tag.disabled).toBe(true));
+    expect(
+      (within(card()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });

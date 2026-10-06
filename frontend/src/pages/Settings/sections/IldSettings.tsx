@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { SchedulerSettingKeys } from "../../../services/auth";
 import { NumericSettingField, SettingRow, ToggleSettingField } from "../controls";
+import ChatTitlesSettings from "./ChatTitlesSettings";
 
 /**
  * How the loop engine behaves: how much it runs at once, how far it goes on its
@@ -108,6 +109,8 @@ export default function IldSettings() {
           whenever you interact with the run.
         </NumericSettingField>
       </section>
+
+      <ChatTitlesSettings />
 
       <section className="settings-card">
         <div className="settings-card-header">

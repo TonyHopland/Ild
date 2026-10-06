@@ -722,6 +722,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document) => Task.CompletedTask;
         public Task EditProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
         public Task UnreadChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
+        public Task TitleChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
     }
 
     private async Task<AiProvider> SeedProviderAsync(string type = "claude-code", string? config = null)

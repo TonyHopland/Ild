@@ -255,4 +255,42 @@ public class ChatControllerTests
         Assert.IsType<UnauthorizedResult>(result);
         VerifyNothingMarked();
     }
+
+    public static TheoryData<string, string> UsableNames => new()
+    {
+        { "  Deploy loop wiring  ", "Deploy loop wiring" },
+        { new string('n', 120), new string('n', 120) },
+        { "  " + new string('n', 120) + "  ", new string('n', 120) },
+    };
+
+    [Theory]
+    [MemberData(nameof(UsableNames))]
+    public async Task Rename_names_a_chat_the_caller_owns_with_the_trimmed_name(string sent, string stored)
+    {
+        var id = Guid.NewGuid();
+        _chat.Setup(c => c.ExistsForUserAsync("tony", id, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _chat.Setup(c => c.RenameAsync("tony", id, It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var result = await CreateController().Rename(id, new RenameChatRequest { Name = sent }, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status204NoContent, StatusOf(result));
+        _chat.Verify(c => c.RenameAsync("tony", id, stored, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    public static TheoryData<string?> UnusableNames => new() { null, "", "   ", new string('n', 121) };
+
+    [Theory]
+    [MemberData(nameof(UnusableNames))]
+    public async Task Rename_to_an_empty_or_over_long_name_is_BadRequest_and_renames_nothing(string? sent)
+    {
+        var id = Guid.NewGuid();
+        _chat.Setup(c => c.ExistsForUserAsync("tony", id, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var result = await CreateController().Rename(id, new RenameChatRequest { Name = sent }, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, StatusOf(result));
+        _chat.Verify(
+            c => c.RenameAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

@@ -106,6 +106,19 @@ public static class AppSettingKeys
     public const string NetworkLogRetentionDays = "network.logRetentionDays";
     public const int DefaultNetworkLogRetentionDays = 30;
     public const int MaxNetworkLogRetentionDays = 3650;
+
+    /// <summary>Whether a model titles each chat from its first exchange; off by default.</summary>
+    public const string ChatSmartTitles = "chat.smartTitles";
+    public const bool DefaultChatSmartTitles = false;
+
+    /// <summary>The provider tag chat titles run on, resolved as an AI node's tag is.</summary>
+    public const string ChatTitleProviderTag = "chat.titleProviderTag";
+    public const string DefaultChatTitleProviderTag = "";
+
+    /// <summary>How many of a chat's messages may each be followed by a title attempt while it is untitled.</summary>
+    public const string ChatTitleMaxAttempts = "chat.titleMaxAttempts";
+    public const int DefaultChatTitleMaxAttempts = 3;
+    public const int MaxChatTitleMaxAttempts = 10;
 }
 
 /// <summary>

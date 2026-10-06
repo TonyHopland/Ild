@@ -150,7 +150,7 @@ _Avoid_: active tracker, in-flight set, running set
 ### Chat
 
 **Chat Session**:
-A standalone interactive conversation with a configured AiProvider, opened from the in-app chat bubble. Deliberately **not** a LoopRun: it has no WorkItem, worktree, branch, or PR of its own, and runs the agent in a durable per-session scratch directory that stays its working directory for the session's whole life. Reuses the loop's agent-adapter execution layer. A user retains **many** chats as browsable history — each auto-named from its first message — resumes any with its full transcript, and a chat is deleted only by an explicit per-chat or "delete all" action, never automatically (no inactivity sweeper). See [ADR-0010](docs/adr/0010-standalone-chat-session.md) and [ADR-0013](docs/adr/0013-retained-chat-history.md).
+A standalone interactive conversation with a configured AiProvider, opened from the in-app chat bubble. Deliberately **not** a LoopRun: it has no WorkItem, worktree, branch, or PR of its own, and runs the agent in a durable per-session scratch directory that stays its working directory for the session's whole life. Reuses the loop's agent-adapter execution layer. A user retains **many** chats as browsable history — each titled with the cleaned-up start of its first message, or, with the opt-in `chat.smartTitles` setting, a short summary of its first message and a successful reply, generated on the provider `chat.titleProviderTag` resolves to (as an AI node's tag does) after each successful reply while the chat is still untitled, until it has more than `chat.titleMaxAttempts` messages (default 3), as a plain model call with no tools and no MCP servers, and no call at all on a Copilot provider, whose tools cannot be turned off; a user can rename any chat, and a renamed chat is never retitled automatically — resumes any with its full transcript, and a chat is deleted only by an explicit per-chat or "delete all" action, never automatically (no inactivity sweeper). See [ADR-0010](docs/adr/0010-standalone-chat-session.md) and [ADR-0013](docs/adr/0013-retained-chat-history.md).
 _Avoid_: chat thread, conversation, chat run
 
 **Chat Context**:
@@ -280,6 +280,7 @@ Both emit messages of shape `{ type: string; payload: T; timestamp: string }`. A
 - `WorkItemEditProposalsChanged` — `{ workItemId }` on `/hubs/work-item`: a Work Item Edit Proposal on that item was made or decided; the board card and an open detail view re-read
 - `ChatEditProposalsChanged` — `{ chatSessionId }` on `/hubs/chat`, to that chat's group only: a proposal the chat made was made or decided; its inline proposal cards re-read
 - `ChatUnreadChanged` — `{ chatSessionId }` on `/hubs/chat`, to the owner's inbox group only (joined with `SubscribeToChatInbox`): a reply in that chat was stored, its read marker rose, or it was deleted; the chat bubble re-reads its history
+- `ChatTitleChanged` — `{ chatSessionId }` on `/hubs/chat`, to the owner's inbox group only: a title was generated for that chat or it was renamed; the chat bubble re-reads its history, which also gives the open chat's header its title
 
 The frontend hook `useSignalR.on<E>(eventType, handler)` resolves the payload type from the map; unknown event names fall through to `unknown` so the call site is forced to narrow before use.
 

@@ -55,4 +55,7 @@ public interface IChatNotifier
     /// only: it carries no state.
     /// </summary>
     Task UnreadChangedAsync(string userId, Guid chatSessionId);
+
+    /// <summary>The chat's title changed; a hint to the owner's inbox, like <see cref="UnreadChangedAsync"/>.</summary>
+    Task TitleChangedAsync(string userId, Guid chatSessionId);
 }

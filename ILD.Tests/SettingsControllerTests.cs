@@ -93,6 +93,49 @@ public sealed class SettingsControllerTests : IDisposable
     }
 
     [Theory]
+    [InlineData(" TRUE ", "true")]
+    [InlineData("False", "false")]
+    public async Task The_smart_titles_switch_is_stored_like_the_other_booleans(string sent, string stored)
+    {
+        var result = await Put(AppSettingKeys.ChatSmartTitles, sent);
+
+        Assert.Equal(stored, StatedValue(result));
+        Assert.Equal(stored, await Stored(AppSettingKeys.ChatSmartTitles));
+    }
+
+    [Fact]
+    public async Task A_smart_titles_switch_no_bool_can_be_read_from_is_refused_and_stores_nothing()
+    {
+        var result = await Put(AppSettingKeys.ChatSmartTitles, "on");
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Null(await Stored(AppSettingKeys.ChatSmartTitles));
+    }
+
+    [Theory]
+    [InlineData(" Fast ", "Fast")]
+    [InlineData("   ", "")]
+    public async Task The_title_provider_tag_is_stored_trimmed(string sent, string stored)
+    {
+        var result = await Put(AppSettingKeys.ChatTitleProviderTag, sent);
+
+        Assert.Equal(stored, StatedValue(result));
+        Assert.Equal(stored, await Stored(AppSettingKeys.ChatTitleProviderTag));
+    }
+
+    public static TheoryData<string> ImpossibleTags => new() { new string('t', 65), "qa,fast" };
+
+    [Theory]
+    [MemberData(nameof(ImpossibleTags))]
+    public async Task A_title_provider_tag_no_provider_could_hold_is_refused_and_stores_nothing(string sent)
+    {
+        var result = await Put(AppSettingKeys.ChatTitleProviderTag, sent);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Null(await Stored(AppSettingKeys.ChatTitleProviderTag));
+    }
+
+    [Theory]
     [InlineData(AppSettingKeys.NetworkMode, " Whitelist ")]
     [InlineData(AppSettingKeys.SchedulerMaxConcurrent, " 7 ")]
     public async Task Canonicalising_is_for_the_booleans_only_and_leaves_every_other_value_as_sent(string key, string sent)
