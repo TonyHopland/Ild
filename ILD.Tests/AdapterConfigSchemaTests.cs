@@ -62,7 +62,7 @@ public class AdapterConfigSchemaTests
     [Fact]
     public void PiAdapter_schema_is_empty()
     {
-        // Pi reaches the ILD MCP server through its extension bridge, but custom
+        // Pi reaches the ILD MCP server through its own MCP support, but custom
         // MCP servers are not wired for pi, so it exposes no config field.
         var adapter = new PiAdapter();
 
