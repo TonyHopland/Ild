@@ -64,7 +64,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     public override string Name => "Copilot";
     public override string[] SupportedProviderTypes => ["copilot"];
 
-    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
+    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
@@ -92,7 +92,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model),
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.AdditionalAllowedDirectories, mcpConfigPath, ctx.Provider.Model, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
                     ctx.Provider.Id, ctx.Environment);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -163,13 +163,18 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         }
     }
 
+    /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
+    internal static readonly string[] ReservedCliFlags =
+        ["--allow-all-tools", "--no-color", "--add-dir", "--additional-mcp-config", "--prompt", "-p"];
+
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
         string prompt,
         IReadOnlyList<string>? additionalAllowedDirectories = null,
         string? mcpConfigPath = null,
-        string? model = null)
+        string? model = null,
+        IReadOnlyList<string>? extraArgs = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
         {
@@ -218,6 +223,9 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add("--additional-mcp-config");
             psi.ArgumentList.Add("@" + mcpConfigPath);
         }
+
+        foreach (var arg in extraArgs ?? [])
+            psi.ArgumentList.Add(arg);
 
         // `-p` runs a single turn non-interactively and exits. Keep it last so
         // the prompt text is unambiguously the option's value.

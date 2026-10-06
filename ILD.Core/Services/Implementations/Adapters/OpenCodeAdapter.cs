@@ -31,7 +31,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
 
     public override string Name => "OpenCode";
     public override string[] SupportedProviderTypes => ["opencode"];
-    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
+    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
@@ -104,6 +104,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             }
 
             var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools);
+            var extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, _logger);
 
             Process? proc = null;
             try
@@ -114,7 +115,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                     ctx.Prompt,
                     opencodeModel,
                     opencodeConfigJson,
-                    sessionIdToUse), ctx.Provider.Id, ctx.Environment);
+                    sessionIdToUse,
+                    extraArgs: extraArgs), ctx.Provider.Id, ctx.Environment);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -129,7 +131,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                             opencodeModel,
                             opencodeConfigJson,
                             sessionIdToUse,
-                            useWorktreeAsWorkingDirectory: false), ctx.Provider.Id, ctx.Environment);
+                            useWorktreeAsWorkingDirectory: false,
+                            extraArgs: extraArgs), ctx.Provider.Id, ctx.Environment);
                     }
                     catch (Exception retryEx) when (retryEx is InvalidOperationException or IOException)
                     {
@@ -412,6 +415,9 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         }
     }
 
+    /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
+    internal static readonly string[] ReservedCliFlags = ["--dir", "--format", "--session", "-s"];
+
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
@@ -419,7 +425,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         string opencodeModel,
         string opencodeConfigJson,
         string? sessionId,
-        bool useWorktreeAsWorkingDirectory = true)
+        bool useWorktreeAsWorkingDirectory = true,
+        IReadOnlyList<string>? extraArgs = null)
     {
         var psi = BuildProcessStartInfo(binaryPath, worktreePath, useWorktreeAsWorkingDirectory);
         psi.EnvironmentVariables["OPENCODE_CONFIG_CONTENT"] = opencodeConfigJson;
@@ -435,6 +442,8 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add("--session");
             psi.ArgumentList.Add(sessionId);
         }
+        foreach (var arg in extraArgs ?? [])
+            psi.ArgumentList.Add(arg);
         psi.ArgumentList.Add("--");
         psi.ArgumentList.Add(prompt);
         return psi;

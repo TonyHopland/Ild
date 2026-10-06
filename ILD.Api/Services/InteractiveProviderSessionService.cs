@@ -64,7 +64,12 @@ public sealed class InteractiveProviderSessionService
             // The routed command carries the environment the crossing requires
             // (HOME, so the TUI writes credentials into the agent's home rather
             // than the orchestrator's); applying it is not optional.
-            var routed = AgentIsolation.RouteCommand(binaryPath, Array.Empty<string>(), provider.Id);
+            // Only the user's extra arguments: the terminal is for logging in and for
+            // checking that the CLI accepts them, not a run, so none of a run's flags.
+            var (extraArgs, notice) = ResolveExtraArgs(provider);
+            if (notice is not null)
+                await PtyWebSocketBridge.SendNoticeAsync(socket, notice, cancellationToken);
+            var routed = AgentIsolation.RouteCommand(binaryPath, extraArgs, provider.Id);
             var environment = new Dictionary<string, string>(routed.Environment);
 
             var options = new PtyOptions
@@ -78,7 +83,7 @@ public sealed class InteractiveProviderSessionService
                 Environment = environment,
             };
 
-            await PtyWebSocketBridge.RunAsync(socket, options, _logger, cancellationToken);
+            await PtyWebSocketBridge.RunAsync(socket, options, _logger, cancellationToken, reportExit: true);
         }
         finally
         {
@@ -86,6 +91,24 @@ public sealed class InteractiveProviderSessionService
             // so a link it planted is unlinked rather than followed.
             try { await AgentWritableFiles.DeleteAsync([sessionRoot], CancellationToken.None); } catch { }
         }
+    }
+
+    /// <summary>
+    /// The extra CLI arguments saved on <paramref name="provider"/>, and the line to
+    /// show above the terminal about them: what it was launched with, or that a
+    /// value which does not split was ignored. No arguments, no line.
+    /// </summary>
+    private (IReadOnlyList<string> Tokens, string? Notice) ResolveExtraArgs(AiProvider provider)
+    {
+        var (tokens, error) = ExtraCliArgs.Tokenize(AiProviderConfig.Parse(provider.Config).ExtraArgs);
+        if (error is not null)
+        {
+            _logger.LogWarning(
+                "Opening the terminal of AI provider {ProviderName} ({ProviderId}) without its extra CLI arguments: {Error}",
+                provider.Name, provider.Id, error);
+            return (tokens, $"Extra CLI arguments ignored: {error} Fix them on the AI Providers page.");
+        }
+        return (tokens, tokens.Count == 0 ? null : "Launched with: " + ExtraCliArgs.Format(tokens));
     }
 
     /// <summary>

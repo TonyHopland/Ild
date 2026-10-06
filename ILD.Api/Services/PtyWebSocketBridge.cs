@@ -23,11 +23,17 @@ public static class PtyWebSocketBridge
 {
     private const int ReadBufferSize = 8 * 1024;
 
+    /// <param name="reportExit">
+    /// When the child ends on its own, follow its output with a line giving its exit
+    /// code before closing, so a CLI that rejects its arguments and exits at once
+    /// leaves something to read.
+    /// </param>
     public static async Task RunAsync(
         WebSocket socket,
         PtyOptions options,
         ILogger logger,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool reportExit = false)
     {
         IPtyConnection? pty = null;
         try
@@ -53,19 +59,40 @@ public static class PtyWebSocketBridge
             // only token the socket ops observe is the request-abort token,
             // which fires only when the client/connection is genuinely gone.
             using var ptyExited = new CancellationTokenSource();
-            pty.ProcessExited += (_, _) =>
+            int? exitCode = null;
+            pty.ProcessExited += (_, e) =>
             {
+                exitCode = e.ExitCode;
                 try { ptyExited.Cancel(); } catch { }
             };
 
             var ptyToSocket = PumpPtyToSocketAsync(pty, socket, cancellationToken);
             var socketToPty = PumpSocketToPtyAsync(socket, pty, cancellationToken);
+            var childExited = AwaitCancellationAsync(ptyExited.Token);
 
             // Wake teardown the moment the child exits, even if the PTY reader is
             // slow to surface EOF. This waits on the token only — it never
             // touches the socket, so unlike the old linked-token cancel it can't
             // abort it.
-            await Task.WhenAny(ptyToSocket, socketToPty, AwaitCancellationAsync(ptyExited.Token));
+            await Task.WhenAny(ptyToSocket, socketToPty, childExited);
+
+            // The child ended on its own: let the pump forward what it wrote last
+            // before the close frame below makes the pump stop sending. Bounded, as
+            // a grandchild holding the PTY open would keep EOF away.
+            if (!socketToPty.IsCompleted && !cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.WhenAny(
+                        Task.WhenAll(ptyToSocket, childExited),
+                        Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
+                }
+                catch { }
+
+                // Only once the pump is done: a WebSocket takes one send at a time.
+                if (reportExit && ptyToSocket.IsCompleted && childExited.IsCompleted && exitCode is { } code)
+                    await SendNoticeAsync(socket, $"The CLI exited with code {code}.", cancellationToken);
+            }
 
             // Send the close frame BEFORE killing the child or tearing anything
             // down, while the socket is still in a closable state, so the client
@@ -111,6 +138,17 @@ public static class PtyWebSocketBridge
 
     public static async Task SendErrorAndCloseAsync(WebSocket socket, string message, CancellationToken ct)
     {
+        await SendNoticeAsync(socket, message, ct);
+        await CloseSocketAsync(socket, WebSocketCloseStatus.InternalServerError, message, ct);
+    }
+
+    /// <summary>
+    /// Show ILD's own <paramref name="message"/> as a line of terminal output. Never
+    /// throws; a socket that is no longer open gets nothing. Must not overlap a
+    /// running <see cref="RunAsync"/>'s output pump.
+    /// </summary>
+    public static async Task SendNoticeAsync(WebSocket socket, string message, CancellationToken ct)
+    {
         try
         {
             var payload = Encoding.UTF8.GetBytes($"[ild] {message}\r\n");
@@ -120,7 +158,6 @@ public static class PtyWebSocketBridge
             }
         }
         catch { }
-        await CloseSocketAsync(socket, WebSocketCloseStatus.InternalServerError, message, ct);
     }
 
     /// <summary>

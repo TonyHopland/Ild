@@ -43,7 +43,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
     public override string Name => "ClaudeCode";
     public override string[] SupportedProviderTypes => ["claude-code"];
-    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField];
+    public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
@@ -84,7 +84,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools),
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, mcpConfigPath, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, ctx.NoTools, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
                     ctx.Provider.Id, ctx.Environment);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -169,6 +169,11 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         }
     }
 
+    /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
+    internal static readonly string[] ReservedCliFlags =
+        ["--print", "-p", "--output-format", "--verbose", "--tools", "--strict-mcp-config", "--no-session-persistence",
+         "--add-dir", "--permission-mode", "--mcp-config", "--resume", "-r"];
+
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
@@ -177,7 +182,8 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         string? mcpConfigPath = null,
         IReadOnlyList<string>? additionalAllowedDirectories = null,
         string? model = null,
-        bool noTools = false)
+        bool noTools = false,
+        IReadOnlyList<string>? extraArgs = null)
     {
         var psi = new ProcessStartInfo(binaryPath)
         {
@@ -244,6 +250,9 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add("--resume");
             psi.ArgumentList.Add(sessionId);
         }
+
+        foreach (var arg in extraArgs ?? [])
+            psi.ArgumentList.Add(arg);
 
         // Terminate option parsing before the prompt. `--mcp-config` is a
         // variadic option in the claude CLI: without this separator it greedily
