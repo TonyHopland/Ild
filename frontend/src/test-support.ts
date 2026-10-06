@@ -1,6 +1,6 @@
 // Shared helpers for tests. Not a test file itself, so it is outside the
 // `src/**/*.test.{ts,tsx}` include and never collected as a suite.
-import { act, fireEvent } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import { vi } from "vite-plus/test";
 import { workItemService } from "./services/auth";
 import { compareServerOrder } from "./utils/taskboardColumns";
@@ -83,6 +83,28 @@ export interface ChatHubEvents {
   ChatTurnProgress: ChatTurnProgressPayload;
   ChatMessageAppended: ChatMessageAppendedPayload;
   ChatTurnCompleted: ChatTurnCompletedPayload;
+}
+
+/**
+ * The chat bubble's list of chats, opened from the panel header if it is closed.
+ * In the default (narrow) panel it fills the panel, so the open chat or the start
+ * form is not on screen while it is.
+ */
+export async function openChatList(): Promise<HTMLElement> {
+  const shown = screen.queryByRole("complementary", { name: "Chats" });
+  if (shown) return shown;
+  fireEvent.click(await screen.findByRole("button", { name: "Chat list" }));
+  return screen.findByRole("complementary", { name: "Chats" });
+}
+
+/** Opens a chat from the chat bubble's list, by the name its row shows. */
+export async function openChatFromList(name: string): Promise<void> {
+  fireEvent.click(await within(await openChatList()).findByText(name));
+}
+
+/** Leaves the open chat for the start form, from the chat bubble's list. */
+export async function startNewChat(): Promise<void> {
+  fireEvent.click(within(await openChatList()).getByRole("button", { name: "New chat" }));
 }
 
 /** A board page request, as the Taskboard sends it for one status column. */

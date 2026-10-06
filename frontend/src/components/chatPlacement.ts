@@ -2,7 +2,8 @@
 // icon and how large they resized the panel. Both are kept per-browser in
 // localStorage and clamped to the current viewport so a bubble dragged to a
 // corner — or a panel sized on a wide monitor — can never end up stranded
-// off-screen after the window shrinks.
+// off-screen after the window shrinks. Whether the chat list is open is kept
+// here too.
 
 export interface Point {
   x: number;
@@ -130,4 +131,21 @@ export function loadPanelPosition(): Point | null {
 
 export function savePanelPosition(pos: Point): void {
   localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify(pos));
+}
+
+/**
+ * The narrowest panel that holds the chat list beside a chat: about the list's
+ * width plus the default panel's. Below it an open list fills the whole panel.
+ */
+export const SIDEBAR_SIDE_BY_SIDE_MIN_WIDTH = 640;
+export const SIDEBAR_OPEN_KEY = "ild_chat_sidebar_open";
+
+/** Whether the chat list was left open; until the user says, open only beside a chat. */
+export function loadSidebarOpen(panelWidth: number): boolean {
+  const stored = readJson(SIDEBAR_OPEN_KEY);
+  return typeof stored === "boolean" ? stored : panelWidth >= SIDEBAR_SIDE_BY_SIDE_MIN_WIDTH;
+}
+
+export function saveSidebarOpen(open: boolean): void {
+  localStorage.setItem(SIDEBAR_OPEN_KEY, JSON.stringify(open));
 }

@@ -320,20 +320,67 @@
   flex: 1;
 }
 
-/* Retained chat history (ADR-0013): the list of past chats under Start chat. */
-.chat-history {
+/* The chat list (ADR-0013 retained history). Beside the chat in a wide panel;
+   filling the panel body in a narrow one. Closed, it is not rendered at all, so
+   the chat takes the whole width. */
+.chat-panel-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.chat-panel-content {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  margin-top: 0.85rem;
-  border-top: 1px solid #2a2a40;
-  padding-top: 0.6rem;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 15rem;
+  flex-shrink: 0;
+  padding: 0.6rem;
+  overflow-y: auto;
+  border-right: 1px solid #2d2d44;
+  background: #1a1a2a;
+}
+
+.chat-sidebar-full {
+  flex: 1;
+  width: auto;
+  min-height: 0;
+  border-right: none;
+}
+
+.chat-sidebar-toggle {
+  position: relative;
+  margin-right: 0.35rem;
+  font-size: 1rem;
+}
+
+.chat-sidebar-badge {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.45rem;
+  min-width: 1rem;
+  padding: 0 0.25rem;
+  border-radius: 0.5rem;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1rem;
+  text-align: center;
 }
 
 .chat-history-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 
@@ -385,6 +432,39 @@
 
 .chat-history-open:hover {
   background: #2a2a40;
+}
+
+.chat-history-open[aria-current="true"] {
+  background: #33335a;
+  box-shadow: inset 2px 0 0 #6366f1;
+}
+
+.chat-history-unread .chat-history-name {
+  font-weight: 700;
+}
+
+.chat-star {
+  color: #707090;
+  font-size: 1rem;
+}
+
+.chat-star-on {
+  color: #facc15;
+}
+
+.chat-star:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+/* Waiting on the user: an amber ring, unlike the solid red unread dot. */
+.chat-needs-you {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 2px solid #f59e0b;
 }
 
 .chat-history-title {

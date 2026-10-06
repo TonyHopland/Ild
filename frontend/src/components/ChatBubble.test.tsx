@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary } from "../types";
-import type { ChatHubEvents } from "../test-support";
+import { openChatFromList, openChatList, startNewChat, type ChatHubEvents } from "../test-support";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
@@ -159,7 +159,7 @@ async function openResumed(session: ChatSession, initialPath = "/") {
   chatService.getById.mockResolvedValue(session);
   const view = renderBubble(initialPath);
   fireEvent.click(await screen.findByLabelText("Open chat"));
-  fireEvent.click(await screen.findByText(session.name ?? "New chat"));
+  await openChatFromList(session.name ?? "Untitled chat");
   await screen.findByLabelText("Chat message");
   return view;
 }
@@ -310,7 +310,7 @@ describe("ChatBubble", () => {
     expect(chatService.getById).toHaveBeenCalledWith("s1");
   });
 
-  test("lists past chats under Start chat with a name and date-stamp", async () => {
+  test("lists past chats in the chat list with a name and date-stamp", async () => {
     chatService.listHistory.mockResolvedValue([
       summary({ id: "s1", name: "Deploy loop help", updatedAt: "2026-03-04T00:00:00Z" }),
       summary({ id: "s2", name: "Bug triage", updatedAt: "2026-03-03T00:00:00Z" }),
@@ -319,11 +319,12 @@ describe("ChatBubble", () => {
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openChatList();
 
     expect(await screen.findByText("Deploy loop help")).toBeTruthy();
     expect(screen.getByText("Bug triage")).toBeTruthy();
-    // The date-stamp renders the last-activity timestamp.
-    expect(screen.getByText(new Date("2026-03-04T00:00:00Z").toLocaleString())).toBeTruthy();
+    // The date-stamp carries the full last-activity timestamp.
+    expect(screen.getByTitle(new Date("2026-03-04T00:00:00Z").toLocaleString())).toBeTruthy();
   });
 
   test("per-chat delete removes that chat without touching the others", async () => {
@@ -336,6 +337,7 @@ describe("ChatBubble", () => {
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openChatList();
     await screen.findByText("Remove me");
 
     fireEvent.click(screen.getByLabelText("Delete chat Remove me"));
@@ -355,6 +357,7 @@ describe("ChatBubble", () => {
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openChatList();
     await screen.findByText("One");
 
     // First click only arms the confirmation — nothing is deleted yet.
@@ -368,12 +371,12 @@ describe("ChatBubble", () => {
     await waitFor(() => expect(screen.queryByText("One")).toBeNull());
   });
 
-  test("Back returns to the list and retains the chat (no delete)", async () => {
+  test("New chat leaves the open chat for the start form and retains it (no delete)", async () => {
     await openResumed(chatSession({ name: "Retained chat" }));
 
-    fireEvent.click(screen.getByText("← Back"));
+    await startNewChat();
 
-    // The list is shown again and the chat was not deleted.
+    // The start form is shown and the chat was not deleted.
     expect(await screen.findByText("Start chat")).toBeTruthy();
     expect(screen.queryByLabelText("Chat message")).toBeNull();
     expect(chatService.deleteOne).not.toHaveBeenCalled();
@@ -391,9 +394,9 @@ describe("ChatBubble", () => {
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     // Resume the past chat (this does not need providers), then end it.
-    fireEvent.click(await screen.findByText("Old chat"));
+    await openChatFromList("Old chat");
     await screen.findByLabelText("Chat message");
-    fireEvent.click(screen.getByText("← Back"));
+    await startNewChat();
 
     // The provider list fills without having to close and reopen the panel.
     expect(await screen.findByText("Claude (claude-code)")).toBeTruthy();
@@ -405,8 +408,8 @@ describe("ChatBubble", () => {
     // The resumed session is published for other components (the LoopEditor).
     await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith("s1"));
 
-    // Going back publishes null so the editor leaves the group.
-    fireEvent.click(await screen.findByText("← Back"));
+    // Leaving publishes null so the editor leaves the group.
+    await startNewChat();
     await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith(null));
   });
 
@@ -594,10 +597,10 @@ describe("ChatBubble", () => {
     await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
     expect(screen.queryByRole("status")).toBeNull();
 
-    // …and neither does going back to the list and coming in again.
-    fireEvent.click(screen.getByText("← Back"));
+    // …and neither does leaving the chat and coming in again.
+    await startNewChat();
     await screen.findByText("Start chat");
-    fireEvent.click(await screen.findByText("Idle chat"));
+    await openChatFromList("Idle chat");
     await screen.findByLabelText("Chat message");
 
     expect(screen.queryByLabelText("Stop")).toBeNull();
@@ -912,10 +915,10 @@ describe("ChatBubble placement", () => {
     await openResumed(chatSession());
 
     const panel = await screen.findByRole("dialog", { name: "AI chat" });
-    const back = await screen.findByText("← Back");
+    const chatList = screen.getByRole("button", { name: "Chat list" });
 
     // Pressing and moving on a header button must not reposition the panel…
-    fireEvent.pointerDown(back, { clientX: 200, clientY: 200 });
+    fireEvent.pointerDown(chatList, { clientX: 200, clientY: 200 });
     fireEvent.pointerMove(window, { clientX: 50, clientY: 50 });
     fireEvent.pointerUp(window, { clientX: 50, clientY: 50 });
 
@@ -923,8 +926,8 @@ describe("ChatBubble placement", () => {
     expect((panel as HTMLElement).style.top).toBe("236px");
     expect(localStorage.getItem(PANEL_POSITION_KEY)).toBeNull();
 
-    // …and the button still does its job, returning to the list.
-    fireEvent.click(back);
-    expect(await screen.findByText("Start chat")).toBeTruthy();
+    // …and the button still does its job, showing the chat list.
+    fireEvent.click(chatList);
+    expect(await screen.findByRole("complementary", { name: "Chats" })).toBeTruthy();
   });
 });

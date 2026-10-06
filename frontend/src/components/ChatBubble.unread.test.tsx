@@ -59,6 +59,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
 import { setChatEnabled } from "../hooks/useChatEnabled";
+import { openChatFromList, openChatList, startNewChat } from "../test-support";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -218,13 +219,15 @@ function closePanel() {
 }
 
 async function resume(name: string) {
-  fireEvent.click(await screen.findByText(name));
+  await openChatFromList(name);
   await screen.findByLabelText("Chat message");
 }
 
+/** Leave the open chat, then show the list again. */
 async function back() {
-  fireEvent.click(screen.getByText("← Back"));
+  await startNewChat();
   await screen.findByText("Start chat");
+  await openChatList();
 }
 
 async function send(text: string) {
@@ -246,6 +249,7 @@ describe("unread chat indicator", () => {
     expect(screen.queryAllByRole("status")).toHaveLength(0);
 
     await openPanel();
+    await openChatList();
     await screen.findByText("Beta");
     expect(rowDot("Alpha")).not.toBeNull();
     expect(rowDot("Beta")).toBeNull();
@@ -361,6 +365,7 @@ describe("unread chat indicator", () => {
     sessions.b = chat("b", "Beta", [msg("b", 4, "user"), msg("b", 5, "assistant")]);
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Beta");
     expect(rowDot("Alpha")).not.toBeNull();
     expect(rowDot("Beta")).not.toBeNull();
@@ -462,6 +467,7 @@ describe("unread chat indicator", () => {
     server = [summary("a", "Alpha", true), summary("b", "Beta", false)];
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     holdHistoryReads(1);
@@ -485,6 +491,7 @@ describe("unread chat indicator", () => {
     server = [summary("a", "Alpha", true), summary("b", "Beta", true)];
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     holdHistoryReads(1);
@@ -511,6 +518,7 @@ describe("unread chat indicator", () => {
     server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     // B's reply lands and its hint's read goes out before A's delete settles.

@@ -53,6 +53,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
+import { openChatFromList, openChatList, startNewChat } from "../test-support";
 
 // A stand-in for the server: what GET /chat/history answers right now. A rename
 // that succeeds changes it there, as PUT /chat/{id}/name does.
@@ -146,13 +147,15 @@ async function openPanel() {
 }
 
 async function resume(name: string) {
-  fireEvent.click(await screen.findByText(name));
+  await openChatFromList(name);
   await screen.findByLabelText("Chat message");
 }
 
+/** Leave the open chat, then show the list again. */
 async function back() {
-  fireEvent.click(screen.getByText("← Back"));
+  await startNewChat();
   await screen.findByText("Start chat");
+  await openChatList();
 }
 
 /** The rename draft's input, if one is open: any text box but the message box. */
@@ -205,6 +208,7 @@ describe("chat titles", () => {
     server = [summary("a", "Alpha"), summary("b", "Beta")];
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     let input = startRenamingRow("Alpha");
@@ -261,6 +265,7 @@ describe("chat titles", () => {
     chatService.rename.mockRejectedValue(new Error("Name is taken"));
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     const input = startRenamingRow("Alpha");

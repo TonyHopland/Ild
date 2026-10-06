@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Chats can be renamed, and an opt-in setting gives each new chat a short title that says what it is about.**
 
+- **A searchable list of your chats sits beside the chat, marks unread ones, lets you star favourites, and replaces the Back button.**
+
 ### Changed
 
 - **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**

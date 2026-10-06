@@ -1010,6 +1010,10 @@ export interface ChatSessionSummary {
   updatedAt: string | null;
   /** Whether it holds a reply the user has not read. */
   hasUnread?: boolean;
+  /** Starred by the user, so the list shows it on top. */
+  isFavorite?: boolean;
+  /** Waiting on the user rather than merely unread. Nothing on the server sets it yet. */
+  needsYou?: boolean;
 }
 
 export interface ChatMessageAppendedPayload {
