@@ -15,8 +15,10 @@ import { sameTag } from "../../utils/providerTags";
 /** Adapter config value shapes rendered by {@link AdapterConfigFields}. */
 type ConfigValue = string | number | boolean;
 
-/** The one schema field the server round-trips as a dedicated, non-secret value. */
-const CUSTOM_MCP_SERVERS_FIELD = "customMcpServersJson";
+/** The schema fields the server round-trips as dedicated, non-secret values. */
+const PERSISTED_CONFIG_FIELDS = ["customMcpServersJson", "extraArgs"] as const;
+const isPersistedConfigField = (name: string) =>
+  (PERSISTED_CONFIG_FIELDS as readonly string[]).includes(name);
 
 /** The tags typed into the comma-separated Tags field, first spelling of each kept. */
 const parseTags = (text: string) =>
@@ -60,11 +62,10 @@ export default function AiProviders() {
   }, []);
 
   // Load the adapter config schema for the selected provider type so its fields
-  // render on the modal. The endpoint returns an empty schema for types without
-  // custom MCP servers (pi), which naturally hides the section for them. We keep only
-  // the fields the save path actually persists (currently just the Custom MCP
-  // servers value) so what renders is always what gets saved — if the backend
-  // adds more schema fields later, they won't silently no-op here.
+  // render on the modal. We keep only the fields the save path actually persists
+  // (the Custom MCP servers and Extra CLI arguments values) so what renders is
+  // always what gets saved — if the backend adds more schema fields later, they
+  // won't silently no-op here.
   useEffect(() => {
     if (!type) {
       setConfigSchema([]);
@@ -76,7 +77,7 @@ export default function AiProviders() {
       .then((schema) => {
         if (cancelled) return;
         const supported = Array.isArray(schema)
-          ? schema.filter((field) => field.name === CUSTOM_MCP_SERVERS_FIELD)
+          ? schema.filter((field) => isPersistedConfigField(field.name))
           : [];
         setConfigSchema(supported);
       })
@@ -141,9 +142,12 @@ export default function AiProviders() {
     setTagsText((provider.tags ?? []).join(", "));
     setSaveError(null);
     setConfigValues(
-      provider.customMcpServersJson != null
-        ? { [CUSTOM_MCP_SERVERS_FIELD]: provider.customMcpServersJson }
-        : {},
+      Object.fromEntries(
+        PERSISTED_CONFIG_FIELDS.flatMap((field) => {
+          const value = provider[field];
+          return value != null ? [[field, value]] : [];
+        }),
+      ),
     );
     setShowModal(true);
   };
@@ -217,13 +221,15 @@ export default function AiProviders() {
       tags: parseTags(tagsText),
     };
 
-    // Send the Custom MCP servers value whenever the selected type exposes it
-    // (opencode, claude-code, copilot — including the CLI-auth ones). An empty
-    // string clears it. The server folds it into AiProvider.Config, preserving any
-    // other stored keys. Types without the field (pi) send nothing, so their
-    // config is left untouched.
-    if (configSchema.some((field) => field.name === CUSTOM_MCP_SERVERS_FIELD)) {
-      data.customMcpServersJson = String(configValues[CUSTOM_MCP_SERVERS_FIELD] ?? "");
+    // Send each persisted value whenever the selected type exposes its field
+    // (Custom MCP servers: opencode, claude-code, copilot; Extra CLI arguments:
+    // those and pi). An empty string clears it. The server folds it into
+    // AiProvider.Config, preserving any other stored keys. A type without the
+    // field sends nothing for it, so that part of its config is left untouched.
+    for (const field of PERSISTED_CONFIG_FIELDS) {
+      if (configSchema.some((schemaField) => schemaField.name === field)) {
+        data[field] = String(configValues[field] ?? "");
+      }
     }
 
     setSaveError(null);

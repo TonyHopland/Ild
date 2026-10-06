@@ -805,3 +805,39 @@ MCP servers and does not expose this field.
 > The `chrome-devtools` example above requires Chrome in the ILD image
 > (`WITH_CHROME`) and Node/npm (`WITH_NODE`). `--no-sandbox` is required because
 > agents run as a non-root user.
+
+### Extra CLI arguments
+
+Every agent provider (**Claude Code**, **GitHub Copilot**, **OpenCode** and **Pi**)
+has an **Extra CLI arguments** field (`extraArgs`) for flags ILD itself doesn't
+pass, such as `--effort high` for Claude Code. Combined with tags, this lets two
+providers run the same CLI differently — e.g. one tagged `Fast` with no extra
+arguments and one tagged `Thinking` with `--effort high` — and each AI node picks
+one by tag.
+
+The value is split like a shell command line, but no shell ever runs it:
+whitespace and newlines separate arguments, `'…'` and `"…"` group words, and a
+backslash makes the next character literal. Nothing is expanded, so `$HOME`,
+`$(…)`, `*`, `;` and `|` reach the CLI as typed. For example
+`--append-system-prompt "be brief"` is two arguments.
+
+Saving is refused, with a message naming the problem, when the value has an
+unbalanced quote, a bare `--`, the model flag (`--model`, `--model=…`, and `-m`
+for OpenCode — set the model with the **Model** field instead), or any other flag
+ILD already sets for that CLI (for example `--print` or `--resume` for Claude Code).
+
+The arguments are added, after ILD's own flags and before the prompt, to every
+launch of the agent: loop AI nodes and chat turns. The provider's terminal on the
+AI Providers page opens the CLI with them too (and with none of a run's flags),
+shows `Launched with: …` above the CLI's output, and keeps the CLI's error output
+and exit code on screen if it rejects them — so open the terminal after saving to
+check that the CLI accepts them. Helper calls such as OpenCode's session
+export/import and the install and version checks don't get them.
+A changed value applies to the next launch.
+
+**Don't put secrets here**: the arguments are visible in the process list. Use the
+provider's API key or environment settings instead (ADR-0014).
+
+A stored value that can't be split (e.g. one written straight into the config
+through the API) never fails a run: the agent launches without the extra
+arguments and a warning is logged, and the terminal says they were ignored.
