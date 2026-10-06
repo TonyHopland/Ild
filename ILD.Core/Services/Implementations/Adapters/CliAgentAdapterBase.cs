@@ -66,8 +66,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// adapter (opencode, claude-code, copilot). Each such adapter surfaces it from
     /// its own <see cref="ConfigSchema"/> so the value is persisted into
     /// <c>AiProvider.Config</c> and injected alongside the built-in <c>ild</c>
-    /// server. Pi reaches only the built-in <c>ild</c> server, through its
-    /// extension bridge, so it does not expose the field.
+    /// server. Pi reaches only the built-in <c>ild</c> server, registered with its
+    /// own MCP client by a generated extension, so it does not expose the field.
     /// </summary>
     protected static readonly ConfigFieldDescriptor CustomMcpServersField = new(
         Name: "customMcpServersJson",

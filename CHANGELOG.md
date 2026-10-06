@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A chat named from its first message keeps up to 120 characters of it instead of 60.**
 
+- **Pi 1.0 is supported, and Pi now reaches ILD's tools through its own MCP support.**
+
 - **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**
 
 ## [0.16.0] - 2026-10-04

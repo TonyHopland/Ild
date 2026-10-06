@@ -40,19 +40,88 @@ public class AdapterUsageParserTests
         Assert.Equal(0.5m, usage.CostUsd);
     }
 
-    [Fact]
-    public void Parses_pi_usage_without_cost()
-    {
-        // pi reports tokens but no monetary cost — CostUsd stays null.
-        var stdout =
-            "{\"type\":\"turn_end\",\"message\":{\"role\":\"assistant\",\"usage\":{\"input_tokens\":12,\"output_tokens\":34}}}";
+    // Shapes from @earendil-works/pi-coding-agent 1.0.4 docs/json.md and
+    // docs/message-types.md: every assistant message carries its own usage, which
+    // pi repeats on message_update, turn_end and agent_end.
+    private static string PiUsage(int input, int output, int cacheRead, int cacheWrite, decimal cost)
+        => $"{{\"input\":{input},\"output\":{output},\"cacheRead\":{cacheRead},\"cacheWrite\":{cacheWrite},"
+            + $"\"totalTokens\":{input + output + cacheRead + cacheWrite},"
+            + $"\"cost\":{{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":{cost.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}}}";
 
-        var usage = AdapterUsageParser.Parse(stdout);
+    private static string PiAssistant(string usage)
+        => $"{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"hi\"}}],\"usage\":{usage}}}";
+
+    private static string PiRunStream(decimal firstCost, decimal secondCost)
+    {
+        var first = PiUsage(100, 10, 20, 5, firstCost);
+        var second = PiUsage(200, 30, 40, 0, secondCost);
+        return string.Join('\n',
+            "{\"type\":\"session\",\"version\":3,\"id\":\"s1\",\"cwd\":\"/w\"}",
+            "{\"type\":\"agent_start\"}",
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"user\",\"content\":\"go\",\"timestamp\":1}}",
+            $"{{\"type\":\"message_update\",\"usage\":{first},\"message\":{PiAssistant(first)},\"assistantMessageEvent\":{{\"type\":\"text_delta\",\"contentIndex\":0,\"delta\":\"hi\"}}}}",
+            $"{{\"type\":\"message_end\",\"message\":{PiAssistant(first)}}}",
+            $"{{\"type\":\"turn_end\",\"message\":{PiAssistant(first)},\"toolResults\":[]}}",
+            $"{{\"type\":\"message_update\",\"usage\":{second},\"message\":{PiAssistant(second)},\"assistantMessageEvent\":{{\"type\":\"text_delta\",\"contentIndex\":0,\"delta\":\"hi\"}}}}",
+            $"{{\"type\":\"message_end\",\"message\":{PiAssistant(second)}}}",
+            $"{{\"type\":\"turn_end\",\"message\":{PiAssistant(second)},\"toolResults\":[]}}",
+            $"{{\"type\":\"agent_end\",\"messages\":[{PiAssistant(first)},{PiAssistant(second)}]}}");
+    }
+
+    [Fact]
+    public void Pi_usage_sums_assistant_message_ends_not_their_repeats_and_reports_no_cost_for_an_unpriced_model()
+    {
+        var usage = AdapterUsageParser.ParsePi(PiRunStream(0m, 0m));
 
         Assert.NotNull(usage);
-        Assert.Equal(12, usage!.InputTokens);
-        Assert.Equal(34, usage.OutputTokens);
+        Assert.Equal((100 + 20 + 5) + (200 + 40 + 0), usage!.InputTokens);
+        Assert.Equal(10 + 30, usage.OutputTokens);
         Assert.Null(usage.CostUsd);
+    }
+
+    [Fact]
+    public void Pi_usage_sums_the_cost_of_every_assistant_message()
+    {
+        var usage = AdapterUsageParser.ParsePi(PiRunStream(0.0125m, 0.5m));
+
+        Assert.NotNull(usage);
+        Assert.Equal(365, usage!.InputTokens);
+        Assert.Equal(40, usage.OutputTokens);
+        Assert.Equal(0.5125m, usage.CostUsd);
+    }
+
+    [Fact]
+    public void Pi_usage_counts_each_compaction_once_alongside_the_assistant_messages()
+    {
+        // docs/json.md: a successful compaction_end carries the summarizing call's
+        // usage under result; an aborted one has no result.
+        var stdout = string.Join('\n',
+            PiRunStream(0.0125m, 0.5m),
+            "{\"type\":\"compaction_start\",\"reason\":\"threshold\"}",
+            $"{{\"type\":\"compaction_end\",\"reason\":\"threshold\",\"result\":{{\"summary\":\"s\",\"firstKeptEntryId\":\"e1\",\"tokensBefore\":150000,\"usage\":{PiUsage(1000, 50, 0, 7, 0.25m)},\"details\":{{}}}},\"aborted\":false,\"willRetry\":false}}",
+            "{\"type\":\"compaction_end\",\"reason\":\"manual\",\"aborted\":true,\"willRetry\":false}");
+
+        var usage = AdapterUsageParser.ParsePi(stdout);
+
+        Assert.NotNull(usage);
+        Assert.Equal(365 + 1007, usage!.InputTokens);
+        Assert.Equal(40 + 50, usage.OutputTokens);
+        Assert.Equal(0.7625m, usage.CostUsd);
+    }
+
+    [Fact]
+    public void Pi_usage_is_null_without_an_assistant_message_usage()
+    {
+        // Usage only on a user message and on streaming updates is not a recorded figure.
+        var stdout = string.Join('\n',
+            "{\"type\":\"session\",\"version\":3,\"id\":\"s1\",\"cwd\":\"/w\"}",
+            $"{{\"type\":\"message_end\",\"message\":{{\"role\":\"user\",\"content\":\"go\",\"usage\":{PiUsage(5, 5, 0, 0, 0m)}}}}}",
+            $"{{\"type\":\"message_update\",\"usage\":{PiUsage(7, 7, 0, 0, 0m)},\"assistantMessageEvent\":{{\"type\":\"text_delta\",\"delta\":\"hi\"}}}}",
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}}",
+            "not json");
+
+        Assert.Null(AdapterUsageParser.ParsePi(stdout));
+        Assert.Null(AdapterUsageParser.ParsePi(null));
     }
 
     [Fact]

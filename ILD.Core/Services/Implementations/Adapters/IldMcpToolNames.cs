@@ -8,9 +8,9 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// <summary>
 /// The tool names the ILD MCP server exposes, read from the
 /// <c>[McpServerTool(Name = …)]</c> attributes in its DLL's metadata. Pi's
-/// <c>--tools</c> allowlist also filters extension tools, so pi has to name every
-/// ILD tool before the server is ever started; reading them here keeps the server
-/// the only definition. The DLL is inspected, never loaded, so ILD.Core needs no
+/// <c>--tools</c> allowlist also filters MCP tools (<c>mcp__ild__&lt;name&gt;</c>),
+/// so pi has to name every ILD tool before the server is ever started; reading
+/// them here keeps the server the only definition. The DLL is inspected, never loaded, so ILD.Core needs no
 /// reference to ILD.McpServer.
 /// </summary>
 internal static class IldMcpToolNames

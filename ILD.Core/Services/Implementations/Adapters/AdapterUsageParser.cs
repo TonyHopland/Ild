@@ -12,9 +12,11 @@ namespace ILD.Core.Services.Implementations.Adapters;
 ///   and <c>total_cost_usd</c>.</item>
 ///   <item>opencode: assistant/step events with a <c>tokens</c> object
 ///   (<c>input</c>/<c>output</c>, plus a nested <c>cache</c>) and a <c>cost</c>.</item>
-///   <item>pi: a <c>usage</c> object on its message/turn-end events (no cost).</item>
+///   <item>pi: a per-message <c>usage</c> object (<c>input</c>/<c>output</c>,
+///   <c>cacheRead</c>/<c>cacheWrite</c>, <c>cost.total</c>) on every assistant
+///   message and compaction, read by <see cref="ParsePi"/>.</item>
 /// </list>
-/// The parser is tolerant: it walks each JSON line and keeps the last usage
+/// <see cref="Parse"/> is tolerant: it walks each JSON line and keeps the last usage
 /// object and cost it sees, so a cumulative final event wins over earlier
 /// partial ones. Returns <c>null</c> when the stream carries no usage at all.
 /// </summary>
@@ -42,6 +44,72 @@ public static class AdapterUsageParser
 
         var cost = state.TotalCostUsd ?? state.GenericCost;
         return new TokenUsage(state.InputTokens, state.OutputTokens, cost);
+    }
+
+    /// <summary>
+    /// Sum the usage of every assistant <c>message_end</c> and every successful
+    /// <c>compaction_end</c> (its summarizing call) in a <c>pi --mode json</c> stream.
+    /// Pi reports usage per message and repeats it on <c>message_update</c>,
+    /// <c>turn_end</c> and <c>agent_end</c>, so only <c>message_end</c> is counted.
+    /// Pi reports a zero cost for a model it has no price for, so a zero total is
+    /// no cost at all.
+    /// </summary>
+    public static TokenUsage? ParsePi(string? rawStdout)
+    {
+        if (string.IsNullOrWhiteSpace(rawStdout)) return null;
+
+        long input = 0, output = 0;
+        decimal cost = 0m;
+        foreach (var rawLine in rawStdout.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0) continue;
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(line); }
+            catch (JsonException) { continue; }
+
+            using (doc)
+            {
+                if (PiCountedUsage(doc.RootElement) is not { } usage)
+                    continue;
+
+                input += SumLongs(usage, "input", "cacheRead", "cacheWrite");
+                output += SumLongs(usage, "output");
+                if (usage.TryGetProperty("cost", out var costObject) && costObject.ValueKind == JsonValueKind.Object
+                    && costObject.TryGetProperty("total", out var total) && TryGetDecimal(total, out var callCost))
+                    cost += callCost;
+            }
+        }
+
+        if (input == 0 && output == 0) return null;
+        return new TokenUsage(input, output, cost > 0 ? cost : null);
+    }
+
+    private static JsonElement? PiCountedUsage(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String)
+            return null;
+
+        JsonElement owner;
+        switch (type.GetString())
+        {
+            case "message_end":
+                if (!root.TryGetProperty("message", out owner) || owner.ValueKind != JsonValueKind.Object
+                    || !owner.TryGetProperty("role", out var role) || role.ValueKind != JsonValueKind.String
+                    || role.GetString() != "assistant")
+                    return null;
+                break;
+            case "compaction_end":
+                if (!root.TryGetProperty("result", out owner) || owner.ValueKind != JsonValueKind.Object)
+                    return null;
+                break;
+            default:
+                return null;
+        }
+
+        return owner.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object ? usage : null;
     }
 
     private struct ParseState
@@ -87,7 +155,7 @@ public static class AdapterUsageParser
         }
     }
 
-    /// <summary>claude-code / pi shape: input_tokens + cache fields, output_tokens.</summary>
+    /// <summary>claude-code shape: input_tokens + cache fields, output_tokens.</summary>
     private static void CaptureUsageObject(JsonElement usage, ref ParseState state)
     {
         var input = SumLongs(usage, "input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens");

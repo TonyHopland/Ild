@@ -797,8 +797,9 @@ empty list, or one like `["read"]` whose keys Copilot does not honour — turns 
 off rather than falling back to the defaults, so Copilot loop steps and chats
 saved before Copilot had an ILD box stay without ILD until you tick it.
 
-The **Pi** adapter reaches the built-in `ild` server through a generated pi
-extension that bridges the server's tools into pi, but it does not attach custom
+The **Pi** adapter reaches the built-in `ild` server through Pi's own MCP
+support: a generated, read-only extension registers the server for the run, and
+the node's tools appear to Pi as `mcp__ild__<tool>`. Pi does not attach custom
 MCP servers and does not expose this field.
 
 > The `chrome-devtools` example above requires Chrome in the ILD image
