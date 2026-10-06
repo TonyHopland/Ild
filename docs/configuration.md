@@ -838,6 +838,6 @@ A changed value applies to the next launch.
 **Don't put secrets here**: the arguments are visible in the process list. Use the
 provider's API key or environment settings instead (ADR-0014).
 
-A stored value that can't be split (e.g. one written straight into the config
-through the API) never fails a run: the agent launches without the extra
+A stored value that can't be split (e.g. one saved by an older version or edited
+in the database) never fails a run: the agent launches without the extra
 arguments and a warning is logged, and the terminal says they were ignored.
