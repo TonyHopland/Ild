@@ -14,7 +14,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 ///   (<c>input</c>/<c>output</c>, plus a nested <c>cache</c>) and a <c>cost</c>.</item>
 ///   <item>pi: a per-message <c>usage</c> object (<c>input</c>/<c>output</c>,
 ///   <c>cacheRead</c>/<c>cacheWrite</c>, <c>cost.total</c>) on every assistant
-///   message, read by <see cref="ParsePi"/>.</item>
+///   message and compaction, read by <see cref="ParsePi"/>.</item>
 /// </list>
 /// <see cref="Parse"/> is tolerant: it walks each JSON line and keeps the last usage
 /// object and cost it sees, so a cumulative final event wins over earlier
@@ -47,8 +47,9 @@ public static class AdapterUsageParser
     }
 
     /// <summary>
-    /// Sum the usage of every assistant <c>message_end</c> in a <c>pi --mode json</c>
-    /// stream. Pi reports usage per message and repeats it on <c>message_update</c>,
+    /// Sum the usage of every assistant <c>message_end</c> and every successful
+    /// <c>compaction_end</c> (its summarizing call) in a <c>pi --mode json</c> stream.
+    /// Pi reports usage per message and repeats it on <c>message_update</c>,
     /// <c>turn_end</c> and <c>agent_end</c>, so only <c>message_end</c> is counted.
     /// Pi reports a zero cost for a model it has no price for, so a zero total is
     /// no cost at all.
@@ -70,26 +71,45 @@ public static class AdapterUsageParser
 
             using (doc)
             {
-                var root = doc.RootElement;
-                if (root.ValueKind != JsonValueKind.Object
-                    || !root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String
-                    || type.GetString() != "message_end"
-                    || !root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object
-                    || !message.TryGetProperty("role", out var role) || role.ValueKind != JsonValueKind.String
-                    || role.GetString() != "assistant"
-                    || !message.TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+                if (PiCountedUsage(doc.RootElement) is not { } usage)
                     continue;
 
                 input += SumLongs(usage, "input", "cacheRead", "cacheWrite");
                 output += SumLongs(usage, "output");
                 if (usage.TryGetProperty("cost", out var costObject) && costObject.ValueKind == JsonValueKind.Object
-                    && costObject.TryGetProperty("total", out var total) && TryGetDecimal(total, out var messageCost))
-                    cost += messageCost;
+                    && costObject.TryGetProperty("total", out var total) && TryGetDecimal(total, out var callCost))
+                    cost += callCost;
             }
         }
 
         if (input == 0 && output == 0) return null;
         return new TokenUsage(input, output, cost > 0 ? cost : null);
+    }
+
+    private static JsonElement? PiCountedUsage(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String)
+            return null;
+
+        JsonElement owner;
+        switch (type.GetString())
+        {
+            case "message_end":
+                if (!root.TryGetProperty("message", out owner) || owner.ValueKind != JsonValueKind.Object
+                    || !owner.TryGetProperty("role", out var role) || role.ValueKind != JsonValueKind.String
+                    || role.GetString() != "assistant")
+                    return null;
+                break;
+            case "compaction_end":
+                if (!root.TryGetProperty("result", out owner) || owner.ValueKind != JsonValueKind.Object)
+                    return null;
+                break;
+            default:
+                return null;
+        }
+
+        return owner.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object ? usage : null;
     }
 
     private struct ParseState

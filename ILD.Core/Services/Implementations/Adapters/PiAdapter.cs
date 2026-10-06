@@ -221,7 +221,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add(settings.IldExtensionPath);
         }
 
-        // pi 1.0 rejects --provider without --model.
+        // pi 1.0 rejects --provider without --model: https://github.com/earendil-works/pi/issues/10236
         if (!string.IsNullOrWhiteSpace(settings.Provider) && !string.IsNullOrWhiteSpace(settings.Model))
         {
             psi.ArgumentList.Add("--provider");
@@ -749,7 +749,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
     }
 
     // pi resolves MCP env values: `$NAME`/`${NAME}` expand and a leading `!` runs a
-    // shell command, while `$$` and `$!` read back as `$` and `!`.
+    // shell command, while `$$` and `$!` read back as `$` and `!`. See
+    // docs/adr/0024-pi-ild-tools-through-native-mcp.md (pi's dist/core/resolve-config-value.js).
     private static string PiLiteral(string value)
     {
         var escaped = value.Replace("$", "$$");
