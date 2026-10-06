@@ -61,6 +61,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
+import { showChatActions } from "../test-support";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -246,6 +247,7 @@ function rowOrder(names: string[]) {
 }
 
 function star(name: string) {
+  showChatActions(name);
   return within(sidebar()).getByRole("button", { name: `Favorite chat ${name}` });
 }
 
@@ -305,7 +307,7 @@ describe("chat sidebar layout", () => {
     // Picking a row keeps the list open, and the chat beside it works.
     expect(querySidebar()).not.toBeNull();
     expect(screen.getByText("assistant message 1 of a")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Rename" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
     expect(screen.queryByText(/Back/)).toBeNull();
     fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "hello" } });
     fireEvent.click(screen.getByText("Send"));
@@ -534,6 +536,7 @@ describe("chat sidebar list", () => {
     await openPanel();
     await pick("Alpha");
 
+    showChatActions("Beta");
     fireEvent.click(within(sidebar()).getByRole("button", { name: "Rename chat Beta" }));
     fireEvent.change(within(sidebar()).getByLabelText("Chat name"), {
       target: { value: "Bravo" },
@@ -542,6 +545,7 @@ describe("chat sidebar list", () => {
     await waitFor(() => expect(within(sidebar()).getByText("Bravo")).toBeTruthy());
     expect(chatService.rename).toHaveBeenCalledWith("b", "Bravo");
 
+    showChatActions("Alpha");
     fireEvent.click(within(sidebar()).getByRole("button", { name: "Delete chat Alpha" }));
     expect(await screen.findByText("Start chat")).toBeTruthy();
     expect(screen.queryByLabelText("Chat message")).toBeNull();
