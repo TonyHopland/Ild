@@ -42,6 +42,18 @@ public interface IChatService
     Task<bool> RenameAsync(string userId, Guid sessionId, string name, CancellationToken ct = default);
 
     /// <summary>
+    /// The ids of the user's chats with a message containing
+    /// <paramref name="query"/> case-insensitively, newest activity first.
+    /// </summary>
+    Task<IReadOnlyList<Guid>> SearchForUserAsync(string userId, string query, CancellationToken ct = default);
+
+    /// <summary>
+    /// Stars or unstars one of the user's chats without touching its last activity;
+    /// false when it is not theirs or does not exist.
+    /// </summary>
+    Task<bool> SetFavoriteAsync(string userId, Guid sessionId, bool favorite, CancellationToken ct = default);
+
+    /// <summary>
     /// Start a new chat session for the user. Provider + tools are fixed for its
     /// life. A user may hold many retained chats (ADR-0013), so this no longer
     /// rejects a second session. Throws <see cref="InvalidOperationException"/>

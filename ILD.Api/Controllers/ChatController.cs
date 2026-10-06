@@ -10,8 +10,8 @@ namespace ILD.Api.Controllers;
 /// streaming of a turn happens over the <c>/hubs/chat</c> SignalR hub; these
 /// endpoints start chats, list/resume retained history, submit messages (which
 /// interrupt any in-flight turn rather than queueing), cancel an in-flight turn
-/// on its own, record how far a chat has been read, rename chats, and delete
-/// chats (one or all). A chat is never deleted automatically — only by an
+/// on its own, record how far a chat has been read, rename, star and search
+/// chats, and delete chats (one or all). A chat is never deleted automatically — only by an
 /// explicit delete.
 /// </summary>
 [ApiController]
@@ -133,6 +133,28 @@ public class ChatController : ControllerBase
         return await _chat.RenameAsync(userId, id, name, ct) ? NoContent() : NotFound();
     }
 
+    [HttpPut("{id:guid}/favorite")]
+    public async Task<IActionResult> SetFavorite(Guid id, [FromBody] SetChatFavoriteRequest request, CancellationToken ct)
+    {
+        if (!TryResolveUser(out var userId, out var error)) return error;
+        if (request.Favorite is not { } favorite)
+            return BadRequest(new { error = "A boolean favorite is required." });
+
+        // Scoped by owner, so another user's chat reads as missing, like an unknown one.
+        return await _chat.SetFavoriteAsync(userId, id, favorite, ct) ? NoContent() : NotFound();
+    }
+
+    [HttpGet("search")]
+    public async Task<IActionResult> Search([FromQuery] string? q, CancellationToken ct)
+    {
+        if (!TryResolveUser(out var userId, out var error)) return error;
+        var query = q?.Trim();
+        if (string.IsNullOrEmpty(query))
+            return BadRequest(new { error = "A search query is required." });
+
+        return Ok(await _chat.SearchForUserAsync(userId, query, ct));
+    }
+
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
@@ -190,6 +212,11 @@ public sealed class RenameChatRequest
     public const int MaxNameLength = 120;
 
     public string? Name { get; set; }
+}
+
+public sealed class SetChatFavoriteRequest
+{
+    public bool? Favorite { get; set; }
 }
 
 public sealed class MarkChatReadRequest
