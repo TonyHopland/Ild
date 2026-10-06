@@ -15,8 +15,7 @@ public class CopilotAdapterTests
 
         Assert.Equal("Copilot", adapter.Name);
         Assert.Contains("copilot", adapter.SupportedProviderTypes);
-        var field = Assert.Single(adapter.ConfigSchema);
-        Assert.Equal("customMcpServersJson", field.Name);
+        Assert.Contains(adapter.ConfigSchema, f => f.Name == "customMcpServersJson");
     }
 
     [Fact]
@@ -76,6 +75,38 @@ public class CopilotAdapterTests
             var args = withModel.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal("claude-sonnet-5", args[Array.IndexOf(args, "--model") + 1]);
             Assert.DoesNotContain("--model", withoutModel.Output!.Split('\n'));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("--effort high --append-system-prompt \"be brief\"", new[] { "--effort", "high", "--append-system-prompt", "be brief" })]
+    [InlineData("--effort \"high", new string[0])]
+    public async Task ExecuteAsync_launches_with_the_extra_arguments_just_before_the_prompt_option(string extraArgs, string[] expected)
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = Path.Combine(worktreeDir, "args.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
+        System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
+
+        try
+        {
+            var result = await new CopilotAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                model: "claude-sonnet-5",
+                config: JsonSerializer.Serialize(new { binaryPath = scriptPath, extraArgs })));
+
+            Assert.True(result.Success, result.Error);
+            var args = result.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal([.. expected, "-p", "test prompt"], args[^(expected.Length + 2)..]);
+            var firstExtra = args.Length - expected.Length - 2;
+            foreach (var ildFlag in new[] { "--allow-all-tools", "--no-color", "--add-dir", "--model" })
+                Assert.InRange(Array.IndexOf(args, ildFlag), 0, firstExtra - 1);
+            Assert.DoesNotContain("--effort", args[..firstExtra]);
         }
         finally
         {

@@ -1055,6 +1055,61 @@ describe("AI Providers page", () => {
     expect((putReq!.body as { customMcpServersJson?: string }).customMcpServersJson).toBe(newValue);
   });
 
+  test("edit modal renders the Extra CLI arguments field, seeds it and sends the edited value", async () => {
+    const extraArgsField = {
+      name: "extraArgs",
+      type: ConfigFieldType.Textarea,
+      label: "Extra CLI arguments",
+      required: false,
+      defaultValue: null,
+      description: "Optional. Split like a shell command line.",
+      options: null,
+    };
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Thinking",
+        type: "claude-code",
+        baseUrl: "",
+        model: "",
+        isDefault: false,
+        customMcpServersJson: '{"a":{"command":["npx"]}}',
+        extraArgs: "--effort high",
+        createdAt: "2025-02-01T00:00:00Z",
+      },
+    ];
+
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        types: ["claude-code"],
+        schema: [...customMcpSchema, extraArgsField],
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Edit"));
+
+    const textarea = (await screen.findByLabelText("Extra CLI arguments")) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("--effort high");
+    const newValue = '--effort low --append-system-prompt "be brief"';
+    fireEvent.change(textarea, { target: { value: newValue } });
+
+    fireEvent.click(screen.getByText("Update"));
+
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect(putReq).toBeTruthy();
+    const body = putReq!.body as { extraArgs?: string; customMcpServersJson?: string };
+    expect(body.extraArgs).toBe(newValue);
+    expect(body.customMcpServersJson).toBe('{"a":{"command":["npx"]}}');
+  });
+
   test("saving a claude-code provider keeps its model instead of wiping it", async () => {
     const providers = [
       {

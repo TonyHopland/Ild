@@ -1,6 +1,7 @@
 using System.Net.WebSockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using ILD.Api.Services;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.Entities;
@@ -87,6 +88,107 @@ public class InteractiveProviderSessionServiceTests
         await runTask;
         Assert.Contains("was not found", received.ToString());
     }
+
+    [Fact]
+    public async Task Launches_the_cli_with_exactly_the_saved_extra_arguments_and_says_so_first()
+    {
+        if (!IsUnix) return;
+
+        // printf prints each argument after the format on its own <<line>>, so the
+        // output shows the argv the terminal launched, token by token.
+        var extraArgs = "'<<%s>>\\n' --effort high \"be brief\" '$(x);|&>' `y`";
+        var (text, _) = await RunToCloseAsync("/usr/bin/printf", extraArgs);
+
+        var lines = Lines(text);
+        var cliLines = lines.Where(l => l.StartsWith("<<", StringComparison.Ordinal)).ToList();
+        Assert.Equal(["<<--effort>>", "<<high>>", "<<be brief>>", "<<$(x);|&>>>", "<<`y`>>"], cliLines);
+
+        var launched = Assert.Single(lines, l => l.Contains("Launched with: ", StringComparison.Ordinal));
+        var shown = launched[(launched.IndexOf("Launched with: ", StringComparison.Ordinal) + "Launched with: ".Length)..];
+        var reparsed = ExtraCliArgs.Tokenize(shown);
+        Assert.Null(reparsed.Error);
+        Assert.Equal(["<<%s>>\\n", "--effort", "high", "be brief", "$(x);|&>", "`y`"], reparsed.Tokens);
+        Assert.True(lines.IndexOf(launched) < lines.IndexOf(cliLines[0]), "the launch line comes before the CLI's output");
+    }
+
+    [Fact]
+    public async Task Shows_what_a_cli_that_exits_at_once_wrote_and_its_exit_code_then_closes_normally()
+    {
+        if (!IsUnix) return;
+
+        var (text, closeStatus) = await RunToCloseAsync("/bin/sh", "-c \"echo boom >&2; exit 3\"");
+
+        var boom = text.IndexOf("boom", StringComparison.Ordinal);
+        Assert.True(boom >= 0, $"the CLI's error output was lost: {text}");
+        Assert.Matches(new Regex(@"exit[^\n]*\b3\b", RegexOptions.IgnoreCase), text[boom..]);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, closeStatus);
+    }
+
+    [Fact]
+    public async Task Launches_with_no_extra_arguments_and_no_launch_line_when_none_are_saved()
+    {
+        if (!IsUnix) return;
+
+        var (text, _) = await RunToCloseAsync("/bin/echo", extraArgs: null);
+
+        Assert.DoesNotContain("Launched with", text);
+    }
+
+    [Fact]
+    public async Task Ignores_saved_extra_arguments_that_do_not_split_and_says_so()
+    {
+        if (!IsUnix) return;
+
+        var (text, _) = await RunToCloseAsync("/bin/echo", "marker-token \"unbalanced");
+
+        var lines = Lines(text);
+        Assert.Contains(lines, l => l.Contains("ignored", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("Launched with", text);
+        Assert.DoesNotContain(lines, l => l.Contains("marker-token", StringComparison.Ordinal)
+            && !l.Contains("ignored", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Opens the provider terminal on <paramref name="binaryPath"/> with the saved
+    /// <paramref name="extraArgs"/>, and reads everything it sends until it closes.
+    /// </summary>
+    private static async Task<(string Text, WebSocketCloseStatus? CloseStatus)> RunToCloseAsync(
+        string binaryPath, string? extraArgs)
+    {
+        var (server, client) = WebSocketPair.Create();
+        var service = new InteractiveProviderSessionService(NullLogger<InteractiveProviderSessionService>.Instance);
+        var config = new Dictionary<string, string> { ["binaryPath"] = binaryPath };
+        if (extraArgs is not null) config["extraArgs"] = extraArgs;
+        var provider = new AiProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "test",
+            Type = "cat",
+            BaseUrl = "http://localhost",
+            Model = "n/a",
+            Config = System.Text.Json.JsonSerializer.Serialize(config),
+        };
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var runTask = service.RunAsync(server, provider, initialCols: 200, initialRows: 24, cancellationToken: cts.Token);
+
+        var received = new MemoryStream();
+        var buffer = new byte[4096];
+        WebSocketReceiveResult result;
+        do
+        {
+            result = await client.ReceiveAsync(buffer, cts.Token);
+            if (result.MessageType != WebSocketMessageType.Close)
+                received.Write(buffer, 0, result.Count);
+        }
+        while (result.MessageType != WebSocketMessageType.Close);
+
+        await runTask;
+        return (Encoding.UTF8.GetString(received.ToArray()), result.CloseStatus);
+    }
+
+    private static List<string> Lines(string text)
+        => text.Replace("\r", "").Split('\n').ToList();
 
     [Fact]
     public void ResolveLaunchCommand_prefers_explicit_binaryPath()

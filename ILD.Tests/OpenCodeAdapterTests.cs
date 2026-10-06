@@ -39,8 +39,7 @@ public class OpenCodeAdapterTests
 
         Assert.Equal("OpenCode", adapter.Name);
         Assert.Contains("opencode", adapter.SupportedProviderTypes);
-        var field = Assert.Single(adapter.ConfigSchema);
-        Assert.Equal("customMcpServersJson", field.Name);
+        Assert.Contains(adapter.ConfigSchema, f => f.Name == "customMcpServersJson");
         // opencode folds the model into its generated config and always passes
         // --model, so blanking it stays a validation error.
         Assert.Equal(AdapterModelSupport.Required, adapter.ModelSupport);
@@ -532,6 +531,88 @@ public class OpenCodeAdapterTests
             "json",
             "--session",
             "session-123",
+            "--",
+            "prompt text",
+        }, psi.ArgumentList);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_gives_the_extra_arguments_to_the_run_but_not_to_session_import_or_export()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-extra-args-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "opencode.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            $"printf '%s\\n' \"$@\" > '{worktreeDir}/argv-$1.txt'\n" +
+            "case \"$1\" in\n" +
+            "  run) echo '{\"text\":\"hello\",\"sessionId\":\"managed-session\"}' ;;\n" +
+            "  export) printf '%s' '{\"id\":\"managed-session\",\"messages\":[2]}' ;;\n" +
+            "esac\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "managed-session", "{\"id\":\"managed-session\",\"messages\":[1]}");
+
+            var result = await new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>()).ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "do it",
+                config: JsonSerializer.Serialize(new { extraArgs = "--variant high --title \"a b\"" }),
+                worktreePath: worktreeDir,
+                sessionId: "managed-session",
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            Assert.True(result.Success, result.Error);
+            var run = File.ReadAllLines(Path.Combine(worktreeDir, "argv-run.txt"));
+            Assert.Equal(["--variant", "high", "--title", "a b", "--", "do it"], run[^6..]);
+            var firstExtra = run.Length - 6;
+            foreach (var ildFlag in new[] { "--dir", "--model", "--format", "--session" })
+                Assert.InRange(Array.IndexOf(run, ildFlag), 0, firstExtra - 1);
+
+            var import = File.ReadAllLines(Path.Combine(worktreeDir, "argv-import.txt"));
+            Assert.Equal("import", import[0]);
+            Assert.Equal(2, import.Length);
+            Assert.Equal(["export", "managed-session"], File.ReadAllLines(Path.Combine(worktreeDir, "argv-export.txt")));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public void BuildRunProcessStartInfo_for_the_retry_without_a_working_directory_keeps_the_extra_arguments_before_the_prompt()
+    {
+        var psi = OpenCodeAdapter.BuildRunProcessStartInfo(
+            binaryPath: "opencode",
+            worktreePath: "/tmp/worktree",
+            prompt: "prompt text",
+            opencodeModel: "provider/model",
+            opencodeConfigJson: "{}",
+            sessionId: "session-123",
+            useWorktreeAsWorkingDirectory: false,
+            extraArgs: ["--variant", "high"]);
+
+        Assert.True(string.IsNullOrEmpty(psi.WorkingDirectory));
+        Assert.Equal(new[]
+        {
+            "run",
+            "--dir",
+            "/tmp/worktree",
+            "--model",
+            "provider/model",
+            "--format",
+            "json",
+            "--session",
+            "session-123",
+            "--variant",
+            "high",
             "--",
             "prompt text",
         }, psi.ArgumentList);

@@ -3,6 +3,7 @@ using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Tests;
 
@@ -15,8 +16,7 @@ public class ClaudeCodeAdapterTests
 
         Assert.Equal("ClaudeCode", adapter.Name);
         Assert.Contains("claude-code", adapter.SupportedProviderTypes);
-        var field = Assert.Single(adapter.ConfigSchema);
-        Assert.Equal("customMcpServersJson", field.Name);
+        Assert.Contains(adapter.ConfigSchema, f => f.Name == "customMcpServersJson");
     }
 
     [Fact]
@@ -351,6 +351,87 @@ public class ClaudeCodeAdapterTests
         finally
         {
             Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_launches_with_the_extra_arguments_after_ilds_flags_and_before_the_prompt()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = WriteArgvEcho(worktreeDir);
+        string ConfigWith(string extraArgs) => JsonSerializer.Serialize(new { binaryPath = scriptPath, extraArgs });
+
+        try
+        {
+            var adapter = new ClaudeCodeAdapter();
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                sessionId: "s-1",
+                model: "opus",
+                config: ConfigWith("--effort high\n--append-system-prompt \"be brief; $(touch pwned) | y\"")));
+
+            Assert.True(result.Success, result.Error);
+            var args = result.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(
+                ["--effort", "high", "--append-system-prompt", "be brief; $(touch pwned) | y", "--", "test prompt"],
+                args[^6..]);
+            var firstExtra = args.Length - 6;
+            foreach (var ildFlag in new[] { "--print", "--output-format", "--verbose", "--permission-mode", "--model", "--resume" })
+                Assert.InRange(Array.IndexOf(args, ildFlag), 0, firstExtra - 1);
+            Assert.False(File.Exists(Path.Combine(worktreeDir, "pwned")));
+
+            // An edited value applies to the next launch of the same adapter.
+            var next = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath, worktreePath: worktreeDir, config: ConfigWith("--effort low")));
+
+            var nextArgs = next.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(["--effort", "low", "--", "test prompt"], nextArgs[^4..]);
+            Assert.DoesNotContain("high", nextArgs);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_launches_without_extra_arguments_it_cannot_split_and_logs_a_warning_naming_the_provider()
+    {
+        var worktreeDir = CreateWorktree();
+        var scriptPath = WriteArgvEcho(worktreeDir);
+        var logger = new RecordingLogger();
+
+        try
+        {
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                config: JsonSerializer.Serialize(new { binaryPath = scriptPath, extraArgs = "--effort \"high" }));
+            ctx.Provider.Id = Guid.NewGuid();
+
+            var result = await new ClaudeCodeAdapter(logger).ExecuteAsync(ctx);
+
+            Assert.True(result.Success, result.Error);
+            var args = result.Output!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.DoesNotContain("--effort", args);
+            Assert.Equal(["--", "test prompt"], args[^2..]);
+            Assert.Contains(logger.Warnings, w => w.Contains(ctx.Provider.Id.ToString()) || w.Contains(ctx.Provider.Name));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    private sealed class RecordingLogger : ILogger<ClaudeCodeAdapter>
+    {
+        public List<string> Warnings { get; } = new();
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning) Warnings.Add(formatter(state, exception));
         }
     }
 

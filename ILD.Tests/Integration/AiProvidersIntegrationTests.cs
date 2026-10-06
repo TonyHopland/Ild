@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.Entities;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -268,5 +269,124 @@ public class AiProvidersIntegrationTests
         using var storedDoc = JsonDocument.Parse(stored);
         Assert.Equal("sk-secret", storedDoc.RootElement.GetProperty("apiKey").GetString());
         Assert.Equal(newServers, storedDoc.RootElement.GetProperty("customMcpServersJson").GetString());
+    }
+
+    [Fact]
+    public async Task ExtraArgs_round_trips_survives_an_edit_that_omits_it_and_a_blank_value_clears_it()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var ct = TestContext.Current.CancellationToken;
+        object Body(string? extraArgs) => new
+        {
+            name = "Thinking",
+            type = "claude-code",
+            baseUrl = "",
+            model = "",
+            isDefault = false,
+            customMcpServersJson = "{\"a\":{\"command\":[\"npx\"]}}",
+            extraArgs,
+        };
+
+        var createResponse = await client.PostAsJsonAsync("/api/v1/aiproviders", new
+        {
+            name = "Thinking",
+            type = "claude-code",
+            baseUrl = "",
+            model = "",
+            isDefault = false,
+            config = "{\"apiKey\":\"sk-secret\"}",
+            extraArgs = "--effort high",
+        }, cancellationToken: ct);
+        Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
+        var created = await createResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
+        var id = created.GetProperty("id").GetString()!;
+        Assert.Equal("--effort high", created.GetProperty("extraArgs").GetString());
+        Assert.False(created.TryGetProperty("config", out _));
+
+        var fetched = await (await client.GetAsync($"/api/v1/aiproviders/{id}", ct)).Content.ReadFromJsonAsync<JsonElement>(ct);
+        Assert.Equal("--effort high", fetched.GetProperty("extraArgs").GetString());
+
+        // A client that doesn't manage the field leaves it as it was.
+        var untouched = await client.PutAsJsonAsync($"/api/v1/aiproviders/{id}", Body(null), cancellationToken: ct);
+        Assert.Equal(HttpStatusCode.OK, untouched.StatusCode);
+        Assert.Equal("--effort high", (await untouched.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("extraArgs").GetString());
+
+        var cleared = await client.PutAsJsonAsync($"/api/v1/aiproviders/{id}", Body("  "), cancellationToken: ct);
+        Assert.Equal(HttpStatusCode.OK, cleared.StatusCode);
+        var clearedBody = await cleared.Content.ReadFromJsonAsync<JsonElement>(ct);
+        Assert.True(!clearedBody.TryGetProperty("extraArgs", out var shown) || shown.ValueKind == JsonValueKind.Null);
+
+        using var scope = factory.Services.CreateScope();
+        var stored = AiProviderConfig.Parse(scope.ServiceProvider.GetRequiredService<AppDbContext>()
+            .AiProviders.Single(p => p.Id == Guid.Parse(id)).Config);
+        Assert.Null(stored.ExtraArgs);
+        Assert.Equal("sk-secret", stored.ApiKey);
+        Assert.NotNull(stored.CustomMcpServersJson);
+    }
+
+    [Theory]
+    [InlineData("claude-code", "--model x", "Model field")]
+    [InlineData("pi", "--model=x", "Model field")]
+    [InlineData("opencode", "--effort \"high", null)]
+    [InlineData("opencode", "--variant high --", "--")]
+    [InlineData("pi", "--session-dir=/tmp/x", "--session-dir")]
+    public async Task Create_with_invalid_extraArgs_returns_400_naming_the_problem_and_saves_nothing(
+        string type, string extraArgs, string? expected)
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var ct = TestContext.Current.CancellationToken;
+
+        var response = await client.PostAsJsonAsync("/api/v1/aiproviders", new
+        {
+            name = "Bad",
+            type,
+            baseUrl = type == "claude-code" ? "" : "https://example.com/v1",
+            model = type == "claude-code" ? "" : "gpt-5",
+            isDefault = false,
+            extraArgs,
+        }, cancellationToken: ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("error").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(error));
+        if (expected is not null) Assert.Contains(expected, error, StringComparison.OrdinalIgnoreCase);
+        var all = await (await client.GetAsync("/api/v1/aiproviders", ct)).Content.ReadFromJsonAsync<JsonElement[]>(ct);
+        Assert.Empty(all!);
+    }
+
+    [Fact]
+    public async Task Update_with_a_reserved_flag_returns_400_and_keeps_the_saved_value_whether_sent_as_field_or_config()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var ct = TestContext.Current.CancellationToken;
+        object Body(string? extraArgs, string? config) => new
+        {
+            name = "Fast",
+            type = "claude-code",
+            baseUrl = "",
+            model = "",
+            isDefault = false,
+            config,
+            extraArgs,
+        };
+
+        var created = await client.PostAsJsonAsync("/api/v1/aiproviders", Body("--effort high", null), cancellationToken: ct);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("id").GetString()!;
+
+        foreach (var (body, flag) in new[] { (Body("--print", null), "--print"), (Body(null, "{\"extraArgs\":\"--output-format=json\"}"), "--output-format") })
+        {
+            var response = await client.PutAsJsonAsync($"/api/v1/aiproviders/{id}", body, cancellationToken: ct);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            var error = (await response.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("error").GetString();
+            Assert.Contains(flag, error);
+        }
+
+        var fetched = await (await client.GetAsync($"/api/v1/aiproviders/{id}", ct)).Content.ReadFromJsonAsync<JsonElement>(ct);
+        Assert.Equal("--effort high", fetched.GetProperty("extraArgs").GetString());
     }
 }

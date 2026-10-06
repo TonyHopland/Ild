@@ -15,36 +15,39 @@ public class AdapterConfigSchemaTests
     }
 
     [Fact]
-    public void OpenCodeAdapter_schema_exposes_custom_mcp_servers_field()
+    public void OpenCodeAdapter_custom_mcp_servers_field_is_a_textarea()
     {
-        var adapter = new OpenCodeAdapter();
-
-        var field = Assert.Single(adapter.ConfigSchema);
-        Assert.Equal("customMcpServersJson", field.Name);
+        var field = Assert.Single(new OpenCodeAdapter().ConfigSchema, f => f.Name == "customMcpServersJson");
         Assert.Equal(ConfigFieldType.Textarea, field.Type);
         Assert.Equal("Custom MCP servers (JSON)", field.Label);
         Assert.False(field.Required);
         Assert.False(string.IsNullOrWhiteSpace(field.Description));
     }
 
-    [Fact]
-    public void ClaudeCodeAdapter_schema_exposes_custom_mcp_servers_field()
+    [Theory]
+    [InlineData("claude-code", new[] { "customMcpServersJson", "extraArgs" })]
+    [InlineData("copilot", new[] { "customMcpServersJson", "extraArgs" })]
+    [InlineData("opencode", new[] { "customMcpServersJson", "extraArgs" })]
+    [InlineData("pi", new[] { "extraArgs" })]
+    public void Every_agent_adapter_offers_extra_cli_arguments_and_only_the_mcp_capable_ones_custom_mcp_servers(
+        string type, string[] expectedNames)
     {
-        var adapter = new ClaudeCodeAdapter();
+        CliAgentAdapterBase adapter = type switch
+        {
+            "claude-code" => new ClaudeCodeAdapter(),
+            "copilot" => new CopilotAdapter(),
+            "opencode" => new OpenCodeAdapter(),
+            _ => new PiAdapter(),
+        };
 
-        var field = Assert.Single(adapter.ConfigSchema);
-        Assert.Equal("customMcpServersJson", field.Name);
+        Assert.Equal(expectedNames.Order(), adapter.ConfigSchema.Select(f => f.Name).Order());
+
+        var field = Assert.Single(adapter.ConfigSchema, f => f.Name == "extraArgs");
         Assert.Equal(ConfigFieldType.Textarea, field.Type);
-    }
-
-    [Fact]
-    public void CopilotAdapter_schema_exposes_custom_mcp_servers_field()
-    {
-        var adapter = new CopilotAdapter();
-
-        var field = Assert.Single(adapter.ConfigSchema);
-        Assert.Equal("customMcpServersJson", field.Name);
-        Assert.Equal(ConfigFieldType.Textarea, field.Type);
+        Assert.Equal("Extra CLI arguments", field.Label);
+        Assert.False(field.Required);
+        Assert.Null(field.DefaultValue);
+        Assert.False(string.IsNullOrWhiteSpace(field.Description));
     }
 
     [Fact]
@@ -57,15 +60,5 @@ public class AdapterConfigSchemaTests
         Assert.DoesNotContain("provider", names);
         Assert.DoesNotContain("model", names);
         Assert.DoesNotContain("apiKey", names);
-    }
-
-    [Fact]
-    public void PiAdapter_schema_is_empty()
-    {
-        // Pi reaches the ILD MCP server through its own MCP support, but custom
-        // MCP servers are not wired for pi, so it exposes no config field.
-        var adapter = new PiAdapter();
-
-        Assert.Empty(adapter.ConfigSchema);
     }
 }

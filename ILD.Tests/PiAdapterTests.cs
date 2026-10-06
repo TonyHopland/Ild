@@ -21,7 +21,6 @@ public class PiAdapterTests
 
         Assert.Equal("Pi", adapter.Name);
         Assert.Contains("pi", adapter.SupportedProviderTypes);
-        Assert.Empty(adapter.ConfigSchema);
         // A BYO-endpoint provider's model is part of its connection details, so
         // blanking it stays a validation error.
         Assert.Equal(AdapterModelSupport.Required, adapter.ModelSupport);
@@ -802,6 +801,41 @@ public class PiAdapterTests
                 Assert.DoesNotContain("--provider", argv);
                 Assert.DoesNotContain("--model", argv);
             }
+        }
+        finally
+        {
+            CleanUpRunScratch(runId);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("--thinking high --append-system-prompt \"be brief\"", new[] { "--thinking", "high", "--append-system-prompt", "be brief" })]
+    [InlineData("--thinking \"high", new string[0])]
+    public async Task ExecuteAsync_launches_with_the_extra_arguments_after_all_of_ilds_flags(string extraArgs, string[] expected)
+    {
+        var runId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-extra-args");
+        var scriptPath = WriteRecordingPi(worktreeDir);
+
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: runId,
+                model: "gpt-5",
+                sessionId: "pi-session-ild",
+                config: JsonSerializer.Serialize(new { provider = "openai", extraArgs }),
+                executionCount: 1));
+
+            Assert.True(result.Success, result.Error);
+            var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
+            Assert.Equal(expected, argv[^expected.Length..]);
+            var firstExtra = argv.Length - expected.Length;
+            foreach (var ildFlag in new[] { "--mode", "--session-dir", "--provider", "--model", "--session" })
+                Assert.InRange(Array.IndexOf(argv, ildFlag), 0, firstExtra - 1);
+            Assert.DoesNotContain("--thinking", argv[..firstExtra]);
         }
         finally
         {
