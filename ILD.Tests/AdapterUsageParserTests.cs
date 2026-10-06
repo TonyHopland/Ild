@@ -69,7 +69,7 @@ public class AdapterUsageParserTests
     }
 
     [Fact]
-    public void Pi_usage_sums_assistant_message_ends_only_and_reports_no_cost_for_an_unpriced_model()
+    public void Pi_usage_sums_assistant_message_ends_not_their_repeats_and_reports_no_cost_for_an_unpriced_model()
     {
         var usage = AdapterUsageParser.ParsePi(PiRunStream(0m, 0m));
 
@@ -88,6 +88,25 @@ public class AdapterUsageParserTests
         Assert.Equal(365, usage!.InputTokens);
         Assert.Equal(40, usage.OutputTokens);
         Assert.Equal(0.5125m, usage.CostUsd);
+    }
+
+    [Fact]
+    public void Pi_usage_counts_each_compaction_once_alongside_the_assistant_messages()
+    {
+        // docs/json.md: a successful compaction_end carries the summarizing call's
+        // usage under result; an aborted one has no result.
+        var stdout = string.Join('\n',
+            PiRunStream(0.0125m, 0.5m),
+            "{\"type\":\"compaction_start\",\"reason\":\"threshold\"}",
+            $"{{\"type\":\"compaction_end\",\"reason\":\"threshold\",\"result\":{{\"summary\":\"s\",\"firstKeptEntryId\":\"e1\",\"tokensBefore\":150000,\"usage\":{PiUsage(1000, 50, 0, 7, 0.25m)},\"details\":{{}}}},\"aborted\":false,\"willRetry\":false}}",
+            "{\"type\":\"compaction_end\",\"reason\":\"manual\",\"aborted\":true,\"willRetry\":false}");
+
+        var usage = AdapterUsageParser.ParsePi(stdout);
+
+        Assert.NotNull(usage);
+        Assert.Equal(365 + 1007, usage!.InputTokens);
+        Assert.Equal(40 + 50, usage.OutputTokens);
+        Assert.Equal(0.7625m, usage.CostUsd);
     }
 
     [Fact]
