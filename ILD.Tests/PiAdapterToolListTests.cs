@@ -8,10 +8,10 @@ using ILD.Data.Entities;
 namespace ILD.Tests;
 
 /// <summary>
-/// pi's <c>--tools</c> allowlist also filters extension tools, so it has to name
-/// every ILD tool the server declares. PiAdapterTests only checks for an
-/// <c>ild_</c> prefix; this checks the whole list against what
-/// <see cref="IldMcpToolNames"/> reads from the server DLL the adapter launches.
+/// pi's <c>--tools</c> allowlist also filters MCP tools, so it has to name every
+/// ILD tool the server declares as <c>mcp__ild__&lt;name&gt;</c>. This checks the
+/// whole list against what <see cref="IldMcpToolNames"/> reads from the server DLL
+/// the adapter launches.
 /// </summary>
 public sealed class PiAdapterToolListTests : IDisposable
 {
@@ -56,7 +56,7 @@ public sealed class PiAdapterToolListTests : IDisposable
         var tools = argv[Array.IndexOf(argv, "--tools") + 1].Split(',');
 
         var expected = new[] { "read", "grep", "find", "ls", "edit", "write", "bash" }
-            .Concat(declared.Select(name => "ild_" + name));
+            .Concat(declared.Select(name => "mcp__ild__" + name));
         Assert.Equal(expected.OrderBy(n => n, StringComparer.Ordinal), tools.OrderBy(n => n, StringComparer.Ordinal));
         Assert.DoesNotContain("--no-extensions", argv);
     }

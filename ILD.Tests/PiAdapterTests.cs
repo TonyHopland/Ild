@@ -271,7 +271,7 @@ public class PiAdapterTests
             Assert.Contains("--session-dir", result.Output);
             Assert.Contains("--session", result.Output);
             Assert.Contains("--tools", result.Output);
-            Assert.Contains("read,grep,find,ls,edit,write,bash,ild_", result.Output);
+            Assert.Contains("read,grep,find,ls,edit,write,bash,mcp__ild__", result.Output);
             Assert.Contains("openai/gpt-5", result.Output);
             Assert.Contains("sk-test", result.Output);
             Assert.DoesNotContain("\n--\n", result.Output);
@@ -473,18 +473,25 @@ public class PiAdapterTests
             Assert.True(result.Success, result.Error);
             var extension = ExtensionArgument(worktreeDir);
             Assert.Equal(Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", runId.ToString("N"), "ild.ts"), extension);
-            Assert.True(File.Exists(Path.Combine(Path.GetDirectoryName(extension)!, "ild-mcp-bridge.js")));
+            Assert.Equal(new[] { extension }, Directory.GetFileSystemEntries(Path.GetDirectoryName(extension)!));
             UnixOwnership.AssertOrchestratorOwned(Path.GetDirectoryName(extension)!, UnixOwnership.AgentReadDirectory);
             UnixOwnership.AssertOrchestratorOwned(extension, UnixOwnership.AgentReadFile);
-            UnixOwnership.AssertOrchestratorOwned(
-                Path.Combine(Path.GetDirectoryName(extension)!, "ild-mcp-bridge.js"), UnixOwnership.AgentReadFile);
 
+            // Pi 1.0's own MCP client starts the server; the file only registers it.
             var ildTs = File.ReadAllText(extension);
-            Assert.Contains("./ild-mcp-bridge.js", ildTs);
+            Assert.Matches(@"registerMcpServer\(\s*""ild""\s*,", ildTs);
+            Assert.Single(System.Text.RegularExpressions.Regex.Matches(ildTs, @"registerMcpServer\("));
+            Assert.Matches(@"""?exposure""?\s*:\s*""direct""", ildTs);
+            Assert.Matches(@"""?timeout""?\s*:\s*120\b", ildTs);
             Assert.Contains("ild-mcp-server.dll", ildTs);
+            Assert.Contains("ILD_API_URL", ildTs);
             Assert.Contains("ILD_LOOP_RUN_ID", ildTs);
             Assert.Contains(runId.ToString(), ildTs);
             Assert.DoesNotContain("ILD_CHAT_SESSION_ID", ildTs);
+            Assert.DoesNotContain("ild-mcp-bridge", ildTs);
+            Assert.DoesNotContain("from \"./", ildTs);
+            Assert.DoesNotContain("registerTool", ildTs);
+            Assert.DoesNotContain("child_process", ildTs);
 
             // The agent dir (and its models.json) stays tied to an absolute BaseUrl.
             Assert.Equal(string.Empty, File.ReadAllText(Path.Combine(worktreeDir, "agent-dir.txt")));
@@ -549,6 +556,7 @@ public class PiAdapterTests
             var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
             Assert.DoesNotContain("-e", argv);
             Assert.Equal("read,grep,find,ls,edit,write,bash", argv[Array.IndexOf(argv, "--tools") + 1]);
+            Assert.DoesNotContain(argv, arg => arg.Contains("mcp__", StringComparison.Ordinal));
             Assert.False(Directory.Exists(Path.Combine(AgentIsolation.AgentReadRoot, "ild-pi-ext", runId.ToString("N"))));
         }
         finally
@@ -578,7 +586,7 @@ public class PiAdapterTests
             var tools = argv[Array.IndexOf(argv, "--tools") + 1].Split(',');
 
             var expected = new[] { "read", "grep", "find", "ls", "edit", "write", "bash" }
-                .Concat(McpServerToolReflection.Names().Select(n => "ild_" + n));
+                .Concat(McpServerToolReflection.Names().Select(n => "mcp__ild__" + n));
             Assert.Equal(expected.OrderBy(n => n, StringComparer.Ordinal), tools.OrderBy(n => n, StringComparer.Ordinal));
         }
         finally
@@ -721,6 +729,159 @@ public class PiAdapterTests
             var agentDir = Path.Combine(Path.GetTempPath(), "ild-pi-agent", runId.ToString("N"));
             if (Directory.Exists(agentDir))
                 Directory.Delete(agentDir, true);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_escapes_mcp_env_values_so_pi_reads_them_back_literally()
+    {
+        // Pi 1.0.4 dist/core/resolve-config-value.js resolves every registered MCP
+        // env value: `$NAME`/`${NAME}` expand, a leading `!` runs a shell command,
+        // and `$$`/`$!` read back as `$`/`!`.
+        var runId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-mcp-escape");
+        var scriptPath = WriteRecordingPi(worktreeDir);
+        var environment = new TestProcessEnvironment
+        {
+            { "ILD_API_TOKEN", "!a$b${C}" },
+            { "ILD_API_URL", "http://example.com/$api" },
+        };
+
+        try
+        {
+            var result = await new PiAdapter(environment).ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: runId,
+                executionCount: 1));
+
+            Assert.True(result.Success, result.Error);
+            var ildTs = File.ReadAllText(ExtensionArgument(worktreeDir));
+            Assert.Contains("$!a$$b$${C}", ildTs);
+            Assert.Contains("http://example.com/$$api", ildTs);
+            Assert.DoesNotContain("\"!a$b${C}\"", ildTs);
+            Assert.DoesNotContain("example.com/$api", ildTs);
+            Assert.Contains(runId.ToString(), ildTs);
+        }
+        finally
+        {
+            CleanUpRunScratch(runId);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("gpt-5", true)]
+    public async Task ExecuteAsync_passes_provider_only_together_with_a_model(string model, bool expectProvider)
+    {
+        var runId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-provider");
+        var scriptPath = WriteRecordingPi(worktreeDir);
+
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: runId,
+                model: model,
+                config: JsonSerializer.Serialize(new { provider = "openai" }),
+                executionCount: 1));
+
+            Assert.True(result.Success, result.Error);
+            var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
+            if (expectProvider)
+            {
+                Assert.Equal("openai", argv[Array.IndexOf(argv, "--provider") + 1]);
+                Assert.Equal(model, argv[Array.IndexOf(argv, "--model") + 1]);
+            }
+            else
+            {
+                Assert.DoesNotContain("--provider", argv);
+                Assert.DoesNotContain("--model", argv);
+            }
+        }
+        finally
+        {
+            CleanUpRunScratch(runId);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_marks_an_ild_tool_called_from_codemode_on_the_live_stream()
+    {
+        // Pi 1.0.4 dist/core/nested-tool-calls.js: a tool called from codemode is
+        // announced with its own tool_execution_start carrying parentToolCallId.
+        var worktreeDir = NewWorktree("ild-pi-nested-tool");
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cat >/dev/null\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-nested\",\"cwd\":\"/w\"}'\n" +
+            "echo '{\"type\":\"tool_execution_start\",\"toolCallId\":\"call-1\",\"toolName\":\"codemode\",\"args\":{\"code\":\"await mcp.ild.get_workitem({workItemId: 1})\"}}'\n" +
+            "echo '{\"type\":\"tool_execution_start\",\"toolCallId\":\"call-1/1\",\"toolName\":\"mcp__ild__get_workitem\",\"args\":{\"workItemId\":\"wi-7\"},\"parentToolCallId\":\"call-1\"}'\n" +
+            "echo '{\"type\":\"tool_execution_end\",\"toolCallId\":\"call-1/1\",\"toolName\":\"mcp__ild__get_workitem\",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{}\"}]},\"isError\":false,\"parentToolCallId\":\"call-1\"}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}'\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var progress = new System.Collections.Concurrent.ConcurrentBag<string>();
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                executionCount: 1,
+                progressCallback: chunk =>
+                {
+                    progress.Add(chunk);
+                    return Task.CompletedTask;
+                }));
+
+            Assert.True(result.Success, result.Error);
+            Assert.Contains("\n[tool: mcp__ild__get_workitem] wi-7\n", progress);
+            Assert.Equal("done", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_records_usage_summed_over_the_runs_assistant_messages()
+    {
+        var worktreeDir = NewWorktree("ild-pi-usage");
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        const string first = "{\"input\":100,\"output\":10,\"cacheRead\":20,\"cacheWrite\":5,\"totalTokens\":135,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.25}}";
+        const string second = "{\"input\":200,\"output\":30,\"cacheRead\":0,\"cacheWrite\":0,\"totalTokens\":230,\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0,\"total\":0.5}}";
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cat >/dev/null\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-usage\",\"cwd\":\"/w\"}'\n" +
+            $"echo '{{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"toolCall\",\"id\":\"c1\",\"name\":\"bash\",\"arguments\":{{}}}}],\"usage\":{first}}}}}'\n" +
+            $"echo '{{\"type\":\"turn_end\",\"message\":{{\"role\":\"assistant\",\"content\":[],\"usage\":{first}}},\"toolResults\":[]}}'\n" +
+            $"echo '{{\"type\":\"message_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}],\"usage\":{second}}}}}'\n" +
+            $"echo '{{\"type\":\"turn_end\",\"message\":{{\"role\":\"assistant\",\"content\":[{{\"type\":\"text\",\"text\":\"done\"}}],\"usage\":{second}}},\"toolResults\":[]}}'\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var result = await new PiAdapter().ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                executionCount: 1));
+
+            Assert.True(result.Success, result.Error);
+            Assert.NotNull(result.Usage);
+            Assert.Equal(325, result.Usage!.InputTokens);
+            Assert.Equal(40, result.Usage.OutputTokens);
+            Assert.Equal(0.75m, result.Usage.CostUsd);
+        }
+        finally
+        {
             Directory.Delete(worktreeDir, true);
         }
     }
