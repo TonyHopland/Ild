@@ -39,8 +39,15 @@ function ChatSessionRow({
   const { editing, begin, closer } = useTitleEdit();
   const actionsRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const name = shownName(chat);
   const lastActivity = chat.updatedAt ?? chat.createdAt;
+
+  // The list scrolls and clips, so a menu opened on a row near its bottom edge
+  // would hang out of sight below it. `scrollIntoView` is absent in jsdom.
+  useEffect(() => {
+    if (menuOpen) menuRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -113,7 +120,12 @@ function ChatSessionRow({
               ⋯
             </button>
             {menuOpen && (
-              <div className="chat-row-menu" role="group" aria-label={`Actions for chat ${name}`}>
+              <div
+                className="chat-row-menu"
+                ref={menuRef}
+                role="group"
+                aria-label={`Actions for chat ${name}`}
+              >
                 <button
                   type="button"
                   className="chat-row-menu-item"

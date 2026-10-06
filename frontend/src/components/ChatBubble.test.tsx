@@ -375,6 +375,33 @@ describe("ChatBubble", () => {
     }
   });
 
+  // The list scrolls and clips, so the actions of a row near its bottom would open
+  // out of sight. jsdom does no layout and has no scrollIntoView, so stub it to
+  // observe that an opened menu is brought into view.
+  test("a chat's opened actions are scrolled into view within the list", async () => {
+    chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Last row" })]);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    const scrolled: Element[] = [];
+    const scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      renderBubble();
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openChatList();
+      fireEvent.click(await screen.findByRole("button", { name: "Actions for chat Last row" }));
+
+      const menu = screen.getByRole("group", { name: "Actions for chat Last row" });
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+      expect(scrolled).toContain(menu);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
   test("per-chat delete removes that chat without touching the others", async () => {
     chatService.listHistory.mockResolvedValue([
       summary({ id: "s1", name: "Keep me" }),
