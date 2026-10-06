@@ -1080,6 +1080,45 @@ describe("ChatBubble turn state", () => {
       expect(screen.queryByRole("status")).toBeNull();
     });
 
+    test("picking the open chat's row again overrules an open of another chat still on its way", async () => {
+      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      let answerOtherOpen!: (session: ChatSession) => void;
+      chatService.getById.mockImplementation((id: string) =>
+        id === "s2"
+          ? new Promise<ChatSession>((resolve) => {
+              answerOtherOpen = resolve;
+            })
+          : Promise.resolve(
+              chatSession({
+                id: "s1",
+                name: "First chat",
+                messages: [msg({ id: "a1", content: "the chat they stayed in", sequence: 0 })],
+              }),
+            ),
+      );
+
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openChatFromList("First chat");
+      await screen.findByLabelText("Chat message");
+      await openChatFromList("Other chat");
+      // Still on the list, because that read has not answered; the user changes their mind.
+      await openChatFromList("First chat");
+      await screen.findByLabelText("Chat message");
+
+      await act(async () => {
+        answerOtherOpen(
+          chatSession({
+            id: "s2",
+            name: "Other chat",
+            messages: [msg({ id: "b1", content: "the chat they did not open", sequence: 0 })],
+          }),
+        );
+      });
+
+      expect(screen.getByText("the chat they stayed in")).toBeTruthy();
+      expect(screen.queryByText("the chat they did not open")).toBeNull();
+    });
+
     test("a read from the earlier visit cannot settle a send this visit is waiting on", async () => {
       // The sharper half of the same hazard: the stale read carries the *send
       // number* of the visit that made it, and that number is what lets a read

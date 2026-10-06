@@ -441,6 +441,32 @@ describe("unread chat indicator", () => {
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 1));
   });
 
+  test("a chat covered by the narrow list stays unread while another chat picked there is still opening", async () => {
+    server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
+    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
+    sessions.b = chat("b", "Beta", [msg("b", 1, "user")]);
+    render(bubble());
+    await openPanel();
+    await resume("Alpha");
+    await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 0));
+    await settle();
+
+    // A reply lands in Alpha while the list covers it, and Beta's open is slow.
+    const list = await openChatList();
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 2, "assistant") });
+    const opening = deferred<ChatSession>();
+    chatService.getById.mockImplementationOnce(() => opening.promise);
+    fireEvent.click(within(list).getByText("Beta"));
+    await settle();
+    expect(screen.queryByText("assistant message 2")).toBeNull();
+    expect(chatService.markRead).not.toHaveBeenCalledWith("a", 2);
+
+    await act(async () => opening.resolve(sessions.b));
+    expect(await screen.findByText("user message 1")).toBeTruthy();
+    await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("b", 1));
+    expect(chatService.markRead).not.toHaveBeenCalledWith("a", 2);
+  });
+
   test("every (re)connect rejoins the inbox and re-reads history, recovering a hint lost while away", async () => {
     server = [summary("a", "Alpha", false)];
     const view = render(bubble());

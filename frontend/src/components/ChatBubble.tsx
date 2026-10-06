@@ -897,14 +897,13 @@ export default function ChatBubble() {
   // A narrow panel's list gives way to the chat only once it is there to show, so a
   // chat it would uncover in the meantime is not marked read unseen.
   const openChat = async (id: string) => {
-    const closeList = !wide;
     if (id === sessionIdRef.current) {
       // Already open, so nothing is re-read; an open still on its way is overruled.
       visitRef.current += 1;
     } else if (!(await resumeChat(id))) {
       return;
     }
-    if (closeList) setSidebarOpen(false);
+    if (panelSizeRef.current.width < SIDEBAR_SIDE_BY_SIDE_MIN_WIDTH) setSidebarOpen(false);
   };
 
   const newChat = () => {
