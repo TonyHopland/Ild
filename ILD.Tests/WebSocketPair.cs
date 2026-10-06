@@ -22,7 +22,9 @@ internal static class WebSocketPair
         return (server, client);
     }
 
-    private sealed record Frame(WebSocketMessageType Type, byte[] Data, bool EndOfMessage, bool Close);
+    private sealed record Frame(
+        WebSocketMessageType Type, byte[] Data, bool EndOfMessage, bool Close,
+        WebSocketCloseStatus? CloseStatus = null, string? CloseStatusDescription = null);
 
     private sealed class InMemoryWebSocket : WebSocket
     {
@@ -39,8 +41,11 @@ internal static class WebSocketPair
 
         public InMemoryWebSocket? Peer { get; set; }
 
-        public override WebSocketCloseStatus? CloseStatus => null;
-        public override string? CloseStatusDescription => null;
+        private WebSocketCloseStatus? _closeStatus;
+        private string? _closeStatusDescription;
+
+        public override WebSocketCloseStatus? CloseStatus => _closeStatus;
+        public override string? CloseStatusDescription => _closeStatusDescription;
         public override WebSocketState State => _state;
         public override string? SubProtocol => null;
 
@@ -54,7 +59,7 @@ internal static class WebSocketPair
         {
             if (_state is WebSocketState.Closed or WebSocketState.Aborted) return Task.CompletedTask;
             _state = WebSocketState.Closed;
-            _writes.TryWrite(new Frame(WebSocketMessageType.Close, Array.Empty<byte>(), true, true));
+            _writes.TryWrite(new Frame(WebSocketMessageType.Close, Array.Empty<byte>(), true, true, closeStatus, statusDescription));
             _writes.TryComplete();
             return Task.CompletedTask;
         }
@@ -88,7 +93,9 @@ internal static class WebSocketPair
             if (frame.Close)
             {
                 _state = WebSocketState.CloseReceived;
-                return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true);
+                _closeStatus = frame.CloseStatus;
+                _closeStatusDescription = frame.CloseStatusDescription;
+                return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true, frame.CloseStatus, frame.CloseStatusDescription);
             }
 
             var n = Math.Min(buffer.Count, frame.Data.Length);

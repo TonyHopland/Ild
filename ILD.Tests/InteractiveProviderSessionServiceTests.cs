@@ -118,9 +118,10 @@ public class InteractiveProviderSessionServiceTests
 
         var (text, closeStatus) = await RunToCloseAsync("/bin/sh", "-c \"echo boom >&2; exit 3\"");
 
-        var boom = text.IndexOf("boom", StringComparison.Ordinal);
-        Assert.True(boom >= 0, $"the CLI's error output was lost: {text}");
-        Assert.Matches(new Regex(@"exit[^\n]*\b3\b", RegexOptions.IgnoreCase), text[boom..]);
+        // The CLI's own line, not the launch line that quotes its arguments.
+        var boom = Regex.Match(text, @"^boom\r?$", RegexOptions.Multiline);
+        Assert.True(boom.Success, $"the CLI's error output was lost: {text}");
+        Assert.Matches(new Regex(@"exit[^\n]*\b3\b", RegexOptions.IgnoreCase), text[boom.Index..]);
         Assert.Equal(WebSocketCloseStatus.NormalClosure, closeStatus);
     }
 

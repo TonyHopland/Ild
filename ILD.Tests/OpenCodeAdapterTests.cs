@@ -542,12 +542,14 @@ public class OpenCodeAdapterTests
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-extra-args-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
         var scriptPath = Path.Combine(worktreeDir, "opencode.sh");
+        // Like a fresh opencode: the session is not local until it is imported, so
+        // export only has it once the run has happened.
         File.WriteAllText(scriptPath,
             "#!/bin/sh\n" +
-            $"printf '%s\\n' \"$@\" > '{worktreeDir}/argv-$1.txt'\n" +
+            $"printf '%s\\n' \"$@\" > '{worktreeDir}/argv-'\"$1\".txt\n" +
             "case \"$1\" in\n" +
             "  run) echo '{\"text\":\"hello\",\"sessionId\":\"managed-session\"}' ;;\n" +
-            "  export) printf '%s' '{\"id\":\"managed-session\",\"messages\":[2]}' ;;\n" +
+            $"  export) [ -f '{worktreeDir}/argv-run.txt' ] && printf '%s' '{{\"id\":\"managed-session\",\"messages\":[2]}}' ;;\n" +
             "esac\n");
         MakeExecutable(scriptPath);
 
