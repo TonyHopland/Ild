@@ -153,7 +153,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(response);
 
             return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout.RawStdout))
+                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.ParsePi(stdout.RawStdout))
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
@@ -211,7 +211,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add(string.Join(',', settings.ToolNames));
         }
 
-        // A discovered extension runs code of its own, an MCP bridge among them.
+        // A discovered extension runs code of its own, an MCP registration among them.
         if (settings.NoTools)
             psi.ArgumentList.Add("--no-extensions");
 
@@ -221,7 +221,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add(settings.IldExtensionPath);
         }
 
-        if (!string.IsNullOrWhiteSpace(settings.Provider))
+        // pi 1.0 rejects --provider without --model.
+        if (!string.IsNullOrWhiteSpace(settings.Provider) && !string.IsNullOrWhiteSpace(settings.Model))
         {
             psi.ArgumentList.Add("--provider");
             psi.ArgumentList.Add(settings.Provider);
@@ -430,9 +431,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     private const string SessionDirSegment = "ild-pi-sessions";
     private const string AgentDirSegment = "ild-pi-agent";
     private const string ExtensionDirSegment = "ild-pi-ext";
-    private const string IldToolPrefix = "ild_";
-    private const string BridgeFileName = "ild-mcp-bridge.js";
-    private const string BridgeResourceName = "ILD.Core.PiExtension.ild-mcp-bridge.js";
+    private const string IldMcpToolPrefix = "mcp__ild__";
 
     private static string BuildSnapshotPath(string sessionDirectory, string sessionId)
         => Path.Combine(sessionDirectory, $"{SanitizeFileName(sessionId)}.jsonl");
@@ -505,21 +504,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
 
         if (!string.IsNullOrWhiteSpace(settings.IldExtensionPath)
             && !string.IsNullOrWhiteSpace(settings.IldExtensionContent))
-        {
             AgentIsolation.WriteAgentReadableFile(settings.IldExtensionPath, Encoding.UTF8.GetBytes(settings.IldExtensionContent));
-            AgentIsolation.WriteAgentReadableFile(
-                Path.Combine(Path.GetDirectoryName(settings.IldExtensionPath)!, BridgeFileName), Bridge.Value);
-        }
     }
-
-    private static readonly Lazy<byte[]> Bridge = new(() =>
-    {
-        using var resource = typeof(PiAdapter).Assembly.GetManifestResourceStream(BridgeResourceName)
-            ?? throw new InvalidOperationException($"{BridgeResourceName} is not embedded in ILD.Core");
-        using var copy = new MemoryStream();
-        resource.CopyTo(copy);
-        return copy.ToArray();
-    });
 
     private static string LegacyExtensionPath(string agentDirectory) => Path.Combine(agentDirectory, "extensions", "ild.ts");
 
@@ -659,7 +645,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
             toolNames.Add("bash");
 
         if (ildServerDll is not null)
-            toolNames.AddRange(IldMcpToolNames.Read(ildServerDll).Select(name => IldToolPrefix + name));
+            toolNames.AddRange(IldMcpToolNames.Read(ildServerDll).Select(name => IldMcpToolPrefix + name));
 
         return toolNames
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -734,31 +720,40 @@ public sealed class PiAdapter : CliAgentAdapterBase
     }
 
     /// <summary>
-    /// Build the <c>ild.ts</c> pi extension: it hands the ILD MCP server's launch
-    /// entry (<see cref="ClaudeCodeAdapter.BuildIldMcpEntry"/>) to
-    /// <c>ild-mcp-bridge.js</c> (written beside it), which registers every tool the
-    /// server lists as <c>ild_&lt;name&gt;</c>. The truncation utilities are passed
-    /// in because only an extension can import them from pi.
+    /// Build the <c>ild.ts</c> pi extension: it registers the ILD MCP server's launch
+    /// entry (<see cref="ClaudeCodeAdapter.BuildIldMcpEntry"/>) with pi's own MCP
+    /// client, which starts the server and exposes every tool it lists as
+    /// <c>mcp__ild__&lt;name&gt;</c> (ADR-0024).
     /// </summary>
     private static string BuildIldExtensionContent(Dictionary<string, object?> ildServer)
     {
-        var config = JsonSerializer.Serialize(new Dictionary<string, object?>(ildServer) { ["toolPrefix"] = IldToolPrefix });
+        var env = ((Dictionary<string, object?>)ildServer["env"]!)
+            .ToDictionary(kv => kv.Key, kv => PiLiteral((string)kv.Value!));
+        var server = JsonSerializer.Serialize(new Dictionary<string, object?>(ildServer)
+        {
+            ["env"] = env,
+            ["exposure"] = "direct",
+            ["timeout"] = 120,
+        });
 
         return $$"""
-            import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
             import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-            import { registerIldMcpTools } from "./{{BridgeFileName}}";
 
-            const CONFIG = {{config}};
+            const SERVER = {{server}};
 
-            export default async function (pi: ExtensionAPI) {
-                await registerIldMcpTools(pi, {
-                    ...CONFIG,
-                    truncate: { truncateHead, formatSize, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES },
-                });
+            export default function (pi: ExtensionAPI) {
+                pi.registerMcpServer("ild", SERVER);
             }
 
             """;
+    }
+
+    // pi resolves MCP env values: `$NAME`/`${NAME}` expand and a leading `!` runs a
+    // shell command, while `$$` and `$!` read back as `$` and `!`.
+    private static string PiLiteral(string value)
+    {
+        var escaped = value.Replace("$", "$$");
+        return escaped.StartsWith('!') ? "$" + escaped : escaped;
     }
 
     internal sealed record PiAdapterSettings(
