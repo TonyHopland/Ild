@@ -465,8 +465,21 @@
 }
 
 /* With a mouse the button shows only on the row it is pointing at (or one with
-   focus, or an open menu); a touch screen has no hover, so it always shows. */
+   focus, or an open menu), and keeps no room in the row while hidden: the title
+   runs the full width and gives up the button's room only while it shows. A
+   touch screen has no hover, so there it always shows, beside the title. */
 @media (hover: hover) and (pointer: fine) {
+  .chat-history-row {
+    position: relative;
+  }
+
+  .chat-row-actions {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    transform: translateY(-50%);
+  }
+
   .chat-row-menu-btn {
     opacity: 0;
   }
@@ -475,6 +488,12 @@
   .chat-history-row:focus-within .chat-row-menu-btn,
   .chat-row-menu-btn[aria-expanded="true"] {
     opacity: 1;
+  }
+
+  .chat-history-row:hover .chat-history-open,
+  .chat-history-row:focus-within .chat-history-open,
+  .chat-history-row:has(.chat-row-menu-btn[aria-expanded="true"]) .chat-history-open {
+    padding-right: 2rem;
   }
 }
 
