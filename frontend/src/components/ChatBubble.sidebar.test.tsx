@@ -452,6 +452,10 @@ describe("chat sidebar layout", () => {
     render(bubble());
     await openPanel();
     await pick("Alpha");
+    // The open reads the chat, and its join reads it again; neither is a reload.
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(2));
+    await settle();
+    const reads = chatService.getById.mock.calls.length;
     act(() => {
       handlers.ChatTurnStarted?.({ payload: { chatSessionId: "a", turnId: "t9" } });
     });
@@ -469,7 +473,7 @@ describe("chat sidebar layout", () => {
     expect((screen.getByLabelText("Chat message") as HTMLInputElement).value).toBe("half typed");
     expect(screen.getByText("assistant message 1 of a")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-    expect(chatService.getById).toHaveBeenCalledTimes(1);
+    expect(chatService.getById).toHaveBeenCalledTimes(reads);
     expect(setCurrentChatSessionId).toHaveBeenLastCalledWith("a");
   });
 });
@@ -501,6 +505,9 @@ describe("chat sidebar list", () => {
 
     expect(sidebar().querySelectorAll('[aria-current="true"]')).toHaveLength(0);
     await pick("Alpha");
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(2));
+    await settle();
+    const reads = chatService.getById.mock.calls.length;
     let current = sidebar().querySelectorAll('[aria-current="true"]');
     expect(current).toHaveLength(1);
     expect(row("Alpha").contains(current[0])).toBe(true);
@@ -509,7 +516,7 @@ describe("chat sidebar list", () => {
     fireEvent.change(screen.getByLabelText("Chat message"), { target: { value: "draft" } });
     fireEvent.click(within(sidebar()).getByText("Alpha"));
     await settle();
-    expect(chatService.getById).toHaveBeenCalledTimes(1);
+    expect(chatService.getById).toHaveBeenCalledTimes(reads);
     expect((screen.getByLabelText("Chat message") as HTMLInputElement).value).toBe("draft");
 
     await pick("Beta");
