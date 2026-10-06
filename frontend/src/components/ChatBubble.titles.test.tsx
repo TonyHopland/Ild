@@ -53,7 +53,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
-import { openChatFromList, openChatList, startNewChat } from "../test-support";
+import { openChatFromList, openChatList, showChatActions, startNewChat } from "../test-support";
 
 // A stand-in for the server: what GET /chat/history answers right now. A rename
 // that succeeds changes it there, as PUT /chat/{id}/name does.
@@ -167,12 +167,8 @@ function renameInput(): HTMLInputElement | undefined {
 }
 
 function startRenamingRow(name: string): HTMLInputElement {
+  showChatActions(name);
   fireEvent.click(screen.getByRole("button", { name: `Rename chat ${name}` }));
-  return renameInput()!;
-}
-
-function startRenamingHeader(): HTMLInputElement {
-  fireEvent.click(within(panel()).getByRole("button", { name: /^rename/i }));
   return renameInput()!;
 }
 
@@ -242,24 +238,6 @@ describe("chat titles", () => {
     expect(screen.queryByText("Thrown away too")).toBeNull();
   });
 
-  test("the open chat is renamed from its header", async () => {
-    server = [summary("a", "Alpha")];
-    sessions.a = chat("a", "Alpha");
-    render(bubble());
-    await openPanel();
-    await resume("Alpha");
-
-    const input = startRenamingHeader();
-    fireEvent.change(input, { target: { value: "Login page fix" } });
-    fireEvent.click(within(panel()).getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(chatService.rename).toHaveBeenCalledWith("a", "Login page fix"));
-    await within(panel()).findByText("Login page fix");
-    expect(renameInput()).toBeUndefined();
-    // The chat itself carries on.
-    expect(screen.getByLabelText("Chat message")).toBeTruthy();
-  });
-
   test("a failed rename shows an error and keeps the old title", async () => {
     server = [summary("a", "Alpha")];
     chatService.rename.mockRejectedValue(new Error("Name is taken"));
@@ -279,17 +257,14 @@ describe("chat titles", () => {
     expect(screen.queryByText("Deploy loop wiring")).toBeNull();
   });
 
-  test("leaving or switching chat discards an unsaved rename", async () => {
+  test("switching chat discards an unsaved rename", async () => {
     server = [summary("a", "Alpha"), summary("b", "Beta")];
     sessions.a = chat("a", "Alpha");
     sessions.b = chat("b", "Beta");
     render(bubble());
     await openPanel();
     await resume("Alpha");
-
-    fireEvent.change(startRenamingHeader(), { target: { value: "Unsaved header name" } });
     await back();
-    expect(renameInput()).toBeUndefined();
     expect(screen.getByText("Alpha")).toBeTruthy();
 
     fireEvent.change(startRenamingRow("Alpha"), { target: { value: "Unsaved row name" } });

@@ -107,6 +107,12 @@ export async function startNewChat(): Promise<void> {
   fireEvent.click(within(await openChatList()).getByRole("button", { name: "New chat" }));
 }
 
+/** Shows the favourite, rename and delete actions of a chat in the chat bubble's list. */
+export function showChatActions(name: string): void {
+  const actions = screen.getByRole("button", { name: `Actions for chat ${name}` });
+  if (actions.getAttribute("aria-expanded") !== "true") fireEvent.click(actions);
+}
+
 /** A board page request, as the Taskboard sends it for one status column. */
 export interface FakeBoardPageQuery {
   status: string;

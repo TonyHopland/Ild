@@ -2,7 +2,13 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary } from "../types";
-import { openChatFromList, openChatList, startNewChat, type ChatHubEvents } from "../test-support";
+import {
+  openChatFromList,
+  openChatList,
+  showChatActions,
+  startNewChat,
+  type ChatHubEvents,
+} from "../test-support";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
@@ -327,6 +333,48 @@ describe("ChatBubble", () => {
     expect(screen.getByTitle(new Date("2026-03-04T00:00:00Z").toLocaleString())).toBeTruthy();
   });
 
+  test("a chat's actions open one row at a time and close on Escape, without it reaching the page below, or on a click outside", async () => {
+    chatService.listHistory.mockResolvedValue([
+      summary({ id: "s1", name: "One" }),
+      summary({ id: "s2", name: "Two" }),
+    ]);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    const pageEscape = vi.fn();
+    const onPageKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") pageEscape();
+    };
+    document.addEventListener("keydown", onPageKey);
+    try {
+      renderBubble();
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openChatList();
+      await screen.findByText("One");
+      const actions = (name: string) =>
+        screen.getByRole("button", { name: `Actions for chat ${name}` });
+
+      expect(screen.queryByLabelText("Rename chat One")).toBeNull();
+      fireEvent.click(actions("One"));
+      expect(actions("One").getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByLabelText("Rename chat One")).toBeTruthy();
+
+      fireEvent.click(actions("Two"));
+      expect(screen.queryByLabelText("Rename chat One")).toBeNull();
+      expect(screen.getByLabelText("Delete chat Two")).toBeTruthy();
+
+      fireEvent.keyDown(screen.getByLabelText("Delete chat Two"), { key: "Escape" });
+      expect(screen.queryByLabelText("Delete chat Two")).toBeNull();
+      expect(actions("Two").getAttribute("aria-expanded")).toBe("false");
+      expect(pageEscape).not.toHaveBeenCalled();
+
+      fireEvent.click(actions("One"));
+      fireEvent.pointerDown(screen.getByLabelText("Search chats"));
+      expect(screen.queryByLabelText("Rename chat One")).toBeNull();
+      expect(chatService.deleteOne).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", onPageKey);
+    }
+  });
+
   test("per-chat delete removes that chat without touching the others", async () => {
     chatService.listHistory.mockResolvedValue([
       summary({ id: "s1", name: "Keep me" }),
@@ -340,6 +388,7 @@ describe("ChatBubble", () => {
     await openChatList();
     await screen.findByText("Remove me");
 
+    showChatActions("Remove me");
     fireEvent.click(screen.getByLabelText("Delete chat Remove me"));
 
     await waitFor(() => expect(chatService.deleteOne).toHaveBeenCalledWith("s2"));

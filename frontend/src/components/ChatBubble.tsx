@@ -30,7 +30,7 @@ import {
   type Point,
   type Size,
 } from "./chatPlacement";
-import { RenameForm, UnreadDot, useTitleEdit, type RenameChat } from "./ChatRename";
+import { UnreadDot, type RenameChat } from "./ChatRename";
 import ChatSidebar from "./ChatSidebar";
 import ChatTranscript from "./ChatTranscript";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
@@ -74,42 +74,6 @@ function useChatClaims() {
     setClaimed(new Set(claimsRef.current));
   }, []);
   return { claimed, claim, release };
-}
-
-/** The open chat's title in the header, renamable in place. Keyed by the chat. */
-function ChatHeaderTitle({
-  chatSessionId,
-  title,
-  renameChat,
-  blocked,
-}: {
-  chatSessionId: string;
-  title: string | null;
-  renameChat: RenameChat;
-  blocked: boolean;
-}) {
-  const { editing, begin, closer } = useTitleEdit();
-  return (
-    <div className="chat-panel-heading">
-      {editing !== null ? (
-        <RenameForm
-          key={editing}
-          chatSessionId={chatSessionId}
-          initial={title ?? ""}
-          renameChat={renameChat}
-          blocked={blocked}
-          onClose={closer(editing)}
-        />
-      ) : (
-        <>
-          <span className="chat-panel-title">{title ?? "AI Chat"}</span>
-          <button type="button" className="chat-link-btn" onClick={begin}>
-            Rename
-          </button>
-        </>
-      )}
-    </div>
-  );
 }
 
 /**
@@ -322,7 +286,7 @@ export default function ChatBubble() {
 
   const startHeaderDrag = useCallback(
     (e: React.PointerEvent) => {
-      // Let the header's own controls (chat list, rename, close) work without dragging.
+      // Let the header's own controls (chat list, close) work without dragging.
       if ((e.target as HTMLElement).closest("button, input")) return;
       const base = panelOverride ?? panelPosition(fabPos, panelSize, viewportSize());
       const origin = { px: e.clientX, py: e.clientY, ox: base.x, oy: base.y };
@@ -1043,17 +1007,9 @@ export default function ChatBubble() {
             <span className="chat-sidebar-badge">{unreadCount}</span>
           )}
         </button>
-        {session ? (
-          <ChatHeaderTitle
-            key={session.id}
-            chatSessionId={session.id}
-            title={sessionTitle}
-            renameChat={renameChat}
-            blocked={renamesInFlight.has(session.id)}
-          />
-        ) : (
-          <span className="chat-panel-title">AI Chat</span>
-        )}
+        <div className="chat-panel-heading">
+          <span className="chat-panel-title">{sessionTitle ?? "AI Chat"}</span>
+        </div>
         <div className="chat-panel-header-actions">
           <button
             type="button"

@@ -105,6 +105,9 @@
 .chat-panel-title {
   font-weight: 600;
   color: #e0e0e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-panel-header-actions {
@@ -443,16 +446,75 @@
   font-weight: 700;
 }
 
-.chat-star {
-  color: #707090;
-  font-size: 1rem;
-}
-
-.chat-star-on {
+.chat-starred {
+  flex-shrink: 0;
   color: #facc15;
+  font-size: 0.8rem;
 }
 
-.chat-star:disabled {
+/* A row's favourite, rename and delete live behind one button, so the title
+   keeps the row's width. */
+.chat-row-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-row-menu-btn {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* With a mouse the button shows only on the row it is pointing at (or one with
+   focus, or an open menu); a touch screen has no hover, so it always shows. */
+@media (hover: hover) and (pointer: fine) {
+  .chat-row-menu-btn {
+    opacity: 0;
+  }
+
+  .chat-history-row:hover .chat-row-menu-btn,
+  .chat-history-row:focus-within .chat-row-menu-btn,
+  .chat-row-menu-btn[aria-expanded="true"] {
+    opacity: 1;
+  }
+}
+
+.chat-row-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 8.5rem;
+  padding: 0.25rem;
+  background: #2a2a40;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.4rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.chat-row-menu-item {
+  background: transparent;
+  border: none;
+  border-radius: 0.3rem;
+  color: #e0e0e0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.chat-row-menu-item:hover,
+.chat-row-menu-item:focus-visible {
+  background: #33335a;
+}
+
+.chat-row-menu-item.chat-danger {
+  color: #f87171;
+}
+
+.chat-row-menu-item:disabled {
   cursor: wait;
   opacity: 0.5;
 }

@@ -53,7 +53,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
-import { openChatList } from "../test-support";
+import { openChatList, showChatActions } from "../test-support";
 
 // A stand-in for the server: what GET /chat/history answers right now. A rename
 // that succeeds changes it there, as PUT /chat/{id}/name does.
@@ -119,6 +119,7 @@ function renameInput(): HTMLInputElement | undefined {
 }
 
 function startRenamingRow(name: string): HTMLInputElement {
+  showChatActions(name);
   fireEvent.click(screen.getByRole("button", { name: `Rename chat ${name}` }));
   return renameInput()!;
 }

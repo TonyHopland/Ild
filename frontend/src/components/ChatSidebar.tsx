@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { chatService } from "../services/auth";
 import type { ChatSessionSummary } from "../types";
 import { formatRelativeTime } from "../utils/relativeTime";
@@ -14,6 +14,8 @@ function ChatSessionRow({
   chat,
   current,
   now,
+  menuOpen,
+  onMenu,
   onOpen,
   onDelete,
   renameChat,
@@ -24,6 +26,9 @@ function ChatSessionRow({
   chat: ChatSessionSummary;
   current: boolean;
   now: number;
+  /** Whether this row's actions are showing; one row's at a time. */
+  menuOpen: boolean;
+  onMenu: (chatSessionId: string, open: boolean) => void;
   onOpen: () => void;
   onDelete: () => void;
   renameChat: RenameChat;
@@ -32,8 +37,25 @@ function ChatSessionRow({
   starring: boolean;
 }) {
   const { editing, begin, closer } = useTitleEdit();
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const name = shownName(chat);
   const lastActivity = chat.updatedAt ?? chat.createdAt;
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!actionsRef.current?.contains(e.target as Node)) onMenu(chat.id, false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [menuOpen, onMenu, chat.id]);
+
+  const choose = (action: () => void) => () => {
+    onMenu(chat.id, false);
+    action();
+  };
+
   return (
     <li className="chat-history-row">
       {editing !== null ? (
@@ -49,21 +71,16 @@ function ChatSessionRow({
         <>
           <button
             type="button"
-            className={`chat-link-btn chat-star${chat.isFavorite ? " chat-star-on" : ""}`}
-            aria-label={`Favorite chat ${name}`}
-            aria-pressed={chat.isFavorite === true}
-            disabled={starring}
-            onClick={onFavorite}
-          >
-            {chat.isFavorite ? "★" : "☆"}
-          </button>
-          <button
-            type="button"
             className={`chat-history-open${chat.hasUnread ? " chat-history-unread" : ""}`}
             aria-current={current ? "true" : undefined}
             onClick={onOpen}
           >
             <span className="chat-history-title">
+              {chat.isFavorite && (
+                <span className="chat-starred" role="img" aria-label="Starred">
+                  ★
+                </span>
+              )}
               <span className="chat-history-name">{name}</span>
               {chat.hasUnread && <UnreadDot />}
               {chat.needsYou && (
@@ -74,22 +91,61 @@ function ChatSessionRow({
               {formatRelativeTime(lastActivity, now)}
             </span>
           </button>
-          <button
-            type="button"
-            className="chat-link-btn"
-            aria-label={`Rename chat ${name}`}
-            onClick={begin}
+          <div
+            className="chat-row-actions"
+            ref={actionsRef}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape" || !menuOpen) return;
+              // A page under the chat, such as an open work item, closes on Escape too.
+              e.stopPropagation();
+              onMenu(chat.id, false);
+              triggerRef.current?.focus();
+            }}
           >
-            ✎
-          </button>
-          <button
-            type="button"
-            className="chat-link-btn chat-danger"
-            aria-label={`Delete chat ${name}`}
-            onClick={onDelete}
-          >
-            ✕
-          </button>
+            <button
+              type="button"
+              ref={triggerRef}
+              className="chat-link-btn chat-row-menu-btn"
+              aria-label={`Actions for chat ${name}`}
+              aria-expanded={menuOpen}
+              onClick={() => onMenu(chat.id, !menuOpen)}
+            >
+              ⋯
+            </button>
+            {menuOpen && (
+              <div className="chat-row-menu" role="group" aria-label={`Actions for chat ${name}`}>
+                <button
+                  type="button"
+                  className="chat-row-menu-item"
+                  aria-label={`Favorite chat ${name}`}
+                  aria-pressed={chat.isFavorite === true}
+                  disabled={starring}
+                  onClick={choose(() => {
+                    triggerRef.current?.focus();
+                    onFavorite();
+                  })}
+                >
+                  {chat.isFavorite ? "★ Unfavorite" : "☆ Favorite"}
+                </button>
+                <button
+                  type="button"
+                  className="chat-row-menu-item"
+                  aria-label={`Rename chat ${name}`}
+                  onClick={choose(begin)}
+                >
+                  ✎ Rename
+                </button>
+                <button
+                  type="button"
+                  className="chat-row-menu-item chat-danger"
+                  aria-label={`Delete chat ${name}`}
+                  onClick={choose(onDelete)}
+                >
+                  ✕ Delete
+                </button>
+              </div>
+            )}
+          </div>
         </>
       )}
     </li>
@@ -136,6 +192,12 @@ export default function ChatSidebar({
   );
   const [now, setNow] = useState(Date.now);
   const term = query.trim();
+  // The row whose actions are showing. A row closes only its own, so a close that
+  // lands after another row has opened leaves that one alone.
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const onMenu = useCallback((chatSessionId: string, open: boolean) => {
+    setMenuFor((shown) => (open ? chatSessionId : shown === chatSessionId ? null : shown));
+  }, []);
 
   useEffect(() => {
     const tick = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
@@ -230,6 +292,8 @@ export default function ChatSidebar({
               chat={c}
               current={c.id === currentChatId}
               now={now}
+              menuOpen={menuFor === c.id}
+              onMenu={onMenu}
               onOpen={() => onOpen(c.id)}
               onDelete={() => onDelete(c.id)}
               renameChat={renameChat}

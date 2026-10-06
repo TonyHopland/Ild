@@ -59,7 +59,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
 import { setChatEnabled } from "../hooks/useChatEnabled";
-import { openChatFromList, openChatList, startNewChat } from "../test-support";
+import { openChatFromList, openChatList, showChatActions, startNewChat } from "../test-support";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -499,6 +499,7 @@ describe("unread chat indicator", () => {
     holdHistoryReads(1);
     emitUnreadChanged({ chatSessionId: "a" });
     await waitFor(() => expect(heldReads).toHaveLength(1));
+    showChatActions("Alpha");
     fireEvent.click(screen.getByLabelText("Delete chat Alpha"));
     await waitFor(() => expect(screen.queryByText("Alpha")).toBeNull());
 
@@ -552,6 +553,7 @@ describe("unread chat indicator", () => {
     setUnread("b", true);
     emitUnreadChanged({ chatSessionId: "b" });
     await waitFor(() => expect(heldReads).toHaveLength(1));
+    showChatActions("Alpha");
     fireEvent.click(screen.getByLabelText("Delete chat Alpha"));
     await waitFor(() => expect(screen.queryByText("Alpha")).toBeNull());
 
