@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { workItemService } from "../services/auth";
 import { computeLineDiff } from "../utils/jsonDiff";
-import type { ApiError, WorkItemEditProposal } from "../types";
+import type { ApiError, EditProposalDependency, WorkItemEditProposal } from "../types";
 import "./EditProposalCard.css";
 
 interface EditProposalCardProps {
@@ -75,8 +75,31 @@ function OverrideChange({ before, after }: { before: string | null; after: strin
   );
 }
 
+function DependencyChanges({
+  added,
+  removed,
+}: {
+  added: EditProposalDependency[];
+  removed: EditProposalDependency[];
+}) {
+  const line = (verb: string, dependency: EditProposalDependency) => (
+    <li key={`${verb}${dependency.id}`}>
+      {verb} dependency: #{dependency.id}
+      {dependency.title != null && <> {dependency.title}</>}
+    </li>
+  );
+  return (
+    <ul className="edit-proposal-dependencies">
+      {added.map((d) => line("Add", d))}
+      {removed.map((d) => line("Remove", d))}
+    </ul>
+  );
+}
+
 export default function EditProposalCard({ proposal, onSettled }: EditProposalCardProps) {
   const { proposed, snapshot } = proposal;
+  const addedDependencies = proposed.addDependencies ?? [];
+  const removedDependencies = proposed.removeDependencies ?? [];
   const isPending = proposal.status === "Pending";
 
   const [approveBusy, setApproveBusy] = useState(false);
@@ -187,6 +210,14 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
                 before={snapshot.baseBranchOverride}
                 after={proposed.baseBranchOverride}
               />
+            </dd>
+          </>
+        )}
+        {(addedDependencies.length > 0 || removedDependencies.length > 0) && (
+          <>
+            <dt>Dependencies</dt>
+            <dd>
+              <DependencyChanges added={addedDependencies} removed={removedDependencies} />
             </dd>
           </>
         )}
