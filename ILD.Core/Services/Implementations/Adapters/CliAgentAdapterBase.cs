@@ -82,6 +82,19 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             + "Example: {\"chrome-devtools\": {\n  \"command\": \"npx\",\n  \"args\": [\n    \"-y\", \"chrome-devtools-mcp@latest\",\n    \"--headless\", \"--isolated\",\n    \"--chrome-arg=--no-sandbox\",\n    \"--chrome-arg=--disable-setuid-sandbox\"\n  ]\n}}. "
             + "Invalid JSON is ignored and never fails a run. The reserved name \"ild\" is ignored.");
 
+    protected static readonly ConfigFieldDescriptor ExtraArgsField = new(
+        Name: "extraArgs",
+        Type: ConfigFieldType.Textarea,
+        Label: "Extra CLI arguments",
+        Required: false,
+        DefaultValue: null,
+        Description: "Optional. Added to every launch of this provider's agent, e.g. --effort high. "
+            + "Words are split like a shell command line: quotes group words, and nothing is expanded. "
+            + "Set the model with the Model field, not here; other flags ILD already sets can't be used either. "
+            + "Open the provider terminal after saving to check that the CLI accepts them. "
+            + "Don't put secrets here: the arguments are visible in the process list. "
+            + "Use the API key or environment settings for secrets (ADR-0014).");
+
     public abstract Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);
 
     /// <summary>

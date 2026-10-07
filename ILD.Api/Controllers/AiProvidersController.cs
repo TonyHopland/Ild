@@ -68,21 +68,27 @@ public class AiProvidersController : ControllerBase
         return null;
     }
 
+    private static string? ApplyManagedConfigFields(string? configJson, AiProviderDto request)
+        => ApplyConfigField(
+            ApplyConfigField(configJson, "customMcpServersJson", request.CustomMcpServersJson),
+            "extraArgs", request.ExtraArgs);
+
     /// <summary>
-    /// Fold the UI-managed Custom MCP servers value into a provider's config blob,
-    /// preserving every other key of a well-formed JSON object (including secrets
-    /// the UI never sees, such as an embedded <c>apiKey</c>). A null
-    /// <paramref name="customMcpServersJson"/> means the caller isn't managing the
-    /// field, so the blob is returned unchanged; a blank value clears the key. If
-    /// the existing blob is malformed or not a JSON object it can't be merged into,
-    /// so it fails open to a fresh object holding just this key (mirroring
-    /// <see cref="AiProviderConfig.Parse"/>) — the only case where other keys are
-    /// not carried over. The stored key is camelCase to match the shape
+    /// Fold one UI-managed value into a provider's config blob under
+    /// <paramref name="key"/>, preserving every other key of a well-formed JSON
+    /// object (including secrets the UI never sees, such as an embedded
+    /// <c>apiKey</c>). A null <paramref name="value"/> means the caller isn't
+    /// managing the field, so the blob is returned unchanged. Every spelling of the
+    /// key is replaced, since <see cref="AiProviderConfig"/> reads keys
+    /// case-insensitively, and a blank value clears it. If the existing blob is
+    /// malformed or not a JSON object it can't be merged into, so it fails open to a
+    /// fresh object holding just this key (mirroring <see cref="AiProviderConfig.Parse"/>)
+    /// — the only case where other keys are not carried over. The stored key is camelCase to match the shape
     /// <see cref="AiProviderConfig"/> reads.
     /// </summary>
-    private static string? ApplyCustomMcpServers(string? configJson, string? customMcpServersJson)
+    private static string? ApplyConfigField(string? configJson, string key, string? value)
     {
-        if (customMcpServersJson is null) return configJson;
+        if (value is null) return configJson;
 
         JsonObject obj;
         try
@@ -96,10 +102,10 @@ public class AiProvidersController : ControllerBase
             obj = new JsonObject();
         }
 
-        if (string.IsNullOrWhiteSpace(customMcpServersJson))
-            obj.Remove("customMcpServersJson");
-        else
-            obj["customMcpServersJson"] = customMcpServersJson;
+        foreach (var spelling in obj.Select(p => p.Key).Where(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase)).ToList())
+            obj.Remove(spelling);
+        if (!string.IsNullOrWhiteSpace(value))
+            obj[key] = value;
 
         return obj.Count == 0 ? null : obj.ToJsonString();
     }
@@ -193,9 +199,11 @@ public class AiProvidersController : ControllerBase
         hasConfig = !string.IsNullOrEmpty(p.Config),
         // The config blob is never returned whole — it can embed a secret (e.g.
         // a Pi provider's apiKey, read by PiAdapter). Surface only the non-secret,
-        // user-editable Custom MCP servers value so the AI Providers form can seed
-        // and round-trip it without leaking the rest of the blob.
+        // user-editable Custom MCP servers and Extra CLI arguments values so the AI
+        // Providers form can seed and round-trip them without leaking the rest of
+        // the blob.
         customMcpServersJson = AiProviderConfig.Parse(p.Config).CustomMcpServersJson,
+        extraArgs = AiProviderConfig.Parse(p.Config).ExtraArgs,
         tags = p.Tags.Select(t => t.Name).Order(StringComparer.OrdinalIgnoreCase).ToList(),
         supportedTools = AiToolCatalog.GetSupportedToolsForProviderType(p.Type),
         createdAt = p.CreatedAt,
@@ -232,6 +240,9 @@ public class AiProvidersController : ControllerBase
         var (tags, tagsError) = NormalizeTags(request.Tags);
         if (tagsError is not null)
             return BadRequest(new { error = tagsError });
+        var config = ApplyManagedConfigFields(request.Config, request);
+        if (ExtraCliArgs.Validate(request.Type, AiProviderConfig.Parse(config).ExtraArgs) is { } extraArgsError)
+            return BadRequest(new { error = extraArgsError });
 
         var p = new AiProvider
         {
@@ -243,7 +254,7 @@ public class AiProvidersController : ControllerBase
             ApiKey = string.IsNullOrEmpty(request.ApiKey) ? null : request.ApiKey,
             IsDefault = request.IsDefault,
             Parallelism = request.Parallelism,
-            Config = ApplyCustomMcpServers(request.Config, request.CustomMcpServersJson),
+            Config = config,
             CreatedAt = DateTime.UtcNow,
         };
         if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.CreateAiProviderAsync(p, tags)) is { } conflict)
@@ -297,6 +308,13 @@ public class AiProvidersController : ControllerBase
         var (tags, tagsError) = NormalizeTags(request.Tags);
         if (tagsError is not null)
             return BadRequest(new { error = tagsError });
+        // Advanced callers may replace the whole blob via Config; otherwise keep the
+        // stored blob as the base so keys the UI never sees (e.g. a Pi provider's
+        // embedded apiKey) survive an edit. The UI-managed fields are then folded in
+        // on top, and the result is checked before the tracked provider is changed.
+        var config = ApplyManagedConfigFields(request.Config ?? p.Config, request);
+        if (ExtraCliArgs.Validate(request.Type, AiProviderConfig.Parse(config).ExtraArgs) is { } extraArgsError)
+            return BadRequest(new { error = extraArgsError });
         p.Name = request.Name;
         p.Type = request.Type;
         p.BaseUrl = request.BaseUrl;
@@ -304,11 +322,7 @@ public class AiProvidersController : ControllerBase
         if (!string.IsNullOrEmpty(request.ApiKey)) p.ApiKey = request.ApiKey;
         p.IsDefault = request.IsDefault;
         p.Parallelism = request.Parallelism;
-        // Advanced callers may replace the whole blob via Config; otherwise keep the
-        // stored blob as the base so keys the UI never sees (e.g. a Pi provider's
-        // embedded apiKey) survive an edit. The Custom MCP servers value is then
-        // folded in on top.
-        p.Config = ApplyCustomMcpServers(request.Config ?? p.Config, request.CustomMcpServersJson);
+        p.Config = config;
         p.UpdatedAt = DateTime.UtcNow;
         if (await SaveReportingTagConflictAsync(p.Id, tags, () => _providerStore.UpdateAiProviderAsync(p, tags)) is { } conflict)
             return Conflict(new { error = conflict });

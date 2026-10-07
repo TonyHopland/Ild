@@ -232,6 +232,51 @@ public class AiProvidersControllerTests : IDisposable
         Assert.Contains("Model is required", System.Text.Json.JsonSerializer.Serialize(badRequest.Value));
     }
 
+    [Theory]
+    [InlineData("ExtraArgs", "extraArgs", "  ")]
+    [InlineData("EXTRAARGS", "extraArgs", "--effort low")]
+    [InlineData("CustomMcpServersJson", "customMcpServersJson", "")]
+    [InlineData("CUSTOMMCPSERVERSJSON", "customMcpServersJson", "{}")]
+    public async Task A_managed_field_replaces_the_key_whatever_its_casing_in_the_stored_config(
+        string storedKey, string key, string sent)
+    {
+        var controller = CreateController();
+        var created = Assert.IsType<CreatedAtActionResult>(await controller.Create(new AiProviderDto
+        {
+            Name = "claude",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            Model = string.Empty,
+            Config = $"{{\"apiKey\":\"sk-test\",\"{storedKey}\":\"old\"}}",
+        }));
+        var id = (Guid)created.Value!.GetType().GetProperty("id")!.GetValue(created.Value)!;
+
+        Assert.IsType<OkObjectResult>(await controller.Update(id.ToString(), new AiProviderDto
+        {
+            Name = "claude",
+            Type = "claude-code",
+            BaseUrl = string.Empty,
+            Model = string.Empty,
+            ExtraArgs = key == "extraArgs" ? sent : null,
+            CustomMcpServersJson = key == "customMcpServersJson" ? sent : null,
+        }));
+
+        var stored = System.Text.Json.Nodes.JsonNode.Parse(
+            (await _db.AiProviders.FindAsync([id], TestContext.Current.CancellationToken))!.Config!)!.AsObject();
+        var spellings = stored.Where(p => string.Equals(p.Key, key, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (string.IsNullOrWhiteSpace(sent))
+        {
+            Assert.Empty(spellings);
+        }
+        else
+        {
+            var only = Assert.Single(spellings);
+            Assert.Equal(key, only.Key);
+            Assert.Equal(sent, only.Value!.GetValue<string>());
+        }
+        Assert.Equal("sk-test", stored["apiKey"]!.GetValue<string>());
+    }
+
     [Fact]
     public async Task Create_then_Update_keeps_a_claude_code_providers_model()
     {

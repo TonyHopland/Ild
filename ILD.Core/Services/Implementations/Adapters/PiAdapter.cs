@@ -8,23 +8,30 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
 public sealed class PiAdapter : CliAgentAdapterBase
 {
-    public PiAdapter(IProcessEnvironment? environment = null)
+    private readonly ILogger _logger;
+
+    public PiAdapter(IProcessEnvironment? environment = null, ILogger<PiAdapter>? logger = null)
         : base(environment)
     {
+        _logger = logger ?? NullLogger<PiAdapter>.Instance;
     }
 
-    public PiAdapter(IServiceScopeFactory scopeFactory, IProcessEnvironment? environment = null)
+    public PiAdapter(IServiceScopeFactory scopeFactory, IProcessEnvironment? environment = null, ILogger<PiAdapter>? logger = null)
         : base(scopeFactory, environment)
     {
+        _logger = logger ?? NullLogger<PiAdapter>.Instance;
     }
 
     public override string Name => "Pi";
     public override string[] SupportedProviderTypes => ["pi"];
+    public override ConfigFieldDescriptor[] ConfigSchema => [ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
@@ -76,7 +83,8 @@ public sealed class PiAdapter : CliAgentAdapterBase
                     worktreePath,
                     sessionDirectory,
                     sessionIdToUse,
-                    sessionPathToUse), ctx.Provider.Id, ctx.Environment);
+                    sessionPathToUse,
+                    ExtraCliArgs.ForLaunch(ctx.Provider, _logger)), ctx.Provider.Id, ctx.Environment);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
             {
@@ -162,14 +170,19 @@ public sealed class PiAdapter : CliAgentAdapterBase
         }
     }
 
+    /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
+    internal static readonly string[] ReservedCliFlags =
+        ["--mode", "--session-dir", "--no-tools", "-nt", "--tools", "-t", "--no-extensions", "-ne", "--extension", "-e", "--provider", "--api-key", "--session"];
+
     // The prompt is not an argument here — pi reads its turn from stdin (see
-    // the StandardInput write in ExecuteAsync).
+    // the StandardInput write in ExecuteAsync), so the extra arguments go last.
     internal static ProcessStartInfo BuildRunProcessStartInfo(
         PiAdapterSettings settings,
         string worktreePath,
         string sessionDirectory,
         string? sessionId,
-        string? sessionPath)
+        string? sessionPath,
+        IReadOnlyList<string>? extraArgs = null)
     {
         var psi = new ProcessStartInfo(settings.BinaryPath)
         {
@@ -250,6 +263,9 @@ public sealed class PiAdapter : CliAgentAdapterBase
             psi.ArgumentList.Add("--session");
             psi.ArgumentList.Add(sessionId);
         }
+
+        foreach (var arg in extraArgs ?? [])
+            psi.ArgumentList.Add(arg);
 
         return psi;
     }
