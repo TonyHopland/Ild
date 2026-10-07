@@ -43,6 +43,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn() }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
 import ChatBubble from "./ChatBubble";
+import { ChatInboxProvider } from "./ChatInbox";
 import { openChatFromList } from "../test-support";
 
 function session(): ChatSession {
@@ -138,7 +139,9 @@ async function openResumed(view: ChatSession = session()) {
   aiProviderService.getAll.mockResolvedValue([]);
   render(
     <MemoryRouter initialEntries={["/"]}>
-      <ChatBubble />
+      <ChatInboxProvider>
+        <ChatBubble />
+      </ChatInboxProvider>
     </MemoryRouter>,
   );
   fireEvent.click(await screen.findByLabelText("Open chat"));

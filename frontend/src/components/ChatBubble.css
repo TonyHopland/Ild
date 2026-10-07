@@ -553,6 +553,23 @@
   border: 2px solid #f59e0b;
 }
 
+/* A chat with a turn running that is not the open one. */
+.chat-busy {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #6366f1;
+  animation: chat-typing-pulse 1s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-busy {
+    animation: none;
+  }
+}
+
 .chat-history-title {
   display: flex;
   align-items: center;

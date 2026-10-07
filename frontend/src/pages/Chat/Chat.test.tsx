@@ -207,7 +207,7 @@ afterEach(() => {
 
 function LocationProbe() {
   const location = useLocation();
-  return <output data-testid="location">{location.pathname}</output>;
+  return <span data-testid="location">{location.pathname}</span>;
 }
 
 function currentPath() {

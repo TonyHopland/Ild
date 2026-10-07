@@ -60,6 +60,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
 import ChatBubble from "./ChatBubble";
+import { ChatInboxProvider } from "./ChatInbox";
 
 function chatSession(partial: Partial<ChatSession> = {}): ChatSession {
   return {
@@ -102,7 +103,9 @@ function openList(...chats: ChatSessionSummary[]) {
   aiProviderService.getAll.mockResolvedValue([]);
   return render(
     <MemoryRouter initialEntries={["/"]}>
-      <ChatBubble />
+      <ChatInboxProvider>
+        <ChatBubble />
+      </ChatInboxProvider>
     </MemoryRouter>,
   );
 }
@@ -127,7 +130,9 @@ function setConnectionState(view: ReturnType<typeof openList>, state: string) {
   act(() => {
     view.rerender(
       <MemoryRouter initialEntries={["/"]}>
-        <ChatBubble />
+        <ChatInboxProvider>
+          <ChatBubble />
+        </ChatInboxProvider>
       </MemoryRouter>,
     );
   });

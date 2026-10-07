@@ -53,6 +53,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
+import { ChatInboxProvider } from "./ChatInbox";
 import { openChatList, showChatActions } from "../test-support";
 
 // A stand-in for the server: what GET /chat/history answers right now. A rename
@@ -97,7 +98,9 @@ afterEach(() => {
 function bubble() {
   return (
     <MemoryRouter initialEntries={["/"]}>
-      <ChatBubble />
+      <ChatInboxProvider>
+        <ChatBubble />
+      </ChatInboxProvider>
     </MemoryRouter>
   );
 }
