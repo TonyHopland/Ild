@@ -687,12 +687,17 @@ describe("chat search", () => {
 
     // Nothing matches; an answer for a query since changed stays unapplied.
     type("qqq");
-    expect(within(sidebar()).getByText("No chats match")).toBeTruthy();
+    expect(within(sidebar()).getByText("Searching…")).toBeTruthy();
     advance(1000);
     type("qqqq");
     await act(async () => searches[3].answer.resolve(["a"]));
     await flush();
     expect(rowOrder(names)).toEqual([]);
+    expect(within(sidebar()).getByText("Searching…")).toBeTruthy();
+    advance(1000);
+    expect(searches[4].q).toBe("qqqq");
+    await act(async () => searches[4].answer.resolve([]));
+    await flush();
     expect(within(sidebar()).getByText("No chats match")).toBeTruthy();
 
     // A failed search leaves the title matches; the shown fallback title counts.

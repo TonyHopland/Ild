@@ -197,11 +197,12 @@ export default function ChatSidebar({
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [query, setQuery] = useState("");
-  // The chats whose messages match, and the query they answer: a match for any
-  // other query is not applied.
-  const [contentMatch, setContentMatch] = useState<{ query: string; ids: Set<string> } | null>(
-    null,
-  );
+  // The answer of the message search and the query it answers: the matching chats,
+  // or null when the search failed. An answer for any other query is not applied.
+  const [contentSearch, setContentSearch] = useState<{
+    query: string;
+    ids: Set<string> | null;
+  } | null>(null);
   const [now, setNow] = useState(Date.now);
   const term = query.trim();
   // The row whose actions are showing. A row closes only its own, so a close that
@@ -222,10 +223,13 @@ export default function ChatSidebar({
     const timer = setTimeout(() => {
       chatService.searchChats(term).then(
         (ids) => {
-          if (!cancelled) setContentMatch({ query: term, ids: new Set(ids) });
+          if (!cancelled) setContentSearch({ query: term, ids: new Set(ids) });
         },
-        // The title matches stay on screen; there is nothing more to show.
-        (err) => console.error(err),
+        (err) => {
+          // The title matches stay on screen; with none, the failure is shown.
+          console.error(err);
+          if (!cancelled) setContentSearch({ query: term, ids: null });
+        },
       );
     }, SEARCH_DEBOUNCE_MS);
     return () => {
@@ -235,7 +239,8 @@ export default function ChatSidebar({
   }, [term]);
 
   const needle = term.toLowerCase();
-  const contentIds = contentMatch?.query === term ? contentMatch.ids : null;
+  const answer = contentSearch?.query === term ? contentSearch : null;
+  const contentIds = answer?.ids ?? null;
   const matching = term
     ? history.filter(
         (c) => shownName(c).toLowerCase().includes(needle) || contentIds?.has(c.id) === true,
@@ -295,7 +300,9 @@ export default function ChatSidebar({
         </div>
       )}
       {term && rows.length === 0 ? (
-        <p className="chat-muted">No chats match</p>
+        <p className="chat-muted">
+          {!answer ? "Searching…" : answer.ids ? "No chats match" : "Message search failed"}
+        </p>
       ) : (
         <ul className="chat-history-list">
           {rows.map((c) => (
