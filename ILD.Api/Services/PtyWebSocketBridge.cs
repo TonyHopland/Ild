@@ -66,7 +66,12 @@ public static class PtyWebSocketBridge
                 try { ptyExited.Cancel(); } catch { }
             };
 
-            var ptyToSocket = PumpPtyToSocketAsync(pty, socket, cancellationToken);
+            // A WebSocket takes one send at a time, and the output pump can still be
+            // sending when a notice or the close frame goes out, so every send on
+            // the socket takes this. Not disposed: a pump that outlives the bounded
+            // waits below may still release it.
+            var sendLock = new SemaphoreSlim(1, 1);
+            var ptyToSocket = PumpPtyToSocketAsync(pty, socket, sendLock, cancellationToken);
             var socketToPty = PumpSocketToPtyAsync(socket, pty, cancellationToken);
             var childExited = AwaitCancellationAsync(ptyExited.Token);
 
@@ -89,9 +94,9 @@ public static class PtyWebSocketBridge
                 }
                 catch { }
 
-                // Only once the pump is done: a WebSocket takes one send at a time.
-                if (reportExit && ptyToSocket.IsCompleted && childExited.IsCompleted && exitCode is { } code)
-                    await SendNoticeAsync(socket, $"The CLI exited with code {code}.", cancellationToken);
+                if (reportExit && childExited.IsCompleted && exitCode is { } code)
+                    await SendExclusivelyAsync(
+                        sendLock, () => SendNoticeAsync(socket, $"The CLI exited with code {code}.", cancellationToken), cancellationToken);
             }
 
             // Send the close frame BEFORE killing the child or tearing anything
@@ -99,15 +104,11 @@ public static class PtyWebSocketBridge
             // sees a clean 1000 close instead of a 1006 drop. CloseOutputAsync
             // only sends — it doesn't read — so it never races the receive pump
             // that drains the client's close reply.
-            if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+            await SendExclusivelyAsync(sendLock, async () =>
             {
-                try
-                {
-                    await socket.CloseOutputAsync(
-                        WebSocketCloseStatus.NormalClosure, "session ended", cancellationToken);
-                }
-                catch { }
-            }
+                if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+                    await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "session ended", cancellationToken);
+            }, cancellationToken);
 
             // The PTY reader stream on Unix doesn't observe the cancellation
             // token, so kill the child to unblock ReadAsync before draining.
@@ -172,8 +173,18 @@ public static class PtyWebSocketBridge
         return tcs.Task;
     }
 
+    /// <summary>Run <paramref name="send"/> holding <paramref name="sendLock"/>. Never throws.</summary>
+    private static async Task SendExclusivelyAsync(SemaphoreSlim sendLock, Func<Task> send, CancellationToken ct)
+    {
+        try { await sendLock.WaitAsync(ct); }
+        catch (OperationCanceledException) { return; }
+        try { await send(); }
+        catch { }
+        finally { sendLock.Release(); }
+    }
+
     private static async Task PumpPtyToSocketAsync(
-        IPtyConnection pty, WebSocket socket, CancellationToken requestCt)
+        IPtyConnection pty, WebSocket socket, SemaphoreSlim sendLock, CancellationToken requestCt)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(ReadBufferSize);
         try
@@ -194,11 +205,20 @@ public static class PtyWebSocketBridge
 
                 try
                 {
-                    await socket.SendAsync(
-                        new ArraySegment<byte>(buffer, 0, read),
-                        WebSocketMessageType.Binary,
-                        endOfMessage: true,
-                        cancellationToken: requestCt);
+                    await sendLock.WaitAsync(requestCt);
+                    try
+                    {
+                        if (socket.State != WebSocketState.Open) break;
+                        await socket.SendAsync(
+                            new ArraySegment<byte>(buffer, 0, read),
+                            WebSocketMessageType.Binary,
+                            endOfMessage: true,
+                            cancellationToken: requestCt);
+                    }
+                    finally
+                    {
+                        sendLock.Release();
+                    }
                 }
                 catch (OperationCanceledException) { break; }
                 catch (WebSocketException) { break; }

@@ -101,6 +101,42 @@ public class PtyWebSocketBridgeTests
         await run.WaitAsync(cts.Token);
     }
 
+    [Fact]
+    public async Task The_exit_code_is_reported_even_when_a_grandchild_keeps_the_pty_open()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+
+        var options = new PtyOptions
+        {
+            Name = "ild-bridge-test",
+            Cols = 80,
+            Rows = 24,
+            Cwd = Path.GetTempPath(),
+            App = "/bin/sh",
+            // The background sleep inherits the PTY and ignores the SIGHUP the shell's
+            // exit sends it, so the output never reaches EOF before the bridge stops
+            // waiting for it.
+            CommandLine = new[] { "-c", "(trap \"\" HUP; exec sleep 8) & echo boom; exit 3" },
+            Environment = new Dictionary<string, string>(),
+        };
+
+        var run = PtyWebSocketBridge.RunAsync(server, options, NullLogger.Instance, cts.Token, reportExit: true);
+
+        var received = await ReadUntilCloseAsync(client, cts.Token);
+        var boom = received.Text.IndexOf("boom", StringComparison.Ordinal);
+        Assert.True(boom >= 0, $"the CLI's output was lost: {received.Text}");
+        Assert.Contains("exited with code 3", received.Text[boom..]);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        await run.WaitAsync(cts.Token);
+    }
+
     private sealed record Received(string Text, IReadOnlyList<WebSocketMessageType> Types);
 
     private static async Task<Received> ReadUntilAsync(WebSocket socket, string needle, CancellationToken ct)

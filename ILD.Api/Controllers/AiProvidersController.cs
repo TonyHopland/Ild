@@ -68,10 +68,6 @@ public class AiProvidersController : ControllerBase
         return null;
     }
 
-    /// <summary>
-    /// The provider's config blob with the UI-managed fields (Custom MCP servers and
-    /// Extra CLI arguments) folded in, each as <see cref="ApplyConfigField"/> does.
-    /// </summary>
     private static string? ApplyManagedConfigFields(string? configJson, AiProviderDto request)
         => ApplyConfigField(
             ApplyConfigField(configJson, "customMcpServersJson", request.CustomMcpServersJson),
