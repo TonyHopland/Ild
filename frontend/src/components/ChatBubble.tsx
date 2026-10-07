@@ -77,6 +77,90 @@ function useChatClaims() {
 }
 
 /**
+ * The open chat: its transcript and the message being typed. Keyed by the chat, so
+ * a draft belongs to the chat it was typed in and goes when the user leaves it. It
+ * stays mounted, showing nothing, while the chat list covers a narrow panel, so a
+ * resize across the breakpoint keeps the draft.
+ */
+function ChatConversation({
+  chatSessionId,
+  covered,
+  messages,
+  streaming,
+  busy,
+  stopping,
+  scrollRef,
+  onSend,
+  onStop,
+}: {
+  chatSessionId: string;
+  covered: boolean;
+  messages: ChatMessage[];
+  streaming: string;
+  busy: boolean;
+  stopping: boolean;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  onSend: (content: string) => void;
+  onStop: () => void;
+}) {
+  const [draft, setDraft] = useState("");
+  if (covered) return null;
+
+  return (
+    <div className="chat-panel-content">
+      <div className="chat-panel-body" ref={scrollRef}>
+        <ChatTranscript chatSessionId={chatSessionId} messages={messages} streaming={streaming} />
+        {/* Visible for the whole turn — including while text streams — so it
+            is clear the agent is still working rather than done. */}
+        {busy && (
+          <div className="chat-muted chat-typing" role="status">
+            {streaming ? "Responding" : "Thinking"}
+            <span className="chat-typing-dots" aria-hidden="true" />
+          </div>
+        )}
+      </div>
+
+      <form
+        className="chat-input-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const content = draft.trim();
+          if (!content) return;
+          setDraft("");
+          onSend(content);
+        }}
+      >
+        <input
+          className="chat-input"
+          placeholder="Message…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          aria-label="Chat message"
+        />
+        {/* Only offered while a turn is in flight — the same window the
+            Thinking/Responding indicator covers. */}
+        {busy && (
+          <button
+            type="button"
+            className="chat-stop-btn"
+            aria-label="Stop"
+            disabled={stopping}
+            onClick={onStop}
+          >
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <rect x="0" y="0" width="16" height="16" rx="2" />
+            </svg>
+          </button>
+        )}
+        <button type="submit" className="chat-primary-btn" disabled={!draft.trim()}>
+          Send
+        </button>
+      </form>
+    </div>
+  );
+}
+
+/**
  * Persistent chat bubble (ADR-0010) with retained chat history (ADR-0013).
  * Mounted globally so it survives navigation; chats live server-side. The bubble
  * lists the user's past chats and resumes any of them with its full transcript;
@@ -693,11 +777,8 @@ export default function ChatBubble() {
     }
   };
 
-  const [input, setInput] = useState("");
-  const send = async () => {
-    const content = input.trim();
-    if (!content || !session) return;
-    setInput("");
+  const send = async (content: string) => {
+    if (!session) return;
     // The message interrupts whatever was running, so the chat is busy from here
     // whichever turn the server ends up naming. The turn being displaced is kept:
     // a send that never reaches the server displaces nothing, and only the turn
@@ -1026,104 +1107,68 @@ export default function ChatBubble() {
 
       {!loaded ? (
         <div className="chat-panel-body chat-muted">Loading…</div>
-      ) : chatCovered ? (
-        sidebar
       ) : (
         <div className="chat-panel-main">
           {sidebar}
-          <div className="chat-panel-content">
-            {!session ? (
-              <div className="chat-panel-body chat-start">
-                <label className="chat-field-label" htmlFor="chat-provider">
-                  AI provider
-                </label>
-                <select
-                  id="chat-provider"
-                  className="chat-select"
-                  value={providerId}
-                  onChange={(e) => setProviderId(e.target.value)}
-                >
-                  <option value="">Select a provider…</option>
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} ({p.type})
-                    </option>
-                  ))}
-                </select>
+          {session ? (
+            <ChatConversation
+              key={session.id}
+              chatSessionId={session.id}
+              covered={chatCovered}
+              messages={messages}
+              streaming={streaming}
+              busy={busy}
+              stopping={stopping}
+              scrollRef={scrollRef}
+              onSend={(content) => void send(content)}
+              onStop={() => void stop()}
+            />
+          ) : (
+            !chatCovered && (
+              <div className="chat-panel-content">
+                <div className="chat-panel-body chat-start">
+                  <label className="chat-field-label" htmlFor="chat-provider">
+                    AI provider
+                  </label>
+                  <select
+                    id="chat-provider"
+                    className="chat-select"
+                    value={providerId}
+                    onChange={(e) => setProviderId(e.target.value)}
+                  >
+                    <option value="">Select a provider…</option>
+                    {providers.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.type})
+                      </option>
+                    ))}
+                  </select>
 
-                <span className="chat-field-label">Tools</span>
-                <div className="chat-tools">
-                  {TOOL_OPTIONS.map((t) => (
-                    <label key={t.key} className="chat-tool">
-                      <input
-                        type="checkbox"
-                        checked={tools.has(t.key)}
-                        onChange={() => toggleTool(t.key)}
-                      />
-                      {t.label}
-                    </label>
-                  ))}
-                </div>
+                  <span className="chat-field-label">Tools</span>
+                  <div className="chat-tools">
+                    {TOOL_OPTIONS.map((t) => (
+                      <label key={t.key} className="chat-tool">
+                        <input
+                          type="checkbox"
+                          checked={tools.has(t.key)}
+                          onChange={() => toggleTool(t.key)}
+                        />
+                        {t.label}
+                      </label>
+                    ))}
+                  </div>
 
-                <button type="button" className="chat-primary-btn" onClick={() => void startChat()}>
-                  Start chat
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="chat-panel-body" ref={scrollRef}>
-                  <ChatTranscript
-                    key={session.id}
-                    chatSessionId={session.id}
-                    messages={messages}
-                    streaming={streaming}
-                  />
-                  {/* Visible for the whole turn — including while text streams — so it
-                is clear the agent is still working rather than done. */}
-                  {busy && (
-                    <div className="chat-muted chat-typing" role="status">
-                      {streaming ? "Responding" : "Thinking"}
-                      <span className="chat-typing-dots" aria-hidden="true" />
-                    </div>
-                  )}
-                </div>
-
-                <form
-                  className="chat-input-row"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void send();
-                  }}
-                >
-                  <input
-                    className="chat-input"
-                    placeholder="Message…"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    aria-label="Chat message"
-                  />
-                  {/* Only offered while a turn is in flight — the same window the
-                Thinking/Responding indicator covers. */}
-                  {busy && (
-                    <button
-                      type="button"
-                      className="chat-stop-btn"
-                      aria-label="Stop"
-                      disabled={stopping}
-                      onClick={() => void stop()}
-                    >
-                      <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                        <rect x="0" y="0" width="16" height="16" rx="2" />
-                      </svg>
-                    </button>
-                  )}
-                  <button type="submit" className="chat-primary-btn" disabled={!input.trim()}>
-                    Send
+                  <button
+                    type="button"
+                    className="chat-primary-btn"
+                    onClick={() => void startChat()}
+                  >
+                    Start chat
                   </button>
-                </form>
-              </>
-            )}
-          </div>
+                </div>
+              </div>
+            )
+          )}
         </div>
       )}
 

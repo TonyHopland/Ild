@@ -459,6 +459,36 @@ describe("ChatBubble", () => {
     expect(chatService.deleteAll).not.toHaveBeenCalled();
   });
 
+  test("an unsent draft stays with its chat: another chat and New chat start empty", async () => {
+    chatService.listHistory.mockResolvedValue([
+      summary({ id: "s1", name: "First chat" }),
+      summary({ id: "s2", name: "Other chat" }),
+    ]);
+    chatService.getById.mockImplementation((id: string) =>
+      Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
+    );
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    const draft = () => screen.getByLabelText("Chat message") as HTMLInputElement;
+
+    await openChatFromList("First chat");
+    await screen.findByLabelText("Chat message");
+    fireEvent.change(draft(), { target: { value: "meant for the first chat" } });
+
+    await openChatFromList("Other chat");
+    await waitFor(() => expect(screen.getByText("Other chat")).toBeTruthy());
+    expect(draft().value).toBe("");
+    fireEvent.change(draft(), { target: { value: "meant for the other chat" } });
+
+    await startNewChat();
+    expect(await screen.findByText("Start chat")).toBeTruthy();
+    await openChatFromList("Other chat");
+    await screen.findByLabelText("Chat message");
+    expect(draft().value).toBe("");
+    expect(chatService.sendMessage).not.toHaveBeenCalled();
+  });
+
   test("reloads providers when ending a chat if the first load failed", async () => {
     chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Old chat" })]);
     chatService.getById.mockResolvedValue(chatSession({ id: "s1", name: "Old chat" }));

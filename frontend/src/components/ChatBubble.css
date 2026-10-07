@@ -466,9 +466,10 @@
 
 /* With a mouse the button shows only on the row it is pointing at (or one with
    focus, or an open menu), and keeps no room in the row while hidden: the title
-   runs the full width and gives up the button's room only while it shows. A
-   touch screen has no hover, so there it always shows, beside the title. */
-@media (hover: hover) and (pointer: fine) {
+   runs the full width and gives up the button's room only while it shows. Any
+   touch screen - the only input, or one beside a mouse - has no hover to reveal
+   it, so there it always shows, beside the title. */
+@media (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
   .chat-history-row {
     position: relative;
   }
