@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
-import { openChatFromList, startNewChat, type ChatHubEvents } from "../test-support";
+import {
+  openChatFromList,
+  showChatActions,
+  startNewChat,
+  type ChatHubEvents,
+} from "../test-support";
 
 // The turn the bubble believes is running outlives every request it makes: a
 // send, a stop and a state read all resolve long after the click that started
@@ -1078,6 +1083,49 @@ describe("ChatBubble turn state", () => {
       // And no controls from that chat's running turn on a view that is idle.
       expect(screen.queryByLabelText("Stop")).toBeNull();
       expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    test("deleting a chat whose open is still on its way calls the open off", async () => {
+      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      chatService.deleteOne.mockResolvedValue(undefined);
+      let answerOtherOpen!: (session: ChatSession) => void;
+      chatService.getById.mockImplementation((id: string) =>
+        id === "s2"
+          ? new Promise<ChatSession>((resolve) => {
+              answerOtherOpen = resolve;
+            })
+          : Promise.resolve(
+              chatSession({
+                id: "s1",
+                name: "First chat",
+                messages: [msg({ id: "a1", content: "the chat they stayed in", sequence: 0 })],
+              }),
+            ),
+      );
+
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openChatFromList("First chat");
+      await screen.findByLabelText("Chat message");
+      await openChatFromList("Other chat");
+      // Still on the list, because that read has not answered; the user deletes it.
+      showChatActions("Other chat");
+      fireEvent.click(screen.getByRole("button", { name: "Delete chat Other chat" }));
+      await waitFor(() => expect(chatService.deleteOne).toHaveBeenCalledWith("s2"));
+
+      await act(async () => {
+        answerOtherOpen(
+          chatSession({
+            id: "s2",
+            name: "Other chat",
+            messages: [msg({ id: "b1", content: "the chat they deleted", sequence: 0 })],
+          }),
+        );
+      });
+
+      expect(screen.queryByText("the chat they deleted")).toBeNull();
+      expect(invoke).not.toHaveBeenCalledWith("SubscribeToChat", "s2");
+      // The chat that was open stays the one open.
+      expect(document.querySelector(".chat-panel-title")?.textContent).toBe("First chat");
     });
 
     test("picking the open chat's row again overrules an open of another chat still on its way", async () => {

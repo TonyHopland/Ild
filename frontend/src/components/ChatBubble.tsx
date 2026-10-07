@@ -235,8 +235,11 @@ export default function ChatBubble() {
   // turn and all — and the stop button on that view would interrupt a turn in a
   // chat they never opened. Counted rather than compared by id, because the second
   // open may be the same chat as the first; bumped by leaving as well, so an open
-  // the user walked away from cannot install itself either.
+  // the user walked away from cannot install itself either, and by deleting the
+  // chat an open is on its way for.
   const visitRef = useRef(0);
+  // The chat the newest visit is opening, while its read is in flight.
+  const openingRef = useRef<{ chatSessionId: string; visit: number } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const busy = turn !== null;
 
@@ -916,6 +919,7 @@ export default function ChatBubble() {
   // Resolves whether it was installed.
   const resumeChat = async (id: string) => {
     const visit = ++visitRef.current;
+    openingRef.current = { chatSessionId: id, visit };
     setError(null);
     try {
       const resumed = await chatService.getById(id);
@@ -937,6 +941,8 @@ export default function ChatBubble() {
       if (visitRef.current !== visit) return false;
       setError((e as { message?: string })?.message ?? "Could not open chat.");
       return false;
+    } finally {
+      if (openingRef.current?.visit === visit) openingRef.current = null;
     }
   };
 
@@ -959,6 +965,11 @@ export default function ChatBubble() {
 
   const deleteChat = async (id: string) => {
     if (sessionIdRef.current === id) leaveChat();
+    else if (
+      openingRef.current?.chatSessionId === id &&
+      openingRef.current.visit === visitRef.current
+    )
+      visitRef.current += 1;
     try {
       await chatService.deleteOne(id);
     } catch {

@@ -148,7 +148,8 @@ public class ChatController : ControllerBase
     public async Task<IActionResult> Search([FromQuery] string? q, CancellationToken ct)
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
-        var query = q?.Trim();
+        // Stored text never holds NUL (the save-time scrub), and the database cannot take it.
+        var query = q is null ? null : ChatTitles.WithoutNul(q).Trim();
         if (string.IsNullOrEmpty(query))
             return BadRequest(new { error = "A search query is required." });
 
