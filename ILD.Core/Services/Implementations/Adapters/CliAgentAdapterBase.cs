@@ -82,12 +82,6 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             + "Example: {\"chrome-devtools\": {\n  \"command\": \"npx\",\n  \"args\": [\n    \"-y\", \"chrome-devtools-mcp@latest\",\n    \"--headless\", \"--isolated\",\n    \"--chrome-arg=--no-sandbox\",\n    \"--chrome-arg=--disable-setuid-sandbox\"\n  ]\n}}. "
             + "Invalid JSON is ignored and never fails a run. The reserved name \"ild\" is ignored.");
 
-    /// <summary>
-    /// The "Extra CLI arguments" field every agent adapter surfaces from its
-    /// <see cref="ConfigSchema"/>. The value is split by <see cref="ExtraCliArgs"/>
-    /// and appended to each run's argv before the prompt, and to the provider
-    /// terminal's command line.
-    /// </summary>
     protected static readonly ConfigFieldDescriptor ExtraArgsField = new(
         Name: "extraArgs",
         Type: ConfigFieldType.Textarea,

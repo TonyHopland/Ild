@@ -28,10 +28,6 @@ public sealed record AiProviderConfig
     /// </summary>
     public string? CustomMcpServersJson { get; init; }
 
-    /// <summary>
-    /// The per-provider "Extra CLI arguments" value, as typed. Split and checked by
-    /// <see cref="ExtraCliArgs"/>, which drops it at launch when it does not split.
-    /// </summary>
     public string? ExtraArgs { get; init; }
 
     /// <summary>Parse a provider config blob. Returns an empty config when the JSON is null, blank, or malformed.</summary>

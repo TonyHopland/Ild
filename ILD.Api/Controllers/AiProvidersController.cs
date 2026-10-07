@@ -82,11 +82,12 @@ public class AiProvidersController : ControllerBase
     /// <paramref name="key"/>, preserving every other key of a well-formed JSON
     /// object (including secrets the UI never sees, such as an embedded
     /// <c>apiKey</c>). A null <paramref name="value"/> means the caller isn't
-    /// managing the field, so the blob is returned unchanged; a blank value clears
-    /// the key. If the existing blob is malformed or not a JSON object it can't be
-    /// merged into, so it fails open to a fresh object holding just this key
-    /// (mirroring <see cref="AiProviderConfig.Parse"/>) — the only case where other
-    /// keys are not carried over. The stored key is camelCase to match the shape
+    /// managing the field, so the blob is returned unchanged. Every spelling of the
+    /// key is replaced, since <see cref="AiProviderConfig"/> reads keys
+    /// case-insensitively, and a blank value clears it. If the existing blob is
+    /// malformed or not a JSON object it can't be merged into, so it fails open to a
+    /// fresh object holding just this key (mirroring <see cref="AiProviderConfig.Parse"/>)
+    /// — the only case where other keys are not carried over. The stored key is camelCase to match the shape
     /// <see cref="AiProviderConfig"/> reads.
     /// </summary>
     private static string? ApplyConfigField(string? configJson, string key, string? value)
@@ -105,9 +106,9 @@ public class AiProvidersController : ControllerBase
             obj = new JsonObject();
         }
 
-        if (string.IsNullOrWhiteSpace(value))
-            obj.Remove(key);
-        else
+        foreach (var spelling in obj.Select(p => p.Key).Where(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase)).ToList())
+            obj.Remove(spelling);
+        if (!string.IsNullOrWhiteSpace(value))
             obj[key] = value;
 
         return obj.Count == 0 ? null : obj.ToJsonString();

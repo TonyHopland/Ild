@@ -11,9 +11,6 @@ public sealed record ExtraCliArgsTokens(IReadOnlyList<string> Tokens, string? Er
 /// The per-provider "Extra CLI arguments" value (<see cref="AiProviderConfig.ExtraArgs"/>).
 /// It is split like a shell command line but never handed to a shell: the tokens go
 /// straight into the agent's argv, so nothing is expanded, globbed or substituted.
-/// The adapters' runs and the provider terminal split it with the same
-/// <see cref="Tokenize"/>; saving checks it with <see cref="Validate"/>, launching
-/// only needs it to split and fails open when it does not (<see cref="ForLaunch"/>).
 /// </summary>
 public static class ExtraCliArgs
 {
