@@ -79,7 +79,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
 
     public async Task<EditProposalCreateResult> CreateAsync(string workItemId, CreateEditProposalRequest req, CancellationToken ct = default)
     {
-        if (Validate(req) is { } error)
+        if (Validate(workItemId, req) is { } error)
             return EditProposalCreateResult.Refused(EditProposalCreateOutcome.Invalid, error);
 
         var key = await WorkItemRows.ResolveKeyAsync(_db, workItemId, ct);
@@ -102,7 +102,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
 
         var item = await _db.WorkItems.AsNoTracking()
             .Where(w => w.InternalId == key.Value)
-            .Select(w => new { w.Title, w.Description, w.TagsJson, w.BranchNameOverride, w.BaseBranchOverride })
+            .Select(w => new { w.Title, w.Description, w.TagsJson, w.BranchNameOverride, w.BaseBranchOverride, w.DependenciesJson })
             .SingleAsync(ct);
 
         var proposal = new WorkItemEditProposal
@@ -114,11 +114,14 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             ProposedTagsJson = req.Tags is null ? null : WorkItemMapper.SerializeTags(req.Tags),
             ProposedBranchNameOverride = req.BranchNameOverride?.Trim(),
             ProposedBaseBranchOverride = req.BaseBranchOverride?.Trim(),
+            ProposedAddDependenciesJson = req.AddDependencies is null ? null : WorkItemMapper.SerializeDependencies(req.AddDependencies),
+            ProposedRemoveDependenciesJson = req.RemoveDependencies is null ? null : WorkItemMapper.SerializeDependencies(req.RemoveDependencies),
             SnapshotTitle = item.Title,
             SnapshotDescription = item.Description,
             SnapshotTagsJson = item.TagsJson,
             SnapshotBranchNameOverride = item.BranchNameOverride,
             SnapshotBaseBranchOverride = item.BaseBranchOverride,
+            SnapshotDependenciesJson = req.AddDependencies is null && req.RemoveDependencies is null ? null : item.DependenciesJson,
             Rationale = string.IsNullOrWhiteSpace(req.Rationale) ? null : req.Rationale.Trim(),
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
@@ -131,14 +134,24 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
         await _db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
 
-        return new EditProposalCreateResult(EditProposalCreateOutcome.Created, null, ToDto(proposal, workItemId));
+        return new EditProposalCreateResult(EditProposalCreateOutcome.Created, null, await ToDtoAsync(proposal, workItemId, ct));
     }
 
-    private static string? Validate(CreateEditProposalRequest req)
+    private static string? Validate(string workItemId, CreateEditProposalRequest req)
     {
         if (req.Title is null && req.Description is null && req.Tags is null
-            && req.BranchNameOverride is null && req.BaseBranchOverride is null)
-            return "Propose at least one of title, description, tags, branchNameOverride or baseBranchOverride.";
+            && req.BranchNameOverride is null && req.BaseBranchOverride is null
+            && req.AddDependencies is null && req.RemoveDependencies is null)
+            return "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, addDependencies or removeDependencies.";
+        if (req.AddDependencies is { Count: 0 } || req.RemoveDependencies is { Count: 0 })
+            return "A dependency list, when given, must name at least one work item.";
+        var dependencyIds = (req.AddDependencies ?? []).Concat(req.RemoveDependencies ?? []).ToList();
+        if (dependencyIds.Any(string.IsNullOrWhiteSpace))
+            return "A dependency id cannot be blank.";
+        if (dependencyIds.Contains(workItemId))
+            return "A work item cannot depend on itself.";
+        if (dependencyIds.Distinct().Count() != dependencyIds.Count)
+            return "Each dependency may appear only once across addDependencies and removeDependencies.";
         if (req.Title is not null && string.IsNullOrWhiteSpace(req.Title))
             return "A proposed title cannot be blank.";
         if (req.Title?.Trim().Length > MaxTitleLength)
@@ -168,7 +181,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             .Where(p => p.WorkItemId == key.Value)
             .OrderByDescending(p => p.CreatedAt)
             .ToListAsync(ct);
-        return rows.Select(p => ToDto(p, workItemId)).ToList();
+        var titles = await DependencyTitlesAsync(rows, ct);
+        return rows.Select(p => ToDto(p, workItemId, titles)).ToList();
     }
 
     public async Task<IReadOnlyList<WorkItemEditProposalDto>> ListAsync(
@@ -187,7 +201,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             .Join(_db.WorkItems, p => p.WorkItemId, w => w.InternalId, (p, w) => new { Proposal = p, WorkItemId = w.Id })
             .OrderByDescending(r => r.Proposal.CreatedAt)
             .ToListAsync(ct);
-        return rows.Select(r => ToDto(r.Proposal, r.WorkItemId)).ToList();
+        var titles = await DependencyTitlesAsync(rows.Select(r => r.Proposal).ToList(), ct);
+        return rows.Select(r => ToDto(r.Proposal, r.WorkItemId, titles)).ToList();
     }
 
     public async Task<EditProposalDecisionResult> ApproveAsync(string workItemId, Guid proposalId, CancellationToken ct = default)
@@ -196,17 +211,19 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
         var proposal = await FindAsync(workItemId, proposalId, ct);
         if (proposal is null) return NotFound();
         if (proposal.Status != WorkItemEditProposalStatus.Pending)
-            return new EditProposalDecisionResult(EditProposalDecisionOutcome.NotPending, ToDto(proposal, workItemId), null);
+            return new EditProposalDecisionResult(EditProposalDecisionOutcome.NotPending, await ToDtoAsync(proposal, workItemId, ct), null);
 
         var now = _clock.GetUtcNow().UtcDateTime;
         var proposedTags = proposal.ProposedTagsJson;
+        var (expectedDependencies, proposedDependencies) = await DependencyWriteAsync(proposal, ct);
         var applied = await _db.WorkItems
             .Where(w => w.InternalId == proposal.WorkItemId
                 && w.Title == proposal.SnapshotTitle
                 && w.Description == proposal.SnapshotDescription
                 && w.TagsJson == proposal.SnapshotTagsJson
                 && w.BranchNameOverride == proposal.SnapshotBranchNameOverride
-                && w.BaseBranchOverride == proposal.SnapshotBaseBranchOverride)
+                && w.BaseBranchOverride == proposal.SnapshotBaseBranchOverride
+                && (expectedDependencies == null || w.DependenciesJson == expectedDependencies))
             .ExecuteUpdateAsync(s =>
             {
                 if (proposal.ProposedTitle is { } title)
@@ -219,6 +236,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
                     s.SetProperty(w => w.BranchNameOverride, WorkItemMapper.NormalizeBranchRef(branch));
                 if (proposal.ProposedBaseBranchOverride is { } baseBranch)
                     s.SetProperty(w => w.BaseBranchOverride, WorkItemMapper.NormalizeBranchRef(baseBranch));
+                if (proposedDependencies is not null)
+                    s.SetProperty(w => w.DependenciesJson, proposedDependencies);
                 s.SetProperty(w => w.UpdatedAt, now);
             }, ct);
 
@@ -316,10 +335,61 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
     private async Task<WorkItemEditProposalDto?> ReadAsync(string workItemId, Guid proposalId, CancellationToken ct)
     {
         var proposal = await FindAsync(workItemId, proposalId, ct);
-        return proposal is null ? null : ToDto(proposal, workItemId);
+        return proposal is null ? null : await ToDtoAsync(proposal, workItemId, ct);
     }
 
-    private static WorkItemEditProposalDto ToDto(WorkItemEditProposal p, string workItemId) => new()
+    /// <summary>
+    /// For a proposal that changes dependencies: the DependenciesJson the row
+    /// must still hold for the approve to apply, and the value it writes — the
+    /// snapshot set minus the removals, plus the additions. The expected value is
+    /// the row's own when it holds the snapshot's set in another order, so only a
+    /// change to the set makes the proposal stale. Both null for any other proposal.
+    /// </summary>
+    private async Task<(string? Expected, string? Proposed)> DependencyWriteAsync(WorkItemEditProposal proposal, CancellationToken ct)
+    {
+        if (proposal.SnapshotDependenciesJson is not { } snapshotJson) return (null, null);
+
+        var snapshot = DeserializeIds(snapshotJson);
+        var current = await _db.WorkItems.AsNoTracking()
+            .Where(w => w.InternalId == proposal.WorkItemId)
+            .Select(w => w.DependenciesJson)
+            .FirstOrDefaultAsync(ct);
+        var expected = current is not null && DeserializeIds(current).ToHashSet().SetEquals(snapshot) ? current : snapshotJson;
+
+        var removals = DeserializeIds(proposal.ProposedRemoveDependenciesJson);
+        var result = snapshot.Where(id => !removals.Contains(id)).ToList();
+        result.AddRange(DeserializeIds(proposal.ProposedAddDependenciesJson).Where(id => !result.Contains(id)));
+        return (expected, WorkItemMapper.SerializeDependencies(result));
+    }
+
+    private static IReadOnlyList<string> DeserializeIds(string? json)
+        => json is null ? [] : WorkItemMapper.DeserializeDependencies(json);
+
+    /// <summary>The titles of every item these proposals add or remove as a dependency, in one read.</summary>
+    private async Task<IReadOnlyDictionary<string, string>> DependencyTitlesAsync(
+        IReadOnlyList<WorkItemEditProposal> proposals, CancellationToken ct)
+    {
+        var ids = proposals
+            .SelectMany(p => DeserializeIds(p.ProposedAddDependenciesJson).Concat(DeserializeIds(p.ProposedRemoveDependenciesJson)))
+            .Distinct()
+            .ToList();
+        if (ids.Count == 0) return new Dictionary<string, string>();
+        return await _db.WorkItems.AsNoTracking()
+            .Where(w => ids.Contains(w.Id))
+            .ToDictionaryAsync(w => w.Id, w => w.Title, ct);
+    }
+
+    private async Task<WorkItemEditProposalDto> ToDtoAsync(WorkItemEditProposal p, string workItemId, CancellationToken ct)
+        => ToDto(p, workItemId, await DependencyTitlesAsync([p], ct));
+
+    private static IReadOnlyList<EditProposalDependencyDto>? NamedDependencies(
+        string? json, IReadOnlyDictionary<string, string> titles)
+        => json is null
+            ? null
+            : DeserializeIds(json).Select(id => new EditProposalDependencyDto { Id = id, Title = titles.GetValueOrDefault(id) }).ToList();
+
+    private static WorkItemEditProposalDto ToDto(
+        WorkItemEditProposal p, string workItemId, IReadOnlyDictionary<string, string> titles) => new()
     {
         Id = p.Id,
         WorkItemId = workItemId,
@@ -331,6 +401,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Tags = p.ProposedTagsJson is null ? null : WorkItemMapper.DeserializeTags(p.ProposedTagsJson),
             BranchNameOverride = p.ProposedBranchNameOverride,
             BaseBranchOverride = p.ProposedBaseBranchOverride,
+            AddDependencies = NamedDependencies(p.ProposedAddDependenciesJson, titles),
+            RemoveDependencies = NamedDependencies(p.ProposedRemoveDependenciesJson, titles),
         },
         Snapshot = new EditProposalFieldsDto
         {
@@ -339,6 +411,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Tags = WorkItemMapper.DeserializeTags(p.SnapshotTagsJson),
             BranchNameOverride = p.SnapshotBranchNameOverride,
             BaseBranchOverride = p.SnapshotBaseBranchOverride,
+            Dependencies = p.SnapshotDependenciesJson is null ? null : DeserializeIds(p.SnapshotDependenciesJson),
         },
         Rationale = p.Rationale,
         CreatedByLoopRunId = p.CreatedByLoopRunId,

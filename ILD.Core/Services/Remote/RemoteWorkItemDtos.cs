@@ -209,11 +209,13 @@ public enum RemoteEditProposalStatus
 }
 
 /// <summary>
-/// The five editable fields of a work item. On a proposal's
-/// <see cref="RemoteWorkItemEditProposal.Proposed"/> side null means "not
-/// proposed" and a blank branch override means "clear it"; on its
+/// The five editable fields of a work item, and its dependencies. On a
+/// proposal's <see cref="RemoteWorkItemEditProposal.Proposed"/> side null means
+/// "not proposed", a blank branch override means "clear it", and the
+/// dependencies are the ones to add and to remove; on its
 /// <see cref="RemoteWorkItemEditProposal.Snapshot"/> side they are the item's
-/// values when the proposal was made.
+/// values when the proposal was made, the dependency set only when the
+/// proposal changes it.
 /// </summary>
 public sealed class RemoteEditProposalFields
 {
@@ -222,6 +224,22 @@ public sealed class RemoteEditProposalFields
     public IReadOnlyList<string>? Tags { get; set; }
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Proposed side only.</summary>
+    public IReadOnlyList<RemoteEditProposalDependency>? AddDependencies { get; set; }
+
+    /// <summary>Proposed side only.</summary>
+    public IReadOnlyList<RemoteEditProposalDependency>? RemoveDependencies { get; set; }
+
+    /// <summary>Snapshot side only.</summary>
+    public IReadOnlyList<string>? Dependencies { get; set; }
+}
+
+/// <summary>A work item a proposal names as a dependency. Title is null once that item no longer exists.</summary>
+public sealed class RemoteEditProposalDependency
+{
+    public string Id { get; set; } = string.Empty;
+    public string? Title { get; set; }
 }
 
 /// <summary>
@@ -264,6 +282,8 @@ public sealed class RemoteCreateEditProposalRequest
     public IReadOnlyList<string>? Tags { get; set; }
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
+    public IReadOnlyList<string>? AddDependencies { get; set; }
+    public IReadOnlyList<string>? RemoveDependencies { get; set; }
     public string? Rationale { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }
     public Guid? CreatedByChatSessionId { get; set; }
@@ -306,6 +326,13 @@ public enum EditProposalDecisionOutcome
 
     /// <summary>No such proposal on that work item.</summary>
     NotFound = 4,
+
+    /// <summary>
+    /// ILD's own refusal, never sent by the WorkItem server: applying the
+    /// proposal's dependency additions would close a cycle or name an item that
+    /// no longer exists, so nothing was sent and the proposal stays Pending.
+    /// </summary>
+    Refused = 5,
 }
 
 /// <param name="Proposal">The proposal as it now stands; null only for <see cref="EditProposalDecisionOutcome.NotFound"/>.</param>

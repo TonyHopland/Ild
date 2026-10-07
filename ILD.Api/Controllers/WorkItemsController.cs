@@ -834,6 +834,8 @@ public class WorkItemsController : ControllerBase
                         error = "The work item changed after this proposal was made, so nothing was applied. The proposal is now stale.",
                         proposal = result.Proposal,
                     });
+                case EditProposalDecisionOutcome.Refused:
+                    return UnprocessableEntity(new { error = result.Error, proposal = result.Proposal });
                 default:
                     return DecisionRefused(result.Outcome, result.Proposal);
             }

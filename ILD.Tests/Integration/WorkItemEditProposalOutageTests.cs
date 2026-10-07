@@ -53,13 +53,19 @@ public class WorkItemEditProposalOutageTests
             CreatedByChatSessionId = Guid.NewGuid(),
         };
         var client = new Mock<IWorkItemServerClient>();
+        var applied = false;
         client.Setup(c => c.ApproveEditProposalAsync(It.IsAny<WorkItemServerOptions>(), WorkItemId, proposal.Id, It.IsAny<CancellationToken>()))
+            .Callback(() => applied = true)
             .ReturnsAsync(new EditProposalDecisionResult(
                 EditProposalDecisionOutcome.Applied, proposal, new RemoteWorkItem { Id = WorkItemId, Title = "Applied" }));
         client.Setup(c => c.GetAsync(It.IsAny<WorkItemServerOptions>(), WorkItemId, It.IsAny<CancellationToken>()))
             .ThrowsAsync(Outage);
+        // Before the approve the server still answers: it reads the pending proposal.
+        var pending = new RemoteWorkItemEditProposal { Id = proposal.Id, WorkItemId = WorkItemId, Status = RemoteEditProposalStatus.Pending };
         client.Setup(c => c.ListEditProposalsAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(Outage);
+            .Returns(() => applied
+                ? Task.FromException<IReadOnlyList<RemoteWorkItemEditProposal>?>(Outage)
+                : Task.FromResult<IReadOnlyList<RemoteWorkItemEditProposal>?>([pending]));
         await using var factory = ServerWith(client);
         var human = await factory.CreateAuthenticatedClientAsync();
 

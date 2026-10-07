@@ -9,8 +9,9 @@ public enum WorkItemEditProposalStatus
     Rejected = 2,
 
     /// <summary>
-    /// The item's editable fields no longer matched the snapshot when a human
-    /// tried to approve it, or another proposal on the item was approved first.
+    /// The item's editable fields (or the dependency set the proposal changes)
+    /// no longer matched the snapshot when a human tried to approve it, or
+    /// another proposal on the item was approved first.
     /// </summary>
     Stale = 3,
 }
@@ -19,8 +20,9 @@ public enum WorkItemEditProposalStatus
 /// An agent's suggested edit to a work item, applied only if a human approves
 /// it. Each proposed field is null when it was not proposed; a blank branch
 /// override is a proposal to clear it. The snapshot is the five editable fields
-/// as they were when the proposal was made: approving compares the item against
-/// it, so a human edit made since is never overwritten.
+/// as they were when the proposal was made, plus the dependency set when the
+/// proposal changes it: approving compares the item against it, so a human
+/// edit made since is never overwritten.
 /// </summary>
 public class WorkItemEditProposal
 {
@@ -44,6 +46,12 @@ public class WorkItemEditProposal
     [MaxLength(256)]
     public string? ProposedBaseBranchOverride { get; set; }
 
+    /// <summary>JSON-serialized string[] of item ids; null when no dependency is proposed to be added.</summary>
+    public string? ProposedAddDependenciesJson { get; set; }
+
+    /// <summary>JSON-serialized string[] of item ids; null when no dependency is proposed to be removed.</summary>
+    public string? ProposedRemoveDependenciesJson { get; set; }
+
     [Required]
     [MaxLength(512)]
     public string SnapshotTitle { get; set; } = string.Empty;
@@ -57,6 +65,13 @@ public class WorkItemEditProposal
 
     [MaxLength(256)]
     public string? SnapshotBaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// The item's DependenciesJson when the proposal was made, taken only when
+    /// it proposes dependency changes. Null otherwise, so a proposal that leaves
+    /// dependencies alone never goes stale because they changed.
+    /// </summary>
+    public string? SnapshotDependenciesJson { get; set; }
 
     [MaxLength(2000)]
     public string? Rationale { get; set; }

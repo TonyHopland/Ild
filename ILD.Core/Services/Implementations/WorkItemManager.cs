@@ -846,16 +846,30 @@ public class WorkItemManager : IWorkItemManager
     public async Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId)
     {
         if (workItemId == dependsOnWorkItemId)
-            throw new InvalidOperationException("A work item cannot depend on itself.");
+            throw new InvalidOperationException(SelfDependencyError);
 
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
-        if (await WouldCreateCycle(workItemId, dependsOnWorkItemId))
-            throw new InvalidOperationException("Adding this dependency would create a cycle.");
+        if (await CheckNewDependencyAsync(workItemId, dependsOnWorkItemId) is { } problem)
+            throw new InvalidOperationException(problem);
 
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         return await _server.AddDependencyAsync(opts, workItemId, dependsOnWorkItemId);
+    }
+
+    private const string SelfDependencyError = "A work item cannot depend on itself.";
+
+    public async Task<string?> CheckNewDependencyAsync(string workItemId, string dependsOnWorkItemId)
+    {
+        if (workItemId == dependsOnWorkItemId)
+            return SelfDependencyError;
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
+        if (await _server.GetAsync(opts, dependsOnWorkItemId) == null)
+            return $"Dependency not found: {dependsOnWorkItemId}";
+        if (await WouldCreateCycle(workItemId, dependsOnWorkItemId))
+            return $"Making {workItemId} depend on {dependsOnWorkItemId} would create a cycle.";
+        return null;
     }
 
     public async Task<bool> RemoveDependencyAsync(string workItemId, string dependsOnWorkItemId)
@@ -1495,6 +1509,8 @@ public class WorkItemManager : IWorkItemManager
     public async Task<EditProposalApproval> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId, ct);
+        if (await RefuseDependencyAdditionsAsync(opts, workItemId, proposalId, ct) is { } refused)
+            return refused;
         var result = await _server.ApproveEditProposalAsync(opts, workItemId, proposalId, ct);
         WorkItemView? updatedView = null;
         // An applied proposal is an edit like any other, so the board hears of it
@@ -1515,6 +1531,41 @@ public class WorkItemManager : IWorkItemManager
         }
         return new EditProposalApproval(result.Outcome, proposal, updatedView);
     }
+
+    /// <summary>
+    /// The WorkItem server knows nothing of cycles, so ILD checks a pending
+    /// proposal's dependency additions before forwarding its approve. Only while
+    /// the item still matches the snapshot: otherwise the server makes it Stale,
+    /// which is the answer that wins. The check is not atomic with the write,
+    /// the same as a human adding an edge.
+    /// </summary>
+    private async Task<EditProposalApproval?> RefuseDependencyAdditionsAsync(
+        WorkItemServerOptions opts, string workItemId, Guid proposalId, CancellationToken ct)
+    {
+        var proposal = (await _server.ListEditProposalsAsync(opts, workItemId, ct))?.FirstOrDefault(p => p.Id == proposalId);
+        if (proposal is not { Status: RemoteEditProposalStatus.Pending, Proposed.AddDependencies: { Count: > 0 } additions })
+            return null;
+        var item = await _server.GetAsync(opts, workItemId, ct);
+        if (item is null || !StillMatchesSnapshot(item, proposal.Snapshot))
+            return null;
+        foreach (var addition in additions)
+        {
+            if (await CheckNewDependencyAsync(workItemId, addition.Id) is { } problem)
+            {
+                var current = (await WithRequestersAsync([proposal]))[0];
+                return new EditProposalApproval(EditProposalDecisionOutcome.Refused, current, null, problem);
+            }
+        }
+        return null;
+    }
+
+    private static bool StillMatchesSnapshot(RemoteWorkItem item, RemoteEditProposalFields snapshot)
+        => item.Title == snapshot.Title
+        && item.Description == snapshot.Description
+        && item.Tags.SequenceEqual(snapshot.Tags ?? [])
+        && item.BranchNameOverride == snapshot.BranchNameOverride
+        && item.BaseBranchOverride == snapshot.BaseBranchOverride
+        && (snapshot.Dependencies is null || item.Dependencies.ToHashSet().SetEquals(snapshot.Dependencies));
 
     public async Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
     {

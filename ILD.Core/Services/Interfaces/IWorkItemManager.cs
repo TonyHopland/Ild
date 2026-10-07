@@ -101,6 +101,14 @@ public interface IWorkItemManager
     /// </summary>
     Task<bool> AppendAiTurnAsync(string workItemId, string name, string content, Guid? runNodeId = null);
     Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId);
+
+    /// <summary>
+    /// Why <paramref name="workItemId"/> may not depend on
+    /// <paramref name="dependsOnWorkItemId"/>: it is the item itself, no such
+    /// item exists, or the edge would close a cycle. Null when it may. The
+    /// check <see cref="AddDependencyAsync"/> makes before it adds an edge.
+    /// </summary>
+    Task<string?> CheckNewDependencyAsync(string workItemId, string dependsOnWorkItemId);
     Task<bool> RemoveDependencyAsync(string workItemId, string dependsOnWorkItemId);
     Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId);
     Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(string workItemId);
@@ -236,8 +244,12 @@ public interface IWorkItemManager
 
     /// <summary>
     /// A human's approve: applies exactly the proposed fields if the item's
-    /// editable fields still equal the proposal's snapshot, atomically on the
-    /// WorkItem server; otherwise the proposal goes Stale and nothing changes.
+    /// editable fields (and, for a proposal that changes them, its dependencies)
+    /// still equal the proposal's snapshot, atomically on the WorkItem server;
+    /// otherwise the proposal goes Stale and nothing changes. A proposal whose
+    /// item still matches but whose additions would now close a cycle or name a
+    /// missing item is <see cref="EditProposalDecisionOutcome.Refused"/>: nothing
+    /// changes and it stays Pending.
     /// </summary>
     Task<EditProposalApproval> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default);
 
@@ -255,10 +267,12 @@ public interface IWorkItemManager
 /// </summary>
 /// <param name="Proposal">The proposal as it now stands; null only for <see cref="EditProposalDecisionOutcome.NotFound"/>.</param>
 /// <param name="WorkItem">The updated item, for <see cref="EditProposalDecisionOutcome.Applied"/> only.</param>
+/// <param name="Error">Why it was refused, for <see cref="EditProposalDecisionOutcome.Refused"/> only.</param>
 public sealed record EditProposalApproval(
     EditProposalDecisionOutcome Outcome,
     RemoteWorkItemEditProposal? Proposal,
-    WorkItemView? WorkItem);
+    WorkItemView? WorkItem,
+    string? Error = null);
 
 /// <summary>
 /// Outcome of a <see cref="IWorkItemManager.MergePullRequestAsync"/> call.

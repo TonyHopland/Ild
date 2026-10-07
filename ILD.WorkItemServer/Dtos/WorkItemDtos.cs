@@ -208,9 +208,11 @@ public sealed class PollResponse
 }
 
 /// <summary>
-/// The five editable fields of a work item. On a proposal's <c>Proposed</c>
-/// side a null field was not proposed and a blank branch override clears it;
-/// on its <c>Snapshot</c> side they are the item's values when it was proposed.
+/// The five editable fields of a work item, and its dependencies. On a
+/// proposal's <c>Proposed</c> side a null field was not proposed and a blank
+/// branch override clears it, and the dependencies are the ones to add and to
+/// remove; on its <c>Snapshot</c> side they are the item's values when it was
+/// proposed, the dependency set only when the proposal changes it.
 /// </summary>
 public sealed class EditProposalFieldsDto
 {
@@ -219,6 +221,22 @@ public sealed class EditProposalFieldsDto
     public IReadOnlyList<string>? Tags { get; set; }
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Proposed side only.</summary>
+    public IReadOnlyList<EditProposalDependencyDto>? AddDependencies { get; set; }
+
+    /// <summary>Proposed side only.</summary>
+    public IReadOnlyList<EditProposalDependencyDto>? RemoveDependencies { get; set; }
+
+    /// <summary>Snapshot side only.</summary>
+    public IReadOnlyList<string>? Dependencies { get; set; }
+}
+
+/// <summary>A work item a proposal names as a dependency. Title is null once that item no longer exists.</summary>
+public sealed class EditProposalDependencyDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string? Title { get; set; }
 }
 
 public sealed class WorkItemEditProposalDto
@@ -250,6 +268,12 @@ public sealed class CreateEditProposalRequest
 
     /// <summary>Null = not proposed; blank = a proposal to clear it.</summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Ids of items to add as dependencies. Null = none.</summary>
+    public IReadOnlyList<string>? AddDependencies { get; set; }
+
+    /// <summary>Ids of current dependencies to remove. Null = none.</summary>
+    public IReadOnlyList<string>? RemoveDependencies { get; set; }
 
     public string? Rationale { get; set; }
     public Guid? CreatedByLoopRunId { get; set; }

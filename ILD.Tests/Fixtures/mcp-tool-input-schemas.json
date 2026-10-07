@@ -1,4 +1,21 @@
 {
+  "add_workitem_dependency": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "GUID of the dependent work item (the one that waits). Must have been created by this session.",
+        "type": "string"
+      },
+      "dependsOnWorkItemId": {
+        "description": "GUID of the work item it should wait on. Any existing work item.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "dependsOnWorkItemId"
+    ]
+  },
   "close_pr_review_item": {
     "type": "object",
     "properties": {
@@ -554,6 +571,34 @@
         ],
         "default": null
       },
+      "addDependencies": {
+        "description": "Proposed work item GUIDs for the item to start depending on. Each must exist, not already be a dependency, and not create a cycle. Omit to add none.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": null
+      },
+      "removeDependencies": {
+        "description": "Proposed work item GUIDs for the item to stop depending on. Each must be a current dependency. Omit to remove none.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "default": null
+      },
       "rationale": {
         "description": "Optional short reason for the edit (up to 2000 chars), shown to the human deciding.",
         "type": [
@@ -577,6 +622,23 @@
     },
     "required": [
       "workItemId"
+    ]
+  },
+  "remove_workitem_dependency": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "GUID of the dependent work item (the one that waits). Must have been created by this session.",
+        "type": "string"
+      },
+      "dependsOnWorkItemId": {
+        "description": "GUID of the work item it should no longer wait on.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "dependsOnWorkItemId"
     ]
   },
   "reply_to_pr_review_comment": {
