@@ -21,8 +21,9 @@ public sealed record EditProposalDecisionResult(
 public interface IWorkItemEditProposalService
 {
     /// <summary>
-    /// Store a pending proposal with a snapshot of the item's editable fields.
-    /// Nothing on the item changes.
+    /// Store a pending proposal with a snapshot of the item's editable fields,
+    /// and of its dependency set when the proposal changes it. Nothing on the
+    /// item changes.
     /// </summary>
     Task<EditProposalCreateResult> CreateAsync(string workItemId, CreateEditProposalRequest req, CancellationToken ct = default);
 
@@ -40,8 +41,9 @@ public interface IWorkItemEditProposalService
         IReadOnlyCollection<Guid>? createdByLoopRunIds, CancellationToken ct = default);
 
     /// <summary>
-    /// Apply a pending proposal if, and only if, the item's editable fields still
-    /// equal its snapshot — checked and written in one statement, so a human edit
+    /// Apply a pending proposal if, and only if, the item's editable fields (and,
+    /// for a proposal that changes them, its dependencies) still equal its
+    /// snapshot — checked and written in one statement, so a human edit
     /// landing at any moment is never overwritten. Otherwise the proposal goes
     /// Stale. Either way no other proposal on the item stays pending once one has
     /// been applied.
