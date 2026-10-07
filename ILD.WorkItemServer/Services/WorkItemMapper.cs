@@ -75,9 +75,11 @@ internal static class WorkItemMapper
         => w.DependenciesJson = SerializeDependencies(deps);
 
     /// <summary>
-    /// The serialized column value, for an edit proposal: it holds the proposed
-    /// dependency changes and the snapshot set in the column's own form, and
-    /// approving writes the result straight to the row.
+    /// A list of work item ids in the form <see cref="WorkItem.DependenciesJson"/>
+    /// stores. Used for the item's own dependency list, and separately for each
+    /// edit proposal column that holds ids (the additions, the removals and the
+    /// snapshot set), so an approve can compare against and write the item's
+    /// column directly.
     /// </summary>
     public static string SerializeDependencies(IReadOnlyList<string> deps)
         => JsonSerializer.Serialize(deps, JsonOpts);
