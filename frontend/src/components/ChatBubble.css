@@ -105,6 +105,9 @@
 .chat-panel-title {
   font-weight: 600;
   color: #e0e0e0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-panel-header-actions {
@@ -320,20 +323,67 @@
   flex: 1;
 }
 
-/* Retained chat history (ADR-0013): the list of past chats under Start chat. */
-.chat-history {
+/* The chat list (ADR-0013 retained history). Beside the chat in a wide panel;
+   filling the panel body in a narrow one. Closed, it is not rendered at all, so
+   the chat takes the whole width. */
+.chat-panel-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.chat-panel-content {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  margin-top: 0.85rem;
-  border-top: 1px solid #2a2a40;
-  padding-top: 0.6rem;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 15rem;
+  flex-shrink: 0;
+  padding: 0.6rem;
+  overflow-y: auto;
+  border-right: 1px solid #2d2d44;
+  background: #1a1a2a;
+}
+
+.chat-sidebar-full {
+  flex: 1;
+  width: auto;
+  min-height: 0;
+  border-right: none;
+}
+
+.chat-sidebar-toggle {
+  position: relative;
+  margin-right: 0.35rem;
+  font-size: 1rem;
+}
+
+.chat-sidebar-badge {
+  position: absolute;
+  top: -0.35rem;
+  right: -0.45rem;
+  min-width: 1rem;
+  padding: 0 0.25rem;
+  border-radius: 0.5rem;
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1rem;
+  text-align: center;
 }
 
 .chat-history-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
 
@@ -385,6 +435,122 @@
 
 .chat-history-open:hover {
   background: #2a2a40;
+}
+
+.chat-history-open[aria-current="true"] {
+  background: #33335a;
+  box-shadow: inset 2px 0 0 #6366f1;
+}
+
+.chat-history-unread .chat-history-name {
+  font-weight: 700;
+}
+
+.chat-starred {
+  flex-shrink: 0;
+  color: #facc15;
+  font-size: 0.8rem;
+}
+
+/* A row's favourite, rename and delete live behind one button, so the title
+   keeps the row's width. */
+.chat-row-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chat-row-menu-btn {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* With a mouse the button shows only on the row it is pointing at (or one with
+   focus, or an open menu), and keeps no room in the row while hidden: the title
+   runs the full width and gives up the button's room only while it shows. Any
+   touch screen - the only input, or one beside a mouse - has no hover to reveal
+   it, so there it always shows, beside the title. */
+@media (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  .chat-history-row {
+    position: relative;
+  }
+
+  /* Centred without a transform: a transform would give each row its own layer,
+     and the next rows' buttons would then be drawn over this row's open menu. */
+  .chat-row-actions {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+  }
+
+  .chat-row-menu-btn {
+    opacity: 0;
+  }
+
+  .chat-history-row:hover .chat-row-menu-btn,
+  .chat-history-row:focus-within .chat-row-menu-btn,
+  .chat-row-menu-btn[aria-expanded="true"] {
+    opacity: 1;
+  }
+
+  .chat-history-row:hover .chat-history-open,
+  .chat-history-row:focus-within .chat-history-open,
+  .chat-history-row:has(.chat-row-menu-btn[aria-expanded="true"]) .chat-history-open {
+    padding-right: 2rem;
+  }
+}
+
+.chat-row-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 8.5rem;
+  padding: 0.25rem;
+  background: #2a2a40;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.4rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.chat-row-menu-item {
+  background: transparent;
+  border: none;
+  border-radius: 0.3rem;
+  color: #e0e0e0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.5rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.chat-row-menu-item:hover,
+.chat-row-menu-item:focus-visible {
+  background: #33335a;
+}
+
+.chat-row-menu-item.chat-danger {
+  color: #f87171;
+}
+
+.chat-row-menu-item:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+/* Waiting on the user: an amber ring, unlike the solid red unread dot. */
+.chat-needs-you {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 2px solid #f59e0b;
 }
 
 .chat-history-title {

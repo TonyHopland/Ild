@@ -53,6 +53,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
+import { openChatList, showChatActions } from "../test-support";
 
 // A stand-in for the server: what GET /chat/history answers right now. A rename
 // that succeeds changes it there, as PUT /chat/{id}/name does.
@@ -118,6 +119,7 @@ function renameInput(): HTMLInputElement | undefined {
 }
 
 function startRenamingRow(name: string): HTMLInputElement {
+  showChatActions(name);
   fireEvent.click(screen.getByRole("button", { name: `Rename chat ${name}` }));
   return renameInput()!;
 }
@@ -143,6 +145,7 @@ describe("a rename being saved", () => {
     );
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     const input = startRenamingRow("Alpha");
@@ -162,6 +165,7 @@ describe("a rename being saved", () => {
     chatService.rename.mockRejectedValue(new Error("Name is taken"));
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     const input = startRenamingRow("Alpha");
@@ -187,6 +191,7 @@ describe("a rename being saved", () => {
     );
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     let input = startRenamingRow("Alpha");
@@ -225,6 +230,7 @@ describe("a rename being saved", () => {
       server = [summary("a", "Alpha")];
       render(bubble());
       await openPanel();
+      await openChatList();
       await screen.findByText("Alpha");
       chatService.listHistory.mockImplementation(reread);
 
@@ -242,6 +248,7 @@ describe("a rename being saved", () => {
     server = [summary("a", "Alpha")];
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
     chatService.listHistory.mockImplementation(() => new Promise<ChatSessionSummary[]>(() => {}));
 
@@ -265,6 +272,7 @@ describe("a rename draft", () => {
     try {
       render(bubble());
       await openPanel();
+      await openChatList();
       await screen.findByText("Alpha");
 
       fireEvent.keyDown(startRenamingRow("Alpha"), { key: "Escape", code: "Escape" });

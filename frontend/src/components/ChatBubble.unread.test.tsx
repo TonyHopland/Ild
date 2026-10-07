@@ -59,6 +59,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
 import { setChatEnabled } from "../hooks/useChatEnabled";
+import { openChatFromList, openChatList, showChatActions, startNewChat } from "../test-support";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -218,13 +219,15 @@ function closePanel() {
 }
 
 async function resume(name: string) {
-  fireEvent.click(await screen.findByText(name));
+  await openChatFromList(name);
   await screen.findByLabelText("Chat message");
 }
 
+/** Leave the open chat, then show the list again. */
 async function back() {
-  fireEvent.click(screen.getByText("← Back"));
+  await startNewChat();
   await screen.findByText("Start chat");
+  await openChatList();
 }
 
 async function send(text: string) {
@@ -246,6 +249,7 @@ describe("unread chat indicator", () => {
     expect(screen.queryAllByRole("status")).toHaveLength(0);
 
     await openPanel();
+    await openChatList();
     await screen.findByText("Beta");
     expect(rowDot("Alpha")).not.toBeNull();
     expect(rowDot("Beta")).toBeNull();
@@ -361,6 +365,7 @@ describe("unread chat indicator", () => {
     sessions.b = chat("b", "Beta", [msg("b", 4, "user"), msg("b", 5, "assistant")]);
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Beta");
     expect(rowDot("Alpha")).not.toBeNull();
     expect(rowDot("Beta")).not.toBeNull();
@@ -436,6 +441,51 @@ describe("unread chat indicator", () => {
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 1));
   });
 
+  test("a chat covered by the narrow list stays unread while another chat picked there is still opening", async () => {
+    server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
+    sessions.a = chat("a", "Alpha", [msg("a", 0, "user")]);
+    sessions.b = chat("b", "Beta", [msg("b", 1, "user")]);
+    render(bubble());
+    await openPanel();
+    await resume("Alpha");
+    await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("a", 0));
+    await settle();
+
+    // A reply lands in Alpha while the list covers it, and Beta's open is slow.
+    const list = await openChatList();
+    emitAppended({ chatSessionId: "a", turnId: "t1", message: msg("a", 2, "assistant") });
+    const opening = deferred<ChatSession>();
+    chatService.getById.mockImplementationOnce(() => opening.promise);
+    fireEvent.click(within(list).getByText("Beta"));
+    await settle();
+    expect(screen.queryByText("assistant message 2")).toBeNull();
+    expect(chatService.markRead).not.toHaveBeenCalledWith("a", 2);
+
+    await act(async () => opening.resolve(sessions.b));
+    expect(await screen.findByText("user message 1")).toBeTruthy();
+    await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("b", 1));
+    expect(chatService.markRead).not.toHaveBeenCalledWith("a", 2);
+  });
+
+  test("while the list is hidden, screen readers hear the unread count as the list button's description", async () => {
+    server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
+    render(bubble());
+    await openPanel();
+    const listButton = () => screen.getByRole("button", { name: "Chat list" });
+    await waitFor(() => expect(listButton()).toBeTruthy());
+    expect(listButton().getAttribute("aria-describedby")).toBeNull();
+
+    setUnread("b", true);
+    emitUnreadChanged({ chatSessionId: "b" });
+    expect(await screen.findByRole("button", { name: "Chat list", description: "1" })).toBe(
+      listButton(),
+    );
+
+    await openChatList();
+    expect(listButton().getAttribute("aria-describedby")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Chat list", description: "1" })).toBeNull();
+  });
+
   test("every (re)connect rejoins the inbox and re-reads history, recovering a hint lost while away", async () => {
     server = [summary("a", "Alpha", false)];
     const view = render(bubble());
@@ -462,11 +512,13 @@ describe("unread chat indicator", () => {
     server = [summary("a", "Alpha", true), summary("b", "Beta", false)];
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     holdHistoryReads(1);
     emitUnreadChanged({ chatSessionId: "a" });
     await waitFor(() => expect(heldReads).toHaveLength(1));
+    showChatActions("Alpha");
     fireEvent.click(screen.getByLabelText("Delete chat Alpha"));
     await waitFor(() => expect(screen.queryByText("Alpha")).toBeNull());
 
@@ -485,6 +537,7 @@ describe("unread chat indicator", () => {
     server = [summary("a", "Alpha", true), summary("b", "Beta", true)];
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     holdHistoryReads(1);
@@ -511,6 +564,7 @@ describe("unread chat indicator", () => {
     server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
     render(bubble());
     await openPanel();
+    await openChatList();
     await screen.findByText("Alpha");
 
     // B's reply lands and its hint's read goes out before A's delete settles.
@@ -518,6 +572,7 @@ describe("unread chat indicator", () => {
     setUnread("b", true);
     emitUnreadChanged({ chatSessionId: "b" });
     await waitFor(() => expect(heldReads).toHaveLength(1));
+    showChatActions("Alpha");
     fireEvent.click(screen.getByLabelText("Delete chat Alpha"));
     await waitFor(() => expect(screen.queryByText("Alpha")).toBeNull());
 

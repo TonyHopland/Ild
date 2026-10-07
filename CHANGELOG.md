@@ -11,7 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Chats can be renamed, and an opt-in setting gives each new chat a short title that says what it is about.**
 
+- **A searchable list of your chats sits beside the chat, marks unread ones, lets you star favourites, and replaces the Back button.**
+
 ### Changed
+
+- **A chat named from its first message keeps up to 120 characters of it instead of 60.**
 
 - **Pi 1.0 is supported, and Pi now reaches ILD's tools through its own MCP support.**
 

@@ -8,7 +8,7 @@ using Moq;
 
 namespace ILD.Tests;
 
-/// <summary>No chat title carries NUL, which the conditional updates writing it would not scrub.</summary>
+/// <summary>No chat title or search query carries NUL: conditional updates are not scrubbed, and the database cannot take it.</summary>
 public class ChatTitleNulTests
 {
     [Theory]
@@ -50,6 +50,27 @@ public class ChatTitleNulTests
 
         Assert.IsType<NoContentResult>(result);
         _chat.Verify(c => c.RenameAsync("tony", id, "Deploy loop", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_search_is_made_without_its_nul_characters()
+    {
+        _chat.Setup(c => c.SearchForUserAsync("tony", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Guid>());
+
+        var result = await Controller().Search(" de\0ploy ", CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        _chat.Verify(c => c.SearchForUserAsync("tony", "deploy", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_search_that_is_nothing_but_nul_is_refused()
+    {
+        var result = await Controller().Search("\0 \0", CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        _chat.Verify(c => c.SearchForUserAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

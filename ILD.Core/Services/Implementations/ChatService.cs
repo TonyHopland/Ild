@@ -83,9 +83,27 @@ public sealed class ChatService : IChatService
                 c.CreatedAt,
                 c.UpdatedAt,
                 c.LastReadSequence != null && _db.ChatMessages.Any(m =>
-                    m.ChatSessionId == c.Id && m.Role == "assistant" && m.Sequence > c.LastReadSequence)))
+                    m.ChatSessionId == c.Id && m.Role == "assistant" && m.Sequence > c.LastReadSequence),
+                c.IsFavorite))
             .ToListAsync(ct);
     }
+
+    public async Task<IReadOnlyList<Guid>> SearchForUserAsync(string userId, string query, CancellationToken ct = default)
+    {
+        // Contains translates to instr/strpos rather than LIKE, so % and _ match literally.
+        var term = query.ToLowerInvariant();
+        return await _db.ChatSessions.AsNoTracking()
+            .Where(c => c.UserId == userId && _db.ChatMessages.Any(m =>
+                m.ChatSessionId == c.Id && m.Content.ToLower().Contains(term)))
+            .OrderByDescending(c => c.UpdatedAt ?? c.CreatedAt)
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+    }
+
+    public async Task<bool> SetFavoriteAsync(string userId, Guid sessionId, bool favorite, CancellationToken ct = default)
+        => await _db.ChatSessions
+            .Where(c => c.Id == sessionId && c.UserId == userId)
+            .ExecuteUpdateAsync(s => s.SetProperty(c => c.IsFavorite, favorite), ct) > 0;
 
     public async Task<bool> MarkReadAsync(string userId, Guid sessionId, int sequence, CancellationToken ct = default)
     {

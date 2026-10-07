@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
-import type { ChatHubEvents } from "../test-support";
+import {
+  openChatFromList,
+  showChatActions,
+  startNewChat,
+  type ChatHubEvents,
+} from "../test-support";
 
 // The turn the bubble believes is running outlives every request it makes: a
 // send, a stop and a state read all resolve long after the click that started
@@ -110,7 +115,7 @@ async function openResumed(session: ChatSession) {
   const view = openList(summary(session.id, session.name ?? "Past chat"));
   chatService.getById.mockResolvedValue(session);
   fireEvent.click(await screen.findByLabelText("Open chat"));
-  fireEvent.click(await screen.findByText(session.name ?? "Past chat"));
+  await openChatFromList(session.name ?? "Past chat");
   await screen.findByLabelText("Chat message");
   await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(2));
   return view;
@@ -197,7 +202,7 @@ describe("ChatBubble turn state", () => {
     );
 
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
 
     // A send to the first chat that never comes back.
@@ -206,8 +211,8 @@ describe("ChatBubble turn state", () => {
     expect(screen.getByLabelText("Stop")).toBeTruthy();
 
     // Leave it hanging and open the other chat, whose turn is running.
-    fireEvent.click(screen.getByText("← Back"));
-    fireEvent.click(await screen.findByText("Other chat"));
+    await startNewChat();
+    await openChatFromList("Other chat");
     await screen.findByLabelText("Chat message");
     await waitFor(() => expect(screen.getByLabelText("Stop")).toBeTruthy());
 
@@ -230,7 +235,7 @@ describe("ChatBubble turn state", () => {
       Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
     );
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
 
     let failSend!: (err: Error) => void;
@@ -242,8 +247,8 @@ describe("ChatBubble turn state", () => {
     await sendMessageText("are you there?");
 
     // Leave for the other chat, and only then does the first send give up.
-    fireEvent.click(screen.getByText("← Back"));
-    fireEvent.click(await screen.findByText("Other chat"));
+    await startNewChat();
+    await openChatFromList("Other chat");
     await screen.findByLabelText("Chat message");
     await act(async () => {
       failSend(new Error("Network error."));
@@ -264,7 +269,7 @@ describe("ChatBubble turn state", () => {
     chatService.interrupt.mockReturnValue(new Promise<void>(() => {}));
 
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
     fireEvent.click(await screen.findByLabelText("Stop"));
     await waitFor(() =>
@@ -273,8 +278,8 @@ describe("ChatBubble turn state", () => {
 
     // That stop never comes back. The other chat is running its own turn, and its
     // button has to work.
-    fireEvent.click(screen.getByText("← Back"));
-    fireEvent.click(await screen.findByText("Other chat"));
+    await startNewChat();
+    await openChatFromList("Other chat");
     await screen.findByLabelText("Chat message");
 
     const stop = await screen.findByLabelText("Stop");
@@ -291,7 +296,7 @@ describe("ChatBubble turn state", () => {
     const view = openList(summary("s1", "First chat"));
     chatService.getById.mockResolvedValue(chatSession({ name: "First chat" }));
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
 
     chatService.sendMessage.mockReturnValue(new Promise<void>(() => {}));
@@ -299,9 +304,9 @@ describe("ChatBubble turn state", () => {
     expect(screen.getByLabelText("Stop")).toBeTruthy();
 
     // Away, and back to the same chat — which the server says is mid-turn.
-    fireEvent.click(screen.getByText("← Back"));
+    await startNewChat();
     chatService.getById.mockResolvedValue(chatSession({ name: "First chat", activeTurnId: "t7" }));
-    fireEvent.click(await screen.findByText("First chat"));
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
     expect(await screen.findByLabelText("Stop")).toBeTruthy();
 
@@ -326,15 +331,15 @@ describe("ChatBubble turn state", () => {
     chatService.interrupt.mockReturnValue(new Promise<void>(() => {}));
 
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
     fireEvent.click(await screen.findByLabelText("Stop"));
     await waitFor(() =>
       expect((screen.getByLabelText("Stop") as HTMLButtonElement).disabled).toBe(true),
     );
 
-    fireEvent.click(screen.getByText("← Back"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await startNewChat();
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
 
     const stop = await screen.findByLabelText("Stop");
@@ -358,7 +363,7 @@ describe("ChatBubble turn state", () => {
     );
 
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
     fireEvent.click(await screen.findByLabelText("Stop"));
     await waitFor(() =>
@@ -367,8 +372,8 @@ describe("ChatBubble turn state", () => {
 
     // Away and back, which drops the claim of the stop still in flight, and the
     // button is live again — that much is intended.
-    fireEvent.click(screen.getByText("← Back"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await startNewChat();
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
     expect((await screen.findByLabelText("Stop")).hasAttribute("disabled")).toBe(false);
 
@@ -604,7 +609,7 @@ describe("ChatBubble turn state", () => {
     );
 
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("Long chat"));
+    await openChatFromList("Long chat");
     await screen.findByLabelText("Chat message");
 
     // Learned over the hub while the read was in flight, so the snapshot cannot
@@ -759,7 +764,7 @@ describe("ChatBubble turn state", () => {
     chatService.getById.mockResolvedValue(chatSession({ id: "s1", name: "First chat" }));
 
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("First chat"));
+    await openChatFromList("First chat");
     await screen.findByLabelText("Chat message");
 
     await sendMessageText("long task");
@@ -778,8 +783,8 @@ describe("ChatBubble turn state", () => {
     fireEvent.click(await screen.findByLabelText("Stop"));
     await waitFor(() => expect(chatService.interrupt).toHaveBeenCalledWith("s1"));
 
-    fireEvent.click(screen.getByText("← Back"));
-    fireEvent.click(await screen.findByText("Other chat"));
+    await startNewChat();
+    await openChatFromList("Other chat");
     await screen.findByLabelText("Chat message");
 
     // The first chat finally answers, and it is still busy — but the bubble is
@@ -924,14 +929,14 @@ describe("ChatBubble turn state", () => {
         Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
       );
       fireEvent.click(await screen.findByLabelText("Open chat"));
-      fireEvent.click(await screen.findByText("First chat"));
+      await openChatFromList("First chat");
       await screen.findByLabelText("Chat message");
 
       const answerSend = heldSendAnswering("t2");
       await sendMessageText("go");
 
-      fireEvent.click(screen.getByText("← Back"));
-      fireEvent.click(await screen.findByText(returnTo));
+      await startNewChat();
+      await openChatFromList(returnTo);
       await screen.findByLabelText("Chat message");
 
       await act(async () => {
@@ -953,7 +958,7 @@ describe("ChatBubble turn state", () => {
   describe("a result from an earlier visit to the same chat", () => {
     /** Opens "First chat" from the list, with whatever the server says about it. */
     async function openFirstChat() {
-      fireEvent.click(await screen.findByText("First chat"));
+      await openChatFromList("First chat");
       await screen.findByLabelText("Chat message");
     }
 
@@ -977,7 +982,7 @@ describe("ChatBubble turn state", () => {
       await waitFor(() => expect(chatService.getById).toHaveBeenCalledTimes(3));
 
       // Away and back into the same chat, which is running a different turn now.
-      fireEvent.click(screen.getByText("← Back"));
+      await startNewChat();
       chatService.getById.mockResolvedValue(
         chatSession({ name: "First chat", activeTurnId: "t2" }),
       );
@@ -1011,7 +1016,7 @@ describe("ChatBubble turn state", () => {
       expect(screen.getByLabelText("Stop")).toBeTruthy();
 
       // Away and back, and this visit has a turn of its own running.
-      fireEvent.click(screen.getByText("← Back"));
+      await startNewChat();
       chatService.getById.mockResolvedValue(
         chatSession({ name: "First chat", activeTurnId: "t5" }),
       );
@@ -1056,9 +1061,9 @@ describe("ChatBubble turn state", () => {
       );
 
       fireEvent.click(await screen.findByLabelText("Open chat"));
-      fireEvent.click(await screen.findByText("First chat"));
+      await openChatFromList("First chat");
       // Still on the list, because that read has not answered.
-      fireEvent.click(await screen.findByText("Other chat"));
+      await openChatFromList("Other chat");
       await screen.findByLabelText("Chat message");
       expect(screen.getByText("the chat they opened")).toBeTruthy();
 
@@ -1080,6 +1085,88 @@ describe("ChatBubble turn state", () => {
       expect(screen.queryByRole("status")).toBeNull();
     });
 
+    test("deleting a chat whose open is still on its way calls the open off", async () => {
+      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      chatService.deleteOne.mockResolvedValue(undefined);
+      let answerOtherOpen!: (session: ChatSession) => void;
+      chatService.getById.mockImplementation((id: string) =>
+        id === "s2"
+          ? new Promise<ChatSession>((resolve) => {
+              answerOtherOpen = resolve;
+            })
+          : Promise.resolve(
+              chatSession({
+                id: "s1",
+                name: "First chat",
+                messages: [msg({ id: "a1", content: "the chat they stayed in", sequence: 0 })],
+              }),
+            ),
+      );
+
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openChatFromList("First chat");
+      await screen.findByLabelText("Chat message");
+      await openChatFromList("Other chat");
+      // Still on the list, because that read has not answered; the user deletes it.
+      showChatActions("Other chat");
+      fireEvent.click(screen.getByRole("button", { name: "Delete chat Other chat" }));
+      await waitFor(() => expect(chatService.deleteOne).toHaveBeenCalledWith("s2"));
+
+      await act(async () => {
+        answerOtherOpen(
+          chatSession({
+            id: "s2",
+            name: "Other chat",
+            messages: [msg({ id: "b1", content: "the chat they deleted", sequence: 0 })],
+          }),
+        );
+      });
+
+      expect(screen.queryByText("the chat they deleted")).toBeNull();
+      expect(invoke).not.toHaveBeenCalledWith("SubscribeToChat", "s2");
+      // The chat that was open stays the one open.
+      expect(document.querySelector(".chat-panel-title")?.textContent).toBe("First chat");
+    });
+
+    test("picking the open chat's row again overrules an open of another chat still on its way", async () => {
+      openList(summary("s1", "First chat"), summary("s2", "Other chat"));
+      let answerOtherOpen!: (session: ChatSession) => void;
+      chatService.getById.mockImplementation((id: string) =>
+        id === "s2"
+          ? new Promise<ChatSession>((resolve) => {
+              answerOtherOpen = resolve;
+            })
+          : Promise.resolve(
+              chatSession({
+                id: "s1",
+                name: "First chat",
+                messages: [msg({ id: "a1", content: "the chat they stayed in", sequence: 0 })],
+              }),
+            ),
+      );
+
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openChatFromList("First chat");
+      await screen.findByLabelText("Chat message");
+      await openChatFromList("Other chat");
+      // Still on the list, because that read has not answered; the user changes their mind.
+      await openChatFromList("First chat");
+      await screen.findByLabelText("Chat message");
+
+      await act(async () => {
+        answerOtherOpen(
+          chatSession({
+            id: "s2",
+            name: "Other chat",
+            messages: [msg({ id: "b1", content: "the chat they did not open", sequence: 0 })],
+          }),
+        );
+      });
+
+      expect(screen.getByText("the chat they stayed in")).toBeTruthy();
+      expect(screen.queryByText("the chat they did not open")).toBeNull();
+    });
+
     test("a read from the earlier visit cannot settle a send this visit is waiting on", async () => {
       // The sharper half of the same hazard: the stale read carries the *send
       // number* of the visit that made it, and that number is what lets a read
@@ -1097,7 +1184,7 @@ describe("ChatBubble turn state", () => {
       );
       await sendMessageText("first visit");
 
-      fireEvent.click(screen.getByText("← Back"));
+      await startNewChat();
       await openFirstChat();
 
       // This visit posts its own message, and that request has not come back — so
@@ -1141,7 +1228,7 @@ describe("ChatBubble turn state", () => {
       );
 
       // Away and back, then a stop of this visit's own, still in flight.
-      fireEvent.click(screen.getByText("← Back"));
+      await startNewChat();
       await openFirstChat();
       chatService.interrupt.mockReturnValue(new Promise<void>(() => {}));
       fireEvent.click(await screen.findByLabelText("Stop"));

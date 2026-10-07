@@ -82,6 +82,13 @@ public class ChatSession : IHasUpdatedAt
     /// </summary>
     public int? LastReadSequence { get; set; }
 
+    /// <summary>
+    /// Starred by the user, so the history list shows it on top. Changed only by a
+    /// conditional update, like <see cref="LastReadSequence"/>, which also leaves
+    /// <see cref="UpdatedAt"/> alone: starring is not activity.
+    /// </summary>
+    public bool IsFavorite { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     /// <summary>Last-activity timestamp; shown as the history row's date-stamp.</summary>

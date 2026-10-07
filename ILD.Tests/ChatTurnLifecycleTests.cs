@@ -117,6 +117,12 @@ public sealed class ChatTurnLifecycleTests
         public Task<bool> RenameAsync(string userId, Guid sessionId, string name, CancellationToken ct = default)
             => throw new NotSupportedException();
 
+        public Task<IReadOnlyList<Guid>> SearchForUserAsync(string userId, string query, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<bool> SetFavoriteAsync(string userId, Guid sessionId, bool favorite, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
         public Task<ChatSessionView> StartAsync(string userId, Guid aiProviderId, IReadOnlyList<string>? tools, CancellationToken ct = default)
             => throw new NotSupportedException();
 

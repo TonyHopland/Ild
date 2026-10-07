@@ -34,20 +34,25 @@ public class ChatTitlesTests
         => Assert.Equal("New chat", ChatTitles.Fallback(firstMessage));
 
     [Fact]
-    public void A_long_first_message_keeps_its_first_sixty_characters_and_an_ellipsis()
-        => Assert.Equal(new string('a', 60) + "…", ChatTitles.Fallback(new string('a', 200)));
+    public void A_long_first_message_keeps_as_much_as_fits_the_stored_name_with_an_ellipsis()
+    {
+        var title = ChatTitles.Fallback(new string('a', 200));
+
+        Assert.Equal(new string('a', 119) + "…", title);
+        Assert.Equal(ChatTitles.MaxFallbackLength, title.Length);
+    }
 
     [Fact]
     public void A_cut_landing_on_a_space_is_trimmed_before_the_ellipsis()
-        => Assert.Equal(new string('a', 59) + "…", ChatTitles.Fallback(new string('a', 59) + " bbbbbbbbbb"));
+        => Assert.Equal(new string('a', 118) + "…", ChatTitles.Fallback(new string('a', 118) + " bbbbbbbbbb"));
 
     [Fact]
-    public void Exactly_sixty_characters_are_kept_whole()
-        => Assert.Equal(new string('a', 60), ChatTitles.Fallback(new string('a', 60)));
+    public void Exactly_the_stored_name_length_is_kept_whole()
+        => Assert.Equal(new string('a', 120), ChatTitles.Fallback(new string('a', 120)));
 
     [Fact]
     public void The_length_is_measured_after_the_markdown_is_gone()
-        => Assert.Equal(new string('c', 58), ChatTitles.Fallback("## " + new string('c', 58)));
+        => Assert.Equal(new string('c', 118), ChatTitles.Fallback("## " + new string('c', 118)));
 
     [Theory]
     [InlineData("Login page fix", "Login page fix")]

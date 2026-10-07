@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { ChatMessage, ChatSession, ChatSessionSummary } from "../types";
-import type { ChatHubEvents } from "../test-support";
+import { openChatFromList, type ChatHubEvents } from "../test-support";
 
 // One table over the whole turn lifecycle. Every case is a sequence of the things
 // that can happen to a chat — a send, the server announcing a turn, streamed text,
@@ -331,7 +331,7 @@ describe("ChatBubble turn state machine", () => {
       </MemoryRouter>,
     );
     fireEvent.click(await screen.findByLabelText("Open chat"));
-    fireEvent.click(await screen.findByText("Past chat"));
+    await openChatFromList("Past chat");
     await screen.findByLabelText("Chat message");
     await waitFor(() => expect(chatService.getById).toHaveBeenCalled());
     await act(async () => {});

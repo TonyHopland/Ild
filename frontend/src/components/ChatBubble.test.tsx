@@ -1,8 +1,14 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, act, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary } from "../types";
-import type { ChatHubEvents } from "../test-support";
+import {
+  openChatFromList,
+  openChatList,
+  showChatActions,
+  startNewChat,
+  type ChatHubEvents,
+} from "../test-support";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
 import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
@@ -37,6 +43,7 @@ const {
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
     deleteAll: vi.fn(),
+    searchChats: vi.fn(),
   },
   aiProviderService: {
     getAll: vi.fn(),
@@ -159,7 +166,7 @@ async function openResumed(session: ChatSession, initialPath = "/") {
   chatService.getById.mockResolvedValue(session);
   const view = renderBubble(initialPath);
   fireEvent.click(await screen.findByLabelText("Open chat"));
-  fireEvent.click(await screen.findByText(session.name ?? "New chat"));
+  await openChatFromList(session.name ?? "Untitled chat");
   await screen.findByLabelText("Chat message");
   return view;
 }
@@ -310,7 +317,7 @@ describe("ChatBubble", () => {
     expect(chatService.getById).toHaveBeenCalledWith("s1");
   });
 
-  test("lists past chats under Start chat with a name and date-stamp", async () => {
+  test("lists past chats in the chat list with a name and date-stamp", async () => {
     chatService.listHistory.mockResolvedValue([
       summary({ id: "s1", name: "Deploy loop help", updatedAt: "2026-03-04T00:00:00Z" }),
       summary({ id: "s2", name: "Bug triage", updatedAt: "2026-03-03T00:00:00Z" }),
@@ -319,11 +326,116 @@ describe("ChatBubble", () => {
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openChatList();
 
     expect(await screen.findByText("Deploy loop help")).toBeTruthy();
     expect(screen.getByText("Bug triage")).toBeTruthy();
-    // The date-stamp renders the last-activity timestamp.
-    expect(screen.getByText(new Date("2026-03-04T00:00:00Z").toLocaleString())).toBeTruthy();
+    // The date-stamp carries the full last-activity timestamp.
+    expect(screen.getByTitle(new Date("2026-03-04T00:00:00Z").toLocaleString())).toBeTruthy();
+  });
+
+  test("a chat's actions open one row at a time and close on Escape, without it reaching the page below, or on a click outside", async () => {
+    chatService.listHistory.mockResolvedValue([
+      summary({ id: "s1", name: "One" }),
+      summary({ id: "s2", name: "Two" }),
+    ]);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    const pageEscape = vi.fn();
+    const onPageKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") pageEscape();
+    };
+    document.addEventListener("keydown", onPageKey);
+    try {
+      renderBubble();
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openChatList();
+      await screen.findByText("One");
+      const actions = (name: string) =>
+        screen.getByRole("button", { name: `Actions for chat ${name}` });
+
+      expect(screen.queryByLabelText("Rename chat One")).toBeNull();
+      fireEvent.click(actions("One"));
+      expect(actions("One").getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByLabelText("Rename chat One")).toBeTruthy();
+
+      fireEvent.click(actions("Two"));
+      expect(screen.queryByLabelText("Rename chat One")).toBeNull();
+      expect(screen.getByLabelText("Delete chat Two")).toBeTruthy();
+
+      fireEvent.keyDown(screen.getByLabelText("Delete chat Two"), { key: "Escape" });
+      expect(screen.queryByLabelText("Delete chat Two")).toBeNull();
+      expect(actions("Two").getAttribute("aria-expanded")).toBe("false");
+      expect(pageEscape).not.toHaveBeenCalled();
+
+      fireEvent.click(actions("One"));
+      fireEvent.pointerDown(screen.getByLabelText("Search chats"));
+      expect(screen.queryByLabelText("Rename chat One")).toBeNull();
+      expect(chatService.deleteOne).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", onPageKey);
+    }
+  });
+
+  // The list scrolls and clips, so the actions of a row near its bottom would open
+  // out of sight. jsdom does no layout and has no scrollIntoView, so stub it to
+  // observe that an opened menu is brought into view.
+  test("a chat's opened actions are scrolled into view within the list", async () => {
+    chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Last row" })]);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    const scrolled: Element[] = [];
+    const scrollIntoView = vi.fn(function (this: Element) {
+      scrolled.push(this);
+    });
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      renderBubble();
+      fireEvent.click(await screen.findByLabelText("Open chat"));
+      await openChatList();
+      fireEvent.click(await screen.findByRole("button", { name: "Actions for chat Last row" }));
+
+      const menu = screen.getByRole("group", { name: "Actions for chat Last row" });
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
+      expect(scrolled).toContain(menu);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollIntoView", original);
+      else delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
+  });
+
+  test("a failed message search with no title match says so, not that nothing matched", async () => {
+    chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Deploy loop" })]);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    let fail!: (reason: unknown) => void;
+    chatService.searchChats.mockImplementation(
+      () =>
+        new Promise<string[]>((_, reject) => {
+          fail = reject;
+        }),
+    );
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    const list = await openChatList();
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      fireEvent.change(within(list).getByLabelText("Search chats"), {
+        target: { value: "broken" },
+      });
+      expect(within(list).getByText("Searching…")).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(chatService.searchChats).toHaveBeenCalledWith("broken");
+      expect(within(list).getByText("Searching…")).toBeTruthy();
+
+      await act(async () => fail(new Error("search failed")));
+      expect(within(list).getByText("Message search failed")).toBeTruthy();
+      expect(within(list).queryByText("Searching…")).toBeNull();
+      expect(within(list).queryByText("No chats match")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("per-chat delete removes that chat without touching the others", async () => {
@@ -336,8 +448,10 @@ describe("ChatBubble", () => {
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openChatList();
     await screen.findByText("Remove me");
 
+    showChatActions("Remove me");
     fireEvent.click(screen.getByLabelText("Delete chat Remove me"));
 
     await waitFor(() => expect(chatService.deleteOne).toHaveBeenCalledWith("s2"));
@@ -355,6 +469,7 @@ describe("ChatBubble", () => {
 
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
+    await openChatList();
     await screen.findByText("One");
 
     // First click only arms the confirmation — nothing is deleted yet.
@@ -368,16 +483,46 @@ describe("ChatBubble", () => {
     await waitFor(() => expect(screen.queryByText("One")).toBeNull());
   });
 
-  test("Back returns to the list and retains the chat (no delete)", async () => {
+  test("New chat leaves the open chat for the start form and retains it (no delete)", async () => {
     await openResumed(chatSession({ name: "Retained chat" }));
 
-    fireEvent.click(screen.getByText("← Back"));
+    await startNewChat();
 
-    // The list is shown again and the chat was not deleted.
+    // The start form is shown and the chat was not deleted.
     expect(await screen.findByText("Start chat")).toBeTruthy();
     expect(screen.queryByLabelText("Chat message")).toBeNull();
     expect(chatService.deleteOne).not.toHaveBeenCalled();
     expect(chatService.deleteAll).not.toHaveBeenCalled();
+  });
+
+  test("an unsent draft stays with its chat: another chat and New chat start empty", async () => {
+    chatService.listHistory.mockResolvedValue([
+      summary({ id: "s1", name: "First chat" }),
+      summary({ id: "s2", name: "Other chat" }),
+    ]);
+    chatService.getById.mockImplementation((id: string) =>
+      Promise.resolve(chatSession({ id, name: id === "s1" ? "First chat" : "Other chat" })),
+    );
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    renderBubble();
+    fireEvent.click(await screen.findByLabelText("Open chat"));
+    const draft = () => screen.getByLabelText("Chat message") as HTMLInputElement;
+
+    await openChatFromList("First chat");
+    await screen.findByLabelText("Chat message");
+    fireEvent.change(draft(), { target: { value: "meant for the first chat" } });
+
+    await openChatFromList("Other chat");
+    await waitFor(() => expect(screen.getByText("Other chat")).toBeTruthy());
+    expect(draft().value).toBe("");
+    fireEvent.change(draft(), { target: { value: "meant for the other chat" } });
+
+    await startNewChat();
+    expect(await screen.findByText("Start chat")).toBeTruthy();
+    await openChatFromList("Other chat");
+    await screen.findByLabelText("Chat message");
+    expect(draft().value).toBe("");
+    expect(chatService.sendMessage).not.toHaveBeenCalled();
   });
 
   test("reloads providers when ending a chat if the first load failed", async () => {
@@ -391,9 +536,9 @@ describe("ChatBubble", () => {
     fireEvent.click(await screen.findByLabelText("Open chat"));
 
     // Resume the past chat (this does not need providers), then end it.
-    fireEvent.click(await screen.findByText("Old chat"));
+    await openChatFromList("Old chat");
     await screen.findByLabelText("Chat message");
-    fireEvent.click(screen.getByText("← Back"));
+    await startNewChat();
 
     // The provider list fills without having to close and reopen the panel.
     expect(await screen.findByText("Claude (claude-code)")).toBeTruthy();
@@ -405,8 +550,8 @@ describe("ChatBubble", () => {
     // The resumed session is published for other components (the LoopEditor).
     await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith("s1"));
 
-    // Going back publishes null so the editor leaves the group.
-    fireEvent.click(await screen.findByText("← Back"));
+    // Leaving publishes null so the editor leaves the group.
+    await startNewChat();
     await waitFor(() => expect(setCurrentChatSessionId).toHaveBeenCalledWith(null));
   });
 
@@ -594,10 +739,10 @@ describe("ChatBubble", () => {
     await waitFor(() => expect(screen.queryByLabelText("Stop")).toBeNull());
     expect(screen.queryByRole("status")).toBeNull();
 
-    // …and neither does going back to the list and coming in again.
-    fireEvent.click(screen.getByText("← Back"));
+    // …and neither does leaving the chat and coming in again.
+    await startNewChat();
     await screen.findByText("Start chat");
-    fireEvent.click(await screen.findByText("Idle chat"));
+    await openChatFromList("Idle chat");
     await screen.findByLabelText("Chat message");
 
     expect(screen.queryByLabelText("Stop")).toBeNull();
@@ -912,10 +1057,10 @@ describe("ChatBubble placement", () => {
     await openResumed(chatSession());
 
     const panel = await screen.findByRole("dialog", { name: "AI chat" });
-    const back = await screen.findByText("← Back");
+    const chatList = screen.getByRole("button", { name: "Chat list" });
 
     // Pressing and moving on a header button must not reposition the panel…
-    fireEvent.pointerDown(back, { clientX: 200, clientY: 200 });
+    fireEvent.pointerDown(chatList, { clientX: 200, clientY: 200 });
     fireEvent.pointerMove(window, { clientX: 50, clientY: 50 });
     fireEvent.pointerUp(window, { clientX: 50, clientY: 50 });
 
@@ -923,8 +1068,8 @@ describe("ChatBubble placement", () => {
     expect((panel as HTMLElement).style.top).toBe("236px");
     expect(localStorage.getItem(PANEL_POSITION_KEY)).toBeNull();
 
-    // …and the button still does its job, returning to the list.
-    fireEvent.click(back);
-    expect(await screen.findByText("Start chat")).toBeTruthy();
+    // …and the button still does its job, showing the chat list.
+    fireEvent.click(chatList);
+    expect(await screen.findByRole("complementary", { name: "Chats" })).toBeTruthy();
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useMatch } from "react-router";
 import { useSignalR } from "../hooks/useSignalR";
 import { useChatEnabled } from "../hooks/useChatEnabled";
@@ -19,14 +19,19 @@ import {
   loadFabPosition,
   loadPanelPosition,
   loadPanelSize,
+  loadSidebarOpen,
   panelPosition,
   saveFabPosition,
   savePanelPosition,
   savePanelSize,
+  saveSidebarOpen,
+  SIDEBAR_SIDE_BY_SIDE_MIN_WIDTH,
   viewportSize,
   type Point,
   type Size,
 } from "./chatPlacement";
+import { UnreadDot, type RenameChat } from "./ChatRename";
+import ChatSidebar from "./ChatSidebar";
 import ChatTranscript from "./ChatTranscript";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
 import { setCurrentChatSessionId } from "../services/chatSessionStore";
@@ -50,196 +55,108 @@ const TOOL_OPTIONS: { key: string; label: string; defaultOn: boolean }[] = [
   { key: "execute", label: "Execute", defaultOn: false },
 ];
 
-/** Marks the chat button, or a past chat, as holding a reply the user has not read. */
-function UnreadDot() {
-  return <span className="chat-unread-dot" role="img" aria-label="New messages" />;
-}
-
-/** Renames a chat; false when another rename of it is still on its way. */
-type RenameChat = (chatSessionId: string, name: string) => Promise<boolean>;
-
-/** The name the server stores for a rename: without NUL characters, trimmed. */
-const storedName = (draft: string) => draft.replace(/\0/g, "").trim();
-
-/** One edit of a chat's title: its draft, save and error go with it when it closes. */
-function RenameForm({
-  chatSessionId,
-  initial,
-  renameChat,
-  blocked,
-  onClose,
-}: {
-  chatSessionId: string;
-  initial: string;
-  renameChat: RenameChat;
-  blocked: boolean;
-  onClose: () => void;
-}) {
-  const [draft, setDraft] = useState(initial);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const empty = storedName(draft) === "";
-
-  const save = async () => {
-    const name = storedName(draft);
-    if (!name || saving || blocked) return;
-    setSaving(true);
-    setError(null);
-    try {
-      if (await renameChat(chatSessionId, name)) onClose();
-      else setSaving(false);
-    } catch (e) {
-      setSaving(false);
-      setError((e as { message?: string })?.message ?? "Could not rename chat.");
-    }
-  };
-
-  return (
-    <form
-      className="chat-rename"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void save();
-      }}
-    >
-      <input
-        className="chat-rename-input"
-        aria-label="Chat name"
-        maxLength={120}
-        autoFocus
-        // An edit made mid-save would be closed away unsaved when the save returns.
-        readOnly={saving}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key !== "Escape") return;
-          // A page under the chat, such as an open work item, closes on Escape too.
-          e.stopPropagation();
-          onClose();
-        }}
-      />
-      <button type="submit" className="chat-link-btn" disabled={empty || saving || blocked}>
-        Save
-      </button>
-      <button type="button" className="chat-link-btn" onClick={onClose}>
-        Cancel
-      </button>
-      {error && (
-        <span className="chat-rename-error" role="alert">
-          {error}
-        </span>
-      )}
-    </form>
-  );
+/**
+ * The chats with a request of one kind out, one claim per chat: a second request
+ * for a chat already claimed is refused. The ref is the synchronous check; the
+ * state disables the control.
+ */
+function useChatClaims() {
+  const claimsRef = useRef(new Set<string>());
+  const [claimed, setClaimed] = useState<ReadonlySet<string>>(new Set());
+  const claim = useCallback((chatSessionId: string) => {
+    if (claimsRef.current.has(chatSessionId)) return false;
+    claimsRef.current.add(chatSessionId);
+    setClaimed(new Set(claimsRef.current));
+    return true;
+  }, []);
+  const release = useCallback((chatSessionId: string) => {
+    claimsRef.current.delete(chatSessionId);
+    setClaimed(new Set(claimsRef.current));
+  }, []);
+  return { claimed, claim, release };
 }
 
 /**
- * Which edit of a title is open, if any. Each edit is a fresh form keyed by its
- * generation, and only that edit can close itself.
+ * The open chat: its transcript and the message being typed. Keyed by the chat, so
+ * a draft belongs to the chat it was typed in and goes when the user leaves it. It
+ * stays mounted, showing nothing, while the chat list covers a narrow panel, so a
+ * resize across the breakpoint keeps the draft.
  */
-function useTitleEdit() {
-  const [editing, setEditing] = useState<number | null>(null);
-  const generation = useRef(0);
-  return {
-    editing,
-    begin: () => setEditing(++generation.current),
-    closer: (edit: number) => () => setEditing((current) => (current === edit ? null : current)),
-  };
-}
-
-/** The open chat's title in the header, renamable in place. Keyed by the chat. */
-function ChatHeaderTitle({
+function ChatConversation({
   chatSessionId,
-  title,
-  renameChat,
-  blocked,
+  covered,
+  messages,
+  streaming,
+  busy,
+  stopping,
+  scrollRef,
+  onSend,
+  onStop,
 }: {
   chatSessionId: string;
-  title: string | null;
-  renameChat: RenameChat;
-  blocked: boolean;
+  covered: boolean;
+  messages: ChatMessage[];
+  streaming: string;
+  busy: boolean;
+  stopping: boolean;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  onSend: (content: string) => void;
+  onStop: () => void;
 }) {
-  const { editing, begin, closer } = useTitleEdit();
-  return (
-    <div className="chat-panel-heading">
-      {editing !== null ? (
-        <RenameForm
-          key={editing}
-          chatSessionId={chatSessionId}
-          initial={title ?? ""}
-          renameChat={renameChat}
-          blocked={blocked}
-          onClose={closer(editing)}
-        />
-      ) : (
-        <>
-          <span className="chat-panel-title">{title ?? "AI Chat"}</span>
-          <button type="button" className="chat-link-btn" onClick={begin}>
-            Rename
-          </button>
-        </>
-      )}
-    </div>
-  );
-}
+  const [draft, setDraft] = useState("");
+  if (covered) return null;
 
-/** One Past-chats row, renamable in place. Keyed by the chat. */
-function PastChatRow({
-  chat,
-  onOpen,
-  onDelete,
-  renameChat,
-  blocked,
-}: {
-  chat: ChatSessionSummary;
-  onOpen: () => void;
-  onDelete: () => void;
-  renameChat: RenameChat;
-  blocked: boolean;
-}) {
-  const { editing, begin, closer } = useTitleEdit();
-  const name = chat.name ?? "New chat";
   return (
-    <li className="chat-history-row">
-      {editing !== null ? (
-        <RenameForm
-          key={editing}
-          chatSessionId={chat.id}
-          initial={chat.name ?? ""}
-          renameChat={renameChat}
-          blocked={blocked}
-          onClose={closer(editing)}
+    <div className="chat-panel-content">
+      <div className="chat-panel-body" ref={scrollRef}>
+        <ChatTranscript chatSessionId={chatSessionId} messages={messages} streaming={streaming} />
+        {/* Visible for the whole turn — including while text streams — so it
+            is clear the agent is still working rather than done. */}
+        {busy && (
+          <div className="chat-muted chat-typing" role="status">
+            {streaming ? "Responding" : "Thinking"}
+            <span className="chat-typing-dots" aria-hidden="true" />
+          </div>
+        )}
+      </div>
+
+      <form
+        className="chat-input-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const content = draft.trim();
+          if (!content) return;
+          setDraft("");
+          onSend(content);
+        }}
+      >
+        <input
+          className="chat-input"
+          placeholder="Message…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          aria-label="Chat message"
         />
-      ) : (
-        <>
-          <button type="button" className="chat-history-open" onClick={onOpen}>
-            <span className="chat-history-title">
-              <span className="chat-history-name">{name}</span>
-              {chat.hasUnread && <UnreadDot />}
-            </span>
-            <span className="chat-history-date">
-              {new Date(chat.updatedAt ?? chat.createdAt).toLocaleString()}
-            </span>
-          </button>
+        {/* Only offered while a turn is in flight — the same window the
+            Thinking/Responding indicator covers. */}
+        {busy && (
           <button
             type="button"
-            className="chat-link-btn"
-            aria-label={`Rename chat ${name}`}
-            onClick={begin}
+            className="chat-stop-btn"
+            aria-label="Stop"
+            disabled={stopping}
+            onClick={onStop}
           >
-            ✎
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <rect x="0" y="0" width="16" height="16" rx="2" />
+            </svg>
           </button>
-          <button
-            type="button"
-            className="chat-link-btn chat-danger"
-            aria-label={`Delete chat ${name}`}
-            onClick={onDelete}
-          >
-            ✕
-          </button>
-        </>
-      )}
-    </li>
+        )}
+        <button type="submit" className="chat-primary-btn" disabled={!draft.trim()}>
+          Send
+        </button>
+      </form>
+    </div>
   );
 }
 
@@ -318,24 +235,23 @@ export default function ChatBubble() {
   // turn and all — and the stop button on that view would interrupt a turn in a
   // chat they never opened. Counted rather than compared by id, because the second
   // open may be the same chat as the first; bumped by leaving as well, so an open
-  // the user walked away from cannot install itself either.
+  // the user walked away from cannot install itself either, and by deleting the
+  // chat an open is on its way for.
   const visitRef = useRef(0);
+  // The chat the newest visit is opening, while its read is in flight.
+  const openingRef = useRef<{ chatSessionId: string; visit: number } | null>(null);
   const [loaded, setLoaded] = useState(false);
   const busy = turn !== null;
 
-  // Retained chat history (ADR-0013): the user's past chats, shown under Start
-  // chat. `confirmDeleteAll` gates the wipe-all action behind a confirmation.
+  // Retained chat history (ADR-0013): the user's chats, listed in the sidebar.
   const [history, setHistory] = useState<ChatSessionSummary[]>([]);
-  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   // Per chat, not per draft: a draft cancelled mid-save leaves its request running.
-  // The ref is the synchronous check; the state disables Save.
-  const renamesInFlightRef = useRef(new Set<string>());
-  const [renamesInFlight, setRenamesInFlight] = useState<ReadonlySet<string>>(new Set());
-  const markRenameInFlight = useCallback((chatSessionId: string, inFlight: boolean) => {
-    if (inFlight) renamesInFlightRef.current.add(chatSessionId);
-    else renamesInFlightRef.current.delete(chatSessionId);
-    setRenamesInFlight(new Set(renamesInFlightRef.current));
-  }, []);
+  const { claimed: renamesInFlight, claim: claimRename, release: releaseRename } = useChatClaims();
+  const {
+    claimed: favoritesInFlight,
+    claim: claimFavorite,
+    release: releaseFavorite,
+  } = useChatClaims();
 
   // Start form
   const [providers, setProviders] = useState<AiProvider[]>([]);
@@ -373,6 +289,18 @@ export default function ChatBubble() {
   // position without re-subscribing on every size change.
   const panelSizeRef = useRef(panelSize);
   panelSizeRef.current = panelSize;
+
+  // The chat list: beside the chat in a wide panel, in place of it in a narrow one.
+  // Stored only when the user opens or closes it, so until then each load picks the
+  // default from the panel's width.
+  const [sidebarOpen, setSidebarOpenState] = useState(() => loadSidebarOpen(panelSize.width));
+  const setSidebarOpen = useCallback((next: boolean) => {
+    setSidebarOpenState(next);
+    saveSidebarOpen(next);
+  }, []);
+  const wide = panelSize.width >= SIDEBAR_SIDE_BY_SIDE_MIN_WIDTH;
+  const unreadBadgeId = useId();
+  const chatCovered = sidebarOpen && !wide;
 
   // Persist placement changes and re-clamp into view whenever the window resizes.
   useEffect(() => {
@@ -446,7 +374,7 @@ export default function ChatBubble() {
 
   const startHeaderDrag = useCallback(
     (e: React.PointerEvent) => {
-      // Let the header's own controls (rename, back, close) work without dragging.
+      // Let the header's own controls (chat list, close) work without dragging.
       if ((e.target as HTMLElement).closest("button, input")) return;
       const base = panelOverride ?? panelPosition(fabPos, panelSize, viewportSize());
       const origin = { px: e.clientX, py: e.clientY, ox: base.x, oy: base.y };
@@ -542,9 +470,10 @@ export default function ChatBubble() {
   // chat is on screen asks again.
   const markedRef = useRef(new Map<string, number>());
 
-  // A chat on screen in the open panel has been read up to its newest message.
+  // A chat on screen in the open panel has been read up to its newest message. One
+  // behind the chat list filling a narrow panel is not on screen.
   useEffect(() => {
-    if (!chatEnabled || !open || !session || messages.length === 0) return;
+    if (!chatEnabled || !open || chatCovered || !session || messages.length === 0) return;
     const id = session.id;
     const newest = Math.max(...messages.map((m) => m.sequence));
     if (newest <= (markedRef.current.get(id) ?? -1)) return;
@@ -561,7 +490,7 @@ export default function ChatBubble() {
       historyEpochRef.current += 1;
       await refreshHistory().catch((err) => console.error(err));
     })();
-  }, [chatEnabled, open, session, messages, refreshHistory]);
+  }, [chatEnabled, open, chatCovered, session, messages, refreshHistory]);
 
   const upsertMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) =>
@@ -777,11 +706,12 @@ export default function ChatBubble() {
     };
   }, [on, off, upsertMessage, applyTurn, isCurrentTurn]);
 
-  // Keep the transcript scrolled to the newest content. `scrollTo` is absent in
-  // jsdom, so guard the call rather than assume it exists.
+  // Keep the transcript scrolled to the newest content, including when it comes back
+  // from behind the chat list. `scrollTo` is absent in jsdom, so guard the call
+  // rather than assume it exists.
   useEffect(() => {
     scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight });
-  }, [messages, streaming]);
+  }, [messages, streaming, chatCovered]);
 
   const openPanel = useCallback(() => {
     setOpen(true);
@@ -851,11 +781,8 @@ export default function ChatBubble() {
     }
   };
 
-  const [input, setInput] = useState("");
-  const send = async () => {
-    const content = input.trim();
-    if (!content || !session) return;
-    setInput("");
+  const send = async (content: string) => {
+    if (!session) return;
     // The message interrupts whatever was running, so the chat is busy from here
     // whichever turn the server ends up naming. The turn being displaced is kept:
     // a send that never reaches the server displaces nothing, and only the turn
@@ -973,31 +900,32 @@ export default function ChatBubble() {
     if (accepted) await refreshActiveState(id).catch((err) => console.error(err));
   };
 
-  // Drop the in-conversation view and return to the chat list. The chat is
-  // retained and resumable — Back never deletes (ADR-0013). Refresh history so the
-  // chat re-sorts to the top with its freshly-derived name.
-  const backToList = useCallback(() => {
+  // Drop the in-conversation view for the start form. The chat is retained and
+  // resumable — leaving never deletes (ADR-0013). Refresh history so the chat
+  // re-sorts to the top with its freshly-derived name.
+  const leaveChat = useCallback(() => {
     visitRef.current += 1;
     setSession(null);
     setMessages([]);
     clearStream();
     applyTurn(null);
     setError(null);
-    setConfirmDeleteAll(false);
     sessionIdRef.current = null;
     releaseRequestClaims();
     void refreshHistory().catch(() => {});
   }, [refreshHistory, applyTurn, releaseRequestClaims]);
 
   // Resume a past chat: load its transcript and continue the same agent session.
+  // Resolves whether it was installed.
   const resumeChat = async (id: string) => {
     const visit = ++visitRef.current;
+    openingRef.current = { chatSessionId: id, visit };
     setError(null);
     try {
       const resumed = await chatService.getById(id);
       // Another chat has been opened since, or the user has gone back to the list:
       // this answer is about a visit that is over and installs nothing.
-      if (visitRef.current !== visit) return;
+      if (visitRef.current !== visit) return false;
       setSession(resumed);
       setMessages(resumed.messages);
       clearStream();
@@ -1008,13 +936,40 @@ export default function ChatBubble() {
       // Opened fresh, so it starts with no claim of its own — the same rule from
       // the other end, for a chat entered by any path that did not go via the list.
       releaseRequestClaims();
+      return true;
     } catch (e) {
-      if (visitRef.current !== visit) return;
+      if (visitRef.current !== visit) return false;
       setError((e as { message?: string })?.message ?? "Could not open chat.");
+      return false;
+    } finally {
+      if (openingRef.current?.visit === visit) openingRef.current = null;
     }
   };
 
+  // A narrow panel's list gives way to the chat only once it is there to show, so a
+  // chat it would uncover in the meantime is not marked read unseen.
+  const openChat = async (id: string) => {
+    if (id === sessionIdRef.current) {
+      // Already open, so nothing is re-read; an open still on its way is overruled.
+      visitRef.current += 1;
+    } else if (!(await resumeChat(id))) {
+      return;
+    }
+    if (panelSizeRef.current.width < SIDEBAR_SIDE_BY_SIDE_MIN_WIDTH) setSidebarOpen(false);
+  };
+
+  const newChat = () => {
+    leaveChat();
+    if (!wide) setSidebarOpen(false);
+  };
+
   const deleteChat = async (id: string) => {
+    if (sessionIdRef.current === id) leaveChat();
+    else if (
+      openingRef.current?.chatSessionId === id &&
+      openingRef.current.visit === visitRef.current
+    )
+      visitRef.current += 1;
     try {
       await chatService.deleteOne(id);
     } catch {
@@ -1025,7 +980,7 @@ export default function ChatBubble() {
   };
 
   const deleteAllChats = async () => {
-    setConfirmDeleteAll(false);
+    leaveChat();
     try {
       await chatService.deleteAll();
     } catch {
@@ -1040,12 +995,11 @@ export default function ChatBubble() {
   // or leave the old title on screen.
   const renameChat = useCallback<RenameChat>(
     async (chatSessionId, name) => {
-      if (renamesInFlightRef.current.has(chatSessionId)) return false;
-      markRenameInFlight(chatSessionId, true);
+      if (!claimRename(chatSessionId)) return false;
       try {
         await chatService.rename(chatSessionId, name);
       } finally {
-        markRenameInFlight(chatSessionId, false);
+        releaseRename(chatSessionId);
       }
       historyEpochRef.current += 1;
       setHistory((rows) => rows.map((c) => (c.id === chatSessionId ? { ...c, name } : c)));
@@ -1053,7 +1007,29 @@ export default function ChatBubble() {
       void refreshHistory().catch((err) => console.error(err));
       return true;
     },
-    [markRenameInFlight, refreshHistory],
+    [claimRename, releaseRename, refreshHistory],
+  );
+
+  // A star the server took is shown at once, like a rename; a failure leaves the
+  // star as it was.
+  const setFavorite = useCallback(
+    async (chatSessionId: string, favorite: boolean) => {
+      if (!claimFavorite(chatSessionId)) return;
+      try {
+        await chatService.setFavorite(chatSessionId, favorite);
+      } catch (err) {
+        console.error(err);
+        return;
+      } finally {
+        releaseFavorite(chatSessionId);
+      }
+      historyEpochRef.current += 1;
+      setHistory((rows) =>
+        rows.map((c) => (c.id === chatSessionId ? { ...c, isFavorite: favorite } : c)),
+      );
+      void refreshHistory().catch((err) => console.error(err));
+    },
+    [claimFavorite, releaseFavorite, refreshHistory],
   );
 
   // The server's current title for the open chat: the history row, which every
@@ -1082,6 +1058,24 @@ export default function ChatBubble() {
   }
 
   const panelPos = panelPosition(panelOverride ?? fabPos, panelSize, viewportSize());
+  const unreadCount = history.filter((c) => c.hasUnread).length;
+  // The button's name stays "Chat list"; the badge reaches screen readers as its description.
+  const showUnreadBadge = !sidebarOpen && unreadCount > 0;
+  const sidebar = sidebarOpen && (
+    <ChatSidebar
+      history={history}
+      currentChatId={session?.id ?? null}
+      full={chatCovered}
+      onOpen={(id) => void openChat(id)}
+      onNewChat={newChat}
+      onDelete={(id) => void deleteChat(id)}
+      onDeleteAll={() => void deleteAllChats()}
+      renameChat={renameChat}
+      renamesInFlight={renamesInFlight}
+      onFavorite={(id, favorite) => void setFavorite(id, favorite)}
+      favoritesInFlight={favoritesInFlight}
+    />
+  );
 
   return (
     <div
@@ -1096,23 +1090,25 @@ export default function ChatBubble() {
       }}
     >
       <div className="chat-panel-header" onPointerDown={startHeaderDrag}>
-        {session ? (
-          <ChatHeaderTitle
-            key={session.id}
-            chatSessionId={session.id}
-            title={sessionTitle}
-            renameChat={renameChat}
-            blocked={renamesInFlight.has(session.id)}
-          />
-        ) : (
-          <span className="chat-panel-title">AI Chat</span>
-        )}
-        <div className="chat-panel-header-actions">
-          {session && (
-            <button type="button" className="chat-link-btn" onClick={backToList}>
-              ← Back
-            </button>
+        <button
+          type="button"
+          className="chat-link-btn chat-sidebar-toggle"
+          aria-label="Chat list"
+          aria-expanded={sidebarOpen}
+          aria-describedby={showUnreadBadge ? unreadBadgeId : undefined}
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+        >
+          ☰
+          {showUnreadBadge && (
+            <span id={unreadBadgeId} className="chat-sidebar-badge">
+              {unreadCount}
+            </span>
           )}
+        </button>
+        <div className="chat-panel-heading">
+          <span className="chat-panel-title">{sessionTitle ?? "AI Chat"}</span>
+        </div>
+        <div className="chat-panel-header-actions">
           <button
             type="button"
             className="chat-link-btn"
@@ -1128,147 +1124,69 @@ export default function ChatBubble() {
 
       {!loaded ? (
         <div className="chat-panel-body chat-muted">Loading…</div>
-      ) : !session ? (
-        <div className="chat-panel-body chat-start">
-          <label className="chat-field-label" htmlFor="chat-provider">
-            AI provider
-          </label>
-          <select
-            id="chat-provider"
-            className="chat-select"
-            value={providerId}
-            onChange={(e) => setProviderId(e.target.value)}
-          >
-            <option value="">Select a provider…</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.type})
-              </option>
-            ))}
-          </select>
-
-          <span className="chat-field-label">Tools</span>
-          <div className="chat-tools">
-            {TOOL_OPTIONS.map((t) => (
-              <label key={t.key} className="chat-tool">
-                <input
-                  type="checkbox"
-                  checked={tools.has(t.key)}
-                  onChange={() => toggleTool(t.key)}
-                />
-                {t.label}
-              </label>
-            ))}
-          </div>
-
-          <button type="button" className="chat-primary-btn" onClick={() => void startChat()}>
-            Start chat
-          </button>
-
-          {history.length > 0 && (
-            <div className="chat-history">
-              <div className="chat-history-head">
-                <span className="chat-field-label">Past chats</span>
-                {confirmDeleteAll ? (
-                  <span
-                    className="chat-history-confirm"
-                    role="alertdialog"
-                    aria-label="Delete all chats?"
-                  >
-                    Delete all chats?
-                    <button
-                      type="button"
-                      className="chat-link-btn chat-danger"
-                      onClick={() => void deleteAllChats()}
-                    >
-                      Delete all
-                    </button>
-                    <button
-                      type="button"
-                      className="chat-link-btn"
-                      onClick={() => setConfirmDeleteAll(false)}
-                    >
-                      Cancel
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    type="button"
-                    className="chat-link-btn chat-danger"
-                    onClick={() => setConfirmDeleteAll(true)}
-                  >
-                    Delete all
-                  </button>
-                )}
-              </div>
-              <ul className="chat-history-list">
-                {history.map((c) => (
-                  <PastChatRow
-                    key={c.id}
-                    chat={c}
-                    onOpen={() => void resumeChat(c.id)}
-                    onDelete={() => void deleteChat(c.id)}
-                    renameChat={renameChat}
-                    blocked={renamesInFlight.has(c.id)}
-                  />
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
       ) : (
-        <>
-          <div className="chat-panel-body" ref={scrollRef}>
-            <ChatTranscript
+        <div className="chat-panel-main">
+          {sidebar}
+          {session ? (
+            <ChatConversation
               key={session.id}
               chatSessionId={session.id}
+              covered={chatCovered}
               messages={messages}
               streaming={streaming}
+              busy={busy}
+              stopping={stopping}
+              scrollRef={scrollRef}
+              onSend={(content) => void send(content)}
+              onStop={() => void stop()}
             />
-            {/* Visible for the whole turn — including while text streams — so it
-                is clear the agent is still working rather than done. */}
-            {busy && (
-              <div className="chat-muted chat-typing" role="status">
-                {streaming ? "Responding" : "Thinking"}
-                <span className="chat-typing-dots" aria-hidden="true" />
-              </div>
-            )}
-          </div>
+          ) : (
+            !chatCovered && (
+              <div className="chat-panel-content">
+                <div className="chat-panel-body chat-start">
+                  <label className="chat-field-label" htmlFor="chat-provider">
+                    AI provider
+                  </label>
+                  <select
+                    id="chat-provider"
+                    className="chat-select"
+                    value={providerId}
+                    onChange={(e) => setProviderId(e.target.value)}
+                  >
+                    <option value="">Select a provider…</option>
+                    {providers.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.type})
+                      </option>
+                    ))}
+                  </select>
 
-          <form
-            className="chat-input-row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void send();
-            }}
-          >
-            <input
-              className="chat-input"
-              placeholder="Message…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              aria-label="Chat message"
-            />
-            {/* Only offered while a turn is in flight — the same window the
-                Thinking/Responding indicator covers. */}
-            {busy && (
-              <button
-                type="button"
-                className="chat-stop-btn"
-                aria-label="Stop"
-                disabled={stopping}
-                onClick={() => void stop()}
-              >
-                <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-                  <rect x="0" y="0" width="16" height="16" rx="2" />
-                </svg>
-              </button>
-            )}
-            <button type="submit" className="chat-primary-btn" disabled={!input.trim()}>
-              Send
-            </button>
-          </form>
-        </>
+                  <span className="chat-field-label">Tools</span>
+                  <div className="chat-tools">
+                    {TOOL_OPTIONS.map((t) => (
+                      <label key={t.key} className="chat-tool">
+                        <input
+                          type="checkbox"
+                          checked={tools.has(t.key)}
+                          onChange={() => toggleTool(t.key)}
+                        />
+                        {t.label}
+                      </label>
+                    ))}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="chat-primary-btn"
+                    onClick={() => void startChat()}
+                  >
+                    Start chat
+                  </button>
+                </div>
+              </div>
+            )
+          )}
+        </div>
       )}
 
       <div

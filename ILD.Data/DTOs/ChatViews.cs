@@ -27,15 +27,16 @@ public sealed record ChatSessionView(
 
 /// <summary>
 /// A lightweight history-list row (ADR-0013): no transcript, just what the chat
-/// bubble needs to render a resumable past chat (name + date-stamp), and whether
-/// it holds a reply the user has not read.
+/// bubble needs to render a resumable past chat (name + date-stamp), whether it
+/// holds a reply the user has not read, and whether the user starred it.
 /// </summary>
 public sealed record ChatSessionSummaryView(
     Guid Id,
     string? Name,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
-    bool HasUnread);
+    bool HasUnread,
+    bool IsFavorite);
 
 /// <summary>
 /// The answer to a message that has been accepted: the turn it started. A client

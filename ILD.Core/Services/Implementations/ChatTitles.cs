@@ -8,17 +8,19 @@ namespace ILD.Core.Services.Implementations;
 public static partial class ChatTitles
 {
     public const int MaxLength = 60;
+    // The stored name's column length; a cut first message keeps one character less, for its ellipsis.
+    public const int MaxFallbackLength = 120;
     public const int MaxFirstMessageLength = 4000;
     public const int MaxFirstReplyLength = 1500;
 
     private const string NoTitle = "New chat";
 
-    /// <summary>The first message as a title (ADR-0013): plain text, cut to <see cref="MaxLength"/> with an ellipsis.</summary>
+    /// <summary>The first message as a title (ADR-0013): plain text, at most <see cref="MaxFallbackLength"/> characters, ellipsis included.</summary>
     public static string Fallback(string firstMessage)
     {
         var text = string.Join(' ', PlainLines(firstMessage));
         if (text.Length == 0) return NoTitle;
-        return text.Length <= MaxLength ? text : Prefix(text, MaxLength).TrimEnd() + "…";
+        return text.Length <= MaxFallbackLength ? text : Prefix(text, MaxFallbackLength - 1).TrimEnd() + "…";
     }
 
     /// <summary>A model's answer as a title, or null when nothing usable is left.</summary>

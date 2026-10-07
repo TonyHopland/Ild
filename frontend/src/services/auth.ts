@@ -821,6 +821,16 @@ export const chatService = {
     await api.put<void>(`/chat/${id}/name`, { name });
   },
 
+  /** Star or unstar one of the user's chats; its last activity is left alone. */
+  setFavorite: async (id: string, favorite: boolean): Promise<void> => {
+    await api.put<void>(`/chat/${id}/favorite`, { favorite });
+  },
+
+  /** The ids of the user's chats with a message containing `query`, case-insensitively. */
+  searchChats: async (query: string): Promise<string[]> => {
+    return api.get<string[]>(`/chat/search?q=${encodeURIComponent(query)}`);
+  },
+
   /** Hard-delete one retained chat. */
   deleteOne: async (id: string): Promise<void> => {
     await api.delete<void>(`/chat/${id}`);
