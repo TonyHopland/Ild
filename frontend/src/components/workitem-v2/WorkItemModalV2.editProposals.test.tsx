@@ -559,6 +559,34 @@ describe("pending proposals on the Overview", () => {
     expect(within(overview()).queryByRole("button", { name: "Reject" })).toBeNull();
   });
 
+  test("names Dependencies for a proposal that adds or removes dependencies", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([
+      makeProposal("Adds", null, {
+        id: "p-add",
+        workItemId: "wi-2",
+        requestedByWorkItemId: "wi-1",
+        proposed: { addDependencies: [{ id: "wi-277", title: "Chat tab" }] },
+      }),
+      makeProposal("Removes", null, {
+        id: "p-remove",
+        workItemId: "wi-2",
+        createdByLoopRunId: null,
+        createdByChatSessionId: "chat-1",
+        chatReplySequence: 1,
+        requestedByWorkItemId: null,
+        proposed: { title: "Also renamed", removeDependencies: [{ id: "wi-12", title: null }] },
+      }),
+    ]);
+
+    await renderDialog(makeWorkItem({ id: "wi-2", status: WorkItemStatus.Done }));
+
+    await waitFor(() => expect(heading()).not.toBeNull());
+    expect(rows()).toHaveLength(2);
+    expect(rows().every((r) => r.textContent?.includes("Dependencies"))).toBe(true);
+    expect(rowWith("Chat").textContent).toContain("Title");
+  });
+
   test("shows only while the item has a pending proposal, follows hints, and never shows the previous item's rows", async () => {
     const { hint } = mockServices();
     const served: Record<string, WorkItemEditProposal[]> = { "wi-2": [decidedFromItemC] };
