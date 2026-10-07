@@ -403,37 +403,39 @@ describe("ChatBubble", () => {
     }
   });
 
-  test("a search with no title match says it is searching until the message search answers, then whether it found nothing or failed", async () => {
+  test("a failed message search with no title match says so, not that nothing matched", async () => {
     chatService.listHistory.mockResolvedValue([summary({ id: "s1", name: "Deploy loop" })]);
     aiProviderService.getAll.mockResolvedValue([provider]);
-    const answers: Record<
-      string,
-      { resolve: (ids: string[]) => void; reject: (e: unknown) => void }
-    > = {};
+    let fail!: (reason: unknown) => void;
     chatService.searchChats.mockImplementation(
-      (q: string) =>
-        new Promise<string[]>((resolve, reject) => {
-          answers[q] = { resolve, reject };
+      () =>
+        new Promise<string[]>((_, reject) => {
+          fail = reject;
         }),
     );
     renderBubble();
     fireEvent.click(await screen.findByLabelText("Open chat"));
     const list = await openChatList();
-    const box = within(list).getByLabelText("Search chats");
 
-    fireEvent.change(box, { target: { value: "nothing here" } });
-    expect(within(list).getByText("Searching…")).toBeTruthy();
-    await waitFor(() => expect(answers["nothing here"]).toBeDefined());
-    expect(within(list).getByText("Searching…")).toBeTruthy();
-    await act(async () => answers["nothing here"].resolve([]));
-    expect(await within(list).findByText("No chats match")).toBeTruthy();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      fireEvent.change(within(list).getByLabelText("Search chats"), {
+        target: { value: "broken" },
+      });
+      expect(within(list).getByText("Searching…")).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(chatService.searchChats).toHaveBeenCalledWith("broken");
+      expect(within(list).getByText("Searching…")).toBeTruthy();
 
-    fireEvent.change(box, { target: { value: "broken" } });
-    expect(within(list).getByText("Searching…")).toBeTruthy();
-    await waitFor(() => expect(answers.broken).toBeDefined());
-    await act(async () => answers.broken.reject(new Error("search failed")));
-    expect(await within(list).findByText("Message search failed")).toBeTruthy();
-    expect(within(list).queryByText("No chats match")).toBeNull();
+      await act(async () => fail(new Error("search failed")));
+      expect(within(list).getByText("Message search failed")).toBeTruthy();
+      expect(within(list).queryByText("Searching…")).toBeNull();
+      expect(within(list).queryByText("No chats match")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("per-chat delete removes that chat without touching the others", async () => {
