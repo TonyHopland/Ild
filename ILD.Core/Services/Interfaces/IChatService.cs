@@ -30,6 +30,9 @@ public interface IChatService
     /// </summary>
     Task<bool> ExistsForUserAsync(string userId, Guid sessionId, CancellationToken ct = default);
 
+    /// <summary>The user the chat belongs to, or null when it does not exist (or has been deleted).</summary>
+    Task<string?> GetOwnerAsync(Guid sessionId, CancellationToken ct = default);
+
     /// <summary>
     /// Record that the user has read their chat up to <paramref name="sequence"/>.
     /// The marker only ever rises, so a sequence at or below the stored one changes

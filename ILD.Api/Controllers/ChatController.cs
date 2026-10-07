@@ -32,7 +32,7 @@ public class ChatController : ControllerBase
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
         var chats = await _chat.ListForUserAsync(userId, ct);
-        return Ok(chats);
+        return Ok(chats.Select(c => c with { IsBusy = _runner.ActiveTurnId(c.Id) is not null }));
     }
 
     [HttpGet("{id:guid}")]
