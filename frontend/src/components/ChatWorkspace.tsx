@@ -722,6 +722,15 @@ export default function ChatWorkspace({
     }
   };
 
+  // A view that has gone ends its visit, so an open or a start still on its way
+  // cannot name its chat as the active one over the view that replaced it.
+  useEffect(
+    () => () => {
+      visitRef.current += 1;
+    },
+    [],
+  );
+
   // Mount only: a later chat is opened through the list, never by this prop.
   useEffect(() => {
     if (initialChat === null) return;

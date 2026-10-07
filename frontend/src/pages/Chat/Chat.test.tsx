@@ -493,6 +493,40 @@ describe("Opening a chat by URL", () => {
     expect(screen.queryByText("s2 reply")).toBeNull();
     expect(currentPath()).not.toMatch(/^\/chat\/s[12]$/);
   });
+
+  test("a chat still opening when the page moves on never becomes the bubble's chat", async () => {
+    seedTwoChats();
+    let answerFirst: (chat: ChatSession) => void = () => {};
+    chatService.getById.mockImplementation((id: string) =>
+      id === "s1"
+        ? new Promise<ChatSession>((resolve) => {
+            answerFirst = resolve;
+          })
+        : Promise.resolve(structuredClone(sessions[id])),
+    );
+    renderShell("/chat/s1");
+
+    fireEvent.click(
+      await within(await screen.findByRole("complementary", { name: "Chats" })).findByText(
+        "Second",
+      ),
+    );
+    await waitFor(() => expect(currentPath()).toBe("/chat/s2"));
+    expect(await screen.findByText("s2 reply")).toBeTruthy();
+
+    answerFirst(structuredClone(sessions.s1));
+    await settle();
+    expect(currentPath()).toBe("/chat/s2");
+    expect(screen.queryByText("s1 reply")).toBeNull();
+
+    fireEvent.click(
+      within(screen.getByRole("navigation")).getByRole("link", { name: "Taskboard" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+    const bubble = await screen.findByRole("dialog", { name: "AI chat" });
+    expect(await within(bubble).findByText("s2 reply")).toBeTruthy();
+    expect(within(bubble).queryByText("s1 reply")).toBeNull();
+  });
 });
 
 describe("Sending from the Chat tab", () => {
