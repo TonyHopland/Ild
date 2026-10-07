@@ -158,7 +158,7 @@ export default function ChatWorkspace({
   covered: boolean;
   sidebarShown: boolean;
   /** Told the chat this view has installed, or null when it has left for the start form. */
-  onActiveChatChange: (chatSessionId: string | null) => void;
+  onActiveChatChange?: (chatSessionId: string | null) => void;
   /** A chat picked from the list, or the start form, has been put on screen. */
   onChatShown?: () => void;
   /** Opens a chat picked from the list in place of opening it here. */
@@ -168,7 +168,7 @@ export default function ChatWorkspace({
   children: (view: ChatWorkspaceView) => React.ReactNode;
 }) {
   const inbox = useChatInbox();
-  const { history, markChatRead, refreshHistory } = inbox;
+  const { history, loaded, markChatRead, refreshHistory, setActiveChatId } = inbox;
   const [session, setSession] = useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState("");
@@ -242,9 +242,13 @@ export default function ChatWorkspace({
   // The chat the newest visit is opening, while its read is in flight.
   const openingRef = useRef<{ chatSessionId: string; visit: number } | null>(null);
   // Until the chat this view was mounted on has been opened or has failed to, it
-  // shows neither that chat nor the start form.
+  // shows neither that chat nor the start form. Any later visit ends the wait.
   const [initialChat] = useState(initialChatId);
   const [openingInitial, setOpeningInitial] = useState(initialChat !== null);
+  const beginVisit = useCallback(() => {
+    setOpeningInitial(false);
+    return ++visitRef.current;
+  }, []);
   const busy = turn !== null;
 
   // Start form
@@ -271,8 +275,9 @@ export default function ChatWorkspace({
   openWorkItemIdRef.current = openWorkItemId;
 
   // A chat on screen has been read up to its newest message. One behind the chat
-  // list filling a narrow panel is not on screen.
-  const onScreen = shown && !covered;
+  // list filling a narrow panel is not on screen, and neither is one whose frame
+  // still shows the history loading in its place.
+  const onScreen = shown && !covered && loaded;
   useEffect(() => {
     if (!onScreen || !session || messages.length === 0) return;
     markChatRead(session.id, Math.max(...messages.map((m) => m.sequence)));
@@ -538,7 +543,7 @@ export default function ChatWorkspace({
       setError("Pick an AI provider first.");
       return;
     }
-    const visit = ++visitRef.current;
+    const visit = beginVisit();
     setError(null);
     try {
       const created = await chatService.start(providerId, Array.from(tools));
@@ -548,7 +553,11 @@ export default function ChatWorkspace({
       applyTurn(created.activeTurnId ?? null);
       sessionIdRef.current = created.id;
       releaseRequestClaims();
-      onActiveChatChangeRef.current(created.id);
+      setActiveChatId(created.id);
+      onActiveChatChangeRef.current?.(created.id);
+      // Starting a chat sends no inbox hint, and a chat with nothing in it yet has
+      // nothing to mark read, so nothing else would put it in the list.
+      void refreshHistory().catch((err) => console.error(err));
     } catch (e) {
       if (visitRef.current !== visit) return;
       setError((e as { message?: string })?.message ?? "Could not start chat.");
@@ -678,7 +687,7 @@ export default function ChatWorkspace({
   // resumable — leaving never deletes (ADR-0013). Refresh history so the chat
   // re-sorts to the top with its freshly-derived name.
   const leaveChat = useCallback(() => {
-    visitRef.current += 1;
+    beginVisit();
     setSession(null);
     setMessages([]);
     clearStream();
@@ -687,13 +696,15 @@ export default function ChatWorkspace({
     sessionIdRef.current = null;
     releaseRequestClaims();
     void refreshHistory().catch(() => {});
-    onActiveChatChangeRef.current(null);
-  }, [refreshHistory, applyTurn, releaseRequestClaims]);
+    setActiveChatId(null);
+    onActiveChatChangeRef.current?.(null);
+  }, [beginVisit, refreshHistory, applyTurn, releaseRequestClaims, setActiveChatId]);
 
   // Resume a past chat: load its transcript and continue the same agent session.
-  // Resolves whether it was installed.
-  const resumeChat = async (id: string) => {
-    const visit = ++visitRef.current;
+  // Resolves whether it was installed. The open this view was mounted on is the one
+  // visit that does not end the wait for itself.
+  const resumeChat = async (id: string, initial = false) => {
+    const visit = initial ? ++visitRef.current : beginVisit();
     openingRef.current = { chatSessionId: id, visit };
     setError(null);
     try {
@@ -711,11 +722,14 @@ export default function ChatWorkspace({
       // Opened fresh, so it starts with no claim of its own — the same rule from
       // the other end, for a chat entered by any path that did not go via the list.
       releaseRequestClaims();
-      onActiveChatChangeRef.current(resumed.id);
+      setActiveChatId(resumed.id);
+      onActiveChatChangeRef.current?.(resumed.id);
       return true;
     } catch (e) {
       if (visitRef.current !== visit) return false;
       setError((e as { message?: string })?.message ?? "Could not open chat.");
+      // The view keeps whatever it had installed, which may be no chat at all.
+      setActiveChatId(sessionIdRef.current);
       return false;
     } finally {
       if (openingRef.current?.visit === visit) openingRef.current = null;
@@ -731,11 +745,15 @@ export default function ChatWorkspace({
     [],
   );
 
-  // Mount only: a later chat is opened through the list, never by this prop.
+  // Mount only: a later chat is opened through the list, never by this prop. A view
+  // mounted on the start form has no chat, and says so.
   useEffect(() => {
-    if (initialChat === null) return;
+    if (initialChat === null) {
+      setActiveChatId(null);
+      return;
+    }
     let mounted = true;
-    void resumeChat(initialChat).finally(() => {
+    void resumeChat(initialChat, true).finally(() => {
       if (mounted) setOpeningInitial(false);
     });
     return () => {
@@ -748,7 +766,7 @@ export default function ChatWorkspace({
   const openChat = async (id: string) => {
     if (id === sessionIdRef.current) {
       // Already open, so nothing is re-read; an open still on its way is overruled.
-      visitRef.current += 1;
+      beginVisit();
     } else if (!(await resumeChat(id))) {
       return;
     }
@@ -766,7 +784,7 @@ export default function ChatWorkspace({
       openingRef.current?.chatSessionId === id &&
       openingRef.current.visit === visitRef.current
     )
-      visitRef.current += 1;
+      beginVisit();
     return inbox.deleteChat(id);
   };
 

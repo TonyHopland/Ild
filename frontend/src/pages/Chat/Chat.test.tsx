@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor, act, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router";
 import type { AiProvider, ChatMessage, ChatSession, ChatSessionSummary, User } from "../../types";
 import {
   openChatFromList,
@@ -207,7 +207,16 @@ afterEach(() => {
 
 function LocationProbe() {
   const location = useLocation();
-  return <span data-testid="location">{location.pathname}</span>;
+  const navigate = useNavigate();
+  return (
+    <>
+      <span data-testid="location">{location.pathname}</span>
+      {/* The browser's Back button. */}
+      <button type="button" onClick={() => void navigate(-1)}>
+        History back
+      </button>
+    </>
+  );
 }
 
 function currentPath() {
@@ -677,5 +686,140 @@ describe("Several chats busy at once", () => {
     patchServer("s2", { isBusy: false });
     emit("ChatActivityChanged", { chatSessionId: "s2" });
     await waitFor(() => expect(busyMarker(rowOf(pageSidebar(), "Second"))).toBeNull());
+  });
+});
+
+describe("The open chat and what is shown", () => {
+  test("a busy open chat keeps its marker while the bubble's list covers it", async () => {
+    server = [
+      summary("s1", "First", "2026-01-03T00:00:00Z", { isBusy: true }),
+      summary("s2", "Second", "2026-01-02T00:00:00Z"),
+    ];
+    sessions.s1 = session("s1", "First", [msg("s1-0", 0, "user", "s1 question")], "tA");
+    sessions.s2 = session("s2", "Second", [msg("s2-0", 0, "user", "s2 question")]);
+    renderShell("/taskboard");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+    await openChatFromList("First");
+    expect(await screen.findByText("s1 question")).toBeTruthy();
+
+    // The narrow panel's list now fills it: the chat's own indicator is out of sight.
+    const list = await openChatList();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(busyMarker(rowOf(list, "First"))).toBeTruthy();
+    expect(busyMarker(rowOf(list, "Second"))).toBeNull();
+  });
+
+  test("a chat opened by URL is not marked read while the page still shows the history loading", async () => {
+    seedTwoChats();
+    let releaseHistory: () => void = () => {};
+    const historyArrives = new Promise<void>((resolve) => {
+      releaseHistory = resolve;
+    });
+    chatService.listHistory.mockImplementation(async () => {
+      await historyArrives;
+      return server.map((c) => ({ ...c }));
+    });
+    renderShell("/chat/s1");
+
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledWith("s1"));
+    await settle();
+    expect(screen.queryByText("s1 reply")).toBeNull();
+    expect(chatService.markRead).not.toHaveBeenCalled();
+
+    releaseHistory();
+    expect(await screen.findByText("s1 reply")).toBeTruthy();
+    await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("s1", 1));
+  });
+
+  test("a chat started with nothing in it yet is listed straight away", async () => {
+    sessions.s9 = session("s9", "Fresh", []);
+    chatService.start.mockImplementation(() => {
+      server = [summary("s9", "Fresh", "2026-01-04T00:00:00Z")];
+      return Promise.resolve(structuredClone(sessions.s9));
+    });
+    renderShell("/chat");
+
+    const start = await screen.findByRole("button", { name: "Start chat" });
+    await waitFor(() =>
+      expect((screen.getByLabelText("AI provider") as HTMLSelectElement).value).toBe("p1"),
+    );
+    fireEvent.click(start);
+
+    await waitFor(() => expect(currentPath()).toBe("/chat/s9"));
+    expect(await within(pageSidebar()).findByText("Fresh")).toBeTruthy();
+    expect(chatService.markRead).not.toHaveBeenCalled();
+  });
+
+  test("New chat in the bubble while its chat is still opening shows the start form", async () => {
+    seedTwoChats();
+    renderShell("/chat/s1");
+    expect(await screen.findByText("s1 reply")).toBeTruthy();
+
+    // From here on the chat never answers.
+    chatService.getById.mockImplementation(() => new Promise<ChatSession>(() => {}));
+    const readsBefore = chatService.getById.mock.calls.length;
+    fireEvent.click(
+      within(screen.getByRole("navigation")).getByRole("link", { name: "Taskboard" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+    await waitFor(() => expect(chatService.getById.mock.calls.length).toBeGreaterThan(readsBefore));
+
+    fireEvent.click(within(await openChatList()).getByRole("button", { name: "New chat" }));
+
+    expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
+    await waitFor(() =>
+      expect((screen.getByLabelText("AI provider") as HTMLSelectElement).value).toBe("p1"),
+    );
+  });
+
+  test("going back to the start form leaves the bubble with no chat open", async () => {
+    sessions.s9 = session("s9", "Fresh", [msg("s9-0", 0, "assistant", "Hello there")]);
+    chatService.start.mockImplementation(() => {
+      server = [summary("s9", "Fresh", "2026-01-04T00:00:00Z")];
+      return Promise.resolve(structuredClone(sessions.s9));
+    });
+    renderShell("/chat");
+
+    const start = await screen.findByRole("button", { name: "Start chat" });
+    await waitFor(() =>
+      expect((screen.getByLabelText("AI provider") as HTMLSelectElement).value).toBe("p1"),
+    );
+    fireEvent.click(start);
+    expect(await screen.findByText("Hello there")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "History back" }));
+    await waitFor(() => expect(currentPath()).toBe("/chat"));
+    expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
+
+    fireEvent.click(
+      within(screen.getByRole("navigation")).getByRole("link", { name: "Taskboard" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+    const bubble = await screen.findByRole("dialog", { name: "AI chat" });
+    expect(await within(bubble).findByRole("button", { name: "Start chat" })).toBeTruthy();
+    await settle();
+    expect(within(bubble).queryByText("Hello there")).toBeNull();
+  });
+
+  test("a chat the page cannot open is not left as the bubble's chat", async () => {
+    seedTwoChats();
+    renderShell("/chat/s1");
+    expect(await screen.findByText("s1 reply")).toBeTruthy();
+
+    // Still listed, but gone by the time it is opened.
+    delete sessions.s2;
+    fireEvent.click(within(pageSidebar()).getByText("Second"));
+    expect(await screen.findByText("Chat not found.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
+
+    fireEvent.click(
+      within(screen.getByRole("navigation")).getByRole("link", { name: "Taskboard" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+    const bubble = await screen.findByRole("dialog", { name: "AI chat" });
+    expect(await within(bubble).findByRole("button", { name: "Start chat" })).toBeTruthy();
+    await settle();
+    expect(within(bubble).queryByText("s1 reply")).toBeNull();
   });
 });

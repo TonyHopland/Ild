@@ -40,3 +40,17 @@
 .chat-page-header .chat-muted {
   margin: 0.2rem 0 0;
 }
+
+/* Too narrow for the list beside the chat: the list goes above it instead. */
+@media (max-width: 720px) {
+  .chat-page {
+    flex-direction: column;
+  }
+
+  .chat-page .chat-sidebar {
+    width: auto;
+    max-height: 40%;
+    border-right: none;
+    border-bottom: 1px solid #2d2d44;
+  }
+}

@@ -19,7 +19,7 @@ export default function Chat() {
   const { chatId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const { history, loaded, activeChatId, setActiveChatId } = useChatInbox();
+  const { history, loaded, activeChatId } = useChatInbox();
   const startForm = (location.state as { startForm?: boolean } | null)?.startForm === true;
 
   // Which chat a visit to /chat lands on: the one open in the bubble, else the one
@@ -38,14 +38,13 @@ export default function Chat() {
 
   const onActiveChatChange = useCallback(
     (id: string | null) => {
-      setActiveChatId(id);
       if (id === null) {
         if (chatId !== undefined) void navigate(ROUTES.CHAT, { state: START_FORM });
       } else if (id !== chatId) {
         void navigate(chatPath(id));
       }
     },
-    [chatId, navigate, setActiveChatId],
+    [chatId, navigate],
   );
 
   const openChat = useCallback(

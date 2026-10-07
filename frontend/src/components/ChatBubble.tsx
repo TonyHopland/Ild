@@ -40,7 +40,7 @@ const DRAG_THRESHOLD_PX = 4;
 export default function ChatBubble() {
   const onChatTab = useMatch("/chat/*") !== null;
   const [open, setOpen] = useState(false);
-  const { loaded, unreadCount, activeChatId, setActiveChatId } = useChatInbox();
+  const { loaded, unreadCount, activeChatId } = useChatInbox();
 
   // Placement: a draggable icon position and a resizable panel size, both
   // persisted and kept inside the viewport.
@@ -192,7 +192,6 @@ export default function ChatBubble() {
       shown={chatEnabled && open}
       covered={chatCovered}
       sidebarShown={sidebarOpen}
-      onActiveChatChange={setActiveChatId}
       onChatShown={foldNarrowList}
     >
       {({ title, error, sidebar, content }) => {

@@ -13,6 +13,7 @@ const shownName = (chat: ChatSessionSummary) => chat.name ?? "Untitled chat";
 function ChatSessionRow({
   chat,
   current,
+  full,
   now,
   menuOpen,
   onMenu,
@@ -25,6 +26,8 @@ function ChatSessionRow({
 }: {
   chat: ChatSessionSummary;
   current: boolean;
+  /** The list fills the frame, so the open chat's own working indicator is out of sight. */
+  full: boolean;
   now: number;
   /** Whether this row's actions are showing; one row's at a time. */
   menuOpen: boolean;
@@ -90,7 +93,7 @@ function ChatSessionRow({
               )}
               <span className="chat-history-name">{name}</span>
               {chat.hasUnread && <UnreadDot />}
-              {chat.isBusy && !current && (
+              {chat.isBusy && (!current || full) && (
                 <span className="chat-busy" role="img" aria-label="Working" />
               )}
               {chat.needsYou && (
@@ -317,6 +320,7 @@ export default function ChatSidebar({
               key={c.id}
               chat={c}
               current={c.id === currentChatId}
+              full={full}
               now={now}
               menuOpen={menuFor === c.id}
               onMenu={onMenu}
