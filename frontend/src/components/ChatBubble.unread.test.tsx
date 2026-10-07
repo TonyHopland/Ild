@@ -467,6 +467,25 @@ describe("unread chat indicator", () => {
     expect(chatService.markRead).not.toHaveBeenCalledWith("a", 2);
   });
 
+  test("while the list is hidden, screen readers hear the unread count as the list button's description", async () => {
+    server = [summary("a", "Alpha", false), summary("b", "Beta", false)];
+    render(bubble());
+    await openPanel();
+    const listButton = () => screen.getByRole("button", { name: "Chat list" });
+    await waitFor(() => expect(listButton()).toBeTruthy());
+    expect(listButton().getAttribute("aria-describedby")).toBeNull();
+
+    setUnread("b", true);
+    emitUnreadChanged({ chatSessionId: "b" });
+    expect(await screen.findByRole("button", { name: "Chat list", description: "1" })).toBe(
+      listButton(),
+    );
+
+    await openChatList();
+    expect(listButton().getAttribute("aria-describedby")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Chat list", description: "1" })).toBeNull();
+  });
+
   test("every (re)connect rejoins the inbox and re-reads history, recovering a hint lost while away", async () => {
     server = [summary("a", "Alpha", false)];
     const view = render(bubble());

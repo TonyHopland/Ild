@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useMatch } from "react-router";
 import { useSignalR } from "../hooks/useSignalR";
 import { useChatEnabled } from "../hooks/useChatEnabled";
@@ -296,6 +296,7 @@ export default function ChatBubble() {
     saveSidebarOpen(next);
   }, []);
   const wide = panelSize.width >= SIDEBAR_SIDE_BY_SIDE_MIN_WIDTH;
+  const unreadBadgeId = useId();
   const chatCovered = sidebarOpen && !wide;
 
   // Persist placement changes and re-clamp into view whenever the window resizes.
@@ -1047,6 +1048,8 @@ export default function ChatBubble() {
 
   const panelPos = panelPosition(panelOverride ?? fabPos, panelSize, viewportSize());
   const unreadCount = history.filter((c) => c.hasUnread).length;
+  // The button's name stays "Chat list"; the badge reaches screen readers as its description.
+  const showUnreadBadge = !sidebarOpen && unreadCount > 0;
   const sidebar = sidebarOpen && (
     <ChatSidebar
       history={history}
@@ -1081,11 +1084,14 @@ export default function ChatBubble() {
           className="chat-link-btn chat-sidebar-toggle"
           aria-label="Chat list"
           aria-expanded={sidebarOpen}
+          aria-describedby={showUnreadBadge ? unreadBadgeId : undefined}
           onClick={() => setSidebarOpen(!sidebarOpen)}
         >
           ☰
-          {!sidebarOpen && unreadCount > 0 && (
-            <span className="chat-sidebar-badge">{unreadCount}</span>
+          {showUnreadBadge && (
+            <span id={unreadBadgeId} className="chat-sidebar-badge">
+              {unreadCount}
+            </span>
           )}
         </button>
         <div className="chat-panel-heading">
