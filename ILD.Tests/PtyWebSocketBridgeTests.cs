@@ -110,6 +110,8 @@ public class PtyWebSocketBridgeTests
         var (server, client) = await ConnectedPairAsync(cts.Token);
         using var serverSocket = server;
         using var clientSocket = client;
+        var pidFile = Path.Combine(Path.GetTempPath(), $"ild-bridge-grandchild-{Guid.NewGuid():N}");
+        var clock = new HeldTimeProvider();
 
         var options = new PtyOptions
         {
@@ -119,22 +121,104 @@ public class PtyWebSocketBridgeTests
             Cwd = Path.GetTempPath(),
             App = "/bin/sh",
             // The background sleep inherits the PTY and ignores the SIGHUP the shell's
-            // exit sends it, so the output never reaches EOF before the bridge stops
-            // waiting for it.
-            CommandLine = new[] { "-c", "(trap \"\" HUP; exec sleep 8) & echo boom; exit 3" },
+            // exit sends it, so the output never reaches EOF and only the bridge's
+            // bounded wait ends it.
+            CommandLine = new[] { "-c", $"(trap \"\" HUP; exec sleep 60) & echo $! > '{pidFile}'; echo boom; exit 3" },
             Environment = new Dictionary<string, string>(),
         };
 
-        var run = PtyWebSocketBridge.RunAsync(server, options, NullLogger.Instance, cts.Token, reportExit: true);
+        try
+        {
+            var run = PtyWebSocketBridge.RunAsync(server, options, NullLogger.Instance, cts.Token, reportExit: true, timeProvider: clock);
 
-        var received = await ReadUntilCloseAsync(client, cts.Token);
-        var boom = received.Text.IndexOf("boom", StringComparison.Ordinal);
-        Assert.True(boom >= 0, $"the CLI's output was lost: {received.Text}");
-        Assert.Contains("exited with code 3", received.Text[boom..]);
-        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+            var output = await ReadUntilAsync(client, "boom", cts.Token);
+            // Every bounded wait times out from here on, as if its time had passed.
+            clock.Release();
+            var rest = await ReadUntilCloseAsync(client, cts.Token);
 
-        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
-        await run.WaitAsync(cts.Token);
+            Assert.Contains("exited with code 3", output.Text + rest.Text);
+            Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+            await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+            await run.WaitAsync(cts.Token);
+        }
+        finally
+        {
+            if (File.Exists(pidFile))
+            {
+                if (int.TryParse(File.ReadAllText(pidFile).Trim(), out var pid))
+                {
+                    try { System.Diagnostics.Process.GetProcessById(pid).Kill(); } catch (ArgumentException) { }
+                }
+                File.Delete(pidFile);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A clock whose timers never fire until <see cref="Release"/>, and fire as soon
+    /// as they are armed after it.
+    /// </summary>
+    private sealed class HeldTimeProvider : TimeProvider
+    {
+        private readonly List<HeldTimer> _armed = new();
+        private bool _released;
+
+        public void Release()
+        {
+            List<HeldTimer> due;
+            lock (_armed)
+            {
+                _released = true;
+                due = _armed.ToList();
+                _armed.Clear();
+            }
+            foreach (var timer in due) timer.Fire();
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new HeldTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+
+        private void Arm(HeldTimer timer)
+        {
+            lock (_armed)
+            {
+                if (!_released)
+                {
+                    _armed.Add(timer);
+                    return;
+                }
+            }
+            timer.Fire();
+        }
+
+        private sealed class HeldTimer(HeldTimeProvider clock, TimerCallback callback, object? state) : ITimer
+        {
+            private volatile bool _disposed;
+
+            public void Fire()
+            {
+                if (!_disposed) ThreadPool.QueueUserWorkItem(_ => { if (!_disposed) callback(state); });
+            }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                if (dueTime != Timeout.InfiniteTimeSpan) clock.Arm(this);
+                return true;
+            }
+
+            public void Dispose() => _disposed = true;
+
+            public ValueTask DisposeAsync()
+            {
+                _disposed = true;
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     private sealed record Received(string Text, IReadOnlyList<WebSocketMessageType> Types);

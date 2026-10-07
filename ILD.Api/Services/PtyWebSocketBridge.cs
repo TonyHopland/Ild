@@ -28,13 +28,16 @@ public static class PtyWebSocketBridge
     /// code before closing, so a CLI that rejects its arguments and exits at once
     /// leaves something to read.
     /// </param>
+    /// <param name="timeProvider">Clock for the bounded teardown waits; <see cref="TimeProvider.System"/> when null.</param>
     public static async Task RunAsync(
         WebSocket socket,
         PtyOptions options,
         ILogger logger,
         CancellationToken cancellationToken,
-        bool reportExit = false)
+        bool reportExit = false,
+        TimeProvider? timeProvider = null)
     {
+        var clock = timeProvider ?? TimeProvider.System;
         IPtyConnection? pty = null;
         try
         {
@@ -90,7 +93,7 @@ public static class PtyWebSocketBridge
                 {
                     await Task.WhenAny(
                         Task.WhenAll(ptyToSocket, childExited),
-                        Task.Delay(TimeSpan.FromSeconds(3), cancellationToken));
+                        Task.Delay(TimeSpan.FromSeconds(3), clock, cancellationToken));
                 }
                 catch { }
 
@@ -121,11 +124,11 @@ public static class PtyWebSocketBridge
             // observed hanging a full test run indefinitely with the child still
             // parked on its pty. The finally block below kills and disposes
             // again, so giving up early costs nothing.
-            try { await Task.WhenAny(ptyToSocket, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken)); } catch { }
+            try { await Task.WhenAny(ptyToSocket, Task.Delay(TimeSpan.FromSeconds(3), clock, cancellationToken)); } catch { }
             // Bounded wait: once CloseOutputAsync has sent our close frame the
             // client already shows a clean close, so don't block teardown if it
             // never sends its close reply back.
-            try { await Task.WhenAny(socketToPty, Task.Delay(TimeSpan.FromSeconds(3), cancellationToken)); } catch { }
+            try { await Task.WhenAny(socketToPty, Task.Delay(TimeSpan.FromSeconds(3), clock, cancellationToken)); } catch { }
         }
         finally
         {
