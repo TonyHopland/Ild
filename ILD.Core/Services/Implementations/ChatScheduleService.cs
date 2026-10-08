@@ -22,6 +22,7 @@ public sealed class ChatScheduleService
 {
     public const string PausedReason = "scheduler paused";
     public const string BusyReason = "chat busy";
+    public const string PreviousTurnRunningReason = "busy: the previous firing's turn is still running";
     public const string RestartReason = "ILD restarted while this turn was running, so it was cut off.";
     public const string RestartNote = "This scheduled turn was cut off because ILD restarted while it was running.";
     public const string NoOutcomeReason = "The turn ended without recording a result.";
@@ -89,6 +90,7 @@ public sealed class ChatScheduleService
         Apply(schedule, valid);
         _db.ChatSchedules.Add(schedule);
         await _db.SaveChangesAsync(ct);
+        await _notifier.SchedulesChangedAsync(userId, schedule.Id);
         return new ChatScheduleSaveResult(ToView(schedule, null), null);
     }
 
@@ -109,6 +111,7 @@ public sealed class ChatScheduleService
                 schedule.LatestChatSessionId = null;
             Apply(schedule, valid);
             await _db.SaveChangesAsync(ct);
+            await _notifier.SchedulesChangedAsync(userId, id);
             return new ChatScheduleSaveResult(ToView(schedule, await LastFiringAsync(id, ct)), null);
         }
     }
@@ -125,6 +128,7 @@ public sealed class ChatScheduleService
         using (await _locks.EnterAsync(id, ct))
             deleted = await _db.ChatSchedules.Where(s => s.Id == id && s.UserId == userId).ExecuteDeleteAsync(ct);
         _locks.Forget(id);
+        if (deleted > 0) await _notifier.SchedulesChangedAsync(userId, id);
         return deleted > 0;
     }
 
@@ -181,6 +185,7 @@ public sealed class ChatScheduleService
             schedule.PendingSince ??= schedule.NextFireAt;
             schedule.NextFireAt = NextFireAt(schedule, now);
             await _db.SaveChangesAsync(ct);
+            await _notifier.SchedulesChangedAsync(schedule.UserId, id);
             return;
         }
 
@@ -238,6 +243,10 @@ public sealed class ChatScheduleService
 
         foreach (var chat in chats)
             await _notifier.ActivityChangedAsync(chat.UserId, chat.Id);
+        var scheduleIds = interrupted.Select(f => f.ChatScheduleId).Distinct().ToList();
+        foreach (var owned in await _db.ChatSchedules.AsNoTracking()
+            .Where(s => scheduleIds.Contains(s.Id)).Select(s => new { s.Id, s.UserId }).ToListAsync(ct))
+            await _notifier.SchedulesChangedAsync(owned.UserId, owned.Id);
         _log.LogWarning("Failed {Count} scheduled chat firing(s) that a restart cut off", interrupted.Count);
     }
 
@@ -257,54 +266,106 @@ public sealed class ChatScheduleService
 
     private async Task<ChatScheduleFiring> FireAsync(ChatSchedule schedule, ChatScheduleTrigger trigger, DateTime? scheduledFor)
     {
-        var previous = await _db.ChatScheduleFirings.AsNoTracking()
-            .Where(f => f.ChatScheduleId == schedule.Id && f.TurnId != null)
-            .OrderByDescending(f => f.Number)
-            .Select(f => (DateTime?)f.FiredAt)
-            .FirstOrDefaultAsync();
-        var firedAt = UtcNow;
-        var (chatId, error) = await ChatForFiringAsync(schedule);
         var firing = new ChatScheduleFiring
         {
             Id = Guid.NewGuid(),
             ChatScheduleId = schedule.Id,
-            Number = await NextFiringNumberAsync(schedule.Id),
             Trigger = trigger,
             ScheduledFor = scheduledFor,
-            FiredAt = firedAt,
-            Outcome = chatId is null ? ChatScheduleFiringOutcome.Failed : ChatScheduleFiringOutcome.Running,
-            Reason = chatId is null ? ChatScheduleFiring.ClipReason(error!) : null,
-            ChatSessionId = chatId,
+            FiredAt = UtcNow,
+            Outcome = ChatScheduleFiringOutcome.Running,
         };
-        _db.ChatScheduleFirings.Add(firing);
-        await _db.SaveChangesAsync();
-        if (chatId is null) return firing;
 
-        var message = await ContextBlockAsync(schedule, firing.FiredAt, previous) + "\n\n" + schedule.Prompt;
+        // Everything that can fail before the turn is decided here, so a firing is
+        // recorded however it ends and never left Running without a turn.
+        string? message = null;
         try
         {
-            var turnId = await _runner.TrySubmitIfIdleAsync(chatId.Value, message,
-                async startingTurnId =>
-                {
-                    firing.TurnId = startingTurnId;
-                    await _db.SaveChangesAsync();
-                },
-                EndFiringWithoutOutcomeAsync);
-            if (turnId is null)
+            if (await ChatOfRunningTurnAsync(schedule.Id) is { } busyChat)
             {
                 firing.Outcome = ChatScheduleFiringOutcome.Skipped;
-                firing.Reason = BusyReason;
+                firing.Reason = PreviousTurnRunningReason;
+                firing.ChatSessionId = busyChat;
+            }
+            else
+            {
+                var previous = await _db.ChatScheduleFirings.AsNoTracking()
+                    .Where(f => f.ChatScheduleId == schedule.Id && f.TurnId != null)
+                    .OrderByDescending(f => f.Number)
+                    .Select(f => (DateTime?)f.FiredAt)
+                    .FirstOrDefaultAsync();
+                var (chatId, error) = await ChatForFiringAsync(schedule);
+                firing.ChatSessionId = chatId;
+                if (chatId is null)
+                {
+                    firing.Outcome = ChatScheduleFiringOutcome.Failed;
+                    firing.Reason = ChatScheduleFiring.ClipReason(error!);
+                }
+                else
+                {
+                    message = await ContextBlockAsync(schedule, firing.FiredAt, previous) + "\n\n" + schedule.Prompt;
+                }
             }
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Schedule {ScheduleId} could not start its turn in chat {ChatSessionId}", schedule.Id, chatId);
+            _log.LogError(ex, "Schedule {ScheduleId} could not prepare its firing", schedule.Id);
             firing.Outcome = ChatScheduleFiringOutcome.Failed;
             firing.Reason = ChatScheduleFiring.ClipReason(ex.Message);
-            firing.TurnId = null;
+            message = null;
         }
+
+        firing.Number = await NextFiringNumberAsync(schedule.Id);
+        _db.ChatScheduleFirings.Add(firing);
         await _db.SaveChangesAsync();
+
+        if (message is not null)
+        {
+            var (userId, scheduleId) = (schedule.UserId, schedule.Id);
+            try
+            {
+                var turnId = await _runner.TrySubmitIfIdleAsync(firing.ChatSessionId!.Value, message,
+                    async startingTurnId =>
+                    {
+                        firing.TurnId = startingTurnId;
+                        await _db.SaveChangesAsync();
+                    },
+                    (endedTurnId, stopped) => EndFiringWithoutOutcomeAsync(userId, scheduleId, endedTurnId, stopped));
+                if (turnId is null)
+                {
+                    firing.Outcome = ChatScheduleFiringOutcome.Skipped;
+                    firing.Reason = BusyReason;
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Schedule {ScheduleId} could not start its turn in chat {ChatSessionId}", schedule.Id, firing.ChatSessionId);
+                firing.Outcome = ChatScheduleFiringOutcome.Failed;
+                firing.Reason = ChatScheduleFiring.ClipReason(ex.Message);
+                firing.TurnId = null;
+            }
+            await _db.SaveChangesAsync();
+        }
+
+        await _notifier.SchedulesChangedAsync(schedule.UserId, schedule.Id);
         return firing;
+    }
+
+    /// <summary>
+    /// The chat in which one of the schedule's firings still has its turn running,
+    /// or null. A schedule runs one turn at a time even when each firing gets a new
+    /// chat, so a later firing never runs beside an earlier one.
+    /// </summary>
+    private async Task<Guid?> ChatOfRunningTurnAsync(Guid scheduleId)
+    {
+        var running = await _db.ChatScheduleFirings.AsNoTracking()
+            .Where(f => f.ChatScheduleId == scheduleId
+                && f.Outcome == ChatScheduleFiringOutcome.Running
+                && f.TurnId != null
+                && f.ChatSessionId != null)
+            .Select(f => new { ChatId = f.ChatSessionId!.Value, TurnId = f.TurnId!.Value })
+            .ToListAsync();
+        return running.FirstOrDefault(f => _runner.ActiveTurnId(f.ChatId) == f.TurnId)?.ChatId;
     }
 
     /// <summary>
@@ -384,15 +445,16 @@ public sealed class ChatScheduleService
     /// stopped or replaced, or it ended without a result (it threw, or its chat
     /// was deleted under it). Runs after the turn, outside any request's scope.
     /// </summary>
-    private async Task EndFiringWithoutOutcomeAsync(Guid turnId, bool stopped)
+    private async Task EndFiringWithoutOutcomeAsync(string userId, Guid scheduleId, Guid turnId, bool stopped)
     {
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.ChatScheduleFirings
+        var ended = await db.ChatScheduleFirings
             .Where(f => f.TurnId == turnId && f.Outcome == ChatScheduleFiringOutcome.Running)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(f => f.Outcome, stopped ? ChatScheduleFiringOutcome.Stopped : ChatScheduleFiringOutcome.Failed)
                 .SetProperty(f => f.Reason, stopped ? null : NoOutcomeReason));
+        if (ended > 0) await _notifier.SchedulesChangedAsync(userId, scheduleId);
     }
 
     private async Task<(ValidSchedule? Valid, string? Error)> ValidateAsync(ChatScheduleRequest request, CancellationToken ct)
@@ -404,6 +466,7 @@ public sealed class ChatScheduleService
         if (!ChatScheduleCron.TryParse(request.CronExpression, out var cron, out var cronError)) return (null, cronError);
         if (!TryFindZone(request.TimeZone, out var zone)) return (null, $"Unknown time zone '{request.TimeZone}'.");
 
+        if (!Enum.IsDefined(request.RepositoryScope)) return (null, "The repository scope must be all, selected or none.");
         var repositoryIds = Array.Empty<Guid>();
         if (request.RepositoryScope == ChatScheduleRepositoryScope.Selected)
         {

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { AiProviderTagField } from "../../components/AiProviderTagField";
-import { useChatInbox } from "../../components/ChatInbox";
 import { useSignalR } from "../../hooks/useSignalR";
 import {
   aiProviderService,
@@ -18,7 +17,6 @@ import type {
   ChatScheduleRepositoryScope,
   Repository,
 } from "../../types";
-import type { TypedSignalRMessage } from "../../types/signalr";
 import { ROUTES } from "../../utils/constants";
 import { cronText } from "../../utils/cronText";
 import { Switch } from "../Settings/controls";
@@ -89,26 +87,44 @@ function LastFiring({ firing }: { firing: ChatScheduleFiring | null }) {
   );
 }
 
-/** One schedule on the list. Keyed by the schedule, so its delete confirmation is its own. */
+/** One act a row can take, with its own busy flag and error, settled only by its own newest request. */
+function useAct(fallback: string, onSettled: () => void) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generationRef = useRef(0);
+  const run = async (request: () => Promise<unknown>) => {
+    const generation = ++generationRef.current;
+    setBusy(true);
+    setError(null);
+    try {
+      await request();
+    } catch (e) {
+      if (generationRef.current === generation) setError(failure(e, fallback));
+    } finally {
+      if (generationRef.current === generation) setBusy(false);
+      onSettled();
+    }
+  };
+  return { busy, error, run };
+}
+
+/** One schedule on the list. Keyed by the schedule, so its acts and delete confirmation are its own. */
 function ScheduleRow({
   schedule,
   repositories,
-  busy,
-  onToggle,
-  onRunNow,
   onEdit,
-  onDelete,
+  onChanged,
 }: {
   schedule: ChatSchedule;
   repositories: Repository[] | null;
-  /** A change of this schedule's is on its way, so its controls wait for it. */
-  busy: boolean;
-  onToggle: () => void;
-  onRunNow: () => void;
   onEdit: () => void;
-  onDelete: () => void;
+  /** A change this row asked for has settled, so the list is re-read. */
+  onChanged: () => void;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const toggle = useAct("The schedule could not be saved.", onChanged);
+  const runNow = useAct("The schedule could not be run.", onChanged);
+  const remove = useAct("The schedule could not be deleted.", onChanged);
   const when = cronText(schedule.cronExpression) ?? schedule.cronExpression;
   const facts: [string, React.ReactNode][] = [
     ["When", `${when} (${schedule.timeZone})`],
@@ -117,6 +133,7 @@ function ScheduleRow({
     ["Next firing", schedule.nextFireAt ? formatTime(schedule.nextFireAt) : "none"],
     ["Last firing", <LastFiring firing={schedule.lastFiring} />],
   ];
+  const errors = [toggle.error, runNow.error, remove.error].filter((e) => e !== null);
 
   return (
     <article className="chat-schedule">
@@ -125,8 +142,15 @@ function ScheduleRow({
         <Switch
           checked={schedule.enabled}
           label={`Enabled: ${schedule.name}`}
-          disabled={busy}
-          onChange={onToggle}
+          disabled={toggle.busy}
+          onChange={() =>
+            void toggle.run(() =>
+              chatScheduleService.update(schedule.id, {
+                ...toInput(schedule),
+                enabled: !schedule.enabled,
+              }),
+            )
+          }
         />
       </header>
       <dl className="chat-schedule-facts">
@@ -137,12 +161,17 @@ function ScheduleRow({
           </div>
         ))}
       </dl>
+      {errors.map((error) => (
+        <p key={error} className="chat-error" role="alert">
+          {error}
+        </p>
+      ))}
       <div className="chat-schedule-actions">
         <button
           type="button"
           className="btn btn-secondary btn-small"
-          disabled={busy}
-          onClick={onRunNow}
+          disabled={runNow.busy}
+          onClick={() => void runNow.run(() => chatScheduleService.runNow(schedule.id))}
         >
           Run now
         </button>
@@ -161,7 +190,7 @@ function ScheduleRow({
               className="btn btn-danger btn-small"
               onClick={() => {
                 setConfirmingDelete(false);
-                onDelete();
+                void remove.run(() => chatScheduleService.delete(schedule.id));
               }}
             >
               Delete
@@ -178,7 +207,7 @@ function ScheduleRow({
           <button
             type="button"
             className="btn btn-danger btn-small"
-            disabled={busy}
+            disabled={remove.busy}
             onClick={() => setConfirmingDelete(true)}
           >
             Delete
@@ -407,16 +436,10 @@ function ScheduleForm({
   );
 }
 
-/**
- * The signed-in user's chat schedules, in the Chat tab beside the chat list. Each
- * starts a chat turn of theirs on a cron. The list is re-read whenever the chat
- * history is, which is how a firing's chat turn starting or ending shows here.
- */
+/** The signed-in user's chat schedules, in the Chat tab beside the chat list. */
 export default function ChatSchedules() {
-  const { history } = useChatInbox();
   const [schedules, setSchedules] = useState<ChatSchedule[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
   const [repositories, setRepositories] = useState<Repository[] | null>(null);
   const [providers, setProviders] = useState<AiProvider[] | null>(null);
   const [paused, setPaused] = useState(false);
@@ -425,74 +448,82 @@ export default function ChatSchedules() {
   const openingsRef = useRef(0);
   const openForm = (schedule: ChatSchedule | null) =>
     setForm({ opening: ++openingsRef.current, schedule });
-  // Schedules with a change on its way, whose controls wait for it.
-  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
 
-  // Each read is numbered as it goes out and applied only if no later one has
-  // been, so a slow answer never puts back a list that has since changed.
+  // Reads are numbered as they go out. One is applied only if it is newer than
+  // the last applied and was started after the last write settled, so neither a
+  // slow read nor one from before a save puts back a list that has since changed.
   const readRef = useRef(0);
   const appliedReadRef = useRef(0);
+  const staleThroughReadRef = useRef(0);
   const reload = useCallback(async () => {
     const read = ++readRef.current;
+    const current = () => read > appliedReadRef.current && read > staleThroughReadRef.current;
     try {
       const list = await chatScheduleService.list();
-      if (read <= appliedReadRef.current) return;
+      if (!current()) return;
       appliedReadRef.current = read;
       setSchedules(list);
       setLoadError(null);
     } catch (e) {
-      if (read > appliedReadRef.current) setLoadError(failure(e, "Could not load the schedules."));
+      if (current()) setLoadError(failure(e, "Could not load the schedules."));
     }
   }, []);
+  const writeSettled = useCallback(() => {
+    staleThroughReadRef.current = readRef.current;
+    void reload();
+  }, [reload]);
 
   useEffect(() => {
     void reload();
-  }, [history, reload]);
-
-  useEffect(() => {
     repositoryService.getEvery().then(setRepositories, (e) => console.error(e));
     aiProviderService.getAll().then(setProviders, (e) => console.error(e));
-  }, []);
+  }, [reload]);
 
-  // A hub event is newer than any read still on its way, so it wins over one.
-  const { on, off, connectionState } = useSignalR();
-  const pauseEventsRef = useRef(0);
+  // Hub events are hints to re-read, never state to apply: they carry no order,
+  // and the hub drops whatever is sent while it is reconnecting.
+  const chatHub = useSignalR("/hubs/chat");
   useEffect(() => {
-    const onSchedulerStateChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {
-      pauseEventsRef.current += 1;
-      setPaused(message.payload.isPaused);
+    const onSchedulesChanged = () => void reload();
+    chatHub.on("ChatSchedulesChanged", onSchedulesChanged);
+    return () => chatHub.off("ChatSchedulesChanged", onSchedulesChanged);
+  }, [chatHub.on, chatHub.off, reload]);
+  useEffect(() => {
+    if (chatHub.connectionState !== "connected") return;
+    void (async () => {
+      try {
+        await chatHub.invoke("SubscribeToChatInbox");
+        await reload();
+      } catch (err) {
+        console.error(err);
+      }
+    })();
+    return () => {
+      void chatHub.invoke("UnsubscribeFromChatInbox")?.catch((err) => console.error(err));
     };
-    on("SchedulerStateChanged", onSchedulerStateChanged);
-    return () => off("SchedulerStateChanged", onSchedulerStateChanged);
-  }, [on, off]);
-  useEffect(() => {
-    // Read on every (re)connect: the hub buffers nothing while it is down.
-    if (connectionState !== "connected") return;
-    const events = pauseEventsRef.current;
-    settingsService.get(SchedulerSettingKeys.IsPaused).then(
-      (setting) => {
-        if (pauseEventsRef.current === events) setPaused(setting.value === "true");
-      },
-      (e) => console.error(e),
-    );
-  }, [connectionState]);
+  }, [chatHub.connectionState, chatHub.invoke, reload]);
 
-  const act = async (id: string, action: () => Promise<unknown>, fallback: string) => {
-    setBusy((prev) => new Set(prev).add(id));
-    setActionError(null);
+  const pauseReadRef = useRef(0);
+  const appliedPauseReadRef = useRef(0);
+  const readPaused = useCallback(async () => {
+    const read = ++pauseReadRef.current;
     try {
-      await action();
+      const setting = await settingsService.get(SchedulerSettingKeys.IsPaused);
+      if (read <= appliedPauseReadRef.current) return;
+      appliedPauseReadRef.current = read;
+      setPaused(setting.value === "true");
     } catch (e) {
-      setActionError(failure(e, fallback));
-    } finally {
-      setBusy((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-      void reload();
+      console.error(e);
     }
-  };
+  }, []);
+  const workItemHub = useSignalR();
+  useEffect(() => {
+    const onSchedulerStateChanged = () => void readPaused();
+    workItemHub.on("SchedulerStateChanged", onSchedulerStateChanged);
+    return () => workItemHub.off("SchedulerStateChanged", onSchedulerStateChanged);
+  }, [workItemHub.on, workItemHub.off, readPaused]);
+  useEffect(() => {
+    if (workItemHub.connectionState === "connected") void readPaused();
+  }, [workItemHub.connectionState, readPaused]);
 
   return (
     <section className="chat-page-chat chat-schedules">
@@ -509,7 +540,6 @@ export default function ChatSchedules() {
           </p>
         )}
         {loadError && <div className="chat-error">{loadError}</div>}
-        {actionError && <div className="chat-error">{actionError}</div>}
         {schedules === null ? (
           !loadError && <p className="chat-muted">Loading…</p>
         ) : schedules.length === 0 ? (
@@ -523,33 +553,8 @@ export default function ChatSchedules() {
               key={schedule.id}
               schedule={schedule}
               repositories={repositories}
-              busy={busy.has(schedule.id)}
-              onToggle={() =>
-                void act(
-                  schedule.id,
-                  () =>
-                    chatScheduleService.update(schedule.id, {
-                      ...toInput(schedule),
-                      enabled: !schedule.enabled,
-                    }),
-                  "The schedule could not be saved.",
-                )
-              }
-              onRunNow={() =>
-                void act(
-                  schedule.id,
-                  () => chatScheduleService.runNow(schedule.id),
-                  "The schedule could not be run.",
-                )
-              }
               onEdit={() => openForm(schedule)}
-              onDelete={() =>
-                void act(
-                  schedule.id,
-                  () => chatScheduleService.delete(schedule.id),
-                  "The schedule could not be deleted.",
-                )
-              }
+              onChanged={writeSettled}
             />
           ))
         )}
@@ -564,7 +569,7 @@ export default function ChatSchedules() {
           onSaved={() => {
             // Closes only the form that saved, not one opened since it was closed.
             setForm((open) => (open?.opening === form.opening ? null : open));
-            void reload();
+            writeSettled();
           }}
         />
       )}

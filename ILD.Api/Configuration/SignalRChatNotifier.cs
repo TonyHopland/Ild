@@ -49,10 +49,13 @@ public class SignalRChatNotifier : IChatNotifier
     public Task ActivityChangedAsync(string userId, Guid chatSessionId)
         => SendAsync(ChatHub.InboxGroup(userId), chatSessionId, "ChatActivityChanged", new ChatActivityChangedPayload(chatSessionId));
 
+    public Task SchedulesChangedAsync(string userId, Guid scheduleId)
+        => SendAsync(ChatHub.InboxGroup(userId), scheduleId, "ChatSchedulesChanged", new ChatSchedulesChangedPayload(scheduleId));
+
     private Task SendAsync(Guid chatSessionId, string eventName, object payload)
         => SendAsync(chatSessionId.ToString(), chatSessionId, eventName, payload);
 
-    private async Task SendAsync(string group, Guid chatSessionId, string eventName, object payload)
+    private async Task SendAsync(string group, Guid subjectId, string eventName, object payload)
     {
         try
         {
@@ -60,7 +63,7 @@ public class SignalRChatNotifier : IChatNotifier
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Failed to broadcast {Event} for chat {ChatSessionId}", eventName, chatSessionId);
+            _log.LogDebug(ex, "Failed to broadcast {Event} about {SubjectId}", eventName, subjectId);
         }
     }
 }

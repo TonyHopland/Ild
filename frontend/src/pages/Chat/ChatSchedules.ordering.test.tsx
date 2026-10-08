@@ -1,0 +1,161 @@
+import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import type { ChatSchedule } from "../../types";
+
+const { handlers, service, settings } = vi.hoisted(() => ({
+  handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
+  service: {
+    list: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    runNow: vi.fn(),
+  },
+  settings: { get: vi.fn() },
+}));
+
+// Stable across renders, as the real hook's callbacks are.
+vi.mock("../../hooks/useSignalR", () => {
+  const hub = {
+    connectionState: "connected",
+    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
+      (handlers[event] ??= new Set()).add(handler);
+    },
+    off: (event: string, handler: (msg: { payload: unknown }) => void) => {
+      handlers[event]?.delete(handler);
+    },
+    invoke: () => Promise.resolve(),
+  };
+  return { useSignalR: () => hub };
+});
+
+vi.mock("../../services/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/auth")>()),
+  chatScheduleService: service,
+  settingsService: settings,
+  repositoryService: { getEvery: () => Promise.resolve([]) },
+  aiProviderService: { getAll: () => Promise.resolve([]) },
+}));
+
+import ChatSchedules from "./ChatSchedules";
+
+function schedule(enabled: boolean, name = "Weekly retro"): ChatSchedule {
+  return {
+    id: "s1",
+    name,
+    prompt: "Check.",
+    aiTag: null,
+    cronExpression: "0 8 * * 1",
+    timeZone: "UTC",
+    enabled,
+    repositoryScope: "All",
+    repositoryIds: [],
+    continueSession: true,
+    latestChatSessionId: null,
+    nextFireAt: null,
+    lastFiring: null,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function emit(event: string, payload: unknown) {
+  act(() => {
+    for (const handler of Array.from(handlers[event] ?? [])) handler({ payload });
+  });
+}
+
+beforeEach(() => {
+  settings.get.mockResolvedValue({ key: "scheduler.isPaused", value: "false" });
+});
+
+afterEach(() => {
+  cleanup();
+  for (const k of Object.keys(handlers)) delete handlers[k];
+  vi.resetAllMocks();
+});
+
+const renderList = () =>
+  render(
+    <MemoryRouter>
+      <ChatSchedules />
+    </MemoryRouter>,
+  );
+
+const toggle = () => screen.getByRole("checkbox", { name: /enabled/i }) as HTMLInputElement;
+
+describe("The schedules list orders what it shows", () => {
+  test("a schedules hint re-reads the list", async () => {
+    service.list.mockResolvedValue([schedule(true)]);
+    renderList();
+    await screen.findByText("Weekly retro");
+
+    service.list.mockResolvedValue([schedule(true, "Renamed elsewhere")]);
+    emit("ChatSchedulesChanged", { scheduleId: "s1" });
+
+    expect(await screen.findByText("Renamed elsewhere")).toBeTruthy();
+  });
+
+  test("a read started before a save settled never shows over the read that follows the save", async () => {
+    service.list.mockResolvedValue([schedule(true)]);
+    renderList();
+    await screen.findByText("Weekly retro");
+    await waitFor(() => expect(toggle().checked).toBe(true));
+    // The read on mount and the one once the inbox is joined.
+    await waitFor(() => expect(service.list).toHaveBeenCalledTimes(2));
+
+    const staleRead = deferred<ChatSchedule[]>();
+    service.list.mockReturnValueOnce(staleRead.promise);
+    emit("ChatSchedulesChanged", { scheduleId: "s1" });
+
+    const save = deferred<ChatSchedule>();
+    const readAfterSave = deferred<ChatSchedule[]>();
+    service.update.mockReturnValueOnce(save.promise);
+    service.list.mockReturnValueOnce(readAfterSave.promise);
+    fireEvent.click(toggle());
+    await act(async () => save.resolve(schedule(false)));
+
+    await act(async () => staleRead.resolve([schedule(true, "Stale copy")]));
+    expect(screen.queryByText("Stale copy")).toBeNull();
+
+    await act(async () => readAfterSave.resolve([schedule(false)]));
+    await waitFor(() => expect(toggle().checked).toBe(false));
+  });
+
+  test("a failed Run now shows its error on its own row and leaves the toggle free", async () => {
+    service.list.mockResolvedValue([schedule(true)]);
+    const run = deferred<never>();
+    service.runNow.mockReturnValueOnce(run.promise);
+    renderList();
+    await screen.findByText("Weekly retro");
+
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+    expect(toggle().disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    await act(async () => run.reject({ message: "boom" }));
+    const row = screen.getByText("Weekly retro").closest("article") as HTMLElement;
+    expect(await within(row).findByText("boom")).toBeTruthy();
+  });
+
+  test("a scheduler event is a hint: the pause shown is the one the server reads back", async () => {
+    service.list.mockResolvedValue([]);
+    renderList();
+    await waitFor(() => expect(settings.get).toHaveBeenCalled());
+
+    emit("SchedulerStateChanged", { isPaused: true, maxConcurrent: 5 });
+
+    await waitFor(() => expect(settings.get).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/paused/i)).toBeNull();
+  });
+});

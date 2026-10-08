@@ -120,6 +120,7 @@ public sealed class ChatServiceTests : IDisposable
         }
 
         public Task ActivityChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
+        public Task SchedulesChangedAsync(string userId, Guid scheduleId) => Task.CompletedTask;
     }
 
     /// <summary>

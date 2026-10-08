@@ -91,6 +91,7 @@ public sealed class ChatTitleGenerationTests : IDisposable
         public Task TurnCompletedAsync(Guid chatSessionId, Guid turnId, bool interrupted) => Task.CompletedTask;
         public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document) => Task.CompletedTask;
         public Task ActivityChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
+        public Task SchedulesChangedAsync(string userId, Guid scheduleId) => Task.CompletedTask;
         public Task EditProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
         public Task UnreadChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
     }

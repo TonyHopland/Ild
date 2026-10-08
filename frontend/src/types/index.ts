@@ -947,6 +947,11 @@ export interface ChatActivityChangedPayload {
   chatSessionId: string;
 }
 
+/** A hint that one of the user's chat schedules, or its latest firing, changed. */
+export interface ChatSchedulesChangedPayload {
+  scheduleId: string;
+}
+
 export interface DependencyResolvedPayload {
   workItemId: string;
 }

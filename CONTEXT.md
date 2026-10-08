@@ -162,7 +162,7 @@ A user's scheduled job: a cron (five numeric fields, ILD's own parser) read in a
 _Avoid_: cron job, scheduled run, routine
 
 **Schedule Firing**:
-One time a Chat Schedule came due or was run by hand (**Run now**), recorded with its time, trigger, chat and outcome: `Running` until its turn ends `Completed`, `Failed` or `Stopped`, or `Skipped` with a reason — the chat was busy (a firing never interrupts or waits on a turn) or the scheduler was paused (`scheduler.isPaused` stops schedules too; Run now ignores it). Missed firings, after a pause or downtime, merge into one. A firing is credited with exactly the work items its own turn created, by the chat turn id its ILD MCP server sends; a create whose outcome is unknown counts as **unresolved**. A restart fails every firing still `Running` and notes it in its chat.
+One time a Chat Schedule came due or was run by hand (**Run now**), recorded with its time, trigger, chat and outcome: `Running` until its turn ends `Completed`, `Failed` or `Stopped`, or `Skipped` with a reason — the chat was busy or the schedule's previous turn is still running (a firing never interrupts or waits on a turn, and a schedule runs one turn at a time) or the scheduler was paused (`scheduler.isPaused` stops schedules too; Run now ignores it). Missed firings, after a pause or downtime, merge into one. A firing is credited with exactly the work items its own turn created, by the chat turn id its ILD MCP server sends; a create whose outcome is unknown counts as **unresolved**. A restart fails every firing still `Running` and notes it in its chat.
 _Avoid_: job run, execution, trigger
 
 ### Network

@@ -65,4 +65,11 @@ public interface IChatNotifier
     /// a history read would already see the new state.
     /// </summary>
     Task ActivityChangedAsync(string userId, Guid chatSessionId);
+
+    /// <summary>
+    /// One of the user's chat schedules, or its latest firing, changed; a hint to the
+    /// owner's inbox, like <see cref="UnreadChangedAsync"/>, so an open schedules list
+    /// re-reads it.
+    /// </summary>
+    Task SchedulesChangedAsync(string userId, Guid scheduleId);
 }
