@@ -82,6 +82,59 @@ public class WorkItemEditProposalToolsTests
     }
 
     [Fact]
+    public async Task propose_workitem_edit_carries_dependency_changes_as_given_and_omits_the_list_not_given()
+    {
+        var (_, _, body) = await InvokeToolAsync("propose_workitem_edit", new Dictionary<string, object?>
+        {
+            ["id"] = "wi-42",
+            ["addDependencies"] = new[] { "wi-277", "wi-278" },
+        }, "{}");
+
+        var json = JsonDocument.Parse(body!).RootElement;
+        Assert.Equal(new[] { "wi-277", "wi-278" },
+            json.GetProperty("addDependencies").EnumerateArray().Select(t => t.GetString()).ToArray());
+        Assert.True(!json.TryGetProperty("removeDependencies", out var removed) || removed.ValueKind == JsonValueKind.Null);
+        Assert.True(!json.TryGetProperty("title", out var title) || title.ValueKind == JsonValueKind.Null);
+
+        var (_, _, removeBody) = await InvokeToolAsync("propose_workitem_edit", new Dictionary<string, object?>
+        {
+            ["id"] = "wi-42",
+            ["removeDependencies"] = new[] { "wi-12" },
+        }, "{}");
+
+        Assert.Equal(new[] { "wi-12" }, JsonDocument.Parse(removeBody!).RootElement
+            .GetProperty("removeDependencies").EnumerateArray().Select(t => t.GetString()).ToArray());
+    }
+
+    [Fact]
+    public async Task add_workitem_dependency_posts_the_other_item_to_the_dependent_items_dependencies()
+    {
+        var (result, request, body) = await InvokeToolAsync("add_workitem_dependency", new Dictionary<string, object?>
+        {
+            ["workItemId"] = "wi-273",
+            ["dependsOnWorkItemId"] = "wi-277",
+        }, """{"changed":true,"dependencies":[{"id":"wi-277","title":"Chat tab","status":"Backlog"}]}""");
+
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal($"{BaseAddress}api/v1/agent/workitems/wi-273/dependencies", request.RequestUri!.ToString());
+        Assert.Equal("wi-277", JsonDocument.Parse(body!).RootElement.GetProperty("dependsOnWorkItemId").GetString());
+        Assert.Contains("Chat tab", result);
+    }
+
+    [Fact]
+    public async Task remove_workitem_dependency_deletes_the_edge_from_the_dependent_item()
+    {
+        var (_, request, _) = await InvokeToolAsync("remove_workitem_dependency", new Dictionary<string, object?>
+        {
+            ["workItemId"] = "wi-273",
+            ["dependsOnWorkItemId"] = "wi-277",
+        }, """{"changed":true,"dependencies":[]}""");
+
+        Assert.Equal(HttpMethod.Delete, request.Method);
+        Assert.Equal($"{BaseAddress}api/v1/agent/workitems/wi-273/dependencies/wi-277", request.RequestUri!.ToString());
+    }
+
+    [Fact]
     public async Task list_workitem_edit_proposals_reads_the_items_proposals_from_the_agent_surface()
     {
         const string listed = """[{"id":"p-1","status":"Rejected","rejectionReason":"Too vague."}]""";

@@ -78,6 +78,12 @@
   min-width: 0;
 }
 
+.edit-proposal-dependencies {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .edit-proposal-values {
   display: flex;
   flex-wrap: wrap;

@@ -21,8 +21,10 @@ internal static class WorkItemMapper
     public static IReadOnlyList<string> DeserializeTags(string json)
         => JsonSerializer.Deserialize<List<string>>(json, JsonOpts) ?? new();
 
-    public static IReadOnlyList<string> ReadDependencies(WorkItem w)
-        => JsonSerializer.Deserialize<List<string>>(w.DependenciesJson, JsonOpts) ?? new();
+    public static IReadOnlyList<string> ReadDependencies(WorkItem w) => DeserializeDependencies(w.DependenciesJson);
+
+    public static IReadOnlyList<string> DeserializeDependencies(string json)
+        => JsonSerializer.Deserialize<List<string>>(json, JsonOpts) ?? new();
 
     public static List<ConversationMessage> ReadConversation(WorkItem w)
         => JsonSerializer.Deserialize<List<ConversationMessage>>(w.ConversationJson, JsonOpts) ?? new();
@@ -70,7 +72,17 @@ internal static class WorkItemMapper
         => JsonSerializer.Serialize(tags, JsonOpts);
 
     public static void WriteDependencies(WorkItem w, IReadOnlyList<string> deps)
-        => w.DependenciesJson = JsonSerializer.Serialize(deps, JsonOpts);
+        => w.DependenciesJson = SerializeDependencies(deps);
+
+    /// <summary>
+    /// A list of work item ids in the form <see cref="WorkItem.DependenciesJson"/>
+    /// stores. Used for the item's own dependency list, and separately for each
+    /// edit proposal column that holds ids (the additions, the removals and the
+    /// snapshot set), so an approve can compare against and write the item's
+    /// column directly.
+    /// </summary>
+    public static string SerializeDependencies(IReadOnlyList<string> deps)
+        => JsonSerializer.Serialize(deps, JsonOpts);
 
     public static void WriteConversation(WorkItem w, IReadOnlyList<ConversationMessage> messages)
         => w.ConversationJson = JsonSerializer.Serialize(messages, JsonOpts);

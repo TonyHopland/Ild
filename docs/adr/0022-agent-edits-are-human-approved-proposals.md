@@ -16,3 +16,11 @@ Proposals live on the WorkItem Server beside the items they edit ([ADR-0001](./0
 - A chat learns the decisions on its proposals on its next turn, in the prompt; the notice is marked delivered only once a turn reached the agent, so a turn that failed to launch announces it again. A loop run has no next turn, so it reads outcomes on demand.
 - A human decides a proposal where it was asked for: a loop run's in the Action tab of the work item whose run made it, whichever item it edits, and a chat's inline in that chat. The edited item shows its pending count on its board card and lists its pending proposals, each with its source, on its Overview. Deleting a loop run rejects its still-pending proposals, so none is left with nowhere to be decided.
 - Each work item holds at most 20 pending proposals, so an agent cannot flood one item.
+
+## Amendment: dependencies can be proposed
+
+An agent changes the dependencies of an item its own session created directly, with `add_workitem_dependency` and `remove_workitem_dependency`, under the same ownership rule as `update_workitem`. For any other item, `propose_workitem_edit` now also carries `addDependencies` and `removeDependencies`, alone or with the five fields.
+
+- A proposal that changes dependencies also snapshots the item's dependency set, and approving compares that set in the same statement as the five fields: if it changed, the proposal goes Stale and nothing is applied. Applying writes the snapshot set minus the removals plus the additions.
+- A proposal that leaves dependencies alone takes no dependency snapshot and never goes stale because they changed, for the reason `UpdatedAt` was rejected above: dependency edits on an active item must not make its proposals unapprovable. Proposals made before this amendment are such proposals.
+- The WorkItem Server does not know about cycles; ILD checks them. A proposal whose addition is unknown, already a dependency or would close a cycle, or whose removal is not a dependency, is refused when it is made. If, at approval, an addition would now close a cycle or names an item that no longer exists, the approve is refused with the reason and the proposal stays Pending — unless the item no longer matches its snapshot, in which case it goes Stale as any other. That check is not atomic with the write, the same as when a human adds an edge.

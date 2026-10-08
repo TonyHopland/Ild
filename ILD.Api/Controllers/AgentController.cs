@@ -26,10 +26,10 @@ namespace ILD.Api.Controllers;
 ///    spawned by a specific run if an agent goes rogue,
 ///  - create new work items into Backlog with an optional set of
 ///    dependencies, stamped with the originating loop-run id,
-///  - edit or delete work items the caller's own session created — the
-///    item's <c>CreatedByLoopRunId</c> (or <c>CreatedByChatSessionId</c>)
-///    must match the caller's session; pre-existing items and items from
-///    other sessions are off-limits (403),
+///  - edit or delete work items the caller's own session created, and add
+///    or remove their dependencies — the item's <c>CreatedByLoopRunId</c>
+///    (or <c>CreatedByChatSessionId</c>) must match the caller's session;
+///    pre-existing items and items from other sessions are off-limits (403),
 ///  - propose an edit to ANY work item (a Work Item Edit Proposal, ADR-0022)
 ///    and read back what became of it. Proposing applies nothing: a human
 ///    approves or rejects each proposal on the human-only
@@ -1254,6 +1254,80 @@ public class AgentController : ControllerBase
         return NoContent();
     }
 
+    // -- Dependencies -------------------------------------------------------------
+    //
+    // The edge belongs to the dependent item (the one in the route), so that is
+    // the item the caller must own. The other item is only pointed at.
+
+    [HttpPost("workitems/{id}/dependencies")]
+    public Task<IActionResult> AddWorkItemDependency(string id, [FromBody] AgentWorkItemDependencyRequest request)
+        => ChangeWorkItemDependencyAsync(id, request.DependsOnWorkItemId, adding: true);
+
+    [HttpDelete("workitems/{id}/dependencies/{dependsOnId}")]
+    public Task<IActionResult> RemoveWorkItemDependency(string id, string dependsOnId)
+        => ChangeWorkItemDependencyAsync(id, dependsOnId, adding: false);
+
+    private async Task<IActionResult> ChangeWorkItemDependencyAsync(string id, string? rawDependsOn, bool adding)
+    {
+        try
+        {
+            var wi = await _workItems.GetWorkItemAsync(id);
+            if (wi == null) return NotFound();
+            if (!CallerOwns(wi))
+                return StatusCode(403, new { error = "You can only change the dependencies of work items your own session created. To suggest this change, use propose_workitem_edit with addDependencies or removeDependencies: a human approves or rejects it." });
+
+            var dependsOn = rawDependsOn?.Trim() ?? string.Empty;
+            if (dependsOn.Length == 0)
+                return BadRequest(new { error = "dependsOnWorkItemId is required." });
+            if (dependsOn == id)
+                return BadRequest(new { error = "A work item cannot depend on itself." });
+            if (await _workItems.GetWorkItemAsync(dependsOn) == null)
+                return BadRequest(new { error = $"Dependency not found: {dependsOn}" });
+
+            var before = await _workItems.GetDependenciesAsync(id);
+            if (before.Any(d => d.Id == dependsOn) == adding)
+            {
+                var unchanged = adding
+                    ? $"Nothing changed: work item {id} already depends on {dependsOn}."
+                    : $"Nothing changed: work item {id} does not depend on {dependsOn}.";
+                return Ok(DependencyChange(id, dependsOn, changed: false, unchanged, before));
+            }
+
+            bool ok;
+            try
+            {
+                ok = adding
+                    ? await _workItems.AddDependencyAsync(id, dependsOn)
+                    : await _workItems.RemoveDependencyAsync(id, dependsOn);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+            if (!ok)
+                return StatusCode(503, new { error = "Work item dependency change failed." });
+
+            var message = adding
+                ? $"Work item {id} now depends on {dependsOn}."
+                : $"Work item {id} no longer depends on {dependsOn}.";
+            return Ok(DependencyChange(id, dependsOn, changed: true, message, await _workItems.GetDependenciesAsync(id)));
+        }
+        catch (HttpRequestException ex)
+        {
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
+        }
+    }
+
+    private static object DependencyChange(
+        string id, string dependsOn, bool changed, string message, IReadOnlyList<WorkItemView> dependencies) => new
+    {
+        workItemId = id,
+        dependsOnWorkItemId = dependsOn,
+        changed,
+        message,
+        dependencies = dependencies.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
+    };
+
     // -- Work Item Edit Proposals ---------------------------------------------
     //
     // The way an agent suggests an edit to an item its session did not create.
@@ -1272,8 +1346,9 @@ public class AgentController : ControllerBase
             return sessionError;
 
         if (request.Title is null && request.Description is null && request.Tags is null
-            && request.BranchNameOverride is null && request.BaseBranchOverride is null)
-            return BadRequest(new { error = "Propose at least one of title, description, tags, branchNameOverride or baseBranchOverride." });
+            && request.BranchNameOverride is null && request.BaseBranchOverride is null
+            && request.AddDependencies is null && request.RemoveDependencies is null)
+            return BadRequest(new { error = "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, addDependencies or removeDependencies." });
         if (request.Title is not null && string.IsNullOrWhiteSpace(request.Title))
             return BadRequest(new { error = "A proposed title cannot be blank." });
 
@@ -1286,9 +1361,15 @@ public class AgentController : ControllerBase
             && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
 
+        var addDependencies = TrimIds(request.AddDependencies);
+        var removeDependencies = TrimIds(request.RemoveDependencies);
+
         EditProposalCreateResult result;
         try
         {
+            if (await CheckProposedDependenciesAsync(id, addDependencies, removeDependencies) is { } dependencyError)
+                return dependencyError;
+
             result = await _workItems.ProposeEditAsync(id, new RemoteCreateEditProposalRequest
             {
                 Title = request.Title,
@@ -1296,6 +1377,8 @@ public class AgentController : ControllerBase
                 Tags = request.Tags,
                 BranchNameOverride = request.BranchNameOverride,
                 BaseBranchOverride = request.BaseBranchOverride,
+                AddDependencies = addDependencies,
+                RemoveDependencies = removeDependencies,
                 Rationale = request.Rationale,
                 CreatedByLoopRunId = runId,
                 CreatedByChatSessionId = chatSessionId,
@@ -1326,6 +1409,34 @@ public class AgentController : ControllerBase
             default:
                 return BadRequest(new { error = result.Error });
         }
+    }
+
+    private static List<string>? TrimIds(List<string>? ids) => ids?.Select(i => i?.Trim() ?? string.Empty).ToList();
+
+    private async Task<IActionResult?> CheckProposedDependenciesAsync(string id, List<string>? add, List<string>? remove)
+    {
+        if (add is null && remove is null) return null;
+        var named = (add ?? []).Concat(remove ?? []).ToList();
+        if (named.Any(d => d.Length == 0))
+            return BadRequest(new { error = "A dependency id cannot be blank." });
+        if (named.Distinct().Count() != named.Count)
+            return BadRequest(new { error = "Each dependency may appear only once across addDependencies and removeDependencies." });
+
+        if (await _workItems.GetWorkItemAsync(id) == null) return NotFound();
+        var current = (await _workItems.GetDependenciesAsync(id)).Select(d => d.Id).ToHashSet();
+        foreach (var dep in remove ?? [])
+        {
+            if (!current.Contains(dep))
+                return BadRequest(new { error = $"Work item {id} does not depend on {dep}, so there is nothing to remove." });
+        }
+        foreach (var dep in add ?? [])
+        {
+            if (current.Contains(dep))
+                return BadRequest(new { error = $"Work item {id} already depends on {dep}." });
+            if (await _workItems.CheckNewDependencyAsync(id, dep) is { } problem)
+                return BadRequest(new { error = problem });
+        }
+        return null;
     }
 
     /// <summary>

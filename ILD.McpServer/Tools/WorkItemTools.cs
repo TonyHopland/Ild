@@ -5,7 +5,8 @@ namespace ILD.McpServer.Tools;
 
 /// <summary>
 /// MCP tools that mutate state. An agent may create work items in the Backlog
-/// column, and edit or delete the items its own session created — but NOT
+/// column, and edit or delete the items its own session created and change
+/// their dependencies — but NOT
 /// pre-existing items or items from other sessions. For those it may only
 /// propose an edit, which a human approves or rejects (ADR-0022). Agents are
 /// still NOT allowed to start, move, or otherwise transition work items via
@@ -50,7 +51,7 @@ public sealed class WorkItemTools
     }
 
     [McpServerTool(Name = "update_workitem")]
-    [Description("Edit a work item THIS session created. In a loop run that means an item whose createdByLoopRunId matches the current run (the ILD_LOOP_RUN_ID env var); in a chat session it means an item whose createdByChatSessionId matches the current chat session (the ILD_CHAT_SESSION_ID env var). You CANNOT edit pre-existing items or items created by other runs or sessions; the server rejects those with 403 — use propose_workitem_edit to suggest an edit to one of those for a human to approve. Updates the title and description, and optionally replaces the tags (tags determine which loop template executes the item — each must match a loop template name).")]
+    [Description("Edit a work item THIS session created. In a loop run that means an item whose createdByLoopRunId matches the current run (the ILD_LOOP_RUN_ID env var); in a chat session it means an item whose createdByChatSessionId matches the current chat session (the ILD_CHAT_SESSION_ID env var). You CANNOT edit pre-existing items or items created by other runs or sessions; the server rejects those with 403 — use propose_workitem_edit to suggest an edit to one of those for a human to approve. Updates the title and description, and optionally replaces the tags (tags determine which loop template executes the item — each must match a loop template name). Dependencies are changed with add_workitem_dependency and remove_workitem_dependency.")]
     public Task<string> UpdateWorkItem(
         [Description("Work item GUID. Must have been created by this session.")] string id,
         [Description("New title (1..512 chars).")] string title,
@@ -72,8 +73,25 @@ public sealed class WorkItemTools
         [Description("Work item GUID. Must have been created by this session.")] string id)
         => _ild.DeleteAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}");
 
+    [McpServerTool(Name = "add_workitem_dependency")]
+    [Description("Make a work item THIS session created wait on another work item: workItemId will depend on dependsOnWorkItemId. Only workItemId must be this session's own (the same rule as update_workitem); dependsOnWorkItemId may be any existing work item and is not changed. For an item this session did not create the server answers 403 — use propose_workitem_edit with addDependencies to suggest it for a human to approve. An edge that would create a cycle, an unknown item, or an item depending on itself is refused with 400. Adding an edge that already exists changes nothing and says so (changed=false). Returns the item's dependencies after the call, each with id, title and status.")]
+    public Task<string> AddWorkItemDependency(
+        [Description("GUID of the dependent work item (the one that waits). Must have been created by this session.")] string workItemId,
+        [Description("GUID of the work item it should wait on. Any existing work item.")] string dependsOnWorkItemId)
+        => _ild.PostJsonAsync(
+            $"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/dependencies",
+            new { dependsOnWorkItemId });
+
+    [McpServerTool(Name = "remove_workitem_dependency")]
+    [Description("Stop a work item THIS session created from waiting on another work item: removes the edge workItemId -> dependsOnWorkItemId. Only workItemId must be this session's own (the same rule as update_workitem); dependsOnWorkItemId is not changed. For an item this session did not create the server answers 403 — use propose_workitem_edit with removeDependencies to suggest it for a human to approve. Removing an edge that does not exist changes nothing and says so (changed=false). Returns the item's dependencies after the call, each with id, title and status.")]
+    public Task<string> RemoveWorkItemDependency(
+        [Description("GUID of the dependent work item (the one that waits). Must have been created by this session.")] string workItemId,
+        [Description("GUID of the work item it should no longer wait on.")] string dependsOnWorkItemId)
+        => _ild.DeleteAsync(
+            $"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/dependencies/{Uri.EscapeDataString(dependsOnWorkItemId)}");
+
     [McpServerTool(Name = "propose_workitem_edit")]
-    [Description("Propose an edit to ANY work item, including ones this session did not create. Nothing changes until a human approves the proposal; they may instead reject it, with a reason. Only the fields you pass are proposed — omit a field to leave it out of the proposal. If the item is edited before the human approves, the proposal goes stale and nothing is applied; propose again against the current values if the edit still makes sense. Returns the proposal id and its status (Pending). Use list_workitem_edit_proposals to see what became of it. For items this session created, update_workitem applies edits directly.")]
+    [Description("Propose an edit to ANY work item, including ones this session did not create. Nothing changes until a human approves the proposal; they may instead reject it, with a reason. Only the fields you pass are proposed — omit a field to leave it out of the proposal. If the item is edited before the human approves, the proposal goes stale and nothing is applied; propose again against the current values if the edit still makes sense. Returns the proposal id and its status (Pending). Use list_workitem_edit_proposals to see what became of it. A proposal can also add or remove dependencies of the item; one that changes them goes stale if the item's dependencies change before approval, and an approval whose addition would by then create a cycle is refused and stays pending. For items this session created, update_workitem, add_workitem_dependency and remove_workitem_dependency apply changes directly.")]
     public Task<string> ProposeWorkItemEdit(
         [Description("Work item GUID. Any work item.")] string id,
         [Description("Proposed title (1..512 chars). Omit to leave the title out of the proposal.")]
@@ -86,10 +104,14 @@ public sealed class WorkItemTools
         string? branchNameOverride = null,
         [Description("Proposed base branch the item's runs start from and open PRs against. Pass an empty string to propose going back to the repository's default branch; omit to leave it out of the proposal.")]
         string? baseBranchOverride = null,
+        [Description("Proposed work item GUIDs for the item to start depending on. Each must exist, not already be a dependency, and not create a cycle. Omit to add none.")]
+        string[]? addDependencies = null,
+        [Description("Proposed work item GUIDs for the item to stop depending on. Each must be a current dependency. Omit to remove none.")]
+        string[]? removeDependencies = null,
         [Description("Optional short reason for the edit (up to 2000 chars), shown to the human deciding.")]
         string? rationale = null)
     {
-        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, rationale };
+        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, addDependencies, removeDependencies, rationale };
         return _ild.PostJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}/edit-proposals", body);
     }
 

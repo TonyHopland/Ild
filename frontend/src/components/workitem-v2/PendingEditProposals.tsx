@@ -9,6 +9,8 @@ function proposedFields({ proposed }: WorkItemEditProposal): string[] {
   if (proposed.tags != null) fields.push("Tags");
   if (proposed.branchNameOverride != null) fields.push("Branch");
   if (proposed.baseBranchOverride != null) fields.push("Base branch");
+  if (proposed.addDependencies?.length || proposed.removeDependencies?.length)
+    fields.push("Dependencies");
   return fields;
 }
 

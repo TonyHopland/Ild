@@ -145,10 +145,17 @@ export interface WorkItem {
 
 export type WorkItemEditProposalStatus = "Pending" | "Approved" | "Rejected" | "Stale";
 
+/** A work item an edit proposal names as a dependency; title is null once that item no longer exists. */
+export interface EditProposalDependency {
+  id: string;
+  title: string | null;
+}
+
 /**
  * An agent's proposed edit to a work item, applied only when a human approves it.
  * In `proposed`, null or absent means the field is not part of the proposal and a
- * blank override clears it. `snapshot` holds the item's values when it was proposed.
+ * blank override clears it. `snapshot` holds the item's values when it was proposed,
+ * and its dependency set only when the proposal changes it.
  */
 export interface WorkItemEditProposal {
   id: string;
@@ -160,6 +167,8 @@ export interface WorkItemEditProposal {
     tags?: string[] | null;
     branchNameOverride?: string | null;
     baseBranchOverride?: string | null;
+    addDependencies?: EditProposalDependency[] | null;
+    removeDependencies?: EditProposalDependency[] | null;
   };
   snapshot: {
     title: string | null;
@@ -167,6 +176,7 @@ export interface WorkItemEditProposal {
     tags: string[] | null;
     branchNameOverride: string | null;
     baseBranchOverride: string | null;
+    dependencies?: string[] | null;
   };
   rationale: string | null;
   rejectionReason: string | null;

@@ -491,6 +491,67 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_dependency_proposal_snapshots_the_set_names_its_items_and_approving_applies_the_snapshot_minus_removals_plus_additions()
+    {
+        var item = await CreateItemAsync();
+        var kept = await CreateItemAsync("Kept dependency");
+        var dropped = await CreateItemAsync("Dropped dependency");
+        var added = await CreateItemAsync("Chat tab");
+        var gone = await CreateItemAsync("Soon deleted");
+        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, kept.Id, TestContext.Current.CancellationToken));
+        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, dropped.Id, TestContext.Current.CancellationToken));
+
+        var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest
+        {
+            Description = "A sharper description.",
+            AddDependencies = new[] { added.Id },
+            RemoveDependencies = new[] { dropped.Id },
+        });
+        var other = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { AddDependencies = new[] { gone.Id } });
+        Assert.True(await _client.DeleteAsync(_opts, gone.Id, TestContext.Current.CancellationToken));
+
+        Assert.Equal(new[] { kept.Id, dropped.Id }.Order(), proposal.Snapshot.Dependencies!.Order());
+        Assert.Equal(new[] { (added.Id, (string?)"Chat tab") }, proposal.Proposed.AddDependencies!.Select(d => (d.Id, d.Title)));
+        Assert.Equal(new[] { (dropped.Id, (string?)"Dropped dependency") }, proposal.Proposed.RemoveDependencies!.Select(d => (d.Id, d.Title)));
+        var otherRead = await ReadProposalAsync(item.Id, other.Id);
+        Assert.Equal(new[] { (gone.Id, (string?)null) }, otherRead.Proposed.AddDependencies!.Select(d => (d.Id, d.Title)));
+        Assert.Equal(new[] { kept.Id, dropped.Id }.Order(), (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.Dependencies.Order());
+
+        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(EditProposalDecisionOutcome.Applied, approved.Outcome);
+        Assert.Equal(new[] { (added.Id, (string?)"Chat tab") }, approved.Proposal!.Proposed.AddDependencies!.Select(d => (d.Id, d.Title)));
+        var stored = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!;
+        Assert.Equal(new[] { kept.Id, added.Id }.Order(), stored.Dependencies.Order());
+        Assert.Equal("A sharper description.", stored.Description);
+        Assert.Equal(RemoteEditProposalStatus.Stale, (await ReadProposalAsync(item.Id, other.Id)).Status);
+    }
+
+    /// <summary>
+    /// The dependency set is compared in the same step as the write: an edge a
+    /// human adds after the approve started is never dropped by applying the
+    /// proposal against the set it was made from.
+    /// </summary>
+    [Fact]
+    public async Task A_dependency_change_landing_while_the_approve_is_in_flight_is_never_overwritten()
+    {
+        var item = await CreateItemAsync();
+        var dropped = await CreateItemAsync("Dropped dependency");
+        var humanAdded = await CreateItemAsync("Added by a human");
+        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, dropped.Id, TestContext.Current.CancellationToken));
+        var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { RemoveDependencies = new[] { dropped.Id } });
+
+        _humanEdit.ArmDependencies(item.Id, new[] { dropped.Id, humanAdded.Id });
+        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+
+        Assert.True(_humanEdit.Fired, "the approve never wrote to the work item");
+        Assert.Equal(EditProposalDecisionOutcome.Stale, result.Outcome);
+        Assert.Equal(new[] { dropped.Id, humanAdded.Id }.Order(),
+            (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.Dependencies.Order());
+        Assert.Equal(RemoteEditProposalStatus.Stale, (await ReadProposalAsync(item.Id, proposal.Id)).Status);
+    }
+
+    [Fact]
     public void The_servers_model_has_no_change_that_lacks_a_scaffolded_migration()
     {
         // The tests run the server on SQLite through EnsureCreated, so only this
@@ -523,14 +584,21 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     private sealed class HumanEditBeforeWorkItemWrite : DbCommandInterceptor
     {
         private string? _workItemId;
-        private string? _description;
+        private string _column = "Description";
+        private string? _value;
 
         public bool Fired { get; private set; }
 
-        public void Arm(string workItemId, string description)
+        public void Arm(string workItemId, string description) => Arm(workItemId, "Description", description);
+
+        public void ArmDependencies(string workItemId, IReadOnlyList<string> dependencies)
+            => Arm(workItemId, "DependenciesJson", System.Text.Json.JsonSerializer.Serialize(dependencies));
+
+        private void Arm(string workItemId, string column, string value)
         {
             _workItemId = workItemId;
-            _description = description;
+            _column = column;
+            _value = value;
         }
 
         public override InterceptionResult<DbDataReader> ReaderExecuting(
@@ -570,11 +638,11 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
 
             using var edit = command.Connection!.CreateCommand();
             edit.Transaction = command.Transaction;
-            edit.CommandText = "UPDATE \"WorkItems\" SET \"Description\" = $description WHERE \"Id\" = $id";
-            var description = edit.CreateParameter();
-            description.ParameterName = "$description";
-            description.Value = _description;
-            edit.Parameters.Add(description);
+            edit.CommandText = $"UPDATE \"WorkItems\" SET \"{_column}\" = $value WHERE \"Id\" = $id";
+            var value = edit.CreateParameter();
+            value.ParameterName = "$value";
+            value.Value = _value;
+            edit.Parameters.Add(value);
             var id = edit.CreateParameter();
             id.ParameterName = "$id";
             id.Value = workItemId;

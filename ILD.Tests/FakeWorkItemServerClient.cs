@@ -204,6 +204,8 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Tags = req.Tags?.ToList(),
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
+            AddDependencies = req.AddDependencies?.ToList(),
+            RemoveDependencies = req.RemoveDependencies?.ToList(),
             Rationale = req.Rationale,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
@@ -272,7 +274,12 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         Tags = dto.Tags,
         BranchNameOverride = dto.BranchNameOverride,
         BaseBranchOverride = dto.BaseBranchOverride,
+        AddDependencies = dto.AddDependencies?.Select(ToRemote).ToList(),
+        RemoveDependencies = dto.RemoveDependencies?.Select(ToRemote).ToList(),
+        Dependencies = dto.Dependencies,
     };
+
+    private static RemoteEditProposalDependency ToRemote(EditProposalDependencyDto dto) => new() { Id = dto.Id, Title = dto.Title };
 
     public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
     {

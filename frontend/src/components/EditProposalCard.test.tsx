@@ -71,6 +71,42 @@ describe("EditProposalCard", () => {
     expect(text).not.toContain("feature/untouched-branch");
   });
 
+  test("shows each dependency change as a line naming the item, and no title it does not know", () => {
+    const { container } = render(
+      <EditProposalCard
+        proposal={makeProposal({
+          proposed: {
+            addDependencies: [{ id: "wi-277", title: "Chat tab" }],
+            removeDependencies: [
+              { id: "wi-12", title: "Old plan" },
+              { id: "wi-9", title: null },
+            ],
+          },
+          snapshot: { ...makeProposal().snapshot, dependencies: ["wi-12", "wi-9"] },
+        })}
+        onSettled={vi.fn()}
+      />,
+    );
+    const text = (container.textContent ?? "").replace(/\s+/g, " ");
+
+    expect(text).toMatch(/Add dependency: ?#wi-277 ?Chat tab/);
+    expect(text).toMatch(/Remove dependency: ?#wi-12 ?Old plan/);
+
+    const goneLines = Array.from(container.querySelectorAll("*")).filter(
+      (el) =>
+        /Remove dependency/.test(el.textContent ?? "") &&
+        /#wi-9/.test(el.textContent ?? "") &&
+        !/wi-12/.test(el.textContent ?? ""),
+    );
+    expect(goneLines.length).toBeGreaterThan(0);
+    const line = goneLines[goneLines.length - 1].textContent ?? "";
+    expect(line.replace(/\s+/g, " ").trim()).toMatch(/^Remove dependency: ?#wi-9$/);
+
+    // Nothing else was proposed.
+    expect(text).not.toContain("Old title");
+    expect(text).not.toContain("develop-base");
+  });
+
   test("approving calls the approve endpoint for this proposal, then reports it settled", async () => {
     const approval = deferred<unknown>();
     const approve = vi
