@@ -104,3 +104,7 @@ Keep code, tests, docs and examples generic. NEVER reference the infrastructure
 of the deployment you are running in: its hostnames, domains, IP addresses or
 accounts. Use reserved example names instead (`example.com`, `*.example`,
 `*.test`, `*.invalid`).
+
+## WorkItem Server contract
+
+The WorkItem Server API is a contract that may be implemented over external trackers (GitHub Issues, Azure DevOps). Do not add fields, columns or endpoints for Ild-specific data to it. Store such data on the Ild instance, keyed by work item ID. See [ADR-0025](docs/adr/0025-workitem-server-contract-is-tracker-mappable.md).
