@@ -249,6 +249,80 @@ describe("The schedules list orders what it shows", () => {
     expect(service.listEvery).toHaveBeenCalledTimes(4);
   });
 
+  test("a created schedule an earlier read already brought in is shown once", async () => {
+    service.listEvery.mockResolvedValue([]);
+    renderList();
+    await waitFor(() => expect(service.listEvery).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "New schedule" }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText(/^name/i), {
+      target: { value: "Weekly retro" },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/prompt/i), { target: { value: "Check." } });
+    const create = deferred<ChatSchedule>();
+    service.create.mockReturnValueOnce(create.promise);
+    fireEvent.click(within(dialog).getByRole("button", { name: /^create/i }));
+
+    service.listEvery.mockResolvedValue([schedule(true)]);
+    emit("ChatSchedulesChanged", { scheduleId: "s1" });
+    await screen.findByText("Weekly retro", { selector: "h2" });
+    service.listEvery.mockRejectedValue({ message: "offline" });
+    await act(async () => create.resolve(schedule(true)));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getAllByText("Weekly retro", { selector: "h2" })).toHaveLength(1);
+  });
+
+  test("a settled save costs one re-read", async () => {
+    service.listEvery.mockResolvedValue([schedule(true)]);
+    renderList();
+    await waitFor(() => expect(service.listEvery).toHaveBeenCalledTimes(2));
+
+    service.update.mockResolvedValueOnce(schedule(false));
+    service.listEvery.mockResolvedValue([schedule(false)]);
+    fireEvent.click(toggle());
+    await waitFor(() => expect(service.listEvery).toHaveBeenCalledTimes(3));
+    await act(async () => {});
+    expect(service.listEvery).toHaveBeenCalledTimes(3);
+  });
+
+  test("an older Run now answer does not take the place of a newer firing already shown", async () => {
+    const firing = (id: string, firedAt: string, chatSessionId: string) => ({
+      id,
+      trigger: "RunNow" as const,
+      scheduledFor: null,
+      firedAt,
+      outcome: "Running" as const,
+      reason: null,
+      chatSessionId,
+      createdWorkItemIds: [],
+      unresolvedItems: 0,
+    });
+    service.listEvery.mockResolvedValue([schedule(true)]);
+    renderList();
+    await waitFor(() => expect(service.listEvery).toHaveBeenCalledTimes(2));
+
+    const run = deferred<ReturnType<typeof firing>>();
+    service.runNow.mockReturnValueOnce(run.promise);
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+    service.listEvery.mockResolvedValue([
+      {
+        ...schedule(true),
+        latestChatSessionId: "c2",
+        lastFiring: firing("f2", "2026-07-06T07:00:00Z", "c2"),
+      },
+    ]);
+    emit("ChatSchedulesChanged", { scheduleId: "s1" });
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: /chat/i }).getAttribute("href")).toBe("/chat/c2"),
+    );
+
+    service.listEvery.mockRejectedValue({ message: "offline" });
+    await act(async () => run.resolve(firing("f1", "2026-07-06T06:00:00Z", "c1")));
+    expect(screen.getByRole("link", { name: /chat/i }).getAttribute("href")).toBe("/chat/c2");
+  });
+
   test("a scheduler event is a hint: the pause shown is the one the server reads back", async () => {
     service.listEvery.mockResolvedValue([]);
     renderList();

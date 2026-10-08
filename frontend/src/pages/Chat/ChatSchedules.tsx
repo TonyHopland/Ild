@@ -37,6 +37,9 @@ const SCOPES: { value: ChatScheduleRepositoryScope; label: string }[] = [
 const failure = (error: unknown, fallback: string) =>
   (error as { message?: string } | null)?.message || fallback;
 
+const isNotOlder = (firing: ChatScheduleFiring, shown: ChatScheduleFiring | null) =>
+  shown === null || Date.parse(firing.firedAt) >= Date.parse(shown.firedAt);
+
 const formatTime = (iso: string) => new Date(iso).toLocaleString();
 
 const toInput = (schedule: ChatSchedule): ChatScheduleInput => ({
@@ -86,7 +89,6 @@ function LastFiring({ firing }: { firing: ChatScheduleFiring | null }) {
   );
 }
 
-/** Sends one write of a schedule, then applies the change to the list its answer confirms. */
 type ScheduleWrite = (
   scheduleId: string,
   request: () => Promise<(list: ChatSchedule[]) => ChatSchedule[]>,
@@ -124,7 +126,6 @@ function ScheduleRow({
 }: {
   schedule: ChatSchedule;
   repositories: Repository[] | null;
-  /** A write of this schedule's is out, from this row or its edit form. */
   writing: boolean;
   editing: boolean;
   onEdit: () => void;
@@ -475,9 +476,6 @@ export default function ChatSchedules() {
   const openForm = (schedule: ChatSchedule | null) =>
     setForm({ opening: ++openingsRef.current, schedule });
 
-  // One read of the list at a time, and one more if asked for meanwhile, however
-  // many hints arrive. A read that was out when a write was confirmed is dropped,
-  // so it never puts back a list from before that write.
   const readRef = useRef(0);
   const staleThroughReadRef = useRef(0);
   const readingRef = useRef(false);
@@ -507,7 +505,6 @@ export default function ChatSchedules() {
       readingRef.current = false;
     }
   }, []);
-  // What a write confirmed is shown at once, whether or not the re-read after it succeeds.
   const confirm = useCallback(
     (change: (list: ChatSchedule[]) => ChatSchedule[]) => {
       staleThroughReadRef.current = readRef.current;
@@ -517,9 +514,6 @@ export default function ChatSchedules() {
     [reload],
   );
 
-  // Each write sends the whole schedule, so a later one would undo an earlier one:
-  // a schedule has one write out at a time, held until its answer is in even when
-  // the form that sent it has closed.
   const [writing, setWriting] = useState<ReadonlySet<string>>(new Set());
   const writingRef = useRef(new Set<string>());
   const write = useCallback<ScheduleWrite>(
@@ -530,10 +524,12 @@ export default function ChatSchedules() {
       setWriting(new Set(writingRef.current));
       try {
         confirm(await request());
+      } catch (e) {
+        void reload();
+        throw e;
       } finally {
         writingRef.current.delete(scheduleId);
         setWriting(new Set(writingRef.current));
-        void reload();
       }
     },
     [confirm, reload],
@@ -626,7 +622,7 @@ export default function ChatSchedules() {
               onRanNow={(firing) =>
                 confirm((list) =>
                   list.map((s) =>
-                    s.id === schedule.id
+                    s.id === schedule.id && isNotOlder(firing, s.lastFiring)
                       ? {
                           ...s,
                           lastFiring: firing,
@@ -656,7 +652,7 @@ export default function ChatSchedules() {
               });
             } else {
               const created = await chatScheduleService.create(body);
-              confirm((list) => [...list, created]);
+              confirm((list) => [...list.filter((s) => s.id !== created.id), created]);
             }
           }}
           // Closes only the form that saved, not one opened since it was closed.
