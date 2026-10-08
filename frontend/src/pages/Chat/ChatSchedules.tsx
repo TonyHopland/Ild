@@ -51,7 +51,6 @@ const toInput = (schedule: ChatSchedule): ChatScheduleInput => ({
   continueSession: schedule.continueSession,
 });
 
-/** The repositories a schedule may use, by name once they are known. */
 function repositoriesText(schedule: ChatSchedule, repositories: Repository[] | null): string {
   if (schedule.repositoryScope === "All") return "All repositories";
   if (schedule.repositoryScope === "None") return "None";
@@ -108,23 +107,29 @@ function useAct(fallback: string, onSettled: () => void) {
   return { busy, error, run };
 }
 
-/** One schedule on the list. Keyed by the schedule, so its acts and delete confirmation are its own. */
+// Keyed by the schedule, so its acts and delete confirmation are its own. Only one
+// write of a schedule is out at a time, toggle, delete or its open edit form, since
+// each sends the whole schedule and the later one would undo the earlier.
 function ScheduleRow({
   schedule,
   repositories,
+  editing,
   onEdit,
+  onConfirmed,
   onChanged,
 }: {
   schedule: ChatSchedule;
   repositories: Repository[] | null;
+  editing: boolean;
   onEdit: () => void;
-  /** A change this row asked for has settled, so the list is re-read. */
+  onConfirmed: (change: (list: ChatSchedule[]) => ChatSchedule[]) => void;
   onChanged: () => void;
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const toggle = useAct("The schedule could not be saved.", onChanged);
   const runNow = useAct("The schedule could not be run.", onChanged);
   const remove = useAct("The schedule could not be deleted.", onChanged);
+  const writing = toggle.busy || remove.busy;
   const when = cronText(schedule.cronExpression) ?? schedule.cronExpression;
   const facts: [string, React.ReactNode][] = [
     ["When", `${when} (${schedule.timeZone})`],
@@ -142,14 +147,15 @@ function ScheduleRow({
         <Switch
           checked={schedule.enabled}
           label={`Enabled: ${schedule.name}`}
-          disabled={toggle.busy}
+          disabled={writing || editing}
           onChange={() =>
-            void toggle.run(() =>
-              chatScheduleService.update(schedule.id, {
+            void toggle.run(async () => {
+              const saved = await chatScheduleService.update(schedule.id, {
                 ...toInput(schedule),
                 enabled: !schedule.enabled,
-              }),
-            )
+              });
+              onConfirmed((list) => list.map((s) => (s.id === saved.id ? saved : s)));
+            })
           }
         />
       </header>
@@ -171,11 +177,23 @@ function ScheduleRow({
           type="button"
           className="btn btn-secondary btn-small"
           disabled={runNow.busy}
-          onClick={() => void runNow.run(() => chatScheduleService.runNow(schedule.id))}
+          onClick={() =>
+            void runNow.run(async () => {
+              const firing = await chatScheduleService.runNow(schedule.id);
+              onConfirmed((list) =>
+                list.map((s) => (s.id === schedule.id ? { ...s, lastFiring: firing } : s)),
+              );
+            })
+          }
         >
           Run now
         </button>
-        <button type="button" className="btn btn-secondary btn-small" onClick={onEdit}>
+        <button
+          type="button"
+          className="btn btn-secondary btn-small"
+          disabled={writing}
+          onClick={onEdit}
+        >
           Edit
         </button>
         {confirmingDelete ? (
@@ -190,7 +208,10 @@ function ScheduleRow({
               className="btn btn-danger btn-small"
               onClick={() => {
                 setConfirmingDelete(false);
-                void remove.run(() => chatScheduleService.delete(schedule.id));
+                void remove.run(async () => {
+                  await chatScheduleService.delete(schedule.id);
+                  onConfirmed((list) => list.filter((s) => s.id !== schedule.id));
+                });
               }}
             >
               Delete
@@ -207,7 +228,7 @@ function ScheduleRow({
           <button
             type="button"
             className="btn btn-danger btn-small"
-            disabled={remove.busy}
+            disabled={writing || editing}
             onClick={() => setConfirmingDelete(true)}
           >
             Delete
@@ -238,7 +259,7 @@ function ScheduleForm({
   providers: AiProvider[] | null;
   repositories: Repository[] | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (saved: ChatSchedule) => void;
 }) {
   const [input, setInput] = useState<ChatScheduleInput>(() =>
     schedule
@@ -277,9 +298,11 @@ function ScheduleForm({
       repositoryIds: input.repositoryScope === "Selected" ? input.repositoryIds : [],
     };
     try {
-      if (schedule) await chatScheduleService.update(schedule.id, body);
-      else await chatScheduleService.create(body);
-      onSaved();
+      onSaved(
+        schedule
+          ? await chatScheduleService.update(schedule.id, body)
+          : await chatScheduleService.create(body),
+      );
     } catch (e) {
       setError(failure(e, "The schedule could not be saved."));
     } finally {
@@ -459,7 +482,7 @@ export default function ChatSchedules() {
     const read = ++readRef.current;
     const current = () => read > appliedReadRef.current && read > staleThroughReadRef.current;
     try {
-      const list = await chatScheduleService.list();
+      const list = await chatScheduleService.listEvery();
       if (!current()) return;
       appliedReadRef.current = read;
       setSchedules(list);
@@ -467,6 +490,11 @@ export default function ChatSchedules() {
     } catch (e) {
       if (current()) setLoadError(failure(e, "Could not load the schedules."));
     }
+  }, []);
+  // What a write confirmed is shown at once, whether or not the re-read after it succeeds.
+  const confirm = useCallback((change: (list: ChatSchedule[]) => ChatSchedule[]) => {
+    staleThroughReadRef.current = readRef.current;
+    setSchedules((list) => list && change(list));
   }, []);
   const writeSettled = useCallback(() => {
     staleThroughReadRef.current = readRef.current;
@@ -553,7 +581,9 @@ export default function ChatSchedules() {
               key={schedule.id}
               schedule={schedule}
               repositories={repositories}
+              editing={form?.schedule?.id === schedule.id}
               onEdit={() => openForm(schedule)}
+              onConfirmed={confirm}
               onChanged={writeSettled}
             />
           ))
@@ -566,9 +596,14 @@ export default function ChatSchedules() {
           providers={providers}
           repositories={repositories}
           onClose={() => setForm(null)}
-          onSaved={() => {
+          onSaved={(saved) => {
             // Closes only the form that saved, not one opened since it was closed.
             setForm((open) => (open?.opening === form.opening ? null : open));
+            confirm((list) =>
+              list.some((s) => s.id === saved.id)
+                ? list.map((s) => (s.id === saved.id ? saved : s))
+                : [...list, saved],
+            );
             writeSettled();
           }}
         />

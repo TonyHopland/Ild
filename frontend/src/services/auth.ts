@@ -847,9 +847,13 @@ export const chatService = {
 
 /** The signed-in user's chat schedules: each starts a chat turn of theirs on a cron. */
 export const chatScheduleService = {
-  list: async (): Promise<ChatSchedule[]> => {
-    return api.get<ChatSchedule[]>("/chat/schedules");
+  list: async (opts?: { skip?: number; take?: number }): Promise<ChatSchedule[]> => {
+    return api.get<ChatSchedule[]>(`/chat/schedules${pageQuery(opts)}`);
   },
+
+  /** Every schedule, read page by page past the server's per-request cap. */
+  listEvery: async (): Promise<ChatSchedule[]> =>
+    readEveryPage((opts) => chatScheduleService.list(opts)),
 
   create: async (input: ChatScheduleInput): Promise<ChatSchedule> => {
     return api.post<ChatSchedule>("/chat/schedules", input);

@@ -21,10 +21,13 @@ public class ChatSchedulesController : ControllerBase
     }
 
     [HttpGet]
-    public async Task<IActionResult> List(CancellationToken ct)
+    public async Task<IActionResult> List([FromQuery] int skip = 0, [FromQuery] int take = 100, CancellationToken ct = default)
     {
         if (!TryResolveUser(out var userId, out var error)) return error;
-        return Ok(await _schedules.ListAsync(userId, ct));
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 100;
+        if (take > 500) take = 500;
+        return Ok(await _schedules.ListAsync(userId, skip, take, ct));
     }
 
     [HttpPost]

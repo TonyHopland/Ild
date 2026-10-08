@@ -1162,7 +1162,7 @@ public class AgentController : ControllerBase
         var credit = createdByChatSessionId is { } chatId
             && Request.Headers.TryGetValue(ChatTurnIdHeader, out var turnHdr)
             && Guid.TryParse(turnHdr.ToString(), out var turnId)
-                ? await ScheduledItemCredit.ForTurnAsync(_db, _log, chatId, turnId)
+                ? await ScheduledItemCredit.ForTurnAsync(_db, _chatNotifier, _log, chatId, turnId)
                 : null;
 
         // Validate dependencies up-front so we don't half-create.

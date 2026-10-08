@@ -6,7 +6,7 @@ import type { ChatSchedule } from "../../types";
 const { handlers, service, settings } = vi.hoisted(() => ({
   handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
   service: {
-    list: vi.fn(),
+    listEvery: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
@@ -91,36 +91,36 @@ const renderList = () =>
     </MemoryRouter>,
   );
 
-const toggle = () => screen.getByRole("checkbox", { name: /enabled/i }) as HTMLInputElement;
+const toggle = () => screen.getByRole("checkbox", { name: /^Enabled: / }) as HTMLInputElement;
 
 describe("The schedules list orders what it shows", () => {
   test("a schedules hint re-reads the list", async () => {
-    service.list.mockResolvedValue([schedule(true)]);
+    service.listEvery.mockResolvedValue([schedule(true)]);
     renderList();
     await screen.findByText("Weekly retro");
 
-    service.list.mockResolvedValue([schedule(true, "Renamed elsewhere")]);
+    service.listEvery.mockResolvedValue([schedule(true, "Renamed elsewhere")]);
     emit("ChatSchedulesChanged", { scheduleId: "s1" });
 
     expect(await screen.findByText("Renamed elsewhere")).toBeTruthy();
   });
 
   test("a read started before a save settled never shows over the read that follows the save", async () => {
-    service.list.mockResolvedValue([schedule(true)]);
+    service.listEvery.mockResolvedValue([schedule(true)]);
     renderList();
     await screen.findByText("Weekly retro");
     await waitFor(() => expect(toggle().checked).toBe(true));
     // The read on mount and the one once the inbox is joined.
-    await waitFor(() => expect(service.list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(service.listEvery).toHaveBeenCalledTimes(2));
 
     const staleRead = deferred<ChatSchedule[]>();
-    service.list.mockReturnValueOnce(staleRead.promise);
+    service.listEvery.mockReturnValueOnce(staleRead.promise);
     emit("ChatSchedulesChanged", { scheduleId: "s1" });
 
     const save = deferred<ChatSchedule>();
     const readAfterSave = deferred<ChatSchedule[]>();
     service.update.mockReturnValueOnce(save.promise);
-    service.list.mockReturnValueOnce(readAfterSave.promise);
+    service.listEvery.mockReturnValueOnce(readAfterSave.promise);
     fireEvent.click(toggle());
     await act(async () => save.resolve(schedule(false)));
 
@@ -132,7 +132,7 @@ describe("The schedules list orders what it shows", () => {
   });
 
   test("a failed Run now shows its error on its own row and leaves the toggle free", async () => {
-    service.list.mockResolvedValue([schedule(true)]);
+    service.listEvery.mockResolvedValue([schedule(true)]);
     const run = deferred<never>();
     service.runNow.mockReturnValueOnce(run.promise);
     renderList();
@@ -148,8 +148,44 @@ describe("The schedules list orders what it shows", () => {
     expect(await within(row).findByText("boom")).toBeTruthy();
   });
 
+  test("a confirmed save shows even when the re-read after it fails", async () => {
+    service.listEvery.mockResolvedValue([schedule(true)]);
+    renderList();
+    await waitFor(() => expect(service.listEvery).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(toggle().checked).toBe(true));
+
+    service.update.mockResolvedValueOnce(schedule(false));
+    service.listEvery.mockRejectedValue({ message: "offline" });
+    fireEvent.click(toggle());
+
+    await waitFor(() => expect(toggle().checked).toBe(false));
+    await screen.findByText("offline");
+    expect(toggle().checked).toBe(false);
+  });
+
+  test("one write of a schedule at a time: its open form and a save in flight hold the others", async () => {
+    service.listEvery.mockResolvedValue([schedule(true)]);
+    renderList();
+    await screen.findByText("Weekly retro");
+    const edit = () => screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement;
+    const remove = () => screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement;
+
+    const save = deferred<ChatSchedule>();
+    service.update.mockReturnValueOnce(save.promise);
+    fireEvent.click(toggle());
+    expect(edit().disabled).toBe(true);
+    expect(remove().disabled).toBe(true);
+    await act(async () => save.resolve(schedule(false)));
+    await waitFor(() => expect(edit().disabled).toBe(false));
+
+    fireEvent.click(edit());
+    await screen.findByRole("dialog");
+    expect(toggle().disabled).toBe(true);
+    expect(remove().disabled).toBe(true);
+  });
+
   test("a scheduler event is a hint: the pause shown is the one the server reads back", async () => {
-    service.list.mockResolvedValue([]);
+    service.listEvery.mockResolvedValue([]);
     renderList();
     await waitFor(() => expect(settings.get).toHaveBeenCalled());
 

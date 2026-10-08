@@ -24,6 +24,8 @@ public sealed class ChatScheduleScheduler : BackgroundService, IChatScheduleSche
     private readonly SemaphoreSlim _pulse = new(0, 1);
     private readonly object _firingsLock = new();
     private readonly HashSet<Task> _firings = new();
+    // Set while the startup sweep is still owed: the start it covers firings before.
+    private DateTime? _sweepFiredBefore;
 
     public ChatScheduleScheduler(IServiceScopeFactory scopes, TimeProvider time, ILogger<ChatScheduleScheduler> log)
     {
@@ -40,19 +42,30 @@ public sealed class ChatScheduleScheduler : BackgroundService, IChatScheduleSche
     /// <summary>
     /// Fails the firings a restart cut off before the first pass, and before the
     /// API takes requests, so the sweep never mistakes a new firing for one of them.
+    /// A sweep that fails is retried every pass, limited to firings from before this
+    /// start for the same reason.
     /// </summary>
     public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var startedAt = _time.GetUtcNow().UtcDateTime;
+        if (!await TrySweepAsync(firedBefore: null, cancellationToken))
+            _sweepFiredBefore = startedAt;
+        await base.StartAsync(cancellationToken);
+    }
+
+    private async Task<bool> TrySweepAsync(DateTime? firedBefore, CancellationToken ct)
     {
         try
         {
             using var scope = _scopes.CreateScope();
-            await scope.ServiceProvider.GetRequiredService<ChatScheduleService>().FailInterruptedFiringsAsync(cancellationToken);
+            await scope.ServiceProvider.GetRequiredService<ChatScheduleService>().FailInterruptedFiringsAsync(firedBefore, ct);
+            return true;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogError(ex, "Could not fail the scheduled chat firings a restart cut off");
+            _log.LogError(ex, "Could not fail the scheduled chat firings a restart cut off; will retry");
+            return false;
         }
-        await base.StartAsync(cancellationToken);
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
@@ -69,6 +82,8 @@ public sealed class ChatScheduleScheduler : BackgroundService, IChatScheduleSche
         {
             try
             {
+                if (_sweepFiredBefore is { } before && await TrySweepAsync(before, stoppingToken))
+                    _sweepFiredBefore = null;
                 await StartDueFiringsAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

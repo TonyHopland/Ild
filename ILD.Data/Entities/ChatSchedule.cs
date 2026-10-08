@@ -55,6 +55,12 @@ public class ChatSchedule : IHasUpdatedAt
     /// <summary>The chat the schedule used last; null before its first chat or once that chat is deleted.</summary>
     public Guid? LatestChatSessionId { get; set; }
 
+    /// <summary>
+    /// Whether a continuing firing may use <see cref="LatestChatSessionId"/>: false once
+    /// the AI tag changes after that chat was started on the old tag's provider.
+    /// </summary>
+    public bool LatestChatContinues { get; set; }
+
     /// <summary>When the cron next comes due, in UTC; null while disabled.</summary>
     public DateTime? NextFireAt { get; set; }
 

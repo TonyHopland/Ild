@@ -66,11 +66,12 @@ public sealed class ChatScheduleService
 
     private DateTime UtcNow => _time.GetUtcNow().UtcDateTime;
 
-    public async Task<IReadOnlyList<ChatScheduleView>> ListAsync(string userId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<ChatScheduleView>> ListAsync(string userId, int skip, int take, CancellationToken ct = default)
     {
         var schedules = await _db.ChatSchedules.AsNoTracking()
             .Where(s => s.UserId == userId)
-            .OrderBy(s => s.Name)
+            .OrderBy(s => s.Name).ThenBy(s => s.Id)
+            .Skip(skip).Take(take)
             .ToListAsync(ct);
         var ids = schedules.Select(s => s.Id).ToList();
         var lastFirings = await _db.ChatScheduleFirings.AsNoTracking()
@@ -106,9 +107,10 @@ public sealed class ChatScheduleService
             var schedule = await _db.ChatSchedules.FirstOrDefaultAsync(s => s.Id == id && s.UserId == userId, ct);
             if (schedule is null) return null;
 
-            // A chat started on the old tag's provider stays on it, so a changed tag needs a new chat.
+            // A chat started on the old tag's provider stays on it, so a changed tag needs
+            // a new chat; the old one stays the latest until then.
             if (!string.Equals(schedule.AiTag, valid.AiTag, StringComparison.OrdinalIgnoreCase))
-                schedule.LatestChatSessionId = null;
+                schedule.LatestChatContinues = false;
             Apply(schedule, valid);
             await _db.SaveChangesAsync(ct);
             await _notifier.SchedulesChangedAsync(userId, id);
@@ -191,23 +193,25 @@ public sealed class ChatScheduleService
 
         if (!due && schedule.PendingSince is null) return;
 
-        // Advanced before firing, so a firing that fails part-way is not retried
-        // every pass: however many firings were missed, one is made up for.
-        var scheduledFor = schedule.PendingSince ?? schedule.NextFireAt;
+        // Advanced only once the firing is recorded, so a firing that could not be
+        // recorded is tried again next pass rather than lost. However many firings
+        // were missed, one is made up for.
+        await FireAsync(schedule, ChatScheduleTrigger.Schedule, schedule.PendingSince ?? schedule.NextFireAt);
         schedule.PendingSince = null;
         schedule.NextFireAt = NextFireAt(schedule, now);
-        await _db.SaveChangesAsync(ct);
-        await FireAsync(schedule, ChatScheduleTrigger.Schedule, scheduledFor);
+        await _db.SaveChangesAsync(CancellationToken.None);
     }
 
     /// <summary>
     /// For startup: no turn survives a restart, so every firing still Running
-    /// fails, and a chat whose turn was cut off is told so.
+    /// fails, and a chat whose turn was cut off is told so. <paramref name="firedBefore"/>
+    /// limits it to firings from before this process started, for a sweep retried
+    /// once firings of its own may be running.
     /// </summary>
-    public async Task FailInterruptedFiringsAsync(CancellationToken ct)
+    public async Task FailInterruptedFiringsAsync(DateTime? firedBefore, CancellationToken ct)
     {
         var interrupted = await _db.ChatScheduleFirings
-            .Where(f => f.Outcome == ChatScheduleFiringOutcome.Running)
+            .Where(f => f.Outcome == ChatScheduleFiringOutcome.Running && (firedBefore == null || f.FiredAt < firedBefore))
             .ToListAsync(ct);
         if (interrupted.Count == 0) return;
 
@@ -375,7 +379,7 @@ public sealed class ChatScheduleService
     /// </summary>
     private async Task<(Guid? ChatId, string? Error)> ChatForFiringAsync(ChatSchedule schedule)
     {
-        if (schedule.ContinueSession && schedule.LatestChatSessionId is { } latest
+        if (schedule.ContinueSession && schedule.LatestChatContinues && schedule.LatestChatSessionId is { } latest
             && await _chat.ExistsForUserAsync(schedule.UserId, latest))
             return (latest, null);
 
@@ -400,6 +404,7 @@ public sealed class ChatScheduleService
                 .SetProperty(c => c.Name, schedule.Name)
                 .SetProperty(c => c.TitleSource, ChatTitleSource.Manual));
         schedule.LatestChatSessionId = chat.Id;
+        schedule.LatestChatContinues = true;
         await _db.SaveChangesAsync();
 
         // Into the owner's sidebar now, not only once its first turn ends.
@@ -491,6 +496,11 @@ public sealed class ChatScheduleService
 
     private void Apply(ChatSchedule schedule, ValidSchedule valid)
     {
+        var now = UtcNow;
+        var owed = schedule.Enabled && valid.Enabled
+            && schedule.CronExpression == valid.CronExpression && schedule.TimeZone == valid.TimeZone
+                ? schedule.PendingSince ?? (schedule.NextFireAt <= now ? schedule.NextFireAt : null)
+                : null;
         schedule.Name = valid.Name;
         schedule.Prompt = valid.Prompt;
         schedule.AiTag = valid.AiTag;
@@ -500,9 +510,11 @@ public sealed class ChatScheduleService
         schedule.RepositoryScope = valid.RepositoryScope;
         schedule.RepositoryIdsCsv = string.Join(',', valid.RepositoryIds);
         schedule.ContinueSession = valid.ContinueSession;
-        // An edit counts from now: nothing missed before it is made up for.
-        schedule.PendingSince = null;
-        schedule.NextFireAt = valid.Enabled ? ChatScheduleCron.Next(valid.Cron, UtcNow, valid.Zone) : null;
+        // The next firing counts from now. A firing the schedule already owes, skipped
+        // while paused or missed while ILD was down, is still made up for once, unless
+        // the edit turns the schedule off or on or changes when it fires.
+        schedule.PendingSince = owed;
+        schedule.NextFireAt = valid.Enabled ? ChatScheduleCron.Next(valid.Cron, now, valid.Zone) : null;
     }
 
     private static DateTime NextFireAt(ChatSchedule schedule, DateTime afterUtc)
