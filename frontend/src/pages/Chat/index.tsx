@@ -75,9 +75,6 @@ export default function Chat() {
               <section className="chat-page-chat">
                 <header className="chat-page-header">
                   <h1 className="chat-page-title">{title ?? "AI Chat"}</h1>
-                  <p className="chat-muted">
-                    No work item or loop open: the agent only sees this conversation
-                  </p>
                 </header>
                 {error && <div className="chat-error">{error}</div>}
                 {content}

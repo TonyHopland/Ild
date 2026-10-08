@@ -352,6 +352,12 @@
   background: #1a1a2a;
 }
 
+/* One line however tall the list is: the rule above stretches a chat input, which
+   in this column would fill the height a short list leaves free. */
+.chat-sidebar-search {
+  flex: none;
+}
+
 .chat-sidebar-full {
   flex: 1;
   width: auto;

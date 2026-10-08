@@ -76,6 +76,7 @@ import { AuthContext } from "../../hooks/useAuth";
 import { setChatEnabled } from "../../hooks/useChatEnabled";
 import ChatPage from ".";
 
+// The page does not explain that it sends no context: a reviewer asked for the line to go.
 const NO_CONTEXT = "No work item or loop open: the agent only sees this conversation";
 
 const user: User = { id: "1", username: "test", createdAt: "" };
@@ -366,7 +367,7 @@ describe("Chat tab in the main navigation", () => {
       render(<App />);
 
       expect(await screen.findByText(shown)).toBeTruthy();
-      expect(screen.getByText(NO_CONTEXT)).toBeTruthy();
+      expect(screen.queryByText(NO_CONTEXT)).toBeNull();
       expect(
         within(screen.getByRole("navigation")).getByRole("link", { name: "Chat" }),
       ).toBeTruthy();
@@ -433,7 +434,7 @@ describe("Opening the Chat tab", () => {
 
     await waitFor(() => expect(currentPath()).toBe("/chat/s1"));
     expect(await screen.findByText("s1 reply")).toBeTruthy();
-    expect(screen.getByText(NO_CONTEXT)).toBeTruthy();
+    expect(screen.queryByText(NO_CONTEXT)).toBeNull();
     expect(screen.queryByRole("button", { name: "Open chat" })).toBeNull();
     // Marked read up to its newest message, once.
     await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("s1", 1));
@@ -451,7 +452,7 @@ describe("Opening the Chat tab", () => {
 
     const start = await screen.findByRole("button", { name: "Start chat" });
     expect(screen.getByLabelText("AI provider")).toBeTruthy();
-    expect(screen.getByText(NO_CONTEXT)).toBeTruthy();
+    expect(screen.queryByText(NO_CONTEXT)).toBeNull();
     await waitFor(() =>
       expect((screen.getByLabelText("AI provider") as HTMLSelectElement).value).toBe("p1"),
     );
@@ -462,7 +463,7 @@ describe("Opening the Chat tab", () => {
     await waitFor(() => expect(currentPath()).toBe("/chat/s9"));
     expect(await screen.findByText("Hello there")).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeTruthy();
-    expect(screen.getByText(NO_CONTEXT)).toBeTruthy();
+    expect(screen.queryByText(NO_CONTEXT)).toBeNull();
 
     fireEvent.click(within(pageSidebar()).getByRole("button", { name: "New chat" }));
 
@@ -483,7 +484,7 @@ describe("Opening a chat by URL", () => {
     expect(await screen.findByText("s2 reply")).toBeTruthy();
     expect(pageTitleShows("Second")).toBe(true);
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeTruthy();
-    expect(screen.getByText(NO_CONTEXT)).toBeTruthy();
+    expect(screen.queryByText(NO_CONTEXT)).toBeNull();
     await settle();
     expect(currentPath()).toBe("/chat/s2");
     expect(screen.queryByText("s1 reply")).toBeNull();

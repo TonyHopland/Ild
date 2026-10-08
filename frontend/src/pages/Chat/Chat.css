@@ -37,10 +37,6 @@
   text-overflow: ellipsis;
 }
 
-.chat-page-header .chat-muted {
-  margin: 0.2rem 0 0;
-}
-
 /* Too narrow for the list beside the chat: the list goes above it instead. */
 @media (max-width: 720px) {
   .chat-page {
