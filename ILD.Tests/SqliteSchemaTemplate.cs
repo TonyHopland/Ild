@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
 
-/// <summary>Opens private in-memory SQLite databases that already hold <typeparamref name="TContext"/>'s schema.</summary>
+/// <summary>Opens private SQLite databases that already hold <typeparamref name="TContext"/>'s schema.</summary>
 public static class SqliteSchemaTemplate<TContext> where TContext : DbContext
 {
     private static readonly Lock Gate = new();
@@ -13,14 +13,20 @@ public static class SqliteSchemaTemplate<TContext> where TContext : DbContext
     {
         var copy = new SqliteConnection("Filename=:memory:");
         copy.Open();
+        CopyInto(copy, createContext);
+        return copy;
+    }
+
+    /// <summary>Writes the schema into the database <paramref name="target"/> has open.</summary>
+    public static void CopyInto(SqliteConnection target, Func<DbContextOptions<TContext>, TContext> createContext)
+    {
         // A SqliteConnection cannot be used from several threads at once:
         // https://learn.microsoft.com/dotnet/standard/data/sqlite/database-errors#locking-retries-and-timeouts
         lock (Gate)
         {
             _template ??= Build(createContext);
-            _template.BackupDatabase(copy);
+            _template.BackupDatabase(target);
         }
-        return copy;
     }
 
     private static SqliteConnection Build(Func<DbContextOptions<TContext>, TContext> createContext)

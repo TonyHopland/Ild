@@ -46,7 +46,7 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
                 .Last(d => d.ServiceType == typeof(IWorkItemServerClient)).ImplementationInstance!;
             services.RemoveAll<IWorkItemServerClient>();
             services.AddSingleton(FaultyWorkItemServerClient.Wrap(inner, Faults));
-        });
+        }, connectionPerContext: true);
     }
 
     public static async Task<ChatScheduleTestHost> StartAsync(string startUtc)

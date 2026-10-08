@@ -24,12 +24,15 @@ namespace ILD.Tests.Integration;
 /// </summary>
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
-    private readonly SqliteConnection _connection;
+    private readonly SqliteConnection? _connection;
+    private readonly string? _databaseFile;
     private readonly FakeWorkItemServerHarness _serverHarness;
     private readonly string _dataRoot;
     private readonly IReadOnlyDictionary<string, string?> _extraConfiguration;
     private readonly Action<IServiceCollection>? _configureServices;
     private readonly Func<string, string?> _readVariable;
+
+    private string DatabaseFileConnectionString => $"Data Source={_databaseFile}";
 
     public string AdminUsername { get; } = "admin";
     public string AdminPassword { get; } = "ild-int-tests-admin-pw";
@@ -55,11 +58,18 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     /// Start on a database with no tables, so the API has to create its own schema,
     /// instead of on a copy of the prebuilt one.
     /// </param>
+    /// <param name="connectionPerContext">
+    /// Give every DbContext a connection of its own to a database file, as Postgres
+    /// gives each one its own session, instead of sharing one in-memory connection.
+    /// For tests whose background work uses the database while requests do: one
+    /// SqliteConnection cannot be used from several threads at once.
+    /// </param>
     public ApiFactory(
         IReadOnlyDictionary<string, string?>? extraConfiguration = null,
         Action<IServiceCollection>? configureServices = null,
         IReadOnlyDictionary<string, string?>? environment = null,
-        bool emptyDatabase = false)
+        bool emptyDatabase = false,
+        bool connectionPerContext = false)
     {
         _extraConfiguration = extraConfiguration ?? new Dictionary<string, string?>();
         _configureServices = configureServices;
@@ -73,7 +83,21 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         _readVariable = name => variables.GetValueOrDefault(name);
         _serverHarness = new FakeWorkItemServerHarness(
             limits: ILD.WorkItemServer.Attachments.AttachmentLimits.FromEnvironment(_readVariable));
-        if (emptyDatabase)
+        _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_dataRoot);
+        if (connectionPerContext)
+        {
+            _databaseFile = Path.Combine(_dataRoot, "ild.db");
+            using var file = new SqliteConnection(DatabaseFileConnectionString);
+            file.Open();
+            if (!emptyDatabase)
+                SqliteSchemaTemplate<AppDbContext>.CopyInto(file, options => new AppDbContext(options));
+            // Readers never wait on a writer, and a writer waits its turn rather than failing.
+            using var wal = file.CreateCommand();
+            wal.CommandText = "PRAGMA journal_mode=WAL;";
+            wal.ExecuteNonQuery();
+        }
+        else if (emptyDatabase)
         {
             _connection = new SqliteConnection("DataSource=:memory:");
             _connection.Open();
@@ -82,8 +106,6 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             _connection = SqliteSchemaTemplate<AppDbContext>.OpenCopy(options => new AppDbContext(options));
         }
-        _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_dataRoot);
         Environment.SetEnvironmentVariable("ILD_DATA_PATH", null);
         Environment.SetEnvironmentVariable("ILD_WORKTREES_PATH", null);
         Environment.SetEnvironmentVariable("ILD_DB_CONNECTION_STRING", null);
@@ -115,8 +137,13 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         builder.ConfigureServices(services =>
         {
             services.AddDataStores();
-            services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection,
-                sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)));
+            services.AddDbContext<AppDbContext>(options =>
+            {
+                if (_connection is null)
+                    options.UseSqlite(DatabaseFileConnectionString, sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly));
+                else
+                    options.UseSqlite(_connection, sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly));
+            });
 
             services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemStartupReconciler>();
             services.RemoveHostedService<ILD.Core.Services.Remote.WorkItemScheduler>();
@@ -151,7 +178,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             // intermittently under parallel test load. The test's assertions have
             // already run by this point, so a teardown-only race must not fail the
             // test — swallow it like the temp-directory cleanup below.
-            try { _connection.Dispose(); } catch { }
+            try { _connection?.Dispose(); } catch { }
+            // Pooled connections keep the database file open.
+            if (_databaseFile is not null) SqliteConnection.ClearPool(new SqliteConnection(DatabaseFileConnectionString));
             _serverHarness.Dispose();
             try { Directory.Delete(_dataRoot, recursive: true); } catch { }
         }
