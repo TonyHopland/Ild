@@ -117,6 +117,14 @@ function AppRoutes() {
               }
             />
             <Route
+              path="/chat/schedules"
+              element={
+                <ProtectedRoute>
+                  <Chat view="schedules" />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/chat/:chatId"
               element={
                 <ProtectedRoute>

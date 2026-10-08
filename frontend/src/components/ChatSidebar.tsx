@@ -23,6 +23,7 @@ function ChatSessionRow({
   renaming,
   onFavorite,
   starring,
+  scheduleMark,
 }: {
   chat: ChatSessionSummary;
   current: boolean;
@@ -38,6 +39,8 @@ function ChatSessionRow({
   renaming: boolean;
   onFavorite: () => void;
   starring: boolean;
+  /** Mark it when a chat schedule started it. */
+  scheduleMark: boolean;
 }) {
   const { editing, begin, closer } = useTitleEdit();
   const actionsRef = useRef<HTMLDivElement | null>(null);
@@ -92,6 +95,31 @@ function ChatSessionRow({
                 </span>
               )}
               <span className="chat-history-name">{name}</span>
+              {scheduleMark && chat.scheduleName && (
+                <span
+                  className="chat-scheduled"
+                  role="img"
+                  aria-label={`Started by the schedule ${chat.scheduleName}`}
+                  title={`Started by the schedule ${chat.scheduleName}`}
+                >
+                  <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+                    <circle
+                      cx="8"
+                      cy="8"
+                      r="6.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                    />
+                    <path
+                      d="M8 4.5V8l2.5 1.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                    />
+                  </svg>
+                </span>
+              )}
               {chat.hasUnread && <UnreadDot />}
               {chat.isBusy && (!current || full) && (
                 <span className="chat-busy" role="img" aria-label="Working" />
@@ -188,6 +216,7 @@ export default function ChatSidebar({
   onFavorite,
   favoritesInFlight,
   extras,
+  scheduleMarks = false,
 }: {
   history: ChatSessionSummary[];
   currentChatId: string | null;
@@ -203,6 +232,8 @@ export default function ChatSidebar({
   favoritesInFlight: ReadonlySet<string>;
   /** Entries a frame adds below New chat, which another frame's list does not show. */
   extras?: React.ReactNode;
+  /** Whether chats a schedule started carry a mark naming it; the bubble's list has no room for one. */
+  scheduleMarks?: boolean;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [query, setQuery] = useState("");
@@ -330,6 +361,7 @@ export default function ChatSidebar({
               renaming={renamesInFlight.has(c.id)}
               onFavorite={() => onFavorite(c.id, !c.isFavorite)}
               starring={favoritesInFlight.has(c.id)}
+              scheduleMark={scheduleMarks}
             />
           ))}
         </ul>

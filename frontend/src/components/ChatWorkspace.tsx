@@ -143,6 +143,7 @@ export default function ChatWorkspace({
   onChatShown,
   onOpenChat,
   sidebarExtras,
+  scheduleMarks = false,
   children,
 }: {
   /** The chat opened on mount. Read once: later changes are not followed. */
@@ -165,6 +166,8 @@ export default function ChatWorkspace({
   onOpenChat?: (chatSessionId: string) => void;
   /** Entries the frame adds to the chat list. */
   sidebarExtras?: React.ReactNode;
+  /** Whether the chat list marks the chats a schedule started. */
+  scheduleMarks?: boolean;
   children: (view: ChatWorkspaceView) => React.ReactNode;
 }) {
   const inbox = useChatInbox();
@@ -831,6 +834,7 @@ export default function ChatWorkspace({
       onFavorite={(id, favorite) => void inbox.setFavorite(id, favorite)}
       favoritesInFlight={inbox.favoritesInFlight}
       extras={sidebarExtras}
+      scheduleMarks={scheduleMarks}
     />
   );
 

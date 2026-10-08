@@ -28,5 +28,6 @@ Short records of architectural decisions that are **hard to reverse, surprising 
 | [0023](./0023-node-outputs-declared-once.md)                   | A node declares each of its outputs once, in config                                   |
 | [0024](./0024-pi-ild-tools-through-native-mcp.md)              | Pi gets ILD tools from its own MCP client, registered by a generated extension        |
 | [0025](./0025-workitem-server-contract-is-tracker-mappable.md) | The WorkItem Server API is a contract an external tracker can implement               |
+| [0026](./0026-scheduled-jobs-are-chats-that-only-check.md)     | Scheduled jobs are chats that only check                                              |
 
 New ADRs use the next sequential number; see the format in `.agents/skills/grill-with-docs/ADR-FORMAT.md`.

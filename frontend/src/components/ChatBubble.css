@@ -620,3 +620,10 @@
   color: #f87171;
   font-size: 0.78rem;
 }
+
+/* Only the Chat tab's list draws it: the bubble's has no room. */
+.chat-scheduled {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: #a5b4fc;
+}

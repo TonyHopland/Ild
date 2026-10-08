@@ -37,6 +37,136 @@
   text-overflow: ellipsis;
 }
 
+/* The Chat tab's own entries in its chat list, such as Schedules. */
+.chat-sidebar-link {
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.35rem;
+  color: #c7d2fe;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.chat-sidebar-link:hover,
+.chat-sidebar-link.active {
+  background: #2a2a40;
+}
+
+.chat-schedules-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.chat-schedules-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.chat-schedules-paused {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.4rem;
+  background: #3b2f12;
+  color: #fcd34d;
+}
+
+.chat-schedule {
+  padding: 0.75rem 1rem;
+  border: 1px solid #2d2d44;
+  border-radius: 0.5rem;
+  background: #23233a;
+}
+
+.chat-schedule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.chat-schedule-name {
+  margin: 0;
+  font-size: 1rem;
+  color: #e0e0e0;
+}
+
+.chat-schedule-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.4rem 1rem;
+  margin: 0.6rem 0;
+  font-size: 0.85rem;
+}
+
+.chat-schedule-facts dt {
+  color: #9ca3af;
+}
+
+.chat-schedule-facts dd {
+  margin: 0;
+  color: #e0e0e0;
+}
+
+.chat-schedule-outcome {
+  font-weight: 600;
+}
+
+.chat-schedule-outcome.is-completed {
+  color: #4ade80;
+}
+
+.chat-schedule-outcome.is-failed {
+  color: #f87171;
+}
+
+.chat-schedule-outcome.is-skipped,
+.chat-schedule-outcome.is-stopped {
+  color: #fbbf24;
+}
+
+.chat-schedule-actions,
+.chat-schedule-confirm,
+.chat-schedule-presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chat-schedule-confirm {
+  color: #fca5a5;
+  font-size: 0.85rem;
+}
+
+.chat-schedule-chat {
+  margin-left: auto;
+  color: #a5b4fc;
+}
+
+.chat-schedule-presets {
+  margin-bottom: 0.5rem;
+}
+
+.chat-schedule-repositories {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.chat-schedule-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
 /* Too narrow for the list beside the chat: the list goes above it instead. */
 @media (max-width: 720px) {
   .chat-page {
