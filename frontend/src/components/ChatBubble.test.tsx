@@ -71,6 +71,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
+import { ChatInboxProvider } from "./ChatInbox";
 
 // The bubble reads the open work item from the route (useMatch), so every render
 // must sit inside a Router. `initialPath` lets a test simulate having a work item
@@ -78,7 +79,9 @@ import ChatBubble from "./ChatBubble";
 function renderBubble(initialPath = "/") {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
-      <ChatBubble />
+      <ChatInboxProvider>
+        <ChatBubble />
+      </ChatInboxProvider>
     </MemoryRouter>,
   );
 }
@@ -141,7 +144,9 @@ function setConnectionState(
   act(() => {
     view.rerender(
       <MemoryRouter initialEntries={[initialPath]}>
-        <ChatBubble />
+        <ChatInboxProvider>
+          <ChatBubble />
+        </ChatInboxProvider>
       </MemoryRouter>,
     );
   });

@@ -61,6 +61,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
+import { ChatInboxProvider } from "./ChatInbox";
 import { showChatActions } from "../test-support";
 
 interface Deferred<T> {
@@ -199,7 +200,9 @@ function widePanel() {
 function bubble() {
   return (
     <MemoryRouter initialEntries={["/"]}>
-      <ChatBubble />
+      <ChatInboxProvider>
+        <ChatBubble />
+      </ChatInboxProvider>
     </MemoryRouter>
   );
 }

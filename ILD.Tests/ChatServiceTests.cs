@@ -118,6 +118,8 @@ public sealed class ChatServiceTests : IDisposable
             TitleChanged.Add((userId, chatSessionId));
             return Task.CompletedTask;
         }
+
+        public Task ActivityChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
     }
 
     /// <summary>
@@ -873,6 +875,22 @@ public sealed class ChatServiceTests : IDisposable
         // A different user, and a missing id, are both unauthorized/absent.
         Assert.False(await svc.ExistsForUserAsync("bob", started.Id, TestContext.Current.CancellationToken));
         Assert.False(await svc.ExistsForUserAsync("alice", Guid.NewGuid(), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task GetOwnerAsync_names_the_chats_owner_and_null_once_it_is_gone()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var alices = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("alice", await svc.GetOwnerAsync(alices.Id, TestContext.Current.CancellationToken));
+        Assert.Equal("bob", await svc.GetOwnerAsync(bobs.Id, TestContext.Current.CancellationToken));
+        Assert.Null(await svc.GetOwnerAsync(Guid.NewGuid(), TestContext.Current.CancellationToken));
+
+        Assert.True(await svc.DeleteAsync("alice", alices.Id, TestContext.Current.CancellationToken));
+        Assert.Null(await svc.GetOwnerAsync(alices.Id, TestContext.Current.CancellationToken));
     }
 
     [Fact]

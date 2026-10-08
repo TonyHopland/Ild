@@ -58,6 +58,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
+import { ChatInboxProvider } from "./ChatInbox";
 import { setChatEnabled } from "../hooks/useChatEnabled";
 import { openChatFromList, openChatList, showChatActions, startNewChat } from "../test-support";
 
@@ -170,7 +171,9 @@ afterEach(() => {
 function bubble() {
   return (
     <MemoryRouter initialEntries={["/"]}>
-      <ChatBubble />
+      <ChatInboxProvider>
+        <ChatBubble />
+      </ChatInboxProvider>
     </MemoryRouter>
   );
 }

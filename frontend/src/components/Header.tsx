@@ -1,9 +1,13 @@
+import { useId } from "react";
 import { NavLink } from "react-router";
 import { useAuth } from "../hooks/useAuth";
-import { NAV_ITEMS, APP_NAME } from "../utils/constants";
+import { NAV_ITEMS, APP_NAME, ROUTES } from "../utils/constants";
+import { useChatInbox } from "./ChatInbox";
 
 export default function Header() {
   const { user, logout } = useAuth();
+  const { unreadCount } = useChatInbox();
+  const unreadBadgeId = useId();
 
   return (
     <header className="header">
@@ -12,15 +16,26 @@ export default function Header() {
           <NavLink to="/taskboard">{APP_NAME}</NavLink>
         </div>
         <nav className="header-nav">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          {NAV_ITEMS.map((item) => {
+            const showUnreadBadge = item.path === ROUTES.CHAT && unreadCount > 0;
+            return (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
+                aria-describedby={showUnreadBadge ? unreadBadgeId : undefined}
+              >
+                {item.label}
+                {/* The link's name stays its label; the count reaches screen
+                    readers as its description. */}
+                {showUnreadBadge && (
+                  <span id={unreadBadgeId} className="nav-badge" aria-hidden="true">
+                    {unreadCount}
+                  </span>
+                )}
+              </NavLink>
+            );
+          })}
         </nav>
         <div className="header-user">
           <span className="user-name">{user?.username}</span>
@@ -111,6 +126,20 @@ export default function Header() {
         .nav-link.active {
           color: #fff;
           background-color: #3a3a5c;
+        }
+
+        .nav-badge {
+          margin-left: 0.4rem;
+          min-width: 1rem;
+          padding: 0 0.3rem;
+          border-radius: 0.5rem;
+          background: #b91c1c;
+          color: #fff;
+          font-size: 0.7rem;
+          font-weight: 600;
+          line-height: 1rem;
+          display: inline-block;
+          text-align: center;
         }
 
         .header-user {

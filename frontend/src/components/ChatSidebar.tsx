@@ -13,6 +13,7 @@ const shownName = (chat: ChatSessionSummary) => chat.name ?? "Untitled chat";
 function ChatSessionRow({
   chat,
   current,
+  full,
   now,
   menuOpen,
   onMenu,
@@ -25,6 +26,8 @@ function ChatSessionRow({
 }: {
   chat: ChatSessionSummary;
   current: boolean;
+  /** The list fills the frame, so the open chat's own working indicator is out of sight. */
+  full: boolean;
   now: number;
   /** Whether this row's actions are showing; one row's at a time. */
   menuOpen: boolean;
@@ -90,6 +93,9 @@ function ChatSessionRow({
               )}
               <span className="chat-history-name">{name}</span>
               {chat.hasUnread && <UnreadDot />}
+              {chat.isBusy && (!current || full) && (
+                <span className="chat-busy" role="img" aria-label="Working" />
+              )}
               {chat.needsYou && (
                 <span className="chat-needs-you" role="img" aria-label="Needs you" />
               )}
@@ -181,6 +187,7 @@ export default function ChatSidebar({
   renamesInFlight,
   onFavorite,
   favoritesInFlight,
+  extras,
 }: {
   history: ChatSessionSummary[];
   currentChatId: string | null;
@@ -194,6 +201,8 @@ export default function ChatSidebar({
   renamesInFlight: ReadonlySet<string>;
   onFavorite: (chatSessionId: string, favorite: boolean) => void;
   favoritesInFlight: ReadonlySet<string>;
+  /** Entries a frame adds below New chat, which another frame's list does not show. */
+  extras?: React.ReactNode;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [query, setQuery] = useState("");
@@ -253,6 +262,7 @@ export default function ChatSidebar({
       <button type="button" className="chat-primary-btn" onClick={onNewChat}>
         New chat
       </button>
+      {extras}
       <input
         className="chat-input chat-sidebar-search"
         type="search"
@@ -310,6 +320,7 @@ export default function ChatSidebar({
               key={c.id}
               chat={c}
               current={c.id === currentChatId}
+              full={full}
               now={now}
               menuOpen={menuFor === c.id}
               onMenu={onMenu}
