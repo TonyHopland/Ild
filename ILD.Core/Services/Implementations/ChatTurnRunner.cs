@@ -174,14 +174,16 @@ public sealed class ChatTurnRunner : IChatTurnRunner
                 // was persisted would otherwise announce an interrupt of a reply the
                 // service had already written as a complete one.
                 var interrupted = false;
+                string? owner = null;
                 try
                 {
-                    interrupted = await RunTurnAsync(chatSessionId, turn.Id, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
+                    (interrupted, owner) = await RunTurnAsync(chatSessionId, turn.Id, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
                 }
                 finally
                 {
                     Retire(chatSessionId, turn);
                     await _notifier.TurnCompletedAsync(chatSessionId, turn.Id, interrupted).ConfigureAwait(false);
+                    await HintActivityAsync(owner, chatSessionId).ConfigureAwait(false);
                 }
             });
 
@@ -376,25 +378,59 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
+    // Best-effort, like the hint it is for: a chat that cannot be looked up has no
+    // inbox to tell, and its turn runs regardless.
+    private async Task<string?> OwnerOfAsync(IChatService chat, Guid chatSessionId)
+    {
+        try
+        {
+            return await chat.GetOwnerAsync(chatSessionId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Could not look up the owner of chat {ChatSessionId}", chatSessionId);
+            return null;
+        }
+    }
+
+    // Tells the owner's open windows to re-read their history. A chat with no owner
+    // has been deleted, and nobody is left to tell.
+    private async Task HintActivityAsync(string? owner, Guid chatSessionId)
+    {
+        if (owner is null) return;
+        try
+        {
+            await _notifier.ActivityChangedAsync(owner, chatSessionId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Failed to hint the inbox about chat {ChatSessionId}", chatSessionId);
+        }
+    }
+
     // Returns whether the turn ended cancelled, taken while the execution is still
     // the only thing that has run: the reply's own interrupted flag is taken from
     // this same token by the service that persists it, so reading it any later can
-    // contradict what the transcript already says.
-    private async Task<bool> RunTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
+    // contradict what the transcript already says. Also returns the chat's owner,
+    // whose inbox is hinted now that the turn is installed and again once it retires.
+    private async Task<(bool Interrupted, string? Owner)> RunTurnAsync(Guid chatSessionId, Guid turnId, string userMessage, string? openWorkItemId, string? openLoopDocument, CancellationToken ct)
     {
         // The caller retires this turn when it ends, whether it finished or threw,
         // so nothing is left behind for a chat that is never used again.
+        string? owner = null;
         try
         {
             using var scope = _scopes.CreateScope();
             var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+            owner = await OwnerOfAsync(chat, chatSessionId).ConfigureAwait(false);
+            await HintActivityAsync(owner, chatSessionId).ConfigureAwait(false);
             await chat.ExecuteTurnAsync(chatSessionId, turnId, userMessage, openWorkItemId, openLoopDocument, ct).ConfigureAwait(false);
-            return ct.IsCancellationRequested;
+            return (ct.IsCancellationRequested, owner);
         }
         catch (Exception ex)
         {
             _log.LogError(ex, "Chat turn failed for {ChatSessionId}", chatSessionId);
-            return ct.IsCancellationRequested;
+            return (ct.IsCancellationRequested, owner);
         }
     }
 }

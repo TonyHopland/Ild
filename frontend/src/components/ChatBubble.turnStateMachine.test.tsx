@@ -59,6 +59,7 @@ vi.mock("../utils/openLoopDocument", () => ({ getOpenLoopDocument }));
 vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn() }));
 
 import ChatBubble from "./ChatBubble";
+import { ChatInboxProvider } from "./ChatInbox";
 
 const CHAT = "s1";
 
@@ -327,7 +328,9 @@ describe("ChatBubble turn state machine", () => {
     serverTurn = resumeWith ?? null;
     const view = render(
       <MemoryRouter initialEntries={["/"]}>
-        <ChatBubble />
+        <ChatInboxProvider>
+          <ChatBubble />
+        </ChatInboxProvider>
       </MemoryRouter>,
     );
     fireEvent.click(await screen.findByLabelText("Open chat"));
@@ -424,7 +427,9 @@ describe("ChatBubble turn state machine", () => {
           act(() => {
             view.rerender(
               <MemoryRouter initialEntries={["/"]}>
-                <ChatBubble />
+                <ChatInboxProvider>
+                  <ChatBubble />
+                </ChatInboxProvider>
               </MemoryRouter>,
             );
           });

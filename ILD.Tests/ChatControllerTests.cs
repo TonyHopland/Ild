@@ -159,6 +159,46 @@ public class ChatControllerTests
     }
 
     [Fact]
+    public async Task History_marks_busy_exactly_the_chats_whose_turn_is_in_flight()
+    {
+        var busy = Guid.NewGuid();
+        var idle = Guid.NewGuid();
+        var created = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var updated = new DateTime(2026, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+        _chat.Setup(c => c.ListForUserAsync("tony", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ChatSessionSummaryView>
+            {
+                new(busy, "Running", created, updated, HasUnread: true, IsFavorite: false),
+                new(idle, "Quiet", created, null, HasUnread: false, IsFavorite: true),
+            });
+        _runner.Setup(r => r.ActiveTurnId(busy)).Returns(Guid.NewGuid());
+        _runner.Setup(r => r.ActiveTurnId(idle)).Returns((Guid?)null);
+
+        var result = await CreateController().History(CancellationToken.None);
+
+        // As the client reads it: the JSON the endpoint answers with.
+        var rows = System.Text.Json.JsonSerializer.SerializeToElement(
+            Assert.IsType<OkObjectResult>(result).Value,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        Assert.Equal(2, rows.GetArrayLength());
+
+        var running = rows[0];
+        Assert.Equal(busy, running.GetProperty("id").GetGuid());
+        Assert.True(running.GetProperty("isBusy").GetBoolean());
+        Assert.Equal("Running", running.GetProperty("name").GetString());
+        Assert.Equal(updated, running.GetProperty("updatedAt").GetDateTime());
+        Assert.True(running.GetProperty("hasUnread").GetBoolean());
+        Assert.False(running.GetProperty("isFavorite").GetBoolean());
+
+        var quiet = rows[1];
+        Assert.Equal(idle, quiet.GetProperty("id").GetGuid());
+        Assert.False(quiet.GetProperty("isBusy").GetBoolean());
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, quiet.GetProperty("updatedAt").ValueKind);
+        Assert.False(quiet.GetProperty("hasUnread").GetBoolean());
+        Assert.True(quiet.GetProperty("isFavorite").GetBoolean());
+    }
+
+    [Fact]
     public async Task Get_reports_no_turn_in_flight_for_an_idle_chat()
     {
         var id = Guid.NewGuid();

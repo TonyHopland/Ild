@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Agents can add and remove dependencies on the work items they created, and propose dependency changes on any other for you to approve.**
 
+- **A Chat tab shows your chats full screen, with the open chat beside the list and a marker on chats that are still working.**
+
 - **An AI provider can pass extra command-line arguments to its agent, such as `--effort high` for Claude Code.**
 
 - **Chats can be renamed, and an opt-in setting gives each new chat a short title that says what it is about.**

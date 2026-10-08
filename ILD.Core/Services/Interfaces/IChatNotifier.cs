@@ -58,4 +58,11 @@ public interface IChatNotifier
 
     /// <summary>The chat's title changed; a hint to the owner's inbox, like <see cref="UnreadChangedAsync"/>.</summary>
     Task TitleChangedAsync(string userId, Guid chatSessionId);
+
+    /// <summary>
+    /// A turn started or ended in the chat, so whether it is busy may have changed;
+    /// a hint to the owner's inbox, like <see cref="UnreadChangedAsync"/>. Sent once
+    /// a history read would already see the new state.
+    /// </summary>
+    Task ActivityChangedAsync(string userId, Guid chatSessionId);
 }

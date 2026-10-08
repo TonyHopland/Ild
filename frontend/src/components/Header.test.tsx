@@ -76,6 +76,7 @@ describe("Header nav items", () => {
       "Taskboard",
       "Loop Editor",
       "Analytics",
+      "Chat",
       "Settings",
       "Repositories",
       "Remote Providers",

@@ -8,7 +8,7 @@ namespace ILD.Api.Configuration;
 
 /// <summary>
 /// Broadcasts chat turns into the per-session group on <see cref="ChatHub"/>, and
-/// unread and title hints into the owner's <see cref="ChatHub.InboxGroup">inbox group</see>.
+/// unread, title and activity hints into the owner's <see cref="ChatHub.InboxGroup">inbox group</see>.
 /// Failures are swallowed and logged so a dropped notification never fails a turn.
 /// </summary>
 public class SignalRChatNotifier : IChatNotifier
@@ -45,6 +45,9 @@ public class SignalRChatNotifier : IChatNotifier
 
     public Task TitleChangedAsync(string userId, Guid chatSessionId)
         => SendAsync(ChatHub.InboxGroup(userId), chatSessionId, "ChatTitleChanged", new ChatTitleChangedPayload(chatSessionId));
+
+    public Task ActivityChangedAsync(string userId, Guid chatSessionId)
+        => SendAsync(ChatHub.InboxGroup(userId), chatSessionId, "ChatActivityChanged", new ChatActivityChangedPayload(chatSessionId));
 
     private Task SendAsync(Guid chatSessionId, string eventName, object payload)
         => SendAsync(chatSessionId.ToString(), chatSessionId, eventName, payload);

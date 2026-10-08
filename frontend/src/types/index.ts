@@ -943,6 +943,10 @@ export interface ChatTitleChangedPayload {
   chatSessionId: string;
 }
 
+export interface ChatActivityChangedPayload {
+  chatSessionId: string;
+}
+
 export interface DependencyResolvedPayload {
   workItemId: string;
 }
@@ -1029,6 +1033,8 @@ export interface ChatSessionSummary {
   isFavorite?: boolean;
   /** Waiting on the user rather than merely unread. Nothing on the server sets it yet. */
   needsYou?: boolean;
+  /** Whether the server has a turn in flight for it. */
+  isBusy?: boolean;
 }
 
 export interface ChatMessageAppendedPayload {

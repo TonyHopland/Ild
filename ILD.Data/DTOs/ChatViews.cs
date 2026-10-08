@@ -29,6 +29,8 @@ public sealed record ChatSessionView(
 /// A lightweight history-list row (ADR-0013): no transcript, just what the chat
 /// bubble needs to render a resumable past chat (name + date-stamp), whether it
 /// holds a reply the user has not read, and whether the user starred it.
+/// <paramref name="IsBusy"/> is whether the turn runner has a turn in flight for
+/// it, filled in by the controller like <see cref="ChatSessionView.ActiveTurnId"/>.
 /// </summary>
 public sealed record ChatSessionSummaryView(
     Guid Id,
@@ -36,7 +38,8 @@ public sealed record ChatSessionSummaryView(
     DateTime CreatedAt,
     DateTime? UpdatedAt,
     bool HasUnread,
-    bool IsFavorite);
+    bool IsFavorite,
+    bool IsBusy = false);
 
 /// <summary>
 /// The answer to a message that has been accepted: the turn it started. A client
