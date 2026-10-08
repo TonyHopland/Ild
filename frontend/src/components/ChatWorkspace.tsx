@@ -497,12 +497,13 @@ export default function ChatWorkspace({
     };
   }, [on, off, upsertMessage, applyTurn, isCurrentTurn]);
 
-  // Keep the transcript scrolled to the newest content, including when it comes back
-  // from behind the chat list. `scrollTo` is absent in jsdom, so guard the call
-  // rather than assume it exists.
+  // Keep the transcript scrolled to the newest content, including whenever it comes
+  // on screen: from behind the chat list, in a panel opened again, or once the
+  // history has loaded in its place. `scrollTo` is absent in jsdom, so guard the
+  // call rather than assume it exists.
   useEffect(() => {
     scrollRef.current?.scrollTo?.({ top: scrollRef.current.scrollHeight });
-  }, [messages, streaming, covered]);
+  }, [messages, streaming, onScreen]);
 
   // Load the AI providers whenever the start form needs them — on first showing and
   // again after ending a chat — so the list is never left empty waiting for a

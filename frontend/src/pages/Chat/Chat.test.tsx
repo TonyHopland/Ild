@@ -727,9 +727,20 @@ describe("The open chat and what is shown", () => {
     expect(screen.queryByText("s1 reply")).toBeNull();
     expect(chatService.markRead).not.toHaveBeenCalled();
 
-    releaseHistory();
-    expect(await screen.findByText("s1 reply")).toBeTruthy();
-    await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("s1", 1));
+    // jsdom has no scrolling: record where the transcript is asked to scroll.
+    const scrolled: Element[] = [];
+    HTMLElement.prototype.scrollTo = function (this: HTMLElement) {
+      scrolled.push(this);
+    } as typeof HTMLElement.prototype.scrollTo;
+    try {
+      releaseHistory();
+      const reply = await screen.findByText("s1 reply");
+      await waitFor(() => expect(chatService.markRead).toHaveBeenCalledWith("s1", 1));
+      // Shown at its newest message, not its oldest.
+      await waitFor(() => expect(scrolled.some((el) => el.contains(reply))).toBe(true));
+    } finally {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollTo;
+    }
   });
 
   test("a chat started with nothing in it yet is listed straight away", async () => {

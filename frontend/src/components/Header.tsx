@@ -133,7 +133,7 @@ export default function Header() {
           min-width: 1rem;
           padding: 0 0.3rem;
           border-radius: 0.5rem;
-          background: #ef4444;
+          background: #b91c1c;
           color: #fff;
           font-size: 0.7rem;
           font-weight: 600;
