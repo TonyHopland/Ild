@@ -1267,10 +1267,6 @@ public class AgentController : ControllerBase
     public Task<IActionResult> RemoveWorkItemDependency(string id, string dependsOnId)
         => ChangeWorkItemDependencyAsync(id, dependsOnId, adding: false);
 
-    /// <summary>
-    /// Adds or removes the edge through the same manager calls the human routes
-    /// use, so status follows exactly as it does after a human's change.
-    /// </summary>
     private async Task<IActionResult> ChangeWorkItemDependencyAsync(string id, string? rawDependsOn, bool adding)
     {
         try
@@ -1417,11 +1413,6 @@ public class AgentController : ControllerBase
 
     private static List<string>? TrimIds(List<string>? ids) => ids?.Select(i => i?.Trim() ?? string.Empty).ToList();
 
-    /// <summary>
-    /// Refuses dependency changes that could never be applied as proposed: the
-    /// same checks a human's edge change gets, against the item as it is now.
-    /// Null when there are none to check, or they pass.
-    /// </summary>
     private async Task<IActionResult?> CheckProposedDependenciesAsync(string id, List<string>? add, List<string>? remove)
     {
         if (add is null && remove is null) return null;

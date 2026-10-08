@@ -367,7 +367,6 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
     private static IReadOnlyList<string> DeserializeIds(string? json)
         => json is null ? [] : WorkItemMapper.DeserializeDependencies(json);
 
-    /// <summary>The titles of every item these proposals add or remove as a dependency, in one read.</summary>
     private async Task<IReadOnlyDictionary<string, string>> DependencyTitlesAsync(
         IReadOnlyList<WorkItemEditProposal> proposals, CancellationToken ct)
     {
