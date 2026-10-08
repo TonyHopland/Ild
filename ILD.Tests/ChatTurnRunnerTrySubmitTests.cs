@@ -34,8 +34,9 @@ public sealed class ChatTurnRunnerTrySubmitTests
                 .Returns(async (Guid _, Guid turnId, string message, string? _, string? _, CancellationToken ct) =>
                 {
                     Interlocked.Increment(ref Executions);
-                    Tokens[message] = ct;
+                    // Named before the token is published: a test that waits for the token reads the id next.
                     TurnIds[message] = turnId;
+                    Tokens[message] = ct;
                     Events.Enqueue($"execute:{message}");
                     if (Hold.TryGetValue(message, out var hold)) await hold.Task;
                 });
