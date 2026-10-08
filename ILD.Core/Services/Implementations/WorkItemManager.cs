@@ -143,7 +143,9 @@ public class WorkItemManager : IWorkItemManager
         IEnumerable<string>? tags = null,
         Guid? createdByChatSessionId = null,
         string? branchNameOverride = null,
-        string? baseBranchOverride = null)
+        string? baseBranchOverride = null,
+        Func<Task>? beforeRemote = null,
+        Func<string, Task>? onCreated = null)
     {
         var opts = await _options.ResolveForRepositoryAsync(repositoryId);
 
@@ -159,6 +161,8 @@ public class WorkItemManager : IWorkItemManager
             : createdByChatSessionId.HasValue ? $"Chat-{createdByChatSessionId.Value}"
             : null;
 
+        if (beforeRemote is not null) await beforeRemote();
+
         var serverWi = await _server.CreateAsync(opts, new RemoteCreateWorkItemRequest
         {
             Title = title,
@@ -172,6 +176,18 @@ public class WorkItemManager : IWorkItemManager
             BranchNameOverride = branchNameOverride,
             BaseBranchOverride = baseBranchOverride,
         });
+
+        if (onCreated is not null)
+        {
+            try
+            {
+                await onCreated(serverWi.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Work item {WorkItemId} was created, but recording it afterwards failed", serverWi.Id);
+            }
+        }
 
         // Broadcast the creation so connected clients (e.g. the Taskboard) add
         // the new item live instead of only on a manual refresh. Creation has

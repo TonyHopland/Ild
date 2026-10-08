@@ -1035,6 +1035,55 @@ export interface ChatSessionSummary {
   needsYou?: boolean;
   /** Whether the server has a turn in flight for it. */
   isBusy?: boolean;
+  /** The schedule that started it, if one did and still exists. */
+  scheduleId?: string | null;
+  scheduleName?: string | null;
+}
+
+/** Which repositories a scheduled chat may use. */
+export type ChatScheduleRepositoryScope = "All" | "Selected" | "None";
+
+/** How a schedule's firing went. */
+export type ChatScheduleFiringOutcome = "Running" | "Completed" | "Failed" | "Stopped" | "Skipped";
+
+/** A schedule as its owner saves it. An empty AI tag means the default provider. */
+export interface ChatScheduleInput {
+  name: string;
+  prompt: string;
+  aiTag: string;
+  cronExpression: string;
+  /** An IANA zone, such as Europe/Oslo. */
+  timeZone: string;
+  enabled: boolean;
+  repositoryScope: ChatScheduleRepositoryScope;
+  repositoryIds: string[];
+  /** On, every firing is a new turn in one chat; off, every firing starts a new chat. */
+  continueSession: boolean;
+}
+
+export interface ChatScheduleFiring {
+  id: string;
+  /** What started it: its cron, or Run now. */
+  trigger: "Schedule" | "RunNow";
+  scheduledFor: string | null;
+  firedAt: string;
+  outcome: ChatScheduleFiringOutcome;
+  /** Why it was skipped or failed. */
+  reason: string | null;
+  chatSessionId: string | null;
+  createdWorkItemIds: string[];
+  /** Creates whose outcome is not known, so they cannot be listed as items. */
+  unresolvedItems: number;
+}
+
+export interface ChatSchedule extends Omit<ChatScheduleInput, "aiTag"> {
+  id: string;
+  aiTag: string | null;
+  /** The chat it used last, or null before its first or once that chat is deleted. */
+  latestChatSessionId: string | null;
+  /** When it fires next, in UTC; null while disabled. */
+  nextFireAt: string | null;
+  lastFiring: ChatScheduleFiring | null;
 }
 
 export interface ChatMessageAppendedPayload {

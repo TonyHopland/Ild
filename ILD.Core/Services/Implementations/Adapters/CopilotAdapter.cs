@@ -86,7 +86,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(
                     "[copilot-error] AI node requires a valid worktree path; refusing to run outside the loop's worktree.");
 
-            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
+            mcpConfigPath = TryWriteMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables, ctx.ChatTurnId);
 
             Process? proc;
             try
@@ -252,13 +252,13 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     /// </param>
     public static string? TryWriteMcpConfig(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? allowlist, Guid? chatSessionId = null,
-        ILogger? logger = null, IProcessEnvironment? environment = null)
+        ILogger? logger = null, IProcessEnvironment? environment = null, Guid? chatTurnId = null)
     {
         var servers = new Dictionary<string, object?>();
 
         var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, allowlist);
         if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
-            && ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment) is { } ild)
+            && ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment, chatTurnId) is { } ild)
             servers["ild"] = WithCopilotKeys(ild);
 
         // The parser reserves the "ild" name, so these can never clobber it.

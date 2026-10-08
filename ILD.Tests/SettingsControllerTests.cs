@@ -16,13 +16,14 @@ public sealed class SettingsControllerTests : IDisposable
     private readonly Mock<IPrStatusPoller> _prPoller = new();
     private readonly Mock<IEgressPolicy> _policy = new();
     private readonly Mock<INetworkNotifier> _networkNotifier = new();
+    private readonly Mock<IChatScheduleScheduler> _chatSchedules = new();
 
     public void Dispose() => _db.Dispose();
 
     private SettingsController Build()
         => new(_db.Settings, _notifier.Object, _scheduler.Object, _schedulerSettings.Object,
             _prPoller.Object, _policy.Object, _networkNotifier.Object,
-            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment());
+            ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(), _chatSchedules.Object);
 
     private Task<IActionResult> Put(string key, string value)
         => Build().Put(key, new SettingsController.UpdateSettingRequest { Value = value }, default);

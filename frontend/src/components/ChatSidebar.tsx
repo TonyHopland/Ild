@@ -23,6 +23,7 @@ function ChatSessionRow({
   renaming,
   onFavorite,
   starring,
+  showScheduleMark,
 }: {
   chat: ChatSessionSummary;
   current: boolean;
@@ -38,6 +39,8 @@ function ChatSessionRow({
   renaming: boolean;
   onFavorite: () => void;
   starring: boolean;
+  /** Mark it when a schedule started it. */
+  showScheduleMark: boolean;
 }) {
   const { editing, begin, closer } = useTitleEdit();
   const actionsRef = useRef<HTMLDivElement | null>(null);
@@ -92,6 +95,16 @@ function ChatSessionRow({
                 </span>
               )}
               <span className="chat-history-name">{name}</span>
+              {showScheduleMark && chat.scheduleId && chat.scheduleName && (
+                <span
+                  className="chat-scheduled"
+                  role="img"
+                  aria-label={`Started by the schedule ${chat.scheduleName}`}
+                  title={`Started by the schedule ${chat.scheduleName}`}
+                >
+                  ⏱
+                </span>
+              )}
               {chat.hasUnread && <UnreadDot />}
               {chat.isBusy && (!current || full) && (
                 <span className="chat-busy" role="img" aria-label="Working" />
@@ -188,6 +201,7 @@ export default function ChatSidebar({
   onFavorite,
   favoritesInFlight,
   extras,
+  showScheduleMarks = false,
 }: {
   history: ChatSessionSummary[];
   currentChatId: string | null;
@@ -203,6 +217,8 @@ export default function ChatSidebar({
   favoritesInFlight: ReadonlySet<string>;
   /** Entries a frame adds below New chat, which another frame's list does not show. */
   extras?: React.ReactNode;
+  /** Marks the chats a schedule started; only the Chat tab's list does. */
+  showScheduleMarks?: boolean;
 }) {
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
   const [query, setQuery] = useState("");
@@ -330,6 +346,7 @@ export default function ChatSidebar({
               renaming={renamesInFlight.has(c.id)}
               onFavorite={() => onFavorite(c.id, !c.isFavorite)}
               starring={favoritesInFlight.has(c.id)}
+              showScheduleMark={showScheduleMarks}
             />
           ))}
         </ul>

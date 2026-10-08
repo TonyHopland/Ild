@@ -27,6 +27,7 @@ export const ROUTES = {
   LOOP_EDITOR: "/loop-editor",
   ANALYTICS: "/analytics",
   CHAT: "/chat",
+  CHAT_SCHEDULES: "/chat/schedules",
   SETTINGS: "/settings",
   REPOSITORIES: "/repositories",
   REMOTE_PROVIDERS: "/remote-providers",

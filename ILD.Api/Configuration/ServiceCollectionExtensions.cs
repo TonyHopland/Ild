@@ -104,6 +104,11 @@ public static class ServiceCollectionExtensions
         // chat turn to the agent-scoped API (ADR-0011); a singleton so both scopes
         // share the same in-memory store.
         services.AddSingleton<IChatLoopScratchpad, ChatLoopScratchpad>();
+        services.AddSingleton<ChatScheduleLocks>();
+        services.AddScoped<ChatScheduleService>();
+        services.AddSingleton<ChatScheduleScheduler>();
+        services.AddSingleton<IChatScheduleScheduler>(sp => sp.GetRequiredService<ChatScheduleScheduler>());
+        services.AddHostedService(sp => sp.GetRequiredService<ChatScheduleScheduler>());
 
         services.AddSingleton<IRunProgressBuffer, RunProgressBuffer>();
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();

@@ -4,7 +4,7 @@ using ModelContextProtocol;
 
 namespace ILD.McpServer;
 
-public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null);
+public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null, string? ChatTurnId = null);
 
 /// <summary>
 /// Thin HTTP wrapper for the ILD agent-scoped API surface (`/api/v1/agent/...`).

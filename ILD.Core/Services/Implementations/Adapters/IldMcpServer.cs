@@ -86,13 +86,14 @@ public static class IldMcpServer
     /// Build the environment variables the MCP server needs: the ILD API URL,
     /// an optional API token, and the originating context id. When
     /// <paramref name="chatSessionId"/> is set the server is told the chat session
-    /// id (so created work items are stamped with it); otherwise it is told the
-    /// current loop-run id. Returned as a loosely-typed dictionary so each adapter
-    /// can splice it directly into its CLI config JSON.
+    /// id (so created work items are stamped with it) and the turn's own
+    /// <paramref name="chatTurnId"/> (so they are credited to that turn alone);
+    /// otherwise it is told the current loop-run id. Returned as a loosely-typed
+    /// dictionary so each adapter can splice it directly into its CLI config JSON.
     /// </summary>
     /// <param name="environment">Where the URL and token come from; the process environment by default.</param>
     public static Dictionary<string, object?> BuildEnvironment(
-        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null)
+        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null, Guid? chatTurnId = null)
     {
         environment ??= ProcessEnvironment.Current;
         var env = new Dictionary<string, object?>
@@ -105,7 +106,11 @@ public static class IldMcpServer
             env["ILD_API_TOKEN"] = apiToken;
 
         if (chatSessionId is { } chatId)
+        {
             env["ILD_CHAT_SESSION_ID"] = chatId.ToString();
+            if (chatTurnId is { } turnId)
+                env["ILD_CHAT_TURN_ID"] = turnId.ToString();
+        }
         else if (runContext != null)
             env["ILD_LOOP_RUN_ID"] = runContext.LoopRunId.ToString();
 

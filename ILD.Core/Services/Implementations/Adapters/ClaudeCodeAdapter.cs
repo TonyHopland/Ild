@@ -65,7 +65,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             // with whatever the user has installed in their config — there is
             // no replace-only mode required here.
             if (!ctx.NoTools)
-                mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
+                mcpConfigPath = TryWriteIldMcpConfig(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables, ctx.ChatTurnId);
 
             // Fork: seed a copy of the source session's transcript under the
             // destination id (leaving the source file untouched) so the restore
@@ -274,7 +274,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// </summary>
     /// <param name="environment">Where the server's DLL, URL and token are configured; the process environment by default.</param>
     public static Dictionary<string, object?>? BuildIldMcpEntry(
-        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null)
+        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null, Guid? chatTurnId = null)
     {
         var dllPath = IldMcpServer.ResolveServerDll(environment);
         if (dllPath == null) return null;
@@ -283,7 +283,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         {
             ["command"] = "dotnet",
             ["args"] = new[] { dllPath },
-            ["env"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
+            ["env"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment, chatTurnId),
         };
     }
 
@@ -330,14 +330,14 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     /// </param>
     public static string? TryWriteIldMcpConfig(
         AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? toolAllowlist, Guid? chatSessionId = null,
-        ILogger? logger = null, IProcessEnvironment? environment = null)
+        ILogger? logger = null, IProcessEnvironment? environment = null, Guid? chatTurnId = null)
     {
         var servers = new Dictionary<string, object?>();
 
         var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, toolAllowlist);
         if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
         {
-            var entry = BuildIldMcpEntry(runContext, chatSessionId, environment);
+            var entry = BuildIldMcpEntry(runContext, chatSessionId, environment, chatTurnId);
             if (entry != null)
                 servers["ild"] = entry;
         }

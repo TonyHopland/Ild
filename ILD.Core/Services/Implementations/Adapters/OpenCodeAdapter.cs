@@ -103,7 +103,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 sessionIdToUse = restoreResult.SessionIdToUse;
             }
 
-            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools);
+            var (opencodeModel, opencodeConfigJson) = BuildOpenCodeConfig(ctx.Provider, EnvironmentVariables, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.AdditionalAllowedDirectories, ctx.NoTools, ctx.ChatTurnId);
             var extraArgs = ExtraCliArgs.ForLaunch(ctx.Provider, _logger);
 
             Process? proc = null;
@@ -701,7 +701,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         return fallback.Length > 0 ? fallback.ToString().Trim() : null;
     }
 
-    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null, bool noTools = false)
+    private static (string ModelRef, string ConfigJson) BuildOpenCodeConfig(AiProvider provider, IProcessEnvironment environment, LoopRunContext? runContext = null, IReadOnlyList<string>? selectedToolKeys = null, Guid? chatSessionId = null, IReadOnlyList<string>? additionalAllowedDirectories = null, bool noTools = false, Guid? chatTurnId = null)
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
@@ -749,7 +749,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         var mcp = new Dictionary<string, object?>();
 
         var ildMcp = !noTools && enabled.Contains(AiToolCatalog.Ild)
-            ? BuildIldMcpEntry(runContext, chatSessionId, environment)
+            ? BuildIldMcpEntry(runContext, chatSessionId, environment, chatTurnId)
             : null;
         if (ildMcp != null)
             mcp["ild"] = ildMcp;
@@ -805,7 +805,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     /// </summary>
     /// <param name="environment">Where the server's DLL, URL and token are configured; the process environment by default.</param>
     public static Dictionary<string, object?>? BuildIldMcpEntry(
-        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null)
+        LoopRunContext? runContext, Guid? chatSessionId = null, IProcessEnvironment? environment = null, Guid? chatTurnId = null)
     {
         var dllPath = IldMcpServer.ResolveServerDll(environment);
         if (dllPath == null) return null;
@@ -814,7 +814,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         {
             ["type"] = "local",
             ["command"] = new[] { "dotnet", dllPath },
-            ["environment"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
+            ["environment"] = IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment, chatTurnId),
         };
     }
 

@@ -16,8 +16,9 @@ var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
 var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN") ?? "";
 var runId = Environment.GetEnvironmentVariable("ILD_LOOP_RUN_ID");
 var chatSessionId = Environment.GetEnvironmentVariable("ILD_CHAT_SESSION_ID");
+var chatTurnId = Environment.GetEnvironmentVariable("ILD_CHAT_TURN_ID");
 
-builder.Services.AddSingleton(new IldClientOptions(apiUrl, apiToken, runId, chatSessionId));
+builder.Services.AddSingleton(new IldClientOptions(apiUrl, apiToken, runId, chatSessionId, chatTurnId));
 builder.Services.AddHttpClient<IldClient>((sp, c) =>
 {
     var opts = sp.GetRequiredService<IldClientOptions>();
@@ -28,6 +29,8 @@ builder.Services.AddHttpClient<IldClient>((sp, c) =>
         c.DefaultRequestHeaders.Add("X-ILD-Run-Id", opts.LoopRunId);
     if (!string.IsNullOrEmpty(opts.ChatSessionId))
         c.DefaultRequestHeaders.Add("X-ILD-Chat-Session-Id", opts.ChatSessionId);
+    if (!string.IsNullOrEmpty(opts.ChatTurnId))
+        c.DefaultRequestHeaders.Add("X-ILD-Chat-Turn-Id", opts.ChatTurnId);
 });
 
 builder.Services

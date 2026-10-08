@@ -38,7 +38,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     {
         try
         {
-            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, EnvironmentVariables, ctx.NoTools);
+            var settings = ResolveSettings(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, ctx.ChatTurnId, EnvironmentVariables, ctx.NoTools);
 
             if (string.IsNullOrWhiteSpace(settings.BinaryPath))
                 return NodeExecutionResult.Fail("[pi-error] binaryPath is not configured");
@@ -577,7 +577,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     }
 
     private static PiAdapterSettings ResolveSettings(
-        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId,
+        AiProvider provider, LoopRunContext runContext, IReadOnlyList<string>? selectedToolKeys, Guid? chatSessionId, Guid? chatTurnId,
         IProcessEnvironment environment, bool noTools)
     {
         var loopRunId = runContext.LoopRunId;
@@ -590,7 +590,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
         var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
         var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
-            ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment)
+            ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment, chatTurnId)
             : null;
         var ildServerDll = (ildServer?["args"] as string[])?.FirstOrDefault();
         var toolNames = BuildPiToolNames(enabledToolKeys, ildServerDll);

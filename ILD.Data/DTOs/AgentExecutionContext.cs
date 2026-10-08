@@ -37,5 +37,9 @@ public record AgentExecutionContext(
     IReadOnlyDictionary<string, string>? Environment = null,
     // No tools at all and no MCP servers, whatever ToolAllowlist says; check
     // AiToolCatalog.SupportsNoTools first.
-    bool NoTools = false
+    bool NoTools = false,
+    // The chat turn this execution runs, set with ChatSessionId. The ILD MCP
+    // server sends it with every API call, so what the turn creates is credited
+    // to this turn and never to another of the same chat.
+    Guid? ChatTurnId = null
 );

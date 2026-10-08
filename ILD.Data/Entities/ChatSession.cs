@@ -89,6 +89,11 @@ public class ChatSession : IHasUpdatedAt
     /// </summary>
     public bool IsFavorite { get; set; }
 
+    /// <summary>The schedule that started this chat; null for a chat a person started, or once that schedule is deleted.</summary>
+    public Guid? ChatScheduleId { get; set; }
+
+    public ChatSchedule? ChatSchedule { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     /// <summary>Last-activity timestamp; shown as the history row's date-stamp.</summary>

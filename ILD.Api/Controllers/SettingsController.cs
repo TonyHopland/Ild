@@ -25,6 +25,7 @@ public class SettingsController : ControllerBase
     private readonly IEgressPolicy _egressPolicy;
     private readonly INetworkNotifier _networkNotifier;
     private readonly AttachmentLimits _attachmentLimits;
+    private readonly IChatScheduleScheduler _chatSchedules;
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
@@ -53,7 +54,8 @@ public class SettingsController : ControllerBase
         ILD.Core.Services.Remote.IPrStatusPoller prPoller,
         IEgressPolicy egressPolicy,
         INetworkNotifier networkNotifier,
-        AttachmentLimits attachmentLimits)
+        AttachmentLimits attachmentLimits,
+        IChatScheduleScheduler chatSchedules)
     {
         _store = store;
         _notifier = notifier;
@@ -63,6 +65,7 @@ public class SettingsController : ControllerBase
         _egressPolicy = egressPolicy;
         _networkNotifier = networkNotifier;
         _attachmentLimits = attachmentLimits;
+        _chatSchedules = chatSchedules;
     }
 
     public sealed class UpdateSettingRequest
@@ -150,6 +153,8 @@ public class SettingsController : ControllerBase
         if (key == AppSettingKeys.SchedulerIsPaused || key == AppSettingKeys.SchedulerMaxConcurrent)
         {
             _scheduler.Pulse();
+            // Unpausing fires the schedules that came due while paused.
+            if (key == AppSettingKeys.SchedulerIsPaused) _chatSchedules.Pulse();
             var isPaused = await _schedulerSettings.GetIsPausedAsync(ct);
             var max = await _schedulerSettings.GetMaxConcurrentAsync(ct);
             await _notifier.SchedulerStateChangedAsync(isPaused, max);

@@ -84,7 +84,9 @@ public sealed class ChatService : IChatService
                 c.UpdatedAt,
                 c.LastReadSequence != null && _db.ChatMessages.Any(m =>
                     m.ChatSessionId == c.Id && m.Role == "assistant" && m.Sequence > c.LastReadSequence),
-                c.IsFavorite))
+                c.IsFavorite,
+                c.ChatScheduleId,
+                c.ChatSchedule != null ? c.ChatSchedule.Name : null))
             .ToListAsync(ct);
     }
 
@@ -236,6 +238,7 @@ public sealed class ChatService : IChatService
         {
             await FinalizeAssistantAsync(session, turnId, nextSeq + 1,
                 $"[chat-error] AI provider {session.AiProviderId} is no longer configured.", interrupted: false, newSessionId: null, ct);
+            await EndFiringAsync(turnId, ChatScheduleFiringOutcome.Failed, $"AI provider {session.AiProviderId} is no longer configured.");
             return;
         }
 
@@ -248,6 +251,7 @@ public sealed class ChatService : IChatService
         {
             await FinalizeAssistantAsync(session, turnId, nextSeq + 1,
                 $"[chat-error] no adapter for provider type '{provider.Type}': {ex.Message}", interrupted: false, newSessionId: null, ct);
+            await EndFiringAsync(turnId, ChatScheduleFiringOutcome.Failed, $"No adapter for provider type '{provider.Type}': {ex.Message}");
             return;
         }
 
@@ -316,7 +320,8 @@ public sealed class ChatService : IChatService
             OnSessionId: sid => capturedSessionId = sid,
             ForkFromSessionId: null,
             ChatSessionId: session.Id,
-            AdditionalAllowedDirectories: additionalAllowedDirectories);
+            AdditionalAllowedDirectories: additionalAllowedDirectories,
+            ChatTurnId: turnId);
 
         NodeExecutionResult result;
         try
@@ -365,6 +370,12 @@ public sealed class ChatService : IChatService
             await MarkProposalDecisionsDeliveredAsync(decidedProposals);
 
         await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct);
+
+        // A stopped turn is recorded by whoever started it, which is told it was stopped.
+        if (!interrupted)
+            await EndFiringAsync(turnId,
+                result.Success ? ChatScheduleFiringOutcome.Completed : ChatScheduleFiringOutcome.Failed,
+                result.Success ? null : result.Error ?? "The agent failed.");
 
         // Whether the turn succeeded is known only here: a failed turn's reply may be
         // stored as the CLI's output, indistinguishable from an answer. Not awaited: a
@@ -659,6 +670,20 @@ public sealed class ChatService : IChatService
         // method running at all (a chat deleted while its turn was streaming).
         await _notifier.MessageAppendedAsync(session.Id, turnId, ToView(assistant));
         await _notifier.UnreadChangedAsync(session.UserId, session.Id);
+    }
+
+    /// <summary>
+    /// Records how the turn went on the schedule firing that started it, if one
+    /// did and nothing has recorded it yet.
+    /// </summary>
+    private async Task EndFiringAsync(Guid turnId, ChatScheduleFiringOutcome outcome, string? reason)
+    {
+        var clipped = reason is null ? null : ChatScheduleFiring.ClipReason(reason);
+        await _db.ChatScheduleFirings
+            .Where(f => f.TurnId == turnId && f.Outcome == ChatScheduleFiringOutcome.Running)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(f => f.Outcome, outcome)
+                .SetProperty(f => f.Reason, clipped), CancellationToken.None);
     }
 
     private async Task<ChatMessage> AppendMessageAsync(

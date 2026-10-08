@@ -50,3 +50,159 @@
     border-bottom: 1px solid #2d2d44;
   }
 }
+
+/* The Schedules entry under New chat; only the Chat tab's list has it. */
+.chat-sidebar-link {
+  color: #a0a0b0;
+  font-size: 0.9rem;
+  padding: 0.3rem 0.45rem;
+  border-radius: 0.35rem;
+  text-decoration: none;
+}
+
+.chat-sidebar-link:hover,
+.chat-sidebar-link.active {
+  color: #e0e0e0;
+  background: #2a2a40;
+}
+
+.chat-scheduled {
+  flex: none;
+  font-size: 0.8rem;
+  cursor: default;
+}
+
+.chat-schedules-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.chat-schedules-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.chat-schedules-paused {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.35rem;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  color: #fde68a;
+  font-size: 0.85rem;
+}
+
+.chat-schedule {
+  background: #2a2a40;
+  border: 1px solid #3a3a5c;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+}
+
+.chat-schedule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.chat-schedule-name {
+  margin: 0;
+  font-size: 1rem;
+  color: #e0e0e0;
+  overflow-wrap: anywhere;
+}
+
+.chat-schedule-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0.6rem 0;
+}
+
+.chat-schedule-facts dt {
+  font-size: 0.72rem;
+  color: #808090;
+}
+
+.chat-schedule-facts dd {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #c0c0d0;
+  overflow-wrap: anywhere;
+}
+
+.chat-schedule-outcome {
+  font-weight: 600;
+}
+
+.chat-schedule-outcome-completed {
+  color: #4ade80;
+}
+
+.chat-schedule-outcome-failed {
+  color: #f87171;
+}
+
+.chat-schedule-outcome-skipped,
+.chat-schedule-outcome-stopped {
+  color: #fbbf24;
+}
+
+.chat-schedule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.chat-schedule-confirm {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #e0e0e0;
+}
+
+.chat-schedule-chat {
+  margin-left: auto;
+  font-size: 0.85rem;
+}
+
+.chat-schedule-form {
+  max-width: 640px;
+}
+
+.chat-schedule-presets {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.chat-schedule-repositories {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+}
+
+.chat-schedule-form .chat-schedule-check {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: #c0c0d0;
+  margin-bottom: 0.5rem;
+}
+
+.chat-schedule-form .chat-schedule-check input {
+  width: auto;
+}

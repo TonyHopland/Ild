@@ -34,6 +34,9 @@ public class AppDbContext : DbContext
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ChatSchedule> ChatSchedules => Set<ChatSchedule>();
+    public DbSet<ChatScheduleFiring> ChatScheduleFirings => Set<ChatScheduleFiring>();
+    public DbSet<ChatScheduleFiringWorkItem> ChatScheduleFiringWorkItems => Set<ChatScheduleFiringWorkItem>();
     public DbSet<NetworkPolicyEntry> NetworkPolicyEntries => Set<NetworkPolicyEntry>();
     public DbSet<NetworkLogEntry> NetworkLogEntries => Set<NetworkLogEntry>();
     public DbSet<NetworkForwardEntry> NetworkForwardEntries => Set<NetworkForwardEntry>();
@@ -147,6 +150,18 @@ public class AppDbContext : DbContext
             .Property(e => e.Decision)
             .HasConversion<string>()
             .HasMaxLength(32);
+        modelBuilder.Entity<ChatSchedule>()
+            .Property(s => s.RepositoryScope)
+            .HasConversion<string>()
+            .HasMaxLength(32);
+        modelBuilder.Entity<ChatScheduleFiring>()
+            .Property(f => f.Trigger)
+            .HasConversion<string>()
+            .HasMaxLength(32);
+        modelBuilder.Entity<ChatScheduleFiring>()
+            .Property(f => f.Outcome)
+            .HasConversion<string>()
+            .HasMaxLength(32);
     }
 
     private void ConfigureIndexes(ModelBuilder modelBuilder)
@@ -228,6 +243,19 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ChatMessage>(e =>
         {
             e.HasIndex(m => new { m.ChatSessionId, m.Sequence });
+        });
+
+        modelBuilder.Entity<ChatSchedule>(e =>
+        {
+            e.HasIndex(s => s.UserId);
+            e.HasIndex(s => s.NextFireAt);
+        });
+
+        modelBuilder.Entity<ChatScheduleFiring>(e =>
+        {
+            e.HasIndex(f => new { f.ChatScheduleId, f.Number }).IsUnique();
+            e.HasIndex(f => f.TurnId);
+            e.HasIndex(f => f.Outcome);
         });
 
         modelBuilder.Entity<LoopRunSessionBinding>(e =>
@@ -402,6 +430,11 @@ public class AppDbContext : DbContext
             e.Property(m => m.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
+        modelBuilder.Entity<ChatSchedule>(e =>
+        {
+            e.Property(s => s.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
         modelBuilder.Entity<NetworkPolicyEntry>(e =>
         {
             e.Property(p => p.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
@@ -449,6 +482,37 @@ public class AppDbContext : DbContext
             .HasOne(m => m.ChatSession)
             .WithMany(c => c.Messages)
             .HasForeignKey(m => m.ChatSessionId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // A schedule and its chats outlive each other: deleting either only unlinks it.
+        modelBuilder.Entity<ChatSession>()
+            .HasOne(c => c.ChatSchedule)
+            .WithMany()
+            .HasForeignKey(c => c.ChatScheduleId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<ChatSchedule>()
+            .HasOne<ChatSession>()
+            .WithMany()
+            .HasForeignKey(s => s.LatestChatSessionId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<ChatScheduleFiring>()
+            .HasOne(f => f.ChatSchedule)
+            .WithMany()
+            .HasForeignKey(f => f.ChatScheduleId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ChatScheduleFiring>()
+            .HasOne<ChatSession>()
+            .WithMany()
+            .HasForeignKey(f => f.ChatSessionId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<ChatScheduleFiringWorkItem>()
+            .HasOne<ChatScheduleFiring>()
+            .WithMany(f => f.WorkItems)
+            .HasForeignKey(w => w.ChatScheduleFiringId)
             .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<LoopRunSessionBinding>()

@@ -13,6 +13,7 @@ using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Api.Controllers;
 
@@ -53,6 +54,7 @@ public class AgentController : ControllerBase
 {
     private const string RunIdHeader = "X-ILD-Run-Id";
     private const string ChatSessionIdHeader = "X-ILD-Chat-Session-Id";
+    private const string ChatTurnIdHeader = "X-ILD-Chat-Turn-Id";
 
     // Upper bound on a pushed loop document (~1 MB). A real ild-loop-template/v2 is
     // a few KB; this stops a rogue agent from shoving megabytes over the chat hub.
@@ -68,6 +70,7 @@ public class AgentController : ControllerBase
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IChatNotifier _chatNotifier;
     private readonly IWorkItemNotifier _notifier;
+    private readonly ILogger<AgentController> _log;
 
     public AgentController(
         IWorkItemManager workItems,
@@ -79,7 +82,8 @@ public class AgentController : ControllerBase
         IWorktreePreviewService preview,
         IChatLoopScratchpad loopScratchpad,
         IChatNotifier chatNotifier,
-        IWorkItemNotifier? notifier = null)
+        IWorkItemNotifier? notifier = null,
+        ILogger<AgentController>? log = null)
     {
         _workItems = workItems;
         _templates = templates;
@@ -91,6 +95,7 @@ public class AgentController : ControllerBase
         _loopScratchpad = loopScratchpad;
         _chatNotifier = chatNotifier;
         _notifier = notifier ?? new NoopWorkItemNotifier();
+        _log = log ?? NullLogger<AgentController>.Instance;
     }
 
     /// <summary>
@@ -1152,6 +1157,14 @@ public class AgentController : ControllerBase
             && Guid.TryParse(chatHdr.ToString(), out var headerChat))
             createdByChatSessionId = headerChat;
 
+        // Credited to a schedule firing only when the create comes from that
+        // firing's own turn; the item itself is created the same either way.
+        var credit = createdByChatSessionId is { } chatId
+            && Request.Headers.TryGetValue(ChatTurnIdHeader, out var turnHdr)
+            && Guid.TryParse(turnHdr.ToString(), out var turnId)
+                ? await ScheduledItemCredit.ForTurnAsync(_db, _log, chatId, turnId)
+                : null;
+
         // Validate dependencies up-front so we don't half-create.
         var dependencyIds = new List<string>();
         if (request.Dependencies is { Count: > 0 })
@@ -1180,11 +1193,20 @@ public class AgentController : ControllerBase
                 tags: request.Tags,
                 createdByChatSessionId: createdByChatSessionId,
                 branchNameOverride: branchNameOverride,
-                baseBranchOverride: baseBranchOverride);
+                baseBranchOverride: baseBranchOverride,
+                beforeRemote: credit is null ? null : credit.OpenAsync,
+                onCreated: credit is null ? null : credit.ResolveAsync);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (HttpRequestException ex)
+        {
+            // Refused with a status, so nothing was created. Without one (a timeout,
+            // a dropped connection) it may have been, and the credit stays unresolved.
+            if (credit is not null && ex.StatusCode is not null) await credit.WithdrawAsync();
+            return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
         }
 
         foreach (var dep in dependencyIds)

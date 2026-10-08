@@ -25,6 +25,20 @@ public interface IChatTurnRunner
     /// </summary>
     Task<Guid> SubmitAsync(Guid chatSessionId, string userMessage, string? openWorkItemId = null, string? openLoopDocument = null);
 
+    /// <summary>
+    /// Start a turn for <paramref name="userMessage"/> only if the chat is idle: no
+    /// turn in flight and no send, stop or delete under way. A busy chat is never
+    /// waited on or interrupted; it answers null at once. Deciding that and starting
+    /// the turn are one step, so no send can land in between.
+    ///
+    /// <para><paramref name="onStarting"/> is given the turn's id before the turn
+    /// starts; if it throws, nothing starts and the exception is rethrown.
+    /// <paramref name="onEnded"/> is given the id again once the turn has ended,
+    /// with whether it was stopped or replaced by a newer message (false when it
+    /// finished, failed, or its chat was deleted under it).</para>
+    /// </summary>
+    Task<Guid?> TrySubmitIfIdleAsync(Guid chatSessionId, string userMessage, Func<Guid, Task> onStarting, Func<Guid, bool, Task> onEnded);
+
     /// <summary>Cancel any in-flight turn for the session and await its finalization.</summary>
     Task InterruptAsync(Guid chatSessionId);
 

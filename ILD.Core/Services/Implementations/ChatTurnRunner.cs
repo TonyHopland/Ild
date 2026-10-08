@@ -38,6 +38,10 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         // two. The turn itself can finish and retire before this is assigned, which
         // is harmless for the same reason: nothing can be waiting on it yet.
         public Task Task { get; set; } = Task.CompletedTask;
+
+        // Set by a delete before it cancels the turn, so the turn can tell its
+        // chat going away from a stop.
+        public volatile bool ChatDeleted;
     }
 
     /// <summary>
@@ -107,92 +111,8 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         var gate = await EnterAsync(chatSessionId).ConfigureAwait(false);
         try
         {
-            var turn = new ActiveTurn(new CancellationTokenSource());
-
-            // Attached before anything else is read or written, so from here the
-            // chat has a turn at every instant. The turn it is replacing may retire
-            // itself at any moment — Retire runs outside this gate — and without
-            // this the chat would read as idle between that retirement and the
-            // install below.
-            var attaching = Swap(chatSessionId, state => state with { Attached = turn });
-
-            // Announced before the outgoing turn is cancelled, so that turn's
-            // completion lands on a client which already knows a newer turn is
-            // running and cannot read it as this chat falling idle.
-            //
-            // A read arriving now is handed this turn's id already — it has been
-            // attached since the line above, as it has to be — so the announcement
-            // can be on its way out while the id is being read. That is harmless:
-            // the event carries the same id, so a client that has it early applies
-            // the same value twice rather than two different ones.
-            //
-            // Announcing here rather than after the install is what gives the
-            // hand-over below a window wide enough to be scripted in a test; see
-            // TurnsLeftToRetireCount.
-            //
-            // If announcing throws, the send fails, so the attachment goes back out
-            // again: nothing else would ever clear it, and the chat would read as
-            // busy from then on for a turn that is never going to run. Only a
-            // notifier that throws gets here — SignalRChatNotifier swallows its own
-            // failures — so this is a backstop, not a live path.
-            try
-            {
-                await _notifier.TurnStartedAsync(chatSessionId, turn.Id).ConfigureAwait(false);
-            }
-            catch
-            {
-                Swap(chatSessionId, state => state.Attached == turn ? state with { Attached = null } : state);
-                // Never installed and never run, so this thread is the only one that
-                // has ever held it and the only one that can dispose it.
-                turn.Cts.Dispose();
-                throw;
-            }
-
-            // Installed as the live turn by one swap, which drops the attachment in
-            // the same step: the chat holds this turn either way, and never neither.
-            // That swap also moves whatever was live out of `Live`, and moving a turn
-            // out of `Live` is what makes this thread the one that cancels and
-            // disposes it — exactly one thread can win that swap.
-            var installing = Swap(chatSessionId, state => state with { Live = turn, Attached = null });
-            var displaced = installing.Previous.Live;
-
-            // There was a live turn when we attached but none left to displace, so it
-            // retired itself in between and owns its own disposal: wait for it below,
-            // but neither cancel nor dispose it.
-            var retiring = displaced is null ? attaching.Previous.Live : null;
-            if (retiring is not null) Interlocked.Increment(ref _turnsLeftToRetire);
-
-            if (displaced is not null)
-                await DrainAsync(chatSessionId, displaced, cancel: true).ConfigureAwait(false);
-            else if (retiring is not null)
-                await DrainAsync(chatSessionId, retiring, cancel: false).ConfigureAwait(false);
-
-            turn.Task = Task.Run(async () =>
-            {
-                // How the turn ended comes back from the execution itself, rather
-                // than being sampled once it is over: a stop landing after the reply
-                // was persisted would otherwise announce an interrupt of a reply the
-                // service had already written as a complete one.
-                var interrupted = false;
-                string? owner = null;
-                try
-                {
-                    (interrupted, owner) = await RunTurnAsync(chatSessionId, turn.Id, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
-                }
-                finally
-                {
-                    Retire(chatSessionId, turn);
-                    await _notifier.TurnCompletedAsync(chatSessionId, turn.Id, interrupted).ConfigureAwait(false);
-                    await HintActivityAsync(owner, chatSessionId).ConfigureAwait(false);
-                }
-            });
-
-            // Told to the caller that sent the message, so it knows which turn is
-            // now in flight without waiting for the start broadcast — which can be
-            // dropped, and until the id is known a client can only hold a
-            // placeholder that matches any turn's events, including those of the
-            // turn this one displaced.
-            return turn.Id;
+            return await StartTurnAsync(chatSessionId, new ActiveTurn(new CancellationTokenSource()),
+                userMessage, openWorkItemId, openLoopDocument, onEnded: null).ConfigureAwait(false);
         }
         finally
         {
@@ -200,12 +120,136 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
+    public async Task<Guid?> TrySubmitIfIdleAsync(
+        Guid chatSessionId, string userMessage, Func<Guid, Task> onStarting, Func<Guid, bool, Task> onEnded)
+    {
+        // Taken only if nobody holds it: a send, stop or delete under way makes the
+        // chat busy, and a busy chat is answered at once rather than waited on.
+        var gate = TryEnter(chatSessionId);
+        if (gate is null) return null;
+        try
+        {
+            if (ActiveTurnId(chatSessionId) is not null) return null;
+
+            var turn = new ActiveTurn(new CancellationTokenSource());
+            try
+            {
+                await onStarting(turn.Id).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Never attached, so nothing else has seen it.
+                turn.Cts.Dispose();
+                throw;
+            }
+
+            return await StartTurnAsync(chatSessionId, turn, userMessage, null, null, onEnded).ConfigureAwait(false);
+        }
+        finally
+        {
+            Leave(chatSessionId, gate);
+        }
+    }
+
+    // Runs under the chat's gate, which the caller holds for the whole of it.
+    private async Task<Guid> StartTurnAsync(
+        Guid chatSessionId, ActiveTurn turn, string userMessage, string? openWorkItemId, string? openLoopDocument,
+        Func<Guid, bool, Task>? onEnded)
+    {
+        // Attached before anything else is read or written, so from here the
+        // chat has a turn at every instant. The turn it is replacing may retire
+        // itself at any moment — Retire runs outside this gate — and without
+        // this the chat would read as idle between that retirement and the
+        // install below.
+        var attaching = Swap(chatSessionId, state => state with { Attached = turn });
+
+        // Announced before the outgoing turn is cancelled, so that turn's
+        // completion lands on a client which already knows a newer turn is
+        // running and cannot read it as this chat falling idle.
+        //
+        // A read arriving now is handed this turn's id already — it has been
+        // attached since the line above, as it has to be — so the announcement
+        // can be on its way out while the id is being read. That is harmless:
+        // the event carries the same id, so a client that has it early applies
+        // the same value twice rather than two different ones.
+        //
+        // Announcing here rather than after the install is what gives the
+        // hand-over below a window wide enough to be scripted in a test; see
+        // TurnsLeftToRetireCount.
+        //
+        // If announcing throws, the send fails, so the attachment goes back out
+        // again: nothing else would ever clear it, and the chat would read as
+        // busy from then on for a turn that is never going to run. Only a
+        // notifier that throws gets here — SignalRChatNotifier swallows its own
+        // failures — so this is a backstop, not a live path.
+        try
+        {
+            await _notifier.TurnStartedAsync(chatSessionId, turn.Id).ConfigureAwait(false);
+        }
+        catch
+        {
+            Swap(chatSessionId, state => state.Attached == turn ? state with { Attached = null } : state);
+            // Never installed and never run, so this thread is the only one that
+            // has ever held it and the only one that can dispose it.
+            turn.Cts.Dispose();
+            throw;
+        }
+
+        // Installed as the live turn by one swap, which drops the attachment in
+        // the same step: the chat holds this turn either way, and never neither.
+        // That swap also moves whatever was live out of `Live`, and moving a turn
+        // out of `Live` is what makes this thread the one that cancels and
+        // disposes it — exactly one thread can win that swap.
+        var installing = Swap(chatSessionId, state => state with { Live = turn, Attached = null });
+        var displaced = installing.Previous.Live;
+
+        // There was a live turn when we attached but none left to displace, so it
+        // retired itself in between and owns its own disposal: wait for it below,
+        // but neither cancel nor dispose it.
+        var retiring = displaced is null ? attaching.Previous.Live : null;
+        if (retiring is not null) Interlocked.Increment(ref _turnsLeftToRetire);
+
+        if (displaced is not null)
+            await DrainAsync(chatSessionId, displaced, cancel: true).ConfigureAwait(false);
+        else if (retiring is not null)
+            await DrainAsync(chatSessionId, retiring, cancel: false).ConfigureAwait(false);
+
+        turn.Task = Task.Run(async () =>
+        {
+            // How the turn ended comes back from the execution itself, rather
+            // than being sampled once it is over: a stop landing after the reply
+            // was persisted would otherwise announce an interrupt of a reply the
+            // service had already written as a complete one.
+            var interrupted = false;
+            string? owner = null;
+            try
+            {
+                (interrupted, owner) = await RunTurnAsync(chatSessionId, turn.Id, userMessage, openWorkItemId, openLoopDocument, turn.Cts.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                Retire(chatSessionId, turn);
+                if (onEnded is not null)
+                    await ReportEndAsync(onEnded, chatSessionId, turn.Id, interrupted && !turn.ChatDeleted).ConfigureAwait(false);
+                await _notifier.TurnCompletedAsync(chatSessionId, turn.Id, interrupted).ConfigureAwait(false);
+                await HintActivityAsync(owner, chatSessionId).ConfigureAwait(false);
+            }
+        });
+
+        // Told to the caller that sent the message, so it knows which turn is
+        // now in flight without waiting for the start broadcast — which can be
+        // dropped, and until the id is known a client can only hold a
+        // placeholder that matches any turn's events, including those of the
+        // turn this one displaced.
+        return turn.Id;
+    }
+
     public async Task InterruptAsync(Guid chatSessionId)
     {
         var gate = await EnterAsync(chatSessionId).ConfigureAwait(false);
         try
         {
-            await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
+            await CancelActiveAsync(chatSessionId, chatDeleted: false).ConfigureAwait(false);
         }
         finally
         {
@@ -218,7 +262,7 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         var gate = await EnterAsync(chatSessionId).ConfigureAwait(false);
         try
         {
-            await CancelActiveAsync(chatSessionId).ConfigureAwait(false);
+            await CancelActiveAsync(chatSessionId, chatDeleted: true).ConfigureAwait(false);
             await delete().ConfigureAwait(false);
         }
         finally
@@ -286,9 +330,33 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
+    // Never waits: null when someone else holds the gate.
+    private Gate? TryEnter(Guid chatSessionId)
+    {
+        while (true)
+        {
+            var gate = _gates.GetOrAdd(chatSessionId, _ => new Gate());
+            lock (gate)
+            {
+                if (gate.Dropped) continue;
+                gate.Holders++;
+            }
+
+            if (gate.Semaphore.Wait(0)) return gate;
+            LetGo(chatSessionId, gate);
+            return null;
+        }
+    }
+
     private void Leave(Guid chatSessionId, Gate gate)
     {
         gate.Semaphore.Release();
+        LetGo(chatSessionId, gate);
+    }
+
+    // Counts one holder or would-be holder out, dropping the gate with the last.
+    private void LetGo(Guid chatSessionId, Gate gate)
+    {
         lock (gate)
         {
             if (--gate.Holders > 0) return;
@@ -302,12 +370,13 @@ public sealed class ChatTurnRunner : IChatTurnRunner
     // retired and possibly announced itself finished — and the chat never reads as
     // idle in between. Winning that swap is what makes this thread the one that
     // cancels and disposes it.
-    private async Task CancelActiveAsync(Guid chatSessionId)
+    private async Task CancelActiveAsync(Guid chatSessionId, bool chatDeleted)
     {
         var claiming = Swap(chatSessionId, state =>
             state.Live is null ? state : new ChatTurn(null, state.Live));
         var prev = claiming.Previous.Live;
         if (prev is null) return;
+        if (chatDeleted) prev.ChatDeleted = true;
 
         try
         {
@@ -390,6 +459,20 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         {
             _log.LogDebug(ex, "Could not look up the owner of chat {ChatSessionId}", chatSessionId);
             return null;
+        }
+    }
+
+    // The caller's own bookkeeping; a failure in it is logged and never stops the
+    // turn from announcing that it has finished.
+    private async Task ReportEndAsync(Func<Guid, bool, Task> onEnded, Guid chatSessionId, Guid turnId, bool stopped)
+    {
+        try
+        {
+            await onEnded(turnId, stopped).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Recording the end of chat turn {TurnId} for {ChatSessionId} failed", turnId, chatSessionId);
         }
     }
 

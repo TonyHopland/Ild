@@ -5,7 +5,14 @@ namespace ILD.Core.Services.Interfaces;
 public interface IWorkItemManager
 {
     Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId);
-    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null);
+    /// <summary>
+    /// Create a work item on the WorkItem server. <paramref name="beforeRemote"/> runs
+    /// right before the server is asked, after every local check has passed; if it
+    /// throws, nothing is created. <paramref name="onCreated"/> runs with the new id
+    /// as soon as the server returns it; its failure is logged and never fails a
+    /// create that has already happened.
+    /// </summary>
+    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null, Func<Task>? beforeRemote = null, Func<string, Task>? onCreated = null);
 
     /// <summary>
     /// Edit the server-held fields of a work item. <paramref name="branchNameOverride"/>
