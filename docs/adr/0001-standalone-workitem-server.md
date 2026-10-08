@@ -2,7 +2,7 @@
 
 Work-item state, dependencies, tags, repository association, and claim semantics live in a separate `ILD.WorkItemServer` process reached over HTTP with an API key — not inside `ILD.Api`. We did this so multiple ILD instances can coordinate against one authoritative store and claim items atomically without stepping on each other; embedding the data in a single ILD host would have tied the source of truth to one instance's lifecycle. Each ILD instance treats the server as remote and heartbeats the items it is actively working.
 
-Refined by [ADR-0025](./0025-workitem-server-contract-is-tracker-mappable.md): the server's API is a contract that an adapter over an external tracker may implement, so it carries only what such trackers support natively.
+Refined by [ADR-0025](./0025-workitem-server-contract-is-tracker-mappable.md): the server's API is a contract that an adapter over an external tracker may implement, so any new contract surface must be something such trackers support natively. Existing fields that are not, repository association among them, are listed there for a later audit.
 
 ## Consequences
 

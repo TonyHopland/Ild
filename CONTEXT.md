@@ -7,7 +7,7 @@ A containerized AI-assisted development platform that runs configurable workflow
 ### Core Concepts
 
 **WorkItem**:
-A unit of work — code change, planning session, or any task type. May or may not involve a repository, worktree, or PR. The WorkItem Server holds only what an external tracker (GitHub Issues, Azure DevOps Boards) could hold natively — title, description, status, priority, tags, dependencies, linked PRs, attachments and the claim. Ild-specific state about a work item (runs, conversations, schedules, chat sessions, run settings) lives on the ILD instance, keyed by work item id. See [ADR-0025](docs/adr/0025-workitem-server-contract-is-tracker-mappable.md).
+A unit of work — code change, planning session, or any task type. May or may not involve a repository, worktree, or PR. The WorkItem Server's contract is designed to carry only what an external tracker (GitHub Issues, Azure DevOps Boards) could hold natively — title, description, status, priority, tags, dependencies, linked PRs, attachments and the claim — so new fields and endpoints must stay within that list. The server today still holds some fields outside it, such as the creating run or chat, the human-feedback actions, the repository ID, the branch overrides and Edit Proposals; ADR-0025 lists them for a later audit and they are no precedent. Ild-specific state about a work item (runs, conversations, schedules, chat sessions, run settings) lives on the ILD instance, keyed by work item id. See [ADR-0025](docs/adr/0025-workitem-server-contract-is-tracker-mappable.md).
 _Avoid_: task, ticket, issue, story
 
 **LoopTemplate**:
