@@ -193,13 +193,7 @@ public sealed class ChatScheduleService
 
         if (!due && schedule.PendingSince is null) return;
 
-        // Advanced only once the firing is recorded, so a firing that could not be
-        // recorded is tried again next pass rather than lost. However many firings
-        // were missed, one is made up for.
-        await FireAsync(schedule, ChatScheduleTrigger.Schedule, schedule.PendingSince ?? schedule.NextFireAt);
-        schedule.PendingSince = null;
-        schedule.NextFireAt = NextFireAt(schedule, now);
-        await _db.SaveChangesAsync(CancellationToken.None);
+        await FireAsync(schedule, ChatScheduleTrigger.Schedule, schedule.PendingSince ?? schedule.NextFireAt, advance: true);
     }
 
     /// <summary>
@@ -268,7 +262,14 @@ public sealed class ChatScheduleService
             .OrderByDescending(f => f.Number)
             .FirstOrDefaultAsync(ct);
 
-    private async Task<ChatScheduleFiring> FireAsync(ChatSchedule schedule, ChatScheduleTrigger trigger, DateTime? scheduledFor)
+    /// <param name="advance">
+    /// Move the schedule on to its next firing, in the same save that records this
+    /// one: a firing that cannot be recorded is tried again next pass rather than
+    /// lost, and none is advanced after its turn could already have ended. However
+    /// many firings were missed, one is made up for.
+    /// </param>
+    private async Task<ChatScheduleFiring> FireAsync(
+        ChatSchedule schedule, ChatScheduleTrigger trigger, DateTime? scheduledFor, bool advance = false)
     {
         var firing = new ChatScheduleFiring
         {
@@ -321,6 +322,11 @@ public sealed class ChatScheduleService
 
         firing.Number = await NextFiringNumberAsync(schedule.Id);
         _db.ChatScheduleFirings.Add(firing);
+        if (advance)
+        {
+            schedule.PendingSince = null;
+            schedule.NextFireAt = NextFireAt(schedule, firing.FiredAt);
+        }
         await _db.SaveChangesAsync();
 
         if (message is not null)
