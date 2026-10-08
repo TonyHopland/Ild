@@ -45,6 +45,7 @@ public sealed class ChatService : IChatService
     private readonly IWorkItemManager? _workItems;
     private readonly ILogger<ChatService> _log;
     private readonly IChatTitleScheduler? _titles;
+    private readonly IChatScheduleNotifier? _schedules;
 
     public ChatService(
         AppDbContext db,
@@ -56,7 +57,8 @@ public sealed class ChatService : IChatService
         IChatLoopScratchpad loopScratchpad,
         IWorkItemManager? workItems = null,
         ILogger<ChatService>? log = null,
-        IChatTitleScheduler? titles = null)
+        IChatTitleScheduler? titles = null,
+        IChatScheduleNotifier? schedules = null)
     {
         _db = db;
         _providers = providers;
@@ -68,6 +70,7 @@ public sealed class ChatService : IChatService
         _workItems = workItems;
         _log = log ?? NullLogger<ChatService>.Instance;
         _titles = titles;
+        _schedules = schedules;
     }
 
     public async Task<IReadOnlyList<ChatSessionSummaryView>> ListForUserAsync(string userId, CancellationToken ct = default)
@@ -84,7 +87,9 @@ public sealed class ChatService : IChatService
                 c.UpdatedAt,
                 c.LastReadSequence != null && _db.ChatMessages.Any(m =>
                     m.ChatSessionId == c.Id && m.Role == "assistant" && m.Sequence > c.LastReadSequence),
-                c.IsFavorite))
+                c.IsFavorite,
+                c.ScheduleId,
+                c.Schedule != null ? c.Schedule.Name : null))
             .ToListAsync(ct);
     }
 
@@ -236,6 +241,7 @@ public sealed class ChatService : IChatService
         {
             await FinalizeAssistantAsync(session, turnId, nextSeq + 1,
                 $"[chat-error] AI provider {session.AiProviderId} is no longer configured.", interrupted: false, newSessionId: null, ct);
+            await EndScheduledFiringAsync(session, turnId, $"AI provider {session.AiProviderId} is no longer configured.");
             return;
         }
 
@@ -248,6 +254,7 @@ public sealed class ChatService : IChatService
         {
             await FinalizeAssistantAsync(session, turnId, nextSeq + 1,
                 $"[chat-error] no adapter for provider type '{provider.Type}': {ex.Message}", interrupted: false, newSessionId: null, ct);
+            await EndScheduledFiringAsync(session, turnId, $"No adapter for provider type '{provider.Type}': {ex.Message}");
             return;
         }
 
@@ -365,6 +372,10 @@ public sealed class ChatService : IChatService
             await MarkProposalDecisionsDeliveredAsync(decidedProposals);
 
         await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct);
+
+        // A stopped turn is recorded by whoever started it, which the runner tells.
+        if (!interrupted)
+            await EndScheduledFiringAsync(session, turnId, result.Success ? null : result.Error ?? "The agent failed.");
 
         // Whether the turn succeeded is known only here: a failed turn's reply may be
         // stored as the CLI's output, indistinguishable from an answer. Not awaited: a
@@ -659,6 +670,27 @@ public sealed class ChatService : IChatService
         // method running at all (a chat deleted while its turn was streaming).
         await _notifier.MessageAppendedAsync(session.Id, turnId, ToView(assistant));
         await _notifier.UnreadChangedAsync(session.UserId, session.Id);
+    }
+
+    /// <summary>
+    /// Records how the turn went on the Schedule Firing that started it, if one did:
+    /// Completed when <paramref name="failure"/> is null, else Failed with it. Only
+    /// this service knows whether the agent succeeded.
+    /// </summary>
+    private async Task EndScheduledFiringAsync(ChatSession session, Guid turnId, string? failure)
+    {
+        var running = _db.ChatScheduleFirings
+            .Where(f => f.TurnId == turnId && f.Outcome == ChatScheduleFiringOutcome.Running);
+        var scheduleId = await running.Select(f => (Guid?)f.ScheduleId).FirstOrDefaultAsync(CancellationToken.None);
+        if (scheduleId is null) return;
+
+        var outcome = failure is null ? ChatScheduleFiringOutcome.Completed : ChatScheduleFiringOutcome.Failed;
+        var reason = failure is null ? null : ChatScheduleFiring.ClipReason(failure);
+        var ended = await running.ExecuteUpdateAsync(s => s
+            .SetProperty(f => f.Outcome, outcome)
+            .SetProperty(f => f.Reason, reason), CancellationToken.None);
+        if (ended > 0 && _schedules is not null)
+            await _schedules.SchedulesChangedAsync(session.UserId, scheduleId.Value);
     }
 
     private async Task<ChatMessage> AppendMessageAsync(

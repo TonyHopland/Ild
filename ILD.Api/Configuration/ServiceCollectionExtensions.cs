@@ -99,11 +99,19 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatTurnRunner, ChatTurnRunner>();
         services.AddScoped<ChatTitleGenerator>();
         services.AddSingleton<IChatTitleScheduler, ChatTitleScheduler>();
-        services.AddSingleton<IChatNotifier, SignalRChatNotifier>();
+        services.AddSingleton<SignalRChatNotifier>();
+        services.AddSingleton<IChatNotifier>(sp => sp.GetRequiredService<SignalRChatNotifier>());
+        services.AddSingleton<IChatScheduleNotifier>(sp => sp.GetRequiredService<SignalRChatNotifier>());
         // The loop scratchpad relays the open Loop Editor's live document from the
         // chat turn to the agent-scoped API (ADR-0011); a singleton so both scopes
         // share the same in-memory store.
         services.AddSingleton<IChatLoopScratchpad, ChatLoopScratchpad>();
+        // Chat Schedules (ADR-0026): a firing is a chat turn, started by the scheduler
+        // or by Run now; one lock per schedule, shared by both.
+        services.AddSingleton<ChatScheduleLocks>();
+        services.AddScoped<ChatScheduleService>();
+        services.AddSingleton<ChatScheduleScheduler>();
+        services.AddHostedService(sp => sp.GetRequiredService<ChatScheduleScheduler>());
 
         services.AddSingleton<IRunProgressBuffer, RunProgressBuffer>();
         services.AddSingleton<IRunNotifier, SignalRRunNotifier>();
