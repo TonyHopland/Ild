@@ -778,13 +778,14 @@ export default function ChatWorkspace({
     onChatShown?.();
   };
 
+  // Deleting the chat this view is showing, or the one it is opening with nothing
+  // else installed, leaves it for the start form. Deleting one it is opening over
+  // another chat only calls the open off, and the installed chat stays.
   const deleteChat = (id: string) => {
-    if (sessionIdRef.current === id) leaveChat();
-    else if (
-      openingRef.current?.chatSessionId === id &&
-      openingRef.current.visit === visitRef.current
-    )
-      beginVisit();
+    const opening =
+      openingRef.current?.chatSessionId === id && openingRef.current.visit === visitRef.current;
+    if (sessionIdRef.current === id || (opening && sessionIdRef.current === null)) leaveChat();
+    else if (opening) beginVisit();
     return inbox.deleteChat(id);
   };
 

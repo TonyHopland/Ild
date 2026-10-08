@@ -822,4 +822,35 @@ describe("The open chat and what is shown", () => {
     await settle();
     expect(within(bubble).queryByText("s1 reply")).toBeNull();
   });
+
+  test("deleting a chat the page is still opening leaves for the start form, and the bubble has no chat", async () => {
+    seedTwoChats();
+    renderShell("/chat/s1");
+    expect(await screen.findByText("s1 reply")).toBeTruthy();
+
+    chatService.getById.mockImplementation((id: string) =>
+      id === "s2"
+        ? new Promise<ChatSession>(() => {})
+        : Promise.resolve(structuredClone(sessions[id])),
+    );
+    fireEvent.click(within(pageSidebar()).getByText("Second"));
+    await waitFor(() => expect(currentPath()).toBe("/chat/s2"));
+    await waitFor(() => expect(chatService.getById).toHaveBeenCalledWith("s2"));
+
+    showChatActions("Second");
+    fireEvent.click(screen.getByRole("button", { name: "Delete chat Second" }));
+
+    await waitFor(() => expect(currentPath()).toBe("/chat"));
+    expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
+    expect(chatService.deleteOne).toHaveBeenCalledWith("s2");
+
+    fireEvent.click(
+      within(screen.getByRole("navigation")).getByRole("link", { name: "Taskboard" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+    const bubble = await screen.findByRole("dialog", { name: "AI chat" });
+    expect(await within(bubble).findByRole("button", { name: "Start chat" })).toBeTruthy();
+    await settle();
+    expect(within(bubble).queryByText("s1 reply")).toBeNull();
+  });
 });
