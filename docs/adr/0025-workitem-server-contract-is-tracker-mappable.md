@@ -25,5 +25,5 @@ Everything Ild-specific lives on the **Ild instance**, keyed by work item id: lo
 
 ## Consequences
 
-- Several existing fields do not fit this model: `CreatedByLoopRunId`, `CreatedByChatSessionId`, `HumanFeedbackActions`, `LastHeartbeatAt`, the AI provider override, the branch overrides (`BranchNameOverride`, `BaseBranchOverride`) and Work Item Edit Proposals ([ADR-0022](./0022-agent-edits-are-human-approved-proposals.md)). They are subject to a later audit and are left as they are by this decision. `ConversationJson` is being removed by #286.
+- Several existing fields do not fit this model: `CreatedByLoopRunId`, `CreatedByChatSessionId`, `HumanFeedbackActions`, `LastHeartbeatAt`, `RepositoryId` (a GitHub issue lives in one repository, but an Azure DevOps work item belongs to a project, not a repository), the AI provider override, the branch overrides (`BranchNameOverride`, `BaseBranchOverride`) and Work Item Edit Proposals ([ADR-0022](./0022-agent-edits-are-human-approved-proposals.md)). They are subject to a later audit and are left as they are by this decision. `ConversationJson` is being removed by #286.
 - New features that need per-work-item Ild state add it to `ILD.Data`, keyed by work item id, rather than to the WorkItem Server.
