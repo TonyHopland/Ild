@@ -311,4 +311,92 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
         // never the prompt itself.
         Assert.Equal("--", args[mcpIdx + 2]);
     }
+
+    /// <summary>
+    /// The ILD MCP server a chat turn starts is told that turn's own id, so every
+    /// API call it makes names the turn; a later turn of the same chat gets its
+    /// own id, never the first one's, and a loop run gets none.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_tells_the_ild_server_each_chat_turn_its_own_id_and_a_loop_run_none()
+    {
+        var chatSessionId = Guid.NewGuid();
+        var firstTurnId = Guid.NewGuid();
+        var secondTurnId = Guid.NewGuid();
+        var loopRunId = Guid.NewGuid();
+        var worktree = Directory.CreateDirectory(Path.Combine(_tempDir, "wt-" + Guid.NewGuid().ToString("N"))).FullName;
+        var script = WriteRecordingClaude(worktree);
+        var adapter = new ClaudeCodeAdapter(environment: _environment);
+
+        var firstTurn = await IldServerEnvironmentAsync(
+            adapter, worktree, ChatTurnContext(script, worktree, chatSessionId, chatSessionId, firstTurnId));
+        Assert.Equal(firstTurnId.ToString(), firstTurn.GetProperty("ILD_CHAT_TURN_ID").GetString());
+        Assert.Equal(chatSessionId.ToString(), firstTurn.GetProperty("ILD_CHAT_SESSION_ID").GetString());
+
+        var secondTurn = await IldServerEnvironmentAsync(
+            adapter, worktree, ChatTurnContext(script, worktree, chatSessionId, chatSessionId, secondTurnId));
+        Assert.Equal(secondTurnId.ToString(), secondTurn.GetProperty("ILD_CHAT_TURN_ID").GetString());
+        Assert.Equal(chatSessionId.ToString(), secondTurn.GetProperty("ILD_CHAT_SESSION_ID").GetString());
+
+        var loopRun = await IldServerEnvironmentAsync(
+            adapter, worktree, ChatTurnContext(script, worktree, loopRunId, chatSessionId: null, chatTurnId: null));
+        Assert.False(loopRun.TryGetProperty("ILD_CHAT_TURN_ID", out _));
+        Assert.Equal(loopRunId.ToString(), loopRun.GetProperty("ILD_LOOP_RUN_ID").GetString());
+    }
+
+    private static async Task<System.Text.Json.JsonElement> IldServerEnvironmentAsync(
+        ClaudeCodeAdapter adapter, string worktree, AgentExecutionContext context)
+    {
+        var captured = Path.Combine(worktree, "mcp-config.json");
+        File.Delete(captured);
+
+        var result = await adapter.ExecuteAsync(context);
+
+        Assert.True(result.Success, result.Error);
+        Assert.True(File.Exists(captured), "claude was not given --mcp-config");
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(captured));
+        return doc.RootElement.GetProperty("mcpServers").GetProperty("ild").GetProperty("env").Clone();
+    }
+
+    private static AgentExecutionContext ChatTurnContext(
+        string binaryPath, string worktree, Guid runId, Guid? chatSessionId, Guid? chatTurnId)
+        => new(
+            Provider: new AiProvider
+            {
+                Name = "claude-test",
+                Type = "claude-code",
+                BaseUrl = string.Empty,
+                ApiKey = null,
+                Model = string.Empty,
+                Config = System.Text.Json.JsonSerializer.Serialize(new { binaryPath }),
+            },
+            Prompt: "fix it",
+            RunContext: new LoopRunContext(runId, "wi", "t", "d", worktree, "main", new List<string>(), null),
+            ExecutionCount: 1,
+            Cancel: CancellationToken.None,
+            ChatSessionId: chatSessionId,
+            ChatTurnId: chatTurnId);
+
+    /// <summary>
+    /// A stand-in claude that copies the file it was handed with <c>--mcp-config</c>,
+    /// since the adapter deletes the original, then completes a stream-json turn.
+    /// </summary>
+    private static string WriteRecordingClaude(string worktree)
+    {
+        var script = Path.Combine(worktree, "fake-claude.sh");
+        File.WriteAllText(script,
+            "#!/bin/sh\n" +
+            "prev=''\n" +
+            "for a in \"$@\"; do\n" +
+            $"  if [ \"$prev\" = '--mcp-config' ]; then cp \"$a\" '{worktree}/mcp-config.json'; fi\n" +
+            "  prev=\"$a\"\n" +
+            "done\n" +
+            PromptCapturingCli.ClaudeCodeTurn);
+        var psi = new System.Diagnostics.ProcessStartInfo("chmod") { UseShellExecute = false };
+        psi.ArgumentList.Add("+x");
+        psi.ArgumentList.Add(script);
+        using var chmod = System.Diagnostics.Process.Start(psi)!;
+        chmod.WaitForExit();
+        return script;
+    }
 }

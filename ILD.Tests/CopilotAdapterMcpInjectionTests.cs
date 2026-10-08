@@ -213,6 +213,38 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
         Assert.False(env.TryGetProperty("ILD_LOOP_RUN_ID", out _));
     }
 
+    /// <summary>
+    /// The ILD MCP server a chat turn starts is told that turn's own id, so every
+    /// API call it makes names the turn; a later turn of the same chat gets its
+    /// own id, never the first one's, and a loop run gets none.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_tells_the_ild_server_each_chat_turn_its_own_id_and_a_loop_run_none()
+    {
+        var chatSessionId = Guid.NewGuid();
+        var firstTurnId = Guid.NewGuid();
+        var secondTurnId = Guid.NewGuid();
+        var loopRunId = Guid.NewGuid();
+        var worktree = CreateWorktree();
+        var script = WriteRecordingCopilot(worktree, exitCode: 0);
+        var adapter = new CopilotAdapter(environment: _environment);
+
+        var firstTurn = await IldServerEnvironmentAsync(
+            adapter, worktree, ChatTurnContext(script, worktree, chatSessionId, chatSessionId, firstTurnId));
+        Assert.Equal(firstTurnId.ToString(), firstTurn.GetProperty("ILD_CHAT_TURN_ID").GetString());
+        Assert.Equal(chatSessionId.ToString(), firstTurn.GetProperty("ILD_CHAT_SESSION_ID").GetString());
+
+        var secondTurn = await IldServerEnvironmentAsync(
+            adapter, worktree, ChatTurnContext(script, worktree, chatSessionId, chatSessionId, secondTurnId));
+        Assert.Equal(secondTurnId.ToString(), secondTurn.GetProperty("ILD_CHAT_TURN_ID").GetString());
+        Assert.Equal(chatSessionId.ToString(), secondTurn.GetProperty("ILD_CHAT_SESSION_ID").GetString());
+
+        var loopRun = await IldServerEnvironmentAsync(
+            adapter, worktree, ChatTurnContext(script, worktree, loopRunId, chatSessionId: null, chatTurnId: null));
+        Assert.False(loopRun.TryGetProperty("ILD_CHAT_TURN_ID", out _));
+        Assert.Equal(loopRunId.ToString(), loopRun.GetProperty("ILD_LOOP_RUN_ID").GetString());
+    }
+
     [Fact]
     public async Task ExecuteAsync_deletes_the_config_file_when_copilot_fails()
     {
@@ -269,6 +301,31 @@ public class CopilotAdapterMcpInjectionTests : IDisposable
             RunContext: RunContext(runId, worktreePath),
             ExecutionCount: 1,
             Cancel: CancellationToken.None);
+
+    private static AgentExecutionContext ChatTurnContext(
+        string binaryPath, string worktreePath, Guid runId, Guid? chatSessionId, Guid? chatTurnId)
+        => new(
+            Provider: Provider(binaryPath: binaryPath),
+            Prompt: "fix it",
+            RunContext: RunContext(runId, worktreePath),
+            ExecutionCount: 1,
+            Cancel: CancellationToken.None,
+            ChatSessionId: chatSessionId,
+            ChatTurnId: chatTurnId);
+
+    private static async Task<JsonElement> IldServerEnvironmentAsync(
+        CopilotAdapter adapter, string worktree, AgentExecutionContext context)
+    {
+        var captured = Path.Combine(worktree, "mcp-config.json");
+        File.Delete(captured);
+
+        var result = await adapter.ExecuteAsync(context);
+
+        Assert.True(result.Success, result.Error);
+        Assert.True(File.Exists(captured), "copilot was not given --additional-mcp-config");
+        using var doc = JsonDocument.Parse(File.ReadAllText(captured));
+        return doc.RootElement.GetProperty("mcpServers").GetProperty("ild").GetProperty("env").Clone();
+    }
 
     private static JsonDocument ReadAndDelete(string? path)
     {

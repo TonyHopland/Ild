@@ -536,6 +536,63 @@ public class PiAdapterTests
         }
     }
 
+    /// <summary>
+    /// The ILD MCP server a chat turn starts is told that turn's own id, so every
+    /// API call it makes names the turn; a later turn of the same chat gets its
+    /// own id, never the first one's, even though the extension lives under the
+    /// chat session, and a loop run gets none.
+    /// </summary>
+    [Fact]
+    public async Task ExecuteAsync_tells_the_ild_server_each_chat_turn_its_own_id_and_a_loop_run_none()
+    {
+        var chatSessionId = Guid.NewGuid();
+        var firstTurnId = Guid.NewGuid();
+        var secondTurnId = Guid.NewGuid();
+        var loopRunId = Guid.NewGuid();
+        var worktreeDir = NewWorktree("ild-pi-mcp-turn");
+        var scriptPath = WriteExtensionCopyingPi(worktreeDir);
+        var adapter = new PiAdapter();
+
+        try
+        {
+            var firstTurn = await IldExtensionAsync(adapter, worktreeDir, BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: chatSessionId,
+                executionCount: 1,
+                chatSessionId: chatSessionId,
+                chatTurnId: firstTurnId));
+            Assert.Equal(firstTurnId.ToString(), ChatTurnIdIn(firstTurn));
+            Assert.Contains("ILD_CHAT_SESSION_ID", firstTurn);
+            Assert.Contains(chatSessionId.ToString(), firstTurn);
+
+            var secondTurn = await IldExtensionAsync(adapter, worktreeDir, BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: chatSessionId,
+                executionCount: 1,
+                chatSessionId: chatSessionId,
+                chatTurnId: secondTurnId));
+            Assert.Equal(secondTurnId.ToString(), ChatTurnIdIn(secondTurn));
+            Assert.DoesNotContain(firstTurnId.ToString(), secondTurn);
+
+            var loopRun = await IldExtensionAsync(adapter, worktreeDir, BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: loopRunId,
+                executionCount: 1));
+            Assert.DoesNotContain("ILD_CHAT_TURN_ID", loopRun);
+            Assert.Contains("ILD_LOOP_RUN_ID", loopRun);
+            Assert.Contains(loopRunId.ToString(), loopRun);
+        }
+        finally
+        {
+            CleanUpRunScratch(chatSessionId);
+            CleanUpRunScratch(loopRunId);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_with_ild_off_loads_no_extension_and_lists_no_ild_tools()
     {
@@ -943,7 +1000,9 @@ public class PiAdapterTests
         Guid? runId = null,
         string? sessionId = null,
         bool manageSession = false,
-        Action<string>? onSessionId = null)
+        Action<string>? onSessionId = null,
+        Guid? chatSessionId = null,
+        Guid? chatTurnId = null)
     {
         var dict = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(
             config ?? "{}") ?? new System.Collections.Generic.Dictionary<string, object>();
@@ -976,7 +1035,9 @@ public class PiAdapterTests
             ProgressCallback: progressCallback,
             SessionId: sessionId,
             ManageSession: manageSession,
-            OnSessionId: onSessionId);
+            OnSessionId: onSessionId,
+            ChatSessionId: chatSessionId,
+            ChatTurnId: chatTurnId);
     }
 
     private static string NewWorktree(string prefix)
@@ -1002,6 +1063,46 @@ public class PiAdapterTests
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
         MakeExecutable(scriptPath);
         return scriptPath;
+    }
+
+    /// <summary>
+    /// A stand-in pi that copies the extension it was handed with <c>-e</c> while it
+    /// runs, so each launch's own extension is what gets inspected, then completes a turn.
+    /// </summary>
+    private static string WriteExtensionCopyingPi(string worktreeDir)
+    {
+        var scriptPath = Path.Combine(worktreeDir, "pi.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "prev=''\n" +
+            "for a in \"$@\"; do\n" +
+            $"  if [ \"$prev\" = '-e' ]; then cp \"$a\" '{worktreeDir}/ild-extension.ts'; fi\n" +
+            "  prev=\"$a\"\n" +
+            "done\n" +
+            "cat >/dev/null\n" +
+            "echo '{\"type\":\"session\",\"version\":3,\"id\":\"pi-session-turn\",\"cwd\":\"/w\"}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
+        MakeExecutable(scriptPath);
+        return scriptPath;
+    }
+
+    private static async Task<string> IldExtensionAsync(PiAdapter adapter, string worktreeDir, AgentExecutionContext context)
+    {
+        var captured = Path.Combine(worktreeDir, "ild-extension.ts");
+        File.Delete(captured);
+
+        var result = await adapter.ExecuteAsync(context);
+
+        Assert.True(result.Success, result.Error);
+        Assert.True(File.Exists(captured), "pi was not given -e <ild extension>");
+        return File.ReadAllText(captured);
+    }
+
+    private static string ChatTurnIdIn(string ildTs)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(ildTs, @"""ILD_CHAT_TURN_ID""\s*:\s*""([^""]*)""");
+        Assert.True(match.Success, "the ild extension does not set ILD_CHAT_TURN_ID");
+        return match.Groups[1].Value;
     }
 
     private static string ExtensionArgument(string worktreeDir)
