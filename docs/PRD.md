@@ -29,8 +29,8 @@ The product should let a developer:
 
 ### Shared Work-Item Coordination
 
-- The WorkItem Server is authoritative for work-item state.
-- Work items carry title, description, status, priority, tags, dependencies, conversation history, repository ID, optional creating loop-run ID, and optional human-feedback actions.
+- The WorkItem Server is authoritative for work-item state. Its API must stay implementable over an external tracker such as GitHub Issues or Azure DevOps Boards, so Ild-specific state about a work item lives on the ILD instance ([ADR-0025](./adr/0025-workitem-server-contract-is-tracker-mappable.md)).
+- Work items carry title, description, status, priority, tags, dependencies, linked pull requests, and repository ID. The existing optional creating loop-run ID and human-feedback actions do not fit that contract and are left for the audit ADR-0025 calls for.
 - `Transition(Running)` must remain the only validated claim operation on the shared server.
 - Heartbeats must refresh active items so stale work can be reclaimed back to `Ready`.
 - Human responses must move items through `WaitingForIld` so the owning ILD instance can resume execution cleanly.

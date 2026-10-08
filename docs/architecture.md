@@ -23,7 +23,7 @@ ILD.McpServer -> local ILD API for agent-facing work-item tools
 
 ## Module boundaries
 
-- **`ILD.WorkItemServer`** is authoritative for work-item state, dependencies, tags, conversations, repository association, and claim semantics.
+- **`ILD.WorkItemServer`** is authoritative for work-item state, dependencies, tags, repository association, and claim semantics. Its API is a contract that may be implemented over an external tracker, so Ild-specific data about a work item belongs in `ILD.Data`, not on it ([ADR-0025](./adr/0025-workitem-server-contract-is-tracker-mappable.md)).
 - **`ILD.Api`** is the main host for auth, controllers, SignalR hubs, startup seeding, and recovery.
 - **`ILD.Core`** owns loop execution, repository operations, polling orchestration, preview control, metrics generation, and AI adapter selection.
 - **`ILD.Data`** stores loop runs, templates, repositories, providers, users, event logs, adapter session snapshots, and other ILD-local state.
