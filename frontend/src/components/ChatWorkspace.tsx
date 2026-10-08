@@ -548,6 +548,10 @@ export default function ChatWorkspace({
     setError(null);
     try {
       const created = await chatService.start(providerId, Array.from(tools));
+      // The chat exists now whatever became of this view, and the list outlives the
+      // view. Starting a chat sends no inbox hint, and a chat with nothing in it yet
+      // has nothing to mark read, so nothing else would put it in the list.
+      void refreshHistory().catch((err) => console.error(err));
       if (visitRef.current !== visit) return;
       setSession(created);
       setMessages(created.messages);
@@ -556,9 +560,6 @@ export default function ChatWorkspace({
       releaseRequestClaims();
       setActiveChatId(created.id);
       onActiveChatChangeRef.current?.(created.id);
-      // Starting a chat sends no inbox hint, and a chat with nothing in it yet has
-      // nothing to mark read, so nothing else would put it in the list.
-      void refreshHistory().catch((err) => console.error(err));
     } catch (e) {
       if (visitRef.current !== visit) return;
       setError((e as { message?: string })?.message ?? "Could not start chat.");
@@ -814,7 +815,14 @@ export default function ChatWorkspace({
       history={history}
       currentChatId={session?.id ?? null}
       full={covered}
-      onOpen={(id) => (onOpenChat ? onOpenChat(id) : void openChat(id))}
+      onOpen={(id) =>
+        // The frame routes a pick to another chat; the chat this view was mounted on,
+        // when it is not installed (its open failed), is retried here, as the frame
+        // already shows it.
+        onOpenChat && !(id === initialChat && sessionIdRef.current !== id)
+          ? onOpenChat(id)
+          : void openChat(id)
+      }
       onNewChat={newChat}
       onDelete={(id) => void deleteChat(id)}
       onDeleteAll={() => void deleteAllChats()}

@@ -864,4 +864,59 @@ describe("The open chat and what is shown", () => {
     await settle();
     expect(within(bubble).queryByText("s1 reply")).toBeNull();
   });
+
+  test("a chat started on the page is listed even when the page is left before it is created", async () => {
+    sessions.s9 = session("s9", "Fresh", []);
+    let created: () => void = () => {};
+    chatService.start.mockImplementation(
+      () =>
+        new Promise<ChatSession>((resolve) => {
+          created = () => {
+            server = [summary("s9", "Fresh", "2026-01-04T00:00:00Z")];
+            resolve(structuredClone(sessions.s9));
+          };
+        }),
+    );
+    renderShell("/chat");
+
+    const start = await screen.findByRole("button", { name: "Start chat" });
+    await waitFor(() =>
+      expect((screen.getByLabelText("AI provider") as HTMLSelectElement).value).toBe("p1"),
+    );
+    fireEvent.click(start);
+    await waitFor(() => expect(chatService.start).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(
+      within(screen.getByRole("navigation")).getByRole("link", { name: "Taskboard" }),
+    );
+    await waitFor(() => expect(currentPath()).toBe("/taskboard"));
+    await act(async () => {
+      created();
+    });
+    await settle();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+    expect(await within(await openChatList()).findByText("Fresh")).toBeTruthy();
+  });
+
+  test("a chat whose first open failed opens when it is picked again", async () => {
+    seedTwoChats();
+    let firstTry = true;
+    chatService.getById.mockImplementation((id: string) => {
+      if (id === "s1" && firstTry) {
+        firstTry = false;
+        return Promise.reject({ message: "Could not reach the server." });
+      }
+      return Promise.resolve(structuredClone(sessions[id]));
+    });
+    renderShell("/chat/s1");
+    expect(await screen.findByText("Could not reach the server.")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
+
+    fireEvent.click(within(pageSidebar()).getByText("First"));
+
+    expect(await screen.findByText("s1 reply")).toBeTruthy();
+    expect(currentPath()).toBe("/chat/s1");
+    expect(screen.queryByText("Could not reach the server.")).toBeNull();
+  });
 });
