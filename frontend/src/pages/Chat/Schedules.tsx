@@ -393,7 +393,8 @@ function ScheduleForm({
               checked={input.continueSession}
               onChange={(e) => set({ continueSession: e.target.checked })}
             />
-            Continue one chat: each firing is a new turn in the same chat
+            Continue its chat: each firing is a new turn in the schedule's chat, until that chat is
+            deleted or the AI tag picks another provider
           </label>
           <label className="chat-schedule-check">
             <input

@@ -501,9 +501,11 @@ public sealed class ChatScheduleService
         var name = ChatTitles.WithoutNul(request.Name ?? string.Empty).Trim();
         if (name.Length == 0) return (null, "A name is required.");
         if (name.Length > ChatSchedule.MaxNameLength) return (null, $"The name can be at most {ChatSchedule.MaxNameLength} characters.");
-        if (string.IsNullOrWhiteSpace(request.Prompt)) return (null, "A prompt is required.");
+        // Judged as it will be stored: the save strips NUL, which Postgres cannot hold.
+        var prompt = ChatTitles.WithoutNul(request.Prompt ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(prompt)) return (null, "A prompt is required.");
 
-        var tag = request.AiTag?.Trim();
+        var tag = request.AiTag is null ? null : ChatTitles.WithoutNul(request.AiTag).Trim();
         if (string.IsNullOrEmpty(tag)) tag = null;
         else if (AiProviderTag.Problem(tag) is { } tagProblem) return (null, $"The AI tag {tagProblem}.");
 
@@ -526,7 +528,7 @@ public sealed class ChatScheduleService
             if (unknown.Count > 0) return (null, $"Not a repository: {string.Join(", ", unknown)}.");
         }
 
-        return (new ValidSchedule(name, request.Prompt!, tag, cronExpression, cron, request.TimeZone!.Trim(), zone, request.Enabled,
+        return (new ValidSchedule(name, prompt, tag, cronExpression, cron, request.TimeZone!.Trim(), zone, request.Enabled,
             request.RepositoryScope, repositoryIds, request.ContinueSession), null);
     }
 

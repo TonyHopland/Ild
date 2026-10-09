@@ -42,7 +42,15 @@ public class ChatScheduleFiring
 
     public ChatSchedule Schedule { get; set; } = null!;
 
-    /// <summary><paramref name="reason"/> cut to fit the column.</summary>
+    /// <summary>
+    /// <paramref name="reason"/> cut to fit the column, never between the halves of
+    /// a surrogate pair: an agent's error output can carry emoji.
+    /// </summary>
     public static string ClipReason(string reason)
-        => reason.Length <= MaxReasonLength ? reason : reason[..(MaxReasonLength - 1)] + "…";
+    {
+        if (reason.Length <= MaxReasonLength) return reason;
+        var cut = MaxReasonLength - 1;
+        if (char.IsHighSurrogate(reason[cut - 1])) cut--;
+        return reason[..cut] + "…";
+    }
 }

@@ -1060,7 +1060,10 @@ export interface ChatScheduleInput {
   repositoryScope: ChatScheduleRepositoryScope;
   /** Only with the Selected scope. */
   repositoryIds: string[];
-  /** On, every firing is a new turn in one chat; off, every firing starts a new chat. */
+  /**
+   * On, every firing is a new turn in the schedule's chat, until that chat is deleted or the AI tag
+   * picks another provider; off, every firing starts a new chat.
+   */
   continueSession: boolean;
 }
 

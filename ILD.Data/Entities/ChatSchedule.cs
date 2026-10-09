@@ -49,14 +49,17 @@ public class ChatSchedule : IHasUpdatedAt
     [Required]
     public string RepositoryIdsCsv { get; set; } = string.Empty;
 
-    /// <summary>Every firing is a new turn in one chat, rather than a new chat.</summary>
+    /// <summary>
+    /// Every firing is a new turn in the schedule's chat (<see cref="ContinueChatSessionId"/>)
+    /// rather than a new chat, until that chat is deleted or no longer on the provider the AI tag picks.
+    /// </summary>
     public bool ContinueSession { get; set; }
 
     /// <summary>
     /// The chat a continued firing goes to: the schedule's newest chat, cleared when
     /// its AI tag changes, since a chat keeps its provider for life. Not a foreign
     /// key, which would make a cycle with <see cref="ChatSession.ScheduleId"/>; a
-    /// firing checks that the chat still exists and is the owner's.
+    /// firing checks that the chat still exists, is the owner's, and is on the provider the tag picks now.
     /// </summary>
     public Guid? ContinueChatSessionId { get; set; }
 

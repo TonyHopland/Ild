@@ -16,6 +16,7 @@ import { useChatInbox } from "./ChatInbox";
 import ChatSidebar from "./ChatSidebar";
 import ChatTranscript from "./ChatTranscript";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
+import { byTranscriptOrder } from "../utils/transcriptOrder";
 import { setCurrentChatSessionId } from "../services/chatSessionStore";
 import "./ChatBubble.css";
 
@@ -23,10 +24,6 @@ import "./ChatBubble.css";
 // server naming that turn. A message interrupts rather than queues, so whatever
 // turn id we were holding is already stale — and the chat is busy either way.
 const PENDING_TURN = "pending";
-
-// Transcript order: by sequence, and by save time where two messages share one.
-const byTranscriptOrder = (a: ChatMessage, b: ChatMessage) =>
-  a.sequence - b.sequence || Date.parse(a.createdAt) - Date.parse(b.createdAt);
 
 // The v1 tool catalog (read/write/execute/ild). `ild` is the only default-on
 // entry; the backend re-normalizes the selection against the provider type.
