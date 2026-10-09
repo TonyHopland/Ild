@@ -194,7 +194,6 @@ public class StuckRunWatchdogTests
 
     [Fact]
     public async Task A_failing_reconcile_does_not_abort_the_sweep_for_other_runs()
-
     {
         // A throw while healing one completed-yet-Running run must not strand the
         // other orphaned runs in the same sweep (Copilot review on PR #69).
