@@ -1491,6 +1491,7 @@ public class AgentController : ControllerBase
         var newest = await _db.ChatMessages.AsNoTracking()
             .Where(m => m.ChatSessionId == chatSessionId)
             .OrderByDescending(m => m.Sequence)
+            .ThenByDescending(m => m.CreatedAt)
             .Select(m => new { m.Role, m.Sequence })
             .FirstOrDefaultAsync();
         if (newest is null) return null;

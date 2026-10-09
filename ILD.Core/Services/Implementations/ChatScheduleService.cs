@@ -254,30 +254,42 @@ public sealed class ChatScheduleService
             if (firing.ChatSessionId is { } live && firing.TurnId is { } turn && _runner.ActiveTurnId(live) == turn)
                 continue;
 
-            var failed = await _db.ChatScheduleFirings
-                .Where(f => f.Id == firing.Id && f.Outcome == ChatScheduleFiringOutcome.Running)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(f => f.Outcome, ChatScheduleFiringOutcome.Failed)
-                    .SetProperty(f => f.Reason, RestartReason), ct);
-            if (failed == 0) continue;
+            // The failure and the note in its chat are one change: a firing left
+            // failed without its note would never be picked up again to write it.
+            await using (var transaction = await _db.Database.BeginTransactionAsync(ct))
+            {
+                var failed = await _db.ChatScheduleFirings
+                    .Where(f => f.Id == firing.Id && f.Outcome == ChatScheduleFiringOutcome.Running)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(f => f.Outcome, ChatScheduleFiringOutcome.Failed)
+                        .SetProperty(f => f.Reason, RestartReason), ct);
+                if (failed == 0) continue;
+
+                if (firing.ChatSessionId is { } chatId)
+                {
+                    var lastSequence = await _db.ChatMessages.Where(m => m.ChatSessionId == chatId).MaxAsync(m => (int?)m.Sequence, ct);
+                    _db.ChatMessages.Add(new ChatMessage
+                    {
+                        Id = Guid.NewGuid(),
+                        ChatSessionId = chatId,
+                        Role = "assistant",
+                        Content = RestartNote,
+                        Interrupted = true,
+                        Sequence = (lastSequence ?? -1) + 1,
+                        // The clock a turn stamps its messages with, so that a note
+                        // sharing a sequence with one of them orders by save time.
+                        CreatedAt = DateTime.UtcNow,
+                    });
+                    await _db.SaveChangesAsync(ct);
+                }
+                await transaction.CommitAsync(ct);
+            }
             _log.LogWarning("Schedule firing {FiringId} was cut off by a restart", firing.Id);
 
-            if (firing.ChatSessionId is { } chatId)
+            if (firing.ChatSessionId is { } noted)
             {
-                var lastSequence = await _db.ChatMessages.Where(m => m.ChatSessionId == chatId).MaxAsync(m => (int?)m.Sequence, ct);
-                _db.ChatMessages.Add(new ChatMessage
-                {
-                    Id = Guid.NewGuid(),
-                    ChatSessionId = chatId,
-                    Role = "assistant",
-                    Content = RestartNote,
-                    Interrupted = true,
-                    Sequence = (lastSequence ?? -1) + 1,
-                    CreatedAt = UtcNow,
-                });
-                await _db.SaveChangesAsync(ct);
-                await _chatNotifier.UnreadChangedAsync(firing.Owner, chatId);
-                await _chatNotifier.ActivityChangedAsync(firing.Owner, chatId);
+                await _chatNotifier.UnreadChangedAsync(firing.Owner, noted);
+                await _chatNotifier.ActivityChangedAsync(firing.Owner, noted);
             }
             await _notifier.SchedulesChangedAsync(firing.Owner, firing.ScheduleId);
         }
@@ -384,19 +396,22 @@ public sealed class ChatScheduleService
     }
 
     /// <summary>
-    /// The chat the firing's turn runs in: the schedule's own when it continues one
-    /// that still exists, otherwise a new chat of the owner's with every tool group,
-    /// named after the schedule, on the provider its tag picks. Or why there is none.
+    /// The chat the firing's turn runs in, on the provider its tag picks now: the
+    /// schedule's own when it continues one that still exists on that provider,
+    /// otherwise a new chat of the owner's with every tool group, named after the
+    /// schedule. A chat keeps its provider for life, so a tag that has moved to
+    /// another provider starts a new chat, as editing the tag does. Or why there is none.
     /// </summary>
     private async Task<(Guid? ChatId, string? Error)> ChatForFiringAsync(ChatSchedule schedule, CancellationToken ct)
     {
-        if (schedule.ContinueSession && schedule.ContinueChatSessionId is { } continued
-            && await _chat.ExistsForUserAsync(schedule.UserId, continued, ct))
-            return (continued, null);
-
         var (provider, error) = await AiNodeProviderResolver.ResolveAsync(
             _providers, schedule.AiTag, RemoteAiProviderOverrideMode.None, overrideId: null);
         if (provider is null) return (null, error);
+
+        if (schedule.ContinueSession && schedule.ContinueChatSessionId is { } continued
+            && await _db.ChatSessions.AsNoTracking().AnyAsync(c => c.Id == continued
+                && c.UserId == schedule.UserId && c.AiProviderId == provider.Id, ct))
+            return (continued, null);
 
         ChatSessionView chat;
         try

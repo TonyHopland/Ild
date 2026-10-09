@@ -24,6 +24,10 @@ import "./ChatBubble.css";
 // turn id we were holding is already stale — and the chat is busy either way.
 const PENDING_TURN = "pending";
 
+// Transcript order: by sequence, and by save time where two messages share one.
+const byTranscriptOrder = (a: ChatMessage, b: ChatMessage) =>
+  a.sequence - b.sequence || Date.parse(a.createdAt) - Date.parse(b.createdAt);
+
 // The v1 tool catalog (read/write/execute/ild). `ild` is the only default-on
 // entry; the backend re-normalizes the selection against the provider type.
 const TOOL_OPTIONS: { key: string; label: string; defaultOn: boolean }[] = [
@@ -288,9 +292,7 @@ export default function ChatWorkspace({
 
   const upsertMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) =>
-      prev.some((m) => m.id === message.id)
-        ? prev
-        : [...prev, message].sort((a, b) => a.sequence - b.sequence),
+      prev.some((m) => m.id === message.id) ? prev : [...prev, message].sort(byTranscriptOrder),
     );
   }, []);
 
@@ -392,9 +394,7 @@ export default function ChatWorkspace({
       setMessages((prev) => {
         const known = new Set(prev.map((m) => m.id));
         const missing = view.messages.filter((m) => !known.has(m.id));
-        return missing.length === 0
-          ? prev
-          : [...prev, ...missing].sort((a, b) => a.sequence - b.sequence);
+        return missing.length === 0 ? prev : [...prev, ...missing].sort(byTranscriptOrder);
       });
 
       const active = view.activeTurnId ?? null;

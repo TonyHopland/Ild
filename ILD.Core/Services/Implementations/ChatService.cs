@@ -150,6 +150,7 @@ public sealed class ChatService : IChatService
         var messages = await _db.ChatMessages.AsNoTracking()
             .Where(m => m.ChatSessionId == session.Id)
             .OrderBy(m => m.Sequence)
+            .ThenBy(m => m.CreatedAt)
             .ToListAsync(ct);
 
         return ToView(session, messages);
@@ -685,7 +686,9 @@ public sealed class ChatService : IChatService
         if (scheduleId is null) return;
 
         var outcome = failure is null ? ChatScheduleFiringOutcome.Completed : ChatScheduleFiringOutcome.Failed;
-        var reason = failure is null ? null : ChatScheduleFiring.ClipReason(failure);
+        // An adapter's error can carry raw terminal output, and this update bypasses
+        // the save-time NUL scrub that Postgres needs.
+        var reason = failure is null ? null : ChatScheduleFiring.ClipReason(ChatTitles.WithoutNul(failure));
         var ended = await running.ExecuteUpdateAsync(s => s
             .SetProperty(f => f.Outcome, outcome)
             .SetProperty(f => f.Reason, reason), CancellationToken.None);
