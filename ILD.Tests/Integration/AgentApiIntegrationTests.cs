@@ -1101,7 +1101,7 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
-    public async Task GetWorkItem_returns_reverse_blocks_and_gates_the_conversation()
+    public async Task GetWorkItem_returns_reverse_blocks_and_no_conversation()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
@@ -1128,10 +1128,8 @@ public class AgentApiIntegrationTests
         var childDetail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{childId}", TestContext.Current.CancellationToken);
         Assert.Equal(depId, childDetail.GetProperty("dependencies")[0].GetProperty("id").GetString());
 
-        // Conversation is excluded by default and present only when requested.
-        Assert.Equal(JsonValueKind.Null, dep.GetProperty("conversation").ValueKind);
-        var withConv = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{depId}?includeConversation=true", TestContext.Current.CancellationToken);
-        Assert.Equal(JsonValueKind.Array, withConv.GetProperty("conversation").ValueKind);
+        // The conversation belongs to a run's event log now, not to the work item.
+        Assert.False(dep.TryGetProperty("conversation", out _));
     }
 
     [Fact]

@@ -32,22 +32,6 @@ public class LoopRunStoreActiveWorkItemIdsTests
     }
 
     [Fact]
-    public async Task Reports_a_work_item_once_however_many_live_runs_it_has()
-    {
-        // The set is per work item, not per run: a duplicate would count twice
-        // against the cap and be heartbeated twice.
-        using var db = new TestDb();
-
-        var wi = $"WI-{Guid.NewGuid():N}";
-        await SeedRunAsync(db, LoopRunStatus.Running, wi);
-        await SeedRunAsync(db, LoopRunStatus.WaitingHuman, wi);
-
-        var ids = await new LoopRunStore(db.Fresh()).GetActiveWorkItemIdsAsync();
-
-        Assert.Equal(new[] { wi }, ids);
-    }
-
-    [Fact]
     public async Task Skips_runs_with_no_work_item()
     {
         // WorkItemId defaults to empty rather than null, and an empty id in the

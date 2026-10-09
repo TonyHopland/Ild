@@ -978,7 +978,9 @@ public class WorkItemsController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var ok = await _workItemManager.SubmitHumanFeedbackInputAsync(id, request.Input ?? string.Empty);
+        bool ok;
+        try { ok = await _workItemManager.SubmitHumanFeedbackInputAsync(id, request.Input ?? string.Empty); }
+        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
         if (!ok) return NotFound();
 
         // SubmitHumanFeedbackInputAsync signals the engine which re-launches the
@@ -994,7 +996,9 @@ public class WorkItemsController : ControllerBase
         if (request?.Input is { Length: > 8192 })
             return BadRequest(new { error = "Input exceeds 8192 characters" });
 
-        var ok = await _workItemManager.RejectHumanFeedbackAsync(id, request?.Input);
+        bool ok;
+        try { ok = await _workItemManager.RejectHumanFeedbackAsync(id, request?.Input); }
+        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
         if (!ok) return NotFound();
 
         // RejectHumanFeedbackAsync signals the engine which re-launches the run
@@ -1008,7 +1012,9 @@ public class WorkItemsController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var ok = await _workItemManager.SubmitHumanFeedbackRespondAsync(id, request.Input ?? string.Empty);
+        bool ok;
+        try { ok = await _workItemManager.SubmitHumanFeedbackRespondAsync(id, request.Input ?? string.Empty); }
+        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
         if (!ok) return NotFound();
 
         // SubmitHumanFeedbackRespondAsync signals the engine which re-launches
@@ -1024,7 +1030,9 @@ public class WorkItemsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { error = "Edge name is required" });
 
-        var ok = await _workItemManager.SubmitHumanFeedbackEdgeAsync(id, request.Name, request.Input ?? string.Empty);
+        bool ok;
+        try { ok = await _workItemManager.SubmitHumanFeedbackEdgeAsync(id, request.Name, request.Input ?? string.Empty); }
+        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
         if (!ok) return NotFound();
 
         // SubmitHumanFeedbackEdgeAsync signals the engine which re-launches the

@@ -72,7 +72,7 @@ public class WorkItemManagerTests
         db.Context.SaveChanges();
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>()))
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
         engine = new Mock<ILoopEngine>();
         return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions,
@@ -1105,7 +1105,7 @@ public class WorkItemManagerTests
 
         await mgr.SubmitHumanFeedbackInputAsync(id, "ship it");
 
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "ship it", null), Times.Once);
+        eventLog.Verify(e => e.AppendAsync(runId, EventType.HumanFeedbackReceived, "ship it", humanNodeId, runNode.Id, null), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
             It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success && s.Output == "ship it")), Times.Once);
     }
@@ -1160,7 +1160,7 @@ public class WorkItemManagerTests
         // Should not throw even without engine wired up
         var result = await mgr.SubmitHumanFeedbackInputAsync(id, "proceed");
         Assert.True(result);
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed", null), Times.Once);
+        eventLog.Verify(e => e.AppendAsync(runId, EventType.HumanFeedbackReceived, "proceed", nodeId, It.IsAny<Guid?>(), null), Times.Once);
     }
 
     [Fact]
@@ -1275,7 +1275,7 @@ public class WorkItemManagerTests
 
         await mgr.RejectHumanFeedbackAsync(id);
 
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "rejected by user", null), Times.Once);
+        eventLog.Verify(e => e.AppendAsync(runId, EventType.HumanFeedbackReceived, "rejected by user", nodeId, runNode.Id, null), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
             It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Reject)), Times.Once);
     }
@@ -1335,9 +1335,9 @@ public class WorkItemManagerTests
         await mgr.RejectHumanFeedbackAsync(id, "looks wrong, try again with smaller scope");
 
         eventLog.Verify(e => e.AppendAsync(
-            runId, "HumanFeedbackReceived",
+            runId, EventType.HumanFeedbackReceived,
             "rejected by user: looks wrong, try again with smaller scope",
-            null), Times.Once);
+            nodeId, runNode.Id, null), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
             It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Reject && s.Output == "looks wrong, try again with smaller scope")), Times.Once);
     }
@@ -1396,7 +1396,7 @@ public class WorkItemManagerTests
 
         await mgr.SubmitHumanFeedbackRespondAsync(id, "please revise the approach");
 
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "please revise the approach", null), Times.Once);
+        eventLog.Verify(e => e.AppendAsync(runId, EventType.HumanFeedbackReceived, "please revise the approach", nodeId, runNode.Id, "Respond"), Times.Once);
         engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
             It.Is<NodeSignal>(s => s.EdgeName == "Respond" && s.Output == "please revise the approach")), Times.Once);
     }
@@ -1551,8 +1551,9 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("t", "", repoId);
-        SeedLoopRun(db, id);
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]");
+        var runId = SeedLoopRun(db, id);
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]",
+            currentLoopRunId: runId);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, wi!.Status);
@@ -1633,7 +1634,7 @@ public class WorkItemManagerTests
         db.Context.SaveChanges();
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>()))
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
         var notifier = new Mock<IWorkItemNotifier>();
         var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);

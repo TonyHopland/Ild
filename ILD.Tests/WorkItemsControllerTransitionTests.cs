@@ -50,7 +50,7 @@ public class WorkItemsControllerTransitionTests
         db.Context.SaveChanges();
 
         var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>()))
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
 
         var mgr = new WorkItemManager(

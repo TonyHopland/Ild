@@ -754,7 +754,7 @@ describe("RunsPanel run details", () => {
           ? {
               entries: [
                 {
-                  sequence: 1,
+                  id: 1,
                   runId: RUN_A,
                   eventType: "NodeStarted",
                   nodeId: "n-build",
@@ -763,7 +763,7 @@ describe("RunsPanel run details", () => {
                   timestamp: "2025-01-01T00:00:00Z",
                 },
                 {
-                  sequence: 2,
+                  id: 2,
                   runId: RUN_A,
                   eventType: "NodeStarted",
                   nodeId: "n-review",
@@ -778,7 +778,7 @@ describe("RunsPanel run details", () => {
           : {
               entries: [
                 {
-                  sequence: 3,
+                  id: 3,
                   runId: RUN_A,
                   eventType: "NodeCompleted",
                   nodeId: "n-build",
@@ -811,7 +811,7 @@ describe("RunsPanel run events", () => {
     const getEvents = vi.spyOn(loopRunService, "getEvents").mockResolvedValue({
       entries: [
         {
-          sequence: 1,
+          id: 1,
           runId: RUN_A,
           eventType: "NodeStarted",
           nodeId: "n-1",
@@ -820,7 +820,7 @@ describe("RunsPanel run events", () => {
           timestamp: "2025-01-01T00:00:00Z",
         },
         {
-          sequence: 2,
+          id: 2,
           runId: RUN_A,
           eventType: "NodeStarted",
           nodeId: "n-2",
@@ -873,7 +873,7 @@ describe("RunsPanel run events retry", () => {
       .mockResolvedValue({
         entries: [
           {
-            sequence: 1,
+            id: 1,
             runId: RUN_A,
             eventType: "NodeStarted",
             nodeId: "n-1",

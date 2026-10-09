@@ -170,6 +170,29 @@ public class StuckRunWatchdogTests
     }
 
     [Fact]
+    public async Task A_run_whose_end_is_already_recorded_still_leaves_the_Running_column()
+    {
+        // Every ending transition records its end, so a completed-yet-Running run
+        // usually has one already and the heal's own failure event is refused.
+        // That record is a side effect; moving the work item is the heal.
+        using var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var run = SeedRun(db, version.Id, LoopRunStatus.Running, updatedAt: DateTime.UtcNow.AddMinutes(-10));
+        var events = new EventLogService(db.EventLogs);
+        await events.AppendAsync(run.Id, EventType.LoopRunCompleted, "Run completed");
+        await db.Fresh().LoopRuns.Where(r => r.Id == run.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, DateTime.UtcNow.AddMinutes(-9)), TestContext.Current.CancellationToken);
+        var workItems = WorkItemsReturning(RemoteWorkItemStatus.Running);
+
+        await InvokeSweepOnceAsync(BuildWatchdog(new LoopRunStore(db.Fresh()), EngineWithActiveRuns().Object,
+            RecoveryReturning(true).Object, workItems.Object, events));
+
+        Assert.Equal(LoopRunStatus.Failed, db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id).Status);
+        workItems.Verify(w => w.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<string?>(), It.IsAny<string?>(), run.Id, It.IsAny<string?>()), Times.Once);
+    }
+
+    [Fact]
     public async Task A_failing_reconcile_does_not_abort_the_sweep_for_other_runs()
     {
         // A throw while healing one completed-yet-Running run must not strand the
@@ -193,7 +216,7 @@ public class StuckRunWatchdogTests
         workItems.Setup(x => x.GetWorkItemAsync(It.IsAny<string>()))
             .ReturnsAsync((string id) => new WorkItemView { Id = id, Status = RemoteWorkItemStatus.Running });
         workItems.Setup(x => x.TransitionAsync(stuck.WorkItemId, It.IsAny<RemoteWorkItemStatus>(),
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ThrowsAsync(new InvalidOperationException("transition failed"));
 
         var watchdog = BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object);
@@ -358,12 +381,15 @@ public class StuckRunWatchdogTests
     private static StuckRunWatchdog BuildWatchdog(TestDb db, ILoopEngine engine, IRecoveryManager recovery, IWorkItemManager workItems)
         => BuildWatchdog(db.LoopRuns, engine, recovery, workItems);
 
-    private static StuckRunWatchdog BuildWatchdog(ILoopRunStore runStore, ILoopEngine engine, IRecoveryManager recovery, IWorkItemManager workItems)
+    private static StuckRunWatchdog BuildWatchdog(
+        ILoopRunStore runStore, ILoopEngine engine, IRecoveryManager recovery, IWorkItemManager workItems,
+        IEventLogService? eventLog = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(runStore);
         services.AddSingleton(recovery);
         services.AddSingleton(workItems);
+        services.AddSingleton(eventLog ?? new Mock<IEventLogService>().Object);
         var provider = services.BuildServiceProvider();
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
         return new StuckRunWatchdog(scopes, engine, NullLogger<StuckRunWatchdog>.Instance);

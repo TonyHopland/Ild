@@ -102,6 +102,13 @@ export interface WorkItem {
   prUrl: string | null;
   pullRequestBranch: string | null;
   humanFeedbackReason: string | null;
+  /**
+   * Why the item waits on a person when no run says so: a start that failed
+   * before its run existed, or a manual move to HumanFeedback with no live run.
+   * Null once a run starts.
+   */
+  statusReason?: string | null;
+  statusReasonAt?: string | null;
   humanFeedbackActions: string | null;
   createdAt: string;
   startedAt: string | null;
@@ -691,7 +698,8 @@ export interface RemotePrSnapshot {
 }
 
 export interface EventLogEntry {
-  sequence: number;
+  /** The event's id: its place in the run's timeline, and the cursor the events page reads after. */
+  id: number;
   runId: string;
   eventType: string;
   nodeId: string | null;
@@ -699,6 +707,8 @@ export interface EventLogEntry {
   timestamp: string;
   nodeLabel?: string;
   runNodeId: string | null;
+  /** The named edge a human chose, when the event records that choice. */
+  edgeName?: string | null;
 }
 
 export interface EventLogPage {

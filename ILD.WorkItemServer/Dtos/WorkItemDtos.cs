@@ -14,7 +14,6 @@ public sealed class WorkItemDto
     public WorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
-    public IReadOnlyList<ConversationMessage> Conversation { get; set; } = Array.Empty<ConversationMessage>();
 
     /// <summary>Every PR opened against this item, newest first.</summary>
     public IReadOnlyList<WorkItemPullRequest> PullRequests { get; set; } = Array.Empty<WorkItemPullRequest>();
@@ -123,13 +122,7 @@ public sealed class UpdateWorkItemRequest
 public sealed class TransitionRequest
 {
     public WorkItemStatus TargetStatus { get; set; }
-    public string? Reason { get; set; }
     public string? Actions { get; set; }
-    /// <summary>Optional author display name for the conversation entry this
-    /// transition appends (e.g. the originating node's title).</summary>
-    public string? Name { get; set; }
-    /// <summary>The ILD node execution the appended conversation entry comes from.</summary>
-    public Guid? RunNodeId { get; set; }
 }
 
 public sealed class TransitionResponse
@@ -142,14 +135,6 @@ public sealed class TransitionResponse
 public sealed class FeedbackRequest
 {
     public string? Content { get; set; }
-}
-
-public sealed class AppendConversationRequest
-{
-    public string? Role { get; set; }
-    public string? Content { get; set; }
-    public string? Name { get; set; }
-    public Guid? RunNodeId { get; set; }
 }
 
 /// <summary>

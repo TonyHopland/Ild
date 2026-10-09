@@ -120,9 +120,7 @@ public class LoopRunStoreGetByIdTests
         db.Context.LoopRuns.Add(run);
         db.Context.EventLogs.Add(new EventLog
         {
-            Id = Guid.NewGuid(),
             LoopRunId = run.Id,
-            Sequence = 1,
             EventType = EventType.LoopRunCompleted,
             Timestamp = DateTime.UtcNow,
             Data = "done",

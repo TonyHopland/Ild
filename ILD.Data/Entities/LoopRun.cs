@@ -157,8 +157,6 @@ public class LoopRun : IHasUpdatedAt
     /// </summary>
     public DateTime? ThrottleResetAt { get; set; }
 
-    public int NextEventSeq { get; set; }
-
     public DateTime? StartedAt { get; set; }
 
     public DateTime? CompletedAt { get; set; }

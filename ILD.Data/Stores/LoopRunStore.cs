@@ -356,7 +356,17 @@ public class LoopRunStore : ILoopRunStore
     public async Task CreateRunAsync(LoopRun run)
     {
         _db.LoopRuns.Add(run);
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Refused (e.g. a second live run for the work item): the row must
+            // not stay queued on the context for the next unrelated save.
+            _db.Entry(run).State = EntityState.Detached;
+            throw;
+        }
     }
 
     public async Task ReloadAsync(LoopRun run)
@@ -517,17 +527,43 @@ public class LoopRunStore : ILoopRunStore
             .Select(r => r.Id)
             .ToListAsync();
 
-    public async Task<int> AllocateNextEventSequenceAsync(Guid runId)
+    public async Task<WorkItemStatusReason?> GetWorkItemStatusReasonAsync(string workItemId)
+        => await _db.WorkItemStatusReasons.AsNoTracking().FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
+
+    public async Task<IReadOnlyDictionary<string, WorkItemStatusReason>> GetWorkItemStatusReasonsAsync(IReadOnlyCollection<string> workItemIds)
+        => await _db.WorkItemStatusReasons.AsNoTracking()
+            .Where(r => workItemIds.Contains(r.WorkItemId))
+            .ToDictionaryAsync(r => r.WorkItemId, StringComparer.Ordinal);
+
+    public async Task SetWorkItemStatusReasonAsync(string workItemId, string text)
     {
-        // Per-run sequence allocator. Callers are expected to serialize calls
-        // for the same runId via an in-memory lock (see EventLogService).
-        // Cross-run calls remain concurrent.
-        var run = await _db.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId)
-            ?? throw new InvalidOperationException($"Run {runId} not found while allocating event sequence");
-        run.NextEventSeq += 1;
-        await _db.SaveChangesAsync();
-        return run.NextEventSeq;
+        var at = DateTime.UtcNow;
+        if (await UpdateWorkItemStatusReasonAsync(workItemId, text, at)) return;
+
+        var row = new WorkItemStatusReason { WorkItemId = workItemId, Text = text, At = at };
+        _db.WorkItemStatusReasons.Add(row);
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Another writer inserted the row first; the later reason wins.
+            if (!await UpdateWorkItemStatusReasonAsync(workItemId, text, at)) throw;
+        }
+        finally
+        {
+            _db.Entry(row).State = EntityState.Detached;
+        }
     }
+
+    private async Task<bool> UpdateWorkItemStatusReasonAsync(string workItemId, string text, DateTime at)
+        => await _db.WorkItemStatusReasons
+            .Where(r => r.WorkItemId == workItemId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Text, text).SetProperty(r => r.At, at)) > 0;
+
+    public async Task ClearWorkItemStatusReasonAsync(string workItemId)
+        => await _db.WorkItemStatusReasons.Where(r => r.WorkItemId == workItemId).ExecuteDeleteAsync();
 
     public async Task<bool> DeleteAsync(Guid runId)
     {
@@ -579,7 +615,7 @@ public class LoopRunStore : ILoopRunStore
 
         var feedback = eventLogs
             .Where(e => e.EventType == EventType.HumanFeedbackRequested || e.EventType == EventType.HumanFeedbackReceived)
-            .Select(e => new FeedbackFact(e.EventType, e.Sequence, e.Timestamp))
+            .Select(e => new FeedbackFact(e.EventType, e.Id, e.Timestamp))
             .ToList();
 
         var contribution = RunAnalyticsAggregator.BuildContribution(

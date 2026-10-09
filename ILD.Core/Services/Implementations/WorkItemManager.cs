@@ -5,6 +5,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -78,11 +79,32 @@ public class WorkItemManager : IWorkItemManager
         // Belt and braces, for the no-engine wiring and for a best-effort stop
         // that failed: the row has to end terminal and timestamped, or the
         // retention sweeper never sees it and its work item keeps a slot.
-        if (run.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
+        var endedHere = IsAlive(run.Status);
+        if (endedHere)
             run.Status = LoopRunStatus.Cancelled;
         run.CompletedAt ??= DateTime.UtcNow;
         await _loopRunStore.UpdateRunAsync(run);
+        if (endedHere)
+            await TryRecordAsync(run.Id, EventType.LoopRunCancelled, reason);
     }
+
+    /// <summary>
+    /// Record an event about a lifecycle step this manager is taking anyway.
+    /// Best-effort, as event writes are in the engine: a write that fails must
+    /// not stop the step it describes. For a run-ending event, a
+    /// <see cref="RunClosedException"/> means the end is already on record.
+    /// </summary>
+    private async Task TryRecordAsync(Guid runId, EventType type, string text)
+    {
+        try { await _eventLog.AppendAsync(runId, type, text); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not record {EventType} on run {RunId}", type, runId);
+        }
+    }
+
+    private static bool IsAlive(LoopRunStatus status)
+        => status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman;
 
     /// <summary>
     /// Stop a still-active run, leaving its work item's status to the caller.
@@ -93,9 +115,8 @@ public class WorkItemManager : IWorkItemManager
     /// <see cref="ILoopEngine.StopRunAsync"/> and not <c>CancelRunAsync</c>:
     /// the latter parks the work item in HumanFeedback, and every caller here
     /// is on its way to giving the item a status of its own. Inheriting that
-    /// park would leave a "Run cancelled" message in the item's conversation
-    /// and pop a needs-attention toast on the card the human just finished —
-    /// both outliving the status written over it a moment later.
+    /// park would pop a needs-attention toast on the card the human just
+    /// finished, outliving the status written over it a moment later.
     /// </summary>
     private async Task StopRunIfActiveAsync(LoopRun run, string reason)
     {
@@ -190,14 +211,16 @@ public class WorkItemManager : IWorkItemManager
     }
 
     private async Task<WorkItemView> ViewOfAsync(WorkItemServerOptions opts, RemoteWorkItem remote)
-        => await ViewOfAsync(opts, remote, await _loopRunStore.GetAllByWorkItemAsync(remote.Id));
+        => await ViewOfAsync(opts, remote, await _loopRunStore.GetAllByWorkItemAsync(remote.Id),
+            await _loopRunStore.GetWorkItemStatusReasonAsync(remote.Id));
 
-    /// <summary>A work item the server has just returned, joined with its runs.</summary>
-    private async Task<WorkItemView> ViewOfAsync(WorkItemServerOptions opts, RemoteWorkItem remote, IReadOnlyList<LoopRun> runs)
+    /// <summary>A work item the server has just returned, joined with its runs and status reason.</summary>
+    private async Task<WorkItemView> ViewOfAsync(
+        WorkItemServerOptions opts, RemoteWorkItem remote, IReadOnlyList<LoopRun> runs, WorkItemStatusReason? statusReason)
     {
         await RecordUnreportedPullRequestsAsync(opts, remote, runs);
         var currentRun = CurrentRun(runs);
-        return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty));
+        return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty), statusReason);
     }
 
     public async Task<IReadOnlyList<WorkItemView>> ListAsync(
@@ -241,10 +264,13 @@ public class WorkItemManager : IWorkItemManager
         var page = matching.Skip(ClampSkip(query.Skip)).Take(ClampTake(query.Take)).ToList();
         if (page.Count == 0) return new WorkItemPage(Array.Empty<WorkItemView>(), matching.Count);
 
-        var runsByWorkItem = candidateRuns ?? await RunsByWorkItemAsync(page.Select(w => w.Id).ToList());
+        var pageIds = page.Select(w => w.Id).ToList();
+        var runsByWorkItem = candidateRuns ?? await RunsByWorkItemAsync(pageIds);
+        var statusReasons = await _loopRunStore.GetWorkItemStatusReasonsAsync(pageIds);
         var views = new List<WorkItemView>(page.Count);
         foreach (var remote in page)
-            views.Add(await ViewOfAsync(opts, remote, runsByWorkItem.GetValueOrDefault(remote.Id) ?? []));
+            views.Add(await ViewOfAsync(opts, remote, runsByWorkItem.GetValueOrDefault(remote.Id) ?? [],
+                statusReasons.GetValueOrDefault(remote.Id)));
         return new WorkItemPage(views, matching.Count);
     }
 
@@ -437,7 +463,8 @@ public class WorkItemManager : IWorkItemManager
         RemoteWorkItem remote,
         LoopRun? run,
         IReadOnlyList<LoopRun> runs,
-        bool isPreviewRunning)
+        bool isPreviewRunning,
+        WorkItemStatusReason? statusReason)
     {
         var timingRun = LatestRun(runs);
         return new WorkItemView
@@ -451,7 +478,6 @@ public class WorkItemManager : IWorkItemManager
             Priority = remote.Priority,
             Status = remote.Status,
             Tags = remote.Tags,
-            Conversation = remote.Conversation,
             HumanFeedbackActions = remote.HumanFeedbackActions,
             AiProviderOverride = remote.AiProviderOverride,
             AiProviderOverrideId = remote.AiProviderOverrideId,
@@ -468,6 +494,8 @@ public class WorkItemManager : IWorkItemManager
             PrUrl = run?.PrUrl,
             IsPrMerged = run?.IsPrMerged == true,
             HumanFeedbackReason = run?.HumanFeedbackReason,
+            StatusReason = statusReason?.Text,
+            StatusReasonAt = statusReason?.At,
             CurrentLoopRunId = run?.Id,
             CurrentNodeLabel = ResolveCurrentNodeLabel(run),
             IsPreviewRunning = isPreviewRunning,
@@ -727,8 +755,28 @@ public class WorkItemManager : IWorkItemManager
         return await TransitionAsync(workItemId, RemoteWorkItemStatus.Running);
     }
 
-    public Task<bool> TransitionToHumanFeedbackAsync(string workItemId, string reason)
-        => TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
+    /// <summary>
+    /// A human moving the item to HumanFeedback by hand. The reason goes on the
+    /// live run when there is one, and is the item's own status reason when
+    /// there is not — never onto a run that has already ended.
+    /// </summary>
+    public async Task<bool> TransitionToHumanFeedbackAsync(string workItemId, string reason)
+    {
+        if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) is not { } active)
+            return await ParkWithoutRunAsync(workItemId, reason);
+
+        await TryRecordAsync(active.Id, EventType.RunParked, reason);
+        return await TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason,
+            currentLoopRunId: active.Id);
+    }
+
+    public async Task<bool> ParkWithoutRunAsync(string workItemId, string reason)
+    {
+        if (await GetWorkItemAsync(workItemId) is null) return false;
+        await _loopRunStore.SetWorkItemStatusReasonAsync(workItemId, reason);
+        return await TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
+    }
+
 
     /// <summary>
     /// A human declaring the item finished — dragging it to the Done column, or
@@ -756,9 +804,7 @@ public class WorkItemManager : IWorkItemManager
         string? reason = null,
         string? actions = null,
         Guid? currentLoopRunId = null,
-        string? humanFeedbackReason = null,
-        string? name = null,
-        Guid? runNodeId = null)
+        string? humanFeedbackReason = null)
     {
         var prevWi = await GetWorkItemAsync(workItemId);
         if (prevWi == null) return false;
@@ -768,10 +814,7 @@ public class WorkItemManager : IWorkItemManager
         var resp = await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
         {
             TargetStatus = targetStatus,
-            Reason = reason,
             Actions = actions,
-            Name = name,
-            RunNodeId = runNodeId,
         });
 
         if (!resp.Success)
@@ -779,13 +822,13 @@ public class WorkItemManager : IWorkItemManager
 
         var actual = resp.ActualStatus;
 
-        // Update engine-only fields on the current LoopRun
-        Guid? effectiveRunId = currentLoopRunId;
-        if (!effectiveRunId.HasValue || effectiveRunId.Value == Guid.Empty)
-        {
-            var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
-            effectiveRunId = currentRun?.Id;
-        }
+        // Update engine-only fields on the current LoopRun. Only the run the
+        // caller names is given a feedback label: one inferred from the work
+        // item may be a finished run the reason has nothing to do with.
+        var explicitRun = currentLoopRunId.HasValue && currentLoopRunId.Value != Guid.Empty;
+        var effectiveRunId = explicitRun
+            ? currentLoopRunId
+            : (await _loopRunStore.GetCurrentByWorkItemAsync(workItemId))?.Id;
         string? runWorktreePath = null;
         if (effectiveRunId.HasValue)
         {
@@ -793,16 +836,16 @@ public class WorkItemManager : IWorkItemManager
             if (run != null)
             {
                 runWorktreePath = run.WorktreePath;
-                if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)
+                if (actual != RemoteWorkItemStatus.HumanFeedback || explicitRun)
                 {
-                    // Use the dedicated humanFeedbackReason for UI routing on
-                    // the LoopRun. Falls back to reason when not supplied.
-                    run.HumanFeedbackReason = humanFeedbackReason ?? reason;
+                    run.HumanFeedbackReason = actual == RemoteWorkItemStatus.HumanFeedback && reason != null
+                        // Use the dedicated humanFeedbackReason for UI routing on
+                        // the LoopRun. Falls back to reason when not supplied.
+                        ? humanFeedbackReason ?? reason
+                        : null;
+                    run.UpdatedAt = DateTime.UtcNow;
+                    await _loopRunStore.UpdateRunAsync(run);
                 }
-                else
-                    run.HumanFeedbackReason = null;
-                run.UpdatedAt = DateTime.UtcNow;
-                await _loopRunStore.UpdateRunAsync(run);
             }
         }
 
@@ -827,16 +870,6 @@ public class WorkItemManager : IWorkItemManager
             _scheduler.Pulse();
 
         return true;
-    }
-
-    public async Task<bool> AppendAiTurnAsync(string workItemId, string name, string content, Guid? runNodeId = null)
-    {
-        try
-        {
-            var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            return await _server.AppendConversationAsync(opts, workItemId, "ai", content, name, runNodeId);
-        }
-        catch (InvalidOperationException) { return false; /* No remote — local only. */ }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -893,7 +926,8 @@ public class WorkItemManager : IWorkItemManager
                 var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
                 var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                                ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-                views.Add(BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
+                views.Add(BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
+                    await _loopRunStore.GetWorkItemStatusReasonAsync(id)));
             }
         }
         return views;
@@ -910,7 +944,8 @@ public class WorkItemManager : IWorkItemManager
             var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
             var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
                            ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
-            views.Add(BuildView(candidate, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty)));
+            views.Add(BuildView(candidate, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
+                await _loopRunStore.GetWorkItemStatusReasonAsync(candidate.Id)));
         }
         return views;
     }
@@ -1034,6 +1069,7 @@ public class WorkItemManager : IWorkItemManager
 
         if (currentRun != null)
         {
+            var endedHere = IsAlive(currentRun.Status);
             currentRun.Status = LoopRunStatus.Completed;
             // Terminal timestamp keeps the row visible to the retention
             // sweeper; without it the run is never reclaimed.
@@ -1041,6 +1077,8 @@ public class WorkItemManager : IWorkItemManager
             currentRun.HumanFeedbackReason = null;
             currentRun.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(currentRun);
+            if (endedHere)
+                await TryRecordAsync(currentRun.Id, EventType.LoopRunCompleted, "Work item sent back to Backlog");
         }
 
         return true;
@@ -1247,7 +1285,7 @@ public class WorkItemManager : IWorkItemManager
         var nodes = await _loopRunStore.GetRunNodesAsync(runId);
         var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
 
-        await _eventLog.AppendAsync(runId, "HumanFeedbackReceived", input);
+        await _eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, input, humanRunNode?.LoopNodeId, humanRunNode?.Id);
 
         try
         {
@@ -1301,7 +1339,7 @@ public class WorkItemManager : IWorkItemManager
         var currentRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
 
         var logMessage = string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}";
-        await _eventLog.AppendAsync(run.Id, "HumanFeedbackReceived", logMessage);
+        await _eventLog.AppendAsync(run.Id, EventType.HumanFeedbackReceived, logMessage, currentRunNode?.LoopNodeId, currentRunNode?.Id);
 
         try
         {
@@ -1338,7 +1376,7 @@ public class WorkItemManager : IWorkItemManager
         var nodes = await _loopRunStore.GetRunNodesAsync(runId);
         var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
 
-        await _eventLog.AppendAsync(runId, "HumanFeedbackReceived", input);
+        await _eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, input, humanRunNode?.LoopNodeId, humanRunNode?.Id, edgeName);
 
         try
         {
@@ -1383,14 +1421,14 @@ public class WorkItemManager : IWorkItemManager
         var merged = await _remoteProvider.MergePullRequestAsync(repo.CloneUrl, prNumber);
         if (!merged)
         {
-            await _eventLog.AppendAsync(runId, "PrMergeFailed", $"Merge of {wi.PrUrl} failed");
+            await TryRecordAsync(runId, EventType.PrMergeFailed, $"Merge of {wi.PrUrl} failed");
             // Leave the work item parked — do not advance the loop.
             return new MergePullRequestResult(false,
                 "Failed to merge the pull request. It may have conflicts or be blocked by branch protection.",
                 false, null);
         }
 
-        await _eventLog.AppendAsync(runId, "PrMerged", $"PR {wi.PrUrl} merged by user");
+        await TryRecordAsync(runId, EventType.PrMerged, $"PR {wi.PrUrl} merged by user");
 
         // Branch deletion is best effort: a failure after a successful merge is
         // reported but never blocks loop continuation.
@@ -1403,12 +1441,14 @@ public class WorkItemManager : IWorkItemManager
             if (!branchDeleted)
             {
                 branchWarning = $"PR merged, but the branch '{branch}' could not be deleted.";
-                await _eventLog.AppendAsync(runId, "BranchDeleteFailed", branchWarning);
+                await TryRecordAsync(runId, EventType.BranchDeleteFailed, branchWarning);
             }
         }
 
         // Continue along OnSuccess — identical continuation to the Approve action.
-        await SubmitHumanFeedbackInputAsync(workItemId, string.Empty);
+        // A run that has already ended has nothing left to continue.
+        try { await SubmitHumanFeedbackInputAsync(workItemId, string.Empty); }
+        catch (RunClosedException) { }
 
         return new MergePullRequestResult(true, null, branchDeleted, branchWarning);
     }
@@ -1424,6 +1464,7 @@ public class WorkItemManager : IWorkItemManager
             await _server.DeleteAsync(opts, workItemId);
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
+        await _loopRunStore.ClearWorkItemStatusReasonAsync(workItemId);
 
         // Delete all LoopRuns for this work item. Reclaim each run's local
         // git state first — once the rows are gone the retention sweeper can

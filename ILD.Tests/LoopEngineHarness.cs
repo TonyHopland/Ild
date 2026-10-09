@@ -77,7 +77,7 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<IPackageFeedResolver>(new PackageFeedResolver(Db.PackageFeeds, NullLogger<PackageFeedResolver>.Instance));
         // The engine resolves IEventLogService optionally; register it so node and
         // edge-traversal events are written exactly as they are in production.
-        services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, Db.LoopRuns));
+        services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs));
         services.AddSingleton<IRunNotifier>(notifier ?? new NoopRunNotifier());
         services.AddSingleton<IWorkItemManager>(WorkItemsMock.Object);
         services.AddSingleton<IWorkItemNotifier>(WorkItemNotifierMock.Object);
@@ -241,11 +241,11 @@ internal sealed class LoopEngineHarness : IDisposable
             .OrderBy(rn => rn.StartedAt)
             .ToList();
 
-    /// <summary>All event-log rows written for this run, in sequence order.</summary>
+    /// <summary>All event-log rows written for this run, in the order they were written.</summary>
     public IReadOnlyList<EventLog> ReloadEvents()
         => Db.Fresh().EventLogs.AsNoTracking()
             .Where(e => e.LoopRunId == RunId)
-            .OrderBy(e => e.Sequence)
+            .OrderBy(e => e.Id)
             .ToList();
 
     public void Dispose()

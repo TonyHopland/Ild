@@ -238,10 +238,18 @@ public interface ILoopRunStore
     Task<IReadOnlyList<Guid>> GetFailedRunIdsAsync();
 
     /// <summary>
-    /// Atomically increments and returns the next per-run event log sequence
-    /// number. Replaces the previous global lock + MAX(Sequence) scan.
+    /// The work item's status reason: why it waits on a person when no run is
+    /// there to say so (see <see cref="WorkItemStatusReason"/>). Null when it has none.
     /// </summary>
-    Task<int> AllocateNextEventSequenceAsync(Guid runId);
+    Task<WorkItemStatusReason?> GetWorkItemStatusReasonAsync(string workItemId);
+
+    /// <summary>The status reasons of those of <paramref name="workItemIds"/> that have one, by work item id.</summary>
+    Task<IReadOnlyDictionary<string, WorkItemStatusReason>> GetWorkItemStatusReasonsAsync(IReadOnlyCollection<string> workItemIds);
+
+    /// <summary>Set the work item's status reason to <paramref name="text"/>, stamped now (UTC).</summary>
+    Task SetWorkItemStatusReasonAsync(string workItemId, string text);
+
+    Task ClearWorkItemStatusReasonAsync(string workItemId);
 
     /// <summary>
     /// Hard-deletes a loop run and all of its dependent rows (run nodes,

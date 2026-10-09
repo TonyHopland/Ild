@@ -208,10 +208,10 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                         $"Multiple loop templates match tags: {string.Join(", ", resolution.MatchingTemplateNames)}",
                     _ => "Unable to resolve template",
                 };
+                await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, reason);
                 await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
                 {
                     TargetStatus = RemoteWorkItemStatus.HumanFeedback,
-                    Reason = reason,
                 }, ct);
                 escalated.Add(ready);
                 continue;
@@ -249,19 +249,16 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                     _logger?.LogWarning(ex,
                         "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
                     // The claim stands on the server with nothing driving it, so
-                    // hand it back for review and give up the slot it took —
-                    // for the rest of this pass only. StartRunAsync commits the
-                    // LoopRun row before the transition that most often throws
-                    // here, so where a row did get written the derived set
-                    // legitimately takes that slot back on the next pass. The
-                    // item is heartbeated again from then on, and the resume
-                    // path drives the orphaned run as soon as a human responds.
+                    // hand it back for review and give up the slot it took.
+                    // StartRunAsync ends any run it had already created as
+                    // Failed, so no orphan keeps the slot on the next pass, and
+                    // the reason belongs to the item rather than to that run.
                     try
                     {
+                        await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, $"Failed to start run: {ex.Message}");
                         await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
                         {
                             TargetStatus = RemoteWorkItemStatus.HumanFeedback,
-                            Reason = $"Failed to start run: {ex.Message}",
                         }, ct);
                         slotHolders.Remove(ready.Id);
                         await _workItemNotifier.WorkItemStateChangedAsync(

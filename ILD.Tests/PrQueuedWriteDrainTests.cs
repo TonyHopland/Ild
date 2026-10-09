@@ -43,7 +43,7 @@ public class PrQueuedWriteDrainTests
         public Mock<IRemoteProvider> Remote { get; } = new();
         public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRunNotifier> Notifier { get; } = new();
-        public Mock<IEventLogStore> Events { get; } = new();
+        public Mock<IEventLogService> Events { get; } = new();
         public List<EventLog> Logged { get; } = new();
         public List<Guid> QueueChanges { get; } = new();
         public LoopRun Run { get; }
@@ -81,8 +81,9 @@ public class PrQueuedWriteDrainTests
                 .Callback<string, string, string>((_, _, body) => { PostedComment = body; PostedComments.Add(body); })
                 .ReturnsAsync(new RemotePrWriteResult(true, "5000000001", null));
 
-            Events.Setup(s => s.AppendAsync(It.IsAny<EventLog>()))
-                .Callback<EventLog>(Logged.Add)
+            Events.Setup(s => s.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+                .Callback<Guid, EventType, string, Guid?, Guid?, string?>((run, type, data, node, runNode, edge) => Logged.Add(
+                    new EventLog { LoopRunId = run, EventType = type, Data = data, NodeId = node, RunNodeId = runNode, EdgeName = edge }))
                 .ReturnsAsync(1);
 
             Notifier.Setup(n => n.PrQueueChangedAsync(It.IsAny<Guid>()))

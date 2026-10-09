@@ -58,12 +58,13 @@ public class PrRoundVoiceTests
             Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(Fetched(Inline("11")));
             Remote.Setup(r => r.SupportsThreadResolutionAsync(RepoUrl)).ReturnsAsync(canResolve);
 
-            Events.Setup(s => s.AppendAsync(It.IsAny<EventLog>()))
-                .Callback<EventLog>(Logged.Add)
+            Events.Setup(s => s.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+                .Callback<Guid, EventType, string, Guid?, Guid?, string?>((run, type, data, node, runNode, edge) => Logged.Add(
+                    new EventLog { LoopRunId = run, EventType = type, Data = data, NodeId = node, RunNodeId = runNode, EdgeName = edge }))
                 .ReturnsAsync(1);
         }
 
-        public Mock<IEventLogStore> Events { get; } = new();
+        public Mock<IEventLogService> Events { get; } = new();
 
         public PrReviewService Build() => new(Runs.Object, Remote.Object, null, Events.Object);
 
