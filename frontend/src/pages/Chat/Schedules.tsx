@@ -90,6 +90,24 @@ function ScheduleRow({
 }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const deleteRef = useRef<HTMLButtonElement>(null);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  // The confirmation takes the place of the Delete button that opened it, so focus
+  // would fall to the page: it moves to Cancel, and back to Delete when called off.
+  const focusNextRef = useRef<"cancel" | "delete" | null>(null);
+  useEffect(() => {
+    const next = focusNextRef.current;
+    focusNextRef.current = null;
+    (next === "cancel" ? cancelRef : next === "delete" ? deleteRef : null)?.current?.focus();
+  }, [confirmingDelete]);
+  const askToDelete = () => {
+    focusNextRef.current = "cancel";
+    setConfirmingDelete(true);
+  };
+  const keepIt = () => {
+    focusNextRef.current = "delete";
+    setConfirmingDelete(false);
+  };
 
   const act = (fallback: string, request: Parameters<ScheduleWrite>[1]) => {
     setError(null);
@@ -172,6 +190,11 @@ function ScheduleRow({
             className="chat-schedule-confirm"
             role="alertdialog"
             aria-label={`Delete the schedule ${schedule.name}?`}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.stopPropagation();
+              keepIt();
+            }}
           >
             Delete this schedule? Its chats stay.
             <button
@@ -189,8 +212,9 @@ function ScheduleRow({
             </button>
             <button
               type="button"
+              ref={cancelRef}
               className="btn btn-secondary btn-sm"
-              onClick={() => setConfirmingDelete(false)}
+              onClick={keepIt}
             >
               Cancel
             </button>
@@ -198,9 +222,10 @@ function ScheduleRow({
         ) : (
           <button
             type="button"
+            ref={deleteRef}
             className="btn btn-danger btn-sm"
             disabled={writing || editing}
-            onClick={() => setConfirmingDelete(true)}
+            onClick={askToDelete}
           >
             Delete
           </button>
@@ -248,6 +273,16 @@ function ScheduleForm({
           continueSession: true,
         },
   );
+  const nameRef = useRef<HTMLInputElement>(null);
+  // Keyed by each opening, so this runs once per opening: focus goes into the form
+  // and, however it closes, back to whatever opened it.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    nameRef.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (changes: Partial<ChatScheduleInput>) =>
@@ -285,6 +320,11 @@ function ScheduleForm({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          e.stopPropagation();
+          onClose();
+        }}
       >
         <div className="modal-header">
           <h2>{title}</h2>
@@ -297,6 +337,7 @@ function ScheduleForm({
             <label htmlFor="schedule-name">Name</label>
             <input
               id="schedule-name"
+              ref={nameRef}
               type="text"
               maxLength={120}
               value={input.name}
