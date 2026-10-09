@@ -235,6 +235,13 @@ public class LoopRunStore : ILoopRunStore
             .Select(rn => (Guid?)rn.Id)
             .FirstOrDefaultAsync();
 
+    public Task<Guid?> GetWaitingHumanLoopNodeIdAsync(Guid runId, Guid runNodeId)
+        => _db.LoopRunNodes
+            .AsNoTracking()
+            .Where(rn => rn.Id == runNodeId && rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.WaitingHuman)
+            .Select(rn => (Guid?)rn.LoopNodeId)
+            .FirstOrDefaultAsync();
+
     public async Task SetVariableAsync(Guid runId, string name, string value)
     {
         var runningNodeId = await GetRunningNodeIdAsync(runId);

@@ -556,21 +556,17 @@ public sealed class LoopEngine : ILoopEngine
         var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
         var run = await loopRunStore.GetByIdAsync(runId)
             ?? throw new HumanFeedbackRefusedException("The run this answer is for no longer exists.");
-        if (run.Status != LoopRunStatus.WaitingHuman)
-            throw new HumanFeedbackRefusedException(RunNotWaitingMessage);
-        var waiting = await loopRunStore.GetRunNodeByIdAsync(runNodeId);
-        if (waiting is null || waiting.LoopRunId != runId || waiting.Status != LoopRunNodeStatus.WaitingHuman)
-            throw new HumanFeedbackRefusedException("The question this answer is for is no longer open.");
+        var loopNodeId = EnsureStillWaiting(run, await loopRunStore.GetWaitingHumanLoopNodeIdAsync(runId, runNodeId));
 
         await sp.GetRequiredService<IEventLogService>().AppendAlongsideAsync(
-            runId, EventType.HumanFeedbackReceived, feedback, waiting.LoopNodeId, waiting.Id, edgeName,
+            runId, EventType.HumanFeedbackReceived, feedback, loopNodeId, runNodeId, edgeName,
             async () =>
             {
-                // Under the run's lock: a second answer that read the run as
-                // waiting before the first committed finds it Running here.
+                // Under the run's lock, on the rows as they are now: a second
+                // answer that read them before the first committed finds the run
+                // Running, or already parked again at a later question, here.
                 await loopRunStore.ReloadAsync(run);
-                if (run.Status != LoopRunStatus.WaitingHuman)
-                    throw new HumanFeedbackRefusedException(RunNotWaitingMessage);
+                EnsureStillWaiting(run, await loopRunStore.GetWaitingHumanLoopNodeIdAsync(runId, runNodeId));
                 ApplySignal(run, signal);
                 await loopRunStore.UpdateRunAsync(run);
             });
@@ -591,7 +587,18 @@ public sealed class LoopEngine : ILoopEngine
         _ = LaunchAfterAwaitAsync(runId);
     }
 
-    private const string RunNotWaitingMessage = "This run is no longer waiting for an answer.";
+    /// <summary>
+    /// Refuse an answer unless its run waits on a person at exactly that node: a
+    /// resumed run applies whatever answer it holds to the node it is parked at,
+    /// so an answer to one question must never reach another.
+    /// </summary>
+    private static Guid EnsureStillWaiting(LoopRun run, Guid? waitingLoopNodeId)
+    {
+        if (run.Status != LoopRunStatus.WaitingHuman)
+            throw new HumanFeedbackRefusedException("This run is no longer waiting for an answer.");
+        return waitingLoopNodeId
+            ?? throw new HumanFeedbackRefusedException("The question this answer is for is no longer open.");
+    }
 
     /// <summary>Record a parked node's outcome on its run and move the run back to Running.</summary>
     private static void ApplySignal(LoopRun run, NodeSignal signal)

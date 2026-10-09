@@ -147,6 +147,13 @@ public interface ILoopRunStore
     Task<Guid?> GetRunningNodeIdAsync(Guid runId);
 
     /// <summary>
+    /// The loop node that execution <paramref name="runNodeId"/> of the run is
+    /// of, while that execution waits on a person; null otherwise. Read from the
+    /// database, not from an instance this context already tracks.
+    /// </summary>
+    Task<Guid?> GetWaitingHumanLoopNodeIdAsync(Guid runId, Guid runNodeId);
+
+    /// <summary>
     /// What each node execution of the work item's runs did to each variable it
     /// wrote: one entry per execution and variable, not per write.
     /// </summary>

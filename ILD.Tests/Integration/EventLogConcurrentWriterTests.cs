@@ -4,8 +4,10 @@ using ILD.Api.Controllers;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -29,6 +31,7 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
     private readonly string _directory;
     private readonly CommitGate _gate = new();
     private readonly ApiFactory _factory;
+    private Func<Task>? _beforeNextAnswer;
 
     public EventLogConcurrentWriterTests()
     {
@@ -52,6 +55,9 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
             services.AddDbContext<AppDbContext>(options => options
                 .UseSqlite($"Data Source={file}", sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly))
                 .AddInterceptors(_gate));
+            services.AddScoped<IEventLogService>(sp => new EventLogWithInterleaving(
+                new EventLogService(sp.GetRequiredService<IEventLogStore>()),
+                () => Interlocked.Exchange(ref _beforeNextAnswer, null)));
         });
     }
 
@@ -186,7 +192,10 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
         Assert.Equal(new[] { "done" }, page.Entries.Select(e => e.Payload));
     }
 
-    private async Task<(string WorkItemId, Guid RunId)> SeedRunWaitingOnAHumanAsync()
+    /// <param name="thenAnotherQuestion">
+    /// Approving the question leads to a second Human node, so the run parks again.
+    /// </param>
+    private async Task<(string WorkItemId, Guid RunId)> SeedRunWaitingOnAHumanAsync(bool thenAnotherQuestion = false)
     {
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -200,6 +209,15 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
         db.LoopTemplates.Add(template);
         db.LoopTemplateVersions.Add(version);
         db.LoopNodes.Add(human);
+        if (thenAnotherQuestion)
+        {
+            var next = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.Human, Label = "Release check" };
+            db.LoopNodes.Add(next);
+            db.LoopNodeEdges.Add(new LoopNodeEdge
+            {
+                Id = Guid.NewGuid(), SourceNodeId = human.Id, TargetNodeId = next.Id, EdgeType = EdgeType.OnSuccess,
+            });
+        }
         await db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var workItemId = await scope.ServiceProvider.GetRequiredService<IWorkItemManager>()
@@ -230,10 +248,10 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
     }
 
     /// <summary>An answer sent from a request scope of its own, as the API receives one.</summary>
-    private Task<IActionResult> AnswerInOwnScopeAsync(string workItemId, Guid runId, string text, string role)
+    private Task<IActionResult> AnswerInOwnScopeAsync(string workItemId, Guid runId, string text, string? role = null)
         => Task.Run(async () =>
         {
-            CommitGate.ActAs(role);
+            if (role is not null) CommitGate.ActAs(role);
             using var scope = _factory.Services.CreateScope();
             var controller = ActivatorUtilities.CreateInstance<WorkItemsController>(scope.ServiceProvider);
             return await controller.HumanFeedbackInput(workItemId, new HumanFeedbackInputRequest { RunId = runId, Input = text });
@@ -264,5 +282,61 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
             .Where(e => e.LoopRunId == runId && e.EventType == EventType.HumanFeedbackReceived)
             .ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal("Ship it", Assert.Single(answers).Data);
+    }
+
+    [Fact]
+    public async Task An_answer_overtaken_by_one_that_moved_the_run_on_to_a_later_question_is_refused_there()
+    {
+        var (workItemId, runId) = await SeedRunWaitingOnAHumanAsync(thenAnotherQuestion: true);
+        var engine = (LoopEngine)_factory.Services.GetRequiredService<ILoopEngine>();
+
+        // The late answer has read the run and its question as waiting. Before it
+        // takes the run lock, another answer to that question is delivered and the
+        // run parks at the next one: the late answer must not land there.
+        _beforeNextAnswer = async () =>
+        {
+            Assert.IsType<OkResult>(await AnswerInOwnScopeAsync(workItemId, runId, "Ship it"));
+            await LoopEngineHarness.WaitUntilIdleAsync(engine, runId);
+        };
+        var late = await Within(AnswerInOwnScopeAsync(workItemId, runId, "Hold off"), "The late answer never finished.");
+
+        var conflict = Assert.IsAssignableFrom<ObjectResult>(late);
+        Assert.Equal(409, conflict.StatusCode);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var ct = TestContext.Current.CancellationToken;
+        var run = await db.LoopRuns.AsNoTracking().SingleAsync(r => r.Id == runId, ct);
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Null(run.ExternalActionResult);
+        var nodes = await db.LoopRunNodes.AsNoTracking().Where(n => n.LoopRunId == runId).ToListAsync(ct);
+        Assert.Equal(LoopRunNodeStatus.WaitingHuman, Assert.Single(nodes, n => n.LoopNodeId == run.CurrentNodeId).Status);
+        Assert.Equal(2, nodes.Count);
+        var answers = await db.EventLogs.AsNoTracking()
+            .Where(e => e.LoopRunId == runId && e.EventType == EventType.HumanFeedbackReceived)
+            .ToListAsync(ct);
+        Assert.Equal("Ship it", Assert.Single(answers).Data);
+    }
+
+    /// <summary>The real event log, running a test's hook, once, just before the next answer is written.</summary>
+    private sealed class EventLogWithInterleaving(IEventLogService inner, Func<Func<Task>?> takeHook) : IEventLogService
+    {
+        public async Task<long> AppendAlongsideAsync(Guid runId, EventType eventType, string message,
+            Guid? nodeId, Guid? runNodeId, string? edgeName, Func<Task> alongside)
+        {
+            if (takeHook() is { } hook) await hook();
+            return await inner.AppendAlongsideAsync(runId, eventType, message, nodeId, runNodeId, edgeName, alongside);
+        }
+
+        public Task<long> AppendAsync(Guid runId, EventType eventType, string message,
+            Guid? nodeId = null, Guid? runNodeId = null, string? edgeName = null)
+            => inner.AppendAsync(runId, eventType, message, nodeId, runNodeId, edgeName);
+
+        public Task<bool> HasRunEndedAsync(Guid runId) => inner.HasRunEndedAsync(runId);
+
+        public Task<IEnumerable<EventLogEntry>> GetByRunIdAsync(Guid runId, int? limit = null)
+            => inner.GetByRunIdAsync(runId, limit);
+
+        public Task<EventLogPage> GetByRunIdAfterCursorAsync(Guid runId, long cursor, int limit)
+            => inner.GetByRunIdAfterCursorAsync(runId, cursor, limit);
     }
 }
