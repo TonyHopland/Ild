@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 
@@ -18,10 +19,17 @@ public sealed class RunConversationService : IRunConversationService
     public async Task<IReadOnlyList<RunConversationMessage>?> GetMessagesAsync(Guid runId)
     {
         if (await _runs.GetByIdAsync(runId) is null) return null;
+        return await ProjectAsync(runId, await _events.GetByRunIdAsync(runId));
+    }
 
-        var runNodes = (await _runs.GetRunNodesWithNodeAsync(runId)).ToDictionary(rn => rn.Id);
+    public async Task<IReadOnlyList<RunConversationMessage>> ProjectAsync(Guid runId, IReadOnlyList<EventLog> events)
+    {
+        // Only an AI turn needs its execution, for the node's type and label.
+        var runNodes = events.Any(e => e.EventType == EventType.NodeCompleted)
+            ? (await _runs.GetRunNodesWithNodeAsync(runId)).ToDictionary(rn => rn.Id)
+            : new Dictionary<Guid, LoopRunNode>();
         var messages = new List<RunConversationMessage>();
-        foreach (var e in await _events.GetByRunIdAsync(runId))
+        foreach (var e in events)
         {
             var text = e.Data ?? string.Empty;
             var runNode = e.RunNodeId is { } runNodeId ? runNodes.GetValueOrDefault(runNodeId) : null;

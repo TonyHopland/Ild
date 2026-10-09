@@ -1,3 +1,5 @@
+using ILD.Data.Entities;
+
 namespace ILD.Core.Services.Interfaces;
 
 /// <summary>
@@ -24,4 +26,10 @@ public interface IRunConversationService
 {
     /// <summary>The run's messages in the order they were written; null when there is no such run.</summary>
     Task<IReadOnlyList<RunConversationMessage>?> GetMessagesAsync(Guid runId);
+
+    /// <summary>
+    /// The conversation in <paramref name="events"/>, the run's whole event log in
+    /// Id order, for a caller that has already read it.
+    /// </summary>
+    Task<IReadOnlyList<RunConversationMessage>> ProjectAsync(Guid runId, IReadOnlyList<EventLog> events);
 }

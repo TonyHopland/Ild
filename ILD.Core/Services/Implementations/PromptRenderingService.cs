@@ -7,14 +7,14 @@ namespace ILD.Core.Services.Implementations;
 public sealed class PromptRenderingService : IPromptRenderingService
 {
     private readonly IPromptTemplateResolver _resolver;
-    private readonly IEventLogService _eventLog;
+    private readonly IEventLogStore _eventLog;
     private readonly IRunConversationService _conversation;
     private readonly ILoopRunStore _runs;
     private readonly ILogger<PromptRenderingService>? _logger;
 
     public PromptRenderingService(
         IPromptTemplateResolver resolver,
-        IEventLogService eventLog,
+        IEventLogStore eventLog,
         IRunConversationService conversation,
         ILoopRunStore runs,
         ILogger<PromptRenderingService>? logger = null)
@@ -34,24 +34,20 @@ public sealed class PromptRenderingService : IPromptRenderingService
     {
         if (string.IsNullOrEmpty(template)) return "";
 
+        // Read once: the summary and the conversation are two views of the same log.
         IReadOnlyList<string>? summary = null;
-        try
-        {
-            var entries = await _eventLog.GetByRunIdAsync(runId);
-            summary = entries.Select(e => $"{e.EventType}: {e.Data}").ToList();
-        }
-        catch { /* event log is best-effort */ }
-
-        // The AI turns and human replies of the run's conversation; its system
-        // messages (starts, parks, failures) are not part of these variables.
         IReadOnlyList<RunConversationMessage> messages = Array.Empty<RunConversationMessage>();
         try
         {
-            messages = (await _conversation.GetMessagesAsync(runId) ?? messages)
+            var events = await _eventLog.GetByRunIdAsync(runId);
+            summary = events.Select(e => $"{e.EventType}: {e.Data}").ToList();
+            // The AI turns and human replies of the run's conversation; its system
+            // messages (starts, parks, failures) are not part of these variables.
+            messages = (await _conversation.ProjectAsync(runId, events))
                 .Where(m => m.Role is RunConversationMessage.Ai or RunConversationMessage.Human)
                 .ToList();
         }
-        catch { /* the conversation is best-effort, like the event log */ }
+        catch { /* the event log is best-effort */ }
 
         var conversationAi = string.Join("\n\n", messages
             .Where(m => m.Role == RunConversationMessage.Ai)

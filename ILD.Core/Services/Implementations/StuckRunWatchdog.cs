@@ -205,9 +205,19 @@ public sealed class StuckRunWatchdog : BackgroundService
         run.Status = LoopRunStatus.Failed;
         run.HumanFeedbackReason = HumanFeedbackReasons.RunCrashed;
         await runStore.UpdateRunAsync(run);
-        await eventLog.AppendAsync(run.Id, EventType.LoopRunFailed,
-            $"{HumanFeedbackReasons.RunCrashed}: the run had finished at {run.CompletedAt:o} "
-                + "but was still marked Running with nothing driving it");
+        // Best-effort, and refused outright when the run already recorded its
+        // end before it was left Running: the work item must leave the Running
+        // column either way, and this sweep never sees the run again.
+        try
+        {
+            await eventLog.AppendAsync(run.Id, EventType.LoopRunFailed,
+                $"{HumanFeedbackReasons.RunCrashed}: the run had finished at {run.CompletedAt:o} "
+                    + "but was still marked Running with nothing driving it");
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not record the failure of healed run {RunId}", run.Id);
+        }
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: HumanFeedbackReasons.RunCrashed, humanFeedbackReason: HumanFeedbackReasons.RunCrashed,
             currentLoopRunId: run.Id);

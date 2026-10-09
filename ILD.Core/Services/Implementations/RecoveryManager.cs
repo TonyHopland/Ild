@@ -3,6 +3,8 @@ using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -14,10 +16,12 @@ public class RecoveryManager : IRecoveryManager
     private readonly IRepositoryManager _repo;
     private readonly ILoopEngine _engine;
     private readonly IEventLogService _eventLog;
+    private readonly ILogger<RecoveryManager> _logger;
 
-    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog)
+    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog, ILogger<RecoveryManager>? logger = null)
     {
         _eventLog = eventLog;
+        _logger = logger ?? NullLogger<RecoveryManager>.Instance;
         _workItems = workItems;
         _loopRunStore = loopRunStore;
         _templateStore = templateStore;
@@ -93,7 +97,9 @@ public class RecoveryManager : IRecoveryManager
 
     private async Task ParkForReviewAsync(LoopRun run, string reason)
     {
-        await _eventLog.AppendAsync(run.Id, EventType.RecoveryTriggered, reason);
+        // Best-effort: a lost record must not keep the run from being parked for review.
+        try { await _eventLog.AppendAsync(run.Id, EventType.RecoveryTriggered, reason); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not record recovery of run {RunId}", run.Id); }
         await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.RecoveryRequiresReview, currentLoopRunId: run.Id);
     }

@@ -58,10 +58,6 @@ public class AINodeExecutorSteeringTests
             m.GetWorkItemAsync(It.IsAny<string>())
                 == Task.FromResult<WorkItemView?>(new WorkItemView { Id = "WI-1", Title = workItemTitle, RepositoryId = null }));
 
-        var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>(), It.IsAny<int?>()))
-            .ReturnsAsync(Array.Empty<EventLogEntry>());
-
         var adapter = new CapturingAdapter();
         var services = new ServiceCollection();
         services.AddSingleton(NoPackageFeeds.Resolver);
@@ -72,7 +68,7 @@ public class AINodeExecutorSteeringTests
         // Production always has the rendering service in scope, so the steering
         // path must be exercised with it present.
         services.AddSingleton<IPromptRenderingService>(new ILD.Core.Services.Implementations.PromptRenderingService(
-            new ILD.Core.Services.Implementations.PromptTemplateResolver(), eventLog.Object,
+            new ILD.Core.Services.Implementations.PromptTemplateResolver(), db.EventLogs,
             new ILD.Core.Services.Implementations.RunConversationService(db.EventLogs, db.LoopRuns), db.LoopRuns));
         return (services.BuildServiceProvider(), adapter);
     }

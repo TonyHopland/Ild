@@ -64,7 +64,7 @@ public class EventLogStore : IEventLogStore
                 || e.EventType == EventType.LoopRunCancelled));
 
     public async Task<IReadOnlyList<EventLog>> GetByRunIdAsync(Guid runId)
-        => await _db.EventLogs.Where(e => e.LoopRunId == runId).OrderBy(e => e.Id).ToListAsync();
+        => await _db.EventLogs.AsNoTracking().Where(e => e.LoopRunId == runId).OrderBy(e => e.Id).ToListAsync();
 
     public async Task<IReadOnlyList<EventLog>> GetByRunIdLastNAsync(Guid runId, int n)
         => await _db.EventLogs

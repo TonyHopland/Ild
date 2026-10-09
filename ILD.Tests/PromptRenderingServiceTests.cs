@@ -28,7 +28,7 @@ public class PromptRenderingServiceTests
             _events = new EventLogService(_db.EventLogs);
             _versionId = RunTimeline.SeedVersion(_db);
             Id = RunTimeline.SeedRun(_db, "WI-1", _versionId, LoopRunStatus.Running).Id;
-            Renderer = new PromptRenderingService(new PromptTemplateResolver(), _events,
+            Renderer = new PromptRenderingService(new PromptTemplateResolver(), _db.EventLogs,
                 new RunConversationService(_db.EventLogs, _db.LoopRuns), _db.LoopRuns);
         }
 

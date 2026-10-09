@@ -55,6 +55,10 @@ public class PrSyncService : IPrSyncService
                 // below still applies.
                 _logger.LogInformation(ex, "PR comment for ended run {RunId} not recorded", run.Id);
             }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not record the PR comment on run {RunId}", run.Id);
+            }
         }
 
         var edgeName = MapWebhookToEdge(payload, out var merged);

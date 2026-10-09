@@ -77,15 +77,14 @@ public class PromptRenderRecursionTests
             .Returns(Task.CompletedTask);
 
         var conversation = new Mock<IRunConversationService>();
-        conversation.Setup(s => s.GetMessagesAsync(It.IsAny<Guid>()))
+        conversation.Setup(s => s.ProjectAsync(It.IsAny<Guid>(), It.IsAny<IReadOnlyList<EventLog>>()))
             .ReturnsAsync((priorAiOutputs ?? Array.Empty<(string, string)>())
                 .Select((n, i) => new RunConversationMessage(i + 1, runId, Guid.NewGuid(), RunConversationMessage.Ai,
                     n.Label, n.Output, new DateTime(2026, 1, 1, 0, i, 0, DateTimeKind.Utc)))
                 .ToList());
 
-        var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>(), It.IsAny<int?>()))
-            .ReturnsAsync(Array.Empty<EventLogEntry>());
+        var eventLog = new Mock<IEventLogStore>();
+        eventLog.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>())).ReturnsAsync(Array.Empty<EventLog>());
 
         var adapter = new RecordingAdapter(new ClaudeCodeAdapter());
         var registry = Mock.Of<IAgentAdapterRegistry>(r =>

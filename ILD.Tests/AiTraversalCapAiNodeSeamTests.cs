@@ -74,16 +74,12 @@ public class AiTraversalCapAiNodeSeamTests
         var providerStore = new Mock<IProviderStore>();
         providerStore.Setup(s => s.GetDefaultAiProviderAsync()).ReturnsAsync(provider);
 
-        var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>(), It.IsAny<int?>()))
-            .ReturnsAsync(Array.Empty<EventLogEntry>());
-
         return new LoopEngineHarness(configure: services =>
         {
             services.AddSingleton(providerStore.Object);
             services.AddSingleton<IAgentAdapterRegistry>(new FakeRegistry(adapter));
             services.AddSingleton<IPromptRenderingService>(sp => new PromptRenderingService(
-                new PromptTemplateResolver(), eventLog.Object,
+                new PromptTemplateResolver(), sp.GetRequiredService<IEventLogStore>(),
                 new RunConversationService(sp.GetRequiredService<IEventLogStore>(), sp.GetRequiredService<ILoopRunStore>()),
                 sp.GetRequiredService<ILoopRunStore>()));
             if (concurrency is not null) services.AddSingleton(concurrency);
