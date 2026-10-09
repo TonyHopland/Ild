@@ -152,7 +152,9 @@ export function ChatInboxProvider({ children }: { children: React.ReactNode }) {
   }, [connectionState, invoke, refreshHistory]);
 
   // Every hint means the same thing here: re-read the history, which carries every
-  // chat's unread flag, busy flag and title — the open chat's header included.
+  // chat's unread flag, busy flag, title and schedule mark — the open chat's header
+  // included. A schedule renamed or deleted changes the mark of every chat it started
+  // without a word about any one chat, so its hint re-reads the history too.
   useEffect(() => {
     const onHistoryChanged = () => {
       void refreshHistory().catch((err) => console.error(err));
@@ -160,10 +162,12 @@ export function ChatInboxProvider({ children }: { children: React.ReactNode }) {
     on("ChatUnreadChanged", onHistoryChanged);
     on("ChatTitleChanged", onHistoryChanged);
     on("ChatActivityChanged", onHistoryChanged);
+    on("ChatSchedulesChanged", onHistoryChanged);
     return () => {
       off("ChatUnreadChanged", onHistoryChanged);
       off("ChatTitleChanged", onHistoryChanged);
       off("ChatActivityChanged", onHistoryChanged);
+      off("ChatSchedulesChanged", onHistoryChanged);
     };
   }, [on, off, refreshHistory]);
 
