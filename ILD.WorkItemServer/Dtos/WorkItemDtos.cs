@@ -132,11 +132,6 @@ public sealed class TransitionResponse
     public string? Reason { get; set; }
 }
 
-public sealed class FeedbackRequest
-{
-    public string? Content { get; set; }
-}
-
 /// <summary>
 /// What came of recording a PR against a work item. Distinguished rather than
 /// collapsed into a bool because they mean different things to a caller: only

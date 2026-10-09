@@ -43,7 +43,7 @@ public sealed class PrCiLogService : IPrCiLogService
         tailLines = Math.Clamp(tailLines <= 0 ? DefaultTailLines : tailLines, 1, MaxTailLines);
         offset = Math.Max(0, offset);
 
-        var run = await _runs.GetCurrentByWorkItemAsync(workItemId);
+        var run = await _runs.GetLatestByWorkItemAsync(workItemId);
         if (run?.PrUrl is null)
             return RemoteCiLog.Unavailable("This work item's current run has no pull request, so it has no CI checks.");
 

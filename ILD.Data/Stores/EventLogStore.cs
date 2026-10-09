@@ -14,7 +14,9 @@ public class EventLogStore : IEventLogStore
         _db = db;
     }
 
-    public async Task<long> AppendAsync(EventLog entry)
+    public Task<long> AppendAsync(EventLog entry) => AppendAlongsideAsync(entry, () => Task.CompletedTask);
+
+    public async Task<long> AppendAlongsideAsync(EventLog entry, Func<Task> alongside)
     {
         if (entry.LoopRunId is not { } runId)
             throw new ArgumentException("An event must name the run it belongs to.", nameof(entry));
@@ -34,6 +36,8 @@ public class EventLogStore : IEventLogStore
 
             if (await IsConversationAsync(entry) && await HasEndedAsync(runId))
                 throw new RunClosedException(runId);
+
+            await alongside();
 
             _db.EventLogs.Add(entry);
             await _db.SaveChangesAsync();

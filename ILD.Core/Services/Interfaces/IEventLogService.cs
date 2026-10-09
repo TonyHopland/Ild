@@ -16,6 +16,15 @@ public interface IEventLogService
     Task<long> AppendAsync(Guid runId, EventType eventType, string message,
         Guid? nodeId = null, Guid? runNodeId = null, string? edgeName = null);
 
+    /// <summary>
+    /// <see cref="AppendAsync"/> with <paramref name="alongside"/> run in the
+    /// same transaction, under the run's lock and after the closed check: the
+    /// event and whatever <paramref name="alongside"/> writes commit together or
+    /// not at all, and an exception from it propagates with nothing written.
+    /// </summary>
+    Task<long> AppendAlongsideAsync(Guid runId, EventType eventType, string message,
+        Guid? nodeId, Guid? runNodeId, string? edgeName, Func<Task> alongside);
+
     /// <summary>Whether the run's run-ending event has been written.</summary>
     Task<bool> HasRunEndedAsync(Guid runId);
 

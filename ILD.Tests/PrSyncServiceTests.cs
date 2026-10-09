@@ -111,7 +111,7 @@ public class PrSyncServiceTests
 
         var loopRuns = new Mock<ILoopRunStore>();
         loopRuns.Setup(s => s.GetByPrUrlAsync(staleRun.PrUrl!)).ReturnsAsync(staleRun);
-        loopRuns.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(currentRun);
+        loopRuns.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(currentRun);
         loopRuns.Setup(s => s.GetRunNodesAsync(staleRun.Id)).ReturnsAsync(Array.Empty<LoopRunNode>());
 
         var workItems = new Mock<IWorkItemManager>();
@@ -141,7 +141,7 @@ public class PrSyncServiceTests
 
         var loopRuns = new Mock<ILoopRunStore>();
         loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
-        loopRuns.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        loopRuns.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(run);
         loopRuns.Setup(s => s.GetRunNodesAsync(run.Id)).ReturnsAsync(Array.Empty<LoopRunNode>());
 
         var workItems = new Mock<IWorkItemManager>();
@@ -174,6 +174,7 @@ public class PrSyncServiceTests
 
         var loopRuns = new Mock<ILoopRunStore>();
         loopRuns.Setup(s => s.GetByPrUrlAsync(run.PrUrl!)).ReturnsAsync(run);
+        loopRuns.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(run);
         loopRuns.Setup(s => s.GetRunNodeAsync(run.Id, run.CurrentNodeId.Value)).ReturnsAsync(runNode);
         loopRuns.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
             .ReturnsAsync(new[] { CustomEdge(runNode.LoopNodeId, LoopOutputs.OnRejected) });

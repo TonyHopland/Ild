@@ -752,6 +752,10 @@ public class WorkItemManager : IWorkItemManager
         if (wi == null) return false;
         if (wi.Status != RemoteWorkItemStatus.Ready && wi.Status != RemoteWorkItemStatus.HumanFeedback)
             return false;
+        // Running says a run is being driven; with none alive nothing would
+        // drive it, and the item would sit there until the server reclaimed it.
+        if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) is null)
+            return false;
         return await TransitionAsync(workItemId, RemoteWorkItemStatus.Running);
     }
 
@@ -792,7 +796,7 @@ public class WorkItemManager : IWorkItemManager
     /// </summary>
     public async Task<bool> TransitionToDoneAsync(string workItemId)
     {
-        var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        var currentRun = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
         if (currentRun != null) await EndRunAsync(currentRun, "Work item marked Done");
         return await TransitionAsync(workItemId, RemoteWorkItemStatus.Done,
             currentLoopRunId: currentRun?.Id ?? Guid.Empty);
@@ -828,7 +832,7 @@ public class WorkItemManager : IWorkItemManager
         var explicitRun = currentLoopRunId.HasValue && currentLoopRunId.Value != Guid.Empty;
         var effectiveRunId = explicitRun
             ? currentLoopRunId
-            : (await _loopRunStore.GetCurrentByWorkItemAsync(workItemId))?.Id;
+            : (await _loopRunStore.GetLatestByWorkItemAsync(workItemId))?.Id;
         string? runWorktreePath = null;
         if (effectiveRunId.HasValue)
         {
@@ -994,7 +998,7 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> LinkPullRequestAsync(string workItemId, string prUrl)
     {
-        var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        var run = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
 
         // The link belongs to the work item, so it is recorded even when there
         // is no run to hang it on — a finished item can still have its PR
@@ -1025,7 +1029,7 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> CleanupToDoneAsync(string workItemId)
     {
-        var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        var currentRun = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
 
@@ -1048,7 +1052,7 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> CleanupToBacklogAsync(string workItemId)
     {
-        var currentRun = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        var currentRun = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
 
         // Stop a still-active run but keep its worktree and branch for
         // inspection; the retention sweeper (or a manual run delete) reclaims
@@ -1273,36 +1277,42 @@ public class WorkItemManager : IWorkItemManager
     // Human feedback
     // ──────────────────────────────────────────────────────────────────
 
-    public async Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input)
+    public Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input)
+        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Success(input), input, edgeName: null);
+
+    public Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null)
+        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Reject("Rejected by user", input),
+            string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}", edgeName: null);
+
+    public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input)
+        => SubmitHumanFeedbackEdgeAsync(workItemId, runId, "Respond", input);
+
+    public Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input)
+        => DeliverHumanFeedbackAsync(workItemId, runId, NodeSignal.Custom(edgeName, input), input, edgeName);
+
+    /// <summary>
+    /// Hand an answer to the node it answers, which only the work item's active
+    /// run can have, and only while that run waits on a person. The answer names
+    /// the run the person was looking at, so one sent to a run that has since
+    /// ended or been replaced is refused rather than landing on another.
+    /// </summary>
+    private async Task<bool> DeliverHumanFeedbackAsync(
+        string workItemId, Guid runId, NodeSignal signal, string feedback, string? edgeName)
     {
-        var wi = await GetWorkItemAsync(workItemId);
-        if (wi == null || wi.CurrentLoopRunId == null) return false;
+        if (await GetWorkItemAsync(workItemId) is null) return false;
 
-        var runId = wi.CurrentLoopRunId.Value;
-        var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run == null) return false;
+        var active = await _loopRunStore.GetActiveByWorkItemAsync(workItemId)
+            ?? throw new HumanFeedbackRefusedException("This work item has no run waiting for an answer.");
+        if (active.Id != runId)
+            throw new HumanFeedbackRefusedException("The run this answer is for is no longer the work item's current run.");
+        if (active.Status != LoopRunStatus.WaitingHuman)
+            throw new HumanFeedbackRefusedException("The run is busy, not waiting for an answer.");
+        var waiting = FindWaitingHumanNode(await _loopRunStore.GetRunNodesAsync(runId), active.CurrentNodeId)
+            ?? throw new HumanFeedbackRefusedException("The run has no question waiting for an answer.");
+        if (_engine is null)
+            throw new HumanFeedbackRefusedException("No loop engine is running to deliver this answer.");
 
-        var nodes = await _loopRunStore.GetRunNodesAsync(runId);
-        var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
-
-        await _eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, input, humanRunNode?.LoopNodeId, humanRunNode?.Id);
-
-        try
-        {
-            var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            await _server.AppendFeedbackAsync(opts, workItemId, input);
-            await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
-            {
-                TargetStatus = RemoteWorkItemStatus.Running,
-            });
-        }
-        catch (InvalidOperationException) { /* No remote — local only. */ }
-
-        if (_engine is not null && humanRunNode is not null)
-        {
-            await _engine.SignalNodeResultAsync(runId, humanRunNode.Id,
-                NodeSignal.Success(input));
-        }
+        await _engine.DeliverHumanFeedbackAsync(runId, waiting.Id, signal, feedback, edgeName);
         return true;
     }
 
@@ -1325,76 +1335,6 @@ public class WorkItemManager : IWorkItemManager
         var nodes = await _loopRunStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
         var node = nodes.FirstOrDefault(n => n.Id == loopNodeId);
         return node?.NodeType == NodeType.PR;
-    }
-
-    public async Task<bool> RejectHumanFeedbackAsync(string workItemId, string? input = null)
-    {
-        var wi = await GetWorkItemAsync(workItemId);
-        if (wi == null || wi.CurrentLoopRunId == null) return false;
-
-        var run = await _loopRunStore.GetByIdAsync(wi.CurrentLoopRunId.Value);
-        if (run == null) return false;
-
-        var nodes = await _loopRunStore.GetRunNodesAsync(run.Id);
-        var currentRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
-
-        var logMessage = string.IsNullOrEmpty(input) ? "rejected by user" : $"rejected by user: {input}";
-        await _eventLog.AppendAsync(run.Id, EventType.HumanFeedbackReceived, logMessage, currentRunNode?.LoopNodeId, currentRunNode?.Id);
-
-        try
-        {
-            var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            if (!string.IsNullOrEmpty(input))
-                await _server.AppendFeedbackAsync(opts, workItemId, $"rejected: {input}");
-            await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
-            {
-                TargetStatus = RemoteWorkItemStatus.Running,
-            });
-        }
-        catch (InvalidOperationException) { /* No remote — local only. */ }
-
-        if (_engine is not null && currentRunNode is not null)
-        {
-            await _engine.SignalNodeResultAsync(run.Id, currentRunNode.Id,
-                NodeSignal.Reject("Rejected by user", input));
-        }
-        return true;
-    }
-
-    public Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input)
-        => SubmitHumanFeedbackEdgeAsync(workItemId, "Respond", input);
-
-    public async Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, string edgeName, string input)
-    {
-        var wi = await GetWorkItemAsync(workItemId);
-        if (wi == null || wi.CurrentLoopRunId == null) return false;
-
-        var runId = wi.CurrentLoopRunId.Value;
-        var run = await _loopRunStore.GetByIdAsync(runId);
-        if (run == null) return false;
-
-        var nodes = await _loopRunStore.GetRunNodesAsync(runId);
-        var humanRunNode = FindWaitingHumanNode(nodes, run.CurrentNodeId);
-
-        await _eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, input, humanRunNode?.LoopNodeId, humanRunNode?.Id, edgeName);
-
-        try
-        {
-            var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            await _server.AppendFeedbackAsync(opts, workItemId, input);
-            await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
-            {
-                TargetStatus = RemoteWorkItemStatus.Running,
-            });
-        }
-        catch (InvalidOperationException) { /* No remote — local only. */ }
-
-        if (_engine is not null && humanRunNode is not null)
-        {
-            await _engine.SignalNodeResultAsync(runId, humanRunNode.Id,
-                NodeSignal.Custom(edgeName, input));
-        }
-        return true;
     }
 
     public async Task<MergePullRequestResult?> MergePullRequestAsync(string workItemId, bool deleteBranch)
@@ -1446,9 +1386,11 @@ public class WorkItemManager : IWorkItemManager
         }
 
         // Continue along OnSuccess — identical continuation to the Approve action.
-        // A run that has already ended has nothing left to continue.
-        try { await SubmitHumanFeedbackInputAsync(workItemId, string.Empty); }
+        // A run that has ended, or is not waiting at its PR node, has nothing to
+        // continue; the merge itself still happened and is reported as such.
+        try { await SubmitHumanFeedbackInputAsync(workItemId, runId, string.Empty); }
         catch (RunClosedException) { }
+        catch (HumanFeedbackRefusedException) { }
 
         return new MergePullRequestResult(true, null, branchDeleted, branchWarning);
     }

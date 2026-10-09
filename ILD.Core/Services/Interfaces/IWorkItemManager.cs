@@ -171,16 +171,24 @@ public interface IWorkItemManager
     /// A failing check yields null rather than an exception.
     /// </summary>
     Task<string?> GetBranchUrlAsync(WorkItemView workItem);
-    Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input);
-    Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input);
+    /// <summary>
+    /// Answer the parked node of run <paramref name="runId"/> along its success
+    /// edge. Like every answer below, it is delivered only when that run is the
+    /// work item's active run and waits on a person; otherwise it throws
+    /// <c>HumanFeedbackRefusedException</c> (or
+    /// <see cref="ILD.Data.Stores.RunClosedException"/> for a run that has
+    /// ended) and nothing is written. False when there is no such work item.
+    /// </summary>
+    Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input);
+    Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input);
 
     /// <summary>
     /// Route the parked node to its named output <paramref name="edgeName"/>
     /// (a Human node button), passing <paramref name="input"/> as the node's
     /// output for downstream <c>{{PreviousNode.Output}}</c>.
     /// </summary>
-    Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, string edgeName, string input);
-    Task<bool> RejectHumanFeedbackAsync(string workItemId, string? input = null);
+    Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input);
+    Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null);
 
     /// <summary>
     /// Merge the pull request linked to the work item's current run on the

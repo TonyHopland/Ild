@@ -125,9 +125,6 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     public Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
         => _svc.RemoveDependencyAsync(id, dependencyId, ct);
 
-    public Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default)
-        => _svc.AppendFeedbackAsync(id, content, ct);
-
     /// <summary>
     /// Mirrors the HTTP client, which reports success as the status code: only
     /// a recorded PR is a success, and every failure — 400/404/409 — is false.

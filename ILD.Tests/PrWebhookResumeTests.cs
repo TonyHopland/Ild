@@ -55,6 +55,7 @@ public class PrWebhookResumeTests
                 Status = LoopRunNodeStatus.WaitingHuman,
             };
             Runs.Setup(s => s.GetByPrUrlAsync(PrUrl)).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetActiveByWorkItemAsync(Run.WorkItemId)).ReturnsAsync(Run);
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
                 .ReturnsAsync(wiredEdges.Select(name => new LoopNodeEdge

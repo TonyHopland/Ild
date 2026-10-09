@@ -536,6 +536,66 @@ public sealed class LoopEngine : ILoopEngine
             return;
         }
 
+        var old = run.Status;
+        ApplySignal(run, signal);
+        await loopRunStore.UpdateRunAsync(run);
+        // Move the work item back out of HumanFeedback. The run is resuming to
+        // Running here, but unlike the other resume paths this handler had been
+        // omitting the transition — stranding the card in HumanFeedback while the
+        // run actively executed. Every resume that flips the run to Running pairs
+        // it with this transition (run start, ResumeFromHaltAsync, RetryFromNodeAsync).
+        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
+        _ = LaunchAfterAwaitAsync(runId);
+    }
+
+    public async Task DeliverHumanFeedbackAsync(Guid runId, Guid runNodeId, NodeSignal signal, string feedback, string? edgeName)
+    {
+        using var scope = _sp.CreateScope();
+        var sp = scope.ServiceProvider;
+        var loopRunStore = sp.GetRequiredService<ILoopRunStore>();
+        var run = await loopRunStore.GetByIdAsync(runId)
+            ?? throw new HumanFeedbackRefusedException("The run this answer is for no longer exists.");
+        if (run.Status != LoopRunStatus.WaitingHuman)
+            throw new HumanFeedbackRefusedException(RunNotWaitingMessage);
+        var waiting = await loopRunStore.GetRunNodeByIdAsync(runNodeId);
+        if (waiting is null || waiting.LoopRunId != runId || waiting.Status != LoopRunNodeStatus.WaitingHuman)
+            throw new HumanFeedbackRefusedException("The question this answer is for is no longer open.");
+
+        await sp.GetRequiredService<IEventLogService>().AppendAlongsideAsync(
+            runId, EventType.HumanFeedbackReceived, feedback, waiting.LoopNodeId, waiting.Id, edgeName,
+            async () =>
+            {
+                // Under the run's lock: a second answer that read the run as
+                // waiting before the first committed finds it Running here.
+                await loopRunStore.ReloadAsync(run);
+                if (run.Status != LoopRunStatus.WaitingHuman)
+                    throw new HumanFeedbackRefusedException(RunNotWaitingMessage);
+                ApplySignal(run, signal);
+                await loopRunStore.UpdateRunAsync(run);
+            });
+
+        await _notifier.RunStateChangedAsync(runId, LoopRunStatus.WaitingHuman, LoopRunStatus.Running);
+        try
+        {
+            await sp.GetRequiredService<IWorkItemManager>().TransitionAsync(
+                run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+        }
+        catch (Exception ex)
+        {
+            // The answer is delivered and the run is Running: it is driven either
+            // way, and the item catches up on the run's next transition.
+            _logger.LogWarning(ex, "Run {RunId} resumed on a human answer, but work item {WorkItemId} could not be moved to Running",
+                runId, run.WorkItemId);
+        }
+        _ = LaunchAfterAwaitAsync(runId);
+    }
+
+    private const string RunNotWaitingMessage = "This run is no longer waiting for an answer.";
+
+    /// <summary>Record a parked node's outcome on its run and move the run back to Running.</summary>
+    private static void ApplySignal(LoopRun run, NodeSignal signal)
+    {
         run.ExternalActionResult = signal.Output ?? signal.Error ?? string.Empty;
         run.ExternalActionResultType = signal.Type;
         run.ExternalActionEdgeName = signal.EdgeName;
@@ -549,17 +609,7 @@ public sealed class LoopEngine : ILoopEngine
         // fresh reason — so nulling it here loses nothing.
         run.HumanFeedbackReason = null;
         ResetUnattendedCounters(run);
-        var old = run.Status;
         run.Status = LoopRunStatus.Running;
-        await loopRunStore.UpdateRunAsync(run);
-        // Move the work item back out of HumanFeedback. The run is resuming to
-        // Running here, but unlike the other resume paths this handler had been
-        // omitting the transition — stranding the card in HumanFeedback while the
-        // run actively executed. Every resume that flips the run to Running pairs
-        // it with this transition (run start, ResumeFromHaltAsync, RetryFromNodeAsync).
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
-        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
-        _ = LaunchAfterAwaitAsync(runId);
     }
 
     public async Task RetryFromNodeAsync(Guid runId, Guid runNodeId)

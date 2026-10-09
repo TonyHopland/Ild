@@ -744,8 +744,15 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   // Not runAction: a refused answer is shown beside the buttons for a retry,
   // where runAction's failure would reach no further than the console.
-  const submitAnswer = async (submit: (id: string, input: string) => Promise<unknown>) => {
+  const submitAnswer = async (
+    submit: (id: string, runId: string, input: string) => Promise<unknown>,
+  ) => {
     if (!workItem || responding.current) return;
+    const runId = workItem.currentLoopRunId;
+    if (!runId) {
+      setRespondError("There is no run waiting for an answer.");
+      return;
+    }
     responding.current = true;
     setRespondLoading(true);
     setRespondError(null);
@@ -756,7 +763,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     try {
       await whileBusy(async () => {
         try {
-          await submit(workItem.id, feedbackInput);
+          await submit(workItem.id, runId, feedbackInput);
         } catch (error) {
           setRespondError(
             (error as { message?: string })?.message ?? "Failed to submit the answer.",
@@ -784,15 +791,17 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   };
 
   const handleApprove = () =>
-    submitAnswer((id, input) => workItemService.humanFeedbackInput(id, input));
+    submitAnswer((id, runId, input) => workItemService.humanFeedbackInput(id, runId, input));
 
   // Pass any typed feedback through to the OnFailure successor as {{PreviousNode.Output}}.
   const handleReject = () =>
-    submitAnswer((id, input) => workItemService.humanFeedbackReject(id, input || undefined));
+    submitAnswer((id, runId, input) =>
+      workItemService.humanFeedbackReject(id, runId, input || undefined),
+    );
 
   // Route the parked node to one of its named outputs (a Human/PR button).
   const handleEdge = (name: string) =>
-    submitAnswer((id, input) => workItemService.humanFeedbackEdge(id, name, input));
+    submitAnswer((id, runId, input) => workItemService.humanFeedbackEdge(id, runId, name, input));
 
   // Merge the linked PR on the remote (and optionally delete the branch), then
   // continue the loop along OnSuccess. A merge failure leaves the item parked,

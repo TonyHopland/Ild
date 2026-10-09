@@ -259,7 +259,8 @@ public class PrQueuedWriteDrainTests
         // WI-181: corrected twice in one round, the implementer answered the
         // same review three times, and all three were about to be posted.
         var f = new Fixture(Array.Empty<PrQueuedWrite>());
-        f.Runs.Setup(s => s.GetCurrentByWorkItemAsync("WI-1")).ReturnsAsync(f.Run);
+        f.Runs.Setup(s => s.GetActiveByWorkItemAsync("WI-1")).ReturnsAsync(f.Run);
+        f.Runs.Setup(s => s.GetLatestByWorkItemAsync("WI-1")).ReturnsAsync(f.Run);
         f.Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "42")).ReturnsAsync(new RemotePrReviewLedger(
             Array.Empty<RemotePrReviewSummary>(),
             new[]

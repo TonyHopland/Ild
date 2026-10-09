@@ -315,16 +315,26 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/link-pr`, { prUrl });
   },
 
-  humanFeedbackInput: async (id: string, input: string): Promise<void> => {
-    return api.post<void>(`/workitems/${id}/human-feedback/input`, { input });
+  // Every answer names the run it answers, the one the dialog is showing: the
+  // server refuses an answer for any run but the one waiting on it.
+  humanFeedbackInput: async (id: string, runId: string, input: string): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/human-feedback/input`, { runId, input });
   },
 
-  humanFeedbackReject: async (id: string, input?: string): Promise<void> => {
-    return api.post<void>(`/workitems/${id}/human-feedback/reject`, input ? { input } : {});
+  humanFeedbackReject: async (id: string, runId: string, input?: string): Promise<void> => {
+    return api.post<void>(
+      `/workitems/${id}/human-feedback/reject`,
+      input ? { runId, input } : { runId },
+    );
   },
 
-  humanFeedbackEdge: async (id: string, name: string, input: string): Promise<void> => {
-    return api.post<void>(`/workitems/${id}/human-feedback/edge`, { name, input });
+  humanFeedbackEdge: async (
+    id: string,
+    runId: string,
+    name: string,
+    input: string,
+  ): Promise<void> => {
+    return api.post<void>(`/workitems/${id}/human-feedback/edge`, { runId, name, input });
   },
 
   mergePr: async (

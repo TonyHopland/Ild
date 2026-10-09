@@ -978,32 +978,19 @@ public class WorkItemsController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        bool ok;
-        try { ok = await _workItemManager.SubmitHumanFeedbackInputAsync(id, request.Input ?? string.Empty); }
-        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
-        if (!ok) return NotFound();
-
-        // SubmitHumanFeedbackInputAsync signals the engine which re-launches the
-        // run loop. Calling RunInBackground here would race a second runner and
-        // produce duplicate LoopRunNode rows / Interrupted in-flight nodes.
-        return Ok();
+        return await AnswerAsync(request.RunId,
+            runId => _workItemManager.SubmitHumanFeedbackInputAsync(id, runId, request.Input ?? string.Empty));
     }
 
     [HttpPost("{id}/human-feedback/reject")]
-    public async Task<IActionResult> HumanFeedbackReject(string id, [FromBody] HumanFeedbackRejectRequest? request = null)
+    public async Task<IActionResult> HumanFeedbackReject(string id, [FromBody] HumanFeedbackRejectRequest request)
     {
         // Validate length only when text is supplied; reject without text is valid.
-        if (request?.Input is { Length: > 8192 })
+        if (request.Input is { Length: > 8192 })
             return BadRequest(new { error = "Input exceeds 8192 characters" });
 
-        bool ok;
-        try { ok = await _workItemManager.RejectHumanFeedbackAsync(id, request?.Input); }
-        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
-        if (!ok) return NotFound();
-
-        // RejectHumanFeedbackAsync signals the engine which re-launches the run
-        // loop along the failure edge. See note on HumanFeedbackInput.
-        return Ok();
+        return await AnswerAsync(request.RunId,
+            runId => _workItemManager.RejectHumanFeedbackAsync(id, runId, request.Input));
     }
 
     [HttpPost("{id}/human-feedback/respond")]
@@ -1012,14 +999,8 @@ public class WorkItemsController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        bool ok;
-        try { ok = await _workItemManager.SubmitHumanFeedbackRespondAsync(id, request.Input ?? string.Empty); }
-        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
-        if (!ok) return NotFound();
-
-        // SubmitHumanFeedbackRespondAsync signals the engine which re-launches
-        // the run loop along the respond edge. See note on HumanFeedbackInput.
-        return Ok();
+        return await AnswerAsync(request.RunId,
+            runId => _workItemManager.SubmitHumanFeedbackRespondAsync(id, runId, request.Input ?? string.Empty));
     }
 
     [HttpPost("{id}/human-feedback/edge")]
@@ -1030,14 +1011,25 @@ public class WorkItemsController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { error = "Edge name is required" });
 
-        bool ok;
-        try { ok = await _workItemManager.SubmitHumanFeedbackEdgeAsync(id, request.Name, request.Input ?? string.Empty); }
-        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
-        if (!ok) return NotFound();
+        return await AnswerAsync(request.RunId,
+            runId => _workItemManager.SubmitHumanFeedbackEdgeAsync(id, runId, request.Name, request.Input ?? string.Empty));
+    }
 
-        // SubmitHumanFeedbackEdgeAsync signals the engine which re-launches the
-        // run loop along the named custom edge. See note on HumanFeedbackInput.
-        return Ok();
+    /// <summary>
+    /// Deliver an answer to the run it names. Delivery re-launches the run loop
+    /// itself; calling RunInBackground here would race a second runner and
+    /// produce duplicate LoopRunNode rows / Interrupted in-flight nodes.
+    /// </summary>
+    private async Task<IActionResult> AnswerAsync(Guid? runId, Func<Guid, Task<bool>> deliver)
+    {
+        if (runId is not { } run || run == Guid.Empty)
+            return BadRequest(new { error = "The answer must name the run it answers (runId)." });
+
+        bool ok;
+        try { ok = await deliver(run); }
+        catch (RunClosedException ex) { return Conflict(new { error = ex.Message }); }
+        catch (HumanFeedbackRefusedException ex) { return Conflict(new { error = ex.Message }); }
+        return ok ? Ok() : NotFound();
     }
 
     [HttpPost("{id}/pr/merge")]
@@ -1095,6 +1087,9 @@ public class AddDependencyRequest
 
 public class HumanFeedbackInputRequest
 {
+    /// <summary>The run the person is answering: the run the UI shows.</summary>
+    public Guid? RunId { get; set; }
+
     /// <summary>
     /// Optional human acknowledgement / additional context. Empty input is
     /// allowed: the human may simply approve the suspended node. When supplied
@@ -1107,6 +1102,9 @@ public class HumanFeedbackInputRequest
 
 public class HumanFeedbackEdgeRequest
 {
+    /// <summary>The run the person is answering: the run the UI shows.</summary>
+    public Guid? RunId { get; set; }
+
     /// <summary>
     /// Name of the output the human selected (one of the parked node's
     /// named buttons). Routes the node to the matching <c>Custom</c> edge.
@@ -1135,6 +1133,9 @@ public class MergePrRequest
 
 public class HumanFeedbackRejectRequest
 {
+    /// <summary>The run the person is answering: the run the UI shows.</summary>
+    public Guid? RunId { get; set; }
+
     /// <summary>
     /// Optional rejection rationale. When supplied it is stored on the
     /// suspended run node's <c>Output</c> so the OnFailure successor can

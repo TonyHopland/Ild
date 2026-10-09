@@ -437,21 +437,6 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Feedback_moves_to_WaitingForIld()
-    {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest
-        {
-            TargetStatus = WorkItemStatus.HumanFeedback,
-        }, TestContext.Current.CancellationToken);
-
-        await _svc.AppendFeedbackAsync(dto.Id, "approve please", TestContext.Current.CancellationToken);
-
-        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
-        Assert.Equal(WorkItemStatus.WaitingForIld, fresh!.Status);
-    }
-
-    [Fact]
     public async Task Poll_returns_active_items_and_ready_items_and_refreshes_heartbeat()
     {
         var ready = await _svc.CreateAsync(new CreateWorkItemRequest

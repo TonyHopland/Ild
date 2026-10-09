@@ -45,7 +45,8 @@ public class PrRoundVoiceTests
             {
                 Id = Guid.NewGuid(), WorkItemId = "wi-1", PrUrl = PrUrl, Status = LoopRunStatus.Running,
             };
-            Runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(Run);
             Runs.Setup(s => s.GetByIdAsync(Run.Id)).ReturnsAsync(() => Run);
             Runs.Setup(s => s.GetPrCommentQueueAsync(Run.Id)).ReturnsAsync(() => Run.PrCommentQueue);
             Runs.Setup(s => s.TrySetPrCommentQueueAsync(Run.Id, It.IsAny<string?>(), It.IsAny<string?>()))

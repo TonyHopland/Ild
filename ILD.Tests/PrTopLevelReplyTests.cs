@@ -45,7 +45,8 @@ public class PrTopLevelReplyTests
             Id = Guid.NewGuid(), WorkItemId = "wi-1", PrUrl = PrUrl, Status = LoopRunStatus.Running,
         };
         var runs = new Mock<ILoopRunStore>();
-        runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(run);
         runs.Setup(s => s.GetByIdAsync(run.Id)).ReturnsAsync(() => run);
         runs.Setup(s => s.GetPrCommentQueueAsync(run.Id)).ReturnsAsync(() => run.PrCommentQueue);
         runs.Setup(s => s.TrySetPrCommentQueueAsync(run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
@@ -97,7 +98,8 @@ public class PrTopLevelReplyTests
             Id = Guid.NewGuid(), WorkItemId = "wi-1", PrUrl = PrUrl, Status = LoopRunStatus.Running,
         };
         var runs = new Mock<ILoopRunStore>();
-        runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(run);
         runs.Setup(s => s.GetPrCommentQueueAsync(run.Id)).ReturnsAsync(() => run.PrCommentQueue);
         runs.Setup(s => s.TrySetPrCommentQueueAsync(run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync((Guid _, string? expected, string? json) =>
@@ -138,7 +140,8 @@ public class PrTopLevelReplyTests
             Id = Guid.NewGuid(), WorkItemId = "wi-1", PrUrl = PrUrl, Status = LoopRunStatus.Running,
         };
         var runs = new Mock<ILoopRunStore>();
-        runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(run);
         runs.Setup(s => s.GetPrCommentQueueAsync(run.Id)).ReturnsAsync(() => run.PrCommentQueue);
         runs.Setup(s => s.TrySetPrCommentQueueAsync(run.Id, It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync((Guid _, string? expected, string? json) =>

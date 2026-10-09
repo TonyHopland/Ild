@@ -22,7 +22,6 @@ public interface IWorkItemServerClient
     Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, CancellationToken ct = default);
     Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default);
     Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default);
-    Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default);
 
     /// <summary>
     /// Record a PR against a work item on the server, keyed by URL — reporting
@@ -198,14 +197,6 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     public async Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
     {
         var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}/dependencies/{dependencyId}");
-        using var resp = await _http.SendAsync(msg, ct);
-        return resp.IsSuccessStatusCode;
-    }
-
-    public async Task<bool> AppendFeedbackAsync(WorkItemServerOptions opts, string id, string content, CancellationToken ct = default)
-    {
-        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/feedback");
-        msg.Content = JsonContent.Create(new { content }, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
