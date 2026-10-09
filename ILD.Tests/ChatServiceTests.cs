@@ -1168,10 +1168,7 @@ public sealed class ChatServiceTests : IDisposable
         var chatNotifier = new Mock<IChatNotifier>();
         var scheduleNotifier = new Mock<IChatScheduleNotifier>();
 
-        ChatScheduleService Recovery(AppDbContext db) => new(db, _db.Providers, Mock.Of<IChatService>(),
-            Mock.Of<IChatTurnRunner>(), chatNotifier.Object, scheduleNotifier.Object, Mock.Of<ISchedulerSettingsService>(),
-            new ChatScheduleLocks(), Mock.Of<IServiceScopeFactory>(),
-            TimeProvider.System, NullLogger<ChatScheduleService>.Instance);
+        ChatScheduleService Recovery(AppDbContext db) => NewRecovery(db, chatNotifier.Object, scheduleNotifier.Object);
 
         using (var failing = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(connection).AddInterceptors(new FailingNoteSave()).Options))
@@ -1196,6 +1193,44 @@ public sealed class ChatServiceTests : IDisposable
             Assert.Single(ctx.ChatMessages.AsNoTracking().Where(m => m.ChatSessionId == chat.Id && m.Interrupted));
         }
     }
+
+    [Fact]
+    public async Task A_restart_note_is_announced_to_its_open_chat_and_moves_the_chats_last_activity_like_a_reply()
+    {
+        var provider = await SeedProviderAsync();
+        var chat = await NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())))
+            .StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var turnId = Guid.NewGuid();
+        await SeedRunningFiringAsync(chat.Id, turnId);
+        var chatNotifier = new Mock<IChatNotifier>();
+        ChatMessage? committed = null;
+        DateTime? activityWhenAnnounced = null;
+        chatNotifier.Setup(n => n.MessageAppendedAsync(chat.Id, turnId, It.IsAny<ChatMessageView>()))
+            .Callback(() =>
+            {
+                // Announced only once a reader can see the note and the chat's new activity.
+                using var ctx = _db.Fresh();
+                committed = ctx.ChatMessages.AsNoTracking().SingleOrDefault(m => m.ChatSessionId == chat.Id);
+                activityWhenAnnounced = ctx.ChatSessions.AsNoTracking().Single(c => c.Id == chat.Id).UpdatedAt;
+            })
+            .Returns(Task.CompletedTask);
+
+        using (var db = _db.Fresh())
+            await NewRecovery(db, chatNotifier.Object, Mock.Of<IChatScheduleNotifier>()).RecoverInterruptedAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(committed);
+        Assert.True(committed!.Interrupted);
+        Assert.Equal(committed.CreatedAt, activityWhenAnnounced);
+        chatNotifier.Verify(n => n.MessageAppendedAsync(chat.Id, turnId, It.Is<ChatMessageView>(v =>
+            v.Id == committed.Id && v.Role == "assistant" && v.Interrupted && v.Sequence == committed.Sequence)), Times.Once);
+        chatNotifier.Verify(n => n.UnreadChangedAsync("alice", chat.Id), Times.Once);
+        chatNotifier.Verify(n => n.ActivityChangedAsync("alice", chat.Id), Times.Once);
+    }
+
+    private ChatScheduleService NewRecovery(AppDbContext db, IChatNotifier chatNotifier, IChatScheduleNotifier scheduleNotifier)
+        => new(db, _db.Providers, Mock.Of<IChatService>(), Mock.Of<IChatTurnRunner>(), chatNotifier, scheduleNotifier,
+            Mock.Of<ISchedulerSettingsService>(), new ChatScheduleLocks(), Mock.Of<IServiceScopeFactory>(),
+            TimeProvider.System, NullLogger<ChatScheduleService>.Instance);
 
     private sealed class FailingNoteSave : SaveChangesInterceptor
     {

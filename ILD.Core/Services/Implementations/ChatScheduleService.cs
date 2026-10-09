@@ -241,6 +241,13 @@ public sealed class ChatScheduleService
     /// For startup: a turn does not survive a restart, so a firing still Running
     /// whose turn this process is not running was cut off. It fails, and its chat
     /// is told so. A turn this process did start since is left alone.
+    ///
+    /// <para>The note is an assistant message of the chat like the reply the turn
+    /// never wrote, and gets what such a reply gets: the next sequence, a save time
+    /// from the turn's clock, the chat's last activity moved to that time in the
+    /// same save, and, once committed, the append announced to the chat itself and
+    /// the unread and activity hints to its owner's inbox. A chat open before the
+    /// note is saved therefore still receives it.</para>
     /// </summary>
     public async Task RecoverInterruptedAsync(CancellationToken ct)
     {
@@ -254,6 +261,7 @@ public sealed class ChatScheduleService
             if (firing.ChatSessionId is { } live && firing.TurnId is { } turn && _runner.ActiveTurnId(live) == turn)
                 continue;
 
+            ChatMessage? note = null;
             // The failure and the note in its chat are one change: a firing left
             // failed without its note would never be picked up again to write it.
             await using (var transaction = await _db.Database.BeginTransactionAsync(ct))
@@ -267,8 +275,11 @@ public sealed class ChatScheduleService
 
                 if (firing.ChatSessionId is { } chatId)
                 {
+                    // The clock a turn stamps its messages with, so that a note sharing
+                    // a sequence with one of them orders by save time.
+                    var savedAt = DateTime.UtcNow;
                     var lastSequence = await _db.ChatMessages.Where(m => m.ChatSessionId == chatId).MaxAsync(m => (int?)m.Sequence, ct);
-                    _db.ChatMessages.Add(new ChatMessage
+                    note = new ChatMessage
                     {
                         Id = Guid.NewGuid(),
                         ChatSessionId = chatId,
@@ -276,20 +287,25 @@ public sealed class ChatScheduleService
                         Content = RestartNote,
                         Interrupted = true,
                         Sequence = (lastSequence ?? -1) + 1,
-                        // The clock a turn stamps its messages with, so that a note
-                        // sharing a sequence with one of them orders by save time.
-                        CreatedAt = DateTime.UtcNow,
-                    });
+                        CreatedAt = savedAt,
+                    };
+                    _db.ChatMessages.Add(note);
                     await _db.SaveChangesAsync(ct);
+                    await _db.ChatSessions
+                        .Where(c => c.Id == chatId)
+                        .ExecuteUpdateAsync(s => s.SetProperty(c => c.UpdatedAt, savedAt), ct);
                 }
                 await transaction.CommitAsync(ct);
             }
             _log.LogWarning("Schedule firing {FiringId} was cut off by a restart", firing.Id);
 
-            if (firing.ChatSessionId is { } noted)
+            if (note is not null)
             {
-                await _chatNotifier.UnreadChangedAsync(firing.Owner, noted);
-                await _chatNotifier.ActivityChangedAsync(firing.Owner, noted);
+                // Every Running firing names the turn it started; the note is that turn's.
+                await _chatNotifier.MessageAppendedAsync(note.ChatSessionId, firing.TurnId ?? Guid.Empty,
+                    new ChatMessageView(note.Id, note.Role, note.Content, note.Interrupted, note.Sequence, note.CreatedAt));
+                await _chatNotifier.UnreadChangedAsync(firing.Owner, note.ChatSessionId);
+                await _chatNotifier.ActivityChangedAsync(firing.Owner, note.ChatSessionId);
             }
             await _notifier.SchedulesChangedAsync(firing.Owner, firing.ScheduleId);
         }
