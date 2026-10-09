@@ -258,8 +258,9 @@ public class LoopRunVariableStoreTests
         using var db = new TestDb();
         var first = await SeedRunAsync(db);
         var retry = await SeedRunAsync(db);
-        retry.WorkItemId = first.WorkItemId;
         first.Status = LoopRunStatus.Failed;
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        retry.WorkItemId = first.WorkItemId;
         var other = await SeedRunAsync(db);
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
         var store = new LoopRunStore(db.Fresh());
