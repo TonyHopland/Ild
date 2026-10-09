@@ -287,19 +287,13 @@ public sealed class PRNodeExecutor : INodeExecutor
     private static async Task RecordClaimAsync(
         NodeExecutionContext ctx, IServiceProvider sp, IReadOnlyList<PrQueuedWrite> queued)
     {
-        if (sp.GetService<IEventLogStore>() is not { } events)
+        if (sp.GetService<IEventLogService>() is not { } events)
             return;
 
         try
         {
-            await events.AppendAsync(new EventLog
-            {
-                Id = Guid.NewGuid(),
-                LoopRunId = ctx.Run.Id,
-                EventType = EventType.PrQueuedWritesClaimed,
-                Data = string.Join("\n", queued.Select(Describe)),
-                Timestamp = DateTime.UtcNow,
-            });
+            await events.AppendAsync(ctx.Run.Id, EventType.PrQueuedWritesClaimed,
+                string.Join("\n", queued.Select(Describe)));
         }
         catch (Exception ex)
         {

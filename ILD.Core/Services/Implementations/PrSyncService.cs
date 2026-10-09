@@ -2,7 +2,10 @@ using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 
@@ -11,23 +14,26 @@ namespace ILD.Core.Services.Implementations;
 public class PrSyncService : IPrSyncService
 {
     private readonly ILoopRunStore _loopRunStore;
-    private readonly IEventLogStore _eventLogStore;
+    private readonly IEventLogService _eventLog;
     private readonly IWorkItemManager _workItems;
     private readonly ILoopEngine _loopEngine;
     private readonly IPrStatusPoller _poller;
+    private readonly ILogger<PrSyncService> _logger;
 
     public PrSyncService(
         ILoopRunStore loopRunStore,
-        IEventLogStore eventLogStore,
+        IEventLogService eventLog,
         IWorkItemManager workItems,
         ILoopEngine loopEngine,
-        IPrStatusPoller poller)
+        IPrStatusPoller poller,
+        ILogger<PrSyncService>? logger = null)
     {
         _loopRunStore = loopRunStore;
-        _eventLogStore = eventLogStore;
+        _eventLog = eventLog;
         _workItems = workItems;
         _loopEngine = loopEngine;
         _poller = poller;
+        _logger = logger ?? NullLogger<PrSyncService>.Instance;
     }
 
     public async Task HandleWebhookAsync(WebhookPayload payload)
@@ -38,14 +44,17 @@ public class PrSyncService : IPrSyncService
 
         if (!string.IsNullOrEmpty(payload.Comment))
         {
-            await _eventLogStore.AppendAsync(new EventLog
+            try
             {
-                Id = Guid.NewGuid(),
-                LoopRunId = run.Id,
-                EventType = EventType.HumanFeedbackReceived,
-                Data = payload.Comment,
-                Timestamp = DateTime.UtcNow,
-            });
+                await _eventLog.AppendAsync(run.Id, EventType.HumanFeedbackReceived, payload.Comment);
+            }
+            catch (RunClosedException ex)
+            {
+                // The PR outlives its run: a comment on it after the run ended
+                // is not part of that run's conversation. The merge bookkeeping
+                // below still applies.
+                _logger.LogInformation(ex, "PR comment for ended run {RunId} not recorded", run.Id);
+            }
         }
 
         var edgeName = MapWebhookToEdge(payload, out var merged);

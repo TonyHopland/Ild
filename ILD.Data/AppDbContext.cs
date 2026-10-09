@@ -27,6 +27,7 @@ public class AppDbContext : DbContext
     public DbSet<LoopRunVariable> LoopRunVariables => Set<LoopRunVariable>();
     public DbSet<LoopRunVariableWrite> LoopRunVariableWrites => Set<LoopRunVariableWrite>();
     public DbSet<EventLog> EventLogs => Set<EventLog>();
+    public DbSet<WorkItemStatusReason> WorkItemStatusReasons => Set<WorkItemStatusReason>();
     public DbSet<AiProvider> AiProviders => Set<AiProvider>();
     public DbSet<AiProviderTag> AiProviderTags => Set<AiProviderTag>();
     public DbSet<User> Users => Set<User>();
@@ -202,6 +203,12 @@ public class AppDbContext : DbContext
             e.HasIndex(l => l.LoopTemplateVersionId);
             e.HasIndex(l => l.Status);
             e.HasIndex(l => l.PrUrl);
+            // One live run per work item, enforced where the race is: two starts
+            // that both pass the engine's "is one active?" check must not both insert.
+            // The filter is LoopRunStatus.Running (0) and WaitingHuman (4).
+            e.HasIndex(l => l.WorkItemId, "IX_LoopRuns_WorkItemId_Active")
+                .IsUnique()
+                .HasFilter("\"Status\" IN (0, 4)");
         });
 
         modelBuilder.Entity<LoopRunNode>(e =>
@@ -275,7 +282,7 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<EventLog>(e =>
         {
-            e.HasIndex(e => new { e.LoopRunId, e.Sequence });
+            e.HasIndex(e => new { e.LoopRunId, e.Id });
             e.HasIndex(e => e.Timestamp);
         });
 
@@ -507,6 +514,13 @@ public class AppDbContext : DbContext
             .HasOne(s => s.LoopRun)
             .WithMany()
             .HasForeignKey(s => s.LoopRunId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // A run's events are its timeline: they go with the run and never before it.
+        modelBuilder.Entity<EventLog>()
+            .HasOne(e => e.LoopRun)
+            .WithMany(lr => lr.EventLogs)
+            .HasForeignKey(e => e.LoopRunId)
             .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<LoopRunVariable>()

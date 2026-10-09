@@ -23,11 +23,13 @@ public sealed class RemoteWorkItemCoordinatorTests
     /// always has to be stubbed: unstubbed, Moq hands back null rather than an
     /// empty list.
     /// </summary>
-    private static ILoopRunStore NoLiveRuns()
+    private static ILoopRunStore NoLiveRuns() => NoLiveRunsMock().Object;
+
+    private static Mock<ILoopRunStore> NoLiveRunsMock()
     {
         var store = new Mock<ILoopRunStore>();
         store.Setup(s => s.GetActiveWorkItemIdsAsync()).ReturnsAsync(Array.Empty<string>());
-        return store.Object;
+        return store;
     }
 
     [Fact]
@@ -75,12 +77,13 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.None, null, Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
+        var runs = NoLiveRunsMock();
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.EscalatedToHumanFeedback);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
-        Assert.Contains("No loop", captured.Reason);
+        runs.Verify(s => s.SetWorkItemStatusReasonAsync(ready.Id, It.Is<string>(r => r.Contains("No loop"))), Times.Once);
     }
 
     [Fact]
@@ -101,11 +104,13 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Ambiguous, null, new[] { "build", "deploy" }));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
+        var runs = NoLiveRunsMock();
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.EscalatedToHumanFeedback);
-        Assert.Contains("Multiple loop templates", captured!.Reason);
+        Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
+        runs.Verify(s => s.SetWorkItemStatusReasonAsync(ready.Id, It.Is<string>(r => r.Contains("Multiple loop templates"))), Times.Once);
     }
 
     [Fact]
@@ -681,16 +686,17 @@ public sealed class RemoteWorkItemCoordinatorTests
         engine.Setup(e => e.StartRunAsync(doomed.Id, It.IsAny<CancellationToken>()))
               .ThrowsAsync(new InvalidOperationException("no start node"));
 
-        var sut = Coordinator(client, RunStoreWithActive(NoActiveRuns()), engine: engine);
+        var runs = RunStoreWithActive(NoActiveRuns());
+        var sut = Coordinator(client, runs, engine: engine);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         Assert.Equal(doomed.Id, Assert.Single(result.EscalatedToHumanFeedback).Id);
         Assert.Contains(next.Id, result.Claimed.Select(c => c.Id));
         // Handed back for review rather than left Running with no driver.
         client.Verify(c => c.TransitionAsync(Opts, doomed.Id,
-            It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback
-                && r.Reason!.Contains("Failed to start run")),
+            It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback),
             It.IsAny<CancellationToken>()), Times.Once);
+        runs.Verify(s => s.SetWorkItemStatusReasonAsync(doomed.Id, "Failed to start run: no start node"), Times.Once);
     }
 
     [Fact]

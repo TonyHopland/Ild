@@ -83,7 +83,9 @@ public class AiTraversalCapAiNodeSeamTests
             services.AddSingleton(providerStore.Object);
             services.AddSingleton<IAgentAdapterRegistry>(new FakeRegistry(adapter));
             services.AddSingleton<IPromptRenderingService>(sp => new PromptRenderingService(
-                new PromptTemplateResolver(), eventLog.Object, sp.GetRequiredService<ILoopRunStore>()));
+                new PromptTemplateResolver(), eventLog.Object,
+                new RunConversationService(sp.GetRequiredService<IEventLogStore>(), sp.GetRequiredService<ILoopRunStore>()),
+                sp.GetRequiredService<ILoopRunStore>()));
             if (concurrency is not null) services.AddSingleton(concurrency);
         });
     }

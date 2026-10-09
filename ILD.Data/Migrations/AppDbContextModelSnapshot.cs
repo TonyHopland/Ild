@@ -414,12 +414,18 @@ namespace ILD.Data.Migrations
 
             modelBuilder.Entity("ILD.Data.Entities.EventLog", b =>
                 {
-                    b.Property<Guid>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
 
                     b.Property<string>("Data")
                         .HasColumnType("text");
+
+                    b.Property<string>("EdgeName")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
 
                     b.Property<int>("EventType")
                         .HasColumnType("integer");
@@ -437,9 +443,6 @@ namespace ILD.Data.Migrations
                     b.Property<Guid?>("RunNodeId")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("Sequence")
-                        .HasColumnType("integer");
-
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("timestamp with time zone");
 
@@ -447,7 +450,7 @@ namespace ILD.Data.Migrations
 
                     b.HasIndex("Timestamp");
 
-                    b.HasIndex("LoopRunId", "Sequence");
+                    b.HasIndex("LoopRunId", "Id");
 
                     b.ToTable("EventLogs");
                 });
@@ -584,9 +587,6 @@ namespace ILD.Data.Migrations
                     b.Property<Guid>("LoopTemplateVersionId")
                         .HasColumnType("uuid");
 
-                    b.Property<int>("NextEventSeq")
-                        .HasColumnType("integer");
-
                     b.Property<int>("NodeExecutionCount")
                         .HasColumnType("integer");
 
@@ -656,6 +656,10 @@ namespace ILD.Data.Migrations
                     b.HasIndex("Status");
 
                     b.HasIndex("WorkItemId");
+
+                    b.HasIndex(new[] { "WorkItemId" }, "IX_LoopRuns_WorkItemId_Active")
+                        .IsUnique()
+                        .HasFilter("\"Status\" IN (0, 4)");
 
                     b.ToTable("LoopRuns");
                 });
@@ -1302,6 +1306,23 @@ namespace ILD.Data.Migrations
                     b.ToTable("UserSessions");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.WorkItemStatusReason", b =>
+                {
+                    b.Property<string>("WorkItemId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("WorkItemId");
+
+                    b.ToTable("WorkItemStatusReasons");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.AdapterSessionSnapshot", b =>
                 {
                     b.HasOne("ILD.Data.Entities.ChatSession", "ChatSession")
@@ -1371,7 +1392,8 @@ namespace ILD.Data.Migrations
                 {
                     b.HasOne("ILD.Data.Entities.LoopRun", "LoopRun")
                         .WithMany("EventLogs")
-                        .HasForeignKey("LoopRunId");
+                        .HasForeignKey("LoopRunId")
+                        .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("LoopRun");
                 });

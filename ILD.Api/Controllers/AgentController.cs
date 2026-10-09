@@ -247,7 +247,7 @@ public class AgentController : ControllerBase
     }
 
     [HttpGet("workitems/{id}")]
-    public async Task<IActionResult> GetWorkItem(string id, [FromQuery] bool includeConversation = false)
+    public async Task<IActionResult> GetWorkItem(string id)
     {
         var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
@@ -288,11 +288,6 @@ public class AgentController : ControllerBase
                 contentType = a.ContentType,
                 sizeBytes = a.SizeBytes,
             }),
-            // The conversation is the largest field and rarely needed for
-            // planning, so it is gated behind an explicit flag (ADR scope note).
-            conversation = includeConversation
-                ? wi.Conversation.Select(m => new { role = m.Role, content = m.Content, timestamp = m.Timestamp, name = m.Name, runNodeId = m.RunNodeId })
-                : null,
         });
     }
 

@@ -79,27 +79,28 @@ public interface IWorkItemManager
     /// <summary>
     /// Generic transition entry point. Mirrors the remote server transition contract.
     /// </summary>
-    /// <param name="reason">Content stored in the server conversation thread.</param>
-    /// <param name="humanFeedbackReason">Short label stored on LoopRun for frontend UI routing. Falls back to <paramref name="reason"/> when null.</param>
-    /// <param name="name">Optional author display name for the conversation entry (e.g. the originating node's title).</param>
-    /// <param name="runNodeId">The node execution the conversation entry comes from.</param>
+    /// <param name="reason">Why the item needs a person, for the needs-attention notification.</param>
+    /// <param name="humanFeedbackReason">
+    /// Short label stored on the run for frontend UI routing; falls back to
+    /// <paramref name="reason"/> when null. Written only onto the run
+    /// <paramref name="currentLoopRunId"/> names: a run inferred from the work
+    /// item may have its label cleared, but is never given one.
+    /// </param>
     Task<bool> TransitionAsync(
         string workItemId,
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
         string? actions = null,
         Guid? currentLoopRunId = null,
-        string? humanFeedbackReason = null,
-        string? name = null,
-        Guid? runNodeId = null);
+        string? humanFeedbackReason = null);
 
     /// <summary>
-    /// Append an AI-authored conversation turn (e.g. an AI node's output) to the
-    /// work item's thread without changing its status. <paramref name="name"/> is
-    /// the author label shown in the UI, typically the node's title;
-    /// <paramref name="runNodeId"/> is the node execution that produced it.
+    /// Move the item to HumanFeedback for a reason no run carries — a start that
+    /// failed before its run existed — recording <paramref name="reason"/> as the
+    /// item's own status reason. No run is touched.
     /// </summary>
-    Task<bool> AppendAiTurnAsync(string workItemId, string name, string content, Guid? runNodeId = null);
+    Task<bool> ParkWithoutRunAsync(string workItemId, string reason);
+
     Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId);
 
     /// <summary>

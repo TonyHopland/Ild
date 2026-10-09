@@ -103,7 +103,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     private readonly ILoopRunStore _runs;
     private readonly IRemoteProvider _remote;
     private readonly IRunNotifier? _notifier;
-    private readonly IEventLogStore? _events;
+    private readonly IEventLogService? _events;
 
     /// <summary>
     /// <paramref name="notifier"/> and <paramref name="events"/> are optional
@@ -111,11 +111,11 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// really about; DI always supplies both. Without the notifier a queued
     /// answer sits in the database unseen until something else happens to
     /// refresh the run, which is most of the window a person has to drop it;
-    /// without the event store a closed item leaves no trace, which costs the
+    /// without the event log a closed item leaves no trace, which costs the
     /// record and not the decision.
     /// </summary>
     public PrReviewService(
-        ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null, IEventLogStore? events = null)
+        ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null, IEventLogService? events = null)
     {
         _runs = runs;
         _remote = remote;
@@ -445,14 +445,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 
         try
         {
-            await _events.AppendAsync(new EventLog
-            {
-                Id = Guid.NewGuid(),
-                LoopRunId = runId,
-                EventType = type,
-                Data = data,
-                Timestamp = DateTime.UtcNow,
-            });
+            await _events.AppendAsync(runId, type, data);
         }
         catch { }
     }

@@ -53,7 +53,7 @@ public class PrOwnQueuedWriteTests
         public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<IRemoteProvider> Remote { get; } = new();
         public Mock<IRunNotifier> Notifier { get; } = new();
-        public Mock<IEventLogStore> Events { get; } = new();
+        public Mock<IEventLogService> Events { get; } = new();
         public List<EventLog> Logged { get; } = new();
         public List<Guid> Notified { get; } = new();
         public int QueueWrites { get; set; }
@@ -94,8 +94,9 @@ public class PrOwnQueuedWriteTests
             Notifier.Setup(n => n.PrQueueChangedAsync(It.IsAny<Guid>()))
                 .Callback<Guid>(Notified.Add)
                 .Returns(Task.CompletedTask);
-            Events.Setup(s => s.AppendAsync(It.IsAny<EventLog>()))
-                .Callback<EventLog>(Logged.Add)
+            Events.Setup(s => s.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+                .Callback<Guid, EventType, string, Guid?, Guid?, string?>((run, type, data, node, runNode, edge) => Logged.Add(
+                    new EventLog { LoopRunId = run, EventType = type, Data = data, NodeId = node, RunNodeId = runNode, EdgeName = edge }))
                 .ReturnsAsync(1);
         }
 
@@ -489,7 +490,7 @@ public class PrOwnQueuedWriteTests
     public async Task An_event_store_that_will_not_take_the_record_costs_the_record_not_the_correction()
     {
         var h = new Harness();
-        h.Events.Setup(s => s.AppendAsync(It.IsAny<EventLog>())).ThrowsAsync(new InvalidOperationException("down"));
+        h.Events.Setup(s => s.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>())).ThrowsAsync(new InvalidOperationException("down"));
         var service = h.Build();
         var first = await service.ReplyAsync("wi-1", "11", "first answer", h.Run.Id);
         var gone = await service.CommentAsync("wi-1", "never mind", h.Run.Id);

@@ -193,7 +193,7 @@ public class StuckRunWatchdogTests
         workItems.Setup(x => x.GetWorkItemAsync(It.IsAny<string>()))
             .ReturnsAsync((string id) => new WorkItemView { Id = id, Status = RemoteWorkItemStatus.Running });
         workItems.Setup(x => x.TransitionAsync(stuck.WorkItemId, It.IsAny<RemoteWorkItemStatus>(),
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ThrowsAsync(new InvalidOperationException("transition failed"));
 
         var watchdog = BuildWatchdog(new LoopRunStore(db.Fresh()), engine.Object, recovery.Object, workItems.Object);
@@ -364,6 +364,7 @@ public class StuckRunWatchdogTests
         services.AddSingleton(runStore);
         services.AddSingleton(recovery);
         services.AddSingleton(workItems);
+        services.AddSingleton(new Mock<IEventLogService>().Object);
         var provider = services.BuildServiceProvider();
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
         return new StuckRunWatchdog(scopes, engine, NullLogger<StuckRunWatchdog>.Instance);

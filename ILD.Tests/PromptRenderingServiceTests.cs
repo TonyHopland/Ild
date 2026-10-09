@@ -1,17 +1,12 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
-using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
-using ILD.Data.Stores.Interfaces;
-using Moq;
 
 namespace ILD.Tests;
 
 public class PromptRenderingServiceTests
 {
-    private static readonly Guid RunId = Guid.NewGuid();
-
     private static readonly WorkItemView WorkItem = new()
     {
         Id = "WI-1",
@@ -19,62 +14,49 @@ public class PromptRenderingServiceTests
         Description = "Body",
     };
 
-    private static LoopRunNode AiNode(string label, string output, DateTime completedAt) => new()
+    /// <summary>A run whose event log a test writes, and the renderer that reads it.</summary>
+    private sealed class Run : IDisposable
     {
-        Id = Guid.NewGuid(),
-        LoopRunId = RunId,
-        LoopNodeId = Guid.NewGuid(),
-        NodeLabel = label,
-        Output = output,
-        CompletedAt = completedAt,
-        CreatedAt = completedAt,
-        LoopNode = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.AI, Label = label },
-    };
+        private readonly TestDb _db = new();
+        private readonly EventLogService _events;
+        private readonly Guid _versionId;
+        public Guid Id { get; }
+        public PromptRenderingService Renderer { get; }
 
-    private static LoopRunNode NonAiNode(NodeType type, string output, DateTime completedAt) => new()
-    {
-        Id = Guid.NewGuid(),
-        LoopRunId = RunId,
-        LoopNodeId = Guid.NewGuid(),
-        Output = output,
-        CompletedAt = completedAt,
-        CreatedAt = completedAt,
-        LoopNode = new LoopNode { Id = Guid.NewGuid(), NodeType = type, Label = type.ToString() },
-    };
+        public Run()
+        {
+            _events = new EventLogService(_db.EventLogs);
+            _versionId = RunTimeline.SeedVersion(_db);
+            Id = RunTimeline.SeedRun(_db, "WI-1", _versionId, LoopRunStatus.Running).Id;
+            Renderer = new PromptRenderingService(new PromptTemplateResolver(), _events,
+                new RunConversationService(_db.EventLogs, _db.LoopRuns), _db.LoopRuns);
+        }
 
-    private static EventLogEntry Human(string data, DateTime timestamp)
-        => new(RunId, EventType.HumanFeedbackReceived.ToString(), data, Timestamp: timestamp);
+        /// <summary>One execution of a fresh node of <paramref name="type"/> completing with <paramref name="output"/>.</summary>
+        public Task Completed(NodeType type, string label, string output)
+        {
+            var node = RunTimeline.SeedNode(_db, _versionId, type, label);
+            var runNode = RunTimeline.SeedRunNode(_db, Id, node, LoopRunNodeStatus.Succeeded);
+            return _events.AppendAsync(Id, EventType.NodeCompleted, output, node.Id, runNode.Id);
+        }
 
-    private static EventLogEntry Event(EventType type, string data, DateTime timestamp)
-        => new(RunId, type.ToString(), data, Timestamp: timestamp);
+        public Task Event(EventType type, string data) => _events.AppendAsync(Id, type, data);
 
-    private static PromptRenderingService Build(
-        IReadOnlyList<LoopRunNode> runNodes,
-        IEnumerable<EventLogEntry> events)
-    {
-        var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(s => s.GetByRunIdAsync(RunId, null)).ReturnsAsync(events);
+        public Task<string> RenderAsync(string template) => Renderer.RenderAsync(template, Id, WorkItem, null);
 
-        var store = new Mock<ILoopRunStore>();
-        store.Setup(s => s.GetRunNodesWithNodeAsync(RunId)).ReturnsAsync(runNodes);
-
-        return new PromptRenderingService(new PromptTemplateResolver(), eventLog.Object, store.Object);
+        public void Dispose() => _db.Dispose();
     }
 
     [Fact]
     public async Task Conversation_AI_contains_only_AI_node_outputs()
     {
-        var t = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var svc = Build(
-            new[]
-            {
-                AiNode("Implementer", "did the work", t),
-                NonAiNode(NodeType.Prompt, "rendered prompt", t.AddMinutes(1)),
-                NonAiNode(NodeType.Cmd, "command output", t.AddMinutes(2)),
-            },
-            new[] { Human("human note", t.AddMinutes(3)) });
+        using var run = new Run();
+        await run.Completed(NodeType.AI, "Implementer", "did the work");
+        await run.Completed(NodeType.Prompt, "Prompt", "rendered prompt");
+        await run.Completed(NodeType.Cmd, "Cmd", "command output");
+        await run.Event(EventType.HumanFeedbackReceived, "human note");
 
-        var result = await svc.RenderAsync("{{Conversation.AI}}", RunId, WorkItem, null);
+        var result = await run.RenderAsync("{{Conversation.AI}}");
 
         Assert.Equal("[AI · Implementer] did the work", result);
         Assert.DoesNotContain("rendered prompt", result);
@@ -85,17 +67,13 @@ public class PromptRenderingServiceTests
     [Fact]
     public async Task Conversation_Human_is_verbatim_HumanFeedback_only()
     {
-        var t = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var svc = Build(
-            new[] { AiNode("Reviewer", "Reject: do it differently", t) },
-            new[]
-            {
-                Event(EventType.HumanFeedbackRequested, "please review", t.AddMinutes(1)),
-                Human("Store the token in the header instead", t.AddMinutes(2)),
-                Event(EventType.NodeCompleted, "node done", t.AddMinutes(3)),
-            });
+        using var run = new Run();
+        await run.Completed(NodeType.AI, "Reviewer", "Reject: do it differently");
+        await run.Event(EventType.HumanFeedbackRequested, "please review");
+        await run.Event(EventType.HumanFeedbackReceived, "Store the token in the header instead");
+        await run.Completed(NodeType.Cmd, "Cmd", "node done");
 
-        var result = await svc.RenderAsync("{{Conversation.Human}}", RunId, WorkItem, null);
+        var result = await run.RenderAsync("{{Conversation.Human}}");
 
         Assert.Equal("Store the token in the header instead", result);
         Assert.DoesNotContain("please review", result);
@@ -103,18 +81,15 @@ public class PromptRenderingServiceTests
     }
 
     [Fact]
-    public async Task Conversation_Full_interleaves_AI_and_Human_by_timestamp()
+    public async Task Conversation_Full_interleaves_AI_and_Human_in_the_order_they_were_written()
     {
-        var t = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var svc = Build(
-            new[]
-            {
-                AiNode("Implementer", "first AI message", t.AddMinutes(1)),
-                AiNode("Reviewer", "third message, also AI", t.AddMinutes(3)),
-            },
-            new[] { Human("second message from a human", t.AddMinutes(2)) });
+        using var run = new Run();
+        await run.Completed(NodeType.AI, "Implementer", "first AI message");
+        await run.Event(EventType.HumanFeedbackReceived, "second message from a human");
+        await run.Event(EventType.RunParked, "Run Halted");
+        await run.Completed(NodeType.AI, "Reviewer", "third message, also AI");
 
-        var result = await svc.RenderAsync("{{Conversation.Full}}", RunId, WorkItem, null);
+        var result = await run.RenderAsync("{{Conversation.Full}}");
 
         var expected =
             "[AI · Implementer] first AI message\n\n" +
@@ -126,11 +101,10 @@ public class PromptRenderingServiceTests
     [Fact]
     public async Task Empty_history_renders_all_conversation_placeholders_as_empty()
     {
-        var svc = Build(Array.Empty<LoopRunNode>(), Array.Empty<EventLogEntry>());
+        using var run = new Run();
 
-        var result = await svc.RenderAsync(
-            "F:[{{Conversation.Full}}] A:[{{Conversation.AI}}] H:[{{Conversation.Human}}]",
-            RunId, WorkItem, null);
+        var result = await run.RenderAsync(
+            "F:[{{Conversation.Full}}] A:[{{Conversation.AI}}] H:[{{Conversation.Human}}]");
 
         Assert.Equal("F:[] A:[] H:[]", result);
     }

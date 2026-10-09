@@ -23,6 +23,7 @@ public class LoopRunsController : ControllerBase
     private readonly IRunReclaimer _runReclaimer;
     private readonly IWorkItemManager _workItemManager;
     private readonly IPackageFeedResolver _packageFeeds;
+    private readonly IRunConversationService _conversation;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
@@ -32,7 +33,8 @@ public class LoopRunsController : ControllerBase
         InteractiveShellSessionService shellSessions,
         IRunReclaimer runReclaimer,
         IWorkItemManager workItemManager,
-        IPackageFeedResolver packageFeeds)
+        IPackageFeedResolver packageFeeds,
+        IRunConversationService conversation)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
@@ -42,6 +44,7 @@ public class LoopRunsController : ControllerBase
         _runReclaimer = runReclaimer;
         _workItemManager = workItemManager;
         _packageFeeds = packageFeeds;
+        _conversation = conversation;
     }
 
     /// <summary>
@@ -367,7 +370,7 @@ public class LoopRunsController : ControllerBase
     }
 
     [HttpGet("{id}/events")]
-    public async Task<IActionResult> GetEvents(string id, [FromQuery] int cursor = 0, [FromQuery] int limit = 100)
+    public async Task<IActionResult> GetEvents(string id, [FromQuery] long cursor = 0, [FromQuery] int limit = 100)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
@@ -381,17 +384,30 @@ public class LoopRunsController : ControllerBase
         {
             entries = page.Entries.Select(e => new
             {
-                sequence = e.Sequence,
+                id = e.Id,
                 runId = e.LoopRunId,
                 eventType = e.EventType.ToString(),
                 nodeId = e.NodeId,
                 runNodeId = e.RunNodeId,
+                edgeName = e.EdgeName,
                 timestamp = e.Timestamp,
                 payload = e.Data ?? string.Empty
             }),
             nextCursor = page.NextCursor,
             hasMore = page.HasMore
         });
+    }
+
+    /// <summary>The run's conversation, projected from its event log in the order it was written.</summary>
+    [HttpGet("{id}/conversation")]
+    public async Task<IActionResult> GetConversation(string id)
+    {
+        if (!Guid.TryParse(id, out var guid))
+            return BadRequest(new { error = "Invalid GUID" });
+
+        var messages = await _conversation.GetMessagesAsync(guid);
+        if (messages is null) return NotFound();
+        return Ok(new { runId = guid, messages });
     }
 
     [HttpGet("{id}/sessions/preview")]

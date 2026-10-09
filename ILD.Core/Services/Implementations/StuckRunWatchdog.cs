@@ -92,6 +92,7 @@ public sealed class StuckRunWatchdog : BackgroundService
         var runStore = sp.GetRequiredService<ILoopRunStore>();
         var recovery = sp.GetRequiredService<IRecoveryManager>();
         var workItems = sp.GetRequiredService<IWorkItemManager>();
+        var eventLog = sp.GetRequiredService<IEventLogService>();
 
         // Superset of the orphaned-Running sweep by one shape — the shutdown park
         // startup never came back for — which is exactly what makes it the same
@@ -142,7 +143,7 @@ public sealed class StuckRunWatchdog : BackgroundService
                 // strand the other orphaned runs until the next interval.
                 try
                 {
-                    await HealCompletedButRunningAsync(runStore, workItems, run);
+                    await HealCompletedButRunningAsync(runStore, workItems, eventLog, run);
                     recovered++;
                 }
                 catch (Exception ex)
@@ -193,7 +194,8 @@ public sealed class StuckRunWatchdog : BackgroundService
     /// the completion timestamp it was finalized with, and park the work item for
     /// human review so it leaves the Running column. See issue #39.
     /// </summary>
-    private async Task HealCompletedButRunningAsync(ILoopRunStore runStore, IWorkItemManager workItems, LoopRun run)
+    private async Task HealCompletedButRunningAsync(
+        ILoopRunStore runStore, IWorkItemManager workItems, IEventLogService eventLog, LoopRun run)
     {
         _log.LogWarning(
             "Reconciling run {RunId} (work item {WorkItemId}): Running with CompletedAt {CompletedAt:o} and no driver",
@@ -203,6 +205,9 @@ public sealed class StuckRunWatchdog : BackgroundService
         run.Status = LoopRunStatus.Failed;
         run.HumanFeedbackReason = HumanFeedbackReasons.RunCrashed;
         await runStore.UpdateRunAsync(run);
+        await eventLog.AppendAsync(run.Id, EventType.LoopRunFailed,
+            $"{HumanFeedbackReasons.RunCrashed}: the run had finished at {run.CompletedAt:o} "
+                + "but was still marked Running with nothing driving it");
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: HumanFeedbackReasons.RunCrashed, humanFeedbackReason: HumanFeedbackReasons.RunCrashed,
             currentLoopRunId: run.Id);

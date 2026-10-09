@@ -183,7 +183,7 @@ public class EngineFeedbackResumeTransitionTests
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(), LoopOutputs.OnCiFailed,
-            It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
+            It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
         var last = h.ReloadRunNodes().OrderBy(n => n.StartedAt).Last();
         Assert.Equal(h.NodesById["coder"].Id, last.LoopNodeId);
         Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);

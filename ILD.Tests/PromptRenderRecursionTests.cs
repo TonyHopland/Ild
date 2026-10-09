@@ -73,22 +73,15 @@ public class PromptRenderRecursionTests
             .ReturnsAsync((variables ?? Array.Empty<(string, string)>())
                 .Select(v => new LoopRunVariable { LoopRunId = runId, Name = v.Name, Value = v.Value })
                 .ToList());
-        runStore.Setup(s => s.GetRunNodesWithNodeAsync(It.IsAny<Guid>()))
-            .ReturnsAsync((priorAiOutputs ?? Array.Empty<(string, string)>())
-                .Select((n, i) => new LoopRunNode
-                {
-                    Id = Guid.NewGuid(),
-                    LoopRunId = runId,
-                    LoopNodeId = Guid.NewGuid(),
-                    NodeLabel = n.Label,
-                    Output = n.Output,
-                    CompletedAt = new DateTime(2026, 1, 1, 0, i, 0, DateTimeKind.Utc),
-                    CreatedAt = new DateTime(2026, 1, 1, 0, i, 0, DateTimeKind.Utc),
-                    LoopNode = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.AI, Label = n.Label },
-                })
-                .ToList());
         runStore.Setup(s => s.SetCurrentAiSessionIdAsync(It.IsAny<Guid>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
+
+        var conversation = new Mock<IRunConversationService>();
+        conversation.Setup(s => s.GetMessagesAsync(It.IsAny<Guid>()))
+            .ReturnsAsync((priorAiOutputs ?? Array.Empty<(string, string)>())
+                .Select((n, i) => new RunConversationMessage(i + 1, runId, Guid.NewGuid(), RunConversationMessage.Ai,
+                    n.Label, n.Output, new DateTime(2026, 1, 1, 0, i, 0, DateTimeKind.Utc)))
+                .ToList());
 
         var eventLog = new Mock<IEventLogService>();
         eventLog.Setup(s => s.GetByRunIdAsync(It.IsAny<Guid>(), It.IsAny<int?>()))
@@ -107,7 +100,7 @@ public class PromptRenderRecursionTests
         services.AddSingleton(registry);
         services.AddSingleton<IPromptTemplateResolver>(new PromptTemplateResolver());
         services.AddSingleton<IPromptRenderingService>(sp => new PromptRenderingService(
-            sp.GetRequiredService<IPromptTemplateResolver>(), eventLog.Object, runStore.Object));
+            sp.GetRequiredService<IPromptTemplateResolver>(), eventLog.Object, conversation.Object, runStore.Object));
         var sp = services.BuildServiceProvider();
 
         var node = new LoopNode

@@ -66,9 +66,8 @@ public static class ServiceCollectionExtensions
             return proxyBase;
         });
         services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
-        services.AddSingleton<EventLogOptions>();
         services.AddScoped<IEventLogService, EventLogService>();
-        services.AddHostedService<EventLogRetentionSweeper>();
+        services.AddScoped<IRunConversationService, RunConversationService>();
         services.AddHostedService<WorktreeRetentionSweeper>();
         services.AddHostedService<NetworkLogRetentionSweeper>();
         services.AddHostedService<StuckRunWatchdog>();

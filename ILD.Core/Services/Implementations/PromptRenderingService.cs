@@ -1,6 +1,4 @@
 using ILD.Core.Services.Interfaces;
-using ILD.Data.Entities;
-using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -10,26 +8,23 @@ public sealed class PromptRenderingService : IPromptRenderingService
 {
     private readonly IPromptTemplateResolver _resolver;
     private readonly IEventLogService _eventLog;
+    private readonly IRunConversationService _conversation;
     private readonly ILoopRunStore _runs;
     private readonly ILogger<PromptRenderingService>? _logger;
 
     public PromptRenderingService(
         IPromptTemplateResolver resolver,
         IEventLogService eventLog,
+        IRunConversationService conversation,
         ILoopRunStore runs,
         ILogger<PromptRenderingService>? logger = null)
     {
         _resolver = resolver;
         _eventLog = eventLog;
+        _conversation = conversation;
         _runs = runs;
         _logger = logger;
     }
-
-    // One run-scoped message in the assembled conversation. AI messages come
-    // from AI-node outputs; Human messages from HumanFeedbackReceived events.
-    private enum Author { Ai, Human }
-
-    private sealed record Message(Author Author, DateTime Timestamp, string Source, string Text);
 
     public async Task<string> RenderAsync(
         string? template,
@@ -40,41 +35,31 @@ public sealed class PromptRenderingService : IPromptRenderingService
         if (string.IsNullOrEmpty(template)) return "";
 
         IReadOnlyList<string>? summary = null;
-        var aiMessages = new List<Message>();
-        var humanMessages = new List<Message>();
         try
         {
             var entries = await _eventLog.GetByRunIdAsync(runId);
-            var entryList = entries.ToList();
-            summary = entryList.Select(e => $"{e.EventType}: {e.Data}").ToList();
-
-            humanMessages.AddRange(entryList
-                .Where(e => e.EventType == EventType.HumanFeedbackReceived.ToString()
-                            && !string.IsNullOrEmpty(e.Data))
-                .Select(e => new Message(Author.Human, e.Timestamp, "Human", e.Data)));
+            summary = entries.Select(e => $"{e.EventType}: {e.Data}").ToList();
         }
         catch { /* event log is best-effort */ }
 
+        // The AI turns and human replies of the run's conversation; its system
+        // messages (starts, parks, failures) are not part of these variables.
+        IReadOnlyList<RunConversationMessage> messages = Array.Empty<RunConversationMessage>();
         try
         {
-            var runNodes = await _runs.GetRunNodesWithNodeAsync(runId);
-            aiMessages.AddRange(runNodes
-                .Where(rn => rn.LoopNode?.NodeType == NodeType.AI
-                             && !string.IsNullOrEmpty(rn.Output))
-                .Select(rn => new Message(
-                    Author.Ai,
-                    rn.CompletedAt ?? rn.CreatedAt,
-                    rn.NodeLabel ?? rn.LoopNode?.Label ?? "AI",
-                    rn.Output!)));
+            messages = (await _conversation.GetMessagesAsync(runId) ?? messages)
+                .Where(m => m.Role is RunConversationMessage.Ai or RunConversationMessage.Human)
+                .ToList();
         }
-        catch { /* run-node history is best-effort */ }
+        catch { /* the conversation is best-effort, like the event log */ }
 
-        var conversationAi = string.Join("\n\n", aiMessages.Select(Format));
-        var conversationHuman = string.Join("\n\n", humanMessages.Select(m => m.Text));
-        var conversationFull = string.Join("\n\n", aiMessages
-            .Concat(humanMessages)
-            .OrderBy(m => m.Timestamp)
+        var conversationAi = string.Join("\n\n", messages
+            .Where(m => m.Role == RunConversationMessage.Ai)
             .Select(Format));
+        var conversationHuman = string.Join("\n\n", messages
+            .Where(m => m.Role == RunConversationMessage.Human)
+            .Select(m => m.Text));
+        var conversationFull = string.Join("\n\n", messages.Select(Format));
 
         LogConversationSize(runId, conversationFull);
 
@@ -102,9 +87,9 @@ public sealed class PromptRenderingService : IPromptRenderingService
     // Attribution for the Full and AI views: author plus source node, stable and
     // readable. Human view is rendered verbatim (no prefix) so it can be treated
     // as an authoritative spec amendment free of any framing.
-    private static string Format(Message m)
-        => m.Author == Author.Ai
-            ? $"[AI · {m.Source}] {m.Text}"
+    private static string Format(RunConversationMessage m)
+        => m.Role == RunConversationMessage.Ai
+            ? $"[AI · {m.Name}] {m.Text}"
             : $"[Human] {m.Text}";
 
     // {{Conversation.Full}} grows unbounded with run length; measure the rendered

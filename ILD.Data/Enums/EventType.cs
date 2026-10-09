@@ -46,5 +46,16 @@ public enum EventType
     /// An agent took back a write it had queued, before the PR node sent it.
     /// Records what it would have said.
     /// </summary>
-    PrQueuedWriteWithdrawn = 20
+    PrQueuedWriteWithdrawn = 20,
+
+    /// <summary>An execution cut off before it finished: a halt, or the AI provider stopping it.</summary>
+    NodeInterrupted = 21,
+
+    /// <summary>
+    /// The run stopped for a person without a node asking them anything: a halt,
+    /// a provider interruption, the AI step cap, or a manual move to
+    /// HumanFeedback. Carries the full reason; a Human or PR node asking is
+    /// <see cref="HumanFeedbackRequested"/> instead.
+    /// </summary>
+    RunParked = 22,
 }

@@ -16,7 +16,7 @@ public sealed record NodeFact(
     string? AiProvider);
 
 /// <summary>A human-feedback request/response event used to compute turnaround.</summary>
-public sealed record FeedbackFact(EventType EventType, int Sequence, DateTime Timestamp);
+public sealed record FeedbackFact(EventType EventType, long Id, DateTime Timestamp);
 
 /// <summary>One run's contribution to a (day, template, provider) bucket.</summary>
 public sealed record RunContribution(DateTime BucketDate, Guid TemplateId, string TemplateName, string AiProvider, AnalyticsMetrics Metrics);
@@ -152,11 +152,11 @@ public static class RunAnalyticsAggregator
         return best ?? NoProvider;
     }
 
-    /// <summary>Pair each human-feedback request with the next response, in sequence order.</summary>
+    /// <summary>Pair each human-feedback request with the next response, in the order they were written.</summary>
     private static IEnumerable<(DateTime Requested, DateTime Received)> PairFeedback(IReadOnlyList<FeedbackFact> feedback)
     {
         DateTime? pending = null;
-        foreach (var evt in feedback.OrderBy(f => f.Sequence))
+        foreach (var evt in feedback.OrderBy(f => f.Id))
         {
             if (evt.EventType == EventType.HumanFeedbackRequested)
                 pending = evt.Timestamp;

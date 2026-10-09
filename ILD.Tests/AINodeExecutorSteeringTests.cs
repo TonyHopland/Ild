@@ -72,7 +72,8 @@ public class AINodeExecutorSteeringTests
         // Production always has the rendering service in scope, so the steering
         // path must be exercised with it present.
         services.AddSingleton<IPromptRenderingService>(new ILD.Core.Services.Implementations.PromptRenderingService(
-            new ILD.Core.Services.Implementations.PromptTemplateResolver(), eventLog.Object, db.LoopRuns));
+            new ILD.Core.Services.Implementations.PromptTemplateResolver(), eventLog.Object,
+            new ILD.Core.Services.Implementations.RunConversationService(db.EventLogs, db.LoopRuns), db.LoopRuns));
         return (services.BuildServiceProvider(), adapter);
     }
 

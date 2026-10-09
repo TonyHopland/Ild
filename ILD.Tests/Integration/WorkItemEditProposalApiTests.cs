@@ -649,8 +649,10 @@ public class WorkItemEditProposalApiTests
         var itemC = await CreateHumanItemAsync(host);
         var start = DateTime.UtcNow.AddHours(-2);
         var runsOfA = new List<Guid>();
+        // One live run at most per item: the earlier ones have ended.
         for (var i = 0; i < 60; i++)
-            runsOfA.Add(await SeedRunAsync(host.Factory, itemA, start.AddMinutes(i)));
+            runsOfA.Add(await SeedRunAsync(host.Factory, itemA, start.AddMinutes(i),
+                i < 59 ? LoopRunStatus.Completed : LoopRunStatus.Running));
         var runOfC = await SeedRunAsync(host.Factory, itemC);
         var chatId = await SeedChatSessionAsync(host.Factory);
 
@@ -864,7 +866,8 @@ public class WorkItemEditProposalApiTests
         return session.Id;
     }
 
-    private static async Task<Guid> SeedRunAsync(ApiFactory factory, string? workItemId = null, DateTime? startedAt = null)
+    private static async Task<Guid> SeedRunAsync(
+        ApiFactory factory, string? workItemId = null, DateTime? startedAt = null, LoopRunStatus status = LoopRunStatus.Running)
     {
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -883,7 +886,7 @@ public class WorkItemEditProposalApiTests
             Id = Guid.NewGuid(),
             WorkItemId = workItemId ?? Guid.NewGuid().ToString(),
             LoopTemplateVersionId = version.Id,
-            Status = LoopRunStatus.Running,
+            Status = status,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
             StartedAt = startedAt ?? DateTime.UtcNow,
         };

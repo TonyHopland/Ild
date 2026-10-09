@@ -13,9 +13,11 @@ public class RecoveryManager : IRecoveryManager
     private readonly ILoopTemplateStore _templateStore;
     private readonly IRepositoryManager _repo;
     private readonly ILoopEngine _engine;
+    private readonly IEventLogService _eventLog;
 
-    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine)
+    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog)
     {
+        _eventLog = eventLog;
         _workItems = workItems;
         _loopRunStore = loopRunStore;
         _templateStore = templateStore;
@@ -48,10 +50,7 @@ public class RecoveryManager : IRecoveryManager
         }
         if (policy == RecoveryPolicy.NeedsReview)
         {
-            await _workItems.TransitionAsync(
-                run.WorkItemId,
-                RemoteWorkItemStatus.HumanFeedback,
-                reason: "Recovery requires review");
+            await ParkForReviewAsync(run, HumanFeedbackReasons.RecoveryRequiresReview);
             return true;
         }
 
@@ -75,10 +74,8 @@ public class RecoveryManager : IRecoveryManager
         if (!string.IsNullOrWhiteSpace(run.WorktreePath)
             && !await _repo.ValidateWorktreeHealthAsync(run.WorktreePath))
         {
-            await _workItems.TransitionAsync(
-                run.WorkItemId,
-                RemoteWorkItemStatus.HumanFeedback,
-                reason: $"Recovery requires review: worktree is missing or unhealthy at '{run.WorktreePath}'");
+            await ParkForReviewAsync(run,
+                $"{HumanFeedbackReasons.RecoveryRequiresReview}: worktree is missing or unhealthy at '{run.WorktreePath}'");
             return true;
         }
 
@@ -92,6 +89,13 @@ public class RecoveryManager : IRecoveryManager
         else
             await _engine.ResumeRecoveredRunAsync(runId);
         return true;
+    }
+
+    private async Task ParkForReviewAsync(LoopRun run, string reason)
+    {
+        await _eventLog.AppendAsync(run.Id, EventType.RecoveryTriggered, reason);
+        await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            reason: reason, humanFeedbackReason: HumanFeedbackReasons.RecoveryRequiresReview, currentLoopRunId: run.Id);
     }
 
     public async Task<bool> ValidateWorktreeHealthAsync(Guid runId)
