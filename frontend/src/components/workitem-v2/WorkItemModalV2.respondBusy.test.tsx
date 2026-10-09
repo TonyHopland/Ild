@@ -345,7 +345,7 @@ describe("an answer the server refuses", () => {
     });
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
-    expect(answer.mock.calls[1]).toEqual(["wi-1", "Looks good"]);
+    expect(answer.mock.calls[1]).toEqual(["wi-1", "run-1", "Looks good"]);
   });
 });
 
@@ -386,7 +386,7 @@ describe("an answer waiting to be retried", () => {
     });
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(2));
-    expect(answer.mock.calls[1]).toEqual(["wi-1", "Looks good"]);
+    expect(answer.mock.calls[1]).toEqual(["wi-1", "run-1", "Looks good"]);
     expect(upload).not.toHaveBeenCalled();
   });
 });

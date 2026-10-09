@@ -128,10 +128,45 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
+        var runStore = NoLiveRunsMock();
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = waiting.Id, Status = LoopRunStatus.Running };
+        runStore.Setup(s => s.GetActiveByWorkItemAsync(waiting.Id)).ReturnsAsync(run);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runStore.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Resumed);
+        engine.Verify(e => e.ResumeRecoveredRunAsync(run.Id), Times.Once);
+    }
+
+    [Fact]
+    public async Task Leaves_a_waiting_for_ild_item_alone_when_it_has_no_live_run()
+    {
+        // The item says it is waiting on ILD, but nothing here is alive to pick
+        // it up — its newest run has ended. Moving it to Running would leave it
+        // there with nothing driving it.
+        var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
+
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { waiting } });
+        client.Setup(c => c.TransitionAsync(Opts, waiting.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
+
+        var runStore = NoLiveRunsMock();
+        var ended = new LoopRun { Id = Guid.NewGuid(), WorkItemId = waiting.Id, Status = LoopRunStatus.Failed };
+        runStore.Setup(s => s.GetLatestByWorkItemAsync(waiting.Id)).ReturnsAsync(ended);
+        var engine = new Mock<ILoopEngine>();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var sut = new RemoteWorkItemCoordinator(
+            client.Object, new Mock<ILoopTemplateResolver>().Object, engine.Object, runStore.Object,
+            workItemNotifier: notifier.Object);
+
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Resumed);
+        client.Verify(c => c.TransitionAsync(Opts, waiting.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(waiting.Id, It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
+        engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
     }
 
     [Fact]
@@ -265,8 +300,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         var resolver = new Mock<ILoopTemplateResolver>();
 
         var notifier = new Mock<IWorkItemNotifier>();
+        var runStore = NoLiveRunsMock();
+        runStore.Setup(s => s.GetActiveByWorkItemAsync(waiting.Id))
+                .ReturnsAsync(new LoopRun { Id = Guid.NewGuid(), WorkItemId = waiting.Id, Status = LoopRunStatus.Running });
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, resolver.Object, engine.Object, NoLiveRuns(),
+            client.Object, resolver.Object, engine.Object, runStore.Object,
             workItemNotifier: notifier.Object);
 
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
@@ -326,6 +364,8 @@ public sealed class RemoteWorkItemCoordinatorTests
         var doneRun = new LoopRun { Id = Guid.NewGuid(), WorkItemId = done.Id, Status = LoopRunStatus.WaitingHuman };
         var runStore = RunStoreWithActive(activeRuns);
         runStore.Setup(s => s.GetActiveByWorkItemAsync(done.Id)).ReturnsAsync(doneRun);
+        runStore.Setup(s => s.GetActiveByWorkItemAsync(waiting.Id))
+                .ReturnsAsync(new LoopRun { Id = Guid.NewGuid(), WorkItemId = waiting.Id, Status = LoopRunStatus.Running });
         var engine = new Mock<ILoopEngine>();
 
         var result = await Coordinator(client, runStore, engine)
@@ -774,7 +814,7 @@ public sealed class RemoteWorkItemCoordinatorTests
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var runStore = new Mock<ILoopRunStore>();
-        runStore.Setup(s => s.GetCurrentByWorkItemAsync(waiting.Id)).ReturnsAsync(run);
+        runStore.Setup(s => s.GetActiveByWorkItemAsync(waiting.Id)).ReturnsAsync(run);
         runStore.Setup(s => s.GetNodesForVersionAsync(versionId))
                 .ReturnsAsync(new[] { node });
         // Unstubbed, Moq hands back null here rather than an empty list, which
