@@ -119,6 +119,32 @@ describe("Keyboard focus on the schedules list", () => {
     expect(document.activeElement).toBe(confirmDelete);
   });
 
+  test("while the delete runs, Cancel and Escape keep the confirmation and focus", async () => {
+    let fail!: (reason: unknown) => void;
+    chatScheduleService.delete.mockReturnValue(
+      new Promise((_, reject) => {
+        fail = reject;
+      }),
+    );
+    const row = await renderList();
+
+    press(within(row).getByRole("button", { name: "Delete" }));
+    const confirm = within(row).getByRole("alertdialog");
+    const cancel = within(confirm).getByRole("button", { name: "Cancel" });
+    press(within(confirm).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(cancel.getAttribute("aria-disabled")).toBe("true"));
+
+    press(cancel);
+    fireEvent.keyDown(confirm, { key: "Escape" });
+    expect(within(row).getByRole("alertdialog")).toBe(confirm);
+    expect(document.activeElement).toBe(cancel);
+
+    fail({ status: 500, message: "The server is down." });
+    expect(await within(row).findByText("The server is down.")).toBeTruthy();
+    expect(within(row).getByRole("alertdialog")).toBe(confirm);
+    expect(document.activeElement).toBe(cancel);
+  });
+
   test("the schedule form takes focus when it opens and gives it back to what opened it", async () => {
     const row = await renderList();
 

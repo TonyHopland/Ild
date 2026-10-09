@@ -105,7 +105,10 @@ function ScheduleRow({
     focusNextRef.current = "cancel";
     setConfirmingDelete(true);
   };
+  // Not while a write runs: the Delete it would hand focus back to is disabled then,
+  // and a delete under way could still fail and need its confirmation.
   const keepIt = () => {
+    if (writing) return;
     focusNextRef.current = "delete";
     setConfirmingDelete(false);
   };
@@ -199,8 +202,9 @@ function ScheduleRow({
           >
             Delete this schedule? Its chats stay.
             {/* Stays up until the delete succeeds, which takes the row with it: a failed
-                delete leaves the confirmation, its error and focus where they were.
-                aria-disabled rather than disabled, which would drop focus to the page. */}
+                delete leaves the confirmation, its error and focus where they were. Both
+                buttons are aria-disabled while it runs rather than disabled, which would
+                drop focus to the page. */}
             <button
               type="button"
               className="btn btn-danger btn-sm"
@@ -219,6 +223,7 @@ function ScheduleRow({
               type="button"
               ref={cancelRef}
               className="btn btn-secondary btn-sm"
+              aria-disabled={writing}
               onClick={keepIt}
             >
               Cancel
