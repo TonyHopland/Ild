@@ -198,11 +198,15 @@ function ScheduleRow({
             }}
           >
             Delete this schedule? Its chats stay.
+            {/* Stays up until the delete succeeds, which takes the row with it: a failed
+                delete leaves the confirmation, its error and focus where they were.
+                aria-disabled rather than disabled, which would drop focus to the page. */}
             <button
               type="button"
               className="btn btn-danger btn-sm"
+              aria-disabled={writing}
               onClick={() => {
-                setConfirmingDelete(false);
+                if (writing) return;
                 act("The schedule could not be deleted.", async () => {
                   await chatScheduleService.delete(schedule.id);
                   return (list) => list.filter((s) => s.id !== schedule.id);

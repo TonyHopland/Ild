@@ -88,6 +88,37 @@ describe("Keyboard focus on the schedules list", () => {
     expect(chatScheduleService.delete).not.toHaveBeenCalled();
   });
 
+  test("a delete that fails leaves the confirmation open, says why, and keeps focus", async () => {
+    chatScheduleService.delete.mockRejectedValue({ status: 500, message: "The server is down." });
+    const row = await renderList();
+
+    press(within(row).getByRole("button", { name: "Delete" }));
+    const confirm = within(row).getByRole("alertdialog");
+    const confirmDelete = within(confirm).getByRole("button", { name: "Delete" });
+    press(confirmDelete);
+
+    expect(await within(row).findByText("The server is down.")).toBeTruthy();
+    expect(within(row).getByRole("alertdialog")).toBe(confirm);
+    expect(document.activeElement).toBe(confirmDelete);
+    expect(chatScheduleService.delete).toHaveBeenCalledTimes(1);
+  });
+
+  test("a second press while the delete is on its way sends nothing more", async () => {
+    chatScheduleService.delete.mockReturnValue(new Promise(() => {}));
+    const row = await renderList();
+
+    press(within(row).getByRole("button", { name: "Delete" }));
+    const confirmDelete = within(within(row).getByRole("alertdialog")).getByRole("button", {
+      name: "Delete",
+    });
+    press(confirmDelete);
+    await waitFor(() => expect(confirmDelete.getAttribute("aria-disabled")).toBe("true"));
+    press(confirmDelete);
+
+    expect(chatScheduleService.delete).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(confirmDelete);
+  });
+
   test("the schedule form takes focus when it opens and gives it back to what opened it", async () => {
     const row = await renderList();
 
