@@ -124,9 +124,14 @@ public class WorkItemRunEventsTests
         return id;
     }
 
-    private static async Task DrainAsync(LoopEngineHarness h, TestDb db, string workItemId)
+    /// <summary>
+    /// Wait out every drive an answer launched. The runs come from the engine, not
+    /// the database: the harness shares one SQLite connection, and opening a
+    /// context on it while a drive is running a statement fails.
+    /// </summary>
+    private static async Task DrainAsync(LoopEngineHarness h)
     {
-        foreach (var runId in db.Fresh().LoopRuns.AsNoTracking().Where(r => r.WorkItemId == workItemId).Select(r => r.Id).ToList())
+        foreach (var runId in await h.Engine.GetActiveRunIdsAsync())
             await LoopEngineHarness.WaitUntilIdleAsync((LoopEngine)h.Engine, runId);
     }
 
@@ -172,7 +177,7 @@ public class WorkItemRunEventsTests
         var (run, waiting) = Parked(rig.Db, id, h.TemplateVersionId, human);
 
         var result = await AnswerAsync(Controller(rig), id, answer, run.Id, text);
-        await DrainAsync(h, rig.Db, id);
+        await DrainAsync(h);
 
         Assert.IsType<OkResult>(result);
         var received = Assert.Single(RunTimeline.Events(rig.Db, run.Id, EventType.HumanFeedbackReceived));
@@ -282,7 +287,7 @@ public class WorkItemRunEventsTests
         var before = RunState(rig.Db, id);
 
         var result = await AnswerAsync(Controller(rig), id, answer, runId, "late");
-        if (h is not null) await DrainAsync(h, rig.Db, id);
+        if (h is not null) await DrainAsync(h);
 
         AssertErrorFor(result, 409);
         AssertNoAnswerRecorded(rig.Db);
@@ -311,7 +316,7 @@ public class WorkItemRunEventsTests
         var before = RunState(rig.Db, id);
 
         var result = await AnswerAsync(Controller(rig), id, answer, emptyId ? Guid.Empty : null, "Ship it");
-        await DrainAsync(h, rig.Db, id);
+        await DrainAsync(h);
 
         AssertErrorFor(result, 400);
         AssertNoAnswerRecorded(rig.Db);
@@ -332,7 +337,7 @@ public class WorkItemRunEventsTests
         var (run, waiting) = Parked(rig.Db, id, h.TemplateVersionId, human);
 
         var result = await AnswerAsync(Controller(rig), id, Answer.Input, run.Id, "Ship it as planned");
-        await DrainAsync(h, rig.Db, id);
+        await DrainAsync(h);
 
         Assert.IsType<OkResult>(result);
         Assert.Equal(waiting.Id, Assert.Single(RunTimeline.Events(rig.Db, run.Id, EventType.HumanFeedbackReceived)).RunNodeId);
