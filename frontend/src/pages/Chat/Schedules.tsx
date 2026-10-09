@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { AiProviderTagField } from "../../components/AiProviderTagField";
 import { useSignalR } from "../../hooks/useSignalR";
@@ -94,8 +94,9 @@ function ScheduleRow({
   const cancelRef = useRef<HTMLButtonElement>(null);
   // The confirmation takes the place of the Delete button that opened it, so focus
   // would fall to the page: it moves to Cancel, and back to Delete when called off.
+  // A layout effect, so focus moves in the commit that shows the change, not after it.
   const focusNextRef = useRef<"cancel" | "delete" | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const next = focusNextRef.current;
     focusNextRef.current = null;
     (next === "cancel" ? cancelRef : next === "delete" ? deleteRef : null)?.current?.focus();
@@ -276,7 +277,7 @@ function ScheduleForm({
   const nameRef = useRef<HTMLInputElement>(null);
   // Keyed by each opening, so this runs once per opening: focus goes into the form
   // and, however it closes, back to whatever opened it.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     nameRef.current?.focus();
     return () => {
