@@ -34,6 +34,8 @@ public class AppDbContext : DbContext
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+    public DbSet<ChatSchedule> ChatSchedules => Set<ChatSchedule>();
+    public DbSet<ChatScheduleFiring> ChatScheduleFirings => Set<ChatScheduleFiring>();
     public DbSet<NetworkPolicyEntry> NetworkPolicyEntries => Set<NetworkPolicyEntry>();
     public DbSet<NetworkLogEntry> NetworkLogEntries => Set<NetworkLogEntry>();
     public DbSet<NetworkForwardEntry> NetworkForwardEntries => Set<NetworkForwardEntry>();
@@ -147,6 +149,18 @@ public class AppDbContext : DbContext
             .Property(e => e.Decision)
             .HasConversion<string>()
             .HasMaxLength(32);
+        modelBuilder.Entity<ChatSchedule>()
+            .Property(s => s.RepositoryScope)
+            .HasConversion<string>()
+            .HasMaxLength(32);
+        modelBuilder.Entity<ChatScheduleFiring>()
+            .Property(f => f.Trigger)
+            .HasConversion<string>()
+            .HasMaxLength(32);
+        modelBuilder.Entity<ChatScheduleFiring>()
+            .Property(f => f.Outcome)
+            .HasConversion<string>()
+            .HasMaxLength(32);
     }
 
     private void ConfigureIndexes(ModelBuilder modelBuilder)
@@ -228,6 +242,19 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ChatMessage>(e =>
         {
             e.HasIndex(m => new { m.ChatSessionId, m.Sequence });
+        });
+
+        modelBuilder.Entity<ChatSchedule>(e =>
+        {
+            e.HasIndex(s => s.UserId);
+            e.HasIndex(s => new { s.Enabled, s.NextFireAt });
+        });
+
+        modelBuilder.Entity<ChatScheduleFiring>(e =>
+        {
+            e.HasIndex(f => new { f.ScheduleId, f.Sequence }).IsUnique();
+            e.HasIndex(f => f.TurnId);
+            e.HasIndex(f => f.Outcome);
         });
 
         modelBuilder.Entity<LoopRunSessionBinding>(e =>
@@ -402,6 +429,11 @@ public class AppDbContext : DbContext
             e.Property(m => m.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
+        modelBuilder.Entity<ChatSchedule>(e =>
+        {
+            e.Property(s => s.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
         modelBuilder.Entity<NetworkPolicyEntry>(e =>
         {
             e.Property(p => p.CreatedAt).HasDefaultValueSql("CURRENT_TIMESTAMP");
@@ -450,6 +482,26 @@ public class AppDbContext : DbContext
             .WithMany(c => c.Messages)
             .HasForeignKey(m => m.ChatSessionId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        // A schedule and the chats it started outlive each other: deleting either
+        // only unlinks it.
+        modelBuilder.Entity<ChatSession>()
+            .HasOne(c => c.Schedule)
+            .WithMany()
+            .HasForeignKey(c => c.ScheduleId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<ChatScheduleFiring>()
+            .HasOne(f => f.Schedule)
+            .WithMany()
+            .HasForeignKey(f => f.ScheduleId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ChatScheduleFiring>()
+            .HasOne<ChatSession>()
+            .WithMany()
+            .HasForeignKey(f => f.ChatSessionId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         modelBuilder.Entity<LoopRunSessionBinding>()
             .HasOne(s => s.LoopRun)

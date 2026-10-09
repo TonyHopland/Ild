@@ -65,6 +65,8 @@ public record ChatTitleChangedPayload(Guid ChatSessionId);
 
 public record ChatActivityChangedPayload(Guid ChatSessionId);
 
+public record ChatSchedulesChangedPayload(Guid ScheduleId);
+
 public record NetworkPolicyChangedPayload();
 
 /// <summary>

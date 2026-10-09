@@ -16,6 +16,7 @@ import { useChatInbox } from "./ChatInbox";
 import ChatSidebar from "./ChatSidebar";
 import ChatTranscript from "./ChatTranscript";
 import { getOpenLoopDocument } from "../utils/openLoopDocument";
+import { byTranscriptOrder } from "../utils/transcriptOrder";
 import { setCurrentChatSessionId } from "../services/chatSessionStore";
 import "./ChatBubble.css";
 
@@ -143,6 +144,7 @@ export default function ChatWorkspace({
   onChatShown,
   onOpenChat,
   sidebarExtras,
+  scheduleMarks = false,
   children,
 }: {
   /** The chat opened on mount. Read once: later changes are not followed. */
@@ -165,6 +167,8 @@ export default function ChatWorkspace({
   onOpenChat?: (chatSessionId: string) => void;
   /** Entries the frame adds to the chat list. */
   sidebarExtras?: React.ReactNode;
+  /** Whether the chat list marks the chats a schedule started. */
+  scheduleMarks?: boolean;
   children: (view: ChatWorkspaceView) => React.ReactNode;
 }) {
   const inbox = useChatInbox();
@@ -285,9 +289,7 @@ export default function ChatWorkspace({
 
   const upsertMessage = useCallback((message: ChatMessage) => {
     setMessages((prev) =>
-      prev.some((m) => m.id === message.id)
-        ? prev
-        : [...prev, message].sort((a, b) => a.sequence - b.sequence),
+      prev.some((m) => m.id === message.id) ? prev : [...prev, message].sort(byTranscriptOrder),
     );
   }, []);
 
@@ -389,9 +391,7 @@ export default function ChatWorkspace({
       setMessages((prev) => {
         const known = new Set(prev.map((m) => m.id));
         const missing = view.messages.filter((m) => !known.has(m.id));
-        return missing.length === 0
-          ? prev
-          : [...prev, ...missing].sort((a, b) => a.sequence - b.sequence);
+        return missing.length === 0 ? prev : [...prev, ...missing].sort(byTranscriptOrder);
       });
 
       const active = view.activeTurnId ?? null;
@@ -831,6 +831,7 @@ export default function ChatWorkspace({
       onFavorite={(id, favorite) => void inbox.setFavorite(id, favorite)}
       favoritesInFlight={inbox.favoritesInFlight}
       extras={sidebarExtras}
+      scheduleMarks={scheduleMarks}
     />
   );
 

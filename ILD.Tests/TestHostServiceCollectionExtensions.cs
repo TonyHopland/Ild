@@ -23,6 +23,33 @@ internal static class TestHostServiceCollectionExtensions
         }
     }
 
+    /// <summary>
+    /// Leaves out a hosted service registered as <c>AddHostedService(sp => sp.GetRequiredService&lt;TService&gt;())</c>,
+    /// which <see cref="RemoveHostedService{TService}"/> cannot recognise: its factory
+    /// hands back a host that does nothing in its place, while the service itself stays resolvable.
+    /// </summary>
+    public static void RemoveForwardedHostedService<TService>(this IServiceCollection services)
+        where TService : class, IHostedService
+    {
+        for (var i = 0; i < services.Count; i++)
+        {
+            var descriptor = services[i];
+            if (descriptor.ServiceType != typeof(IHostedService) || descriptor.IsKeyedService) continue;
+            if (descriptor.ImplementationFactory is not { } factory) continue;
+            services[i] = new ServiceDescriptor(typeof(IHostedService), sp =>
+            {
+                var made = factory(sp);
+                return made is TService ? new IdleHostedService() : made;
+            }, descriptor.Lifetime);
+        }
+    }
+
+    private sealed class IdleHostedService : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     public static void ReplaceSingleton<TService>(this IServiceCollection services, TService implementation)
         where TService : class
     {

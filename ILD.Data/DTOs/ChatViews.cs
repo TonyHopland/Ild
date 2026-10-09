@@ -29,6 +29,8 @@ public sealed record ChatSessionView(
 /// A lightweight history-list row (ADR-0013): no transcript, just what the chat
 /// bubble needs to render a resumable past chat (name + date-stamp), whether it
 /// holds a reply the user has not read, and whether the user starred it.
+/// <paramref name="ScheduleId"/> and <paramref name="ScheduleName"/> name the Chat Schedule
+/// that started it, if one did and still exists.
 /// <paramref name="IsBusy"/> is whether the turn runner has a turn in flight for
 /// it, filled in by the controller like <see cref="ChatSessionView.ActiveTurnId"/>.
 /// </summary>
@@ -39,6 +41,8 @@ public sealed record ChatSessionSummaryView(
     DateTime? UpdatedAt,
     bool HasUnread,
     bool IsFavorite,
+    Guid? ScheduleId = null,
+    string? ScheduleName = null,
     bool IsBusy = false);
 
 /// <summary>

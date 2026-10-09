@@ -37,6 +37,7 @@ import type {
   ChatUnreadChangedPayload,
   ChatTitleChangedPayload,
   ChatActivityChangedPayload,
+  ChatSchedulesChangedPayload,
 } from "./index";
 
 export interface SignalREventPayloads {
@@ -69,6 +70,7 @@ export interface SignalREventPayloads {
   ChatUnreadChanged: ChatUnreadChangedPayload;
   ChatTitleChanged: ChatTitleChangedPayload;
   ChatActivityChanged: ChatActivityChangedPayload;
+  ChatSchedulesChanged: ChatSchedulesChangedPayload;
 }
 
 export type SignalREventName = keyof SignalREventPayloads;

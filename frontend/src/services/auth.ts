@@ -20,6 +20,10 @@ import {
   ChatSession,
   ChatSendAccepted,
   ChatSessionSummary,
+  ChatSchedule,
+  ChatScheduleFiring,
+  ChatScheduleInput,
+  ChatScheduleList,
   LoopTemplateVersion,
   EventLogPage,
   AgentAdapterDescriptor,
@@ -839,6 +843,31 @@ export const chatService = {
   /** Hard-delete every retained chat the user owns. */
   deleteAll: async (): Promise<void> => {
     await api.delete<void>("/chat");
+  },
+};
+
+/** The signed-in user's chat schedules: each starts a chat turn of theirs on a cron. */
+export const chatScheduleService = {
+  /** The schedules, and whether the global scheduler pause holds them. */
+  list: async (): Promise<ChatScheduleList> => {
+    return api.get<ChatScheduleList>("/chat/schedules");
+  },
+
+  create: async (input: ChatScheduleInput): Promise<ChatSchedule> => {
+    return api.post<ChatSchedule>("/chat/schedules", input);
+  },
+
+  update: async (id: string, input: ChatScheduleInput): Promise<ChatSchedule> => {
+    return api.put<ChatSchedule>(`/chat/schedules/${id}`, input);
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await api.delete<void>(`/chat/schedules/${id}`);
+  },
+
+  /** Fires it once now, paused or disabled. Resolves with the firing, which may be a skip. */
+  runNow: async (id: string): Promise<ChatScheduleFiring> => {
+    return api.post<ChatScheduleFiring>(`/chat/schedules/${id}/run`, {});
   },
 };
 

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Chat schedules start a chat on a timer with a set prompt, to run checks that file work items for what they find.**
+
 - **Agents can add and remove dependencies on the work items they created, and propose dependency changes on any other for you to approve.**
 
 - **A Chat tab shows your chats full screen, with the open chat beside the list and a marker on chats that are still working.**

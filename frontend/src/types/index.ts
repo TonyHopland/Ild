@@ -947,6 +947,11 @@ export interface ChatActivityChangedPayload {
   chatSessionId: string;
 }
 
+/** A hint that one of the user's chat schedules, or one of its firings, changed. */
+export interface ChatSchedulesChangedPayload {
+  scheduleId: string;
+}
+
 export interface DependencyResolvedPayload {
   workItemId: string;
 }
@@ -1035,6 +1040,59 @@ export interface ChatSessionSummary {
   needsYou?: boolean;
   /** Whether the server has a turn in flight for it. */
   isBusy?: boolean;
+  /** The chat schedule that started it, if one did and still exists. */
+  scheduleId?: string | null;
+  scheduleName?: string | null;
+}
+
+/** Which repositories a scheduled chat may use. */
+export type ChatScheduleRepositoryScope = "All" | "Selected" | "None";
+
+/** A chat schedule as its owner saves it. An empty AI tag means the default provider. Mirrors ILD.Data.DTOs.ChatScheduleRequest. */
+export interface ChatScheduleInput {
+  name: string;
+  prompt: string;
+  aiTag: string;
+  cronExpression: string;
+  /** An IANA zone, such as Europe/Oslo. */
+  timeZone: string;
+  enabled: boolean;
+  repositoryScope: ChatScheduleRepositoryScope;
+  /** Only with the Selected scope. */
+  repositoryIds: string[];
+  /**
+   * On, every firing is a new turn in the schedule's chat, until that chat is deleted or the AI tag
+   * picks another provider; off, every firing starts a new chat.
+   */
+  continueSession: boolean;
+}
+
+/** One firing of a schedule. Mirrors ILD.Data.DTOs.ChatScheduleFiringView. */
+export interface ChatScheduleFiring {
+  id: string;
+  trigger: "Cron" | "RunNow";
+  firedAt: string;
+  outcome: "Running" | "Completed" | "Failed" | "Stopped" | "Skipped";
+  /** Why it was skipped or failed. */
+  reason: string | null;
+  chatSessionId: string | null;
+}
+
+/** A schedule on its owner's list. Mirrors ILD.Data.DTOs.ChatScheduleView. */
+export interface ChatSchedule extends Omit<ChatScheduleInput, "aiTag"> {
+  id: string;
+  aiTag: string | null;
+  /** When it fires next, in UTC; null while disabled. */
+  nextFireAt: string | null;
+  lastFiring: ChatScheduleFiring | null;
+  /** The chat its newest firing used; null before its first or once that chat is deleted. */
+  latestChatSessionId: string | null;
+}
+
+/** The user's schedules, and whether the global scheduler pause holds them. */
+export interface ChatScheduleList {
+  schedulerPaused: boolean;
+  schedules: ChatSchedule[];
 }
 
 export interface ChatMessageAppendedPayload {

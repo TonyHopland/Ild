@@ -8,10 +8,10 @@ namespace ILD.Api.Configuration;
 
 /// <summary>
 /// Broadcasts chat turns into the per-session group on <see cref="ChatHub"/>, and
-/// unread, title and activity hints into the owner's <see cref="ChatHub.InboxGroup">inbox group</see>.
+/// unread, title, activity and schedule hints into the owner's <see cref="ChatHub.InboxGroup">inbox group</see>.
 /// Failures are swallowed and logged so a dropped notification never fails a turn.
 /// </summary>
-public class SignalRChatNotifier : IChatNotifier
+public class SignalRChatNotifier : IChatNotifier, IChatScheduleNotifier
 {
     private readonly IHubContext<ChatHub> _hub;
     private readonly ILogger<SignalRChatNotifier> _log;
@@ -49,10 +49,13 @@ public class SignalRChatNotifier : IChatNotifier
     public Task ActivityChangedAsync(string userId, Guid chatSessionId)
         => SendAsync(ChatHub.InboxGroup(userId), chatSessionId, "ChatActivityChanged", new ChatActivityChangedPayload(chatSessionId));
 
+    public Task SchedulesChangedAsync(string userId, Guid scheduleId)
+        => SendAsync(ChatHub.InboxGroup(userId), scheduleId, "ChatSchedulesChanged", new ChatSchedulesChangedPayload(scheduleId));
+
     private Task SendAsync(Guid chatSessionId, string eventName, object payload)
         => SendAsync(chatSessionId.ToString(), chatSessionId, eventName, payload);
 
-    private async Task SendAsync(string group, Guid chatSessionId, string eventName, object payload)
+    private async Task SendAsync(string group, Guid subjectId, string eventName, object payload)
     {
         try
         {
@@ -60,7 +63,7 @@ public class SignalRChatNotifier : IChatNotifier
         }
         catch (Exception ex)
         {
-            _log.LogDebug(ex, "Failed to broadcast {Event} for chat {ChatSessionId}", eventName, chatSessionId);
+            _log.LogDebug(ex, "Failed to broadcast {Event} for {SubjectId}", eventName, subjectId);
         }
     }
 }

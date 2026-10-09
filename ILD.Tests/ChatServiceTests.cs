@@ -6,6 +6,9 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace ILD.Tests;
@@ -1113,5 +1116,160 @@ public sealed class ChatServiceTests : IDisposable
         // After the reply: a hint that beats it has the client re-read a chat that is
         // not unread yet, and nothing tells it again.
         Assert.Equal(("alice", chat.Id, 1), _notifier.UnreadChanged.Last());
+    }
+
+    [Fact]
+    public async Task Messages_that_share_a_sequence_come_back_in_the_order_they_were_saved()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var saved = new DateTime(2026, 10, 9, 8, 0, 0, DateTimeKind.Utc);
+        // The later one is stored first, in a save of its own, so row order alone would put it first.
+        _db.Context.ChatMessages.Add(new ChatMessage { Id = Guid.NewGuid(), ChatSessionId = chat.Id, Role = "assistant", Content = "later", Sequence = 1, CreatedAt = saved.AddSeconds(1) });
+        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        _db.Context.ChatMessages.Add(new ChatMessage { Id = Guid.NewGuid(), ChatSessionId = chat.Id, Role = "user", Content = "earlier", Sequence = 1, CreatedAt = saved });
+        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var view = await svc.GetByIdAsync("alice", chat.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["earlier", "later"], view!.Messages.Select(m => m.Content));
+    }
+
+    [Fact]
+    public async Task A_scheduled_turn_that_fails_records_the_agents_error_without_nul()
+    {
+        var provider = await SeedProviderAsync();
+        var schedules = new Mock<IChatScheduleNotifier>();
+        var svc = new ChatService(_db.Context, _db.Providers,
+            RegistryFor(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Fail("raw\0 terminal output")))),
+            _notifier, Options, _db.LoopRuns, _loopScratchpad, schedules: schedules.Object);
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var turnId = Guid.NewGuid();
+        var firingId = await SeedRunningFiringAsync(chat.Id, turnId);
+
+        await svc.ExecuteTurnAsync(chat.Id, turnId, "check", CancellationToken.None);
+
+        using var ctx = _db.Fresh();
+        var firing = ctx.ChatScheduleFirings.AsNoTracking().Single(f => f.Id == firingId);
+        Assert.Equal(ChatScheduleFiringOutcome.Failed, firing.Outcome);
+        Assert.Equal("raw terminal output", firing.Reason);
+        schedules.Verify(s => s.SchedulesChangedAsync("alice", firing.ScheduleId), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_restart_note_that_cannot_be_saved_leaves_its_firing_running_and_announces_nothing()
+    {
+        var provider = await SeedProviderAsync();
+        var chat = await NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())))
+            .StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var firingId = await SeedRunningFiringAsync(chat.Id, Guid.NewGuid());
+        var connection = _db.Context.Database.GetDbConnection();
+        var chatNotifier = new Mock<IChatNotifier>();
+        var scheduleNotifier = new Mock<IChatScheduleNotifier>();
+
+        ChatScheduleService Recovery(AppDbContext db) => NewRecovery(db, chatNotifier.Object, scheduleNotifier.Object);
+
+        using (var failing = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection).AddInterceptors(new FailingNoteSave()).Options))
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Recovery(failing).RecoverInterruptedAsync(TestContext.Current.CancellationToken));
+        }
+
+        using (var ctx = _db.Fresh())
+        {
+            Assert.Equal(ChatScheduleFiringOutcome.Running, ctx.ChatScheduleFirings.AsNoTracking().Single(f => f.Id == firingId).Outcome);
+            Assert.Empty(ctx.ChatMessages.AsNoTracking().Where(m => m.ChatSessionId == chat.Id));
+        }
+        chatNotifier.VerifyNoOtherCalls();
+        scheduleNotifier.VerifyNoOtherCalls();
+
+        // A later recovery that can save writes both.
+        using (var working = _db.Fresh())
+            await Recovery(working).RecoverInterruptedAsync(TestContext.Current.CancellationToken);
+        using (var ctx = _db.Fresh())
+        {
+            Assert.Equal(ChatScheduleFiringOutcome.Failed, ctx.ChatScheduleFirings.AsNoTracking().Single(f => f.Id == firingId).Outcome);
+            Assert.Single(ctx.ChatMessages.AsNoTracking().Where(m => m.ChatSessionId == chat.Id && m.Interrupted));
+        }
+    }
+
+    [Fact]
+    public async Task A_restart_note_is_announced_to_its_open_chat_and_moves_the_chats_last_activity_like_a_reply()
+    {
+        var provider = await SeedProviderAsync();
+        var chat = await NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok())))
+            .StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var turnId = Guid.NewGuid();
+        await SeedRunningFiringAsync(chat.Id, turnId);
+        var chatNotifier = new Mock<IChatNotifier>();
+        ChatMessage? committed = null;
+        DateTime? activityWhenAnnounced = null;
+        chatNotifier.Setup(n => n.MessageAppendedAsync(chat.Id, turnId, It.IsAny<ChatMessageView>()))
+            .Callback(() =>
+            {
+                // Announced only once a reader can see the note and the chat's new activity.
+                using var ctx = _db.Fresh();
+                committed = ctx.ChatMessages.AsNoTracking().SingleOrDefault(m => m.ChatSessionId == chat.Id);
+                activityWhenAnnounced = ctx.ChatSessions.AsNoTracking().Single(c => c.Id == chat.Id).UpdatedAt;
+            })
+            .Returns(Task.CompletedTask);
+
+        using (var db = _db.Fresh())
+            await NewRecovery(db, chatNotifier.Object, Mock.Of<IChatScheduleNotifier>()).RecoverInterruptedAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(committed);
+        Assert.True(committed!.Interrupted);
+        Assert.Equal(committed.CreatedAt, activityWhenAnnounced);
+        chatNotifier.Verify(n => n.MessageAppendedAsync(chat.Id, turnId, It.Is<ChatMessageView>(v =>
+            v.Id == committed.Id && v.Role == "assistant" && v.Interrupted && v.Sequence == committed.Sequence)), Times.Once);
+        chatNotifier.Verify(n => n.UnreadChangedAsync("alice", chat.Id), Times.Once);
+        chatNotifier.Verify(n => n.ActivityChangedAsync("alice", chat.Id), Times.Once);
+    }
+
+    private ChatScheduleService NewRecovery(AppDbContext db, IChatNotifier chatNotifier, IChatScheduleNotifier scheduleNotifier)
+        => new(db, _db.Providers, Mock.Of<IChatService>(), Mock.Of<IChatTurnRunner>(), chatNotifier, scheduleNotifier,
+            Mock.Of<ISchedulerSettingsService>(), new ChatScheduleLocks(), Mock.Of<IServiceScopeFactory>(),
+            TimeProvider.System, NullLogger<ChatScheduleService>.Instance);
+
+    private sealed class FailingNoteSave : SaveChangesInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+            => eventData.Context!.ChangeTracker.Entries<ChatMessage>().Any(e => e.State == EntityState.Added)
+                ? throw new InvalidOperationException("the note could not be saved")
+                : ValueTask.FromResult(result);
+    }
+
+    private async Task<Guid> SeedRunningFiringAsync(Guid chatId, Guid turnId)
+    {
+        var schedule = new ChatSchedule
+        {
+            Id = Guid.NewGuid(),
+            UserId = "alice",
+            Name = "Nightly check",
+            Prompt = "Check.",
+            CronExpression = "0 3 * * *",
+            TimeZone = "UTC",
+            Enabled = true,
+            CreatedAt = DateTime.UtcNow,
+        };
+        var firing = new ChatScheduleFiring
+        {
+            Id = Guid.NewGuid(),
+            ScheduleId = schedule.Id,
+            Sequence = 1,
+            Trigger = ChatScheduleTrigger.RunNow,
+            FiredAt = DateTime.UtcNow,
+            ChatSessionId = chatId,
+            TurnId = turnId,
+            Outcome = ChatScheduleFiringOutcome.Running,
+        };
+        _db.Context.ChatSchedules.Add(schedule);
+        _db.Context.ChatScheduleFirings.Add(firing);
+        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        return firing.Id;
     }
 }
