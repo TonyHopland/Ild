@@ -1,8 +1,11 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Moq;
 
 namespace ILD.Tests;
 
@@ -83,6 +86,40 @@ public class LoopEngineRunEventsTests
             Assert.Equal(note, Assert.Single(replies).Data);
         else
             Assert.Empty(replies);
+    }
+
+    [Theory]
+    [InlineData(LoopRunStatus.Completed)]
+    [InlineData(LoopRunStatus.Failed)]
+    [InlineData(LoopRunStatus.Cancelled)]
+    public async Task Retrying_a_node_of_a_run_that_ended_without_an_ending_event_is_refused(LoopRunStatus ended)
+    {
+        using var h = new LoopEngineHarness();
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd, new NodeOutcome.NodeStarting("again"), new NodeOutcome.Terminal("done")));
+        h.AddNode("cmd", NodeType.Cmd);
+        h.SeedRun("cmd", ended);
+        var node = RunTimeline.SeedRunNode(h.Db, h.RunId, h.NodesById["cmd"], LoopRunNodeStatus.Failed);
+
+        var refused = await Record.ExceptionAsync(() => h.Engine.RetryFromNodeAsync(h.RunId, node.Id));
+        await h.WaitUntilIdleAsync();
+
+        Assert.IsAssignableFrom<InvalidOperationException>(refused);
+        Assert.Equal(ended, h.ReloadRun().Status);
+        Assert.Empty(Events(h));
+    }
+
+    [Fact]
+    public async Task An_automatic_resume_is_not_recorded_as_a_persons_reply()
+    {
+        using var h = new LoopEngineHarness();
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI));
+        h.AddNode("ai", NodeType.AI);
+        h.SeedRun("ai", LoopRunStatus.WaitingHuman, isHalted: true, haltReason: HaltReason.Throttled);
+
+        await h.Engine.ResumeFromHaltAsync(h.RunId, ThrottledRunResumeSweeper.AutomaticResumeNote, automatic: true);
+        await h.WaitUntilIdleAsync();
+
+        Assert.Empty(Events(h, EventType.HumanFeedbackReceived));
     }
 
     [Fact]
@@ -227,5 +264,86 @@ public class LoopEngineRunEventsTests
         Assert.Equal(LoopRunNodeStatus.Failed, node.Status);
         Assert.Equal(eventsBefore, Events(h).Count);
         Assert.DoesNotContain(h.WorkItemsMock.Invocations, i => i.Method.Name == nameof(IWorkItemManager.TransitionAsync));
+    }
+
+    [Fact]
+    public async Task A_parking_run_takes_answers_only_once_its_item_waits_on_a_person_and_its_question_is_recorded()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("human", NodeType.Human, "Plan check");
+        h.Registry.Register(new ScriptedExecutor(NodeType.Human,
+            new NodeOutcome.NodeStarting("ask"),
+            new NodeOutcome.WaitingAction(HumanFeedbackReasons.HumanInputNeeded, "Does the plan hold up?")));
+        h.SeedRun("human");
+        LoopRunStatus? runWhenItemParked = null;
+        h.WorkItemsMock.Setup(m => m.TransitionAsync(h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+            .Callback(() => runWhenItemParked = h.ReloadRun().Status)
+            .ReturnsAsync(true);
+
+        await h.RunAsync();
+
+        Assert.Equal(LoopRunStatus.Running, runWhenItemParked);
+        Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
+        Assert.Single(Events(h, EventType.HumanFeedbackRequested));
+    }
+
+    [Fact]
+    public async Task A_run_stopped_while_it_parks_stays_stopped()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("human", NodeType.Human, "Plan check");
+        h.Registry.Register(new ScriptedExecutor(NodeType.Human,
+            new NodeOutcome.NodeStarting("ask"),
+            new NodeOutcome.WaitingAction(HumanFeedbackReasons.HumanInputNeeded, "Does the plan hold up?")));
+        h.SeedRun("human");
+        h.WorkItemsMock.Setup(m => m.TransitionAsync(h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+            .Returns(async () =>
+            {
+                await h.Engine.StopRunAsync(h.RunId, HumanFeedbackReasons.RunCancelled);
+                return true;
+            });
+
+        await h.RunAsync();
+
+        Assert.Equal(LoopRunStatus.Cancelled, h.ReloadRun().Status);
+        Assert.Empty(Events(h, EventType.HumanFeedbackRequested));
+    }
+
+    [Fact]
+    public async Task An_event_the_engine_could_not_record_is_logged_and_the_run_goes_on()
+    {
+        var logger = new RecordingLogger();
+        var eventLog = new Mock<IEventLogService>();
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(),
+                It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+            .ThrowsAsync(new InvalidOperationException("database unavailable"));
+        using var h = new LoopEngineHarness(configure: s => s.AddSingleton(eventLog.Object), logger: logger);
+        h.AddNode("cmd", NodeType.Cmd);
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd, new NodeOutcome.NodeStarting("go"), new NodeOutcome.Terminal("done")));
+        h.SeedRun("cmd");
+
+        await h.RunAsync();
+
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+        var warning = Assert.Single(logger.Warnings, w => w.Text.Contains(nameof(EventType.LoopRunCompleted)));
+        Assert.Contains(h.RunId.ToString(), warning.Text);
+        Assert.Equal("database unavailable", warning.Exception?.Message);
+    }
+
+    private sealed class RecordingLogger : ILogger<LoopEngine>
+    {
+        public List<(string Text, Exception? Exception)> Warnings { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning) Warnings.Add((formatter(state, exception), exception));
+        }
     }
 }

@@ -211,6 +211,8 @@ public class WorkItemRunEventsTests
         NoEngine,
         EarlierRunWhileTheNextIsRunning,
         EarlierRunWhileTheNextIsWaiting,
+        HaltedWithAnOldQuestionOpen,
+        ParkedElsewhereWithAnOldQuestionOpen,
     }
 
     public static TheoryData<Refusal, Answer> Refusals()
@@ -266,6 +268,18 @@ public class WorkItemRunEventsTests
                 var earlier = Parked(rig.Db, id, versionId, human, LoopRunStatus.Cancelled, DateTime.UtcNow.AddHours(-1)).Run;
                 Parked(rig.Db, id, versionId, human);
                 return earlier.Id;
+            }
+            case Refusal.HaltedWithAnOldQuestionOpen:
+            case Refusal.ParkedElsewhereWithAnOldQuestionOpen:
+            {
+                // A retry left the earlier question's execution waiting; the run
+                // is now parked at an AI node, halted or not.
+                var ai = RunTimeline.SeedNode(rig.Db, versionId, NodeType.AI, "Coder");
+                var run = RunTimeline.SeedRun(rig.Db, id, versionId, LoopRunStatus.WaitingHuman, currentNodeId: ai.Id);
+                run.IsHalted = refusal == Refusal.HaltedWithAnOldQuestionOpen;
+                rig.Db.Context.SaveChanges();
+                RunTimeline.SeedRunNode(rig.Db, run.Id, human, LoopRunNodeStatus.WaitingHuman);
+                return run.Id;
             }
             default:
                 throw new ArgumentOutOfRangeException(nameof(refusal));
@@ -405,6 +419,25 @@ public class WorkItemRunEventsTests
         Assert.NotNull(view.StatusReasonAt);
         Assert.Equal("Run Cancelled", rig.Db.Fresh().LoopRuns.Single(r => r.Id == previous.Id).HumanFeedbackReason);
         Assert.Empty(RunTimeline.Events(rig.Db, previous.Id));
+    }
+
+    [Theory]
+    [InlineData(RemoteWorkItemStatus.Ready)]
+    [InlineData(RemoteWorkItemStatus.Backlog)]
+    [InlineData(RemoteWorkItemStatus.Done)]
+    public async Task An_items_own_reason_goes_once_it_no_longer_waits_on_a_person(RemoteWorkItemStatus next)
+    {
+        using var rig = new Rig();
+        var id = await rig.WorkItemAsync();
+        await rig.Manager.TransitionToHumanFeedbackAsync(id, "Needs a product decision before going further");
+
+        await rig.Manager.TransitionAsync(id, next);
+
+        var view = await rig.Manager.GetWorkItemAsync(id);
+        Assert.Equal(next, view!.Status);
+        Assert.Null(view.StatusReason);
+        Assert.Null(view.StatusReasonAt);
+        Assert.Empty(rig.Db.Fresh().WorkItemStatusReasons.Where(r => r.WorkItemId == id));
     }
 
     [Fact]

@@ -280,17 +280,13 @@ public class WorkItemManager : IWorkItemManager
             .ToDictionary(g => g.Key, g => g.ToList());
 
     /// <summary>
-    /// The run a work item's view reflects: a live one first, then one that
-    /// stopped short, then the latest that has not completed.
+    /// The run a work item's view reflects: the live one, else the latest run
+    /// when it stopped short. None when the latest completed: an older run that
+    /// stopped short is history then, and must not speak for the item.
     /// </summary>
     private static LoopRun? CurrentRun(IReadOnlyList<LoopRun> runs)
-        => runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.WaitingHuman)
-           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Failed)
-           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Cancelled)
-           ?? runs.Where(r => r.Status != LoopRunStatus.Completed)
-                  .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
-                  .FirstOrDefault();
+        => runs.FirstOrDefault(r => r.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
+           ?? (LatestRun(runs) is { Status: not LoopRunStatus.Completed } latest ? latest : null);
 
     public async Task<IReadOnlyDictionary<RemoteWorkItemStatus, int>> CountByStatusAsync(WorkItemListQuery query)
     {
@@ -777,9 +773,9 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> ParkWithoutRunAsync(string workItemId, string reason)
     {
-        if (await GetWorkItemAsync(workItemId) is null) return false;
+        if (!await TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason)) return false;
         await _loopRunStore.SetWorkItemStatusReasonAsync(workItemId, reason);
-        return await TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
+        return true;
     }
 
 
@@ -826,6 +822,10 @@ public class WorkItemManager : IWorkItemManager
             return false;
 
         var actual = resp.ActualStatus;
+        // The item's own reason says why it waits on a person; once it does
+        // not, the reason is history.
+        if (actual != RemoteWorkItemStatus.HumanFeedback)
+            await _loopRunStore.ClearWorkItemStatusReasonAsync(workItemId);
 
         // Update engine-only fields on the current LoopRun. Only the run the
         // caller names is given a feedback label: one inferred from the work
@@ -842,15 +842,12 @@ public class WorkItemManager : IWorkItemManager
             {
                 runWorktreePath = run.WorktreePath;
                 if (actual != RemoteWorkItemStatus.HumanFeedback || explicitRun)
-                {
-                    run.HumanFeedbackReason = actual == RemoteWorkItemStatus.HumanFeedback && reason != null
-                        // Use the dedicated humanFeedbackReason for UI routing on
-                        // the LoopRun. Falls back to reason when not supplied.
-                        ? humanFeedbackReason ?? reason
-                        : null;
-                    run.UpdatedAt = DateTime.UtcNow;
-                    await _loopRunStore.UpdateRunAsync(run);
-                }
+                    await _loopRunStore.SetHumanFeedbackReasonAsync(run.Id,
+                        actual == RemoteWorkItemStatus.HumanFeedback && reason != null
+                            // Use the dedicated humanFeedbackReason for UI routing on
+                            // the LoopRun. Falls back to reason when not supplied.
+                            ? humanFeedbackReason ?? reason
+                            : null);
             }
         }
 
@@ -1308,6 +1305,8 @@ public class WorkItemManager : IWorkItemManager
             throw new HumanFeedbackRefusedException("The run this answer is for is no longer the work item's current run.");
         if (active.Status != LoopRunStatus.WaitingHuman)
             throw new HumanFeedbackRefusedException("The run is busy, not waiting for an answer.");
+        if (active.IsHalted)
+            throw new HumanFeedbackRefusedException("The run is halted, not waiting for an answer; resume it instead.");
         var waiting = FindWaitingHumanNode(await _loopRunStore.GetRunNodesAsync(runId), active.CurrentNodeId)
             ?? throw new HumanFeedbackRefusedException("The run has no question waiting for an answer.");
         if (_engine is null)
@@ -1317,18 +1316,16 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
+    /// <summary>
+    /// The execution waiting at the node the run is parked at. Only that one: an
+    /// execution left waiting at another node (a retry moved the run on) asks a
+    /// question the run no longer is at.
+    /// </summary>
     private static LoopRunNode? FindWaitingHumanNode(IReadOnlyList<LoopRunNode> nodes, Guid? currentNodeId)
-    {
-        var primary = nodes
+        => nodes
             .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman && n.LoopNodeId == currentNodeId)
             .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
             .FirstOrDefault();
-        if (primary != null) return primary;
-        return nodes
-            .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
-            .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-            .FirstOrDefault();
-    }
 
     private async Task<bool> IsPrNodeAsync(LoopRun run, Guid loopNodeId)
     {

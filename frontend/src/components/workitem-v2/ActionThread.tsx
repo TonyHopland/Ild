@@ -98,9 +98,19 @@ function TurnVariables({ variables }: { variables: TurnVariableChange[] }) {
   );
 }
 
-/** Whether the current run has a pull request, or anything queued for one, to show. */
-function hasPrDetails(workItem: WorkItem, detail: WorkItemDetail): boolean {
-  const run = detail.currentRun;
+/** The current run's detail as last read, when that is the run `runId`. */
+function currentRunIf(detail: WorkItemDetail, runId: string | null) {
+  return runId && detail.currentRun?.id === runId ? detail.currentRun : null;
+}
+
+/**
+ * Whether the thread's run has a pull request, or anything queued for one, to
+ * show. What the item holds about a pull request is its current run's, so it
+ * shows only when that is the thread's run.
+ */
+function hasPrDetails(workItem: WorkItem, detail: WorkItemDetail, runId: string | null): boolean {
+  if (!runId || workItem.currentLoopRunId !== runId) return false;
+  const run = currentRunIf(detail, runId);
   return !!run?.prSnapshot || (run?.prQueuedWrites?.length ?? 0) > 0 || !!workItem.prUrl;
 }
 
@@ -112,10 +122,12 @@ function hasPrDetails(workItem: WorkItem, detail: WorkItemDetail): boolean {
 function PrDetails({
   workItem,
   detail,
+  runId,
   onOpen,
 }: {
   workItem: WorkItem;
   detail: WorkItemDetail;
+  runId: string | null;
   onOpen: (panel: HTMLElement) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -124,9 +136,10 @@ function PrDetails({
     if (open && panelRef.current) onOpen(panelRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-  const snapshot = detail.currentRun?.prSnapshot ?? null;
-  const pending = detail.currentRun?.prQueuedWrites?.length ?? 0;
-  if (!hasPrDetails(workItem, detail)) return null;
+  const run = currentRunIf(detail, runId);
+  const snapshot = run?.prSnapshot ?? null;
+  const pending = run?.prQueuedWrites?.length ?? 0;
+  if (!hasPrDetails(workItem, detail, runId)) return null;
   return (
     <section ref={panelRef} className="wiv2-pr-details">
       <div className="wiv2-pr-details-header">
@@ -267,7 +280,7 @@ function RunThread({
     !view.error &&
     !streaming &&
     !awaitingHuman &&
-    !hasPrDetails(workItem, detail) &&
+    !hasPrDetails(workItem, detail, runId) &&
     live.length === 0 &&
     end.length === 0;
 
@@ -316,7 +329,13 @@ function RunThread({
       />
     </Bubble>,
     ...cards(live),
-    <PrDetails key="pr-details" workItem={workItem} detail={detail} onOpen={revealFromTop} />,
+    <PrDetails
+      key="pr-details"
+      workItem={workItem}
+      detail={detail}
+      runId={runId}
+      onOpen={revealFromTop}
+    />,
     <Bubble key="feedback" side="human">
       <FeedbackBanner
         workItem={workItem}

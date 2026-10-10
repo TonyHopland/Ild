@@ -6,6 +6,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace ILD.Data.Stores;
 
@@ -420,6 +421,35 @@ public class LoopRunStore : ILoopRunStore
         => await _db.LoopRuns
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.SteeringNote, (string?)null));
+
+    public async Task SetHumanFeedbackReasonAsync(Guid runId, string? reason)
+    {
+        var at = DateTime.UtcNow;
+        await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.HumanFeedbackReason, reason).SetProperty(r => r.UpdatedAt, at));
+        if (_db.ChangeTracker.Entries<LoopRun>().FirstOrDefault(e => e.Entity.Id == runId) is { } tracked)
+        {
+            SetUnchanged(tracked.Property(r => r.HumanFeedbackReason), reason);
+            SetUnchanged(tracked.Property(r => r.UpdatedAt), at);
+        }
+    }
+
+    public async Task<bool> UnderRunLockAsync(Guid runId, Func<Task> body)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync();
+        if (!await RunRowLock.TakeAsync(_db, runId)) return false;
+        await body();
+        await tx.CommitAsync();
+        return true;
+    }
+
+    private static void SetUnchanged<T>(PropertyEntry<LoopRun, T> property, T value)
+    {
+        property.CurrentValue = value;
+        property.OriginalValue = value;
+        property.IsModified = false;
+    }
 
     public async Task SetPrCommentLedgerAsync(Guid runId, string? json)
         => await _db.LoopRuns

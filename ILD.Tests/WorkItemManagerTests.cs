@@ -538,6 +538,34 @@ public class WorkItemManagerTests
         Assert.Equal(newer, (await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id).LatestLoopRunId);
     }
 
+    [Theory]
+    [InlineData(LoopRunStatus.Cancelled, true)]
+    [InlineData(LoopRunStatus.Failed, true)]
+    [InlineData(LoopRunStatus.Completed, false)]
+    public async Task The_views_current_run_is_never_older_than_its_latest(LoopRunStatus latestStatus, bool latestIsCurrent)
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var versionId = RunTimeline.SeedVersion(db);
+        var now = DateTime.UtcNow;
+        RunTimeline.SeedRun(db, id, versionId, LoopRunStatus.Failed,
+            humanFeedbackReason: "Run failed", startedAt: now.AddMinutes(-10));
+        var latest = RunTimeline.SeedRun(db, id, versionId, latestStatus,
+            humanFeedbackReason: latestIsCurrent ? "Run stopped" : null, startedAt: now.AddMinutes(-5));
+
+        foreach (var view in new[]
+                 {
+                     (await mgr.GetWorkItemAsync(id))!,
+                     (await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id),
+                 })
+        {
+            Assert.Equal(latest.Id, view.LatestLoopRunId);
+            Assert.Equal(latestIsCurrent ? latest.Id : null, view.CurrentLoopRunId);
+            Assert.Equal(latestIsCurrent ? "Run stopped" : null, view.HumanFeedbackReason);
+        }
+    }
+
     [Fact]
     public async Task TransitionToHumanFeedback_sets_reason_on_workitem()
     {
@@ -1385,6 +1413,43 @@ public class WorkItemManagerTests
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, wi!.Status);
         Assert.Equal("Need approval", wi.HumanFeedbackReason);
         Assert.Equal("[\"approve\",\"reject\"]", wi.HumanFeedbackActions);
+    }
+
+    [Fact]
+    public async Task A_transition_never_writes_back_a_run_status_another_writer_changed_since_it_was_read()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        // Seeded through the shared context, so the store hands back this copy.
+        var run = RunTimeline.SeedRun(db, id, RunTimeline.SeedVersion(db), LoopRunStatus.Running);
+        await using (var other = db.Fresh())
+            await other.LoopRuns.Where(r => r.Id == run.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, LoopRunStatus.Cancelled));
+
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+
+        await using var read = db.Fresh();
+        Assert.Equal(LoopRunStatus.Cancelled, (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).Status);
+    }
+
+    [Fact]
+    public async Task A_transitions_feedback_reason_reaches_the_runs_row_and_the_copy_its_caller_holds()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var run = RunTimeline.SeedRun(db, id, RunTimeline.SeedVersion(db), LoopRunStatus.WaitingHuman);
+
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", currentLoopRunId: run.Id);
+
+        await using (var read = db.Fresh())
+            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
+        // A later save of the caller's copy must not put the old reason back.
+        Assert.Equal("Need approval", run.HumanFeedbackReason);
+        await db.LoopRuns.UpdateRunAsync(run);
+        await using (var read = db.Fresh())
+            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
     }
 
     [Fact]
