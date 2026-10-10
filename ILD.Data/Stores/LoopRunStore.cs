@@ -245,6 +245,7 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task SetVariableAsync(Guid runId, string name, string value)
     {
+        value = AppDbContext.WithoutNul(value);
         var runningNodeId = await GetRunningNodeIdAsync(runId);
 
         // The history row must name the value this write actually replaced, so
@@ -424,6 +425,7 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task SetHumanFeedbackReasonAsync(Guid runId, string? reason)
     {
+        reason = reason is null ? null : AppDbContext.WithoutNul(reason);
         var at = DateTime.UtcNow;
         await _db.LoopRuns
             .Where(r => r.Id == runId)
@@ -571,6 +573,7 @@ public class LoopRunStore : ILoopRunStore
 
     public async Task SetWorkItemStatusReasonAsync(string workItemId, string text)
     {
+        text = AppDbContext.WithoutNul(text);
         var at = DateTime.UtcNow;
         if (await UpdateWorkItemStatusReasonAsync(workItemId, text, at)) return;
 

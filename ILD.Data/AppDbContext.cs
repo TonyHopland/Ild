@@ -590,10 +590,17 @@ public class AppDbContext : DbContext
             foreach (var property in entry.Properties)
             {
                 if (property.CurrentValue is string value && value.IndexOf('\0') >= 0)
-                    property.CurrentValue = value.Replace("\0", string.Empty);
+                    property.CurrentValue = WithoutNul(value);
             }
         }
     }
+
+    /// <summary>
+    /// <paramref name="value"/> as PostgreSQL text can hold it. Writers that go
+    /// past SaveChanges, such as <c>ExecuteUpdate</c>, miss the save-time scrub
+    /// and must apply this themselves.
+    /// </summary>
+    public static string WithoutNul(string value) => value.Replace("\0", string.Empty);
 
     /// <summary>
     /// Enforce the "a Running run has not completed" invariant at the save
