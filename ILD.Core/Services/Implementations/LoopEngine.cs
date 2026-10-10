@@ -490,8 +490,9 @@ public sealed class LoopEngine : ILoopEngine
         run.Status = LoopRunStatus.Running;
         await loopRunStore.UpdateRunAsync(run);
         // The steering note is the human's words to the run, so it is part of
-        // the conversation the prompt and the UI read.
-        if (!string.IsNullOrWhiteSpace(note) && sp.GetService<IEventLogService>() is { } eventLog)
+        // the conversation the prompt and the UI read. An automatic resume's
+        // note is ILD's, not a person's.
+        if (!automatic && !string.IsNullOrWhiteSpace(note) && sp.GetService<IEventLogService>() is { } eventLog)
             await TrySafe(() => eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, note));
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);

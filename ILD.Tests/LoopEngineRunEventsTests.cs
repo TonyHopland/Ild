@@ -88,6 +88,20 @@ public class LoopEngineRunEventsTests
     }
 
     [Fact]
+    public async Task An_automatic_resume_is_not_recorded_as_a_persons_reply()
+    {
+        using var h = new LoopEngineHarness();
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI));
+        h.AddNode("ai", NodeType.AI);
+        h.SeedRun("ai", LoopRunStatus.WaitingHuman, isHalted: true, haltReason: HaltReason.Throttled);
+
+        await h.Engine.ResumeFromHaltAsync(h.RunId, ThrottledRunResumeSweeper.AutomaticResumeNote, automatic: true);
+        await h.WaitUntilIdleAsync();
+
+        Assert.Empty(Events(h, EventType.HumanFeedbackReceived));
+    }
+
+    [Fact]
     public async Task A_provider_interruption_is_recorded_as_an_interruption_and_the_park_keeps_the_full_reason()
     {
         const string reason = "Provider throttled this AI node — Resume will continue the same agent session where it left off.";
