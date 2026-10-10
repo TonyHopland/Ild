@@ -1,8 +1,10 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using Microsoft.Extensions.DependencyInjection;
+using Moq;
 
 namespace ILD.Tests;
 
@@ -227,5 +229,50 @@ public class LoopEngineRunEventsTests
         Assert.Equal(LoopRunNodeStatus.Failed, node.Status);
         Assert.Equal(eventsBefore, Events(h).Count);
         Assert.DoesNotContain(h.WorkItemsMock.Invocations, i => i.Method.Name == nameof(IWorkItemManager.TransitionAsync));
+    }
+
+    [Fact]
+    public async Task A_parking_run_takes_answers_only_once_its_item_waits_on_a_person_and_its_question_is_recorded()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("human", NodeType.Human, "Plan check");
+        h.Registry.Register(new ScriptedExecutor(NodeType.Human,
+            new NodeOutcome.NodeStarting("ask"),
+            new NodeOutcome.WaitingAction(HumanFeedbackReasons.HumanInputNeeded, "Does the plan hold up?")));
+        h.SeedRun("human");
+        LoopRunStatus? runWhenItemParked = null;
+        h.WorkItemsMock.Setup(m => m.TransitionAsync(h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+            .Callback(() => runWhenItemParked = h.ReloadRun().Status)
+            .ReturnsAsync(true);
+
+        await h.RunAsync();
+
+        Assert.Equal(LoopRunStatus.Running, runWhenItemParked);
+        Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
+        Assert.Single(Events(h, EventType.HumanFeedbackRequested));
+    }
+
+    [Fact]
+    public async Task A_run_stopped_while_it_parks_stays_stopped()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("human", NodeType.Human, "Plan check");
+        h.Registry.Register(new ScriptedExecutor(NodeType.Human,
+            new NodeOutcome.NodeStarting("ask"),
+            new NodeOutcome.WaitingAction(HumanFeedbackReasons.HumanInputNeeded, "Does the plan hold up?")));
+        h.SeedRun("human");
+        h.WorkItemsMock.Setup(m => m.TransitionAsync(h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+            .Returns(async () =>
+            {
+                await h.Engine.StopRunAsync(h.RunId, HumanFeedbackReasons.RunCancelled);
+                return true;
+            });
+
+        await h.RunAsync();
+
+        Assert.Equal(LoopRunStatus.Cancelled, h.ReloadRun().Status);
+        Assert.Empty(Events(h, EventType.HumanFeedbackRequested));
     }
 }

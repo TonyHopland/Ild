@@ -3,6 +3,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -1034,27 +1035,6 @@ public sealed class LoopEngine : ILoopEngine
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.WaitingHuman, wa.Output, null);
                         if (!stillCurrent)
                             return ParkResult.Stop;
-                        var oldStatus = run.Status;
-                        run.Status = LoopRunStatus.WaitingHuman;
-                        run.HumanFeedbackReason = wa.Reason;
-                        // The run is now in a person's hands — a Human node's
-                        // prompt or a PR waiting to be merged — which is exactly
-                        // what the AI traversal budget measures the absence of.
-                        // Refill it here rather than only on the way back out, so
-                        // the invariant holds for a parked run too.
-                        ResetUnattendedCounters(run);
-                        // Reset the PR heartbeat baseline so the poller treats a
-                        // state already true at park time (e.g. CI already red, or
-                        // a still-red state on a re-park after a fix loop) as a
-                        // transition and fires on the first poll.
-                        if (wa.Reason == HumanFeedbackReasons.PrAwaitingMerge)
-                            run.PrPolledEdgeStates = null;
-                        await loopRunStore.UpdateRunAsync(run);
-                        if (eventLog is not null)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.HumanFeedbackRequested,
-                                string.IsNullOrEmpty(wa.Output) ? wa.Reason : wa.Output, node.Id, runNodeId));
-                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
-                        await _notifier.RunStateChangedAsync(run.Id, oldStatus, LoopRunStatus.WaitingHuman);
                         var outEdges = await loopRunStore.GetEdgesForNodeIdsAsync(new[] { node.Id });
                         // Custom edges surface by their name (the Human node's button
                         // labels); default/fallback edges surface by their role name.
@@ -1063,9 +1043,17 @@ public sealed class LoopEngine : ILoopEngine
                             .Select(e => e.EdgeType == EdgeType.Custom ? e.Name : e.EdgeType.ToString())
                             .Where(s => !string.IsNullOrEmpty(s))
                             .Distinct());
+                        // The item waits on a person before the run will take an
+                        // answer, so an answer's move back to Running always lands
+                        // after this one.
                         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
                             reason: wa.Reason, actions: string.IsNullOrEmpty(actions) ? null : actions,
                             humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id);
+                        var oldStatus = run.Status;
+                        if (!await ParkAtQuestionAsync(run, entryStatus, wa, node.Id, runNodeId, loopRunStore, eventLog))
+                            return ParkResult.Stop;
+                        await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.WaitingHuman);
+                        await _notifier.RunStateChangedAsync(run.Id, oldStatus, LoopRunStatus.WaitingHuman);
                         return ParkResult.Stop;
                     }
                     case NodeOutcome.WaitingIld wi:
@@ -1163,6 +1151,61 @@ public sealed class LoopEngine : ILoopEngine
         catch { return false; }
         return run.Status == entryStatus;
     }
+
+    /// <summary>
+    /// Park the run at the question its node asks. The run becomes WaitingHuman
+    /// in the commit that records the question, under the run's lock, so an
+    /// answer, which re-checks under that lock, never lands before the question
+    /// or on a run that moved on. False when the run is no longer in the status
+    /// this drive entered with: stopped or ended meanwhile.
+    /// </summary>
+    private async Task<bool> ParkAtQuestionAsync(LoopRun run, LoopRunStatus entryStatus, NodeOutcome.WaitingAction wa,
+        Guid nodeId, Guid? runNodeId, ILoopRunStore store, IEventLogService? eventLog)
+    {
+        async Task<bool> ParkAsync()
+        {
+            await store.ReloadAsync(run);
+            if (run.Status != entryStatus) return false;
+            run.Status = LoopRunStatus.WaitingHuman;
+            run.HumanFeedbackReason = wa.Reason;
+            // The run is now in a person's hands — a Human node's prompt or a PR
+            // waiting to be merged — which is exactly what the AI traversal
+            // budget measures the absence of. Refill it here rather than only on
+            // the way back out, so the invariant holds for a parked run too.
+            ResetUnattendedCounters(run);
+            // Reset the PR heartbeat baseline so the poller treats a state already
+            // true at park time (e.g. CI already red, or a still-red state on a
+            // re-park after a fix loop) as a transition and fires on the first poll.
+            if (wa.Reason == HumanFeedbackReasons.PrAwaitingMerge)
+                run.PrPolledEdgeStates = null;
+            await store.UpdateRunAsync(run);
+            return true;
+        }
+
+        if (eventLog is null)
+            return await ParkAsync();
+        try
+        {
+            await eventLog.AppendAlongsideAsync(run.Id, EventType.HumanFeedbackRequested,
+                string.IsNullOrEmpty(wa.Output) ? wa.Reason : wa.Output, nodeId, runNodeId, edgeName: null,
+                async () =>
+                {
+                    if (!await ParkAsync()) throw new RunMovedOnException();
+                });
+            return true;
+        }
+        catch (Exception ex) when (ex is RunMovedOnException or RunClosedException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Run {RunId}: the question it parks at could not be recorded; parking without it", run.Id);
+            return await ParkAsync();
+        }
+    }
+
+    private sealed class RunMovedOnException : Exception;
 
     /// <summary>Human-readable name for a node's live-output transition marker,
     /// falling back to the node type when the template left the label blank.</summary>
