@@ -541,7 +541,7 @@ describe("RunsPanel re-read after an action", () => {
   test.each([
     ["pause", { status: LoopRunStatus.Running, completedAt: null }, PAUSE],
     ["clean up", {}, /confirm clean up/i],
-    ["retry", {}, /retry from this node/i],
+    ["retry", { status: LoopRunStatus.WaitingHuman, completedAt: null }, /retry from this node/i],
   ] as const)(
     "a %s that went through is not reported as refused when re-reading the run fails",
     async (label, state, name) => {
@@ -1070,30 +1070,32 @@ describe("RunsPanel one action per run", () => {
     );
     return { onDeleteRun };
   }
-  const mutating = () => [
-    actionButton(DELETE_RUN),
-    screen.queryByRole("button", { name: /^retain$/i }),
-    cleanUpButton(),
-    screen.queryByRole("button", { name: /retry from this node/i }),
-  ];
 
   test("a retry in flight blocks every other action on the run until it settles", async () => {
     const pending = deferred();
     vi.spyOn(loopRunService, "retryFromNode").mockImplementation(() => pending.promise);
-    renderFinished();
+    const detail = runWithNode(RUN_A, { status: LoopRunStatus.WaitingHuman, completedAt: null });
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" {...actions()} />);
     await screen.findByText("Node of aaaaaaaa");
+    const others = () =>
+      [
+        screen.queryByRole("button", { name: /^retain$/i }),
+        screen.queryByRole("button", { name: /retry from this node/i }),
+      ].filter((b) => b !== null);
+    expect(others().length).toBe(2);
 
     fireEvent.click(screen.getByRole("button", { name: /retry from this node/i }));
 
-    await waitFor(() => expect(mutating().every((b) => isDisabled(b) === true)).toBe(true));
+    await waitFor(() => expect(others().every((b) => isDisabled(b) === true)).toBe(true));
     await act(async () => {
       pending.resolve();
       await pending.promise;
     });
-    await waitFor(() => expect(mutating().every((b) => isDisabled(b) === false)).toBe(true));
+    await waitFor(() => expect(others().every((b) => isDisabled(b) === false)).toBe(true));
   });
 
-  test("a clean-up in flight blocks delete, retain and retry", async () => {
+  test("a clean-up in flight blocks delete and retain", async () => {
     const pending = deferred();
     renderFinished({ onReclaimRun: () => pending.promise });
     await screen.findByText("Node of aaaaaaaa");
@@ -1104,7 +1106,6 @@ describe("RunsPanel one action per run", () => {
     await screen.findByText("Cleaning up…");
     expect(isDisabled(actionButton(DELETE_RUN))).toBe(true);
     expect(isDisabled(screen.getByRole("button", { name: /^retain$/i }))).toBe(true);
-    expect(isDisabled(screen.getByRole("button", { name: /retry from this node/i }))).toBe(true);
     await act(async () => {
       pending.resolve();
       await pending.promise;
@@ -1371,5 +1372,30 @@ describe("RunsPanel recorded node type", () => {
     fireEvent.click(await screen.findByRole("button", { name: /AI.*Node of aaaaaaaa/ }));
 
     expect(screen.getByRole("heading", { name: "Plan" })).not.toBeNull();
+  });
+});
+
+describe("RunsPanel retry", () => {
+  test.each([LoopRunStatus.Completed, LoopRunStatus.Failed, LoopRunStatus.Cancelled])(
+    "a %s run offers no retry: an ended run is not started again",
+    async (status) => {
+      const detail = runWithNode(RUN_A, { status });
+      vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+      render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
+
+      await screen.findByText("Node of aaaaaaaa");
+
+      expect(screen.queryByRole("button", { name: /retry from this node/i })).toBeNull();
+    },
+  );
+
+  test("a run waiting on a person can be retried from a node", async () => {
+    const detail = runWithNode(RUN_A, { status: LoopRunStatus.WaitingHuman, completedAt: null });
+    vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
+    render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
+
+    await screen.findByText("Node of aaaaaaaa");
+
+    expect(screen.getByRole("button", { name: /retry from this node/i })).not.toBeNull();
   });
 });

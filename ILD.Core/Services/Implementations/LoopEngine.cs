@@ -637,7 +637,7 @@ public sealed class LoopEngine : ILoopEngine
         var workItems = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run is null) return;
-        if (await scope.ServiceProvider.GetRequiredService<IEventLogService>().HasRunEndedAsync(runId))
+        if (!IsAlive(run.Status) || await scope.ServiceProvider.GetRequiredService<IEventLogService>().HasRunEndedAsync(runId))
             throw new InvalidOperationException("Cannot retry a node of a run that has ended; start a new run instead");
         if (run.Status == LoopRunStatus.Running && !run.IsPaused)
             throw new InvalidOperationException("Cannot retry while run is actively executing");

@@ -88,6 +88,26 @@ public class LoopEngineRunEventsTests
             Assert.Empty(replies);
     }
 
+    [Theory]
+    [InlineData(LoopRunStatus.Completed)]
+    [InlineData(LoopRunStatus.Failed)]
+    [InlineData(LoopRunStatus.Cancelled)]
+    public async Task Retrying_a_node_of_a_run_that_ended_without_an_ending_event_is_refused(LoopRunStatus ended)
+    {
+        using var h = new LoopEngineHarness();
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd, new NodeOutcome.NodeStarting("again"), new NodeOutcome.Terminal("done")));
+        h.AddNode("cmd", NodeType.Cmd);
+        h.SeedRun("cmd", ended);
+        var node = RunTimeline.SeedRunNode(h.Db, h.RunId, h.NodesById["cmd"], LoopRunNodeStatus.Failed);
+
+        var refused = await Record.ExceptionAsync(() => h.Engine.RetryFromNodeAsync(h.RunId, node.Id));
+        await h.WaitUntilIdleAsync();
+
+        Assert.IsAssignableFrom<InvalidOperationException>(refused);
+        Assert.Equal(ended, h.ReloadRun().Status);
+        Assert.Empty(Events(h));
+    }
+
     [Fact]
     public async Task An_automatic_resume_is_not_recorded_as_a_persons_reply()
     {

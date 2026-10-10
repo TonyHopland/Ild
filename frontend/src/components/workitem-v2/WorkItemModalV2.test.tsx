@@ -385,13 +385,15 @@ describe("WorkItemModalV2", () => {
     expect(screen.getByText("done")).toBeTruthy();
   });
 
-  test("runs tab retry button restarts the run from a node and refreshes", async () => {
-    mockServices();
+  test("runs tab retry button sends a waiting run back to a node and refreshes", async () => {
+    mockServices([makeRun({ status: LoopRunStatus.WaitingHuman, completedAt: null })]);
     const retrySpy = vi
       .spyOn(authServices.loopRunService, "retryFromNode")
       .mockResolvedValue(undefined);
     const getRunsSpy = vi.spyOn(authServices.workItemService, "getRuns");
-    await renderDialog(makeWorkItem());
+    await renderDialog(
+      makeWorkItem({ status: WorkItemStatus.HumanFeedback, currentLoopRunId: "run-1" }),
+    );
 
     await act(async () => {
       fireEvent.click(screen.getByRole("tab", { name: /Runs/ }));

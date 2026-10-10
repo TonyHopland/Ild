@@ -128,7 +128,8 @@ function NodeRow({
   isLive: boolean;
   progressText: string;
   events: RunEvents;
-  onRetry: (runNodeId: string) => void;
+  /** Absent when the run has ended: an ended run is not started again. */
+  onRetry?: (runNodeId: string) => void;
   retryDisabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -159,7 +160,7 @@ function NodeRow({
           </span>
           <span className="wiv2-node-chevron">{expanded ? "▾" : "▸"}</span>
         </button>
-        {status !== LoopRunNodeStatus.Running && (
+        {onRetry && status !== LoopRunNodeStatus.Running && (
           <button
             type="button"
             className="wiv2-node-retry"
@@ -401,10 +402,12 @@ function RunDetail({
     );
   }
 
-  // Retrying restarts the run, so it is blocked while the run is actively
-  // executing (a paused run can still be retried) or while any action on it is
-  // in flight.
+  // Retrying sends a live run back to a node; an ended run is not started
+  // again. It is blocked while the run is actively executing (a paused run can
+  // still be retried) or while any action on it is in flight.
   const retryDisabled = busy || (runDetail.status === LoopRunStatus.Running && !runDetail.isPaused);
+  const canRetry =
+    runDetail.status === LoopRunStatus.Running || runDetail.status === LoopRunStatus.WaitingHuman;
 
   const isLiveRun =
     runDetail.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
@@ -601,7 +604,7 @@ function RunDetail({
                 }
                 progressText={progressText}
                 events={runEvents}
-                onRetry={(runNodeId) => void handleRetry(runNodeId)}
+                onRetry={canRetry ? (runNodeId) => void handleRetry(runNodeId) : undefined}
                 retryDisabled={retryDisabled}
               />
             </Fragment>
