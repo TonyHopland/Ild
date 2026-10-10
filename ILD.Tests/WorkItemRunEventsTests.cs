@@ -211,6 +211,8 @@ public class WorkItemRunEventsTests
         NoEngine,
         EarlierRunWhileTheNextIsRunning,
         EarlierRunWhileTheNextIsWaiting,
+        HaltedWithAnOldQuestionOpen,
+        ParkedElsewhereWithAnOldQuestionOpen,
     }
 
     public static TheoryData<Refusal, Answer> Refusals()
@@ -266,6 +268,18 @@ public class WorkItemRunEventsTests
                 var earlier = Parked(rig.Db, id, versionId, human, LoopRunStatus.Cancelled, DateTime.UtcNow.AddHours(-1)).Run;
                 Parked(rig.Db, id, versionId, human);
                 return earlier.Id;
+            }
+            case Refusal.HaltedWithAnOldQuestionOpen:
+            case Refusal.ParkedElsewhereWithAnOldQuestionOpen:
+            {
+                // A retry left the earlier question's execution waiting; the run
+                // is now parked at an AI node, halted or not.
+                var ai = RunTimeline.SeedNode(rig.Db, versionId, NodeType.AI, "Coder");
+                var run = RunTimeline.SeedRun(rig.Db, id, versionId, LoopRunStatus.WaitingHuman, currentNodeId: ai.Id);
+                run.IsHalted = refusal == Refusal.HaltedWithAnOldQuestionOpen;
+                rig.Db.Context.SaveChanges();
+                RunTimeline.SeedRunNode(rig.Db, run.Id, human, LoopRunNodeStatus.WaitingHuman);
+                return run.Id;
             }
             default:
                 throw new ArgumentOutOfRangeException(nameof(refusal));

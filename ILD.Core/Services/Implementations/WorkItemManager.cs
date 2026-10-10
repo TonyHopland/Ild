@@ -1301,6 +1301,8 @@ public class WorkItemManager : IWorkItemManager
             throw new HumanFeedbackRefusedException("The run this answer is for is no longer the work item's current run.");
         if (active.Status != LoopRunStatus.WaitingHuman)
             throw new HumanFeedbackRefusedException("The run is busy, not waiting for an answer.");
+        if (active.IsHalted)
+            throw new HumanFeedbackRefusedException("The run is halted, not waiting for an answer; resume it instead.");
         var waiting = FindWaitingHumanNode(await _loopRunStore.GetRunNodesAsync(runId), active.CurrentNodeId)
             ?? throw new HumanFeedbackRefusedException("The run has no question waiting for an answer.");
         if (_engine is null)
@@ -1310,18 +1312,16 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
+    /// <summary>
+    /// The execution waiting at the node the run is parked at. Only that one: an
+    /// execution left waiting at another node (a retry moved the run on) asks a
+    /// question the run no longer is at.
+    /// </summary>
     private static LoopRunNode? FindWaitingHumanNode(IReadOnlyList<LoopRunNode> nodes, Guid? currentNodeId)
-    {
-        var primary = nodes
+        => nodes
             .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman && n.LoopNodeId == currentNodeId)
             .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
             .FirstOrDefault();
-        if (primary != null) return primary;
-        return nodes
-            .Where(n => n.Status == LoopRunNodeStatus.WaitingHuman)
-            .OrderByDescending(n => n.StartedAt ?? DateTime.MinValue)
-            .FirstOrDefault();
-    }
 
     private async Task<bool> IsPrNodeAsync(LoopRun run, Guid loopNodeId)
     {

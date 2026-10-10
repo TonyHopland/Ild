@@ -605,10 +605,11 @@ public sealed class LoopEngine : ILoopEngine
     /// </summary>
     private static Guid EnsureStillWaiting(LoopRun run, Guid? waitingLoopNodeId)
     {
-        if (run.Status != LoopRunStatus.WaitingHuman)
+        if (run.Status != LoopRunStatus.WaitingHuman || run.IsHalted)
             throw new HumanFeedbackRefusedException("This run is no longer waiting for an answer.");
-        return waitingLoopNodeId
-            ?? throw new HumanFeedbackRefusedException("The question this answer is for is no longer open.");
+        if (waitingLoopNodeId is not { } loopNodeId || loopNodeId != run.CurrentNodeId)
+            throw new HumanFeedbackRefusedException("The question this answer is for is no longer open.");
+        return loopNodeId;
     }
 
     /// <summary>Record a parked node's outcome on its run and move the run back to Running.</summary>
