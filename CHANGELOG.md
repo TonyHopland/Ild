@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Each run has its own conversation, built from its event log, and the Action tab shows only the latest run's; earlier runs are on the Runs tab.** Conversation history from before this release was intentionally dropped.
 
+- **A finished run can no longer be retried from one of its steps; start a new run instead.**
+
+- **This release's database changes cannot be rolled back, so back up both databases before upgrading.**
+
+### Fixed
+
+- **Answering a run that is no longer waiting shows an error instead of leaving the work item stuck.**
+
 ## [0.16.0] - 2026-10-04
 
 ### Added
@@ -70,8 +78,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The pull request node's unused comment template setting.**
 
 ### Fixed
-
-- **Answering a run that is no longer waiting shows an error instead of leaving the work item stuck.**
 
 - **Clicking a dependency on a work item now opens that work item instead of the taskboard.**
 
