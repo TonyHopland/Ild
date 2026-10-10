@@ -1,18 +1,19 @@
 using ILD.Core.Services.Interfaces;
-using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
-using Moq;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// Each conversation entry the engine writes names the node execution it came
+/// Each conversation event the engine writes names the node execution it came
 /// from, so the UI can tie a turn to what that execution did (e.g. the loop
 /// variables it wrote) without guessing from labels and timestamps.
 /// </summary>
 public class LoopEngineConversationLinkTests
 {
+    private static EventLog Single(LoopEngineHarness h, EventType type)
+        => Assert.Single(h.ReloadEvents(), e => e.EventType == type);
+
     [Fact]
     public async Task An_AI_turn_names_the_execution_that_produced_it()
     {
@@ -26,17 +27,13 @@ public class LoopEngineConversationLinkTests
         h.Registry.Register(new ScriptedExecutor(NodeType.Cleanup,
             new NodeOutcome.NodeStarting("cleanup"),
             new NodeOutcome.Terminal("done")));
-        Guid? linked = null;
-        h.WorkItemsMock
-            .Setup(m => m.AppendAiTurnAsync(h.WorkItemId, "Developer", "implemented it", It.IsAny<Guid?>()))
-            .Callback((string _, string _, string _, Guid? runNodeId) => linked = runNodeId)
-            .ReturnsAsync(true);
 
         h.SeedRun("ai");
         await h.RunAsync();
 
         var aiExecution = h.ReloadRunNodes().Single(rn => rn.LoopNodeId == h.NodesById["ai"].Id);
-        Assert.Equal(aiExecution.Id, linked);
+        var turn = Assert.Single(h.ReloadEvents(), e => e.EventType == EventType.NodeCompleted && e.Data == "implemented it");
+        Assert.Equal(aiExecution.Id, turn.RunNodeId);
     }
 
     [Fact]
@@ -47,21 +44,12 @@ public class LoopEngineConversationLinkTests
         h.Registry.Register(new ScriptedExecutor(NodeType.Human,
             new NodeOutcome.NodeStarting("human"),
             new NodeOutcome.WaitingAction(HumanFeedbackReasons.HumanInputNeeded)));
-        Guid? linked = null;
-        h.WorkItemsMock
-            .Setup(m => m.TransitionAsync(
-                h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(),
-                It.IsAny<string?>(), It.IsAny<Guid?>()))
-            .Callback((string _, RemoteWorkItemStatus _, string? _, string? _, Guid? _, string? _, string? _, Guid? runNodeId)
-                => linked = runNodeId)
-            .ReturnsAsync(true);
 
         h.SeedRun("human");
         await h.RunAsync();
 
         var humanExecution = Assert.Single(h.ReloadRunNodes());
-        Assert.Equal(humanExecution.Id, linked);
+        Assert.Equal(humanExecution.Id, Single(h, EventType.HumanFeedbackRequested).RunNodeId);
     }
 
     [Theory]
@@ -86,38 +74,10 @@ public class LoopEngineConversationLinkTests
         };
         h.Db.Context.LoopRunNodes.Add(execution);
         h.Db.Context.SaveChanges();
-        Guid? linked = Guid.Empty;
-        h.WorkItemsMock
-            .Setup(m => m.TransitionAsync(
-                h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(),
-                It.IsAny<string?>(), It.IsAny<Guid?>()))
-            .Callback((string _, RemoteWorkItemStatus _, string? _, string? _, Guid? _, string? _, string? _, Guid? runNodeId)
-                => linked = runNodeId)
-            .ReturnsAsync(true);
 
         await h.Engine.HaltRunAsync(h.RunId);
 
-        Assert.Equal(expectLinked ? execution.Id : null, linked);
-    }
-
-    private static Func<Guid?> CaptureFailureLink(LoopEngineHarness h, out Func<string?> name)
-    {
-        Guid? linked = Guid.Empty;
-        string? author = "<none>";
-        h.WorkItemsMock
-            .Setup(m => m.TransitionAsync(
-                h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(),
-                It.IsAny<string?>(), It.IsAny<Guid?>()))
-            .Callback((string _, RemoteWorkItemStatus _, string? _, string? _, Guid? _, string? _, string? n, Guid? runNodeId) =>
-            {
-                linked = runNodeId;
-                author = n;
-            })
-            .ReturnsAsync(true);
-        name = () => author;
-        return () => linked;
+        Assert.Equal(expectLinked ? execution.Id : null, Single(h, EventType.RunParked).RunNodeId);
     }
 
     [Fact]
@@ -128,32 +88,29 @@ public class LoopEngineConversationLinkTests
         h.Registry.Register(new ScriptedExecutor(NodeType.AI,
             new NodeOutcome.NodeStarting("ai"),
             new NodeOutcome.Fail(EdgeType.OnFailure, "tests failed")));
-        var linked = CaptureFailureLink(h, out var author);
 
         h.SeedRun("ai");
         await h.RunAsync();
 
         var failed = Assert.Single(h.ReloadRunNodes());
-        Assert.Equal(failed.Id, linked());
-        Assert.Equal("Developer", author());
+        Assert.Equal(failed.Id, Single(h, EventType.LoopRunFailed).RunNodeId);
     }
 
     [Fact]
     public async Task A_missing_edge_after_a_successful_turn_does_not_claim_that_turn()
     {
-        // The execution succeeded and posted its own turn; the failure that
+        // The execution succeeded and recorded its own turn; the failure that
         // follows must not show that turn's variables a second time.
         using var h = new LoopEngineHarness();
         h.AddNode("ai", NodeType.AI, "Developer");
         h.Registry.Register(new ScriptedExecutor(NodeType.AI,
             new NodeOutcome.NodeStarting("ai"),
             new NodeOutcome.Success(EdgeType.Custom, "done", EdgeName: "nowhere")));
-        var linked = CaptureFailureLink(h, out _);
 
         h.SeedRun("ai");
         await h.RunAsync();
 
-        Assert.Null(linked());
+        Assert.Null(Single(h, EventType.LoopRunFailed).RunNodeId);
     }
 
     [Fact]
@@ -162,15 +119,13 @@ public class LoopEngineConversationLinkTests
         using var h = new LoopEngineHarness();
         h.AddNode("ai", NodeType.AI, "Developer");
         h.Registry.Register(new ThrowingExecutor(NodeType.AI));
-        var linked = CaptureFailureLink(h, out var author);
 
         h.SeedRun("ai");
         await h.LaunchAsync();
         await h.WaitUntilIdleAsync();
 
         var crashed = Assert.Single(h.ReloadRunNodes());
-        Assert.Equal(crashed.Id, linked());
-        Assert.Equal("Developer", author());
+        Assert.Equal(crashed.Id, Single(h, EventType.LoopRunFailed).RunNodeId);
     }
 
     private sealed class ThrowingExecutor(NodeType type) : INodeExecutor

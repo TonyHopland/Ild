@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { TurnVariableChange, WorkItem, WorkItemEditProposal, WorkItemStatus } from "../../types";
+import { TurnVariableChange, WorkItem, WorkItemEditProposal } from "../../types";
 import { useEditProposals } from "../../hooks/useEditProposals";
 import { workItemService } from "../../services/auth";
-import { parseConversation } from "../../utils/workItemJson";
 import EditProposalCard from "../EditProposalCard";
 import { placeActionProposals } from "../editProposalPlacement";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
 import HaltSteerControls from "./HaltSteerControls";
-import { FeedbackBanner, PrView, QueuedPrWrites } from "./panels";
+import { FeedbackBanner, PrView, QueuedPrWrites, feedbackFor } from "./panels";
 import { variablesSetByTurn } from "./turnVariables";
+import { useRunView } from "./useRunView";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
 type Side = "ai" | "human";
@@ -40,6 +40,17 @@ function Bubble({
         <div className="wiv2-bubble-body">{children}</div>
         {footer}
       </div>
+    </div>
+  );
+}
+
+/** Something that happened to the run (it started, waited, ended), rather than a turn in the dialogue. */
+function RunEvent({ name, text, timestamp }: { name: string; text: string; timestamp: string }) {
+  return (
+    <div className="wiv2-run-event">
+      <strong>{name}</strong>
+      <span className="wiv2-run-event-text">{text}</span>
+      <span>{new Date(timestamp).toLocaleString()}</span>
     </div>
   );
 }
@@ -87,9 +98,19 @@ function TurnVariables({ variables }: { variables: TurnVariableChange[] }) {
   );
 }
 
-/** Whether the current run has a pull request, or anything queued for one, to show. */
-function hasPrDetails(workItem: WorkItem, detail: WorkItemDetail): boolean {
-  const run = detail.currentRun;
+/** The current run's detail as last read, when that is the run `runId`. */
+function currentRunIf(detail: WorkItemDetail, runId: string | null) {
+  return runId && detail.currentRun?.id === runId ? detail.currentRun : null;
+}
+
+/**
+ * Whether the thread's run has a pull request, or anything queued for one, to
+ * show. What the item holds about a pull request is its current run's, so it
+ * shows only when that is the thread's run.
+ */
+function hasPrDetails(workItem: WorkItem, detail: WorkItemDetail, runId: string | null): boolean {
+  if (!runId || workItem.currentLoopRunId !== runId) return false;
+  const run = currentRunIf(detail, runId);
   return !!run?.prSnapshot || (run?.prQueuedWrites?.length ?? 0) > 0 || !!workItem.prUrl;
 }
 
@@ -101,10 +122,12 @@ function hasPrDetails(workItem: WorkItem, detail: WorkItemDetail): boolean {
 function PrDetails({
   workItem,
   detail,
+  runId,
   onOpen,
 }: {
   workItem: WorkItem;
   detail: WorkItemDetail;
+  runId: string | null;
   onOpen: (panel: HTMLElement) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -113,9 +136,10 @@ function PrDetails({
     if (open && panelRef.current) onOpen(panelRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-  const snapshot = detail.currentRun?.prSnapshot ?? null;
-  const pending = detail.currentRun?.prQueuedWrites?.length ?? 0;
-  if (!hasPrDetails(workItem, detail)) return null;
+  const run = currentRunIf(detail, runId);
+  const snapshot = run?.prSnapshot ?? null;
+  const pending = run?.prQueuedWrites?.length ?? 0;
+  if (!hasPrDetails(workItem, detail, runId)) return null;
   return (
     <section ref={panelRef} className="wiv2-pr-details">
       <div className="wiv2-pr-details-header">
@@ -175,30 +199,44 @@ function useTurnVariables(workItemId: string, refreshKey: number): TurnVariableC
   return changes;
 }
 
-/**
- * The Action tab as one chronological thread: the conversation so far, the
- * live run as the latest AI bubble, and the pending human feedback as the
- * latest human bubble. Opens scrolled to the newest entry.
- */
-export default function ActionThread({
-  workItem,
-  detail,
-  feedbackPrompt,
-  active,
-}: {
+interface ActionThreadProps {
   workItem: WorkItem;
   detail: WorkItemDetail;
   feedbackPrompt: string | null;
   active: boolean;
-}) {
-  const messages = parseConversation(workItem);
+}
+
+/**
+ * The Action tab as one chronological thread for the item's latest run,
+ * finished or not: its conversation so far, the live run as the latest AI
+ * bubble, and the pending human feedback as the latest human bubble. Opens
+ * scrolled to the newest entry. Earlier runs are on the Runs tab.
+ */
+export default function ActionThread(props: ActionThreadProps) {
+  const runId = props.workItem.latestLoopRunId ?? null;
+  return <RunThread key={runId ?? ""} runId={runId} {...props} />;
+}
+
+function RunThread({
+  runId,
+  workItem,
+  detail,
+  feedbackPrompt,
+  active,
+}: ActionThreadProps & { runId: string | null }) {
+  const view = useRunView(runId, detail.runLock.settledOf(runId), {
+    isCurrent: !!runId && workItem.currentLoopRunId === runId,
+    run: detail.currentRun,
+  });
+  const { messages } = view;
   const turnVariables = useTurnVariables(workItem.id, messages.length);
   const { proposals, refresh } = useEditProposals({ requestedByWorkItemId: workItem.id });
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const savedScrollTop = useRef(0);
-  const awaitingHuman =
-    workItem.status === WorkItemStatus.HumanFeedback && !!workItem.humanFeedbackReason;
+  const awaitingHuman = feedbackFor(workItem, runId, view.run) !== null;
+  // The live output is the current run's, so it belongs here only while that is this run.
+  const streaming = detail.shouldStream && workItem.currentLoopRunId === runId;
 
   // Stay on the newest entry while content loads in and grows beneath it
   // (prompt, PR snapshot, live output), until the reader scrolls away. Coming
@@ -234,7 +272,7 @@ export default function ActionThread({
     el.scrollIntoView?.({ block: "start" });
   };
 
-  const { afterTurn, live, end } = placeActionProposals(messages, proposals ?? []);
+  const { afterTurn, live, end } = placeActionProposals(runId, messages, proposals ?? []);
   const cards = (list: WorkItemEditProposal[] = []) =>
     list.map((proposal) => (
       <EditProposalCard key={`proposal:${proposal.id}`} proposal={proposal} onSettled={refresh} />
@@ -242,58 +280,73 @@ export default function ActionThread({
 
   const isEmpty =
     messages.length === 0 &&
-    !detail.shouldStream &&
+    !view.error &&
+    !streaming &&
     !awaitingHuman &&
-    !hasPrDetails(workItem, detail) &&
+    !hasPrDetails(workItem, detail, runId) &&
     live.length === 0 &&
     end.length === 0;
 
-  // Halt, steer and cleanup act on the current run, and wait for any other
-  // action on it, wherever in the dialog that was started.
-  const currentRunId = workItem.currentLoopRunId;
   // One keyed list, so a card that moves to a new slot (its step's turn
   // arriving) is moved rather than remounted, and keeps a decision in progress.
   const entries: ReactNode[] = [];
   messages.forEach((m, i) => {
-    const side: Side = m.role.toLowerCase() === "human" ? "human" : "ai";
-    const variables = variablesSetByTurn(m, turnVariables);
-    entries.push(
-      <Bubble
-        key={`turn:${i}`}
-        side={side}
-        author={side === "ai" ? (m.name ?? "AI") : undefined}
-        timestamp={m.timestamp}
-        footer={variables.length > 0 && <TurnVariables variables={variables} />}
-      >
-        <div className="conversation-message-content">
-          <MarkdownRenderer content={m.content} />
-        </div>
-      </Bubble>,
-      ...cards(afterTurn.get(i)),
-    );
+    if (m.role === "system") {
+      entries.push(
+        <RunEvent key={`turn:${m.id}`} name={m.name} text={m.text} timestamp={m.timestamp} />,
+      );
+    } else {
+      const variables = variablesSetByTurn(m, turnVariables);
+      entries.push(
+        <Bubble
+          key={`turn:${m.id}`}
+          side={m.role}
+          author={m.role === "ai" ? m.name : undefined}
+          timestamp={m.timestamp}
+          footer={variables.length > 0 && <TurnVariables variables={variables} />}
+        >
+          <div className="conversation-message-content">
+            {m.role === "human" && !m.text ? "No comment" : <MarkdownRenderer content={m.text} />}
+          </div>
+        </Bubble>,
+      );
+    }
+    entries.push(...cards(afterTurn.get(i)));
   });
+  // Halt, steer and cleanup act on this run, and wait for any other action on
+  // it, wherever in the dialog that was started.
   entries.push(
-    <Bubble key="live" side="ai" author="AI" live={detail.shouldStream}>
-      {detail.shouldStream && <LiveStream text={detail.progressText} />}
+    <Bubble key="live" side="ai" author="AI" live={streaming}>
+      {streaming && <LiveStream text={detail.progressText} />}
       <HaltSteerControls
-        run={detail.currentRun}
+        run={view.run}
         workItemStatus={workItem.status}
-        onHalt={() => detail.runLock.hold(currentRunId, "halt", detail.handleHalt)}
+        onHalt={() => detail.runLock.hold(runId, "halt", () => detail.handleHalt(runId))}
         onResumeSteer={(note) =>
-          detail.runLock.hold(currentRunId, "steer", () => detail.handleResumeSteer(note))
+          detail.runLock.hold(runId, "steer", () => detail.handleResumeSteer(runId, note))
         }
-        onCleanupDone={() => detail.runLock.hold(currentRunId, "abandon", detail.handleCleanupDone)}
-        onCleanupBacklog={() =>
-          detail.runLock.hold(currentRunId, "abandon", detail.handleCleanupBacklog)
-        }
+        onCleanupDone={() => detail.runLock.hold(runId, "abandon", detail.handleCleanupDone)}
+        onCleanupBacklog={() => detail.runLock.hold(runId, "abandon", detail.handleCleanupBacklog)}
         showAbandon={false}
-        blocked={detail.runLock.pendingOf(currentRunId) !== null}
+        blocked={detail.runLock.pendingOf(runId) !== null}
       />
     </Bubble>,
     ...cards(live),
-    <PrDetails key="pr-details" workItem={workItem} detail={detail} onOpen={revealFromTop} />,
+    <PrDetails
+      key="pr-details"
+      workItem={workItem}
+      detail={detail}
+      runId={runId}
+      onOpen={revealFromTop}
+    />,
     <Bubble key="feedback" side="human">
-      <FeedbackBanner workItem={workItem} detail={detail} prompt={feedbackPrompt} />
+      <FeedbackBanner
+        workItem={workItem}
+        runId={runId}
+        run={view.run}
+        detail={detail}
+        prompt={feedbackPrompt}
+      />
     </Bubble>,
     ...cards(end),
   );
@@ -301,6 +354,11 @@ export default function ActionThread({
   return (
     <div className="wiv2-thread" ref={threadRef}>
       {entries}
+      {view.error && (
+        <div className="preview-message preview-error">
+          The conversation could not be loaded: {view.error}
+        </div>
+      )}
       {isEmpty && <div className="wiv2-empty">No action required.</div>}
     </div>
   );

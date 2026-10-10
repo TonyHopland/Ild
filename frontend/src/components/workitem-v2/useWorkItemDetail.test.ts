@@ -24,7 +24,6 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     status: WorkItemStatus.Running,
     priority: WorkItemPriority.Medium,
     tags: [],
-    conversation: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",

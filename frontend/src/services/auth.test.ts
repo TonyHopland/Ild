@@ -101,6 +101,36 @@ describe("workItemService URL contract", () => {
     expect(init?.method).toBe("POST");
   });
 
+  test("every answer names the run it answers in its body, even a reject with no reason", async () => {
+    fetchSpy.mockImplementation(async () => new Response("", { status: 200 }));
+
+    await workItemService.humanFeedbackInput("wi-1", "run-1", "Looks good");
+    await workItemService.humanFeedbackReject("wi-1", "run-1");
+    await workItemService.humanFeedbackEdge("wi-1", "run-1", "Needs work", "Have a look");
+
+    const sent = fetchSpy.mock.calls.map((call: unknown[]) => {
+      const [url, init] = call as [string, RequestInit | undefined];
+      return [url, init?.method, JSON.parse(init?.body as string)];
+    });
+    expect(sent).toEqual([
+      [
+        "/api/v1/workitems/wi-1/human-feedback/input",
+        "POST",
+        { runId: "run-1", input: "Looks good" },
+      ],
+      [
+        "/api/v1/workitems/wi-1/human-feedback/reject",
+        "POST",
+        expect.objectContaining({ runId: "run-1" }),
+      ],
+      [
+        "/api/v1/workitems/wi-1/human-feedback/edge",
+        "POST",
+        { runId: "run-1", name: "Needs work", input: "Have a look" },
+      ],
+    ]);
+  });
+
   test("getDependencies calls GET /api/v1/workitems/:id/dependencies", async () => {
     await workItemService.getDependencies("wi-1");
     const [url, init] = fetchSpy.mock.calls[0];

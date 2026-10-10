@@ -38,9 +38,6 @@ public class WorkItem
     /// <summary>JSON-serialized string[] of dependency work item IDs.</summary>
     public string DependenciesJson { get; set; } = "[]";
 
-    /// <summary>JSON-serialized array of <see cref="ConversationMessage"/>.</summary>
-    public string ConversationJson { get; set; } = "[]";
-
     /// <summary>
     /// JSON-serialized array of <see cref="WorkItemPullRequest"/> — every PR
     /// ever opened against this item, deduplicated by URL. Lives here rather

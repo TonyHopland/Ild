@@ -24,7 +24,6 @@ function makeItem(id: string, title: string, overrides: Partial<WorkItem> = {}):
     status: WorkItemStatus.Ready,
     priority: WorkItemPriority.Medium,
     tags: [],
-    conversation: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
@@ -60,6 +59,11 @@ function mockServices(items: WorkItem[]) {
   mockTaskboardServer(items);
   vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
+  vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
+    runId,
+    messages: [],
+    lastEventId: null,
+  }));
   // The edit form's repository select is required, so the item's repository has
   // to be among the options or the browser refuses to submit the form.
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([
@@ -221,6 +225,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
       status: WorkItemStatus.HumanFeedback,
       humanFeedbackReason: "Human Input Needed",
       currentLoopRunId: "run-1",
+      latestLoopRunId: "run-1",
     });
     // Item B waits on a human too, so it has a feedback pane of its own — the
     // place another item's refusal would surface if the two shared one dialog.
@@ -230,6 +235,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
         status: WorkItemStatus.HumanFeedback,
         humanFeedbackReason: "Human Input Needed",
         currentLoopRunId: "run-2",
+        latestLoopRunId: "run-2",
       }),
     ];
     mockServices(items);
@@ -265,7 +271,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
     // was never answered in A's place.
     await waitFor(() => expect(openTitle()).toBe("Item B"));
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-a", "Looks good");
+    expect(answer).toHaveBeenCalledWith("wi-a", "run-1", "Looks good");
     expect(dialog().querySelector<HTMLTextAreaElement>(".wiv2-feedback textarea")?.value).toBe("");
     expect(dialog().textContent).not.toContain("Looks good");
     expect(dialog().textContent).not.toContain("Input must be 8192 characters or fewer.");

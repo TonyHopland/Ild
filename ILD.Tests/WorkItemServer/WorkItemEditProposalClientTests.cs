@@ -173,9 +173,8 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Staleness is about the five editable fields only. A status transition or
-    /// a conversation append moves the item's UpdatedAt without touching any of
-    /// them, and must not make a proposal on an active item unapprovable.
+    /// Staleness is about the five editable fields only. A status transition
+    /// moves the item's UpdatedAt without touching any of them, and must not make a proposal on an active item unapprovable.
     /// </summary>
     [Fact]
     public async Task Changes_outside_the_editable_fields_do_not_make_a_proposal_stale()
@@ -184,7 +183,6 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Agent title" });
 
         await _client.TransitionAsync(_opts, item.Id, new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.WorkQueue }, TestContext.Current.CancellationToken);
-        await _client.AppendConversationAsync(_opts, item.Id, "user", "a note", name: null, ct: TestContext.Current.CancellationToken);
         var statusBefore = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.Status;
         Assert.NotEqual(RemoteWorkItemStatus.Backlog, statusBefore);
 

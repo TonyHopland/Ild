@@ -6,6 +6,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace ILD.Data.Stores;
 
@@ -47,12 +48,14 @@ public class LoopRunStore : ILoopRunStore
         => await _db.LoopRuns
             .Where(r => r.WorktreePath == worktreePath)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ThenByDescending(r => r.Id)
             .FirstOrDefaultAsync();
 
     public async Task<LoopRun?> GetByBranchNameAsync(string branchName)
         => await _db.LoopRuns
             .Where(r => r.BranchName == branchName)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ThenByDescending(r => r.Id)
             .FirstOrDefaultAsync();
 
     public async Task<LoopRun?> GetByWorkItemAsync(string workItemId)
@@ -63,6 +66,7 @@ public class LoopRunStore : ILoopRunStore
             .Include(r => r.RunNodes).ThenInclude(rn => rn.LoopNode)
             .Where(r => r.WorkItemId == workItemId)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ThenByDescending(r => r.Id)
             .ToListAsync();
 
     public async Task<IReadOnlyList<LoopRun>> GetAllByWorkItemsAsync(IReadOnlyCollection<string> workItemIds)
@@ -70,29 +74,30 @@ public class LoopRunStore : ILoopRunStore
             .Include(r => r.RunNodes).ThenInclude(rn => rn.LoopNode)
             .Where(r => workItemIds.Contains(r.WorkItemId))
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ThenByDescending(r => r.Id)
             .ToListAsync();
 
     public async Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take)
         => await _db.LoopRuns.AsNoTracking()
             .Where(r => r.WorkItemId == workItemId)
             .OrderByDescending(r => r.StartedAt)
+            .ThenByDescending(r => r.Id)
             .Skip(skip).Take(take)
             .ToListAsync();
-
-    public async Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId)
-        => await _db.LoopRuns
-            .Where(r => r.WorkItemId == workItemId && (r.Status == LoopRunStatus.Running
-                || r.Status == LoopRunStatus.Failed
-                || r.Status == LoopRunStatus.Cancelled
-                || r.Status == LoopRunStatus.WaitingHuman))
-            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
-            .FirstOrDefaultAsync();
 
     public async Task<LoopRun?> GetActiveByWorkItemAsync(string workItemId)
         => await _db.LoopRuns
             .Where(r => r.WorkItemId == workItemId)
             .Where(IsAlive)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ThenByDescending(r => r.Id)
+            .FirstOrDefaultAsync();
+
+    public async Task<LoopRun?> GetLatestByWorkItemAsync(string workItemId)
+        => await _db.LoopRuns
+            .Where(r => r.WorkItemId == workItemId)
+            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ThenByDescending(r => r.Id)
             .FirstOrDefaultAsync();
 
     public async Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100)
@@ -100,6 +105,7 @@ public class LoopRunStore : ILoopRunStore
             .Include(r => r.RunNodes).ThenInclude(rn => rn.LoopNode)
             .Include(r => r.LoopTemplateVersion)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ThenByDescending(r => r.Id)
             .Skip(skip).Take(take)
             .ToListAsync();
 
@@ -235,11 +241,20 @@ public class LoopRunStore : ILoopRunStore
             .AsNoTracking()
             .Where(rn => rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.Running)
             .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
+            .ThenByDescending(rn => rn.Id)
             .Select(rn => (Guid?)rn.Id)
+            .FirstOrDefaultAsync();
+
+    public Task<Guid?> GetWaitingHumanLoopNodeIdAsync(Guid runId, Guid runNodeId)
+        => _db.LoopRunNodes
+            .AsNoTracking()
+            .Where(rn => rn.Id == runNodeId && rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.WaitingHuman)
+            .Select(rn => (Guid?)rn.LoopNodeId)
             .FirstOrDefaultAsync();
 
     public async Task SetVariableAsync(Guid runId, string name, string value)
     {
+        value = AppDbContext.WithoutNul(value);
         var runningNodeId = await GetRunningNodeIdAsync(runId);
 
         // The history row must name the value this write actually replaced, so
@@ -348,6 +363,7 @@ public class LoopRunStore : ILoopRunStore
         => await _db.LoopRunNodes
             .Where(rn => rn.LoopRunId == runId && rn.LoopNodeId == nodeId)
             .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
+            .ThenByDescending(rn => rn.Id)
             .FirstOrDefaultAsync();
 
     public async Task<LoopRunNode?> GetRunNodeByIdAsync(Guid runNodeId)
@@ -356,7 +372,17 @@ public class LoopRunStore : ILoopRunStore
     public async Task CreateRunAsync(LoopRun run)
     {
         _db.LoopRuns.Add(run);
-        await _db.SaveChangesAsync();
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Refused (e.g. a second live run for the work item): the row must
+            // not stay queued on the context for the next unrelated save.
+            _db.Entry(run).State = EntityState.Detached;
+            throw;
+        }
     }
 
     public async Task ReloadAsync(LoopRun run)
@@ -406,6 +432,36 @@ public class LoopRunStore : ILoopRunStore
         => await _db.LoopRuns
             .Where(r => r.Id == runId)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.SteeringNote, (string?)null));
+
+    public async Task SetHumanFeedbackReasonAsync(Guid runId, string? reason)
+    {
+        reason = reason is null ? null : AppDbContext.WithoutNul(reason);
+        var at = DateTime.UtcNow;
+        await _db.LoopRuns
+            .Where(r => r.Id == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.HumanFeedbackReason, reason).SetProperty(r => r.UpdatedAt, at));
+        if (_db.ChangeTracker.Entries<LoopRun>().FirstOrDefault(e => e.Entity.Id == runId) is { } tracked)
+        {
+            SetUnchanged(tracked.Property(r => r.HumanFeedbackReason), reason);
+            SetUnchanged(tracked.Property(r => r.UpdatedAt), at);
+        }
+    }
+
+    public async Task<bool> UnderRunLockAsync(Guid runId, Func<Task> body)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync();
+        if (!await RunRowLock.TakeAsync(_db, runId)) return false;
+        await body();
+        await tx.CommitAsync();
+        return true;
+    }
+
+    private static void SetUnchanged<T>(PropertyEntry<LoopRun, T> property, T value)
+    {
+        property.CurrentValue = value;
+        property.OriginalValue = value;
+        property.IsModified = false;
+    }
 
     public async Task SetPrCommentLedgerAsync(Guid runId, string? json)
         => await _db.LoopRuns
@@ -517,17 +573,44 @@ public class LoopRunStore : ILoopRunStore
             .Select(r => r.Id)
             .ToListAsync();
 
-    public async Task<int> AllocateNextEventSequenceAsync(Guid runId)
+    public async Task<WorkItemStatusReason?> GetWorkItemStatusReasonAsync(string workItemId)
+        => await _db.WorkItemStatusReasons.AsNoTracking().FirstOrDefaultAsync(r => r.WorkItemId == workItemId);
+
+    public async Task<IReadOnlyDictionary<string, WorkItemStatusReason>> GetWorkItemStatusReasonsAsync(IReadOnlyCollection<string> workItemIds)
+        => await _db.WorkItemStatusReasons.AsNoTracking()
+            .Where(r => workItemIds.Contains(r.WorkItemId))
+            .ToDictionaryAsync(r => r.WorkItemId, StringComparer.Ordinal);
+
+    public async Task SetWorkItemStatusReasonAsync(string workItemId, string text)
     {
-        // Per-run sequence allocator. Callers are expected to serialize calls
-        // for the same runId via an in-memory lock (see EventLogService).
-        // Cross-run calls remain concurrent.
-        var run = await _db.LoopRuns.FirstOrDefaultAsync(r => r.Id == runId)
-            ?? throw new InvalidOperationException($"Run {runId} not found while allocating event sequence");
-        run.NextEventSeq += 1;
-        await _db.SaveChangesAsync();
-        return run.NextEventSeq;
+        text = AppDbContext.WithoutNul(text);
+        var at = DateTime.UtcNow;
+        if (await UpdateWorkItemStatusReasonAsync(workItemId, text, at)) return;
+
+        var row = new WorkItemStatusReason { WorkItemId = workItemId, Text = text, At = at };
+        _db.WorkItemStatusReasons.Add(row);
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            // Another writer inserted the row first; the later reason wins.
+            if (!await UpdateWorkItemStatusReasonAsync(workItemId, text, at)) throw;
+        }
+        finally
+        {
+            _db.Entry(row).State = EntityState.Detached;
+        }
     }
+
+    private async Task<bool> UpdateWorkItemStatusReasonAsync(string workItemId, string text, DateTime at)
+        => await _db.WorkItemStatusReasons
+            .Where(r => r.WorkItemId == workItemId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Text, text).SetProperty(r => r.At, at)) > 0;
+
+    public async Task ClearWorkItemStatusReasonAsync(string workItemId)
+        => await _db.WorkItemStatusReasons.Where(r => r.WorkItemId == workItemId).ExecuteDeleteAsync();
 
     public async Task<bool> DeleteAsync(Guid runId)
     {
@@ -579,7 +662,7 @@ public class LoopRunStore : ILoopRunStore
 
         var feedback = eventLogs
             .Where(e => e.EventType == EventType.HumanFeedbackRequested || e.EventType == EventType.HumanFeedbackReceived)
-            .Select(e => new FeedbackFact(e.EventType, e.Sequence, e.Timestamp))
+            .Select(e => new FeedbackFact(e.EventType, e.Id, e.Timestamp))
             .ToList();
 
         var contribution = RunAnalyticsAggregator.BuildContribution(

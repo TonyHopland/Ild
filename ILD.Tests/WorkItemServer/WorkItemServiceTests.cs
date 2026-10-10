@@ -421,139 +421,19 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Transition_to_HumanFeedback_appends_AI_conversation_entry_with_reason()
+    public async Task Transition_to_HumanFeedback_records_the_offered_actions()
     {
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
 
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.HumanFeedback,
-            Reason = "Need approval",
             Actions = "[\"approve\",\"reject\"]",
         }, TestContext.Current.CancellationToken);
 
         var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
         Assert.Equal(WorkItemStatus.HumanFeedback, fresh!.Status);
-        Assert.Single(fresh.Conversation);
-        Assert.Equal("ai", fresh.Conversation[0].Role);
-        Assert.Equal("Need approval", fresh.Conversation[0].Content);
         Assert.Equal("[\"approve\",\"reject\"]", fresh.HumanFeedbackActions);
-    }
-
-    [Fact]
-    public async Task Transition_with_Name_records_author_on_conversation_entry()
-    {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
-
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest
-        {
-            TargetStatus = WorkItemStatus.HumanFeedback,
-            Reason = "Need approval",
-            Name = "Code Review",
-        }, TestContext.Current.CancellationToken);
-
-        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
-        Assert.Single(fresh!.Conversation);
-        Assert.Equal("ai", fresh.Conversation[0].Role);
-        Assert.Equal("Code Review", fresh.Conversation[0].Name);
-    }
-
-    [Fact]
-    public async Task Transition_to_Done_with_reason_is_recorded_as_ai_role()
-    {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
-
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest
-        {
-            TargetStatus = WorkItemStatus.Done,
-            Reason = "All checks passed",
-        }, TestContext.Current.CancellationToken);
-
-        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
-        Assert.Single(fresh!.Conversation);
-        // Done is a system/AI-authored event, not a human turn.
-        Assert.Equal("ai", fresh.Conversation[0].Role);
-        Assert.Equal("All checks passed", fresh.Conversation[0].Content);
-    }
-
-    [Fact]
-    public async Task AppendConversation_adds_named_ai_turn_without_changing_status()
-    {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, TestContext.Current.CancellationToken);
-
-        var ok = await _svc.AppendConversationAsync(dto.Id, "ai", "Implemented the feature", "AI Coder", ct: TestContext.Current.CancellationToken);
-
-        Assert.True(ok);
-        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
-        // Status is untouched — an AI turn is dialogue, not a lifecycle change.
-        Assert.Equal(WorkItemStatus.Running, fresh!.Status);
-        Assert.Single(fresh.Conversation);
-        Assert.Equal("ai", fresh.Conversation[0].Role);
-        Assert.Equal("Implemented the feature", fresh.Conversation[0].Content);
-        Assert.Equal("AI Coder", fresh.Conversation[0].Name);
-    }
-
-    [Fact]
-    public async Task Conversation_entries_keep_the_node_execution_they_came_from()
-    {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
-        var coderRun = Guid.NewGuid();
-        var reviewRun = Guid.NewGuid();
-
-        await _svc.AppendConversationAsync(dto.Id, "ai", "Implemented the feature", "AI Coder", coderRun, TestContext.Current.CancellationToken);
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest
-        {
-            TargetStatus = WorkItemStatus.HumanFeedback,
-            Reason = "Need approval",
-            Name = "Code Review",
-            RunNodeId = reviewRun,
-        }, TestContext.Current.CancellationToken);
-        await _svc.AppendConversationAsync(dto.Id, "ai", "No link", "AI Coder", ct: TestContext.Current.CancellationToken);
-
-        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
-        Assert.Equal(new Guid?[] { coderRun, reviewRun, null }, fresh!.Conversation.Select(m => m.RunNodeId));
-    }
-
-    [Fact]
-    public async Task AppendConversation_returns_false_for_missing_work_item()
-    {
-        var ok = await _svc.AppendConversationAsync("does-not-exist", "ai", "hi", "AI Coder", ct: TestContext.Current.CancellationToken);
-        Assert.False(ok);
-    }
-
-    [Fact]
-    public async Task Transition_to_non_response_state_does_not_append_conversation()
-    {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
-
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest
-        {
-            TargetStatus = WorkItemStatus.Ready,
-            Reason = "ignored",
-        }, TestContext.Current.CancellationToken);
-
-        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
-        Assert.Empty(fresh!.Conversation);
-    }
-
-    [Fact]
-    public async Task Feedback_appends_human_message_and_moves_to_WaitingForIld()
-    {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
-        await _svc.TransitionAsync(dto.Id, new TransitionRequest
-        {
-            TargetStatus = WorkItemStatus.HumanFeedback,
-            Reason = "Need approval",
-        }, TestContext.Current.CancellationToken);
-
-        await _svc.AppendFeedbackAsync(dto.Id, "approve please", TestContext.Current.CancellationToken);
-
-        var fresh = await _svc.GetAsync(dto.Id, TestContext.Current.CancellationToken);
-        Assert.Equal(WorkItemStatus.WaitingForIld, fresh!.Status);
-        Assert.Equal(2, fresh.Conversation.Count());
-        Assert.Equal("human", fresh.Conversation[1].Role);
-        Assert.Equal("approve please", fresh.Conversation[1].Content);
     }
 
     [Fact]
@@ -618,7 +498,6 @@ public class WorkItemServiceTests : IAsyncLifetime
         await _svc.TransitionAsync(dto.Id, new TransitionRequest
         {
             TargetStatus = WorkItemStatus.HumanFeedback,
-            Reason = "Need approval",
         }, TestContext.Current.CancellationToken);
 
         // advance time far past timeout

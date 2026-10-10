@@ -94,7 +94,7 @@ Adapters have full autonomy over tool execution, but the engine now passes a per
 _Avoid_: tool sandbox, tool permissions
 
 **Event Log**:
-Append-only audit stream per LoopRun. Serves as AI context and observability. Large payloads (>10KB) stored on disk; DB stores path reference. A background `EventLogRetentionSweeper` deletes entries older than `EventLogOptions.RetentionPeriod` (default 7 days) once per `RetentionSweepInterval` (default 24h), but **only** for runs whose linked WorkItem is in `Done` status — events for runs whose WorkItem is still Running/HumanFeedback/Backlog/etc. are preserved indefinitely.
+The single ordered timeline of one LoopRun, and the only place a run's story is kept. Serves as AI context and observability. Every event names the run it belongs to explicitly and is written through `IEventLogService`; its `Id` is a database identity, and appends to one run commit one at a time under the run's row lock, so a run's events are read in `Id` order everywhere. The run's **conversation** — AI turns (`NodeCompleted` of AI nodes), human replies (`HumanFeedbackReceived`), and its starts, parks, recoveries and end (`LoopRunStarted`, `HumanFeedbackRequested`, `RunParked`, `RecoveryTriggered`, `LoopRunCompleted`/`Failed`/`Cancelled`) — is a read-only projection of these events, and `{{Conversation.*}}` reads the same projection. Once a run-ending event is written the run is **closed**: a further conversation event is refused (`RunClosedException`), while housekeeping (cleanup, PR merge, interruptions) is still recorded. Events are deleted only with their run (FK cascade), so a run's timeline is never partly gone while the run exists.
 _Avoid_: audit trail, log
 
 **AI Traversal Cap**:
@@ -114,7 +114,7 @@ The engine reloads the `LoopRun` row (an explicit `ReloadAsync`, since a re-quer
 ### Work Item Lifecycle
 
 **Human Feedback**:
-The WorkItem status for cases requiring **human** attention: PR awaiting merge, node failure exhaustion, rebase conflicts, Human node input, and a run parked because the **AI provider** interrupted its node (see **Provider Interruption**). Distinguished by `HumanFeedbackReason` string. When a Human node receives input, the input is appended to the event log. When a Human node receives a reject, the current node is marked as Failed and the engine follows the `on_failure` edge (a Respond signal follows `on_respond`). Waits on an **ILD-internal** resource (e.g. the AI provider concurrency gate) use `WaitingForIld` instead.
+The WorkItem status for cases requiring **human** attention: PR awaiting merge, node failure exhaustion, rebase conflicts, Human node input, and a run parked because the **AI provider** interrupted its node (see **Provider Interruption**). Distinguished by `HumanFeedbackReason` string; the full reason is on the run's timeline. A reason no run carries — a start that failed before its run existed, or a manual move with no live run — is the work item's own **status reason**, kept on the ILD instance and cleared when a run starts. When a Human node receives input, the input is appended to the event log. When a Human node receives a reject, the current node is marked as Failed and the engine follows the `on_failure` edge (a Respond signal follows `on_respond`). Waits on an **ILD-internal** resource (e.g. the AI provider concurrency gate) use `WaitingForIld` instead.
 _Avoid_: paused, blocked, stalled
 
 **WaitingForIld**:
@@ -248,7 +248,7 @@ See the [Architecture](#architecture) section below for how the API layer compos
 - `AuthService.LoginAsync` auto-seeds the `admin` user the first time it sees a login attempt with the username `admin` and a non-empty `ILD_PASSWORD` env var.
 - A **User Session** is one signed-in device, held in the `UserSessions` table. A user has as many as they have devices: signing in on a second one never disturbs the first, and signing out revokes only the session that asked (stamping `RevokedAt`, so the row stays readable). The bearer token is stored only as a hash keyed on the `ILD_SESSION_TOKEN_PEPPER` server secret (HMAC-SHA256; plain SHA-256 when no pepper is configured), and lookups are keyed by that hash — the plaintext never reaches the database, and a party that can write the table but not read the pepper cannot forge a row that authenticates. `ILD.Data.Security.SessionTokenHasher` owns that mapping and is the only place a token and a session row are related. `GET /api/v1/auth/sessions` lists the caller's live sessions for the Settings page, `DELETE /api/v1/auth/sessions/{id}` revokes one, `POST /api/v1/auth/sessions/revoke-others` signs out everywhere else. A session also dies on its own: idle past `session.idleDays` (re-evaluated every request) or past the `ExpiresAt` stamped from `session.maxDays` at sign-in. Both are app settings, edited on the Settings page; the credentials themselves stay env vars because they are secrets. Not to be confused with a **Chat Session** (a transcript) or with the adapter/agent sessions of a run — "User Session" is always the login.
 - Webhook routes verify the caller against `RemoteProvider.WebhookSecret` values — an HMAC signature for Forgejo/GitHub, the service hook's Basic password for Azure DevOps; if no provider has a secret configured, all webhook calls are rejected with 401.
-- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events?cursor=&limit=` for the cursor-paginated list, with each entry's full payload inline in the `payload` field) — there is no separate `EventLogController`.
+- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events?cursor=&limit=` for the list paged by event `id`, with each entry's full payload inline in the `payload` field; `GET /api/v1/loopruns/{id}/conversation?after=` for the run's conversation projected from it, all of it or only the messages after event `after`, with `lastEventId`, the newest event the read covered, to read on from) — there is no separate `EventLogController`.
 - `HttpClient` instances for AI providers and the work-item server are registered as **typed clients** via `AddHttpClient<TInterface, TImpl>` (no named clients). Failures from AI calls surface as `AiProviderException` with cause-preserving inner exceptions.
 
 ### Storage layout
@@ -280,7 +280,7 @@ Both emit messages of shape `{ type: string; payload: T; timestamp: string }`. A
 - `LoopRunStateChanged`
 - `WorkItemStateChanged`
 - `HumanFeedbackRequired`
-- `EventLogged`
+- `EventLogged` — `{ runId, id, eventType, nodeId, runNodeId, timestamp }` on `/hubs/loop-run`, to the run's group: sent once for every event stored on the run, after it is stored; `id` is the event's Id, so a client reads the conversation on from the last event it has
 - `RunPaused`
 - `RunResumed`
 - `DependencyResolved`

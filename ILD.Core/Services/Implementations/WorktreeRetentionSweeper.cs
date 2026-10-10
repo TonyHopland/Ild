@@ -100,8 +100,8 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
             var wi = await workItems.GetWorkItemAsync(run.WorkItemId);
             if (wi is not null && wi.Status != RemoteWorkItemStatus.Done)
             {
-                var current = await runStore.GetCurrentByWorkItemAsync(run.WorkItemId);
-                if (current?.Id == run.Id) continue;
+                var latest = await runStore.GetLatestByWorkItemAsync(run.WorkItemId);
+                if (latest?.Id == run.Id) continue;
             }
 
             // Only drop the run row once its local git state is verified gone;

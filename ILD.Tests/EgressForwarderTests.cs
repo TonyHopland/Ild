@@ -35,7 +35,9 @@ public sealed class EgressForwarderTests : IAsyncLifetime
     public EgressForwarderTests()
     {
         var services = new ServiceCollection();
-        services.AddScoped(_ => _db.Fresh());
+        // A connection per scope: a policy edit sets the relay re-judging and the
+        // listeners reconciling at once, each reading on a thread of its own.
+        services.AddScoped(_ => _db.OnOwnConnection());
         services.AddScoped<INetworkPolicyStore, NetworkPolicyStore>();
         services.AddScoped<INetworkForwardStore, NetworkForwardStore>();
         services.AddScoped<IAppSettingStore, AppSettingStore>();
@@ -112,10 +114,8 @@ public sealed class EgressForwarderTests : IAsyncLifetime
 
     /// <summary>
     /// Declare a forward to the echo upstream and bring the listeners in line with it.
-    /// The reconcile runs here instead of being prompted by a policy change, because
-    /// that would also wake the forwarder's own reconcile: a second thread on this
-    /// test's one SQLite connection, which fails whichever read overlaps it — the
-    /// policy load of the connection dialled next among them.
+    /// The reconcile runs here instead of being prompted by a policy change, so the
+    /// listener is known to be bound before the test dials it.
     /// </summary>
     private async Task<NetworkForwardEntry> DeclareAsync(string name = "echo", string host = "localhost", int? localPort = null)
     {

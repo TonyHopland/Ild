@@ -1,6 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import {
+  LoopRun,
+  LoopRunStatus,
   Repository,
   RemotePrSnapshot,
   WorkItem,
@@ -12,6 +14,7 @@ import { loopRunService, repositoryService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import { makeLoopTagMatcher, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
+import { compareCreatedAt } from "../../utils/createdAt";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
 import { useSubmitDefaultOnEnter } from "../../hooks/useSubmitDefaultOnEnter";
@@ -129,33 +132,84 @@ function writeLabel(write: { kind: string; targetId?: string | null }): string {
   return "Reply";
 }
 
+const HUMAN_INPUT_NEEDED = "Human Input Needed";
+const PR_AWAITING_MERGE = "PR Awaiting Merge";
+
+/** Why the item waits on a person, as far as the run on screen bears it out. */
+export type Feedback =
+  | { kind: "reason"; reason: string }
+  | {
+      kind: "answer";
+      reason: typeof HUMAN_INPUT_NEEDED | typeof PR_AWAITING_MERGE;
+      /** The run the answer goes to. */
+      runId: string;
+    };
+
+/** Whether run detail `run` is waiting for an answer from a person. */
+function waitsForAnswer(run: LoopRun): boolean {
+  return run.status === LoopRunStatus.WaitingHuman && !run.isHalted;
+}
+
+/**
+ * What the feedback banner shows beside run `runId`, whose detail is `run`
+ * (null until read). The item's own status reason, when there is no run or it
+ * was given after the run started; which of the two is not known until the
+ * run has been read. Otherwise the reason the item's current run gives, if
+ * that is the run on screen, and an answer only while the run has not been
+ * read to be doing anything other than waiting for one.
+ */
+export function feedbackFor(
+  workItem: WorkItem,
+  runId: string | null,
+  run: LoopRun | null,
+): Feedback | null {
+  if (workItem.status !== WorkItemStatus.HumanFeedback) return null;
+  if (workItem.statusReason) {
+    if (!runId) return { kind: "reason", reason: workItem.statusReason };
+    if (!run) return null;
+    if (workItem.statusReasonAt && compareCreatedAt(workItem.statusReasonAt, run.startedAt) > 0)
+      return { kind: "reason", reason: workItem.statusReason };
+  }
+  const reason = workItem.humanFeedbackReason;
+  if (!runId || !reason || workItem.currentLoopRunId !== runId) return null;
+  if (reason !== HUMAN_INPUT_NEEDED && reason !== PR_AWAITING_MERGE)
+    return { kind: "reason", reason };
+  return run && !waitsForAnswer(run) ? null : { kind: "answer", reason, runId };
+}
+
 /** Prominent feedback banner shown in the Action tab while the item waits on a human. */
 export function FeedbackBanner({
   workItem,
+  runId,
+  run,
   detail,
   prompt,
 }: {
   workItem: WorkItem;
+  runId: string | null;
+  run: LoopRun | null;
   detail: WorkItemDetail;
   prompt: string | null;
 }) {
   const submitDefaultOnEnter = useSubmitDefaultOnEnter();
+  const feedback = feedbackFor(workItem, runId, run);
+  if (!feedback) return null;
 
-  if (workItem.status !== WorkItemStatus.HumanFeedback || !workItem.humanFeedbackReason) {
-    return null;
-  }
-
-  const isInput = workItem.humanFeedbackReason === "Human Input Needed";
-  const isPr = workItem.humanFeedbackReason === "PR Awaiting Merge";
-
-  if (!isInput && !isPr) {
+  if (feedback.kind === "reason") {
     return (
       <div className="wiv2-feedback">
         <div className="wiv2-feedback-title">Human Feedback</div>
-        <div className="feedback-reason">{workItem.humanFeedbackReason}</div>
+        <div className="feedback-reason">{feedback.reason}</div>
       </div>
     );
   }
+
+  const isPr = feedback.reason === PR_AWAITING_MERGE;
+  const answering = feedback.runId;
+  const reply = detail.replyFor(answering);
+  // Answers are offered once the run has been read to be waiting for one, and
+  // the parked node's outputs are known.
+  const outputs = run && waitsForAnswer(run) ? detail.feedbackOutputs : null;
 
   return (
     <div className="wiv2-feedback">
@@ -169,33 +223,23 @@ export function FeedbackBanner({
       )}
       <FeedbackActions
         input={{
-          value: detail.feedbackInput,
-          onChange: detail.setFeedbackInput,
+          value: reply.input,
+          onChange: (value) => detail.setReplyInput(answering, value),
           placeholder: isPr
             ? "Optional feedback for the next node..."
             : "Optional input or context...",
           rows: isPr ? 5 : 3,
         }}
         actions={workItem.humanFeedbackActions}
-        onApprove={detail.handleApprove}
-        onReject={detail.handleReject}
-        onEdge={detail.handleEdge}
+        onApprove={() => detail.handleApprove(answering)}
+        onReject={() => detail.handleReject(answering)}
+        onEdge={(name) => detail.handleEdge(answering, name)}
         onMerge={isPr ? detail.handleMerge : undefined}
-        busy={detail.respondLoading}
-        isVisible={
-          detail.feedbackOutputs.status === "ready" ? detail.feedbackOutputs.isVisible : () => false
-        }
-        needsConfirm={
-          detail.feedbackOutputs.status === "ready"
-            ? detail.feedbackOutputs.needsConfirm
-            : undefined
-        }
-        colorOf={
-          detail.feedbackOutputs.status === "ready" ? detail.feedbackOutputs.colorOf : undefined
-        }
-        defaultOutput={
-          detail.feedbackOutputs.status === "ready" ? detail.feedbackOutputs.defaultOutput : null
-        }
+        busy={reply.loading}
+        isVisible={outputs?.status === "ready" ? outputs.isVisible : () => false}
+        needsConfirm={outputs?.status === "ready" ? outputs.needsConfirm : undefined}
+        colorOf={outputs?.status === "ready" ? outputs.colorOf : undefined}
+        defaultOutput={outputs?.status === "ready" ? outputs.defaultOutput : null}
         submitDefaultOnEnter={submitDefaultOnEnter}
       />
       {detail.feedbackOutputs.status === "error" && (
@@ -204,9 +248,7 @@ export function FeedbackBanner({
           try again.
         </div>
       )}
-      {detail.respondError && (
-        <div className="preview-message preview-error">{detail.respondError}</div>
-      )}
+      {reply.error && <div className="preview-message preview-error">{reply.error}</div>}
       {isPr && detail.mergeError && (
         <div className="preview-message preview-error">{detail.mergeError}</div>
       )}

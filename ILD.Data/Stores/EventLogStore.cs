@@ -14,37 +14,87 @@ public class EventLogStore : IEventLogStore
         _db = db;
     }
 
-    public async Task<int> AppendAsync(EventLog entry)
+    public Task<long> AppendAsync(EventLog entry) => AppendAlongsideAsync(entry, () => Task.CompletedTask);
+
+    public async Task<long> AppendAlongsideAsync(EventLog entry, Func<Task> alongside)
     {
-        _db.EventLogs.Add(entry);
-        await _db.SaveChangesAsync();
-        return entry.Sequence;
+        if (entry.LoopRunId is not { } runId)
+            throw new ArgumentException("An event must name the run it belongs to.", nameof(entry));
+
+        await using var tx = await _db.Database.BeginTransactionAsync();
+        try
+        {
+            // Lock the run row for the rest of the transaction. Appends to one run
+            // then commit one at a time, in the order they took their Ids, so a
+            // reader paging by Id never passes an Id that commits later; and the
+            // closed check below cannot race the run-ending status or event.
+            if (!await RunRowLock.TakeAsync(_db, runId))
+                throw new InvalidOperationException($"Run {runId} not found while appending an event.");
+
+            if (await IsConversationAsync(entry) &&
+                (!RunConversationEvents.Ending.Contains(entry.EventType) &&
+                 await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == runId &&
+                    (r.Status == LoopRunStatus.Completed || r.Status == LoopRunStatus.Failed ||
+                     r.Status == LoopRunStatus.Cancelled)) || await HasEndedAsync(runId)))
+                throw new RunClosedException(runId);
+
+            await alongside();
+
+            _db.EventLogs.Add(entry);
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+            return entry.Id;
+        }
+        catch
+        {
+            // The context may be shared and long-lived; a row it failed to write
+            // must not ride along with the next unrelated save.
+            _db.Entry(entry).State = EntityState.Detached;
+            throw;
+        }
     }
 
+    private async Task<bool> IsConversationAsync(EventLog entry)
+    {
+        var fromAiNode = entry.EventType == EventType.NodeCompleted
+            && entry.RunNodeId is { } runNodeId
+            && await _db.LoopRunNodes.AnyAsync(rn => rn.Id == runNodeId && rn.LoopNode.NodeType == NodeType.AI);
+        return RunConversationEvents.Contains(entry.EventType, fromAiNode);
+    }
+
+    public Task<bool> HasEndedAsync(Guid runId)
+        => _db.EventLogs.AnyAsync(e => e.LoopRunId == runId
+            && (e.EventType == EventType.LoopRunCompleted
+                || e.EventType == EventType.LoopRunFailed
+                || e.EventType == EventType.LoopRunCancelled));
+
     public async Task<IReadOnlyList<EventLog>> GetByRunIdAsync(Guid runId)
-        => await _db.EventLogs.Where(e => e.LoopRunId == runId).OrderBy(e => e.Sequence).ToListAsync();
+        => await _db.EventLogs.AsNoTracking().Where(e => e.LoopRunId == runId).OrderBy(e => e.Id).ToListAsync();
+
+    public async Task<IReadOnlyList<EventLog>> GetByRunIdAfterAsync(Guid runId, long afterId, long throughId, IReadOnlyCollection<EventType> types)
+    {
+        var wanted = types.ToArray();
+        return await _db.EventLogs.AsNoTracking()
+            .Where(e => e.LoopRunId == runId && e.Id > afterId && e.Id <= throughId && wanted.Contains(e.EventType))
+            .OrderBy(e => e.Id)
+            .ToListAsync();
+    }
+
+    public async Task<long?> GetLastIdByRunIdAfterAsync(Guid runId, long afterId)
+        => await _db.EventLogs.Where(e => e.LoopRunId == runId && e.Id > afterId).MaxAsync(e => (long?)e.Id);
 
     public async Task<IReadOnlyList<EventLog>> GetByRunIdLastNAsync(Guid runId, int n)
         => await _db.EventLogs
             .Where(e => e.LoopRunId == runId)
-            .OrderByDescending(e => e.Sequence)
+            .OrderByDescending(e => e.Id)
             .Take(n)
-            .OrderBy(e => e.Sequence)
+            .OrderBy(e => e.Id)
             .ToListAsync();
 
-    public async Task<IReadOnlyList<EventLog>> GetOlderThanAsync(DateTimeOffset before)
-        => await _db.EventLogs.Where(e => e.Timestamp < before.UtcDateTime).ToListAsync();
-
-    public async Task RemoveRangeAsync(IReadOnlyList<EventLog> entries)
-    {
-        _db.EventLogs.RemoveRange(entries);
-        await _db.SaveChangesAsync();
-    }
-
-    public async Task<IReadOnlyList<EventLog>> GetByRunIdAfterCursorAsync(Guid runId, int cursor, int limit)
+    public async Task<IReadOnlyList<EventLog>> GetByRunIdAfterCursorAsync(Guid runId, long cursor, int limit)
         => await _db.EventLogs
-            .Where(e => e.LoopRunId == runId && e.Sequence > cursor)
-            .OrderBy(e => e.Sequence)
+            .Where(e => e.LoopRunId == runId && e.Id > cursor)
+            .OrderBy(e => e.Id)
             .Take(limit)
             .ToListAsync();
 }

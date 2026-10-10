@@ -38,8 +38,7 @@ public class LoopEngineStartRunTests
         await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
-        workItems.Verify(w => w.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback,
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+        workItems.Verify(w => w.ParkWithoutRunAsync(workItemId, "Matched loop template has no version"), Times.Once);
     }
 
     [Theory]
@@ -160,8 +159,7 @@ public class LoopEngineStartRunTests
         await DrainAsync(engine);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
-        workItems.Verify(w => w.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback,
-            conflict, It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+        workItems.Verify(w => w.ParkWithoutRunAsync(workItemId, conflict), Times.Once);
     }
 
     [Fact]
@@ -179,8 +177,7 @@ public class LoopEngineStartRunTests
         await DrainAsync(engine);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
-        workItems.Verify(w => w.TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback,
-            "Branch name cannot contain spaces.", It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+        workItems.Verify(w => w.ParkWithoutRunAsync(workItemId, "Branch name cannot contain spaces."), Times.Once);
     }
 
     [Fact]
@@ -306,7 +303,7 @@ public class LoopEngineStartRunTests
         };
         workItems.Setup(w => w.GetWorkItemAsync(workItemId)).ReturnsAsync(wi);
         workItems.Setup(w => w.TransitionAsync(It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(true);
 
         var resolver = new Mock<ILoopTemplateResolver>();
@@ -323,6 +320,7 @@ public class LoopEngineStartRunTests
         services.AddSingleton(db.Context);
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton<ILoopTemplateStore>(db.LoopTemplates);
+        services.AddSingleton<IEventLogService>(new EventLogService(db.EventLogs, new NoopRunNotifier()));
         services.AddSingleton<IWorkItemManager>(workItems.Object);
         services.AddSingleton(resolver.Object);
         services.AddSingleton<IRunNotifier, NoopRunNotifier>();

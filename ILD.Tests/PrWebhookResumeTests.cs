@@ -34,7 +34,7 @@ public class PrWebhookResumeTests
         public Mock<ILoopRunStore> Runs { get; } = new();
         public Mock<ILoopEngine> Engine { get; } = new();
         public Mock<IPrStatusPoller> Poller { get; } = new();
-        public Mock<IEventLogStore> Events { get; } = new();
+        public Mock<IEventLogService> Events { get; } = new();
         public List<EventLog> Logged { get; } = new();
 
         public Harness(params string[] wiredEdges)
@@ -55,6 +55,7 @@ public class PrWebhookResumeTests
                 Status = LoopRunNodeStatus.WaitingHuman,
             };
             Runs.Setup(s => s.GetByPrUrlAsync(PrUrl)).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetActiveByWorkItemAsync(Run.WorkItemId)).ReturnsAsync(Run);
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>()))
                 .ReturnsAsync(wiredEdges.Select(name => new LoopNodeEdge
@@ -65,8 +66,9 @@ public class PrWebhookResumeTests
                     EdgeType = EdgeType.Custom,
                     Name = name,
                 }).ToArray());
-            Events.Setup(s => s.AppendAsync(It.IsAny<EventLog>()))
-                .Callback<EventLog>(Logged.Add)
+            Events.Setup(s => s.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+                .Callback<Guid, EventType, string, Guid?, Guid?, string?>((run, type, data, node, runNode, edge) => Logged.Add(
+                    new EventLog { LoopRunId = run, EventType = type, Data = data, NodeId = node, RunNodeId = runNode, EdgeName = edge }))
                 .ReturnsAsync(1);
         }
 

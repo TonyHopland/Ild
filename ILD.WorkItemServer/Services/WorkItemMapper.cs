@@ -26,9 +26,6 @@ internal static class WorkItemMapper
     public static IReadOnlyList<string> DeserializeDependencies(string json)
         => JsonSerializer.Deserialize<List<string>>(json, JsonOpts) ?? new();
 
-    public static List<ConversationMessage> ReadConversation(WorkItem w)
-        => JsonSerializer.Deserialize<List<ConversationMessage>>(w.ConversationJson, JsonOpts) ?? new();
-
     /// <summary>
     /// The item's PRs, sorted newest first on the way out — the order clients
     /// render, and the reason nothing else has to sort them. The stored order is
@@ -84,9 +81,6 @@ internal static class WorkItemMapper
     public static string SerializeDependencies(IReadOnlyList<string> deps)
         => JsonSerializer.Serialize(deps, JsonOpts);
 
-    public static void WriteConversation(WorkItem w, IReadOnlyList<ConversationMessage> messages)
-        => w.ConversationJson = JsonSerializer.Serialize(messages, JsonOpts);
-
     public static void WritePullRequests(WorkItem w, IReadOnlyList<WorkItemPullRequest> prs)
         => w.PullRequestsJson = SerializePullRequests(prs);
 
@@ -110,7 +104,6 @@ internal static class WorkItemMapper
         Status = w.Status,
         Tags = ReadTags(w),
         Dependencies = ReadDependencies(w),
-        Conversation = ReadConversation(w),
         PullRequests = ReadPullRequests(w),
         HumanFeedbackActions = w.HumanFeedbackActions,
         CreatedByLoopRunId = w.CreatedByLoopRunId,
