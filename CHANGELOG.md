@@ -29,11 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**
 
-- **Each run has its own conversation, built from its event log, and the Action tab shows only the latest run's; earlier runs are on the Runs tab.** Conversation history from before this release was intentionally dropped.
+- **The Action tab shows the latest run's conversation, and earlier runs' conversations are in Runs.** Conversations from before this release do not carry over.
 
 - **A finished run can no longer be retried from one of its steps; start a new run instead.**
 
-- **This release's database changes cannot be rolled back, so back up both databases before upgrading.**
+- **Back up both databases before upgrading; this release cannot be rolled back.**
 
 ### Fixed
 

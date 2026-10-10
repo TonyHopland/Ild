@@ -1072,7 +1072,9 @@ public sealed class LoopEngine : ILoopEngine
                         // Engine has not created a LoopRunNode yet (capacity gate fires before NodeStarting).
                         var transitioned = await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.WaitingForIld,
                             reason: wi.Reason, humanFeedbackReason: HumanFeedbackReasons.AiProviderThrottled);
-                        if (!transitioned)
+                        if (transitioned && eventLog is not null)
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunParked, wi.Reason, node.Id));
+                        else if (!transitioned)
                             // The scheduler only auto-resumes items the server reports as
                             // WaitingForIld; with the transition lost this run stays parked
                             // until the next restart's reconciliation.
