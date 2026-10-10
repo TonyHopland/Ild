@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, within, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
+import { feedbackFor } from "./panels";
 import {
   WorkItem,
   WorkItemStatus,
@@ -791,6 +792,18 @@ describe("why an item waits on a person when no run says so", () => {
       read.resolve(run);
     });
     expect(await within(panel).findByText(reason)).toBeTruthy();
+  });
+
+  test.each([
+    ["a reason a tick newer than the run's start", "2026-09-24T09:00:00.1234568Z", true],
+    ["a reason stamped at the run's start", "2026-09-24T09:00:00.1234567Z", false],
+    ["a reason a tick older than the run's start", "2026-09-24T09:00:00.1234566Z", false],
+    ["a reason with no time", null, false],
+  ])("is compared with the run's start to the tick: %s", (_label, statusReasonAt, shown) => {
+    const run = makeRun({ id: "run-B", startedAt: "2026-09-24T09:00:00.1234567Z" });
+    const item = waiting({ currentLoopRunId: null, latestLoopRunId: "run-B", statusReasonAt });
+
+    expect(feedbackFor(item, "run-B", run)).toEqual(shown ? { kind: "reason", reason } : null);
   });
 });
 
