@@ -47,7 +47,7 @@ public sealed class RunConversationService : IRunConversationService
                 EventType.HumanFeedbackReceived
                     => (RunConversationMessage.Human, "Human"),
                 var type when RunConversationEvents.System.Contains(type)
-                    => (RunConversationMessage.System, type.ToString()),
+                    => (RunConversationMessage.System, SystemName(type)),
                 _ => (null, null),
             };
             if (role is not null)
@@ -55,6 +55,18 @@ public sealed class RunConversationService : IRunConversationService
         }
         return messages;
     }
+
+    private static string SystemName(EventType type)
+        => type switch
+        {
+            EventType.LoopRunStarted => "Run started",
+            EventType.RunParked => "Run parked",
+            EventType.RecoveryTriggered => "Recovery",
+            EventType.LoopRunCompleted => "Run completed",
+            EventType.LoopRunFailed => "Run failed",
+            EventType.LoopRunCancelled => "Run cancelled",
+            _ => type.ToString(),
+        };
 
     private static string AiName(string? runNodeLabel, string? nodeLabel)
         => !string.IsNullOrEmpty(runNodeLabel) ? runNodeLabel

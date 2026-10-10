@@ -44,7 +44,7 @@ public class EventLogRunClosureTests
         foreach (var ending in RunTimeline.Ending)
         foreach (var late in new[]
                  {
-                     EventType.HumanFeedbackReceived, EventType.HumanFeedbackRequested, EventType.RunParked,
+                     EventType.HumanFeedbackReceived, EventType.RunParked,
                      EventType.RecoveryTriggered, EventType.LoopRunStarted, EventType.LoopRunCompleted,
                      EventType.LoopRunFailed, EventType.LoopRunCancelled,
                  })
@@ -101,6 +101,7 @@ public class EventLogRunClosureTests
 
     [Theory]
     [InlineData(EventType.NodeStarted)]
+    [InlineData(EventType.HumanFeedbackRequested)]
     [InlineData(EventType.EdgeTraversed)]
     [InlineData(EventType.NodeFailed)]
     [InlineData(EventType.NodeInterrupted)]

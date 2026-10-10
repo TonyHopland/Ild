@@ -15,11 +15,13 @@ public static class RunConversationEvents
         EventType.LoopRunCancelled,
     };
 
-    /// <summary>Run-level and park events, shown in the conversation as system messages.</summary>
+    /// <summary>
+    /// Run-level and park events, shown in the conversation as system messages.
+    /// A feedback request is not one: the feedback card already shows its prompt.
+    /// </summary>
     public static readonly IReadOnlySet<EventType> System = new HashSet<EventType>(Ending)
     {
         EventType.LoopRunStarted,
-        EventType.HumanFeedbackRequested,
         EventType.RunParked,
         EventType.RecoveryTriggered,
     };

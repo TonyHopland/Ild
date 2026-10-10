@@ -206,7 +206,7 @@ public class RunConversationApiTests
     }
 
     [Fact]
-    public async Task Run_level_and_park_events_join_the_conversation_as_system_messages_named_by_type()
+    public async Task Run_level_and_park_events_join_the_conversation_as_system_messages_named_for_a_reader()
     {
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
@@ -239,13 +239,12 @@ public class RunConversationApiTests
         Assert.Equal(
             new[]
             {
-                ("system", "LoopRunStarted", "Run started from loop t"),
+                ("system", "Run started", "Run started from loop t"),
                 ("ai", "Coder", "a plan"),
-                ("system", "HumanFeedbackRequested", "Is this plan right?"),
                 ("human", "Human", "yes"),
-                ("system", "RunParked", "Provider throttled the coder; resume when the limit resets"),
-                ("system", "RecoveryTriggered", "Recovery requires review"),
-                ("system", "LoopRunFailed", "missing edge connection: approve"),
+                ("system", "Run parked", "Provider throttled the coder; resume when the limit resets"),
+                ("system", "Recovery", "Recovery requires review"),
+                ("system", "Run failed", "missing edge connection: approve"),
             },
             doc.RootElement.GetProperty("messages").EnumerateArray()
                 .Select(m => (m.GetProperty("role").GetString(), m.GetProperty("name").GetString(), m.GetProperty("text").GetString())));
