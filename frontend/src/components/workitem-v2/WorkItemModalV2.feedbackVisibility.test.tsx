@@ -589,13 +589,17 @@ describe("a work item's actions are filtered only with the node read for that sa
   });
 
   test("a run read answered late for an earlier state of the item changes nothing", async () => {
-    mockDialogServices();
+    const { emit } = mockDialogServices();
     const staged = stageTwoNodes();
     const { rerender } = await renderDialog(onHumanNode());
     const forHumanNode = staged.reads.length;
     expect(forHumanNode).toBeGreaterThan(0);
 
+    // The run moving on to the PR node is announced as well as read.
     rerender(dialogFor(onPrNode()));
+    await act(async () => {
+      emit("NodeStateChanged", { runId: "run-1" });
+    });
     await settled();
     for (const read of staged.reads.slice(forHumanNode)) read.resolve(parkedRun("n-b"));
     await settled();

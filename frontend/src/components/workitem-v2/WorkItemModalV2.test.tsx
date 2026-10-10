@@ -968,6 +968,72 @@ describe("WorkItemModalV2", () => {
     );
   });
 
+  test("a fresh copy of the item does not read its run's conversation again, nor its detail for the Action tab", async () => {
+    mockServices([makeRun({ status: LoopRunStatus.Completed })]);
+    const item = makeWorkItem({ status: WorkItemStatus.Done, latestLoopRunId: "run-1" });
+    const { rerender } = await renderDialog(item);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: "Action" }));
+      await Promise.resolve();
+    });
+    const runReads = vi.mocked(authServices.loopRunService.getById).mock.calls.length;
+    const conversationReads = vi.mocked(authServices.loopRunService.getConversation).mock.calls
+      .length;
+
+    await rerenderDialog(rerender, { ...item });
+    await rerenderDialog(rerender, { ...item });
+
+    // The Runs tab reads its run once per copy; the Action tab reads nothing.
+    expect(vi.mocked(authServices.loopRunService.getById).mock.calls.length).toBeLessThanOrEqual(
+      runReads + 2,
+    );
+    expect(vi.mocked(authServices.loopRunService.getConversation).mock.calls.length).toBe(
+      conversationReads,
+    );
+  });
+
+  test("a halt from the Action tab reads the halted run again", async () => {
+    const runningRun = makeRun({
+      status: LoopRunStatus.Running,
+      completedAt: null,
+      nodes: [
+        {
+          id: "rn-1",
+          nodeId: "n-1",
+          nodeLabel: "Implement",
+          nodeType: "AI",
+          status: LoopRunNodeStatus.Running,
+          effectiveInput: null,
+          output: null,
+          error: null,
+          startedAt: "2025-01-02T00:00:00Z",
+          completedAt: null,
+          executionCount: 1,
+        },
+      ],
+    });
+    mockServices([runningRun]);
+    vi.spyOn(authServices.loopRunService, "halt").mockResolvedValue();
+    const halted = makeRun({
+      status: LoopRunStatus.WaitingHuman,
+      isHalted: true,
+      completedAt: null,
+    });
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+      await Promise.resolve();
+    });
+    const actionPanel = document.getElementById("wiv2-panel-action") as HTMLElement;
+    vi.mocked(authServices.loopRunService.getById).mockResolvedValue(halted);
+
+    await act(async () => {
+      fireEvent.click(within(actionPanel).getByRole("button", { name: "Halt AI node" }));
+    });
+
+    expect(await within(actionPanel).findByRole("button", { name: /Resume/ })).toBeTruthy();
+  });
+
   test("halted run shows the steer-and-resume window in the Action tab", async () => {
     const haltedRun = makeRun({
       status: LoopRunStatus.WaitingHuman,

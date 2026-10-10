@@ -27,9 +27,10 @@ function merge(
  * One run as the Action tab shows it: its detail and its conversation, kept
  * current over the run hub in whatever state the run is. Owned by a component
  * keyed by `runId`, so everything here belongs to that one run and goes with
- * it. A change of `refreshKey` reads both again.
+ * it. The detail is read again when `actionsSettled`, the count of actions on
+ * the run that went through, moves.
  */
-export function useRunView(runId: string | null, refreshKey: unknown): RunView {
+export function useRunView(runId: string | null, actionsSettled: number): RunView {
   const [run, setRun] = useState<LoopRun | null>(null);
   const [messages, setMessages] = useState<RunConversationMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -98,9 +99,12 @@ export function useRunView(runId: string | null, refreshKey: unknown): RunView {
   }, [runId]);
 
   useEffect(() => {
-    readRun();
     readConversation();
-  }, [readRun, readConversation, refreshKey]);
+  }, [readConversation]);
+
+  useEffect(() => {
+    readRun();
+  }, [readRun, actionsSettled]);
 
   // Events are hints: anything missed while disconnected is read again once
   // the connection is back and the run's group joined.
