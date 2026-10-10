@@ -538,6 +538,34 @@ public class WorkItemManagerTests
         Assert.Equal(newer, (await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id).LatestLoopRunId);
     }
 
+    [Theory]
+    [InlineData(LoopRunStatus.Cancelled, true)]
+    [InlineData(LoopRunStatus.Failed, true)]
+    [InlineData(LoopRunStatus.Completed, false)]
+    public async Task The_views_current_run_is_never_older_than_its_latest(LoopRunStatus latestStatus, bool latestIsCurrent)
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var versionId = RunTimeline.SeedVersion(db);
+        var now = DateTime.UtcNow;
+        RunTimeline.SeedRun(db, id, versionId, LoopRunStatus.Failed,
+            humanFeedbackReason: "Run failed", startedAt: now.AddMinutes(-10));
+        var latest = RunTimeline.SeedRun(db, id, versionId, latestStatus,
+            humanFeedbackReason: latestIsCurrent ? "Run stopped" : null, startedAt: now.AddMinutes(-5));
+
+        foreach (var view in new[]
+                 {
+                     (await mgr.GetWorkItemAsync(id))!,
+                     (await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id),
+                 })
+        {
+            Assert.Equal(latest.Id, view.LatestLoopRunId);
+            Assert.Equal(latestIsCurrent ? latest.Id : null, view.CurrentLoopRunId);
+            Assert.Equal(latestIsCurrent ? "Run stopped" : null, view.HumanFeedbackReason);
+        }
+    }
+
     [Fact]
     public async Task TransitionToHumanFeedback_sets_reason_on_workitem()
     {

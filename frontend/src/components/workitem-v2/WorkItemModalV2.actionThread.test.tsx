@@ -576,7 +576,7 @@ describe("the run the thread shows", () => {
   );
 
   test("cards a different run asked for close the thread, after the shown run's own", async () => {
-    const run = makeRun({ id: "run-B", status: LoopRunStatus.Completed });
+    const run = makeRun({ id: "run-B", status: LoopRunStatus.Failed });
     mockServices(run, [], [msg(4, "run-B", "ai", "B's turn", { runNodeId: "exec-B1" })]);
     const card = (title: string, runId: string, runNodeId: string): WorkItemEditProposal => ({
       id: `p-${title}`,
@@ -606,8 +606,8 @@ describe("the run the thread shows", () => {
     ]);
     const panel = await openActionTab(
       makeWorkItem({
-        status: WorkItemStatus.Done,
-        currentLoopRunId: null,
+        status: WorkItemStatus.HumanFeedback,
+        currentLoopRunId: "run-B",
         latestLoopRunId: "run-B",
         prUrl: "https://git.example/pr/1",
       }),
@@ -911,6 +911,20 @@ describe("PR details", () => {
 
     expect(within(panel).getByRole("button", { name: /PR details/ })).toBeTruthy();
     expect(within(panel).queryByText("No action required.")).toBeNull();
+  });
+
+  test("is not shown when the item's current run is not the run the thread is for", async () => {
+    mockServices(makeRun({ id: "run-0", prSnapshot: snapshot(), prQueuedWrites: queued }));
+    const panel = await openActionTab(
+      makeWorkItem({
+        currentLoopRunId: "run-0",
+        latestLoopRunId: "run-1",
+        prUrl: "https://git.example/pr/1",
+      }),
+    );
+
+    expect(within(panel).queryByText("PR details")).toBeNull();
+    expect(within(panel).queryByText("Open PR")).toBeNull();
   });
 
   test("is not shown for an item with no pull request", async () => {

@@ -280,17 +280,13 @@ public class WorkItemManager : IWorkItemManager
             .ToDictionary(g => g.Key, g => g.ToList());
 
     /// <summary>
-    /// The run a work item's view reflects: a live one first, then one that
-    /// stopped short, then the latest that has not completed.
+    /// The run a work item's view reflects: the live one, else the latest run
+    /// when it stopped short. None when the latest completed: an older run that
+    /// stopped short is history then, and must not speak for the item.
     /// </summary>
     private static LoopRun? CurrentRun(IReadOnlyList<LoopRun> runs)
-        => runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.WaitingHuman)
-           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Failed)
-           ?? runs.FirstOrDefault(r => r.Status == LoopRunStatus.Cancelled)
-           ?? runs.Where(r => r.Status != LoopRunStatus.Completed)
-                  .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
-                  .FirstOrDefault();
+        => runs.FirstOrDefault(r => r.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman)
+           ?? (LatestRun(runs) is { Status: not LoopRunStatus.Completed } latest ? latest : null);
 
     public async Task<IReadOnlyDictionary<RemoteWorkItemStatus, int>> CountByStatusAsync(WorkItemListQuery query)
     {
