@@ -19,8 +19,13 @@ public sealed class RunConversationService : IRunConversationService
     public async Task<RunConversationPage?> GetPageAsync(Guid runId, long afterId = 0)
     {
         if (await _runs.GetByIdAsync(runId) is null) return null;
-        var events = await _events.GetByRunIdAfterAsync(runId, afterId);
-        var lastEventId = events.Count > 0 ? events[^1].Id : afterId > 0 ? afterId : (long?)null;
+        // The cursor is read first and bounds the page, so an event appended in
+        // between is left for the next read instead of being stepped over.
+        var lastId = await _events.GetLastIdByRunIdAfterAsync(runId, afterId);
+        var events = lastId is { } throughId
+            ? await _events.GetByRunIdAfterAsync(runId, afterId, throughId, RunConversationEvents.Projected)
+            : [];
+        var lastEventId = lastId ?? (afterId > 0 ? afterId : null);
         return new RunConversationPage(await ProjectAsync(runId, events), lastEventId);
     }
 
