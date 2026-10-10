@@ -228,12 +228,14 @@ function mockServices(
   turnVariables: TurnVariableChange[] = [],
   messages: Message[] = [],
 ) {
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: vi.fn(),
-    off: vi.fn(),
-    invoke: vi.fn(),
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
+  // A hub the test staged with mockHub stays the one the dialog connects to.
+  if (!vi.isMockFunction(signalRHook.useSignalR))
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    } as unknown as ReturnType<typeof signalRHook.useSignalR>);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
