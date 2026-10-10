@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
@@ -185,7 +186,7 @@ public sealed class LoopEngine : ILoopEngine
         var eventLog = sp.GetRequiredService<IEventLogService>();
         try
         {
-            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.LoopRunStarted,
+            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.LoopRunStarted,
                 $"Run started from loop {template?.Name ?? "(unknown)"}"));
             await workItems.TransitionAsync(workItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
             await loopRunStore.ClearWorkItemStatusReasonAsync(workItemId);
@@ -195,7 +196,7 @@ public sealed class LoopEngine : ILoopEngine
         {
             // Nothing will ever drive this run, so it must not stay alive: it
             // would hold the item's one live-run slot with nobody behind it.
-            await TrySafe(() => FailStartedRunAsync(run, loopRunStore, eventLog, DescribeException(ex)));
+            await TrySafe(run.Id, () => FailStartedRunAsync(run, loopRunStore, eventLog, DescribeException(ex)));
             throw;
         }
 
@@ -208,7 +209,7 @@ public sealed class LoopEngine : ILoopEngine
         run.CompletedAt = DateTime.UtcNow;
         run.HumanFeedbackReason = HumanFeedbackReasons.RunCrashed;
         await store.UpdateRunAsync(run);
-        await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.LoopRunFailed, reason));
+        await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.LoopRunFailed, reason));
         await _notifier.RunStateChangedAsync(run.Id, LoopRunStatus.Running, LoopRunStatus.Failed);
     }
 
@@ -284,7 +285,7 @@ public sealed class LoopEngine : ILoopEngine
         await loopRunStore.UpdateRunAsync(run);
         _progressBuffer.Clear(runId);
         if (scope.ServiceProvider.GetService<IEventLogService>() is { } eventLog)
-            await TrySafe(() => eventLog.AppendAsync(runId, EventType.LoopRunCancelled, reason));
+            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.LoopRunCancelled, reason));
 
         // A node executing right now is cut off here; one between nodes stops at
         // its next boundary, where the engine reloads this row and finds it no
@@ -355,9 +356,9 @@ public sealed class LoopEngine : ILoopEngine
         if (sp.GetService<IEventLogService>() is { } eventLog)
         {
             if (haltedRunNodeId is not null)
-                await TrySafe(() => eventLog.AppendAsync(runId, EventType.NodeInterrupted,
+                await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.NodeInterrupted,
                     HumanFeedbackReasons.RunHalted, node.Id, haltedRunNodeId));
-            await TrySafe(() => eventLog.AppendAsync(runId, EventType.RunParked,
+            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.RunParked,
                 HumanFeedbackReasons.RunHalted, node.Id, haltedRunNodeId));
         }
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.WaitingHuman);
@@ -493,7 +494,7 @@ public sealed class LoopEngine : ILoopEngine
         // the conversation the prompt and the UI read. An automatic resume's
         // note is ILD's, not a person's.
         if (!automatic && !string.IsNullOrWhiteSpace(note) && sp.GetService<IEventLogService>() is { } eventLog)
-            await TrySafe(() => eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, note));
+            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, note));
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
@@ -743,7 +744,7 @@ public sealed class LoopEngine : ILoopEngine
                 // and its Runs tab shows RUNNING even though nothing will ever
                 // resume it. Park it for human review instead. (StuckRunWatchdog
                 // is the backstop for the exit paths this catch can't see.)
-                await TrySafe(() => MarkRunCrashedAsync(runId, DescribeException(ex)));
+                await TrySafe(runId, () => MarkRunCrashedAsync(runId, DescribeException(ex)));
             }
             finally
             {
@@ -909,9 +910,9 @@ public sealed class LoopEngine : ILoopEngine
                         // The work item's current step just changed; nudge the
                         // taskboard (which listens on the work-item hub, not the
                         // per-run hub) to refresh the card. Best-effort.
-                        await TrySafe(() => _workItemNotifier.RunProgressedAsync(run.WorkItemId));
+                        await TrySafe(run.Id, () => _workItemNotifier.RunProgressedAsync(run.WorkItemId));
                         if (eventLog is not null)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.NodeStarted, ns.EffectiveInput ?? string.Empty, node.Id, runNodeId: rn.Id));
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeStarted, ns.EffectiveInput ?? string.Empty, node.Id, runNodeId: rn.Id));
                         break;
                     }
                     case NodeOutcome.Success ok:
@@ -926,7 +927,7 @@ public sealed class LoopEngine : ILoopEngine
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Succeeded, ok.Output, null, ok.Usage);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Succeeded);
                         if (eventLog is not null && runNodeId is Guid id)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.NodeCompleted, ok.Output ?? string.Empty, node.Id, runNodeId: id));
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeCompleted, ok.Output ?? string.Empty, node.Id, runNodeId: id));
                         if (!stillCurrent)
                             return ParkResult.Stop;
                         run.PreviousNodeOutput = ok.Output;
@@ -959,7 +960,7 @@ public sealed class LoopEngine : ILoopEngine
                         // name) instead of only the node's Succeeded/Failed status.
                         // Best-effort; attributed to the node the edge left.
                         if (eventLog is not null && runNodeId is Guid successFromId)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.EdgeTraversed, EdgeDisplayName(successEdge), node.Id, runNodeId: successFromId));
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.EdgeTraversed, EdgeDisplayName(successEdge), node.Id, runNodeId: successFromId));
                         return ParkResult.Continue;
                     }
                     case NodeOutcome.Fail f:
@@ -981,7 +982,7 @@ public sealed class LoopEngine : ILoopEngine
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Failed, f.Output, f.Reason);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
                         if (eventLog is not null && runNodeId is Guid id)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.NodeFailed, f.Reason, node.Id, runNodeId: id));
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeFailed, f.Reason, node.Id, runNodeId: id));
                         if (!stillCurrent)
                             return ParkResult.Stop;
                         run.PreviousNodeOutput = f.Output ?? f.Reason;
@@ -1001,7 +1002,7 @@ public sealed class LoopEngine : ILoopEngine
                         // Surface the edge taken on the failure route too (see the
                         // Success branch). Best-effort.
                         if (eventLog is not null && runNodeId is Guid failFromId)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.EdgeTraversed, EdgeDisplayName(failEdge), node.Id, runNodeId: failFromId));
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.EdgeTraversed, EdgeDisplayName(failEdge), node.Id, runNodeId: failFromId));
                         return ParkResult.Continue;
                     }
                     case NodeOutcome.Interrupted intr:
@@ -1017,7 +1018,7 @@ public sealed class LoopEngine : ILoopEngine
                         await CompleteRunNodeAsync(loopRunStore, runNodeId, LoopRunNodeStatus.Interrupted, intr.Output, intr.Reason);
                         await _notifier.NodeStateChangedAsync(run.Id, node.Id, LoopRunNodeStatus.Running, LoopRunNodeStatus.Interrupted);
                         if (eventLog is not null && runNodeId is Guid interruptedId)
-                            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.NodeInterrupted, intr.Reason, node.Id, runNodeId: interruptedId));
+                            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.NodeInterrupted, intr.Reason, node.Id, runNodeId: interruptedId));
                         if (!stillCurrent)
                             return ParkResult.Stop;
                         _logger.LogInformation(
@@ -1094,7 +1095,7 @@ public sealed class LoopEngine : ILoopEngine
                         // Record the worktree/branch even if the run was cancelled
                         // mid-node — without these fields on the row the retention
                         // sweeper can never reclaim what was just created.
-                        await TrySafe(() => loopRunStore.ReloadAsync(run));
+                        await TrySafe(run.Id, () => loopRunStore.ReloadAsync(run));
                         run.WorktreePath = wr.WorktreePath;
                         run.BranchName = wr.BranchName;
                         await loopRunStore.UpdateRunAsync(run);
@@ -1102,20 +1103,20 @@ public sealed class LoopEngine : ILoopEngine
                     }
                     case NodeOutcome.PrCreated pc:
                     {
-                        await TrySafe(() => loopRunStore.ReloadAsync(run));
+                        await TrySafe(run.Id, () => loopRunStore.ReloadAsync(run));
                         run.PrUrl = pc.PrUrl;
                         await loopRunStore.UpdateRunAsync(run);
                         // The run row is throwaway; the PR is not. Tell the
                         // work item straight away so the link survives the run
                         // being reclaimed and this instance being reset — the
                         // manager re-reports it on read if this write is lost.
-                        await TrySafe(() => workItems.RecordPullRequestAsync(
+                        await TrySafe(run.Id, () => workItems.RecordPullRequestAsync(
                             run.WorkItemId, pc.PrUrl, run.Id, merged: false, createdAt: run.StartedAt ?? run.CreatedAt));
                         break;
                     }
                     case NodeOutcome.WorktreeDestroyed _:
                     {
-                        await TrySafe(() => loopRunStore.ReloadAsync(run));
+                        await TrySafe(run.Id, () => loopRunStore.ReloadAsync(run));
                         run.WorktreePath = null;
                         run.BranchName = null;
                         await loopRunStore.UpdateRunAsync(run);
@@ -1347,7 +1348,7 @@ public sealed class LoopEngine : ILoopEngine
         run.HumanFeedbackReason = feedbackReason;
         await store.UpdateRunAsync(run);
         if (eventLog is not null)
-            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.RunParked, reason, node.Id, runNodeId));
+            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunParked, reason, node.Id, runNodeId));
         await _notifier.RunStateChangedAsync(run.Id, old, LoopRunStatus.WaitingHuman);
         await _notifier.HaltedAsync(run.Id);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
@@ -1365,7 +1366,7 @@ public sealed class LoopEngine : ILoopEngine
         // CleanupRunAsync drives a run that has already ended through here too;
         // only the run's own end is its completion.
         if (IsAlive(old) && eventLog is not null)
-            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.LoopRunCompleted, "Run completed"));
+            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.LoopRunCompleted, "Run completed"));
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Done, currentLoopRunId: run.Id);
         return ParkResult.Stop;
     }
@@ -1381,7 +1382,7 @@ public sealed class LoopEngine : ILoopEngine
         await store.UpdateRunAsync(run);
         _progressBuffer.Clear(run.Id);
         if (IsAlive(old) && sp.GetService<IEventLogService>() is { } eventLog)
-            await TrySafe(() => eventLog.AppendAsync(run.Id, EventType.LoopRunFailed, reason, node.Id, runNodeId));
+            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.LoopRunFailed, reason, node.Id, runNodeId));
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.NodeFailed, currentLoopRunId: run.Id);
     }
@@ -1423,13 +1424,32 @@ public sealed class LoopEngine : ILoopEngine
         await store.UpdateRunAsync(run);
         _progressBuffer.Clear(runId);
         if (sp.GetService<IEventLogService>() is { } eventLog)
-            await TrySafe(() => eventLog.AppendAsync(runId, EventType.LoopRunFailed, reason, crashed?.LoopNodeId, crashed?.Id));
+            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.LoopRunFailed, reason, crashed?.LoopNodeId, crashed?.Id));
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Failed);
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: run.HumanFeedbackReason, humanFeedbackReason: HumanFeedbackReasons.RunCrashed, currentLoopRunId: run.Id);
     }
 
-    private static async Task TrySafe(Func<Task> f) { try { await f(); } catch { } }
+    /// <summary>
+    /// Run a step whose failure must not stop the run, such as recording an
+    /// event, and log it when it fails. A conversation event refused because
+    /// the run has already ended is expected after a stop, so it is only noted.
+    /// </summary>
+    private async Task TrySafe(Guid runId, Func<Task> f, [CallerArgumentExpression(nameof(f))] string what = "")
+    {
+        try
+        {
+            await f();
+        }
+        catch (RunClosedException ex)
+        {
+            _logger.LogInformation(ex, "Run {RunId}: not recorded, the run has ended: {What}", runId, what);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Run {RunId}: failed and skipped: {What}", runId, what);
+        }
+    }
 
     /// <summary>
     /// Cap <paramref name="value"/> at <paramref name="max"/> characters, marking

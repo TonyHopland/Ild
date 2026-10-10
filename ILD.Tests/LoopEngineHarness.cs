@@ -8,6 +8,7 @@ using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -45,7 +46,8 @@ internal sealed class LoopEngineHarness : IDisposable
     public LoopEngineHarness(
         IRunNotifier? notifier = null,
         IShutdownState? shutdown = null,
-        Action<IServiceCollection>? configure = null)
+        Action<IServiceCollection>? configure = null,
+        ILogger<LoopEngine>? logger = null)
     {
         Db = new TestDb();
 
@@ -90,7 +92,7 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<ILoopEngine>(sp =>
         {
             return new LoopEngine(sp, Registry, sp.GetRequiredService<IRunNotifier>(),
-                NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>(),
+                logger ?? NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>(),
                 progressBuffer: null, shutdown: shutdown);
         });
         configure?.Invoke(services);

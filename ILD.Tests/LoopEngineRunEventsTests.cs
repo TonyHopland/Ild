@@ -4,6 +4,7 @@ using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace ILD.Tests;
@@ -288,5 +289,41 @@ public class LoopEngineRunEventsTests
 
         Assert.Equal(LoopRunStatus.Cancelled, h.ReloadRun().Status);
         Assert.Empty(Events(h, EventType.HumanFeedbackRequested));
+    }
+
+    [Fact]
+    public async Task An_event_the_engine_could_not_record_is_logged_and_the_run_goes_on()
+    {
+        var logger = new RecordingLogger();
+        var eventLog = new Mock<IEventLogService>();
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(),
+                It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+            .ThrowsAsync(new InvalidOperationException("database unavailable"));
+        using var h = new LoopEngineHarness(configure: s => s.AddSingleton(eventLog.Object), logger: logger);
+        h.AddNode("cmd", NodeType.Cmd);
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd, new NodeOutcome.NodeStarting("go"), new NodeOutcome.Terminal("done")));
+        h.SeedRun("cmd");
+
+        await h.RunAsync();
+
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+        var warning = Assert.Single(logger.Warnings, w => w.Text.Contains(nameof(EventType.LoopRunCompleted)));
+        Assert.Contains(h.RunId.ToString(), warning.Text);
+        Assert.Equal("database unavailable", warning.Exception?.Message);
+    }
+
+    private sealed class RecordingLogger : ILogger<LoopEngine>
+    {
+        public List<(string Text, Exception? Exception)> Warnings { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning) Warnings.Add((formatter(state, exception), exception));
+        }
     }
 }
