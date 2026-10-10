@@ -8,8 +8,9 @@ public interface IEventLogStore
     /// <summary>
     /// Insert <paramref name="entry"/> on its run and return its Id. Appends to
     /// one run commit one at a time in Id order. A conversation event (see
-    /// <see cref="Enums.RunConversationEvents"/>) on a run whose run-ending event
-    /// already exists throws <see cref="RunClosedException"/> and writes nothing;
+    /// <see cref="Enums.RunConversationEvents"/>) on a run with a terminal status
+    /// or a run-ending event throws <see cref="RunClosedException"/> and writes nothing,
+    /// except the first run-ending event itself may follow a terminal status;
     /// the check and the insert are one transaction under the run's row lock.
     /// </summary>
     Task<long> AppendAsync(EventLog entry);
