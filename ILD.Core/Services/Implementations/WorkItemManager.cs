@@ -842,15 +842,12 @@ public class WorkItemManager : IWorkItemManager
             {
                 runWorktreePath = run.WorktreePath;
                 if (actual != RemoteWorkItemStatus.HumanFeedback || explicitRun)
-                {
-                    run.HumanFeedbackReason = actual == RemoteWorkItemStatus.HumanFeedback && reason != null
-                        // Use the dedicated humanFeedbackReason for UI routing on
-                        // the LoopRun. Falls back to reason when not supplied.
-                        ? humanFeedbackReason ?? reason
-                        : null;
-                    run.UpdatedAt = DateTime.UtcNow;
-                    await _loopRunStore.UpdateRunAsync(run);
-                }
+                    await _loopRunStore.SetHumanFeedbackReasonAsync(run.Id,
+                        actual == RemoteWorkItemStatus.HumanFeedback && reason != null
+                            // Use the dedicated humanFeedbackReason for UI routing on
+                            // the LoopRun. Falls back to reason when not supplied.
+                            ? humanFeedbackReason ?? reason
+                            : null);
             }
         }
 
