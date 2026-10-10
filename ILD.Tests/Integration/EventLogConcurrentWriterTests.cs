@@ -317,6 +317,39 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
         Assert.Equal("Ship it", Assert.Single(answers).Data);
     }
 
+    [Fact]
+    public async Task A_pull_request_signal_racing_a_human_answer_never_overwrites_the_answer()
+    {
+        var (workItemId, runId) = await SeedRunWaitingOnAHumanAsync(thenAnotherQuestion: true);
+        var engine = (LoopEngine)_factory.Services.GetRequiredService<ILoopEngine>();
+        Guid waitingNode;
+        using (var scope = _factory.Services.CreateScope())
+            waitingNode = (await scope.ServiceProvider.GetRequiredService<AppDbContext>().LoopRunNodes.AsNoTracking()
+                .SingleAsync(n => n.LoopRunId == runId, TestContext.Current.CancellationToken)).Id;
+
+        var answer = AnswerInOwnScopeAsync(workItemId, runId, "Ship it", CommitGate.Holder);
+        await Within(_gate.Held, "The answer never reached a commit: an answer must be delivered in a transaction.");
+        var signal = Task.Run(async () =>
+        {
+            CommitGate.ActAs(CommitGate.Contender);
+            await engine.SignalNodeResultAsync(runId, waitingNode, NodeSignal.Custom(LoopOutputs.OnCiFailed, "CI is red"));
+        });
+        await Within(_gate.ContenderStarted, "The signal never touched the database.");
+
+        _gate.Release();
+        Assert.IsType<OkResult>(await Within(answer, "The answer did not finish after its commit was released."));
+        await Within(signal, "The signal did not finish after the answer was delivered.");
+        await LoopEngineHarness.WaitUntilIdleAsync(engine, runId);
+
+        using var read = _factory.Services.CreateScope();
+        var db = read.ServiceProvider.GetRequiredService<AppDbContext>();
+        var ct = TestContext.Current.CancellationToken;
+        var run = await db.LoopRuns.AsNoTracking().SingleAsync(r => r.Id == runId, ct);
+        var nextQuestion = await db.LoopNodes.AsNoTracking().SingleAsync(n => n.Label == "Release check", ct);
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Equal(nextQuestion.Id, run.CurrentNodeId);
+    }
+
     /// <summary>The real event log, running a test's hook, once, just before the next answer is written.</summary>
     private sealed class EventLogWithInterleaving(IEventLogService inner, Func<Func<Task>?> takeHook) : IEventLogService
     {

@@ -435,6 +435,15 @@ public class LoopRunStore : ILoopRunStore
         }
     }
 
+    public async Task<bool> UnderRunLockAsync(Guid runId, Func<Task> body)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync();
+        if (!await RunRowLock.TakeAsync(_db, runId)) return false;
+        await body();
+        await tx.CommitAsync();
+        return true;
+    }
+
     private static void SetUnchanged<T>(PropertyEntry<LoopRun, T> property, T value)
     {
         property.CurrentValue = value;

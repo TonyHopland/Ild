@@ -28,10 +28,7 @@ public class EventLogStore : IEventLogStore
             // then commit one at a time, in the order they took their Ids, so a
             // reader paging by Id never passes an Id that commits later; and the
             // closed check below cannot race the run-ending event it looks for.
-            var runs = await _db.LoopRuns
-                .Where(r => r.Id == runId)
-                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, r => r.Status));
-            if (runs == 0)
+            if (!await RunRowLock.TakeAsync(_db, runId))
                 throw new InvalidOperationException($"Run {runId} not found while appending an event.");
 
             if (await IsConversationAsync(entry) && await HasEndedAsync(runId))

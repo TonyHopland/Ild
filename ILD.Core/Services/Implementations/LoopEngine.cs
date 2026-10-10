@@ -523,23 +523,31 @@ public sealed class LoopEngine : ILoopEngine
         var workItems = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run is null) return;
-        if (run.Status != LoopRunStatus.WaitingHuman)
-        {
-            _logger.LogWarning("SignalNodeResult rejected: run {RunId} not WaitingHuman (status={Status})", runId, run.Status);
-            return;
-        }
 
-        // Validate that the target run node belongs to this run and is in WaitingHuman status.
-        var targetNode = await loopRunStore.GetRunNodeByIdAsync(runNodeId);
-        if (targetNode is null || targetNode.LoopRunId != runId || targetNode.Status != LoopRunNodeStatus.WaitingHuman)
+        // Under the run's lock, on the rows as they are now, as an answer is: a
+        // signal that read the run before an answer committed must not then
+        // overwrite it.
+        var applied = false;
+        await loopRunStore.UnderRunLockAsync(runId, async () =>
         {
-            _logger.LogWarning("SignalNodeResult rejected: runNode {RunNodeId} not a WaitingHuman node for run {RunId}", runNodeId, runId);
-            return;
-        }
+            await loopRunStore.ReloadAsync(run);
+            if (run.Status != LoopRunStatus.WaitingHuman)
+            {
+                _logger.LogWarning("SignalNodeResult rejected: run {RunId} not WaitingHuman (status={Status})", runId, run.Status);
+                return;
+            }
+            if (await loopRunStore.GetWaitingHumanLoopNodeIdAsync(runId, runNodeId) is null)
+            {
+                _logger.LogWarning("SignalNodeResult rejected: runNode {RunNodeId} not a WaitingHuman node for run {RunId}", runNodeId, runId);
+                return;
+            }
+            ApplySignal(run, signal);
+            await loopRunStore.UpdateRunAsync(run);
+            applied = true;
+        });
+        if (!applied) return;
 
-        var old = run.Status;
-        ApplySignal(run, signal);
-        await loopRunStore.UpdateRunAsync(run);
+        var old = LoopRunStatus.WaitingHuman;
         // Move the work item back out of HumanFeedback. The run is resuming to
         // Running here, but unlike the other resume paths this handler had been
         // omitting the transition — stranding the card in HumanFeedback while the

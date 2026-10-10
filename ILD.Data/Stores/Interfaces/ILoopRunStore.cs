@@ -189,6 +189,14 @@ public interface ILoopRunStore
     Task SetHumanFeedbackReasonAsync(Guid runId, string? reason);
 
     /// <summary>
+    /// Run <paramref name="body"/> in one transaction holding the run's row
+    /// lock, the lock event appends and human answers take, so what it reads
+    /// cannot change under it before it commits. False, with nothing run, when
+    /// there is no such run.
+    /// </summary>
+    Task<bool> UnderRunLockAsync(Guid runId, Func<Task> body);
+
+    /// <summary>
     /// Overwrite what the run has been handed of its PR's review, touching only
     /// that column and without checking what was there. Every real writer goes
     /// through <see cref="TrySetPrCommentLedgerAsync"/> instead; this remains
