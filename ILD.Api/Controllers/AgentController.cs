@@ -793,6 +793,7 @@ public class AgentController : ControllerBase
             var filtered = await _db.LoopRuns.AsNoTracking()
                 .Where(r => r.WorkItemId == workItemId)
                 .OrderByDescending(r => r.StartedAt)
+                .ThenByDescending(r => r.Id)
                 .Skip(skip).Take(take)
                 .Select(r => new { r.Id, r.WorkItemId, r.Status, r.StartedAt, r.CompletedAt })
                 .ToListAsync();

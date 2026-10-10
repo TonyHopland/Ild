@@ -453,7 +453,7 @@ public class WorkItemManager : IWorkItemManager
     /// here for the work item to surface its completion time.
     /// </summary>
     private static LoopRun? LatestRun(IEnumerable<LoopRun> runs)
-        => runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
+        => runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).ThenByDescending(r => r.Id).FirstOrDefault();
 
     private static WorkItemView BuildView(
         RemoteWorkItem remote,
@@ -927,7 +927,7 @@ public class WorkItemManager : IWorkItemManager
             {
                 var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
                 var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-                               ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
+                               ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).ThenByDescending(r => r.Id).FirstOrDefault();
                 views.Add(BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
                     await _loopRunStore.GetWorkItemStatusReasonAsync(id)));
             }
@@ -945,7 +945,7 @@ public class WorkItemManager : IWorkItemManager
         {
             var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
             var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-                           ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).FirstOrDefault();
+                           ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).ThenByDescending(r => r.Id).FirstOrDefault();
             views.Add(BuildView(candidate, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
                 await _loopRunStore.GetWorkItemStatusReasonAsync(candidate.Id)));
         }
