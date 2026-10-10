@@ -69,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Answering a run that is no longer waiting shows an error instead of leaving the work item stuck.**
+
 - **Clicking a dependency on a work item now opens that work item instead of the taskboard.**
 
 - **A loop's proposed edit to another work item is now approved or rejected from the work item whose loop asked for it, and the edited item lists its pending proposals on its Overview.**

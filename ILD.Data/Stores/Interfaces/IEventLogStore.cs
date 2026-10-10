@@ -13,6 +13,15 @@ public interface IEventLogStore
     /// </summary>
     Task<long> AppendAsync(EventLog entry);
 
+    /// <summary>
+    /// <see cref="AppendAsync"/>, running <paramref name="alongside"/> inside the
+    /// same transaction after the run is locked and found open, before the insert.
+    /// Its writes and the event commit together or not at all: if it throws,
+    /// nothing is written and the exception propagates. It must use this
+    /// store's context and not open a transaction of its own.
+    /// </summary>
+    Task<long> AppendAlongsideAsync(EventLog entry, Func<Task> alongside);
+
     /// <summary>Whether the run's run-ending event (completed, failed, cancelled) has been written.</summary>
     Task<bool> HasEndedAsync(Guid runId);
 

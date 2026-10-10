@@ -82,7 +82,7 @@ describe("answering a parked run", () => {
     });
 
     expect(answer).toHaveBeenCalledTimes(1);
-    expect(answer.mock.calls[0][1]).toBe("Looks good");
+    expect(answer.mock.calls[0]).toEqual(["wi-1", "run-1", "Looks good"]);
     expect(upload).not.toHaveBeenCalled();
   });
 
@@ -99,6 +99,30 @@ describe("answering a parked run", () => {
 
     expect(answer).toHaveBeenCalledTimes(2);
     expect(result.current.respondLoading).toBe(false);
+  });
+
+  test("with no run to answer, nothing is sent and the pane says why", async () => {
+    stubServices();
+    const sends = [
+      vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined),
+      vi.spyOn(workItemService, "humanFeedbackReject").mockResolvedValue(undefined),
+      vi.spyOn(workItemService, "humanFeedbackEdge").mockResolvedValue(undefined),
+    ];
+
+    const workItem = { ...makeParkedWorkItem(), currentLoopRunId: null };
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
+
+    for (const answer of [
+      () => result.current.handleApprove(),
+      () => result.current.handleReject(),
+      () => result.current.handleEdge("Needs work"),
+    ]) {
+      await act(async () => await answer());
+      expect(result.current.respondError).toBeTruthy();
+      expect(result.current.respondLoading).toBe(false);
+    }
+    for (const send of sends) expect(send).not.toHaveBeenCalled();
   });
 
   test("a refused answer releases the buttons so it can be retried", async () => {

@@ -184,7 +184,7 @@ describe("pasting a file into the Action tab's feedback pane", () => {
     await click(await screen.findByRole("button", { name: "Approve" }));
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "Looks good");
+    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Looks good");
     expect(upload).not.toHaveBeenCalled();
   });
 
@@ -219,7 +219,7 @@ describe("answering from the Action tab submits exactly what was typed", () => {
       service: "humanFeedbackInput",
       typed: "Looks good",
       button: "Approve",
-      sent: ["wi-1", "Looks good"],
+      sent: ["wi-1", "run-1", "Looks good"],
     },
     {
       name: "approving with nothing typed sends empty text and uploads nothing",
@@ -227,7 +227,7 @@ describe("answering from the Action tab submits exactly what was typed", () => {
       service: "humanFeedbackInput",
       typed: null,
       button: "Approve",
-      sent: ["wi-1", ""],
+      sent: ["wi-1", "run-1", ""],
     },
     {
       name: "rejecting sends the typed text and uploads nothing",
@@ -235,7 +235,7 @@ describe("answering from the Action tab submits exactly what was typed", () => {
       service: "humanFeedbackReject",
       typed: "Not yet",
       button: "Reject",
-      sent: ["wi-1", "Not yet"],
+      sent: ["wi-1", "run-1", "Not yet"],
     },
     {
       name: "rejecting with nothing typed sends no reason and uploads nothing",
@@ -243,7 +243,7 @@ describe("answering from the Action tab submits exactly what was typed", () => {
       service: "humanFeedbackReject",
       typed: null,
       button: "Reject",
-      sent: ["wi-1", undefined],
+      sent: ["wi-1", "run-1", undefined],
     },
     {
       name: "taking a named edge sends the typed text and uploads nothing",
@@ -251,7 +251,7 @@ describe("answering from the Action tab submits exactly what was typed", () => {
       service: "humanFeedbackEdge",
       typed: "Have a look",
       button: "Needs work",
-      sent: ["wi-1", "Needs work", "Have a look"],
+      sent: ["wi-1", "run-1", "Needs work", "Have a look"],
     },
     {
       name: "taking a named edge with nothing typed sends empty text and uploads nothing",
@@ -259,7 +259,7 @@ describe("answering from the Action tab submits exactly what was typed", () => {
       service: "humanFeedbackEdge",
       typed: null,
       button: "Needs work",
-      sent: ["wi-1", "Needs work", ""],
+      sent: ["wi-1", "run-1", "Needs work", ""],
     },
   ];
 

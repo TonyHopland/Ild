@@ -79,19 +79,16 @@ public class LoopRunStore : ILoopRunStore
             .Skip(skip).Take(take)
             .ToListAsync();
 
-    public async Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId)
-        => await _db.LoopRuns
-            .Where(r => r.WorkItemId == workItemId && (r.Status == LoopRunStatus.Running
-                || r.Status == LoopRunStatus.Failed
-                || r.Status == LoopRunStatus.Cancelled
-                || r.Status == LoopRunStatus.WaitingHuman))
-            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
-            .FirstOrDefaultAsync();
-
     public async Task<LoopRun?> GetActiveByWorkItemAsync(string workItemId)
         => await _db.LoopRuns
             .Where(r => r.WorkItemId == workItemId)
             .Where(IsAlive)
+            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .FirstOrDefaultAsync();
+
+    public async Task<LoopRun?> GetLatestByWorkItemAsync(string workItemId)
+        => await _db.LoopRuns
+            .Where(r => r.WorkItemId == workItemId)
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .FirstOrDefaultAsync();
 
@@ -236,6 +233,13 @@ public class LoopRunStore : ILoopRunStore
             .Where(rn => rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.Running)
             .OrderByDescending(rn => rn.StartedAt ?? rn.CreatedAt)
             .Select(rn => (Guid?)rn.Id)
+            .FirstOrDefaultAsync();
+
+    public Task<Guid?> GetWaitingHumanLoopNodeIdAsync(Guid runId, Guid runNodeId)
+        => _db.LoopRunNodes
+            .AsNoTracking()
+            .Where(rn => rn.Id == runNodeId && rn.LoopRunId == runId && rn.Status == LoopRunNodeStatus.WaitingHuman)
+            .Select(rn => (Guid?)rn.LoopNodeId)
             .FirstOrDefaultAsync();
 
     public async Task SetVariableAsync(Guid runId, string name, string value)

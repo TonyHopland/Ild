@@ -36,14 +36,22 @@ public interface ILoopRunStore
     /// </summary>
     Task<IReadOnlyList<LoopRun>> GetAllByWorkItemsAsync(IReadOnlyCollection<string> workItemIds);
     Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take);
-    Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId);
 
     /// <summary>
     /// The work item's single active run, if any: the most recent run whose
     /// status the engine considers alive (<c>Running</c> or <c>WaitingHuman</c>).
-    /// Used to enforce the at-most-one-active-run-per-work-item invariant.
+    /// Used to enforce the at-most-one-active-run-per-work-item invariant, and by
+    /// everything that drives, resumes, signals or queues work on a run.
     /// </summary>
     Task<LoopRun?> GetActiveByWorkItemAsync(string workItemId);
+
+    /// <summary>
+    /// The work item's newest run in any state, ordered by when it started (or
+    /// was created, if it never started). What reading, displaying and closing
+    /// out the item works on; never a run to drive — that is
+    /// <see cref="GetActiveByWorkItemAsync"/>.
+    /// </summary>
+    Task<LoopRun?> GetLatestByWorkItemAsync(string workItemId);
 
     Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100);
     Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync();
@@ -137,6 +145,13 @@ public interface ILoopRunStore
     /// started when several are. Null when none is.
     /// </summary>
     Task<Guid?> GetRunningNodeIdAsync(Guid runId);
+
+    /// <summary>
+    /// The loop node that execution <paramref name="runNodeId"/> of the run is
+    /// of, while that execution waits on a person; null otherwise. Read from the
+    /// database, not from an instance this context already tracks.
+    /// </summary>
+    Task<Guid?> GetWaitingHumanLoopNodeIdAsync(Guid runId, Guid runNodeId);
 
     /// <summary>
     /// What each node execution of the work item's runs did to each variable it

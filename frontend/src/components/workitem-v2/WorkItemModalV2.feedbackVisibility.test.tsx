@@ -291,7 +291,7 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
     });
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "Needs work", "Have a look");
+    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Needs work", "Have a look");
   });
 
   test("an output the parked node marks to confirm asks before it is sent", async () => {
@@ -314,7 +314,7 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
     });
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "Clean up", "");
+    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Clean up", "");
   });
 
   test("a valid colour stored on the parked node's output colours its button, and nothing else does", async () => {
@@ -349,7 +349,7 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
       fireEvent.click(button("Needs work"));
     });
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "Needs work", "");
+    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Needs work", "");
   });
 
   test("a confirmation open when the work item changes is dropped, and nothing is sent", async () => {
@@ -692,7 +692,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
       expect(enter(box())).toBe(false);
     });
     await waitFor(() => expect(answers.approve).toHaveBeenCalledTimes(1));
-    expect(answers.approve).toHaveBeenCalledWith("wi-1", "Looks good");
+    expect(answers.approve).toHaveBeenCalledWith("wi-1", "run-1", "Looks good");
     expect(answers.reject).not.toHaveBeenCalled();
     expect(answers.edge).not.toHaveBeenCalled();
 
@@ -776,7 +776,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
       });
 
       await waitFor(() => expect(answers.edge).toHaveBeenCalledTimes(1));
-      expect(answers.edge).toHaveBeenCalledWith("wi-1", "Clean up", text);
+      expect(answers.edge).toHaveBeenCalledWith("wi-1", "run-1", "Clean up", text);
       expect(answers.approve).not.toHaveBeenCalled();
       expect(answers.reject).not.toHaveBeenCalled();
       expect(onClose).not.toHaveBeenCalled();

@@ -17,10 +17,18 @@ public class EventLogService : IEventLogService
 
     public Task<long> AppendAsync(Guid runId, EventType eventType, string message,
         Guid? nodeId = null, Guid? runNodeId = null, string? edgeName = null)
-        // Payloads are stored inline in the DB. PostgreSQL keeps the Data
-        // column (text) out-of-line and LZ-compressed via TOAST once a value
-        // exceeds a few KB, so large prompts/diffs cost nothing on the main row.
-        => _eventLogStore.AppendAsync(new EventLog
+        => _eventLogStore.AppendAsync(Entry(runId, eventType, message, nodeId, runNodeId, edgeName));
+
+    public Task<long> AppendAlongsideAsync(Guid runId, EventType eventType, string message,
+        Guid? nodeId, Guid? runNodeId, string? edgeName, Func<Task> alongside)
+        => _eventLogStore.AppendAlongsideAsync(Entry(runId, eventType, message, nodeId, runNodeId, edgeName), alongside);
+
+    // Payloads are stored inline in the DB. PostgreSQL keeps the Data
+    // column (text) out-of-line and LZ-compressed via TOAST once a value
+    // exceeds a few KB, so large prompts/diffs cost nothing on the main row.
+    private static EventLog Entry(Guid runId, EventType eventType, string message,
+        Guid? nodeId, Guid? runNodeId, string? edgeName)
+        => new()
         {
             LoopRunId = runId,
             EventType = eventType,
@@ -29,7 +37,7 @@ public class EventLogService : IEventLogService
             EdgeName = edgeName,
             Timestamp = DateTime.UtcNow,
             Data = message,
-        });
+        };
 
     public Task<bool> HasRunEndedAsync(Guid runId) => _eventLogStore.HasEndedAsync(runId);
 

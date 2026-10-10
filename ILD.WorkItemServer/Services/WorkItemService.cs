@@ -18,8 +18,6 @@ public interface IWorkItemService
     Task<bool> RemoveDependencyAsync(string id, string dependencyId, CancellationToken ct = default);
     Task<IReadOnlyList<string>?> GetDependenciesAsync(string id, CancellationToken ct = default);
 
-    Task<bool> AppendFeedbackAsync(string id, string content, CancellationToken ct = default);
-
     /// <summary>
     /// Record a pull request against a work item, keyed by URL: a URL the item
     /// already knows is updated in place rather than duplicated, so a client may
@@ -397,19 +395,6 @@ public sealed class WorkItemService : IWorkItemService
     {
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         return w == null ? null : WorkItemMapper.ReadDependencies(w);
-    }
-
-    public async Task<bool> AppendFeedbackAsync(string id, string content, CancellationToken ct = default)
-    {
-        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
-        if (w == null) return false;
-        var now = _clock.GetUtcNow().UtcDateTime;
-        // Per PRD: human feedback transitions the item to WaitingForIld so the
-        // claiming ILD instance picks it back up on its next poll.
-        w.Status = WorkItemStatus.WaitingForIld;
-        w.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-        return true;
     }
 
     /// <summary>

@@ -61,7 +61,9 @@ public class PrOwnQueuedWriteTests
         public Harness()
         {
             Run = AddRun("wi-1");
-            Runs.Setup(s => s.GetCurrentByWorkItemAsync(It.IsAny<string>()))
+            Runs.Setup(s => s.GetActiveByWorkItemAsync(It.IsAny<string>()))
+                .ReturnsAsync((string wi) => Rows.Values.FirstOrDefault(r => r.WorkItemId == wi));
+            Runs.Setup(s => s.GetLatestByWorkItemAsync(It.IsAny<string>()))
                 .ReturnsAsync((string wi) => Rows.Values.FirstOrDefault(r => r.WorkItemId == wi));
             Runs.Setup(s => s.GetByIdAsync(It.IsAny<Guid>()))
                 .ReturnsAsync((Guid id) => Rows.GetValueOrDefault(id));

@@ -265,7 +265,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
     // was never answered in A's place.
     await waitFor(() => expect(openTitle()).toBe("Item B"));
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-a", "Looks good");
+    expect(answer).toHaveBeenCalledWith("wi-a", "run-1", "Looks good");
     expect(dialog().querySelector<HTMLTextAreaElement>(".wiv2-feedback textarea")?.value).toBe("");
     expect(dialog().textContent).not.toContain("Looks good");
     expect(dialog().textContent).not.toContain("Input must be 8192 characters or fewer.");

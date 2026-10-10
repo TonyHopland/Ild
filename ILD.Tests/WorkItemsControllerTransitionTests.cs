@@ -231,4 +231,44 @@ public class WorkItemsControllerTransitionTests
         Assert.IsType<BadRequestObjectResult>(result);
         Assert.Equal(RemoteWorkItemStatus.Ready, (await mgr.GetWorkItemAsync(id))!.Status);
     }
+
+    // Moving the card to Running by hand puts nothing behind it: only a live
+    // run can be running, and an item with none would sit in Running undriven
+    // until the server reclaimed it.
+    [Theory]
+    [InlineData(RemoteWorkItemStatus.Ready, null)]
+    [InlineData(RemoteWorkItemStatus.HumanFeedback, null)]
+    [InlineData(RemoteWorkItemStatus.HumanFeedback, LoopRunStatus.Cancelled)]
+    [InlineData(RemoteWorkItemStatus.HumanFeedback, LoopRunStatus.Failed)]
+    [InlineData(RemoteWorkItemStatus.Ready, LoopRunStatus.Completed)]
+    public async Task Transition_to_Running_is_refused_when_the_item_has_no_live_run(
+        RemoteWorkItemStatus from, LoopRunStatus? previousRun)
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _ = db;
+
+        var id = await SeedIdleItemAsync(mgr, repoId, from);
+        if (previousRun is { } status)
+            SeedRun(db, id, status, completed: true);
+
+        var result = await controller.Transition(id, new WorkItemTransitionRequest { TargetStatus = "Running" });
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal(from, (await mgr.GetWorkItemAsync(id))!.Status);
+    }
+
+    [Fact]
+    public async Task Transition_to_Running_is_allowed_for_an_item_whose_run_is_alive()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _ = db;
+
+        var id = await SeedIdleItemAsync(mgr, repoId, RemoteWorkItemStatus.HumanFeedback);
+        SeedLiveRun(db, id);
+
+        var result = await controller.Transition(id, new WorkItemTransitionRequest { TargetStatus = "Running" });
+
+        Assert.IsType<OkResult>(result);
+        Assert.Equal(RemoteWorkItemStatus.Running, (await mgr.GetWorkItemAsync(id))!.Status);
+    }
 }

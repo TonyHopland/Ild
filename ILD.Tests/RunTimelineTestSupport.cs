@@ -126,7 +126,9 @@ internal static class RunTimeline
 /// <see cref="Release"/>; the writer acting as <see cref="Contender"/> reports
 /// when it has started using the database (its first transaction begun, or its
 /// first command finished), so a test knows it is in flight against the held
-/// commit rather than merely scheduled.
+/// commit rather than merely scheduled, and separately when it begins a
+/// transaction or sends a write — the point a writer that has already read its
+/// way past every check starts to write.
 /// </summary>
 internal sealed class CommitGate : IDbTransactionInterceptor, IDbCommandInterceptor
 {
@@ -138,6 +140,7 @@ internal sealed class CommitGate : IDbTransactionInterceptor, IDbCommandIntercep
     private readonly TaskCompletionSource _held = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _released = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _contenderStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _contenderWriting = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _holds;
 
     /// <summary>Marks the calling flow, and everything it awaits, as one of the two writers.</summary>
@@ -145,6 +148,7 @@ internal sealed class CommitGate : IDbTransactionInterceptor, IDbCommandIntercep
 
     public Task Held => _held.Task;
     public Task ContenderStarted => _contenderStarted.Task;
+    public Task ContenderWriting => _contenderWriting.Task;
     public void Release() => _released.TrySetResult();
 
     private async Task HoldAsync()
@@ -157,6 +161,12 @@ internal sealed class CommitGate : IDbTransactionInterceptor, IDbCommandIntercep
     private void Touched()
     {
         if (Role.Value == Contender) _contenderStarted.TrySetResult();
+    }
+
+    private void Writing()
+    {
+        Touched();
+        if (Role.Value == Contender) _contenderWriting.TrySetResult();
     }
 
     public InterceptionResult TransactionCommitting(DbTransaction transaction, TransactionEventData eventData, InterceptionResult result)
@@ -175,7 +185,7 @@ internal sealed class CommitGate : IDbTransactionInterceptor, IDbCommandIntercep
     public InterceptionResult<DbTransaction> TransactionStarting(
         DbConnection connection, TransactionStartingEventData eventData, InterceptionResult<DbTransaction> result)
     {
-        Touched();
+        Writing();
         return result;
     }
 
@@ -183,7 +193,7 @@ internal sealed class CommitGate : IDbTransactionInterceptor, IDbCommandIntercep
         DbConnection connection, TransactionStartingEventData eventData, InterceptionResult<DbTransaction> result,
         CancellationToken cancellationToken = default)
     {
-        Touched();
+        Writing();
         return ValueTask.FromResult(result);
     }
 
@@ -197,6 +207,19 @@ internal sealed class CommitGate : IDbTransactionInterceptor, IDbCommandIntercep
         DbCommand command, CommandExecutedEventData eventData, DbDataReader result, CancellationToken cancellationToken = default)
     {
         Touched();
+        return ValueTask.FromResult(result);
+    }
+
+    public InterceptionResult<int> NonQueryExecuting(DbCommand command, CommandEventData eventData, InterceptionResult<int> result)
+    {
+        Writing();
+        return result;
+    }
+
+    public ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+        DbCommand command, CommandEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
+    {
+        Writing();
         return ValueTask.FromResult(result);
     }
 

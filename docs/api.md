@@ -39,7 +39,7 @@ Event payload types are statically modelled in `frontend/src/types/signalr.ts`. 
 
 ## WorkItem Server API
 
-The standalone server owns work-item state and claim semantics (see [ADR-0001](./adr/0001-standalone-workitem-server.md)). Its surface centres on listing and polling work items (`GET /workitems`, `GET /workitems/poll` for heartbeat + ready-item polling), atomic state changes (`POST /workitems/{id}/transition` for claim-or-permissive transitions), and human feedback (`POST /workitems/{id}/feedback` moves the item to `WaitingForIld`). It keeps no conversation: a run's conversation lives in that run's event log on the ILD instance. `GET /health` reports liveness.
+The standalone server owns work-item state and claim semantics (see [ADR-0001](./adr/0001-standalone-workitem-server.md)). Its surface centres on listing and polling work items (`GET /workitems`, `GET /workitems/poll` for heartbeat + ready-item polling) and atomic state changes (`POST /workitems/{id}/transition` for claim-or-permissive transitions). It keeps no conversation: a run's conversation lives in that run's event log on the ILD instance. `GET /health` reports liveness.
 
 ## See also
 
