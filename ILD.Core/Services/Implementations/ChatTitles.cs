@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using ILD.Data.Entities;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -92,7 +93,7 @@ public static partial class ChatTitles
 
     // Titles are written by conditional updates, past AppDbContext's save-time NUL
     // scrub, and PostgreSQL text cannot hold NUL.
-    public static string WithoutNul(string text) => text.Replace("\0", string.Empty);
+    public static string WithoutNul(string text) => AppDbContext.WithoutNul(text);
 
     private static bool IsQuote(char c) => c is '"' or '\'' or '`' or '“' or '”' or '‘' or '’' or '«' or '»';
 

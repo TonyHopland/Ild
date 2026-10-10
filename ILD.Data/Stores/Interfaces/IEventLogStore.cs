@@ -1,4 +1,5 @@
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 
 namespace ILD.Data.Stores.Interfaces;
 
@@ -27,8 +28,14 @@ public interface IEventLogStore
 
     Task<IReadOnlyList<EventLog>> GetByRunIdAsync(Guid runId);
 
-    /// <summary>The run's events with an Id above <paramref name="afterId"/>, in Id order.</summary>
-    Task<IReadOnlyList<EventLog>> GetByRunIdAfterAsync(Guid runId, long afterId);
+    /// <summary>
+    /// The run's events of the given <paramref name="types"/> with an Id above
+    /// <paramref name="afterId"/> and at most <paramref name="throughId"/>, in Id order.
+    /// </summary>
+    Task<IReadOnlyList<EventLog>> GetByRunIdAfterAsync(Guid runId, long afterId, long throughId, IReadOnlyCollection<EventType> types);
+
+    /// <summary>The highest Id among the run's events above <paramref name="afterId"/>, or null when there are none.</summary>
+    Task<long?> GetLastIdByRunIdAfterAsync(Guid runId, long afterId);
 
     Task<IReadOnlyList<EventLog>> GetByRunIdLastNAsync(Guid runId, int n);
 

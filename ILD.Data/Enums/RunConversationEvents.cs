@@ -24,6 +24,13 @@ public static class RunConversationEvents
         EventType.RecoveryTriggered,
     };
 
+    /// <summary>Every event type the conversation projection can turn into a message.</summary>
+    public static readonly IReadOnlySet<EventType> Projected = new HashSet<EventType>(System)
+    {
+        EventType.NodeCompleted,
+        EventType.HumanFeedbackReceived,
+    };
+
     /// <summary>
     /// Whether an event of <paramref name="type"/> belongs to the conversation.
     /// A completed node is an AI turn only when the node is an AI node.

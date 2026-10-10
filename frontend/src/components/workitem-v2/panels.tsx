@@ -14,6 +14,7 @@ import { loopRunService, repositoryService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import { makeLoopTagMatcher, parseTags } from "../../utils/workItemJson";
 import { prStatusBadges } from "../../utils/prStatusBadges";
+import { compareCreatedAt } from "../../utils/createdAt";
 import MarkdownRenderer from "../MarkdownRenderer";
 import FeedbackActions from "../FeedbackActions";
 import { useSubmitDefaultOnEnter } from "../../hooks/useSubmitDefaultOnEnter";
@@ -166,7 +167,7 @@ export function feedbackFor(
   if (workItem.statusReason) {
     if (!runId) return { kind: "reason", reason: workItem.statusReason };
     if (!run) return null;
-    if (Date.parse(workItem.statusReasonAt ?? "") > Date.parse(run.startedAt))
+    if (workItem.statusReasonAt && compareCreatedAt(workItem.statusReasonAt, run.startedAt) > 0)
       return { kind: "reason", reason: workItem.statusReason };
   }
   const reason = workItem.humanFeedbackReason;
