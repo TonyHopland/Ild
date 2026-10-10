@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, within, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
@@ -124,7 +124,7 @@ function msg(
     runId,
     runNodeId: null,
     role,
-    name: role === "ai" ? "Coder" : role === "human" ? "Human" : "LoopRunStarted",
+    name: role === "ai" ? "Coder" : role === "human" ? "Human" : "Run started",
     text,
     timestamp: `2026-09-24T09:${String(id).padStart(2, "0")}:00Z`,
     ...overrides,
@@ -308,7 +308,7 @@ describe("the Action tab thread", () => {
       run,
       [],
       [
-        msg(3, "run-B", "system", "Run started from loop t", { name: "LoopRunStarted" }),
+        msg(3, "run-B", "system", "Run started from loop t", { name: "Run started" }),
         msg(5, "run-B", "ai", "first turn"),
         msg(8, "run-B", "human", "my reply"),
         msg(12, "run-B", "ai", "second turn"),
@@ -360,7 +360,7 @@ describe("the Action tab thread", () => {
           ".wiv2-bubble-row-ai, .wiv2-bubble-row-human, .wiv2-bubble-ai, .wiv2-bubble-human",
         ),
     ).toBeNull();
-    expect(system.textContent).toContain("LoopRunStarted");
+    expect(within(system).getByText("Run started")).toBeTruthy();
 
     const stamp = (id: number) =>
       new Date(`2026-09-24T09:${String(id).padStart(2, "0")}:00Z`).toLocaleString();
@@ -1005,5 +1005,86 @@ describe("PR details", () => {
     const links = within(panel).getAllByRole("link", { name: "Open PR" });
     expect(links).toHaveLength(1);
     expect(links[0].closest(".wiv2-pr-details")).not.toBeNull();
+  });
+});
+
+describe("reading the shown run's detail", () => {
+  /** The dialog as the board hosts it: what it saves is the item it is shown next. */
+  function Hosted({ initial }: { initial: WorkItem }) {
+    const [item, setItem] = useState(initial);
+    return (
+      <MemoryRouter>
+        <WorkItemModalV2 workItem={item} onClose={vi.fn()} onSave={setItem} />
+      </MemoryRouter>
+    );
+  }
+
+  async function openHostedActionTab(workItem: WorkItem) {
+    await act(async () => {
+      render(<Hosted initial={workItem} />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
+      await Promise.resolve();
+    });
+    await flush();
+    return document.getElementById("wiv2-panel-action") as HTMLElement;
+  }
+
+  const nodeChanged = (runId: string) => ({ runId, nodeId: "n", status: "Running" });
+
+  test("a state event on the item's current run costs no read beyond the item's own refresh", async () => {
+    const hub = mockHub();
+    const run = makeRun({ status: LoopRunStatus.Running });
+    mockServices(run);
+    const { getById } = stageRuns([run]);
+    vi.spyOn(authServices.workItemService, "getById").mockImplementation(() =>
+      Promise.resolve(makeWorkItem()),
+    );
+    await openActionTab(makeWorkItem());
+    const readsDuring = async (change: () => Promise<void>) => {
+      const before = getById.mock.calls.length;
+      await change();
+      await flush();
+      return getById.mock.calls.slice(before);
+    };
+
+    const refresh = await readsDuring(() => rerenderDialog(makeWorkItem()));
+    const event = await readsDuring(async () => {
+      await hub.emit("NodeStateChanged", nodeChanged("run-1"));
+      await rerenderDialog(makeWorkItem());
+    });
+
+    expect(refresh.length).toBeGreaterThan(0);
+    expect(event).toEqual(refresh);
+  });
+
+  test("the current run parking shows its feedback card without a reload", async () => {
+    const hub = mockHub();
+    stageParkedNode();
+    const running = makeRun({ status: LoopRunStatus.Running });
+    mockServices(running);
+    const { getById } = stageRuns([running]);
+    const parkedItem = makeWorkItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+    });
+    const getItem = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockImplementation(() => Promise.resolve(makeWorkItem()));
+    const panel = await openHostedActionTab(makeWorkItem());
+    expect(panel.querySelector(".wiv2-feedback")).toBeNull();
+
+    getById.mockResolvedValue(parkedRun("n-parked"));
+    getItem.mockImplementation(() => Promise.resolve({ ...parkedItem }));
+    await hub.emit("LoopRunStateChanged", {
+      runId: "run-1",
+      oldStatus: "Running",
+      newStatus: "WaitingHuman",
+    });
+    await flush();
+
+    await within(panel).findByRole("button", { name: "Approve" });
   });
 });

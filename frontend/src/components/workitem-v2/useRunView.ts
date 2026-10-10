@@ -29,9 +29,18 @@ function merge(
  * keyed by `runId`, so everything here belongs to that one run and goes with
  * it. The detail is read again when `actionsSettled`, the count of actions on
  * the run that went through, moves.
+ *
+ * While the run is the item's current run, its detail is `current.run`, which
+ * the item's view already keeps fresh, and is not read a second time here.
  */
-export function useRunView(runId: string | null, actionsSettled: number): RunView {
+export function useRunView(
+  runId: string | null,
+  actionsSettled: number,
+  current: { isCurrent: boolean; run: LoopRun | null },
+): RunView {
   const [run, setRun] = useState<LoopRun | null>(null);
+  const ownRead = !current.isCurrent;
+  const shared = current.isCurrent && current.run?.id === runId ? current.run : null;
   const [messages, setMessages] = useState<RunConversationMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
@@ -39,7 +48,8 @@ export function useRunView(runId: string | null, actionsSettled: number): RunVie
   const cursor = useRef(0);
   const reading = useRef(false);
   const readAgain = useRef(false);
-  const runReads = useRef(0);
+  const readingRun = useRef(false);
+  const readRunAgain = useRef(false);
   const { on, off, invoke, connectionState } = useSignalR("/hubs/loop-run");
 
   useEffect(() => {
@@ -86,17 +96,40 @@ export function useRunView(runId: string | null, actionsSettled: number): RunVie
     [runId],
   );
 
-  // The newest read wins; a failed one leaves the last detail in place.
-  const readRun = useCallback(() => {
-    if (!runId) return;
-    const generation = ++runReads.current;
-    loopRunService.getById(runId).then(
-      (r) => {
-        if (mounted.current && generation === runReads.current) setRun(r);
-      },
-      () => {},
-    );
-  }, [runId]);
+  // Like the conversation, one read at a time, so a burst of events costs at
+  // most one more; a failed read leaves the last detail in place.
+  const readRun = useCallback(
+    function read() {
+      if (!runId || !ownRead) return;
+      if (readingRun.current) {
+        readRunAgain.current = true;
+        return;
+      }
+      readingRun.current = true;
+      loopRunService
+        .getById(runId)
+        .then(
+          (r) => {
+            if (mounted.current) setRun(r);
+          },
+          () => {},
+        )
+        .finally(() => {
+          readingRun.current = false;
+          if (mounted.current && readRunAgain.current) {
+            readRunAgain.current = false;
+            read();
+          }
+        });
+    },
+    [runId, ownRead],
+  );
+
+  // A run that stops being the current one keeps showing its last detail until
+  // its own read lands.
+  useEffect(() => {
+    if (shared) setRun(shared);
+  }, [shared]);
 
   useEffect(() => {
     readConversation();
@@ -140,5 +173,5 @@ export function useRunView(runId: string | null, actionsSettled: number): RunVie
     };
   }, [runId, connectionState, on, off, invoke, readConversation, readRun]);
 
-  return { run, messages, error };
+  return { run: ownRead ? run : shared, messages, error };
 }

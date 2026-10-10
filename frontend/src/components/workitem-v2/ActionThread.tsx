@@ -224,7 +224,10 @@ function RunThread({
   feedbackPrompt,
   active,
 }: ActionThreadProps & { runId: string | null }) {
-  const view = useRunView(runId, detail.runLock.settledOf(runId));
+  const view = useRunView(runId, detail.runLock.settledOf(runId), {
+    isCurrent: !!runId && workItem.currentLoopRunId === runId,
+    run: detail.currentRun,
+  });
   const { messages } = view;
   const turnVariables = useTurnVariables(workItem.id, messages.length);
   const { proposals, refresh } = useEditProposals({ requestedByWorkItemId: workItem.id });

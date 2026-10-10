@@ -1021,13 +1021,23 @@ describe("WorkItemModalV2", () => {
       isHalted: true,
       completedAt: null,
     });
-    await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
+    const item = makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" });
+    // As on the board: the item the dialog saves is the one it is shown next.
+    const view = await renderDialog(item, {
+      onSave: (saved) =>
+        view.rerender(
+          <MemoryRouter>
+            <WorkItemModalV2 workItem={saved} onClose={vi.fn()} onSave={vi.fn()} />
+          </MemoryRouter>,
+        ),
+    });
     await act(async () => {
       fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
       await Promise.resolve();
     });
     const actionPanel = document.getElementById("wiv2-panel-action") as HTMLElement;
     vi.mocked(authServices.loopRunService.getById).mockResolvedValue(halted);
+    vi.mocked(authServices.workItemService.getById).mockResolvedValue({ ...item });
 
     await act(async () => {
       fireEvent.click(within(actionPanel).getByRole("button", { name: "Halt AI node" }));

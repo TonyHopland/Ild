@@ -9,9 +9,11 @@ public static class SqliteSchemaTemplate<TContext> where TContext : DbContext
     private static readonly Lock Gate = new();
     private static SqliteConnection? _template;
 
-    public static SqliteConnection OpenCopy(Func<DbContextOptions<TContext>, TContext> createContext)
+    /// <param name="connectionString">Where the copy lives: a private database by default.</param>
+    public static SqliteConnection OpenCopy(
+        Func<DbContextOptions<TContext>, TContext> createContext, string connectionString = "Filename=:memory:")
     {
-        var copy = new SqliteConnection("Filename=:memory:");
+        var copy = new SqliteConnection(connectionString);
         copy.Open();
         // A SqliteConnection cannot be used from several threads at once:
         // https://learn.microsoft.com/dotnet/standard/data/sqlite/database-errors#locking-retries-and-timeouts
