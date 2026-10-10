@@ -1169,16 +1169,21 @@ public class AgentApiIntegrationTests
             var now = DateTime.UtcNow;
             var a = Run(now.AddHours(-2));
             var b = Run(now.AddHours(-1));
+            b.Status = LoopRunStatus.Running;
+            b.CompletedAt = null;
             db.LoopRuns.AddRange(a, b);
             var rnB = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = b.Id, LoopNodeId = coder.Id, NodeLabel = "Coder", Status = LoopRunNodeStatus.Succeeded };
             db.LoopRunNodes.Add(rnB);
             await db.SaveChangesAsync(ct);
             (older, latest, aiRunNode) = (a.Id, b.Id, rnB.Id);
 
-            await events.AppendAsync(older, EventType.LoopRunStarted, "older run started");
-            await events.AppendAsync(older, EventType.HumanFeedbackReceived, "a reply to the older run");
+            db.EventLogs.AddRange(
+                new EventLog { LoopRunId = older, EventType = EventType.LoopRunStarted, Data = "older run started", Timestamp = now.AddHours(-2) },
+                new EventLog { LoopRunId = older, EventType = EventType.HumanFeedbackReceived, Data = "a reply to the older run", Timestamp = now.AddHours(-2) });
+            await db.SaveChangesAsync(ct);
             latestStarted = await events.AppendAsync(latest, EventType.LoopRunStarted, "latest run started");
-            await events.AppendAsync(older, EventType.HumanFeedbackReceived, "a late reply to the older run");
+            db.EventLogs.Add(new EventLog { LoopRunId = older, EventType = EventType.HumanFeedbackReceived, Data = "a late reply to the older run", Timestamp = now });
+            await db.SaveChangesAsync(ct);
             latestAi = await events.AppendAsync(latest, EventType.NodeCompleted, "a plan", coder.Id, aiRunNode);
             latestReply = await events.AppendAsync(latest, EventType.HumanFeedbackReceived, "go on");
         }

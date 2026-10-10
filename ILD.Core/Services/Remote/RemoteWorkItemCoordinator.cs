@@ -212,11 +212,19 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                         $"Multiple loop templates match tags: {string.Join(", ", resolution.MatchingTemplateNames)}",
                     _ => "Unable to resolve template",
                 };
-                await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, reason);
-                await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
+                var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
                 {
                     TargetStatus = RemoteWorkItemStatus.HumanFeedback,
                 }, ct);
+                if (!transition.Success)
+                {
+                    _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback: {Reason}",
+                        ready.Id, transition.Reason);
+                    continue;
+                }
+                await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, reason);
+                await _workItemNotifier.WorkItemStateChangedAsync(
+                    ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.HumanFeedback);
                 escalated.Add(ready);
                 continue;
             }
@@ -253,18 +261,25 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                     _logger?.LogWarning(ex,
                         "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
                     // The claim stands on the server with nothing driving it, so
-                    // hand it back for review and give up the slot it took.
+                    // hand it back for review. Release the slot even if the remote
+                    // transition fails: no live run can use this instance's capacity.
                     // StartRunAsync ends any run it had already created as
                     // Failed, so no orphan keeps the slot on the next pass, and
                     // the reason belongs to the item rather than to that run.
+                    slotHolders.Remove(ready.Id);
                     try
                     {
-                        await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, $"Failed to start run: {ex.Message}");
-                        await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
+                        var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
                         {
                             TargetStatus = RemoteWorkItemStatus.HumanFeedback,
                         }, ct);
-                        slotHolders.Remove(ready.Id);
+                        if (!transition.Success)
+                        {
+                            _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback after run start failure: {Reason}",
+                                ready.Id, transition.Reason);
+                            continue;
+                        }
+                        await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, $"Failed to start run: {ex.Message}");
                         await _workItemNotifier.WorkItemStateChangedAsync(
                             ready.Id, RemoteWorkItemStatus.Running, RemoteWorkItemStatus.HumanFeedback);
                         escalated.Add(ready);

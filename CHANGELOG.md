@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Finished runs refuse late conversation replies, and failed escalations no longer appear to have succeeded.**
+
 - **Answering a run that is no longer waiting shows an error instead of leaving the work item stuck.**
 
 ## [0.16.0] - 2026-10-04

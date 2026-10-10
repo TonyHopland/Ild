@@ -80,6 +80,26 @@ public class EventLogRunClosureTests
     }
 
     [Theory]
+    [InlineData(LoopRunStatus.Completed, EventType.LoopRunCompleted)]
+    [InlineData(LoopRunStatus.Failed, EventType.LoopRunFailed)]
+    [InlineData(LoopRunStatus.Cancelled, EventType.LoopRunCancelled)]
+    public async Task A_terminal_status_closes_conversation_before_the_ending_event_is_written(
+        LoopRunStatus status, EventType ending)
+    {
+        using var f = new Fixture();
+        await f.Db.Fresh().LoopRuns.Where(r => r.Id == f.Run.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, status), TestContext.Current.CancellationToken);
+
+        var refused = await Record.ExceptionAsync(() => f.AppendAsync(EventType.HumanFeedbackReceived, "too late"));
+
+        Assert.Equal("RunClosedException", refused?.GetType().Name);
+        Assert.DoesNotContain(RunTimeline.Events(f.Db, f.Run.Id), e => e.Data == "too late");
+
+        await f.AppendAsync(ending, "the end");
+        Assert.Equal(ending, Assert.Single(RunTimeline.Events(f.Db, f.Run.Id)).EventType);
+    }
+
+    [Theory]
     [InlineData(EventType.NodeStarted)]
     [InlineData(EventType.EdgeTraversed)]
     [InlineData(EventType.NodeFailed)]

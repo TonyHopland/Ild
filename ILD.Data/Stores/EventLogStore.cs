@@ -27,11 +27,15 @@ public class EventLogStore : IEventLogStore
             // Lock the run row for the rest of the transaction. Appends to one run
             // then commit one at a time, in the order they took their Ids, so a
             // reader paging by Id never passes an Id that commits later; and the
-            // closed check below cannot race the run-ending event it looks for.
+            // closed check below cannot race the run-ending status or event.
             if (!await RunRowLock.TakeAsync(_db, runId))
                 throw new InvalidOperationException($"Run {runId} not found while appending an event.");
 
-            if (await IsConversationAsync(entry) && await HasEndedAsync(runId))
+            if (await IsConversationAsync(entry) &&
+                (!RunConversationEvents.Ending.Contains(entry.EventType) &&
+                 await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == runId &&
+                    (r.Status == LoopRunStatus.Completed || r.Status == LoopRunStatus.Failed ||
+                     r.Status == LoopRunStatus.Cancelled)) || await HasEndedAsync(runId)))
                 throw new RunClosedException(runId);
 
             await alongside();

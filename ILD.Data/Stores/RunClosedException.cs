@@ -1,8 +1,8 @@
 namespace ILD.Data.Stores;
 
 /// <summary>
-/// A conversation event was appended to a run whose run-ending event is already
-/// written. The run is closed: nothing more may be said on it.
+/// A conversation event was refused because the run has a terminal status or
+/// a run-ending event. Nothing more may be said on it.
 /// </summary>
 public sealed class RunClosedException : InvalidOperationException
 {

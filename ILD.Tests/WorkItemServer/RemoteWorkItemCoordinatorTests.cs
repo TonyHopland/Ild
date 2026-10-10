@@ -78,12 +78,16 @@ public sealed class RemoteWorkItemCoordinatorTests
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.None, null, Array.Empty<string>()));
 
         var runs = NoLiveRunsMock();
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object);
+        var notifier = new Mock<IWorkItemNotifier>();
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object,
+            workItemNotifier: notifier.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.EscalatedToHumanFeedback);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
         runs.Verify(s => s.SetWorkItemStatusReasonAsync(ready.Id, It.Is<string>(r => r.Contains("No loop"))), Times.Once);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(ready.Id,
+            RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.HumanFeedback), Times.Once);
     }
 
     [Fact]
@@ -111,6 +115,37 @@ public sealed class RemoteWorkItemCoordinatorTests
         Assert.Single(result.EscalatedToHumanFeedback);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, captured!.TargetStatus);
         runs.Verify(s => s.SetWorkItemStatusReasonAsync(ready.Id, It.Is<string>(r => r.Contains("Multiple loop templates"))), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(LoopTemplateResolutionKind.None)]
+    [InlineData(LoopTemplateResolutionKind.Ambiguous)]
+    public async Task Failed_template_escalation_leaves_item_ready_without_local_side_effects(LoopTemplateResolutionKind kind)
+    {
+        var ready = Item(NewId(), RemoteWorkItemStatus.Ready, "unknown");
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
+        client.Setup(c => c.TransitionAsync(Opts, ready.Id,
+                It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback),
+                It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Ready });
+
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(kind, null, Array.Empty<string>()));
+        var runs = NoLiveRunsMock();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, new Mock<ILoopEngine>().Object,
+            runs.Object, workItemNotifier: notifier.Object);
+
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.EscalatedToHumanFeedback);
+        Assert.Empty(result.SlotHolders);
+        runs.Verify(s => s.SetWorkItemStatusReasonAsync(ready.Id, It.IsAny<string>()), Times.Never);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(ready.Id,
+            It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
     }
 
     [Fact]
@@ -737,6 +772,34 @@ public sealed class RemoteWorkItemCoordinatorTests
             It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback),
             It.IsAny<CancellationToken>()), Times.Once);
         runs.Verify(s => s.SetWorkItemStatusReasonAsync(doomed.Id, "Failed to start run: no start node"), Times.Once);
+    }
+
+    [Fact]
+    public async Task Failed_start_escalation_releases_slot_but_does_not_report_a_transition()
+    {
+        var doomed = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+        var next = Item(NewId(), RemoteWorkItemStatus.Ready, "build");
+        var (client, _) = ScriptedClient(new RemotePollResponse { ReadyItems = new[] { doomed, next } });
+        client.Setup(c => c.TransitionAsync(Opts, doomed.Id,
+                It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback),
+                It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Running });
+        var engine = new Mock<ILoopEngine>();
+        engine.Setup(e => e.StartRunAsync(doomed.Id, It.IsAny<CancellationToken>()))
+              .ThrowsAsync(new InvalidOperationException("no start node"));
+        var runs = RunStoreWithActive(NoActiveRuns());
+        var notifier = new Mock<IWorkItemNotifier>();
+        var sut = new RemoteWorkItemCoordinator(client.Object, SingleTemplateResolver().Object, engine.Object,
+            runs.Object, workItemNotifier: notifier.Object);
+
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.EscalatedToHumanFeedback);
+        Assert.DoesNotContain(doomed.Id, result.SlotHolders);
+        Assert.Contains(next.Id, result.Claimed.Select(c => c.Id));
+        runs.Verify(s => s.SetWorkItemStatusReasonAsync(doomed.Id, It.IsAny<string>()), Times.Never);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(doomed.Id,
+            RemoteWorkItemStatus.Running, RemoteWorkItemStatus.HumanFeedback), Times.Never);
     }
 
     [Fact]
