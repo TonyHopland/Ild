@@ -28,6 +28,7 @@ internal static class RunTimeline
         services.AddSingleton(db.Context);
         services.AddSingleton(db.LoopRuns);
         services.AddSingleton(db.EventLogs);
+        services.AddSingleton<IRunNotifier>(new NoopRunNotifier());
         services.AddSingleton(db.LoopTemplates);
         services.AddSingleton(db.Providers);
         services.AddSingleton(db.Settings);

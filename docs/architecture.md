@@ -37,7 +37,7 @@ Two SignalR hubs are mapped:
 - `/hubs/loop-run` — run-level events
 - `/hubs/work-item` — work-item-level events
 
-Both emit messages of shape `{ type, payload, timestamp }`. Event payload types are statically modelled in `frontend/src/types/signalr.ts`. Known events include `NodeStateChanged`, `LoopRunStateChanged`, `WorkItemStateChanged`, `HumanFeedbackRequired`, `EventLogged`, `RunPaused`, `RunResumed`, `DependencyResolved`, and `NodeProgress` (real-time progress lines consumed by the live-stream view); the work-item hub also carries the instance-wide settings events `SchedulerStateChanged`, `NetworkPolicyChanged`, `NetworkLogAppended` and `NetworkLogCleared`.
+Both emit messages of shape `{ type, payload, timestamp }`. Event payload types are statically modelled in `frontend/src/types/signalr.ts`. Known events include `NodeStateChanged`, `LoopRunStateChanged`, `WorkItemStateChanged`, `HumanFeedbackRequired`, `EventLogged` (sent for every event stored on a run, with the event's id and timestamp, so the Action tab reads the run's conversation on from the last event it has), `RunPaused`, `RunResumed`, `DependencyResolved`, and `NodeProgress` (real-time progress lines consumed by the live-stream view); the work-item hub also carries the instance-wide settings events `SchedulerStateChanged`, `NetworkPolicyChanged`, `NetworkLogAppended` and `NetworkLogCleared`.
 
 ## Why it's shaped this way
 

@@ -56,7 +56,7 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
                 .UseSqlite($"Data Source={file}", sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly))
                 .AddInterceptors(_gate));
             services.AddScoped<IEventLogService>(sp => new EventLogWithInterleaving(
-                new EventLogService(sp.GetRequiredService<IEventLogStore>()),
+                new EventLogService(sp.GetRequiredService<IEventLogStore>(), sp.GetRequiredService<IRunNotifier>()),
                 () => Interlocked.Exchange(ref _beforeNextAnswer, null)));
         });
     }

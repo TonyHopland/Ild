@@ -1,10 +1,15 @@
 import { describe, expect, test } from "vite-plus/test";
-import type { ConversationMessage, TurnVariableChange } from "../../types";
+import type { RunConversationMessage, TurnVariableChange } from "../../types";
 import { variablesSetByTurn } from "./turnVariables";
 
-const turn = (runNodeId: string | null, role = "ai"): ConversationMessage => ({
+const turn = (
+  runNodeId: string | null,
+  role: RunConversationMessage["role"] = "ai",
+): RunConversationMessage => ({
+  id: 1,
+  runId: "run-1",
   role,
-  content: "done",
+  text: "done",
   timestamp: "2026-09-24T10:05:01Z",
   name: "Developer",
   runNodeId,
@@ -41,7 +46,8 @@ describe("variablesSetByTurn", () => {
     expect(variablesSetByTurn(turn("exec-3"), changes)).toEqual([]);
   });
 
-  test("human turns never carry variables", () => {
+  test("only AI turns carry variables", () => {
     expect(variablesSetByTurn(turn("exec-1", "human"), changes)).toEqual([]);
+    expect(variablesSetByTurn(turn("exec-1", "system"), changes)).toEqual([]);
   });
 });

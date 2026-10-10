@@ -24,7 +24,6 @@ function makeParkedWorkItem(): WorkItem {
     status: WorkItemStatus.HumanFeedback,
     priority: WorkItemPriority.Medium,
     tags: [],
-    conversation: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
@@ -36,6 +35,7 @@ function makeParkedWorkItem(): WorkItem {
     startedAt: null,
     completedAt: null,
     currentLoopRunId: "run-1",
+    latestLoopRunId: "run-1",
     dependencyIds: [],
     dependentIds: [],
   };
@@ -76,6 +76,11 @@ function mockServices() {
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(makeParkedWorkItem());
+  vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
+    runId,
+    messages: [],
+    lastEventId: null,
+  }));
   vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
     entries: [],
     nextCursor: 0,

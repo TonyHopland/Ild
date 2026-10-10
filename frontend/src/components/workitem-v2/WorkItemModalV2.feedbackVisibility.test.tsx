@@ -39,7 +39,6 @@ function makeParkedWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     status: WorkItemStatus.HumanFeedback,
     priority: WorkItemPriority.Medium,
     tags: [],
-    conversation: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
@@ -51,6 +50,7 @@ function makeParkedWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     startedAt: null,
     completedAt: null,
     currentLoopRunId: "run-1",
+    latestLoopRunId: "run-1",
     dependencyIds: [],
     dependentIds: [],
     ...overrides,
@@ -81,6 +81,11 @@ function mockDialogServices() {
   vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(makeParkedWorkItem());
   vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
+  vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
+    runId,
+    messages: [],
+    lastEventId: null,
+  }));
   vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
     entries: [],
     nextCursor: 0,
@@ -452,11 +457,6 @@ describe("the feedback pane never guesses the parked node's outputs", () => {
       name: "the run names no current node",
       break: (staged) => staged.getRun.mockResolvedValue(parkedRun(null)),
     },
-    {
-      name: "the item has no current run",
-      item: { currentLoopRunId: null },
-      break: () => {},
-    },
   ];
 
   test.each(UNKNOWN_CASES)(
@@ -589,13 +589,17 @@ describe("a work item's actions are filtered only with the node read for that sa
   });
 
   test("a run read answered late for an earlier state of the item changes nothing", async () => {
-    mockDialogServices();
+    const { emit } = mockDialogServices();
     const staged = stageTwoNodes();
     const { rerender } = await renderDialog(onHumanNode());
     const forHumanNode = staged.reads.length;
     expect(forHumanNode).toBeGreaterThan(0);
 
+    // The run moving on to the PR node is announced as well as read.
     rerender(dialogFor(onPrNode()));
+    await act(async () => {
+      emit("NodeStateChanged", { runId: "run-1" });
+    });
     await settled();
     for (const read of staged.reads.slice(forHumanNode)) read.resolve(parkedRun("n-b"));
     await settled();

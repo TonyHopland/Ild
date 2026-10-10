@@ -1757,3 +1757,23 @@
     flex-wrap: wrap;
   }
 }
+
+.wiv2-run-event {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0 0.25rem;
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
+
+.wiv2-run-event strong {
+  color: #e5e7eb;
+}
+
+.wiv2-run-event-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

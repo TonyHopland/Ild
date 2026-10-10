@@ -67,31 +67,7 @@ public class SignalRRunNotifierTests
     }
 
     [Fact]
-    public async Task EventLoggedAsync_sends_a_single_typed_payload()
-    {
-        var runId = Guid.NewGuid();
-        var (ctx, proxy, logger) = BuildHubContext(runId.ToString());
-
-        object?[]? capturedArgs = null;
-        proxy.Setup(p => p.SendCoreAsync("EventLogged", It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object?[], CancellationToken>((_, args, _) => capturedArgs = args)
-            .Returns(Task.CompletedTask);
-
-        var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
-        var nodeId = Guid.NewGuid();
-        await notifier.EventLoggedAsync(runId, "hello", "NodeStarted", nodeId, null);
-
-        Assert.Single(capturedArgs!);
-        var payload = Assert.IsType<EventLoggedPayload>(capturedArgs![0]);
-        Assert.Equal(runId, payload.RunId);
-        Assert.Equal("hello", payload.Message);
-        Assert.Equal("NodeStarted", payload.EventType);
-        Assert.Equal(nodeId, payload.NodeId);
-        Assert.Null(payload.RunNodeId);
-    }
-
-    [Fact]
-    public async Task EventLoggedAsync_includes_runNodeId_in_payload()
+    public async Task EventLoggedAsync_sends_the_events_identity_to_the_runs_group()
     {
         var runId = Guid.NewGuid();
         var (ctx, proxy, logger) = BuildHubContext(runId.ToString());
@@ -104,13 +80,17 @@ public class SignalRRunNotifierTests
         var notifier = new SignalRRunNotifier(ctx.Object, logger.Object);
         var nodeId = Guid.NewGuid();
         var runNodeId = Guid.NewGuid();
-        await notifier.EventLoggedAsync(runId, "AI Node started", "NodeStarted", nodeId, runNodeId);
+        var at = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        await notifier.EventLoggedAsync(runId, 42, "NodeStarted", nodeId, runNodeId, at);
 
         Assert.Single(capturedArgs!);
         var payload = Assert.IsType<EventLoggedPayload>(capturedArgs![0]);
         Assert.Equal(runId, payload.RunId);
+        Assert.Equal(42, payload.Id);
+        Assert.Equal("NodeStarted", payload.EventType);
         Assert.Equal(nodeId, payload.NodeId);
         Assert.Equal(runNodeId, payload.RunNodeId);
+        Assert.Equal(at, payload.Timestamp);
     }
 
     [Fact]

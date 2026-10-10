@@ -263,6 +263,82 @@ public class RunConversationApiTests
         Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
     }
 
+    private static async Task<JsonDocument> ConversationAsync(HttpClient client, Guid runId, string query = "")
+        => JsonDocument.Parse(await client.GetStringAsync(
+            $"/api/v1/loopruns/{runId}/conversation{query}", TestContext.Current.CancellationToken));
+
+    private static long? LastEventId(JsonDocument doc)
+        => doc.RootElement.GetProperty("lastEventId") is { ValueKind: JsonValueKind.Number } n ? n.GetInt64() : null;
+
+    private static long[] MessageIds(JsonDocument doc)
+        => doc.RootElement.GetProperty("messages").EnumerateArray().Select(m => m.GetProperty("id").GetInt64()).ToArray();
+
+    [Fact]
+    public async Task The_conversation_reads_on_after_an_event_id_and_reports_the_last_event_it_covered()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        Guid runId, emptyRunId;
+        EventLog started, aiStarted, ai, reply, edge;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var seed = new Seed(scope.ServiceProvider.GetRequiredService<AppDbContext>());
+            var coder = seed.Node(NodeType.AI, "Coder");
+            var run = seed.Run(LoopRunStatus.Running);
+            emptyRunId = seed.Run(LoopRunStatus.Running).Id;
+            var rnCoder = seed.RunNode(run, coder, "Coder");
+            runId = run.Id;
+
+            started = seed.Event(run, EventType.LoopRunStarted, "Run started");
+            aiStarted = seed.Event(run, EventType.NodeStarted, "the prompt", rnCoder);
+            ai = seed.Event(run, EventType.NodeCompleted, "a plan", rnCoder);
+            reply = seed.Event(run, EventType.HumanFeedbackReceived, "go on");
+            edge = seed.Event(run, EventType.EdgeTraversed, "OnSuccess", rnCoder);
+        }
+
+        using var whole = await ConversationAsync(client, runId);
+        Assert.Equal(new[] { started.Id, ai.Id, reply.Id }, MessageIds(whole));
+        Assert.Equal(edge.Id, LastEventId(whole));
+
+        using var later = await ConversationAsync(client, runId, $"?after={aiStarted.Id}");
+        Assert.Equal(new[] { ai.Id, reply.Id }, MessageIds(later));
+        Assert.Equal(
+            new[] { ("ai", "Coder", "a plan"), ("human", "Human", "go on") },
+            later.RootElement.GetProperty("messages").EnumerateArray()
+                .Select(m => (m.GetProperty("role").GetString(), m.GetProperty("name").GetString(), m.GetProperty("text").GetString())));
+        Assert.Equal(edge.Id, LastEventId(later));
+
+        using var caughtUp = await ConversationAsync(client, runId, $"?after={edge.Id}");
+        Assert.Empty(MessageIds(caughtUp));
+        Assert.True(LastEventId(caughtUp) >= edge.Id);
+
+        using var ahead = await ConversationAsync(client, runId, $"?after={edge.Id + 100}");
+        Assert.Empty(MessageIds(ahead));
+        Assert.True(LastEventId(ahead) >= edge.Id + 100);
+
+        using var none = await ConversationAsync(client, emptyRunId);
+        Assert.Empty(MessageIds(none));
+        Assert.True(LastEventId(none) is null or 0);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("abc")]
+    public async Task A_malformed_or_negative_after_is_400(string after)
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        Guid runId;
+        using (var scope = factory.Services.CreateScope())
+            runId = new Seed(scope.ServiceProvider.GetRequiredService<AppDbContext>()).Run().Id;
+
+        var response = await client.GetAsync($"/api/v1/loopruns/{runId}/conversation?after={after}", TestContext.Current.CancellationToken);
+        var unknown = await client.GetAsync($"/api/v1/loopruns/{Guid.NewGuid()}/conversation?after=0", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+    }
+
     private const string AllThree = "F:[{{Conversation.Full}}] A:[{{Conversation.AI}}] H:[{{Conversation.Human}}]";
 
     [Fact]

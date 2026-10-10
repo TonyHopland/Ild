@@ -497,6 +497,7 @@ public class WorkItemManager : IWorkItemManager
             StatusReason = statusReason?.Text,
             StatusReasonAt = statusReason?.At,
             CurrentLoopRunId = run?.Id,
+            LatestLoopRunId = timingRun?.Id,
             CurrentNodeLabel = ResolveCurrentNodeLabel(run),
             IsPreviewRunning = isPreviewRunning,
             PrStatus = ResolvePrStatus(run?.PrSnapshot),

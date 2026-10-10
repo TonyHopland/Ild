@@ -320,7 +320,7 @@ public class LoopEngineStartRunTests
         services.AddSingleton(db.Context);
         services.AddSingleton<ILoopRunStore>(db.LoopRuns);
         services.AddSingleton<ILoopTemplateStore>(db.LoopTemplates);
-        services.AddSingleton<IEventLogService>(new EventLogService(db.EventLogs));
+        services.AddSingleton<IEventLogService>(new EventLogService(db.EventLogs, new NoopRunNotifier()));
         services.AddSingleton<IWorkItemManager>(workItems.Object);
         services.AddSingleton(resolver.Object);
         services.AddSingleton<IRunNotifier, NoopRunNotifier>();

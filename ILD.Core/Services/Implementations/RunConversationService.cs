@@ -16,10 +16,12 @@ public sealed class RunConversationService : IRunConversationService
         _runs = runs;
     }
 
-    public async Task<IReadOnlyList<RunConversationMessage>?> GetMessagesAsync(Guid runId)
+    public async Task<RunConversationPage?> GetPageAsync(Guid runId, long afterId = 0)
     {
         if (await _runs.GetByIdAsync(runId) is null) return null;
-        return await ProjectAsync(runId, await _events.GetByRunIdAsync(runId));
+        var events = await _events.GetByRunIdAfterAsync(runId, afterId);
+        var lastEventId = events.Count > 0 ? events[^1].Id : afterId > 0 ? afterId : (long?)null;
+        return new RunConversationPage(await ProjectAsync(runId, events), lastEventId);
     }
 
     public async Task<IReadOnlyList<RunConversationMessage>> ProjectAsync(Guid runId, IReadOnlyList<EventLog> events)
