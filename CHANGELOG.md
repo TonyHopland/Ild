@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**
 
+- **Each run has its own conversation, built from its event log, and the Action tab shows only the latest run's; earlier runs are on the Runs tab.** Conversation history from before this release was intentionally dropped.
+
 ## [0.16.0] - 2026-10-04
 
 ### Added

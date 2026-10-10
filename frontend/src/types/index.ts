@@ -43,16 +43,6 @@ export enum AiProviderOverrideMode {
   OverrideAll = "OverrideAll",
 }
 
-export interface ConversationMessage {
-  role: string;
-  content: string;
-  timestamp: string;
-  /** Author display name (e.g. the node's title). Falls back to role when absent. */
-  name?: string | null;
-  /** The node execution that produced the entry; null for human replies and older entries. */
-  runNodeId?: string | null;
-}
-
 export interface WorkItem {
   id: string;
   title: string;
@@ -60,11 +50,6 @@ export interface WorkItem {
   status: WorkItemStatus;
   priority: WorkItemPriority;
   tags: string[];
-  /**
-   * Array of {@link ConversationMessage} mirrored from the WorkItemServer.
-   * Use {@link parseConversation} to safely read (handles null/missing).
-   */
-  conversation?: ConversationMessage[] | null;
   /**
    * Deprecated: template is resolved from {@link tags} at run start
    * (PRD §3.7). The server may still return it for legacy reasons.
@@ -114,6 +99,8 @@ export interface WorkItem {
   startedAt: string | null;
   completedAt: string | null;
   currentLoopRunId: string | null;
+  /** The item's newest run in any status, a completed one included; null when it has none. */
+  latestLoopRunId?: string | null;
   /** Label of the node the active run is currently executing; null when idle. */
   currentNodeLabel?: string | null;
   worktreePath?: string | null;
@@ -717,6 +704,28 @@ export interface EventLogPage {
   hasMore: boolean;
 }
 
+/** One message of a run's conversation, projected from the event whose id it carries. */
+export interface RunConversationMessage {
+  id: number;
+  runId: string;
+  /** The node execution an AI turn came from; null for replies and run events. */
+  runNodeId: string | null;
+  role: "ai" | "human" | "system";
+  name: string;
+  text: string;
+  timestamp: string;
+}
+
+/**
+ * A read of a run's conversation. `lastEventId` is the newest event the read
+ * covered, message or not: the point the next read goes on from.
+ */
+export interface RunConversation {
+  runId: string;
+  messages: RunConversationMessage[];
+  lastEventId: number | null;
+}
+
 export interface Repository {
   id: string;
   name: string;
@@ -911,12 +920,14 @@ export interface LoopRunStateChangedPayload {
   newStatus: LoopRunStatus;
 }
 
+/** An event the run has stored: its id is its place in the run's timeline. */
 export interface EventLoggedPayload {
   runId: string;
-  message: string;
+  id: number;
   eventType: string;
   nodeId: string | null;
   runNodeId: string | null;
+  timestamp: string;
 }
 
 export interface RunPausedPayload {

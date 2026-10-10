@@ -24,7 +24,6 @@ function makeParkedWorkItem(): WorkItem {
     status: WorkItemStatus.HumanFeedback,
     priority: WorkItemPriority.Medium,
     tags: [],
-    conversation: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
@@ -36,6 +35,7 @@ function makeParkedWorkItem(): WorkItem {
     startedAt: null,
     completedAt: null,
     currentLoopRunId: "run-1",
+    latestLoopRunId: "run-1",
     dependencyIds: [],
     dependentIds: [],
   };
@@ -72,13 +72,16 @@ describe("answering a parked run", () => {
     const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
-      result.current.setFeedbackInput("Looks good");
+      result.current.setReplyInput("run-1", "Looks good");
     });
 
     // Both presses land before React can render the buttons disabled, which is
     // what an impatient second click looks like.
     await act(async () => {
-      await Promise.all([result.current.handleApprove(), result.current.handleApprove()]);
+      await Promise.all([
+        result.current.handleApprove("run-1"),
+        result.current.handleApprove("run-1"),
+      ]);
     });
 
     expect(answer).toHaveBeenCalledTimes(1);
@@ -94,35 +97,11 @@ describe("answering a parked run", () => {
     const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
-    await act(async () => await result.current.handleApprove());
-    await act(async () => await result.current.handleApprove());
+    await act(async () => await result.current.handleApprove("run-1"));
+    await act(async () => await result.current.handleApprove("run-1"));
 
     expect(answer).toHaveBeenCalledTimes(2);
-    expect(result.current.respondLoading).toBe(false);
-  });
-
-  test("with no run to answer, nothing is sent and the pane says why", async () => {
-    stubServices();
-    const sends = [
-      vi.spyOn(workItemService, "humanFeedbackInput").mockResolvedValue(undefined),
-      vi.spyOn(workItemService, "humanFeedbackReject").mockResolvedValue(undefined),
-      vi.spyOn(workItemService, "humanFeedbackEdge").mockResolvedValue(undefined),
-    ];
-
-    const workItem = { ...makeParkedWorkItem(), currentLoopRunId: null };
-    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
-    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
-
-    for (const answer of [
-      () => result.current.handleApprove(),
-      () => result.current.handleReject(),
-      () => result.current.handleEdge("Needs work"),
-    ]) {
-      await act(async () => await answer());
-      expect(result.current.respondError).toBeTruthy();
-      expect(result.current.respondLoading).toBe(false);
-    }
-    for (const send of sends) expect(send).not.toHaveBeenCalled();
+    expect(result.current.replyFor("run-1").loading).toBe(false);
   });
 
   test("a refused answer releases the buttons so it can be retried", async () => {
@@ -135,10 +114,10 @@ describe("answering a parked run", () => {
     const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
-    await act(async () => await result.current.handleApprove());
+    await act(async () => await result.current.handleApprove("run-1"));
 
     expect(answer).toHaveBeenCalledTimes(1);
-    expect(result.current.respondError).toBe("Input is too long.");
-    expect(result.current.respondLoading).toBe(false);
+    expect(result.current.replyFor("run-1").error).toBe("Input is too long.");
+    expect(result.current.replyFor("run-1").loading).toBe(false);
   });
 });

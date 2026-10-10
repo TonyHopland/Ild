@@ -26,6 +26,7 @@ import {
   ChatScheduleList,
   LoopTemplateVersion,
   EventLogPage,
+  RunConversation,
   AgentAdapterDescriptor,
   ConfigFieldDescriptor,
   ManagedAgentStatus,
@@ -633,6 +634,12 @@ export const loopRunService = {
 
   getEvents: async (runId: string, cursor = 0, limit = 100): Promise<EventLogPage> => {
     return api.get<EventLogPage>(`/loopruns/${runId}/events?cursor=${cursor}&limit=${limit}`);
+  },
+
+  /** The run's conversation, or with `after` only what follows that event. */
+  getConversation: async (runId: string, after?: number): Promise<RunConversation> => {
+    const query = after ? `?after=${after}` : "";
+    return api.get<RunConversation>(`/loopruns/${runId}/conversation${query}`);
   },
 
   getSessionPreview: async (

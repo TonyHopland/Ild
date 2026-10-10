@@ -49,6 +49,21 @@ export type FeedbackOutputs =
 
 const FEEDBACK_OUTPUTS_LOADING: FeedbackOutputs = { status: "loading" };
 
+/** A person's answer to one run: what they typed, whether it is on its way, and why it was refused. */
+export interface Reply {
+  forRun: string | null;
+  input: string;
+  loading: boolean;
+  error: string | null;
+}
+
+const idleReply = (forRun: string | null): Reply => ({
+  forRun,
+  input: "",
+  loading: false,
+  error: null,
+});
+
 /** One template version's nodes and the edges between them. */
 export interface VersionGraph {
   nodes: LoopNode[];
@@ -87,7 +102,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
-  const [feedbackInput, setFeedbackInput] = useState("");
   const [progressText, setProgressText] = useState("");
   const [preview, setPreview] = useState<WorktreePreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -101,12 +115,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
   const [mergeMessage, setMergeMessage] = useState<string | null>(null);
-  const [respondError, setRespondError] = useState<string | null>(null);
-  const [respondLoading, setRespondLoading] = useState(false);
+  // A reply belongs to the run it answers: its draft, wait and error are kept
+  // with that run's id and shown for no other. A new latest run starts afresh.
+  const [reply, setReply] = useState<Reply>(() => idleReply(workItem?.latestLoopRunId ?? null));
   // The answer buttons render disabled while one is in flight, but only once
   // this render has happened. The guard is a ref because "each answer is sent
   // once" must not depend on how soon React gets to re-render.
-  const responding = useRef(false);
+  const responding = useRef(new Set<string>());
 
   // Everything the dialog does that writes — creating or saving an edit and the
   // uploads inside it, and answering the run — runs through whileBusy, so
@@ -268,9 +283,18 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workItem, readVersionGraph]);
 
+  const latestRunId = workItem?.latestLoopRunId ?? null;
   useEffect(() => {
-    setFeedbackInput("");
-  }, [workItem?.id, workItem?.status]);
+    setReply((r) => (r.forRun === latestRunId ? { ...r, input: "" } : idleReply(latestRunId)));
+  }, [workItem?.id, workItem?.status, latestRunId]);
+
+  const replyFor = (runId: string | null): Reply =>
+    reply.forRun === runId ? reply : idleReply(runId);
+
+  const updateReply = (runId: string, change: Partial<Reply>) =>
+    setReply((r) => (r.forRun === runId ? { ...r, ...change } : r));
+
+  const setReplyInput = (runId: string, input: string) => updateReply(runId, { input });
 
   const refreshPreview = useCallback(async () => {
     if (!workItem?.id || !workItem.worktreePath) {
@@ -605,7 +629,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
     const refetchSoon = () => {
       void refetchWorkItem();
-      // Delayed refetch to catch conversation data that may not be persisted yet
       delayedTimers.push(setTimeout(refetchWorkItem, 500));
     };
 
@@ -617,11 +640,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     const onNodeStateChanged = (message: TypedSignalRMessage<"NodeStateChanged">) => {
       if (message.payload.runId !== runId) return;
       refetchSoon();
-    };
-
-    const onEventLogged = (message: TypedSignalRMessage<"EventLogged">) => {
-      if (message.payload.runId !== runId) return;
-      void refetchWorkItem();
     };
 
     // A halt parks the run mid-AI-node; refetch so the work item flips to
@@ -636,7 +654,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     runOn("NodeProgress", onNodeProgress);
     runOn("LoopRunStateChanged", onLoopRunStateChanged);
     runOn("NodeStateChanged", onNodeStateChanged);
-    runOn("EventLogged", onEventLogged);
     runOn("RunHalted", onRunHalted);
 
     void Promise.resolve(runInvoke?.("SubscribeToRun", runId))
@@ -660,7 +677,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
       runOff("NodeProgress", onNodeProgress);
       runOff("LoopRunStateChanged", onLoopRunStateChanged);
       runOff("NodeStateChanged", onNodeStateChanged);
-      runOff("EventLogged", onEventLogged);
       runOff("RunHalted", onRunHalted);
       for (const t of delayedTimers) clearTimeout(t);
     };
@@ -743,19 +759,16 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   );
 
   // Not runAction: a refused answer is shown beside the buttons for a retry,
-  // where runAction's failure would reach no further than the console.
+  // where runAction's failure would reach no further than the console. Its
+  // outcome settles only the reply of the run it was sent to.
   const submitAnswer = async (
+    runId: string,
     submit: (id: string, runId: string, input: string) => Promise<unknown>,
   ) => {
-    if (!workItem || responding.current) return;
-    const runId = workItem.currentLoopRunId;
-    if (!runId) {
-      setRespondError("There is no run waiting for an answer.");
-      return;
-    }
-    responding.current = true;
-    setRespondLoading(true);
-    setRespondError(null);
+    if (!workItem || responding.current.has(runId)) return;
+    const { input } = replyFor(runId);
+    responding.current.add(runId);
+    updateReply(runId, { loading: true, error: null });
     // Set when the answer is in but the dialog could not be brought up to date:
     // the controls stay held rather than offering to answer again a question the
     // run has already been given an answer to.
@@ -763,11 +776,11 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     try {
       await whileBusy(async () => {
         try {
-          await submit(workItem.id, runId, feedbackInput);
+          await submit(workItem.id, runId, input);
         } catch (error) {
-          setRespondError(
-            (error as { message?: string })?.message ?? "Failed to submit the answer.",
-          );
+          updateReply(runId, {
+            error: (error as { message?: string })?.message ?? "Failed to submit the answer.",
+          });
           return;
         }
         // The answer is in, and the run has moved on: the controls stay held
@@ -777,31 +790,34 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         // honest thing it can do is say so and stay held.
         if (!(await refetchWorkItem())) {
           answeredButUnrefreshed = true;
-          setRespondError(
-            "Your answer was accepted, but this view could not be refreshed — reload the page to see where the run is now.",
-          );
+          updateReply(runId, {
+            error:
+              "Your answer was accepted, but this view could not be refreshed — reload the page to see where the run is now.",
+          });
         }
       });
     } finally {
       if (!answeredButUnrefreshed) {
-        responding.current = false;
-        setRespondLoading(false);
+        responding.current.delete(runId);
+        updateReply(runId, { loading: false });
       }
     }
   };
 
-  const handleApprove = () =>
-    submitAnswer((id, runId, input) => workItemService.humanFeedbackInput(id, runId, input));
+  const handleApprove = (runId: string) =>
+    submitAnswer(runId, (id, run, input) => workItemService.humanFeedbackInput(id, run, input));
 
   // Pass any typed feedback through to the OnFailure successor as {{PreviousNode.Output}}.
-  const handleReject = () =>
-    submitAnswer((id, runId, input) =>
-      workItemService.humanFeedbackReject(id, runId, input || undefined),
+  const handleReject = (runId: string) =>
+    submitAnswer(runId, (id, run, input) =>
+      workItemService.humanFeedbackReject(id, run, input || undefined),
     );
 
   // Route the parked node to one of its named outputs (a Human/PR button).
-  const handleEdge = (name: string) =>
-    submitAnswer((id, runId, input) => workItemService.humanFeedbackEdge(id, runId, name, input));
+  const handleEdge = (runId: string, name: string) =>
+    submitAnswer(runId, (id, run, input) =>
+      workItemService.humanFeedbackEdge(id, run, name, input),
+    );
 
   // Merge the linked PR on the remote (and optionally delete the branch), then
   // continue the loop along OnSuccess. A merge failure leaves the item parked,
@@ -828,16 +844,14 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     [workItem?.id, onSave],
   );
 
-  // Halt/steer act on the work item's current run, not the work item itself,
-  // but reuse runAction's refetch-and-save so the dialog reflects the new state.
-  const handleHalt = () => {
-    const runId = workItem?.currentLoopRunId;
+  // Halt/steer act on the run they name, not the work item itself, but reuse
+  // runAction's refetch-and-save so the dialog reflects the new state.
+  const handleHalt = (runId: string | null) => {
     if (!runId) return Promise.resolve();
     return runAction(() => loopRunService.halt(runId), "halt run");
   };
 
-  const handleResumeSteer = (note?: string) => {
-    const runId = workItem?.currentLoopRunId;
+  const handleResumeSteer = (runId: string | null, note?: string) => {
     if (!runId) return Promise.resolve();
     return runAction(() => loopRunService.resumeSteer(runId, note), "resume run");
   };
@@ -931,8 +945,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     reloadRepositories,
     templates,
     aiProviders,
-    feedbackInput,
-    setFeedbackInput,
+    replyFor,
+    setReplyInput,
     progressText,
     shouldStream,
     preview,
@@ -958,8 +972,6 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     handleApprove,
     handleReject,
     handleEdge,
-    respondError,
-    respondLoading,
     busy,
     whileBusy,
     editAttachments,

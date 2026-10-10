@@ -3,8 +3,8 @@ import { render, fireEvent, cleanup, act, waitFor, within, screen } from "@testi
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import {
-  ConversationMessage,
   LoopRun,
+  RunConversationMessage,
   LoopRunStatus,
   WorkItem,
   WorkItemEditProposal,
@@ -30,7 +30,6 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     status: WorkItemStatus.Backlog,
     priority: WorkItemPriority.Medium,
     tags: [],
-    conversation: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
@@ -97,13 +96,29 @@ function makeProposal(
   };
 }
 
-function aiTurn(content: string, runNodeId: string, timestamp: string): ConversationMessage {
-  return { role: "ai", content, timestamp, name: "Coder", runNodeId };
+function turn(
+  id: number,
+  role: "ai" | "human",
+  text: string,
+  runNodeId: string | null = null,
+): RunConversationMessage {
+  return {
+    id,
+    runId: "run-1",
+    runNodeId,
+    role,
+    name: role === "ai" ? "Coder" : "Human",
+    text,
+    timestamp: "2026-09-26T10:00:00Z",
+  };
 }
+
+const aiTurn = (id: number, text: string, runNodeId: string) => turn(id, "ai", text, runNodeId);
 
 type HubHandler = (msg: { payload: unknown }) => void;
 
-function mockServices(run: LoopRun | null = null) {
+/** Serves `run` and run-1's conversation, `messages`, which a test may grow. */
+function mockServices(run: LoopRun | null = null, messages: RunConversationMessage[] = []) {
   const hub: Record<string, HubHandler[]> = {};
   vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
     on: (event: string, handler: HubHandler) => {
@@ -123,6 +138,12 @@ function mockServices(run: LoopRun | null = null) {
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getTurnVariables").mockResolvedValue([]);
   if (run) vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(run);
+  vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(
+    async (runId: string, after?: number) => {
+      const read = runId === "run-1" ? messages.filter((m) => m.id > (after ?? 0)) : [];
+      return { runId, messages: read, lastEventId: read[read.length - 1]?.id ?? after ?? null };
+    },
+  );
   vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
     entries: [],
     nextCursor: 0,
@@ -138,7 +159,11 @@ function mockServices(run: LoopRun | null = null) {
     act(() => {
       for (const h of hub["WorkItemEditProposalsChanged"] ?? []) h({ payload: { workItemId } });
     });
-  return { hint };
+  const logged = (id: number) =>
+    act(async () => {
+      for (const h of hub["EventLogged"] ?? []) h({ payload: { runId: "run-1", id } });
+    });
+  return { hint, logged };
 }
 
 function dialog(workItem: WorkItem, onSave = vi.fn()) {
@@ -204,7 +229,12 @@ describe("edit proposals in the detail view", () => {
   });
 
   test("a card follows its step's last turn, sits under the live bubble while its step has none, and goes last without a step", async () => {
-    mockServices(makeRun());
+    mockServices(makeRun(), [
+      aiTurn(1, "Planning.", "exec-1"),
+      aiTurn(2, "Plan written.", "exec-1"),
+      turn(3, "human", "Go ahead."),
+      aiTurn(4, "Coded it.", "exec-2"),
+    ]);
     vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       makeProposal("End second", null, { createdAt: "2026-09-26T09:30:00Z" }),
       makeProposal("Live card", "exec-3", { createdAt: "2026-09-26T10:40:00Z" }),
@@ -219,16 +249,12 @@ describe("edit proposals in the detail view", () => {
       makeWorkItem({
         status: WorkItemStatus.Running,
         currentLoopRunId: "run-1",
+        latestLoopRunId: "run-1",
         prUrl: "https://git.example/pr/1",
-        conversation: [
-          aiTurn("Planning.", "exec-1", "2026-09-26T10:00:00Z"),
-          aiTurn("Plan written.", "exec-1", "2026-09-26T10:10:00Z"),
-          { role: "human", content: "Go ahead.", timestamp: "2026-09-26T10:20:00Z", name: null },
-          aiTurn("Coded it.", "exec-2", "2026-09-26T10:35:00Z"),
-        ],
       }),
     );
     await waitFor(() => expect(action().textContent).toContain("Live card"));
+    await waitFor(() => expect(action().textContent).toContain("Coded it."));
 
     const expected = [
       "Planning.",
@@ -249,7 +275,7 @@ describe("edit proposals in the detail view", () => {
   });
 
   test("while the item waits on a human, a card whose step wrote no turn sits above the feedback card and one without a step below it", async () => {
-    mockServices(makeRun({ status: LoopRunStatus.WaitingHuman }));
+    mockServices(makeRun({ status: LoopRunStatus.WaitingHuman }), [aiTurn(1, "Done.", "exec-1")]);
     vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       makeProposal("Loose card", null),
       makeProposal("Halted step card", "exec-9"),
@@ -261,17 +287,21 @@ describe("edit proposals in the detail view", () => {
         status: WorkItemStatus.HumanFeedback,
         humanFeedbackReason: "Human Input Needed",
         currentLoopRunId: "run-1",
-        conversation: [aiTurn("Done.", "exec-1", "2026-09-26T10:00:00Z")],
+        latestLoopRunId: "run-1",
       }),
     );
     await waitFor(() => expect(action().textContent).toContain("Loose card"));
+    await waitFor(() => expect(action().textContent).toContain("Human Feedback"));
 
     const expected = ["Done.", "Step card", "Halted step card", "Human Feedback", "Loose card"];
     expect(documentOrder(inAction(expected))).toEqual(expected);
   });
 
   test("approving re-reads the cards and the approved card stays where it was", async () => {
-    mockServices();
+    mockServices(makeRun({ status: LoopRunStatus.Completed }), [
+      aiTurn(1, "First turn.", "exec-1"),
+      aiTurn(2, "Second turn.", "exec-2"),
+    ]);
     const first = makeProposal("Agent's sharper title", "exec-1");
     const second = makeProposal("Agent's later title", "exec-2");
     const list = vi
@@ -287,15 +317,7 @@ describe("edit proposals in the detail view", () => {
         proposal: { ...first, status: "Approved", decidedAt: "2026-09-26T11:00:00Z" },
         workItem: makeWorkItem({ title: "Agent's sharper title", pendingEditProposalCount: 0 }),
       });
-    await renderDialog(
-      makeWorkItem({
-        status: WorkItemStatus.Done,
-        conversation: [
-          aiTurn("First turn.", "exec-1", "2026-09-26T10:00:00Z"),
-          aiTurn("Second turn.", "exec-2", "2026-09-26T10:10:00Z"),
-        ],
-      }),
-    );
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Done, latestLoopRunId: "run-1" }));
     const expected = [
       "First turn.",
       "Agent's sharper title",
@@ -303,6 +325,7 @@ describe("edit proposals in the detail view", () => {
       "Agent's later title",
     ];
     await waitFor(() => expect(action().textContent).toContain("Agent's sharper title"));
+    await waitFor(() => expect(action().textContent).toContain("Second turn."));
     fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
 
     fireEvent.click(
@@ -322,7 +345,10 @@ describe("edit proposals in the detail view", () => {
   });
 
   test("an approve refused because the item changed shows the card stale, in place, and leaves the item as it is", async () => {
-    mockServices();
+    mockServices(makeRun({ status: LoopRunStatus.Completed }), [
+      aiTurn(1, "First turn.", "exec-1"),
+      aiTurn(2, "Second turn.", "exec-2"),
+    ]);
     const card = makeProposal("Agent's sharper title", "exec-1");
     vi.spyOn(authServices.workItemService, "listRequestedEditProposals")
       .mockResolvedValueOnce([card])
@@ -332,15 +358,10 @@ describe("edit proposals in the detail view", () => {
       message: "The work item changed after this proposal was made.",
     });
     const { onSave } = await renderDialog(
-      makeWorkItem({
-        status: WorkItemStatus.Done,
-        conversation: [
-          aiTurn("First turn.", "exec-1", "2026-09-26T10:00:00Z"),
-          aiTurn("Second turn.", "exec-2", "2026-09-26T10:10:00Z"),
-        ],
-      }),
+      makeWorkItem({ status: WorkItemStatus.Done, latestLoopRunId: "run-1" }),
     );
     await waitFor(() => expect(action().textContent).toContain("Agent's sharper title"));
+    await waitFor(() => expect(action().textContent).toContain("Second turn."));
     fireEvent.click(screen.getByRole("tab", { name: /Action/ }));
 
     fireEvent.click(
@@ -392,29 +413,28 @@ describe("edit proposals in the detail view", () => {
   });
 
   test("a card keeps a reason being typed when its step's turn arrives and it moves under it", async () => {
-    mockServices(makeRun());
+    const conversation = [aiTurn(1, "Planned.", "exec-1")];
+    const { logged } = mockServices(makeRun(), conversation);
     vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([
       makeProposal("Live card", "exec-2"),
     ]);
-    const running = (conversation: ConversationMessage[]) =>
-      makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1", conversation });
-    const { rerender } = await renderDialog(
-      running([aiTurn("Planned.", "exec-1", "2026-09-26T10:00:00Z")]),
+    await renderDialog(
+      makeWorkItem({
+        status: WorkItemStatus.Running,
+        currentLoopRunId: "run-1",
+        latestLoopRunId: "run-1",
+      }),
     );
     await waitFor(() => expect(action().textContent).toContain("Live card"));
+    await waitFor(() => expect(action().textContent).toContain("Planned."));
     fireEvent.click(within(cardOf("Live card")).getByRole("button", { name: "Reject" }));
     fireEvent.change(within(action()).getByLabelText("Rejection reason (optional)"), {
       target: { value: "Too long" },
     });
 
-    rerender(
-      dialog(
-        running([
-          aiTurn("Planned.", "exec-1", "2026-09-26T10:00:00Z"),
-          aiTurn("Coded it.", "exec-2", "2026-09-26T10:30:00Z"),
-        ]),
-      ),
-    );
+    conversation.push(aiTurn(2, "Coded it.", "exec-2"));
+    await logged(2);
+    await waitFor(() => expect(action().textContent).toContain("Coded it."));
 
     const expected = ["Planned.", "Coded it.", "Live card", "Live Output"];
     expect(documentOrder(inAction(expected))).toEqual(expected);

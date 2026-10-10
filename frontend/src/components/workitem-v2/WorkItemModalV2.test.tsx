@@ -59,9 +59,6 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     status: WorkItemStatus.Ready,
     priority: WorkItemPriority.Medium,
     tags: ["build"],
-    conversation: [
-      { role: "Human", content: "hello", timestamp: "2025-01-01T00:00:00Z", name: null },
-    ],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
@@ -73,6 +70,8 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     startedAt: null,
     completedAt: null,
     currentLoopRunId: null,
+    // A run that is the item's current one is also its latest.
+    latestLoopRunId: overrides.currentLoopRunId ?? null,
     dependencyIds: [],
     dependentIds: [],
     ...overrides,
@@ -150,6 +149,11 @@ function mockServices(runs: LoopRun[] = [makeRun()]) {
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(runs[0] ?? makeRun());
+  vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
+    runId,
+    messages: [],
+    lastEventId: null,
+  }));
   vi.spyOn(authServices.workItemService, "getById").mockImplementation(async (id: string) =>
     makeWorkItem({ id, branchUrl: null }),
   );
@@ -449,19 +453,6 @@ describe("WorkItemModalV2", () => {
       await Promise.resolve();
     });
     expect(retrySpy).not.toHaveBeenCalled();
-  });
-
-  test("the Action tab shows the conversation as a thread", async () => {
-    mockServices();
-    await renderDialog(makeWorkItem());
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("tab", { name: "Action" }));
-      await Promise.resolve();
-    });
-
-    const actionPanel = document.getElementById("wiv2-panel-action") as HTMLElement;
-    expect(within(actionPanel).getByText("hello")).toBeTruthy();
   });
 
   test("overview shows work item metadata", async () => {
@@ -903,7 +894,7 @@ describe("WorkItemModalV2", () => {
 
   test("Action tab has no indicator and shows an empty state when there is nothing in it", async () => {
     mockServices();
-    await renderDialog(makeWorkItem({ conversation: [] }));
+    await renderDialog(makeWorkItem());
 
     expect(screen.getByRole("tab", { name: "Action" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "Action ●" })).toBeNull();

@@ -248,7 +248,7 @@ See the [Architecture](#architecture) section below for how the API layer compos
 - `AuthService.LoginAsync` auto-seeds the `admin` user the first time it sees a login attempt with the username `admin` and a non-empty `ILD_PASSWORD` env var.
 - A **User Session** is one signed-in device, held in the `UserSessions` table. A user has as many as they have devices: signing in on a second one never disturbs the first, and signing out revokes only the session that asked (stamping `RevokedAt`, so the row stays readable). The bearer token is stored only as a hash keyed on the `ILD_SESSION_TOKEN_PEPPER` server secret (HMAC-SHA256; plain SHA-256 when no pepper is configured), and lookups are keyed by that hash — the plaintext never reaches the database, and a party that can write the table but not read the pepper cannot forge a row that authenticates. `ILD.Data.Security.SessionTokenHasher` owns that mapping and is the only place a token and a session row are related. `GET /api/v1/auth/sessions` lists the caller's live sessions for the Settings page, `DELETE /api/v1/auth/sessions/{id}` revokes one, `POST /api/v1/auth/sessions/revoke-others` signs out everywhere else. A session also dies on its own: idle past `session.idleDays` (re-evaluated every request) or past the `ExpiresAt` stamped from `session.maxDays` at sign-in. Both are app settings, edited on the Settings page; the credentials themselves stay env vars because they are secrets. Not to be confused with a **Chat Session** (a transcript) or with the adapter/agent sessions of a run — "User Session" is always the login.
 - Webhook routes verify the caller against `RemoteProvider.WebhookSecret` values — an HMAC signature for Forgejo/GitHub, the service hook's Basic password for Azure DevOps; if no provider has a secret configured, all webhook calls are rejected with 401.
-- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events?cursor=&limit=` for the list paged by event `id`, with each entry's full payload inline in the `payload` field; `GET /api/v1/loopruns/{id}/conversation` for the run's conversation projected from it) — there is no separate `EventLogController`.
+- `EventLog` query routes live on `LoopRunsController` (`GET /api/v1/loopruns/{id}/events?cursor=&limit=` for the list paged by event `id`, with each entry's full payload inline in the `payload` field; `GET /api/v1/loopruns/{id}/conversation?after=` for the run's conversation projected from it, all of it or only the messages after event `after`, with `lastEventId`, the newest event the read covered, to read on from) — there is no separate `EventLogController`.
 - `HttpClient` instances for AI providers and the work-item server are registered as **typed clients** via `AddHttpClient<TInterface, TImpl>` (no named clients). Failures from AI calls surface as `AiProviderException` with cause-preserving inner exceptions.
 
 ### Storage layout
@@ -280,7 +280,7 @@ Both emit messages of shape `{ type: string; payload: T; timestamp: string }`. A
 - `LoopRunStateChanged`
 - `WorkItemStateChanged`
 - `HumanFeedbackRequired`
-- `EventLogged`
+- `EventLogged` — `{ runId, id, eventType, nodeId, runNodeId, timestamp }` on `/hubs/loop-run`, to the run's group: sent once for every event stored on the run, after it is stored; `id` is the event's Id, so a client reads the conversation on from the last event it has
 - `RunPaused`
 - `RunResumed`
 - `DependencyResolved`
