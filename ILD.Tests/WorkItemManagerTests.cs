@@ -506,6 +506,39 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task The_view_names_the_latest_run_in_any_status_and_none_when_there_is_no_run()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        Assert.Null((await mgr.GetWorkItemAsync(id))!.LatestLoopRunId);
+        Assert.Null((await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id).LatestLoopRunId);
+
+        var (older, versionId) = SeedRunWithVersion(db, id);
+        var now = DateTime.UtcNow;
+        var run = await db.Context.LoopRuns.FindAsync([older], TestContext.Current.CancellationToken);
+        run!.Status = LoopRunStatus.Failed;
+        run.StartedAt = now.AddMinutes(-10);
+        run.CompletedAt = now.AddMinutes(-9);
+        var newer = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = newer,
+            WorkItemId = id,
+            LoopTemplateVersionId = versionId,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            Status = LoopRunStatus.Completed,
+            StartedAt = now.AddMinutes(-5),
+            CompletedAt = now.AddMinutes(-1),
+        });
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(newer, (await mgr.GetWorkItemAsync(id))!.LatestLoopRunId);
+        Assert.Equal(newer, (await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id).LatestLoopRunId);
+    }
+
+    [Fact]
     public async Task TransitionToHumanFeedback_sets_reason_on_workitem()
     {
         var (mgr, db, repoId, _, _) = Setup();

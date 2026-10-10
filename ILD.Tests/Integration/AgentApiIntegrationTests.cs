@@ -1133,6 +1133,75 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task GetWorkItem_with_includeConversation_returns_only_the_latest_runs_projected_conversation()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var itemId = await CreateAsync(client, "conversing", runId: null, repoId);
+        var ct = TestContext.Current.CancellationToken;
+
+        var none = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}?includeConversation=true", ct);
+        Assert.Equal(JsonValueKind.Null, none.GetProperty("conversation").ValueKind);
+
+        Guid older, latest, aiRunNode;
+        long latestStarted, latestAi, latestReply;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var events = scope.ServiceProvider.GetRequiredService<IEventLogService>();
+            var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"conv-{Guid.NewGuid():N}" };
+            var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
+            var coder = new LoopNode { Id = Guid.NewGuid(), LoopTemplateVersionId = version.Id, NodeType = NodeType.AI, Label = "Coder", CreatedAt = DateTime.UtcNow };
+            db.LoopTemplates.Add(template);
+            db.LoopTemplateVersions.Add(version);
+            db.LoopNodes.Add(coder);
+            LoopRun Run(DateTime startedAt) => new()
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = itemId,
+                LoopTemplateVersionId = version.Id,
+                Status = LoopRunStatus.Completed,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+                StartedAt = startedAt,
+                CompletedAt = startedAt.AddMinutes(1),
+            };
+            var now = DateTime.UtcNow;
+            var a = Run(now.AddHours(-2));
+            var b = Run(now.AddHours(-1));
+            db.LoopRuns.AddRange(a, b);
+            var rnB = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = b.Id, LoopNodeId = coder.Id, NodeLabel = "Coder", Status = LoopRunNodeStatus.Succeeded };
+            db.LoopRunNodes.Add(rnB);
+            await db.SaveChangesAsync(ct);
+            (older, latest, aiRunNode) = (a.Id, b.Id, rnB.Id);
+
+            await events.AppendAsync(older, EventType.LoopRunStarted, "older run started");
+            await events.AppendAsync(older, EventType.HumanFeedbackReceived, "a reply to the older run");
+            latestStarted = await events.AppendAsync(latest, EventType.LoopRunStarted, "latest run started");
+            await events.AppendAsync(older, EventType.HumanFeedbackReceived, "a late reply to the older run");
+            latestAi = await events.AppendAsync(latest, EventType.NodeCompleted, "a plan", coder.Id, aiRunNode);
+            latestReply = await events.AppendAsync(latest, EventType.HumanFeedbackReceived, "go on");
+        }
+
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}?includeConversation=true", ct);
+        var conversation = detail.GetProperty("conversation");
+        Assert.Equal(latest, conversation.GetProperty("runId").GetGuid());
+        var messages = conversation.GetProperty("messages").EnumerateArray().ToList();
+        Assert.Equal(new[] { latestStarted, latestAi, latestReply }, messages.Select(m => m.GetProperty("id").GetInt64()));
+        Assert.Equal(
+            new[] { ("system", "latest run started"), ("ai", "a plan"), ("human", "go on") },
+            messages.Select(m => (m.GetProperty("role").GetString(), m.GetProperty("text").GetString())));
+        Assert.All(messages, m => Assert.Equal(latest, m.GetProperty("runId").GetGuid()));
+        Assert.Equal("Coder", messages[1].GetProperty("name").GetString());
+        Assert.Equal(aiRunNode, messages[1].GetProperty("runNodeId").GetGuid());
+        Assert.Equal(JsonValueKind.Null, messages[2].GetProperty("runNodeId").ValueKind);
+        Assert.All(messages, m => Assert.True(m.GetProperty("timestamp").TryGetDateTime(out _)));
+
+        var without = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}?includeConversation=false", ct);
+        Assert.False(without.TryGetProperty("conversation", out _));
+    }
+
+    [Fact]
     public async Task GetBacklogSummary_returns_counts_and_blocked_vs_actionable()
     {
         await using var factory = new ApiFactory();
