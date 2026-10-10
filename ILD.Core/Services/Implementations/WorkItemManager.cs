@@ -773,9 +773,9 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> ParkWithoutRunAsync(string workItemId, string reason)
     {
-        if (await GetWorkItemAsync(workItemId) is null) return false;
+        if (!await TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason)) return false;
         await _loopRunStore.SetWorkItemStatusReasonAsync(workItemId, reason);
-        return await TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason);
+        return true;
     }
 
 
@@ -822,6 +822,10 @@ public class WorkItemManager : IWorkItemManager
             return false;
 
         var actual = resp.ActualStatus;
+        // The item's own reason says why it waits on a person; once it does
+        // not, the reason is history.
+        if (actual != RemoteWorkItemStatus.HumanFeedback)
+            await _loopRunStore.ClearWorkItemStatusReasonAsync(workItemId);
 
         // Update engine-only fields on the current LoopRun. Only the run the
         // caller names is given a feedback label: one inferred from the work

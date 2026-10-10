@@ -421,6 +421,25 @@ public class WorkItemRunEventsTests
         Assert.Empty(RunTimeline.Events(rig.Db, previous.Id));
     }
 
+    [Theory]
+    [InlineData(RemoteWorkItemStatus.Ready)]
+    [InlineData(RemoteWorkItemStatus.Backlog)]
+    [InlineData(RemoteWorkItemStatus.Done)]
+    public async Task An_items_own_reason_goes_once_it_no_longer_waits_on_a_person(RemoteWorkItemStatus next)
+    {
+        using var rig = new Rig();
+        var id = await rig.WorkItemAsync();
+        await rig.Manager.TransitionToHumanFeedbackAsync(id, "Needs a product decision before going further");
+
+        await rig.Manager.TransitionAsync(id, next);
+
+        var view = await rig.Manager.GetWorkItemAsync(id);
+        Assert.Equal(next, view!.Status);
+        Assert.Null(view.StatusReason);
+        Assert.Null(view.StatusReasonAt);
+        Assert.Empty(rig.Db.Fresh().WorkItemStatusReasons.Where(r => r.WorkItemId == id));
+    }
+
     [Fact]
     public async Task A_transition_puts_a_reason_on_a_run_only_when_told_which_run()
     {
