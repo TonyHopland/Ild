@@ -94,6 +94,9 @@ public sealed class WorkItemView
 
     public Guid? CurrentLoopRunId { get; set; }
 
+    /// <summary>The item's newest run in any status, Completed included; null when it has none.</summary>
+    public Guid? LatestLoopRunId { get; set; }
+
     /// <summary>
     /// Label of the node the current run is executing (resolved from the run's
     /// CurrentNodeId). Null when there is no active run or the run has not

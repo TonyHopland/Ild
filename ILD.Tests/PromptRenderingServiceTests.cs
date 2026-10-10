@@ -25,7 +25,7 @@ public class PromptRenderingServiceTests
 
         public Run()
         {
-            _events = new EventLogService(_db.EventLogs);
+            _events = new EventLogService(_db.EventLogs, new NoopRunNotifier());
             _versionId = RunTimeline.SeedVersion(_db);
             Id = RunTimeline.SeedRun(_db, "WI-1", _versionId, LoopRunStatus.Running).Id;
             Renderer = new PromptRenderingService(new PromptTemplateResolver(), _db.EventLogs,

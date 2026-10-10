@@ -178,7 +178,7 @@ public class StuckRunWatchdogTests
         using var db = new TestDb();
         var (version, _) = SeedTemplate(db);
         var run = SeedRun(db, version.Id, LoopRunStatus.Running, updatedAt: DateTime.UtcNow.AddMinutes(-10));
-        var events = new EventLogService(db.EventLogs);
+        var events = new EventLogService(db.EventLogs, new NoopRunNotifier());
         await events.AppendAsync(run.Id, EventType.LoopRunCompleted, "Run completed");
         await db.Fresh().LoopRuns.Where(r => r.Id == run.Id)
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.CompletedAt, DateTime.UtcNow.AddMinutes(-9)), TestContext.Current.CancellationToken);

@@ -62,10 +62,10 @@ public sealed class ListingTools
     }
 
     [McpServerTool(Name = "get_workitem")]
-    [Description("Get a single work item's full record: full description body, dependencies and reverse 'blocks' edges resolved to {id,title,status}. The conversation is excluded by default (it is the largest field); pass includeConversation=true to include it.")]
+    [Description("Get a single work item's full record: full description body, dependencies and reverse 'blocks' edges resolved to {id,title,status}. The conversation is excluded by default (it is the largest field); pass includeConversation=true to include the latest run's conversation, projected from that run's event log, as {runId, messages}. Each message carries its run id, event id, runNodeId, role, name, text and timestamp, in event order; earlier runs are listed by list_loop_runs.")]
     public Task<string> GetWorkItem(
         [Description("Work item GUID.")] string id,
-        [Description("Include the conversation thread (large; default false).")] bool includeConversation = false)
+        [Description("Include the latest run's conversation, projected from its event log, with run id, event id and timestamp per message (large; default false).")] bool includeConversation = false)
         => _ild.GetRawAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}?includeConversation={(includeConversation ? "true" : "false")}");
 
     [McpServerTool(Name = "list_repositories")]

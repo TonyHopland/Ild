@@ -9,7 +9,7 @@ namespace ILD.Core.Services.Interfaces;
 public interface IRunNotifier
 {
     Task NodeStateChangedAsync(Guid runId, Guid nodeId, LoopRunNodeStatus oldStatus, LoopRunNodeStatus newStatus);
-    Task EventLoggedAsync(Guid runId, string message, string eventType, Guid? nodeId, Guid? runNodeId);
+    Task EventLoggedAsync(Guid runId, long eventId, string eventType, Guid? nodeId, Guid? runNodeId, DateTime timestamp);
     Task RunStateChangedAsync(Guid runId, LoopRunStatus oldStatus, LoopRunStatus newStatus);
     Task PausedAsync(Guid runId);
     Task ResumedAsync(Guid runId);
@@ -31,7 +31,7 @@ public interface IRunNotifier
 public sealed class NoopRunNotifier : IRunNotifier
 {
     public Task NodeStateChangedAsync(Guid runId, Guid nodeId, LoopRunNodeStatus oldStatus, LoopRunNodeStatus newStatus) => Task.CompletedTask;
-    public Task EventLoggedAsync(Guid runId, string message, string eventType, Guid? nodeId, Guid? runNodeId) => Task.CompletedTask;
+    public Task EventLoggedAsync(Guid runId, long eventId, string eventType, Guid? nodeId, Guid? runNodeId, DateTime timestamp) => Task.CompletedTask;
     public Task RunStateChangedAsync(Guid runId, LoopRunStatus oldStatus, LoopRunStatus newStatus) => Task.CompletedTask;
     public Task PausedAsync(Guid runId) => Task.CompletedTask;
     public Task ResumedAsync(Guid runId) => Task.CompletedTask;

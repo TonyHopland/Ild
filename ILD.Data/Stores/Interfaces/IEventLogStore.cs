@@ -26,6 +26,10 @@ public interface IEventLogStore
     Task<bool> HasEndedAsync(Guid runId);
 
     Task<IReadOnlyList<EventLog>> GetByRunIdAsync(Guid runId);
+
+    /// <summary>The run's events with an Id above <paramref name="afterId"/>, in Id order.</summary>
+    Task<IReadOnlyList<EventLog>> GetByRunIdAfterAsync(Guid runId, long afterId);
+
     Task<IReadOnlyList<EventLog>> GetByRunIdLastNAsync(Guid runId, int n);
 
     /// <summary>Up to <paramref name="limit"/> of the run's events with an Id above <paramref name="cursor"/>, in Id order.</summary>

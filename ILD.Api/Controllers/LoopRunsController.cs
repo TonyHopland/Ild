@@ -398,16 +398,22 @@ public class LoopRunsController : ControllerBase
         });
     }
 
-    /// <summary>The run's conversation, projected from its event log in the order it was written.</summary>
+    /// <summary>
+    /// The run's conversation, projected from its event log in the order it was
+    /// written: all of it, or what follows event <paramref name="after"/>.
+    /// <c>lastEventId</c> is where the next read goes on from.
+    /// </summary>
     [HttpGet("{id}/conversation")]
-    public async Task<IActionResult> GetConversation(string id)
+    public async Task<IActionResult> GetConversation(string id, [FromQuery] long after = 0)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
+        if (after < 0)
+            return BadRequest(new { error = "after must not be negative" });
 
-        var messages = await _conversation.GetMessagesAsync(guid);
-        if (messages is null) return NotFound();
-        return Ok(new { runId = guid, messages });
+        var page = await _conversation.GetPageAsync(guid, after);
+        if (page is null) return NotFound();
+        return Ok(new { runId = guid, messages = page.Messages, lastEventId = page.LastEventId });
     }
 
     [HttpGet("{id}/sessions/preview")]

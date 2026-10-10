@@ -3,25 +3,47 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations;
 
 public class EventLogService : IEventLogService
 {
     private readonly IEventLogStore _eventLogStore;
+    private readonly IRunNotifier _notifier;
+    private readonly ILogger<EventLogService> _logger;
 
-    public EventLogService(IEventLogStore eventLogStore)
+    public EventLogService(IEventLogStore eventLogStore, IRunNotifier notifier, ILogger<EventLogService>? logger = null)
     {
         _eventLogStore = eventLogStore;
+        _notifier = notifier;
+        _logger = logger ?? NullLogger<EventLogService>.Instance;
     }
 
     public Task<long> AppendAsync(Guid runId, EventType eventType, string message,
         Guid? nodeId = null, Guid? runNodeId = null, string? edgeName = null)
-        => _eventLogStore.AppendAsync(Entry(runId, eventType, message, nodeId, runNodeId, edgeName));
+        => AnnounceAsync(runId, Entry(runId, eventType, message, nodeId, runNodeId, edgeName), _eventLogStore.AppendAsync);
 
     public Task<long> AppendAlongsideAsync(Guid runId, EventType eventType, string message,
         Guid? nodeId, Guid? runNodeId, string? edgeName, Func<Task> alongside)
-        => _eventLogStore.AppendAlongsideAsync(Entry(runId, eventType, message, nodeId, runNodeId, edgeName), alongside);
+        => AnnounceAsync(runId, Entry(runId, eventType, message, nodeId, runNodeId, edgeName),
+            entry => _eventLogStore.AppendAlongsideAsync(entry, alongside));
+
+    private async Task<long> AnnounceAsync(Guid runId, EventLog entry, Func<EventLog, Task<long>> append)
+    {
+        var id = await append(entry);
+        try
+        {
+            await _notifier.EventLoggedAsync(runId, id, entry.EventType.ToString(),
+                entry.NodeId, entry.RunNodeId, entry.Timestamp);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to announce event {EventId} of run {RunId}", id, runId);
+        }
+        return id;
+    }
 
     // Payloads are stored inline in the DB. PostgreSQL keeps the Data
     // column (text) out-of-line and LZ-compressed via TOAST once a value
@@ -35,9 +57,13 @@ public class EventLogService : IEventLogService
             NodeId = nodeId,
             RunNodeId = runNodeId,
             EdgeName = edgeName,
-            Timestamp = DateTime.UtcNow,
+            Timestamp = ToStoredPrecision(DateTime.UtcNow),
             Data = message,
         };
+
+    // PostgreSQL keeps microseconds; the announced timestamp must be the one a later read returns.
+    private static DateTime ToStoredPrecision(DateTime at)
+        => at.AddTicks(-(at.Ticks % TimeSpan.TicksPerMicrosecond));
 
     public Task<bool> HasRunEndedAsync(Guid runId) => _eventLogStore.HasEndedAsync(runId);
 

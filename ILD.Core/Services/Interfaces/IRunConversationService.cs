@@ -17,6 +17,14 @@ public sealed record RunConversationMessage(
 }
 
 /// <summary>
+/// Part of a run's conversation, from the events after some event Id.
+/// <paramref name="LastEventId"/> is the highest event Id the read covered, so
+/// the next read goes on from there past events that make no message; it is
+/// the Id read on from when nothing newer exists, null when that was the start.
+/// </summary>
+public sealed record RunConversationPage(IReadOnlyList<RunConversationMessage> Messages, long? LastEventId);
+
+/// <summary>
 /// A run's conversation, read from its event log: the AI turns, what people
 /// said to it, and why it started, stopped and waited. The prompt's
 /// <c>{{Conversation.*}}</c> variables and the API both read it from here, so
@@ -24,12 +32,15 @@ public sealed record RunConversationMessage(
 /// </summary>
 public interface IRunConversationService
 {
-    /// <summary>The run's messages in the order they were written; null when there is no such run.</summary>
-    Task<IReadOnlyList<RunConversationMessage>?> GetMessagesAsync(Guid runId);
+    /// <summary>
+    /// The run's messages from events with an Id above <paramref name="afterId"/>, in
+    /// the order they were written; null when there is no such run.
+    /// </summary>
+    Task<RunConversationPage?> GetPageAsync(Guid runId, long afterId = 0);
 
     /// <summary>
-    /// The conversation in <paramref name="events"/>, the run's whole event log in
-    /// Id order, for a caller that has already read it.
+    /// The conversation in <paramref name="events"/>, the run's event log in Id
+    /// order, for a caller that has already read it.
     /// </summary>
     Task<IReadOnlyList<RunConversationMessage>> ProjectAsync(Guid runId, IReadOnlyList<EventLog> events);
 }

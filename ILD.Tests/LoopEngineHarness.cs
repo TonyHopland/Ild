@@ -77,8 +77,9 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<IPackageFeedResolver>(new PackageFeedResolver(Db.PackageFeeds, NullLogger<PackageFeedResolver>.Instance));
         // The engine resolves IEventLogService optionally; register it so node and
         // edge-traversal events are written exactly as they are in production.
-        services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs));
-        services.AddSingleton<IRunNotifier>(notifier ?? new NoopRunNotifier());
+        var runNotifier = notifier ?? new NoopRunNotifier();
+        services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, runNotifier));
+        services.AddSingleton<IRunNotifier>(runNotifier);
         services.AddSingleton<IWorkItemManager>(WorkItemsMock.Object);
         services.AddSingleton<IWorkItemNotifier>(WorkItemNotifierMock.Object);
         services.AddSingleton<INodeExecutorRegistry>(Registry);
