@@ -32,6 +32,23 @@ public class LoopEngineRunEventsTests
         Assert.Equal(EventType.LoopRunCompleted, Assert.Single(RunTimeline.EndingEvents(h.Db, h.RunId)).EventType);
     }
 
+    [Fact]
+    public async Task Waiting_for_provider_capacity_records_the_internal_park_without_a_node_execution()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("ai", NodeType.AI);
+        h.Registry.Register(new ScriptedExecutor(NodeType.AI, new NodeOutcome.WaitingIld("provider at capacity")));
+        h.SeedRun("ai");
+
+        await h.RunAsync();
+
+        var parked = Assert.Single(Events(h, EventType.RunParked));
+        Assert.Equal("provider at capacity", parked.Data);
+        Assert.Equal(h.NodesById["ai"].Id, parked.NodeId);
+        Assert.Null(parked.RunNodeId);
+        Assert.Empty(h.ReloadRunNodes());
+    }
+
     [Theory]
     [InlineData("Read the plan in PLAN.md and say whether it holds up.", "Read the plan in PLAN.md and say whether it holds up.")]
     [InlineData("", HumanFeedbackReasons.HumanInputNeeded)]

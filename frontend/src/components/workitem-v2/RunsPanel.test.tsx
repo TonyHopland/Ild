@@ -1398,4 +1398,73 @@ describe("RunsPanel retry", () => {
 
     expect(screen.getByRole("button", { name: /retry from this node/i })).not.toBeNull();
   });
+
+  describe("RunsPanel conversation history", () => {
+    test("shows an earlier run's run-level events and human replies, including replies without a note", async () => {
+      const older = runWithNode(RUN_A);
+      const latest = runWithNode(RUN_B);
+      const getConversation = vi.spyOn(loopRunService, "getConversation").mockResolvedValue({
+        runId: RUN_A,
+        lastEventId: 3,
+        messages: [
+          {
+            id: 1,
+            runId: RUN_A,
+            runNodeId: null,
+            role: "system",
+            name: "LoopRunStarted",
+            text: "Run started",
+            timestamp: older.startedAt,
+          },
+          {
+            id: 2,
+            runId: RUN_A,
+            runNodeId: null,
+            role: "human",
+            name: "Human",
+            text: "Please revise",
+            timestamp: older.startedAt,
+          },
+          {
+            id: 3,
+            runId: RUN_A,
+            runNodeId: null,
+            role: "human",
+            name: "Human",
+            text: "",
+            timestamp: older.startedAt,
+          },
+        ],
+      });
+      renderActionPanel([latest, older], {
+        workItem: workItem({ latestLoopRunId: RUN_B }),
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Run aaaaaaaa/i }));
+      const section = await screen.findByRole("button", { name: /conversation/i });
+      expect(getConversation).not.toHaveBeenCalled();
+      fireEvent.click(section);
+
+      expect(await screen.findByText("Run started")).not.toBeNull();
+      expect(screen.getByText("Please revise")).not.toBeNull();
+      expect(screen.getByText("No comment")).not.toBeNull();
+      expect(getConversation).toHaveBeenCalledWith(RUN_A);
+    });
+
+    test("reports a failed history read instead of showing an empty conversation", async () => {
+      const older = runWithNode(RUN_A);
+      const latest = runWithNode(RUN_B);
+      vi.spyOn(loopRunService, "getConversation").mockRejectedValue(
+        new Error("History unavailable"),
+      );
+      renderActionPanel([latest, older], {
+        workItem: workItem({ latestLoopRunId: RUN_B }),
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: /Run aaaaaaaa/i }));
+      fireEvent.click(await screen.findByRole("button", { name: /conversation/i }));
+
+      expect((await screen.findByRole("alert")).textContent).toContain("History unavailable");
+    });
+  });
 });

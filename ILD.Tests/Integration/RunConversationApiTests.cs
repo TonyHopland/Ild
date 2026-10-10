@@ -158,7 +158,7 @@ public class RunConversationApiTests
         await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         Guid runId;
-        EventLog implemented, reply, reviewed;
+        EventLog implemented, reply, emptyReply, reviewed;
         using (var scope = factory.Services.CreateScope())
         {
             var seed = new Seed(scope.ServiceProvider.GetRequiredService<AppDbContext>()) { ClockRunsBackwards = true };
@@ -177,7 +177,7 @@ public class RunConversationApiTests
             seed.Event(run, EventType.NodeCompleted, "build ok", rnBuild);
             seed.Event(run, EventType.NodeCompleted, "", rnRev);
             reply = seed.Event(run, EventType.HumanFeedbackReceived, "Looks good, but rename it");
-            seed.Event(run, EventType.HumanFeedbackReceived, "");
+            emptyReply = seed.Event(run, EventType.HumanFeedbackReceived, "");
             seed.Event(other, EventType.HumanFeedbackReceived, "a reply to another run");
             reviewed = seed.Event(run, EventType.NodeCompleted, "renamed and reviewed", rnRev);
             seed.Event(run, EventType.EdgeTraversed, "OnSuccess", rnRev);
@@ -192,16 +192,17 @@ public class RunConversationApiTests
             {
                 ("ai", "Implementer (retry)", "implemented it"),
                 ("human", "Human", "Looks good, but rename it"),
+                ("human", "Human", ""),
                 ("ai", "Reviewer", "renamed and reviewed"),
             },
             messages.Select(m => (m.GetProperty("role").GetString(), m.GetProperty("name").GetString(), m.GetProperty("text").GetString())));
         Assert.Equal(
-            new[] { implemented.Id, reply.Id, reviewed.Id },
+            new[] { implemented.Id, reply.Id, emptyReply.Id, reviewed.Id },
             messages.Select(m => m.GetProperty("id").GetInt64()));
         Assert.All(messages, m => Assert.Equal(runId, m.GetProperty("runId").GetGuid()));
         Assert.Equal(implemented.RunNodeId, messages[0].GetProperty("runNodeId").GetGuid());
         Assert.Equal(JsonValueKind.Null, messages[1].GetProperty("runNodeId").ValueKind);
-        Assert.True(messages[2].TryGetProperty("timestamp", out _));
+        Assert.True(messages[3].TryGetProperty("timestamp", out _));
     }
 
     [Fact]

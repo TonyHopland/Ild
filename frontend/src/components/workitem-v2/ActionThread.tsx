@@ -303,7 +303,7 @@ function RunThread({
           footer={variables.length > 0 && <TurnVariables variables={variables} />}
         >
           <div className="conversation-message-content">
-            <MarkdownRenderer content={m.text} />
+            {m.role === "human" && !m.text ? "No comment" : <MarkdownRenderer content={m.text} />}
           </div>
         </Bubble>,
       );

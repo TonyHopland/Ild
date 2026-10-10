@@ -39,7 +39,7 @@ public sealed class RunConversationService : IRunConversationService
             {
                 EventType.NodeCompleted when runNode?.LoopNode?.NodeType == NodeType.AI && text.Length > 0
                     => (RunConversationMessage.Ai, AiName(runNode.NodeLabel, runNode.LoopNode.Label)),
-                EventType.HumanFeedbackReceived when text.Length > 0
+                EventType.HumanFeedbackReceived
                     => (RunConversationMessage.Human, "Human"),
                 var type when RunConversationEvents.System.Contains(type)
                     => (RunConversationMessage.System, type.ToString()),
