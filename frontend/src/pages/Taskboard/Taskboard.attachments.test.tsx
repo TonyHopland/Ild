@@ -331,6 +331,8 @@ describe("a dialog belongs to the work item it was opened for", () => {
     await click(await within(feedback).findByRole("button", { name: "Approve" }));
     await waitFor(() => expect(feedbackBox()).toBeNull());
 
+    // The read-back took the place of the reconnect read, which was started again.
+    expect(getById).toHaveBeenCalledTimes(3);
     await act(async () => {
       reconnectRead.resolve(parked);
       await Promise.resolve();
@@ -340,6 +342,7 @@ describe("a dialog belongs to the work item it was opened for", () => {
     });
 
     expect(feedbackBox()).toBeNull();
+    expect(openTitle()).toBe("Item A");
   });
 
   describe("an answer refused because the run had moved on", () => {
