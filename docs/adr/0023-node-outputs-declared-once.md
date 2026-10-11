@@ -13,3 +13,7 @@ The change is a storage and model rework only: the engine routes over edge rows 
 **Change the edge document shape to reference outputs by id.** Rejected: edges keep `{ edgeType, name }`, which already identifies an output uniquely within its node, and changing it would widen the format change for no gain.
 
 **Auto-declare every name a rule or case mentions at save.** Rejected for the server: it would make the "references an undeclared output" check dead and hide typos. The editor still declares a new name typed into a rule, case or default when its settings are saved, so authoring a rule stays one step, and a name no output can take — blank, or success/failure — is refused in the settings themselves. Deleting an output that something uses asks first and then removes its edges, rules and cases with it, so a delete leaves no reference behind that would quietly declare it again; typing the name back in declares it anew.
+
+## Amendment: a fixed output that is not reserved
+
+Every PR node also holds `on_existing_pr`, taken by the PR node itself on the visit where it attaches the run to a pull request the branch already had. It is fixed — filled in on save, listed in the editor, removable by nobody — but not reserved: the PR heartbeat never fires it and it has no place in the reserved outputs' priority order, so it carries no `reserved` flag and the run UI shows it like any other output.

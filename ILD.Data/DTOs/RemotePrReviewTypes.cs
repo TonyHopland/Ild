@@ -178,9 +178,9 @@ public static class PrFinding
 /// end of the round, where it posts its own comment. That is what puts a human
 /// between an agent and a public pull request — the queue is visible from the
 /// moment it is written until the round reaches the node, and anything in it can
-/// be dropped. <see cref="Path"/> and <see cref="Line"/> are carried only so the
-/// person reading the queue can see where an answer would land without opening
-/// the transcript.
+/// be dropped. On an answer <see cref="Path"/> and <see cref="Line"/> are carried
+/// only so the person reading the queue can see where it would land without
+/// opening the transcript; on a <see cref="Finding"/> they are where it is posted.
 ///
 /// <see cref="SourceHash"/> is the content fingerprint of the finding this
 /// answers, kept so that dropping the answer — or a forge refusing it — can put
