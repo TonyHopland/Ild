@@ -624,6 +624,9 @@ namespace ILD.Data.Migrations
                     b.Property<int>("AiTraversalCount")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("AttachToExistingBranch")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("BaseBranchOverride")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");

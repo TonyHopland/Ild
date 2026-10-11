@@ -37,6 +37,13 @@ public interface IRepositoryManager
     Task<(bool Success, string? Error)> CloneAsync(string cloneUrl, string targetPath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null);
 
     Task<string> CreateWorktreeAsync(string repoPath, string branchName);
+
+    /// <summary>
+    /// Like <see cref="CreateWorktreeAsync(string, string)"/>, but a new
+    /// <paramref name="branchName"/> starts at <paramref name="startPoint"/>
+    /// (for example <c>origin/feature/x</c>) instead of at the repository's HEAD.
+    /// </summary>
+    Task<string> CreateWorktreeAsync(string repoPath, string branchName, string startPoint);
     Task DestroyWorktreeAsync(string worktreePath);
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);
     Task<bool> CheckoutBranchAsync(string worktreePath, string branchName);

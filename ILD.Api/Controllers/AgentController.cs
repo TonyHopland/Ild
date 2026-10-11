@@ -279,6 +279,7 @@ public class AgentController : ControllerBase
             // holds is what the item's next run will check out.
             branchNameOverride = wi.BranchNameOverride,
             baseBranchOverride = wi.BaseBranchOverride,
+            attachToExistingBranch = wi.AttachToExistingBranch,
             createdAt = wi.CreatedAt,
             updatedAt = wi.UpdatedAt,
             dependencies = deps.Select(d => new { id = d.Id, title = d.Title, status = d.Status.ToString() }),
@@ -1190,7 +1191,8 @@ public class AgentController : ControllerBase
                 tags: request.Tags,
                 createdByChatSessionId: createdByChatSessionId,
                 branchNameOverride: branchNameOverride,
-                baseBranchOverride: baseBranchOverride);
+                baseBranchOverride: baseBranchOverride,
+                attachToExistingBranch: request.AttachToExistingBranch ?? false);
         }
         catch (InvalidOperationException ex)
         {
@@ -1235,7 +1237,8 @@ public class AgentController : ControllerBase
         var ok = await _workItems.UpdateAsync(
             id, request.Title, request.Description ?? string.Empty, request.Tags,
             branchNameOverride: request.BranchNameOverride,
-            baseBranchOverride: request.BaseBranchOverride);
+            baseBranchOverride: request.BaseBranchOverride,
+            attachToExistingBranch: request.AttachToExistingBranch);
         if (!ok)
             return StatusCode(503, new { error = "Work item update failed." });
 
@@ -1248,6 +1251,7 @@ public class AgentController : ControllerBase
             status = updated?.Status.ToString(),
             branchNameOverride = updated?.BranchNameOverride,
             baseBranchOverride = updated?.BaseBranchOverride,
+            attachToExistingBranch = updated?.AttachToExistingBranch,
         });
     }
 
@@ -1356,9 +1360,9 @@ public class AgentController : ControllerBase
             return sessionError;
 
         if (request.Title is null && request.Description is null && request.Tags is null
-            && request.BranchNameOverride is null && request.BaseBranchOverride is null
+            && request.BranchNameOverride is null && request.BaseBranchOverride is null && request.AttachToExistingBranch is null
             && request.AddDependencies is null && request.RemoveDependencies is null)
-            return BadRequest(new { error = "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, addDependencies or removeDependencies." });
+            return BadRequest(new { error = "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, attachToExistingBranch, addDependencies or removeDependencies." });
         if (request.Title is not null && string.IsNullOrWhiteSpace(request.Title))
             return BadRequest(new { error = "A proposed title cannot be blank." });
 
@@ -1387,6 +1391,7 @@ public class AgentController : ControllerBase
                 Tags = request.Tags,
                 BranchNameOverride = request.BranchNameOverride,
                 BaseBranchOverride = request.BaseBranchOverride,
+                AttachToExistingBranch = request.AttachToExistingBranch,
                 AddDependencies = addDependencies,
                 RemoveDependencies = removeDependencies,
                 Rationale = request.Rationale,

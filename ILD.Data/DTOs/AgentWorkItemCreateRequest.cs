@@ -58,4 +58,11 @@ public class AgentWorkItemCreateRequest
     /// </summary>
     [StringLength(256)]
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// Optional: true makes every run check out <see cref="BranchNameOverride"/>
+    /// as it already stands on origin, instead of creating it. Null/false
+    /// leaves runs creating their branch.
+    /// </summary>
+    public bool? AttachToExistingBranch { get; set; }
 }

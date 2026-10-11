@@ -104,7 +104,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
 
         var item = await _db.WorkItems.AsNoTracking()
             .Where(w => w.InternalId == key.Value)
-            .Select(w => new { w.Title, w.Description, w.TagsJson, w.BranchNameOverride, w.BaseBranchOverride, w.DependenciesJson })
+            .Select(w => new { w.Title, w.Description, w.TagsJson, w.BranchNameOverride, w.BaseBranchOverride, w.AttachToExistingBranch, w.DependenciesJson })
             .SingleAsync(ct);
 
         var proposal = new WorkItemEditProposal
@@ -116,6 +116,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             ProposedTagsJson = req.Tags is null ? null : WorkItemMapper.SerializeTags(req.Tags),
             ProposedBranchNameOverride = req.BranchNameOverride?.Trim(),
             ProposedBaseBranchOverride = req.BaseBranchOverride?.Trim(),
+            ProposedAttachToExistingBranch = req.AttachToExistingBranch,
             ProposedAddDependenciesJson = req.AddDependencies is null ? null : WorkItemMapper.SerializeDependencies(req.AddDependencies),
             ProposedRemoveDependenciesJson = req.RemoveDependencies is null ? null : WorkItemMapper.SerializeDependencies(req.RemoveDependencies),
             SnapshotTitle = item.Title,
@@ -123,6 +124,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             SnapshotTagsJson = item.TagsJson,
             SnapshotBranchNameOverride = item.BranchNameOverride,
             SnapshotBaseBranchOverride = item.BaseBranchOverride,
+            SnapshotAttachToExistingBranch = item.AttachToExistingBranch,
             SnapshotDependenciesJson = req.AddDependencies is null && req.RemoveDependencies is null ? null : item.DependenciesJson,
             Rationale = string.IsNullOrWhiteSpace(req.Rationale) ? null : req.Rationale.Trim(),
             CreatedByLoopRunId = req.CreatedByLoopRunId,
@@ -142,9 +144,9 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
     private static string? Validate(string workItemId, CreateEditProposalRequest req)
     {
         if (req.Title is null && req.Description is null && req.Tags is null
-            && req.BranchNameOverride is null && req.BaseBranchOverride is null
+            && req.BranchNameOverride is null && req.BaseBranchOverride is null && req.AttachToExistingBranch is null
             && req.AddDependencies is null && req.RemoveDependencies is null)
-            return "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, addDependencies or removeDependencies.";
+            return "Propose at least one of title, description, tags, branchNameOverride, baseBranchOverride, attachToExistingBranch, addDependencies or removeDependencies.";
         if (req.AddDependencies is { Count: 0 } || req.RemoveDependencies is { Count: 0 })
             return "A dependency list, when given, must name at least one work item.";
         var dependencyIds = (req.AddDependencies ?? []).Concat(req.RemoveDependencies ?? []).ToList();
@@ -225,6 +227,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
                 && w.TagsJson == proposal.SnapshotTagsJson
                 && w.BranchNameOverride == proposal.SnapshotBranchNameOverride
                 && w.BaseBranchOverride == proposal.SnapshotBaseBranchOverride
+                && w.AttachToExistingBranch == proposal.SnapshotAttachToExistingBranch
                 && (expectedDependencies == null || w.DependenciesJson == expectedDependencies))
             .ExecuteUpdateAsync(s =>
             {
@@ -238,6 +241,8 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
                     s.SetProperty(w => w.BranchNameOverride, WorkItemMapper.NormalizeBranchRef(branch));
                 if (proposal.ProposedBaseBranchOverride is { } baseBranch)
                     s.SetProperty(w => w.BaseBranchOverride, WorkItemMapper.NormalizeBranchRef(baseBranch));
+                if (proposal.ProposedAttachToExistingBranch is { } attach)
+                    s.SetProperty(w => w.AttachToExistingBranch, attach);
                 if (proposedDependencies is not null)
                     s.SetProperty(w => w.DependenciesJson, proposedDependencies);
                 s.SetProperty(w => w.UpdatedAt, now);
@@ -402,6 +407,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Tags = p.ProposedTagsJson is null ? null : WorkItemMapper.DeserializeTags(p.ProposedTagsJson),
             BranchNameOverride = p.ProposedBranchNameOverride,
             BaseBranchOverride = p.ProposedBaseBranchOverride,
+            AttachToExistingBranch = p.ProposedAttachToExistingBranch,
             AddDependencies = NamedDependencies(p.ProposedAddDependenciesJson, titles),
             RemoveDependencies = NamedDependencies(p.ProposedRemoveDependenciesJson, titles),
         },
@@ -412,6 +418,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             Tags = WorkItemMapper.DeserializeTags(p.SnapshotTagsJson),
             BranchNameOverride = p.SnapshotBranchNameOverride,
             BaseBranchOverride = p.SnapshotBaseBranchOverride,
+            AttachToExistingBranch = p.SnapshotAttachToExistingBranch,
             Dependencies = p.SnapshotDependenciesJson is null ? null : DeserializeIds(p.SnapshotDependenciesJson),
         },
         Rationale = p.Rationale,

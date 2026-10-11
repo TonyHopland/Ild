@@ -184,6 +184,13 @@ public class LoopRun : IHasUpdatedAt
     [MaxLength(256)]
     public string? BaseBranchOverride { get; set; }
 
+    // Whether this run attaches to BranchName as it already stands on origin
+    // (checked out as is, never created or rebased) rather than creating it.
+    // Pinned at creation for the same reason as BaseBranchOverride: ticking the
+    // box on the work item mid-run must not turn this run into an attach.
+    // Only ever true with a BranchName. See ADR-0008.
+    public bool AttachToExistingBranch { get; set; }
+
     [MaxLength(2048)]
     public string? PrUrl { get; set; }
 

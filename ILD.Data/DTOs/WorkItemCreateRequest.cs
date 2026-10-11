@@ -49,4 +49,11 @@ public class WorkItemCreateRequest
     /// </summary>
     [StringLength(256)]
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// Whether every run checks out <see cref="BranchNameOverride"/> as it
+    /// already stands on origin instead of creating it. Null leaves it
+    /// unchanged on update, and means false on create.
+    /// </summary>
+    public bool? AttachToExistingBranch { get; set; }
 }

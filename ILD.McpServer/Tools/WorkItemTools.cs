@@ -34,7 +34,9 @@ public sealed class WorkItemTools
         [Description("Optional custom branch name used verbatim by every run of the item, instead of the generated ild/wi-<id>-run-<n> name. Must be a valid git branch name. Omit for the default.")]
         string? branchNameOverride = null,
         [Description("Optional branch every run of the item starts from and opens its PR against, instead of the repository's default branch. Must exist on the remote when the run starts. Omit for the default.")]
-        string? baseBranchOverride = null)
+        string? baseBranchOverride = null,
+        [Description("Optional: true makes every run check out branchNameOverride as it already stands on the remote (no new branch, no rebase onto the base) instead of creating it; the run fails to start if the branch is not on the remote. Needs branchNameOverride. Pushes from such a run go to that branch, and so to any pull request open on it — which may be someone else's. Omit for false.")]
+        bool? attachToExistingBranch = null)
     {
         var body = new
         {
@@ -46,6 +48,7 @@ public sealed class WorkItemTools
             tags,
             branchNameOverride,
             baseBranchOverride,
+            attachToExistingBranch,
         };
         return _ild.PostJsonAsync("api/v1/agent/workitems", body);
     }
@@ -61,9 +64,11 @@ public sealed class WorkItemTools
         [Description("Optional replacement custom branch name. Omit to leave it unchanged; pass an empty string to go back to the generated per-run branch name. Only the item's next run is affected.")]
         string? branchNameOverride = null,
         [Description("Optional replacement base branch the item's runs start from and open PRs against. Omit to leave it unchanged; pass an empty string to go back to the repository's default branch. Only the item's next run is affected.")]
-        string? baseBranchOverride = null)
+        string? baseBranchOverride = null,
+        [Description("Optional replacement for whether runs check out branchNameOverride as it already stands on the remote instead of creating it. Pushes from such a run go to that branch, and so to any pull request open on it — which may be someone else's. Omit to leave it unchanged. Only the item's next run is affected.")]
+        bool? attachToExistingBranch = null)
     {
-        var body = new { title, description, tags, branchNameOverride, baseBranchOverride };
+        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, attachToExistingBranch };
         return _ild.PutJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}", body);
     }
 
@@ -104,6 +109,8 @@ public sealed class WorkItemTools
         string? branchNameOverride = null,
         [Description("Proposed base branch the item's runs start from and open PRs against. Pass an empty string to propose going back to the repository's default branch; omit to leave it out of the proposal.")]
         string? baseBranchOverride = null,
+        [Description("Proposed value for whether runs check out branchNameOverride as it already stands on the remote instead of creating it. Pushes from such a run go to that branch, and so to any pull request open on it — which may be someone else's. Omit to leave it out of the proposal.")]
+        bool? attachToExistingBranch = null,
         [Description("Proposed work item GUIDs for the item to start depending on. Each must exist, not already be a dependency, and not create a cycle. Omit to add none.")]
         string[]? addDependencies = null,
         [Description("Proposed work item GUIDs for the item to stop depending on. Each must be a current dependency. Omit to remove none.")]
@@ -111,7 +118,7 @@ public sealed class WorkItemTools
         [Description("Optional short reason for the edit (up to 2000 chars), shown to the human deciding.")]
         string? rationale = null)
     {
-        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, addDependencies, removeDependencies, rationale };
+        var body = new { title, description, tags, branchNameOverride, baseBranchOverride, attachToExistingBranch, addDependencies, removeDependencies, rationale };
         return _ild.PostJsonAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}/edit-proposals", body);
     }
 

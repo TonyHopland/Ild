@@ -19,7 +19,7 @@ public enum WorkItemEditProposalStatus
 /// <summary>
 /// An agent's suggested edit to a work item, applied only if a human approves
 /// it. Each proposed field is null when it was not proposed; a blank branch
-/// override is a proposal to clear it. The snapshot is the five editable fields
+/// override is a proposal to clear it. The snapshot is the six editable fields
 /// as they were when the proposal was made, plus the dependency set when the
 /// proposal changes it: approving compares the item against it, so a human
 /// edit made since is never overwritten.
@@ -46,6 +46,8 @@ public class WorkItemEditProposal
     [MaxLength(256)]
     public string? ProposedBaseBranchOverride { get; set; }
 
+    public bool? ProposedAttachToExistingBranch { get; set; }
+
     /// <summary>JSON-serialized string[] of item ids; null when no dependency is proposed to be added.</summary>
     public string? ProposedAddDependenciesJson { get; set; }
 
@@ -65,6 +67,8 @@ public class WorkItemEditProposal
 
     [MaxLength(256)]
     public string? SnapshotBaseBranchOverride { get; set; }
+
+    public bool SnapshotAttachToExistingBranch { get; set; }
 
     /// <summary>
     /// The item's DependenciesJson when the proposal was made, taken only when

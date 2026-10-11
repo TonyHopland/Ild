@@ -33,7 +33,8 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
         string? branchName,
         Guid? repositoryId,
         string? workItemId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool attachToExistingBranch = false)
     {
         var name = BranchNameRules.Normalize(branchName);
         if (name is null)
@@ -52,6 +53,7 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
         // both hold `feature/foo`. Should the worktree root ever become
         // per-repository, this must be narrowed to the repository or it starts
         // reporting conflicts that are not there.
+        string? conflict = null;
         var holder = await _runs.GetByBranchNameAsync(name);
         if (holder is not null)
         {
@@ -64,40 +66,41 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
             var howToFree = holder.Status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman
                 ? "That run is still active — let it finish or cancel it first, then clean it up (which keeps its history) or delete it"
                 : "Clean up that run to free the branch while keeping its history, or delete it outright";
-            return Conflict(
+            conflict =
                 $"Branch `{name}` is already used locally by run {holder.Id} of {whose}. " +
-                $"{howToFree}, or give this work item a different branch name.");
+                $"{howToFree}, or give this work item a different branch name.";
         }
 
-        if (repositoryId is null)
-            return BranchNameVerdict.Usable;
-        var repo = await _providers.GetRepositoryByIdAsync(repositoryId.Value);
+        var repo = repositoryId is null ? null : await _providers.GetRepositoryByIdAsync(repositoryId.Value);
         if (repo is null)
-            return BranchNameVerdict.Usable;
+            return new BranchNameVerdict(null, conflict);
 
         // The base clone may not be on disk yet (the Start node clones on
         // demand), in which case there are no local branches to collide with.
         var basePath = BaseRepoPath.Existing(repo, _config);
-        if (basePath is not null && await _git.LocalBranchExistsAsync(basePath, name))
-            return Conflict(
+        if (conflict is null && basePath is not null && await _git.LocalBranchExistsAsync(basePath, name))
+            conflict =
                 $"Branch `{name}` already exists locally in the repository. " +
-                "Delete it, or give this work item a different branch name.");
+                "Delete it, or give this work item a different branch name.";
 
+        // Asked even when the name is already in conflict: the dialog offers
+        // attaching off this answer, whatever else is holding the name.
         var auth = await ResolveAuthAsync(repo);
         var onOrigin = await _git.RemoteHasBranchAsync(repo.CloneUrl, name, cancellationToken, auth);
-        if (onOrigin == true)
-            return Conflict(
-                $"Branch `{name}` already exists on origin. " +
-                "ILD never deletes remote branches — remove it yourself, or give this work item a different branch name.");
         if (onOrigin is null)
             _log?.LogWarning(
                 "Could not ask origin whether branch '{Branch}' exists for repository {RepositoryId}; treating it as free",
                 name, repo.Id);
+        else if (conflict is null && onOrigin.Value != attachToExistingBranch)
+            conflict = attachToExistingBranch
+                ? $"Branch `{name}` does not exist on origin, so there is nothing to attach to. " +
+                  "Push it, or clear Attach to existing branch."
+                : $"Branch `{name}` already exists on origin. " +
+                  "ILD never deletes remote branches — remove it yourself, give this work item a different branch name, " +
+                  "or tick Attach to existing branch to work on it as it is.";
 
-        return BranchNameVerdict.Usable;
+        return new BranchNameVerdict(null, conflict, onOrigin);
     }
-
-    private static BranchNameVerdict Conflict(string message) => new(null, message);
 
     private async Task<GitAuthOptions?> ResolveAuthAsync(ILD.Data.Entities.Repository repo)
     {

@@ -117,6 +117,12 @@ public sealed class RemoteWorkItem
     /// </summary>
     public string? BaseBranchOverride { get; set; }
 
+    /// <summary>
+    /// Whether runs check out <see cref="BranchNameOverride"/> as it stands on
+    /// the remote instead of creating it. See ADR-0008.
+    /// </summary>
+    public bool AttachToExistingBranch { get; set; }
+
     /// <summary>How many edit proposals on this item still wait for a human. Zero on a poll.</summary>
     public int PendingEditProposalCount { get; set; }
 }
@@ -139,6 +145,9 @@ public sealed class RemoteCreateWorkItemRequest
 
     /// <summary>Ref the new item's runs branch from; blank/null = the repository's default branch.</summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Whether the new item's runs check out the existing remote branch instead of creating it.</summary>
+    public bool AttachToExistingBranch { get; set; }
 }
 
 public sealed class RemoteUpdateWorkItemRequest
@@ -158,6 +167,9 @@ public sealed class RemoteUpdateWorkItemRequest
     /// null-unchanged / blank-clears convention as <see cref="BranchNameOverride"/>.
     /// </summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Replaces whether the item's runs attach to the existing remote branch; null leaves it untouched.</summary>
+    public bool? AttachToExistingBranch { get; set; }
 
     /// <summary>Replaces the repository the item's next run works in; null leaves it untouched.</summary>
     public Guid? RepositoryId { get; set; }
@@ -199,7 +211,7 @@ public enum RemoteEditProposalStatus
 }
 
 /// <summary>
-/// The five editable fields of a work item, and its dependencies. On a
+/// The six editable fields of a work item, and its dependencies. On a
 /// proposal's <see cref="RemoteWorkItemEditProposal.Proposed"/> side null means
 /// "not proposed", a blank branch override means "clear it", and the
 /// dependencies are the ones to add and to remove; on its
@@ -214,6 +226,7 @@ public sealed class RemoteEditProposalFields
     public IReadOnlyList<string>? Tags { get; set; }
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
+    public bool? AttachToExistingBranch { get; set; }
 
     /// <summary>Proposed side only.</summary>
     public IReadOnlyList<RemoteEditProposalDependency>? AddDependencies { get; set; }
@@ -272,6 +285,7 @@ public sealed class RemoteCreateEditProposalRequest
     public IReadOnlyList<string>? Tags { get; set; }
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
+    public bool? AttachToExistingBranch { get; set; }
     public IReadOnlyList<string>? AddDependencies { get; set; }
     public IReadOnlyList<string>? RemoveDependencies { get; set; }
     public string? Rationale { get; set; }

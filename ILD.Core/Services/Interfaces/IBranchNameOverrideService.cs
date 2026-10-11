@@ -8,9 +8,12 @@ namespace ILD.Core.Services.Interfaces;
 /// name itself, so it blocks the save that introduced it. A
 /// <see cref="Conflict"/> is a property of the world, which moves between the
 /// save and the run, so at save time it is only advice; the binding answer is
-/// the one taken at run start.
+/// the one taken at run start. <see cref="ExistsOnOrigin"/> is whether origin
+/// publishes the name — reported whatever else holds it, because it is what the
+/// work item dialog offers "Attach to existing branch" on — and null when
+/// origin was not asked or did not answer.
 /// </summary>
-public sealed record BranchNameVerdict(string? ValidationError, string? Conflict)
+public sealed record BranchNameVerdict(string? ValidationError, string? Conflict, bool? ExistsOnOrigin = null)
 {
     /// <summary>A usable name: legal, and free for the next run to claim.</summary>
     public static readonly BranchNameVerdict Usable = new(null, null);
@@ -27,7 +30,8 @@ public sealed record BranchNameVerdict(string? ValidationError, string? Conflict
 /// already taken, and by the engine to refuse to start a run on a branch that
 /// already exists. That last check is what keeps ADR-0006's clean-base
 /// invariant intact under custom names: a run never starts on a pre-existing
-/// branch, so there is never a prior run's work underneath it.
+/// branch, so there is never a prior run's work underneath it — unless the item
+/// asks to attach to that branch on origin, the one deliberate exception.
 /// </summary>
 public interface IBranchNameOverrideService
 {
@@ -40,6 +44,12 @@ public interface IBranchNameOverrideService
     /// unreachable origin anyway, and refusing to start over an unanswered
     /// question would park work items over a flaky network.
     /// </summary>
+    /// <param name="attachToExistingBranch">
+    /// Judge the name as an attach: origin publishing it is then what the item
+    /// wants rather than a conflict, and origin NOT publishing it is the
+    /// conflict, since there is nothing to attach to. A run row or a local
+    /// branch holding the name is a conflict either way.
+    /// </param>
     /// <param name="workItemId">
     /// The item the name is being vetted for, so a conflict can say whether the
     /// run holding it is this item's own. Null/empty when the item does not
@@ -49,5 +59,6 @@ public interface IBranchNameOverrideService
         string? branchName,
         Guid? repositoryId,
         string? workItemId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool attachToExistingBranch = false);
 }

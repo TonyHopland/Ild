@@ -5,7 +5,7 @@ namespace ILD.Core.Services.Interfaces;
 public interface IWorkItemManager
 {
     Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId);
-    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null);
+    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null, bool attachToExistingBranch = false);
 
     /// <summary>
     /// Edit the server-held fields of a work item. <paramref name="branchNameOverride"/>
@@ -13,9 +13,10 @@ public interface IWorkItemManager
     /// null leaves the stored value alone, blank clears it back to the default
     /// (generated per-run naming, and the repository's default branch
     /// respectively). Either way they only affect the item's next run, as does
-    /// <paramref name="repositoryId"/>, which null leaves alone.
+    /// <paramref name="repositoryId"/> and <paramref name="attachToExistingBranch"/>,
+    /// which null leaves alone.
     /// </summary>
-    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null, string? branchNameOverride = null, string? baseBranchOverride = null, Guid? repositoryId = null);
+    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null, string? branchNameOverride = null, string? baseBranchOverride = null, Guid? repositoryId = null, bool? attachToExistingBranch = null);
     Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 
     /// <summary>

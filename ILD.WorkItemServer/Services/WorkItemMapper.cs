@@ -113,6 +113,7 @@ internal static class WorkItemMapper
         AiProviderOverrideId = w.AiProviderOverrideId,
         BranchNameOverride = w.BranchNameOverride,
         BaseBranchOverride = w.BaseBranchOverride,
+        AttachToExistingBranch = w.AttachToExistingBranch,
     };
 
     /// <summary>

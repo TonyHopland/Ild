@@ -135,6 +135,20 @@ public sealed class StartNodeExecutor : INodeExecutor
             ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
         if (!baseOk) return (false, null, null, baseError);
 
+        // An attaching run works on someone else's published history: it takes
+        // the branch exactly as origin has it, and rebasing it onto the base
+        // would rewrite that history under them. Never created when missing —
+        // a fresh branch under that name is not what the human pointed at.
+        if (run.AttachToExistingBranch && run.BranchName is not null)
+        {
+            if (!await repoManager.RemoteBranchExistsAsync(basePath!, branch))
+                return (false, null, null,
+                    $"branch 'origin/{branch}' does not exist on the remote — nothing to attach to. "
+                    + "Push it, or clear Attach to existing branch on the work item, then re-run");
+            var attached = await repoManager.CreateWorktreeAsync(basePath!, branch, $"origin/{branch}");
+            return (true, attached, branch, null);
+        }
+
         var path = await repoManager.CreateWorktreeAsync(basePath!, branch);
         await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
         try

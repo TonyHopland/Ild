@@ -164,7 +164,8 @@ public class WorkItemManager : IWorkItemManager
         IEnumerable<string>? tags = null,
         Guid? createdByChatSessionId = null,
         string? branchNameOverride = null,
-        string? baseBranchOverride = null)
+        string? baseBranchOverride = null,
+        bool attachToExistingBranch = false)
     {
         var opts = await _options.ResolveForRepositoryAsync(repositoryId);
 
@@ -192,6 +193,7 @@ public class WorkItemManager : IWorkItemManager
             RepositoryId = repositoryId,
             BranchNameOverride = branchNameOverride,
             BaseBranchOverride = baseBranchOverride,
+            AttachToExistingBranch = attachToExistingBranch,
         });
 
         // Broadcast the creation so connected clients (e.g. the Taskboard) add
@@ -479,6 +481,7 @@ public class WorkItemManager : IWorkItemManager
             AiProviderOverrideId = remote.AiProviderOverrideId,
             BranchNameOverride = remote.BranchNameOverride,
             BaseBranchOverride = remote.BaseBranchOverride,
+            AttachToExistingBranch = remote.AttachToExistingBranch,
             RepositoryId = remote.RepositoryId,
             RunRepositoryId = run?.RepositoryId,
             CreatedByLoopRunId = run?.CreatedByLoopRunId ?? remote.CreatedByLoopRunId,
@@ -663,7 +666,8 @@ public class WorkItemManager : IWorkItemManager
         Guid? aiProviderOverrideId = null,
         string? branchNameOverride = null,
         string? baseBranchOverride = null,
-        Guid? repositoryId = null)
+        Guid? repositoryId = null,
+        bool? attachToExistingBranch = null)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var updated = await _server.UpdateAsync(opts, workItemId, new RemoteUpdateWorkItemRequest
@@ -675,6 +679,7 @@ public class WorkItemManager : IWorkItemManager
             AiProviderOverrideId = aiProviderOverrideId,
             BranchNameOverride = branchNameOverride,
             BaseBranchOverride = baseBranchOverride,
+            AttachToExistingBranch = attachToExistingBranch,
             RepositoryId = repositoryId,
         });
         if (updated == null) return false;
@@ -1546,6 +1551,7 @@ public class WorkItemManager : IWorkItemManager
         && item.Tags.SequenceEqual(snapshot.Tags ?? [])
         && item.BranchNameOverride == snapshot.BranchNameOverride
         && item.BaseBranchOverride == snapshot.BaseBranchOverride
+        && item.AttachToExistingBranch == snapshot.AttachToExistingBranch
         && (snapshot.Dependencies is null || item.Dependencies.ToHashSet().SetEquals(snapshot.Dependencies));
 
     public async Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)

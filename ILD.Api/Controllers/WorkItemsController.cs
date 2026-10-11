@@ -265,7 +265,8 @@ public class WorkItemsController : ControllerBase
             forceBacklog: false,
             tags: request.Tags,
             branchNameOverride: branchNameOverride,
-            baseBranchOverride: baseBranchOverride);
+            baseBranchOverride: baseBranchOverride,
+            attachToExistingBranch: request.AttachToExistingBranch ?? false);
 
         // Creation broadcasts over SignalR from WorkItemManager.CreateWorkItemAsync,
         // so connected clients pick up the new item live without a duplicate here.
@@ -317,7 +318,7 @@ public class WorkItemsController : ControllerBase
 
         var ok = await _workItemManager.UpdateAsync(
             id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId,
-            request.BranchNameOverride, request.BaseBranchOverride, repositoryId);
+            request.BranchNameOverride, request.BaseBranchOverride, repositoryId, request.AttachToExistingBranch);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
@@ -328,21 +329,25 @@ public class WorkItemsController : ControllerBase
     /// legal, and whether anything already holds it. Deliberately advisory —
     /// the world moves between here and the run, so the binding conflict check
     /// is the one the engine takes at run start (ADR-0008). A caller that gets
-    /// a warning here is still free to save.
+    /// a warning here is still free to save. <c>existsOnOrigin</c> is what the
+    /// dialog offers "Attach to existing branch" on: null when origin could not
+    /// be asked. With <paramref name="attachToExistingBranch"/> set the name
+    /// is judged as an attach, so origin holding it stops being a warning.
     /// </summary>
     [HttpGet("branch-name-check")]
     public async Task<IActionResult> CheckBranchName(
         [FromQuery] string? name,
         [FromQuery] string? repositoryId,
         [FromQuery] string? workItemId,
-        CancellationToken cancellationToken)
+        [FromQuery] bool attachToExistingBranch = false,
+        CancellationToken cancellationToken = default)
     {
         if (BranchNameRules.Normalize(name) is null)
-            return Ok(new { error = (string?)null, warning = (string?)null });
+            return Ok(new { error = (string?)null, warning = (string?)null, existsOnOrigin = (bool?)null });
 
         Guid? repoId = Guid.TryParse(repositoryId, out var parsed) ? parsed : null;
-        var verdict = await _branchNames.InspectAsync(name, repoId, workItemId, cancellationToken);
-        return Ok(new { error = verdict.ValidationError, warning = verdict.Conflict });
+        var verdict = await _branchNames.InspectAsync(name, repoId, workItemId, cancellationToken, attachToExistingBranch);
+        return Ok(new { error = verdict.ValidationError, warning = verdict.Conflict, existsOnOrigin = verdict.ExistsOnOrigin });
     }
 
     [HttpGet("{id}/preview")]

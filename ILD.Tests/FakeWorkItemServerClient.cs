@@ -53,6 +53,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         RepositoryId = dto.RepositoryId,
         BranchNameOverride = dto.BranchNameOverride,
         BaseBranchOverride = dto.BaseBranchOverride,
+        AttachToExistingBranch = dto.AttachToExistingBranch,
         PendingEditProposalCount = dto.PendingEditProposalCount,
     };
 
@@ -72,6 +73,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             RepositoryId = req.RepositoryId,
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
+            AttachToExistingBranch = req.AttachToExistingBranch,
         }, ct);
         return ToRemote(dto);
     }
@@ -97,6 +99,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Tags = req.Tags?.ToList(),
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
+            AttachToExistingBranch = req.AttachToExistingBranch,
             RepositoryId = req.RepositoryId,
         }, ct);
         return dto == null ? null : ToRemote(dto);
@@ -192,6 +195,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Tags = req.Tags?.ToList(),
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
+            AttachToExistingBranch = req.AttachToExistingBranch,
             AddDependencies = req.AddDependencies?.ToList(),
             RemoveDependencies = req.RemoveDependencies?.ToList(),
             Rationale = req.Rationale,
@@ -262,6 +266,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         Tags = dto.Tags,
         BranchNameOverride = dto.BranchNameOverride,
         BaseBranchOverride = dto.BaseBranchOverride,
+        AttachToExistingBranch = dto.AttachToExistingBranch,
         AddDependencies = dto.AddDependencies?.Select(ToRemote).ToList(),
         RemoveDependencies = dto.RemoveDependencies?.Select(ToRemote).ToList(),
         Dependencies = dto.Dependencies,

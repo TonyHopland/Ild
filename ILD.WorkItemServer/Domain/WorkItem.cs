@@ -112,4 +112,12 @@ public class WorkItem
     /// </summary>
     [MaxLength(256)]
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// Whether the item's runs check out <see cref="BranchNameOverride"/> as it
+    /// already stands on the remote instead of creating it, so a run can work on
+    /// (or review) a branch and pull request that someone else opened. Only
+    /// meaningful with a branch name override. See ADR-0008.
+    /// </summary>
+    public bool AttachToExistingBranch { get; set; }
 }

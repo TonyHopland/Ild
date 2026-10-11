@@ -36,6 +36,9 @@ namespace ILD.WorkItemServer.Migrations
                     b.Property<Guid?>("AiProviderOverrideId")
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("AttachToExistingBranch")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("BaseBranchOverride")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
@@ -179,6 +182,9 @@ namespace ILD.WorkItemServer.Migrations
                     b.Property<string>("ProposedAddDependenciesJson")
                         .HasColumnType("text");
 
+                    b.Property<bool?>("ProposedAttachToExistingBranch")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("ProposedBaseBranchOverride")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
@@ -207,6 +213,9 @@ namespace ILD.WorkItemServer.Migrations
                     b.Property<string>("RejectionReason")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
+
+                    b.Property<bool>("SnapshotAttachToExistingBranch")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("SnapshotBaseBranchOverride")
                         .HasMaxLength(256)

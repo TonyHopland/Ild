@@ -131,13 +131,16 @@ public sealed class LoopEngine : ILoopEngine
         // earlier run of this item, by another item, or on origin. Settle that
         // before the run exists: an override needs no run id, so the answer is
         // known early enough to park the item without leaving a LoopRun row, a
-        // worktree, or a held concurrency slot behind. See ADR-0008.
+        // worktree, or a held concurrency slot behind. See ADR-0008. An item
+        // that attaches to the branch wants it on origin, so for that item it
+        // is origin NOT having it that parks.
         var branchOverride = BranchNameRules.Normalize(wi.BranchNameOverride);
+        var attachToExistingBranch = branchOverride is not null && wi.AttachToExistingBranch;
         if (branchOverride is not null)
         {
             var branchNames = sp.GetRequiredService<IBranchNameOverrideService>();
             var verdict = await branchNames.InspectAsync(
-                branchOverride, wi.RepositoryId, workItemId, cancellationToken);
+                branchOverride, wi.RepositoryId, workItemId, cancellationToken, attachToExistingBranch);
             if (!verdict.IsUsable)
             {
                 await workItems.ParkWithoutRunAsync(workItemId, verdict.Problem!);
@@ -163,6 +166,9 @@ public sealed class LoopEngine : ILoopEngine
             // work item there would let an edit in between open a PR against a
             // branch the run was never rebased onto.
             BaseBranchOverride = BranchNameRules.Normalize(wi.BaseBranchOverride),
+            // Pinned like the branch it qualifies: ticking the box mid-run must
+            // not turn a run that created its branch into one that attached.
+            AttachToExistingBranch = attachToExistingBranch,
             // The per-template setting controls crash recovery; pin it on the
             // run the same way the template version is pinned.
             RecoveryPolicy = template?.RecoveryPolicy ?? RecoveryPolicy.AutoResume,

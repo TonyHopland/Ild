@@ -45,6 +45,15 @@ public sealed class WorkItemView
     public string? BaseBranchOverride { get; set; }
 
     /// <summary>
+    /// Whether the item's runs check out <see cref="BranchNameOverride"/> as it
+    /// already stands on origin, without creating or rebasing it, so a run can
+    /// work on a branch (and pull request) someone else opened. Only takes
+    /// effect with a branch name override, and like the overrides it is pinned
+    /// onto the <c>LoopRun</c> at creation. See ADR-0008.
+    /// </summary>
+    public bool AttachToExistingBranch { get; set; }
+
+    /// <summary>
     /// The repository the item's next run is created on. Editable, and like the
     /// branch overrides never retroactive: see <see cref="RunRepositoryId"/>.
     /// </summary>

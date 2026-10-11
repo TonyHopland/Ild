@@ -37,6 +37,9 @@ public sealed class WorkItemDto
     /// <summary>The ref every run of this item branches from. Null = the repository's default branch.</summary>
     public string? BaseBranchOverride { get; set; }
 
+    /// <summary>Whether runs check out the existing remote branch named by <see cref="BranchNameOverride"/>.</summary>
+    public bool AttachToExistingBranch { get; set; }
+
     /// <summary>
     /// How many edit proposals on this item still wait for a human. Zero on the
     /// poll response, which stays bodiless.
@@ -77,6 +80,9 @@ public sealed class CreateWorkItemRequest
     /// from the repository's default branch.
     /// </summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Whether the new item's runs check out the existing remote branch instead of creating it.</summary>
+    public bool AttachToExistingBranch { get; set; }
 }
 
 public sealed class UpdateWorkItemRequest
@@ -102,6 +108,13 @@ public sealed class UpdateWorkItemRequest
     /// run: a run already under way keeps the base it was created with.
     /// </summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// Replaces whether the item's runs attach to the existing remote branch.
+    /// Null leaves it untouched; like the overrides, only the item's next run
+    /// sees the change.
+    /// </summary>
+    public bool? AttachToExistingBranch { get; set; }
 
     /// <summary>
     /// Replaces the repository the item's runs work in. Null leaves it
@@ -188,7 +201,7 @@ public sealed class PollResponse
 }
 
 /// <summary>
-/// The five editable fields of a work item, and its dependencies. On a
+/// The six editable fields of a work item, and its dependencies. On a
 /// proposal's <c>Proposed</c> side a null field was not proposed and a blank
 /// branch override clears it, and the dependencies are the ones to add and to
 /// remove; on its <c>Snapshot</c> side they are the item's values when it was
@@ -201,6 +214,7 @@ public sealed class EditProposalFieldsDto
     public IReadOnlyList<string>? Tags { get; set; }
     public string? BranchNameOverride { get; set; }
     public string? BaseBranchOverride { get; set; }
+    public bool? AttachToExistingBranch { get; set; }
 
     /// <summary>Proposed side only.</summary>
     public IReadOnlyList<EditProposalDependencyDto>? AddDependencies { get; set; }
@@ -248,6 +262,9 @@ public sealed class CreateEditProposalRequest
 
     /// <summary>Null = not proposed; blank = a proposal to clear it.</summary>
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>Null = not proposed.</summary>
+    public bool? AttachToExistingBranch { get; set; }
 
     /// <summary>Ids of items to add as dependencies. Null = none.</summary>
     public IReadOnlyList<string>? AddDependencies { get; set; }

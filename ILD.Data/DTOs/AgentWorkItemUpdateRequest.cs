@@ -39,4 +39,11 @@ public class AgentWorkItemUpdateRequest
     /// </summary>
     [StringLength(256)]
     public string? BaseBranchOverride { get; set; }
+
+    /// <summary>
+    /// Optional replacement for whether runs check out the existing branch on
+    /// origin. Omit (null) to leave it unchanged. Only the item's next run sees
+    /// the change.
+    /// </summary>
+    public bool? AttachToExistingBranch { get; set; }
 }

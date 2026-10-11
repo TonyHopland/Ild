@@ -37,7 +37,13 @@ public class RepositoryManager : IRepositoryManager
         return result.Success ? (true, null) : (false, result.StdErr);
     }
 
-    public async Task<string> CreateWorktreeAsync(string repoPath, string branchName)
+    public Task<string> CreateWorktreeAsync(string repoPath, string branchName)
+        => CreateWorktreeAtAsync(repoPath, branchName, startPoint: null);
+
+    public Task<string> CreateWorktreeAsync(string repoPath, string branchName, string startPoint)
+        => CreateWorktreeAtAsync(repoPath, branchName, startPoint);
+
+    private async Task<string> CreateWorktreeAtAsync(string repoPath, string branchName, string? startPoint)
     {
         Directory.CreateDirectory(_worktreesRoot);
         var worktreePath = Path.GetFullPath(Path.Combine(_worktreesRoot, branchName));
@@ -57,7 +63,9 @@ public class RepositoryManager : IRepositoryManager
         }
 
         // Try add as new branch first; if branch already exists, attach to it.
-        var (code, _, stderr) = await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath);
+        var (code, _, stderr) = startPoint is null
+            ? await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath)
+            : await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath, startPoint);
         if (code != 0)
         {
             var (code2, _, stderr2) = await RunAsync(repoPath, "worktree", "add", worktreePath, branchName);
