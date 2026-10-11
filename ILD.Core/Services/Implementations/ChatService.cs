@@ -2,6 +2,7 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data;
+using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -372,7 +373,9 @@ public sealed class ChatService : IChatService
         if (decidedProposals.Count > 0 && boundThisTurn is not null)
             await MarkProposalDecisionsDeliveredAsync(decidedProposals);
 
-        await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct);
+        // An interrupted turn's usage still counts: the provider billed what it ran.
+        (TokenUsage, string)? spent = result is { Success: true, Usage: { HasData: true } usage } ? (usage, provider.Name) : null;
+        await FinalizeAssistantAsync(session, turnId, nextSeq + 1, content, interrupted, newSessionId, ct, spent);
 
         // A stopped turn is recorded by whoever started it, which the runner tells.
         if (!interrupted)
@@ -623,9 +626,11 @@ public sealed class ChatService : IChatService
         // is cleared too, but never holds the delete up.
         await AgentRunFiles.DeleteAsync(session.Id, ct);
 
-        // Messages and adapter snapshots cascade-delete via their FKs; the loop
-        // scratchpad is in-memory only, so drop its entry explicitly.
+        // Messages, usage and adapter snapshots cascade-delete via their FKs, the
+        // usage once its figures are archived for analytics; the loop scratchpad is
+        // in-memory only, so drop its entry explicitly.
         _loopScratchpad.Clear(session.Id);
+        await ChatUsageLedger.ArchiveAsync(_db, session.Id, ct);
         _db.ChatSessions.Remove(session);
         await _db.SaveChangesAsync(ct);
 
@@ -645,7 +650,8 @@ public sealed class ChatService : IChatService
     }
 
     private async Task FinalizeAssistantAsync(
-        ChatSession session, Guid turnId, int sequence, string content, bool interrupted, string? newSessionId, CancellationToken ct)
+        ChatSession session, Guid turnId, int sequence, string content, bool interrupted, string? newSessionId, CancellationToken ct,
+        (TokenUsage Usage, string Provider)? spent = null)
     {
         var assistant = new ChatMessage
         {
@@ -658,6 +664,10 @@ public sealed class ChatService : IChatService
             CreatedAt = DateTime.UtcNow,
         };
         _db.ChatMessages.Add(assistant);
+
+        if (spent is (var usage, var provider))
+            await ChatUsageLedger.AddAsync(_db, session.Id, session.ScheduleId, assistant.Id,
+                ChatUsageKind.Turn, usage, provider, CancellationToken.None);
 
         session.CurrentSessionId = newSessionId;
         session.UpdatedAt = DateTime.UtcNow;
