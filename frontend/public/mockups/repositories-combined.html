@@ -55,7 +55,7 @@
       }
       .repo-row {
         display: grid; grid-template-columns: 1fr auto auto; gap: 1.5rem; align-items: center;
-        padding: 0.85rem 1.25rem 0.85rem 1rem; border-top: 1px solid #25253a;
+        padding: 0.85rem 1.25rem; border-top: 1px solid #25253a;
       }
       .repo-id { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
       .repo-name { color: #e8e8f0; font-weight: 600; font-size: 1rem; }
@@ -63,8 +63,8 @@
       .badge { padding: 0.125rem 0.5rem; border-radius: 0.25rem; font-size: 0.72rem; font-weight: 600; }
       .status-Backlog { background: #3a3a5c; color: #a0a0b0; }
       .status-WorkQueue { background: #1a3a2a; color: #22c55e; }
-      .repo-list { margin: 0 0 0.75rem 2.25rem; border-left: 2px solid #3a3a5c; }
-      .repo-list .result { margin-left: 1rem; }
+      .repo-list { margin-bottom: 0.75rem; }
+      
       .result {
         margin: 0 1.25rem 0.9rem; border-left: 3px solid #22c55e; padding: 0.5rem 0.75rem;
         font-size: 0.8rem; color: #c0c0d0; background: #17172a; border-radius: 0.25rem;
@@ -72,7 +72,7 @@
       .result.failed { border-left-color: #ef4444; }
       .result b { color: #22c55e; margin-right: 0.5rem; }
       .result.failed b { color: #ef4444; }
-      .empty { padding: 1rem 1.25rem 0.25rem 1rem; border-top: 1px solid #25253a; font-size: 0.82rem; color: #707090; }
+      .empty { padding: 1rem 1.25rem 0.25rem; border-top: 1px solid #25253a; font-size: 0.82rem; color: #707090; }
       .empty-page {
         background: #1e1e30; border: 1px dashed #3a3a5c; border-radius: 0.5rem;
         padding: 2rem; text-align: center; color: #a0a0b0; font-size: 0.9rem;
