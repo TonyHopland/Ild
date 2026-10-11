@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Remote providers and repositories share one page, with each provider's repositories listed in its card.**
+
 - **A chat named from its first message keeps up to 120 characters of it instead of 60.**
 
 - **Pi 1.0 is supported, and Pi now reaches ILD's tools through its own MCP support.**

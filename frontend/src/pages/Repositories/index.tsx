@@ -9,6 +9,7 @@ import {
 import { packageFeedService, repositoryService, remoteProviderService } from "../../services/auth";
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import ConnectionTest from "../../components/ConnectionTest";
+import ProviderDialog from "./ProviderDialog";
 
 export default function Repositories() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -25,6 +26,10 @@ export default function Repositories() {
     WorkItemStatus.Backlog,
   );
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  // The provider form, open when set: for creating one when `provider` is null.
+  const [providerDialog, setProviderDialog] = useState<{ provider: RemoteProvider | null } | null>(
+    null,
+  );
   const [isInspecting, setIsInspecting] = useState(false);
   const [packageFeeds, setPackageFeeds] = useState<PackageFeed[]>([]);
   const [packageFeedsError, setPackageFeedsError] = useState<string | null>(null);
@@ -75,12 +80,12 @@ export default function Repositories() {
     previewEnv.reset();
   };
 
-  const openCreate = () => {
+  const openCreate = (providerId: string) => {
     setShowModal(true);
     setEditingRepo(null);
     setName("");
     setCloneUrl("");
-    setRemoteProviderId(providers[0]?.id || "");
+    setRemoteProviderId(providerId);
     setDefaultBranch("main");
     setWorktreesPath("");
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
@@ -148,10 +153,10 @@ export default function Repositories() {
     setConfirmDelete(null);
   };
 
-  const getProviderName = (providerId: string) => {
-    const provider = providers.find((p) => p.id === providerId);
-    return provider?.name || providerId;
-  };
+  const reposOf = (providerId: string) =>
+    repositories.filter((r) => r.remoteProviderId === providerId);
+  // A repository whose provider is not among those loaded still shows, in a card of its own.
+  const orphans = repositories.filter((r) => !providers.some((p) => p.id === r.remoteProviderId));
 
   // Feed names are matched ignoring case, as the server does.
   const sameFeed = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -178,69 +183,155 @@ export default function Repositories() {
     );
   }
 
+  const renderRepo = (repo: Repository) => (
+    <ConnectionTest
+      key={`${repo.id}|${repo.updatedAt ?? repo.createdAt}`}
+      run={() => repositoryService.test(repo.id)}
+    >
+      {({ button, outcome }) => (
+        <div className="repo-row">
+          <div className="repo-row-line">
+            <div className="repo-id">
+              <span className="repo-name">{repo.name}</span>
+              <span className="repo-url">{repo.cloneUrl}</span>
+            </div>
+            <span className={`repo-status-badge status-${repo.defaultIntakeStatus}`}>
+              {repo.defaultIntakeStatus}
+            </span>
+            <div className="repo-actions">
+              {button}
+              <button className="btn btn-secondary btn-small" onClick={() => openEdit(repo)}>
+                Edit
+              </button>
+              {confirmDelete === repo.id ? (
+                <div className="delete-confirm">
+                  <button
+                    className="btn btn-danger btn-small"
+                    onClick={() => handleDelete(repo.id)}
+                  >
+                    Confirm
+                  </button>
+                  <button className="btn btn-small" onClick={() => setConfirmDelete(null)}>
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="btn btn-danger btn-small"
+                  onClick={() => setConfirmDelete(repo.id)}
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          </div>
+          {outcome && <div className="repo-outcome">{outcome}</div>}
+        </div>
+      )}
+    </ConnectionTest>
+  );
+
   return (
     <div className="page-container">
       <div className="repo-header">
         <h1 className="page-title">Repositories</h1>
-        <button className="btn btn-primary" onClick={openCreate}>
-          + New Repository
-        </button>
+        {providers.length > 0 && (
+          <button className="btn btn-primary" onClick={() => setProviderDialog({ provider: null })}>
+            + New provider
+          </button>
+        )}
       </div>
 
-      <div className="repo-list">
-        {repositories.map((repo) => (
-          <div key={repo.id} className="repo-card">
-            <div className="repo-card-header">
-              <div className="repo-name">{repo.name}</div>
-              <div className="repo-actions">
-                <button className="btn btn-secondary btn-small" onClick={() => openEdit(repo)}>
-                  Edit
-                </button>
-                {confirmDelete === repo.id ? (
-                  <div className="delete-confirm">
-                    <button
-                      className="btn btn-danger btn-small"
-                      onClick={() => handleDelete(repo.id)}
-                    >
-                      Confirm
-                    </button>
-                    <button className="btn btn-small" onClick={() => setConfirmDelete(null)}>
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
+      {providers.length === 0 && orphans.length === 0 ? (
+        <div className="repo-empty-page">
+          <p>Add a remote provider first — repositories are added under one.</p>
+          <button className="btn btn-primary" onClick={() => setProviderDialog({ provider: null })}>
+            + New provider
+          </button>
+        </div>
+      ) : (
+        <div className="provider-list">
+          {providers.map((provider) => {
+            const repos = reposOf(provider.id);
+            return (
+              <section key={provider.id} className="provider-card" aria-label={provider.name}>
+                {/* Keyed by the provider's version: a save clears its test outcome, and
+                    leaves its repositories' outcomes alone. */}
+                <ConnectionTest
+                  key={`${provider.id}|${provider.updatedAt ?? provider.createdAt}`}
+                  run={() => remoteProviderService.test(provider.id)}
+                >
+                  {({ button, outcome }) => (
+                    <div className="provider-details">
+                      <div className="provider-card-header">
+                        <div className="provider-name">
+                          {provider.name}
+                          <span className="provider-type">{provider.type}</span>
+                        </div>
+                        <div className="repo-actions">
+                          {button}
+                          <button
+                            className="btn btn-secondary btn-small"
+                            onClick={() => setProviderDialog({ provider })}
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      </div>
+                      <div className="provider-facts">
+                        <span>
+                          <span className="repo-label">URL</span>
+                          <span className="repo-value">{provider.baseUrl}</span>
+                        </span>
+                        <span>
+                          <span className="repo-label">API key</span>
+                          <span className={`repo-value${provider.apiKey ? " repo-masked" : ""}`}>
+                            {provider.apiKey ? "••••••••" : "(not set)"}
+                          </span>
+                        </span>
+                      </div>
+                      {outcome && <div className="provider-outcome">{outcome}</div>}
+                    </div>
+                  )}
+                </ConnectionTest>
+                <div className="provider-repos-head">
+                  <span>Repositories ({repos.length})</span>
                   <button
-                    className="btn btn-danger btn-small"
-                    onClick={() => setConfirmDelete(repo.id)}
+                    className="btn btn-primary btn-small"
+                    onClick={() => openCreate(provider.id)}
                   >
-                    Delete
+                    + Add repository
                   </button>
+                </div>
+                {repos.length === 0 ? (
+                  <div className="provider-repos-empty">No repositories yet.</div>
+                ) : (
+                  <div className="provider-repos">{repos.map(renderRepo)}</div>
                 )}
+              </section>
+            );
+          })}
+          {orphans.length > 0 && (
+            <section className="provider-card" aria-label="Provider not found">
+              <div className="provider-card-header">
+                <div className="provider-name">Provider not found</div>
               </div>
-            </div>
-            <div className="repo-card-body">
-              <div className="repo-field">
-                <span className="repo-label">Clone URL</span>
-                <span className="repo-value">{repo.cloneUrl}</span>
+              <div className="provider-facts">
+                These repositories name a remote provider that is not in the list.
               </div>
-              <div className="repo-field">
-                <span className="repo-label">Provider</span>
-                <span className="repo-value">{getProviderName(repo.remoteProviderId)}</span>
-              </div>
-              <div className="repo-field">
-                <span className="repo-label">Gating</span>
-                <span className={`repo-value repo-status-badge status-${repo.defaultIntakeStatus}`}>
-                  {repo.defaultIntakeStatus}
-                </span>
-              </div>
-            </div>
-            <ConnectionTest
-              key={`${repo.id}|${repo.updatedAt ?? repo.createdAt}`}
-              run={() => repositoryService.test(repo.id)}
-            />
-          </div>
-        ))}
-      </div>
+              <div className="provider-repos">{orphans.map(renderRepo)}</div>
+            </section>
+          )}
+        </div>
+      )}
+
+      {providerDialog && (
+        <ProviderDialog
+          provider={providerDialog.provider}
+          onClose={() => setProviderDialog(null)}
+          onSaved={loadData}
+        />
+      )}
 
       {showModal && (
         <div
@@ -415,39 +506,129 @@ export default function Repositories() {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 1rem;
+          margin-bottom: 1.5rem;
         }
 
-        .repo-list {
+        .repo-header .page-title {
+          margin-bottom: 0;
+        }
+
+        .provider-list {
           display: flex;
           flex-direction: column;
-          gap: 0.75rem;
+          gap: 1.5rem;
         }
 
-        .repo-card {
+        .provider-card {
           background-color: #1e1e30;
           border-radius: 0.5rem;
           border: 1px solid #2d2d44;
           overflow: hidden;
         }
 
-        .repo-card-header {
+        .provider-card-header {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          padding: 0.75rem 1rem;
+          padding: 1rem 1.25rem;
           border-bottom: 1px solid #2d2d44;
         }
 
-        .repo-name {
-          font-size: 0.9rem;
+        .provider-name {
+          display: flex;
+          align-items: baseline;
+          gap: 0.6rem;
+          font-size: 0.95rem;
           font-weight: 600;
           color: #e0e0e0;
         }
 
+        .provider-type {
+          font-size: 0.7rem;
+          font-weight: 600;
+          color: #a0a0b0;
+          background-color: #2d2d44;
+          padding: 0.1rem 0.45rem;
+          border-radius: 0.25rem;
+        }
+
+        .provider-facts {
+          display: flex;
+          gap: 2.5rem;
+          padding: 0.9rem 1.25rem 1rem;
+          font-size: 0.85rem;
+          color: #a0a0b0;
+        }
+
+        .provider-outcome,
+        .repo-outcome {
+          display: flex;
+          flex-direction: column;
+          gap: 0.5rem;
+          padding: 0 1.25rem 0.9rem;
+        }
+
+        .provider-repos-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 0.85rem 1.25rem;
+          border-top: 1px solid #2d2d44;
+          font-size: 0.8rem;
+          font-weight: 700;
+          color: #c0c0d0;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+
+        .provider-repos {
+          padding-bottom: 0.75rem;
+        }
+
+        .provider-repos-empty {
+          padding: 1rem 1.25rem;
+          border-top: 1px solid #25253a;
+          font-size: 0.82rem;
+          color: #707090;
+        }
+
+        .repo-row {
+          border-top: 1px solid #25253a;
+        }
+
+        .repo-row-line {
+          display: grid;
+          grid-template-columns: 1fr auto auto;
+          gap: 1.5rem;
+          align-items: center;
+          padding: 0.85rem 1.25rem;
+        }
+
+        .repo-id {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+          min-width: 0;
+        }
+
+        .repo-name {
+          font-size: 1rem;
+          font-weight: 600;
+          color: #e8e8f0;
+        }
+
+        .repo-url {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 0.75rem;
+          color: #5c5c78;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
         .repo-actions {
           display: flex;
-          gap: 0.5rem;
+          gap: 0.6rem;
           align-items: center;
         }
 
@@ -456,22 +637,39 @@ export default function Repositories() {
           gap: 0.25rem;
         }
 
-        .repo-card-body {
-          padding: 0.75rem 1rem;
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
+        .repo-empty-page {
+          background-color: #1e1e30;
+          border: 1px dashed #3a3a5c;
+          border-radius: 0.5rem;
+          padding: 2rem;
+          text-align: center;
+          color: #a0a0b0;
+          font-size: 0.9rem;
         }
 
-        .repo-field {
+        .repo-empty-page p {
+          margin: 0 0 1rem;
+        }
+
+        .repo-masked {
+          letter-spacing: 0.125rem;
+          user-select: none;
+        }
+
+        .rp-secret-input-row {
           display: flex;
           gap: 0.5rem;
-          font-size: 0.8rem;
+          align-items: center;
+        }
+
+        .rp-secret-input-row input {
+          flex: 1;
+          min-width: 0;
         }
 
         .repo-label {
           color: #707090;
-          min-width: 8rem;
+          margin-right: 0.5rem;
         }
 
         .repo-value {
@@ -526,8 +724,8 @@ export default function Repositories() {
         }
 
         .btn-small {
-          padding: 0.25rem 0.5rem;
-          font-size: 0.75rem;
+          padding: 0.35rem 0.7rem;
+          font-size: 0.78rem;
         }
 
         .modal-overlay {

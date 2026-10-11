@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import Repositories from "./index";
 import * as services from "../../services/auth";
@@ -60,6 +60,12 @@ function mockServices(repos: unknown[]) {
   };
 }
 
+/** The repository row's Edit button; its provider card has one too. */
+async function repoEditButton() {
+  const row = (await screen.findByText("my-repo")).closest(".repo-row") as HTMLElement;
+  return within(row).getByRole("button", { name: "Edit" });
+}
+
 const feedBox = (name: RegExp) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
 
 function sentFeeds(spy: { mock: { calls: unknown[][] } }, argIndex: number) {
@@ -86,7 +92,7 @@ describe("Repositories page package feeds", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(await repoEditButton());
 
     await waitFor(() => expect(feedBox(/^company/).checked).toBe(true));
     expect(feedBox(/^tools/).checked).toBe(false);
@@ -111,7 +117,7 @@ describe("Repositories page package feeds", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.click(await repoEditButton());
 
     await waitFor(() => expect(feedBox(/^company/).checked).toBe(false));
     expect(feedBox(/^tools/).checked).toBe(false);
@@ -129,7 +135,7 @@ describe("Repositories page package feeds", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: /New Repository/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "+ Add repository" }));
     fireEvent.change(screen.getByLabelText("Name"), { target: { value: "new-repo" } });
     fireEvent.change(screen.getByLabelText("Clone URL"), {
       target: { value: "https://git.example.com/new-repo.git" },

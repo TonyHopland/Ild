@@ -68,7 +68,7 @@ describe("Header nav overflow", () => {
 });
 
 describe("Header nav items", () => {
-  test("has no WorkItem Server or Loop Runs link and keeps every other item in order", () => {
+  test("has no WorkItem Server, Loop Runs or Remote Providers link and keeps every other item in order", () => {
     renderHeader();
 
     const nav = within(screen.getByRole("navigation"));
@@ -79,7 +79,6 @@ describe("Header nav items", () => {
       "Chat",
       "Settings",
       "Repositories",
-      "Remote Providers",
       "AI Providers",
     ]);
   });
