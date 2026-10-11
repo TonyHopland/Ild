@@ -72,20 +72,21 @@ public class WorkItemManagerTests
         db.Context.SaveChanges();
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>()))
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
         engine = new Mock<ILoopEngine>();
         return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions,
             engine: engine.Object, remoteProvider: remoteProvider?.Object), db, repo.Id, repoMgr, eventLog);
     }
 
-    // Park a work item at a PR node awaiting merge: a running run carrying the
-    // PR URL + branch, plus a WaitingHuman run node so the OnSuccess
-    // continuation has a node to signal. The CloneUrl is fixed by SetupCore.
+    // Park a work item at a PR node awaiting merge: a run waiting on a person,
+    // carrying the PR URL + branch, plus a WaitingHuman run node so the OnSuccess
+    // continuation has a node to answer. The CloneUrl is fixed by SetupCore.
     private const string MergeRepoCloneUrl = "https://example/repo.git";
 
     private static (string workItemId, Guid runId, Guid runNodeId) SeedPrAwaitingMerge(
-        WorkItemManager mgr, TestDb db, Guid repoId, string prUrl, string branchName)
+        WorkItemManager mgr, TestDb db, Guid repoId, string prUrl, string branchName,
+        LoopRunStatus status = LoopRunStatus.WaitingHuman)
     {
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "pr" };
         var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
@@ -101,7 +102,7 @@ public class WorkItemManagerTests
             Id = runId,
             WorkItemId = id,
             LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Running,
+            Status = status,
             StartedAt = DateTime.UtcNow,
             CurrentNodeId = prNodeId,
             PrUrl = prUrl,
@@ -502,6 +503,67 @@ public class WorkItemManagerTests
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(started, wi!.StartedAt);
         Assert.Equal(completed, wi.CompletedAt);
+    }
+
+    [Fact]
+    public async Task The_view_names_the_latest_run_in_any_status_and_none_when_there_is_no_run()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        Assert.Null((await mgr.GetWorkItemAsync(id))!.LatestLoopRunId);
+        Assert.Null((await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id).LatestLoopRunId);
+
+        var (older, versionId) = SeedRunWithVersion(db, id);
+        var now = DateTime.UtcNow;
+        var run = await db.Context.LoopRuns.FindAsync([older], TestContext.Current.CancellationToken);
+        run!.Status = LoopRunStatus.Failed;
+        run.StartedAt = now.AddMinutes(-10);
+        run.CompletedAt = now.AddMinutes(-9);
+        var newer = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = newer,
+            WorkItemId = id,
+            LoopTemplateVersionId = versionId,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            Status = LoopRunStatus.Completed,
+            StartedAt = now.AddMinutes(-5),
+            CompletedAt = now.AddMinutes(-1),
+        });
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(newer, (await mgr.GetWorkItemAsync(id))!.LatestLoopRunId);
+        Assert.Equal(newer, (await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id).LatestLoopRunId);
+    }
+
+    [Theory]
+    [InlineData(LoopRunStatus.Cancelled, true)]
+    [InlineData(LoopRunStatus.Failed, true)]
+    [InlineData(LoopRunStatus.Completed, false)]
+    public async Task The_views_current_run_is_never_older_than_its_latest(LoopRunStatus latestStatus, bool latestIsCurrent)
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var versionId = RunTimeline.SeedVersion(db);
+        var now = DateTime.UtcNow;
+        RunTimeline.SeedRun(db, id, versionId, LoopRunStatus.Failed,
+            humanFeedbackReason: "Run failed", startedAt: now.AddMinutes(-10));
+        var latest = RunTimeline.SeedRun(db, id, versionId, latestStatus,
+            humanFeedbackReason: latestIsCurrent ? "Run stopped" : null, startedAt: now.AddMinutes(-5));
+
+        foreach (var view in new[]
+                 {
+                     (await mgr.GetWorkItemAsync(id))!,
+                     (await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id),
+                 })
+        {
+            Assert.Equal(latest.Id, view.LatestLoopRunId);
+            Assert.Equal(latestIsCurrent ? latest.Id : null, view.CurrentLoopRunId);
+            Assert.Equal(latestIsCurrent ? "Run stopped" : null, view.HumanFeedbackReason);
+        }
     }
 
     [Fact]
@@ -1052,85 +1114,18 @@ public class WorkItemManagerTests
         repoMgr.Verify(r => r.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
     }
 
-    [Fact]
-    public async Task SubmitHumanFeedbackInput_signals_engine_with_success_and_logs_event()
+    public enum HumanAnswer { Input, Respond, Edge, RejectWithText, RejectWithoutText }
+
+    private static async Task<(string id, Guid runId, Guid runNodeId)> SeedWaitingOnHumanAsync(WorkItemManager mgr, TestDb db, Guid repoId)
     {
-        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
-        using var _ = db;
-
         var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
+        var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
         db.Context.LoopTemplates.Add(lt);
-        var ltv = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = lt.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
         db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
         var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var runId = Guid.NewGuid();
-        var humanNodeId = Guid.NewGuid();
-        var run = new LoopRun
-        {
-            Id = runId,
-            WorkItemId = id,
-            LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Running,
-            StartedAt = DateTime.UtcNow,
-            CurrentNodeId = humanNodeId,
-        };
-        db.Context.LoopRuns.Add(run);
-        db.Context.LoopNodes.Add(new LoopNode
-        {
-            Id = humanNodeId,
-            LoopTemplateVersionId = ltv.Id,
-            NodeType = NodeType.Human,
-            Label = "ask-human",
-        });
-        var runNode = new LoopRunNode
-        {
-            Id = Guid.NewGuid(),
-            LoopRunId = runId,
-            LoopNodeId = humanNodeId,
-            Status = LoopRunNodeStatus.WaitingHuman,
-        };
-        db.Context.LoopRunNodes.Add(runNode);
-
-        await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
-        run.CurrentNodeId = humanNodeId;
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        await mgr.SubmitHumanFeedbackInputAsync(id, "ship it");
-
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "ship it", null), Times.Once);
-        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
-            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success && s.Output == "ship it")), Times.Once);
-    }
-
-    [Fact]
-    public async Task SubmitHumanFeedbackInput_without_engine_does_not_throw()
-    {
-        var (mgr, db, repoId, _, eventLog) = Setup();
-        using var _ = db;
-
-        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
-        db.Context.LoopTemplates.Add(lt);
-        var ltv = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = lt.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var runId = Guid.NewGuid();
         var nodeId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        db.Context.LoopNodes.Add(new LoopNode { Id = nodeId, LoopTemplateVersionId = ltv.Id, NodeType = NodeType.Human, Label = "human-review" });
         db.Context.LoopRuns.Add(new LoopRun
         {
             Id = runId,
@@ -1140,27 +1135,45 @@ public class WorkItemManagerTests
             StartedAt = DateTime.UtcNow,
             CurrentNodeId = nodeId,
         });
-        db.Context.LoopNodes.Add(new LoopNode
-        {
-            Id = nodeId,
-            LoopTemplateVersionId = ltv.Id,
-            NodeType = NodeType.Human,
-            Label = "h",
-        });
-        db.Context.LoopRunNodes.Add(new LoopRunNode
-        {
-            Id = Guid.NewGuid(),
-            LoopRunId = runId,
-            LoopNodeId = nodeId,
-            Status = LoopRunNodeStatus.WaitingHuman,
-        });
-        await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
+        var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = runId, LoopNodeId = nodeId, Status = LoopRunNodeStatus.WaitingHuman };
+        db.Context.LoopRunNodes.Add(runNode);
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
+        return (id, runId, runNode.Id);
+    }
 
-        // Should not throw even without engine wired up
-        var result = await mgr.SubmitHumanFeedbackInputAsync(id, "proceed");
-        Assert.True(result);
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "proceed", null), Times.Once);
+    [Theory]
+    [InlineData(HumanAnswer.Input)]
+    [InlineData(HumanAnswer.Respond)]
+    [InlineData(HumanAnswer.Edge)]
+    [InlineData(HumanAnswer.RejectWithText)]
+    [InlineData(HumanAnswer.RejectWithoutText)]
+    public async Task An_answer_is_delivered_to_the_waiting_node_of_the_run_it_names(HumanAnswer answer)
+    {
+        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
+        using var _ = db;
+        var (id, runId, runNodeId) = await SeedWaitingOnHumanAsync(mgr, db, repoId);
+
+        var (accepted, signal, feedback, edge) = answer switch
+        {
+            HumanAnswer.Input => (await mgr.SubmitHumanFeedbackInputAsync(id, runId, "ship it"),
+                NodeSignal.Success("ship it"), "ship it", (string?)null),
+            HumanAnswer.Respond => (await mgr.SubmitHumanFeedbackRespondAsync(id, runId, "please revise the approach"),
+                NodeSignal.Custom("Respond", "please revise the approach"), "please revise the approach", (string?)"Respond"),
+            HumanAnswer.Edge => (await mgr.SubmitHumanFeedbackEdgeAsync(id, runId, "Rework", "split it up"),
+                NodeSignal.Custom("Rework", "split it up"), "split it up", (string?)"Rework"),
+            HumanAnswer.RejectWithText => (await mgr.RejectHumanFeedbackAsync(id, runId, "looks wrong, try again with smaller scope"),
+                NodeSignal.Reject("Rejected by user", "looks wrong, try again with smaller scope"),
+                "rejected by user: looks wrong, try again with smaller scope", (string?)null),
+            _ => (await mgr.RejectHumanFeedbackAsync(id, runId),
+                NodeSignal.Reject("Rejected by user"), "rejected by user", (string?)null),
+        };
+
+        Assert.True(accepted);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId, signal, feedback, edge), Times.Once);
+        engine.Verify(eng => eng.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+        eventLog.Verify(e => e.AppendAsync(It.IsAny<Guid>(), EventType.HumanFeedbackReceived, It.IsAny<string>(),
+            It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Fact]
@@ -1220,187 +1233,6 @@ public class WorkItemManagerTests
         Assert.False((await mgr.DeleteAsync(Guid.NewGuid().ToString())));
     }
 
-    [Fact]
-    public async Task RejectHumanFeedback_signals_engine_with_failure_and_logs_event()
-    {
-        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
-        using var _ = db;
-
-        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
-        db.Context.LoopTemplates.Add(lt);
-        var ltv = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = lt.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var runId = Guid.NewGuid();
-        var nodeId = Guid.NewGuid();
-        var run = new LoopRun
-        {
-            Id = runId,
-            WorkItemId = id,
-            LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Running,
-            StartedAt = DateTime.UtcNow,
-            CurrentNodeId = nodeId,
-        };
-        db.Context.LoopRuns.Add(run);
-
-        var loopNode = new LoopNode
-        {
-            Id = nodeId,
-            LoopTemplateVersionId = ltv.Id,
-            NodeType = NodeType.Human,
-            Label = "human-review",
-        };
-        db.Context.LoopNodes.Add(loopNode);
-
-        var runNode = new LoopRunNode
-        {
-            Id = Guid.NewGuid(),
-            LoopRunId = runId,
-            LoopNodeId = nodeId,
-            Status = LoopRunNodeStatus.WaitingHuman,
-        };
-        db.Context.LoopRunNodes.Add(runNode);
-
-        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        await mgr.RejectHumanFeedbackAsync(id);
-
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "rejected by user", null), Times.Once);
-        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
-            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Reject)), Times.Once);
-    }
-
-    [Fact]
-    public async Task RejectHumanFeedback_with_input_includes_text_in_signal_output_and_event_log()
-    {
-        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
-        using var _ = db;
-
-        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
-        db.Context.LoopTemplates.Add(lt);
-        var ltv = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = lt.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var runId = Guid.NewGuid();
-        var nodeId = Guid.NewGuid();
-        var run = new LoopRun
-        {
-            Id = runId,
-            WorkItemId = id,
-            LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Running,
-            StartedAt = DateTime.UtcNow,
-            CurrentNodeId = nodeId,
-        };
-        db.Context.LoopRuns.Add(run);
-
-        db.Context.LoopNodes.Add(new LoopNode
-        {
-            Id = nodeId,
-            LoopTemplateVersionId = ltv.Id,
-            NodeType = NodeType.Human,
-            Label = "human-review",
-        });
-
-        var runNode = new LoopRunNode
-        {
-            Id = Guid.NewGuid(),
-            LoopRunId = runId,
-            LoopNodeId = nodeId,
-            Status = LoopRunNodeStatus.WaitingHuman,
-        };
-        db.Context.LoopRunNodes.Add(runNode);
-
-        await mgr.TransitionToHumanFeedbackAsync(id, ILD.Data.Enums.HumanFeedbackReasons.HumanInputNeeded);
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        await mgr.RejectHumanFeedbackAsync(id, "looks wrong, try again with smaller scope");
-
-        eventLog.Verify(e => e.AppendAsync(
-            runId, "HumanFeedbackReceived",
-            "rejected by user: looks wrong, try again with smaller scope",
-            null), Times.Once);
-        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
-            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Reject && s.Output == "looks wrong, try again with smaller scope")), Times.Once);
-    }
-
-    [Fact]
-    public async Task SubmitHumanFeedbackRespond_signals_engine_with_success_and_logs_event()
-    {
-        var (mgr, db, repoId, _, eventLog) = SetupWithEngine(out var engine);
-        using var _ = db;
-
-        var lt = new LoopTemplate { Id = Guid.NewGuid(), Name = "test" };
-        db.Context.LoopTemplates.Add(lt);
-        var ltv = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = lt.Id,
-            VersionNumber = 1,
-            CreatedAt = DateTime.UtcNow,
-        };
-        db.Context.LoopTemplateVersions.Add(ltv);
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var runId = Guid.NewGuid();
-        var nodeId = Guid.NewGuid();
-        var run = new LoopRun
-        {
-            Id = runId,
-            WorkItemId = id,
-            LoopTemplateVersionId = ltv.Id,
-            Status = LoopRunStatus.Running,
-            StartedAt = DateTime.UtcNow,
-            CurrentNodeId = nodeId,
-        };
-        db.Context.LoopRuns.Add(run);
-
-        db.Context.LoopNodes.Add(new LoopNode
-        {
-            Id = nodeId,
-            LoopTemplateVersionId = ltv.Id,
-            NodeType = NodeType.Human,
-            Label = "human-review",
-        });
-
-        var runNode = new LoopRunNode
-        {
-            Id = Guid.NewGuid(),
-            LoopRunId = runId,
-            LoopNodeId = nodeId,
-            Status = LoopRunNodeStatus.WaitingHuman,
-        };
-        db.Context.LoopRunNodes.Add(runNode);
-
-        await mgr.TransitionToHumanFeedbackAsync(id, "Human Input Needed");
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-
-        await mgr.SubmitHumanFeedbackRespondAsync(id, "please revise the approach");
-
-        eventLog.Verify(e => e.AppendAsync(runId, "HumanFeedbackReceived", "please revise the approach", null), Times.Once);
-        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNode.Id,
-            It.Is<NodeSignal>(s => s.EdgeName == "Respond" && s.Output == "please revise the approach")), Times.Once);
-    }
-
     // ---- MergePullRequestAsync -------------------------------------------
 
     [Fact]
@@ -1423,9 +1255,9 @@ public class WorkItemManagerTests
         Assert.Null(result.BranchWarning);
         remote.Verify(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "42"), Times.Once);
         remote.Verify(r => r.DeleteBranchAsync(MergeRepoCloneUrl, "ild/wi-x-run-1"), Times.Once);
-        // OnSuccess continuation is identical to Approve: signal Success on the parked node.
-        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNodeId,
-            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success)), Times.Once);
+        // OnSuccess continuation is identical to Approve: deliver Success to the parked node.
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success), It.IsAny<string>(), null), Times.Once);
     }
 
     [Fact]
@@ -1444,8 +1276,8 @@ public class WorkItemManagerTests
         Assert.True(result!.Merged);
         Assert.False(result.BranchDeleted);
         remote.Verify(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
-        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNodeId,
-            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success)), Times.Once);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success), It.IsAny<string>(), null), Times.Once);
     }
 
     [Fact]
@@ -1497,7 +1329,8 @@ public class WorkItemManagerTests
         Assert.NotNull(result.Error);
         // No branch delete and no loop continuation when the merge fails.
         remote.Verify(r => r.DeleteBranchAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
-        engine.Verify(eng => eng.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
+            It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Fact]
@@ -1518,8 +1351,28 @@ public class WorkItemManagerTests
         Assert.False(result.BranchDeleted);
         Assert.NotNull(result.BranchWarning);
         // The merge succeeded, so the loop still advances along OnSuccess.
-        engine.Verify(eng => eng.SignalNodeResultAsync(runId, runNodeId,
-            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success)), Times.Once);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(runId, runNodeId,
+            It.Is<NodeSignal>(s => s.Type == ExternalActionResultType.Success), It.IsAny<string>(), null), Times.Once);
+    }
+
+    [Fact]
+    public async Task MergePullRequest_with_a_run_that_is_not_waiting_still_reports_the_merge()
+    {
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.MergePullRequestAsync(MergeRepoCloneUrl, "13")).ReturnsAsync(true);
+        var (mgr, db, repoId, _, _) = SetupCore(out var engine, remote);
+        using var _ = db;
+
+        var (id, _, _) = SeedPrAwaitingMerge(
+            mgr, db, repoId, "https://example/repo/pulls/13", "ild/wi-x-run-5", LoopRunStatus.Running);
+
+        var result = await mgr.MergePullRequestAsync(id, deleteBranch: false);
+
+        Assert.NotNull(result);
+        Assert.True(result!.Merged);
+        Assert.Null(result.Error);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
+            It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Fact]
@@ -1530,7 +1383,8 @@ public class WorkItemManagerTests
         using var dispose = db;
 
         Assert.Null(await mgr.MergePullRequestAsync(Guid.NewGuid().ToString(), deleteBranch: true));
-        engine.Verify(eng => eng.SignalNodeResultAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>()), Times.Never);
+        engine.Verify(eng => eng.DeliverHumanFeedbackAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<NodeSignal>(),
+            It.IsAny<string>(), It.IsAny<string?>()), Times.Never);
     }
 
     // ---- TransitionAsync (canonical generic transition) ------------------
@@ -1551,13 +1405,51 @@ public class WorkItemManagerTests
         using var _ = db;
 
         var id = await mgr.CreateWorkItemAsync("t", "", repoId);
-        SeedLoopRun(db, id);
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]");
+        var runId = SeedLoopRun(db, id);
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]",
+            currentLoopRunId: runId);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, wi!.Status);
         Assert.Equal("Need approval", wi.HumanFeedbackReason);
         Assert.Equal("[\"approve\",\"reject\"]", wi.HumanFeedbackActions);
+    }
+
+    [Fact]
+    public async Task A_transition_never_writes_back_a_run_status_another_writer_changed_since_it_was_read()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        // Seeded through the shared context, so the store hands back this copy.
+        var run = RunTimeline.SeedRun(db, id, RunTimeline.SeedVersion(db), LoopRunStatus.Running);
+        await using (var other = db.Fresh())
+            await other.LoopRuns.Where(r => r.Id == run.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, LoopRunStatus.Cancelled));
+
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+
+        await using var read = db.Fresh();
+        Assert.Equal(LoopRunStatus.Cancelled, (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).Status);
+    }
+
+    [Fact]
+    public async Task A_transitions_feedback_reason_reaches_the_runs_row_and_the_copy_its_caller_holds()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var run = RunTimeline.SeedRun(db, id, RunTimeline.SeedVersion(db), LoopRunStatus.WaitingHuman);
+
+        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", currentLoopRunId: run.Id);
+
+        await using (var read = db.Fresh())
+            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
+        // A later save of the caller's copy must not put the old reason back.
+        Assert.Equal("Need approval", run.HumanFeedbackReason);
+        await db.LoopRuns.UpdateRunAsync(run);
+        await using (var read = db.Fresh())
+            Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
     }
 
     [Fact]
@@ -1633,7 +1525,7 @@ public class WorkItemManagerTests
         db.Context.SaveChanges();
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>()))
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
         var notifier = new Mock<IWorkItemNotifier>();
         var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);

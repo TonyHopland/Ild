@@ -90,7 +90,7 @@ export default function WorkItemModalV2({
   const isCreate = workItem === null;
   const hasUnsavedChanges =
     ((editMode || isCreate) && editDirty) ||
-    detail.feedbackInput.trim().length > 0 ||
+    detail.replyFor(workItem?.latestLoopRunId ?? null).input.trim().length > 0 ||
     detail.editAttachments.staged.length > 0;
 
   const requestClose = useCallback(() => {
@@ -313,8 +313,8 @@ export default function WorkItemModalV2({
           runs={detail.runs}
           progressText={detail.progressText}
           onRunsChanged={detail.refreshRuns}
-          onHalt={detail.handleHalt}
-          onResumeSteer={detail.handleResumeSteer}
+          onHalt={() => detail.handleHalt(workItem.currentLoopRunId)}
+          onResumeSteer={(note) => detail.handleResumeSteer(workItem.currentLoopRunId, note)}
           onCleanupDone={detail.handleCleanupDone}
           onCleanupBacklog={detail.handleCleanupBacklog}
           onReclaimRun={detail.handleReclaimRun}

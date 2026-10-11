@@ -1,75 +1,71 @@
-using System.Collections.Concurrent;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations;
 
 public class EventLogService : IEventLogService
 {
     private readonly IEventLogStore _eventLogStore;
-    private readonly ILoopRunStore _loopRunStore;
-    private readonly ILogger<EventLogService>? _logger;
+    private readonly IRunNotifier _notifier;
+    private readonly ILogger<EventLogService> _logger;
 
-    // Per-run lock guards the sequence allocate -> insert path so concurrent
-    // appends within a run cannot insert their event row out of sequence order.
-    // Cross-run appends never block each other.
-    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> _runLocks = new();
-
-    public EventLogService(IEventLogStore eventLogStore, ILoopRunStore loopRunStore, ILogger<EventLogService>? logger = null)
+    public EventLogService(IEventLogStore eventLogStore, IRunNotifier notifier, ILogger<EventLogService>? logger = null)
     {
         _eventLogStore = eventLogStore;
-        _loopRunStore = loopRunStore;
-        _logger = logger;
+        _notifier = notifier;
+        _logger = logger ?? NullLogger<EventLogService>.Instance;
     }
 
-    public async Task<long> AppendAsync(Guid runId, string eventType, string message, Guid? nodeId = null, Guid? runNodeId = null)
-    {
-        if (!Enum.TryParse<EventType>(eventType, ignoreCase: true, out var parsed))
-        {
-            // An unrecognized event-type string is a programming error (typo / drift from
-            // the EventType enum), not a runtime "Error" event. Coercing it silently to
-            // EventType.Error mislabels successful events as failures, so log it loudly.
-            _logger?.LogError(
-                "Unknown event type '{EventType}' for run {RunId} (node {NodeId}); recording as Error. " +
-                "This string does not match any EventType enum member.",
-                eventType, runId, nodeId);
-            parsed = EventType.Error;
-        }
+    public Task<long> AppendAsync(Guid runId, EventType eventType, string message,
+        Guid? nodeId = null, Guid? runNodeId = null, string? edgeName = null)
+        => AnnounceAsync(runId, Entry(runId, eventType, message, nodeId, runNodeId, edgeName), _eventLogStore.AppendAsync);
 
-        var runLock = _runLocks.GetOrAdd(runId, _ => new SemaphoreSlim(1, 1));
-        await runLock.WaitAsync();
+    public Task<long> AppendAlongsideAsync(Guid runId, EventType eventType, string message,
+        Guid? nodeId, Guid? runNodeId, string? edgeName, Func<Task> alongside)
+        => AnnounceAsync(runId, Entry(runId, eventType, message, nodeId, runNodeId, edgeName),
+            entry => _eventLogStore.AppendAlongsideAsync(entry, alongside));
+
+    private async Task<long> AnnounceAsync(Guid runId, EventLog entry, Func<EventLog, Task<long>> append)
+    {
+        var id = await append(entry);
         try
         {
-            var nextSequence = await _loopRunStore.AllocateNextEventSequenceAsync(runId);
-
-            // Payloads are stored inline in the DB. PostgreSQL keeps the Data
-            // column (text) out-of-line and LZ-compressed via TOAST once a value
-            // exceeds a few KB, so large prompts/diffs cost nothing on the main row.
-            var entry = new EventLog
-            {
-                Id = Guid.NewGuid(),
-                LoopRunId = runId,
-                Sequence = nextSequence,
-                EventType = parsed,
-                NodeId = nodeId,
-                RunNodeId = runNodeId,
-                Timestamp = DateTime.UtcNow,
-                Data = message
-            };
-
-            await _eventLogStore.AppendAsync(entry);
-
-            return nextSequence;
+            await _notifier.EventLoggedAsync(runId, id, entry.EventType.ToString(),
+                entry.NodeId, entry.RunNodeId, entry.Timestamp);
         }
-        finally
+        catch (Exception ex)
         {
-            runLock.Release();
+            _logger.LogError(ex, "Failed to announce event {EventId} of run {RunId}", id, runId);
         }
+        return id;
     }
+
+    // Payloads are stored inline in the DB. PostgreSQL keeps the Data
+    // column (text) out-of-line and LZ-compressed via TOAST once a value
+    // exceeds a few KB, so large prompts/diffs cost nothing on the main row.
+    private static EventLog Entry(Guid runId, EventType eventType, string message,
+        Guid? nodeId, Guid? runNodeId, string? edgeName)
+        => new()
+        {
+            LoopRunId = runId,
+            EventType = eventType,
+            NodeId = nodeId,
+            RunNodeId = runNodeId,
+            EdgeName = edgeName,
+            Timestamp = ToStoredPrecision(DateTime.UtcNow),
+            Data = message,
+        };
+
+    // PostgreSQL keeps microseconds; the announced timestamp must be the one a later read returns.
+    private static DateTime ToStoredPrecision(DateTime at)
+        => at.AddTicks(-(at.Ticks % TimeSpan.TicksPerMicrosecond));
+
+    public Task<bool> HasRunEndedAsync(Guid runId) => _eventLogStore.HasEndedAsync(runId);
 
     public async Task<IEnumerable<EventLogEntry>> GetByRunIdAsync(Guid runId, int? limit = null)
     {
@@ -87,25 +83,12 @@ public class EventLogService : IEventLogService
             e.Timestamp));
     }
 
-    public async Task<int> EnforceRetentionPolicyAsync(DateTimeOffset before, ISet<Guid> eligibleRunIds)
-    {
-        if (eligibleRunIds.Count == 0) return 0;
-
-        var older = await _eventLogStore.GetOlderThanAsync(before);
-        var toRemove = older
-            .Where(e => e.LoopRunId.HasValue && eligibleRunIds.Contains(e.LoopRunId.Value))
-            .ToList();
-
-        await _eventLogStore.RemoveRangeAsync(toRemove);
-        return toRemove.Count;
-    }
-
-    public async Task<EventLogPage> GetByRunIdAfterCursorAsync(Guid runId, int cursor, int limit)
+    public async Task<EventLogPage> GetByRunIdAfterCursorAsync(Guid runId, long cursor, int limit)
     {
         var entries = await _eventLogStore.GetByRunIdAfterCursorAsync(runId, cursor, limit);
         var list = entries.ToList();
         var hasMore = list.Count >= limit;
-        var nextCursor = list.Count > 0 ? list[^1].Sequence : cursor;
+        var nextCursor = list.Count > 0 ? list[^1].Id : cursor;
 
         return new EventLogPage
         {

@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The separate Loop Runs and run pages are gone; a work item's Runs tab shows and manages everything about its runs.**
 
+- **The Action tab shows the latest run's conversation, and earlier runs' conversations are in Runs.** Conversations from before this release do not carry over.
+
+- **A finished run can no longer be retried from one of its steps; start a new run instead.**
+
+- **Back up both databases before upgrading; this release cannot be rolled back.**
+
+### Fixed
+
+- **Finished runs refuse late conversation replies, and failed escalations no longer appear to have succeeded.**
+
+- **Answering a run that is no longer waiting shows an error instead of leaving the work item stuck.**
+
 ## [0.16.0] - 2026-10-04
 
 ### Added

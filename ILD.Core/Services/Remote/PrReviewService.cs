@@ -103,7 +103,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     private readonly ILoopRunStore _runs;
     private readonly IRemoteProvider _remote;
     private readonly IRunNotifier? _notifier;
-    private readonly IEventLogStore? _events;
+    private readonly IEventLogService? _events;
 
     /// <summary>
     /// <paramref name="notifier"/> and <paramref name="events"/> are optional
@@ -111,11 +111,11 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// really about; DI always supplies both. Without the notifier a queued
     /// answer sits in the database unseen until something else happens to
     /// refresh the run, which is most of the window a person has to drop it;
-    /// without the event store a closed item leaves no trace, which costs the
+    /// without the event log a closed item leaves no trace, which costs the
     /// record and not the decision.
     /// </summary>
     public PrReviewService(
-        ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null, IEventLogStore? events = null)
+        ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null, IEventLogService? events = null)
     {
         _runs = runs;
         _remote = remote;
@@ -126,12 +126,15 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     private const string NoPullRequest =
         "This work item's current run has no pull request, so there is no review to read.";
 
+    private const string NoLivePullRequest =
+        "This work item has no live run with a pull request, so nothing can be written on one.";
+
     private const string NoQueue =
         "This work item's current run has no pull request, so nothing is waiting to be written on one.";
 
     public async Task<RemotePrReviewLedger> ReadAsync(string workItemId, string? sinceCommit, Guid? callerRunId)
     {
-        var target = await ResolveAsync(workItemId);
+        var target = await ReadTargetAsync(workItemId);
         if (target is null)
             return RemotePrReviewLedger.Unavailable(NoPullRequest);
 
@@ -169,9 +172,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     public async Task<RemotePrWriteResult> ReplyAsync(
         string workItemId, string commentId, string body, Guid? callerRunId, Guid? callerChatSessionId = null)
     {
-        var target = await ResolveAsync(workItemId);
+        var target = await WriteTargetAsync(workItemId);
         if (target is null)
-            return new RemotePrWriteResult(false, null, NoPullRequest);
+            return new RemotePrWriteResult(false, null, NoLivePullRequest);
 
         var fetched = await _remote.GetPullRequestReviewLedgerAsync(target.RepoUrl, target.PrNumber);
         if (!string.IsNullOrEmpty(fetched.Message))
@@ -210,9 +213,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     public async Task<RemotePrWriteResult> ResolveAsync(
         string workItemId, string threadId, Guid? callerRunId, Guid? callerChatSessionId = null)
     {
-        var target = await ResolveAsync(workItemId);
+        var target = await WriteTargetAsync(workItemId);
         if (target is null)
-            return new RemotePrWriteResult(false, null, NoPullRequest);
+            return new RemotePrWriteResult(false, null, NoLivePullRequest);
 
         var fetched = await _remote.GetPullRequestReviewLedgerAsync(target.RepoUrl, target.PrNumber);
         if (!string.IsNullOrEmpty(fetched.Message))
@@ -273,9 +276,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         if (string.IsNullOrWhiteSpace(body))
             return new RemotePrWriteResult(false, null, "A pull-request comment needs something to say.");
 
-        var target = await ResolveAsync(workItemId);
+        var target = await WriteTargetAsync(workItemId);
         if (target is null)
-            return new RemotePrWriteResult(false, null, NoPullRequest);
+            return new RemotePrWriteResult(false, null, NoLivePullRequest);
 
         // No target and no source finding: it answers the round, not an item, so
         // dropping it puts nothing back — and a round may have several of these
@@ -308,9 +311,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     public async Task<RemotePrWriteResult> CloseAsync(
         string workItemId, string commentId, bool resolve, Guid? callerRunId, Guid? callerChatSessionId = null)
     {
-        var target = await ResolveAsync(workItemId);
+        var target = await WriteTargetAsync(workItemId);
         if (target is null)
-            return new RemotePrWriteResult(false, null, NoPullRequest);
+            return new RemotePrWriteResult(false, null, NoLivePullRequest);
 
         var fetched = await _remote.GetPullRequestReviewLedgerAsync(target.RepoUrl, target.PrNumber);
         if (!string.IsNullOrEmpty(fetched.Message))
@@ -364,9 +367,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     public async Task<RemotePrWriteResult> WithdrawAsync(
         string workItemId, string writeId, Guid? callerRunId, Guid? callerChatSessionId)
     {
-        var target = await ResolveAsync(workItemId);
+        var target = await WriteTargetAsync(workItemId);
         if (target is null)
-            return new RemotePrWriteResult(false, writeId, NoQueue);
+            return new RemotePrWriteResult(false, writeId, NoLivePullRequest);
 
         var caller = Caller.Of(callerRunId, callerChatSessionId);
         PrQueuedWrite? withdrawn = null;
@@ -397,7 +400,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 
     public async Task<PrQueuedWritesView> ListQueuedAsync(string workItemId, Guid? callerRunId, Guid? callerChatSessionId)
     {
-        var target = await ResolveAsync(workItemId);
+        var target = await ReadTargetAsync(workItemId);
         if (target is null)
             return new PrQueuedWritesView(Array.Empty<PrQueuedWrite>(), NoQueue);
 
@@ -445,14 +448,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 
         try
         {
-            await _events.AppendAsync(new EventLog
-            {
-                Id = Guid.NewGuid(),
-                LoopRunId = runId,
-                EventType = type,
-                Data = data,
-                Timestamp = DateTime.UtcNow,
-            });
+            await _events.AppendAsync(runId, type, data);
         }
         catch { }
     }
@@ -714,9 +710,19 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 
     private sealed record Target(LoopRun Run, string RepoUrl, string PrNumber);
 
-    private async Task<Target?> ResolveAsync(string workItemId)
+    /// <summary>The PR of the run the work item shows, live or ended: what reading its review looks at.</summary>
+    private async Task<Target?> ReadTargetAsync(string workItemId)
+        => TargetOf(await _runs.GetLatestByWorkItemAsync(workItemId));
+
+    /// <summary>
+    /// The PR of the work item's live run. A queued write waits for the PR node
+    /// of the run it was queued on, and an ended run has no PR node left to send it.
+    /// </summary>
+    private async Task<Target?> WriteTargetAsync(string workItemId)
+        => TargetOf(await _runs.GetActiveByWorkItemAsync(workItemId));
+
+    private static Target? TargetOf(LoopRun? run)
     {
-        var run = await _runs.GetCurrentByWorkItemAsync(workItemId);
         if (run?.PrUrl is null)
             return null;
 

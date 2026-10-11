@@ -1,4 +1,4 @@
-import type { ChatMessage, ConversationMessage, WorkItemEditProposal } from "../types";
+import type { ChatMessage, RunConversationMessage, WorkItemEditProposal } from "../types";
 
 /** Oldest first, by the WorkItem server's clock, then by id. */
 function byCreation(a: WorkItemEditProposal, b: WorkItemEditProposal): number {
@@ -73,17 +73,20 @@ export interface ActionPlacement {
   afterTurn: Map<number, WorkItemEditProposal[]>;
   /** The cards whose step has no turn yet: they follow the live bubble. */
   live: WorkItemEditProposal[];
-  /** The cards that name no step: they close the thread. */
+  /** The cards that name no step, or come from another run: they close the thread. */
   end: WorkItemEditProposal[];
 }
 
 /**
  * Where the cards a work item's loop runs asked for, on whichever item, go in
- * its Action thread. A card follows the last turn its step wrote. A chat's
- * cards belong to that chat and are left out.
+ * the Action thread of run `runId`, whose conversation is `messages`. A card
+ * follows the last turn its step wrote. Another run's cards have no turn here,
+ * so they close the thread, where they can still be decided. A chat's cards
+ * belong to that chat and are left out.
  */
 export function placeActionProposals(
-  messages: ConversationMessage[],
+  runId: string | null,
+  messages: RunConversationMessage[],
   proposals: WorkItemEditProposal[],
 ): ActionPlacement {
   const afterTurn = new Map<number, WorkItemEditProposal[]>();
@@ -92,7 +95,7 @@ export function placeActionProposals(
   for (const proposal of proposals) {
     if (!proposal.createdByLoopRunId) continue;
     const step = proposal.createdByRunNodeId;
-    if (!step) {
+    if (!step || proposal.createdByLoopRunId !== runId) {
       end.push(proposal);
       continue;
     }

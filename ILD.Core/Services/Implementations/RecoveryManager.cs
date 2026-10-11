@@ -3,6 +3,8 @@ using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -13,9 +15,13 @@ public class RecoveryManager : IRecoveryManager
     private readonly ILoopTemplateStore _templateStore;
     private readonly IRepositoryManager _repo;
     private readonly ILoopEngine _engine;
+    private readonly IEventLogService _eventLog;
+    private readonly ILogger<RecoveryManager> _logger;
 
-    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine)
+    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog, ILogger<RecoveryManager>? logger = null)
     {
+        _eventLog = eventLog;
+        _logger = logger ?? NullLogger<RecoveryManager>.Instance;
         _workItems = workItems;
         _loopRunStore = loopRunStore;
         _templateStore = templateStore;
@@ -48,10 +54,7 @@ public class RecoveryManager : IRecoveryManager
         }
         if (policy == RecoveryPolicy.NeedsReview)
         {
-            await _workItems.TransitionAsync(
-                run.WorkItemId,
-                RemoteWorkItemStatus.HumanFeedback,
-                reason: "Recovery requires review");
+            await ParkForReviewAsync(run, HumanFeedbackReasons.RecoveryRequiresReview);
             return true;
         }
 
@@ -75,10 +78,8 @@ public class RecoveryManager : IRecoveryManager
         if (!string.IsNullOrWhiteSpace(run.WorktreePath)
             && !await _repo.ValidateWorktreeHealthAsync(run.WorktreePath))
         {
-            await _workItems.TransitionAsync(
-                run.WorkItemId,
-                RemoteWorkItemStatus.HumanFeedback,
-                reason: $"Recovery requires review: worktree is missing or unhealthy at '{run.WorktreePath}'");
+            await ParkForReviewAsync(run,
+                $"{HumanFeedbackReasons.RecoveryRequiresReview}: worktree is missing or unhealthy at '{run.WorktreePath}'");
             return true;
         }
 
@@ -92,6 +93,15 @@ public class RecoveryManager : IRecoveryManager
         else
             await _engine.ResumeRecoveredRunAsync(runId);
         return true;
+    }
+
+    private async Task ParkForReviewAsync(LoopRun run, string reason)
+    {
+        // Best-effort: a lost record must not keep the run from being parked for review.
+        try { await _eventLog.AppendAsync(run.Id, EventType.RecoveryTriggered, reason); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not record recovery of run {RunId}", run.Id); }
+        await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            reason: reason, humanFeedbackReason: HumanFeedbackReasons.RecoveryRequiresReview, currentLoopRunId: run.Id);
     }
 
     public async Task<bool> ValidateWorktreeHealthAsync(Guid runId)

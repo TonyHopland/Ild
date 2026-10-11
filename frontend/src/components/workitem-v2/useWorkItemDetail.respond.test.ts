@@ -24,7 +24,6 @@ function makeParkedWorkItem(): WorkItem {
     status: WorkItemStatus.HumanFeedback,
     priority: WorkItemPriority.Medium,
     tags: [],
-    conversation: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
@@ -36,6 +35,7 @@ function makeParkedWorkItem(): WorkItem {
     startedAt: null,
     completedAt: null,
     currentLoopRunId: "run-1",
+    latestLoopRunId: "run-1",
     dependencyIds: [],
     dependentIds: [],
   };
@@ -72,17 +72,20 @@ describe("answering a parked run", () => {
     const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
-      result.current.setFeedbackInput("Looks good");
+      result.current.setReplyInput("run-1", "Looks good");
     });
 
     // Both presses land before React can render the buttons disabled, which is
     // what an impatient second click looks like.
     await act(async () => {
-      await Promise.all([result.current.handleApprove(), result.current.handleApprove()]);
+      await Promise.all([
+        result.current.handleApprove("run-1"),
+        result.current.handleApprove("run-1"),
+      ]);
     });
 
     expect(answer).toHaveBeenCalledTimes(1);
-    expect(answer.mock.calls[0][1]).toBe("Looks good");
+    expect(answer.mock.calls[0]).toEqual(["wi-1", "run-1", "Looks good"]);
     expect(upload).not.toHaveBeenCalled();
   });
 
@@ -94,11 +97,11 @@ describe("answering a parked run", () => {
     const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
-    await act(async () => await result.current.handleApprove());
-    await act(async () => await result.current.handleApprove());
+    await act(async () => await result.current.handleApprove("run-1"));
+    await act(async () => await result.current.handleApprove("run-1"));
 
     expect(answer).toHaveBeenCalledTimes(2);
-    expect(result.current.respondLoading).toBe(false);
+    expect(result.current.replyFor("run-1").loading).toBe(false);
   });
 
   test("a refused answer releases the buttons so it can be retried", async () => {
@@ -111,10 +114,10 @@ describe("answering a parked run", () => {
     const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
 
-    await act(async () => await result.current.handleApprove());
+    await act(async () => await result.current.handleApprove("run-1"));
 
     expect(answer).toHaveBeenCalledTimes(1);
-    expect(result.current.respondError).toBe("Input is too long.");
-    expect(result.current.respondLoading).toBe(false);
+    expect(result.current.replyFor("run-1").error).toBe("Input is too long.");
+    expect(result.current.replyFor("run-1").loading).toBe(false);
   });
 });

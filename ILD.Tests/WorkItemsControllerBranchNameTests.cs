@@ -3,6 +3,7 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -198,7 +199,7 @@ public class WorkItemsControllerBranchNameTests
         db.Context.SaveChanges();
 
         var eventLog = new Mock<IEventLogService>();
-        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>()))
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
 
         var mgr = new WorkItemManager(

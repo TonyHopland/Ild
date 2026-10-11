@@ -36,14 +36,22 @@ public interface ILoopRunStore
     /// </summary>
     Task<IReadOnlyList<LoopRun>> GetAllByWorkItemsAsync(IReadOnlyCollection<string> workItemIds);
     Task<IReadOnlyList<LoopRun>> GetByWorkItemPagedAsync(string workItemId, int skip, int take);
-    Task<LoopRun?> GetCurrentByWorkItemAsync(string workItemId);
 
     /// <summary>
     /// The work item's single active run, if any: the most recent run whose
     /// status the engine considers alive (<c>Running</c> or <c>WaitingHuman</c>).
-    /// Used to enforce the at-most-one-active-run-per-work-item invariant.
+    /// Used to enforce the at-most-one-active-run-per-work-item invariant, and by
+    /// everything that drives, resumes, signals or queues work on a run.
     /// </summary>
     Task<LoopRun?> GetActiveByWorkItemAsync(string workItemId);
+
+    /// <summary>
+    /// The work item's newest run in any state, ordered by when it started (or
+    /// was created, if it never started). What reading, displaying and closing
+    /// out the item works on; never a run to drive — that is
+    /// <see cref="GetActiveByWorkItemAsync"/>.
+    /// </summary>
+    Task<LoopRun?> GetLatestByWorkItemAsync(string workItemId);
 
     Task<IReadOnlyList<LoopRun>> GetAllAsync(int skip = 0, int take = 100);
     Task<IReadOnlyList<LoopRun>> GetRunningRunsAsync();
@@ -139,6 +147,13 @@ public interface ILoopRunStore
     Task<Guid?> GetRunningNodeIdAsync(Guid runId);
 
     /// <summary>
+    /// The loop node that execution <paramref name="runNodeId"/> of the run is
+    /// of, while that execution waits on a person; null otherwise. Read from the
+    /// database, not from an instance this context already tracks.
+    /// </summary>
+    Task<Guid?> GetWaitingHumanLoopNodeIdAsync(Guid runId, Guid runNodeId);
+
+    /// <summary>
     /// What each node execution of the work item's runs did to each variable it
     /// wrote: one entry per execution and variable, not per write.
     /// </summary>
@@ -163,6 +178,23 @@ public interface ILoopRunStore
     /// write is not lost.
     /// </summary>
     Task ClearSteeringNoteAsync(Guid runId);
+
+    /// <summary>
+    /// Set the run's human-feedback reason, touching only that column (and
+    /// UpdatedAt), so a status or answer another writer committed since the
+    /// caller read the run is not written back over. A copy of the run this
+    /// store already tracks is brought in step, so saving it later keeps the
+    /// new reason.
+    /// </summary>
+    Task SetHumanFeedbackReasonAsync(Guid runId, string? reason);
+
+    /// <summary>
+    /// Run <paramref name="body"/> in one transaction holding the run's row
+    /// lock, the lock event appends and human answers take, so what it reads
+    /// cannot change under it before it commits. False, with nothing run, when
+    /// there is no such run.
+    /// </summary>
+    Task<bool> UnderRunLockAsync(Guid runId, Func<Task> body);
 
     /// <summary>
     /// Overwrite what the run has been handed of its PR's review, touching only
@@ -238,10 +270,18 @@ public interface ILoopRunStore
     Task<IReadOnlyList<Guid>> GetFailedRunIdsAsync();
 
     /// <summary>
-    /// Atomically increments and returns the next per-run event log sequence
-    /// number. Replaces the previous global lock + MAX(Sequence) scan.
+    /// The work item's status reason: why it waits on a person when no run is
+    /// there to say so (see <see cref="WorkItemStatusReason"/>). Null when it has none.
     /// </summary>
-    Task<int> AllocateNextEventSequenceAsync(Guid runId);
+    Task<WorkItemStatusReason?> GetWorkItemStatusReasonAsync(string workItemId);
+
+    /// <summary>The status reasons of those of <paramref name="workItemIds"/> that have one, by work item id.</summary>
+    Task<IReadOnlyDictionary<string, WorkItemStatusReason>> GetWorkItemStatusReasonsAsync(IReadOnlyCollection<string> workItemIds);
+
+    /// <summary>Set the work item's status reason to <paramref name="text"/>, stamped now (UTC).</summary>
+    Task SetWorkItemStatusReasonAsync(string workItemId, string text);
+
+    Task ClearWorkItemStatusReasonAsync(string workItemId);
 
     /// <summary>
     /// Hard-deletes a loop run and all of its dependent rows (run nodes,

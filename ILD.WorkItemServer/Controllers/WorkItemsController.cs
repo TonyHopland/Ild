@@ -84,21 +84,6 @@ public sealed class WorkItemsController : ControllerBase
     public async Task<IActionResult> RemoveDependency(string id, string depId, CancellationToken ct)
         => await _svc.RemoveDependencyAsync(id, depId, ct) ? NoContent() : NotFound();
 
-    [HttpPost("{id}/feedback")]
-    public async Task<IActionResult> Feedback(string id, [FromBody] FeedbackRequest req, CancellationToken ct)
-    {
-        if (string.IsNullOrEmpty(req.Content)) return BadRequest("Content is required");
-        return await _svc.AppendFeedbackAsync(id, req.Content, ct) ? NoContent() : NotFound();
-    }
-
-    [HttpPost("{id}/conversation")]
-    public async Task<IActionResult> AppendConversation(string id, [FromBody] AppendConversationRequest req, CancellationToken ct)
-    {
-        if (string.IsNullOrEmpty(req.Content)) return BadRequest("Content is required");
-        var role = string.IsNullOrWhiteSpace(req.Role) ? "ai" : req.Role;
-        return await _svc.AppendConversationAsync(id, role, req.Content, req.Name, req.RunNodeId, ct) ? NoContent() : NotFound();
-    }
-
     [HttpPost("{id}/pull-requests")]
     public async Task<IActionResult> RecordPullRequest(string id, [FromBody] RecordPullRequestRequest req, CancellationToken ct)
     {

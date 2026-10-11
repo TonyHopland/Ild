@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ILD.Api.Authentication;
 using ILD.Api.Contracts;
 using ILD.Core.Services.Implementations;
@@ -247,7 +248,10 @@ public class AgentController : ControllerBase
     }
 
     [HttpGet("workitems/{id}")]
-    public async Task<IActionResult> GetWorkItem(string id, [FromQuery] bool includeConversation = false)
+    public async Task<IActionResult> GetWorkItem(
+        string id,
+        [FromServices] IRunConversationService conversations,
+        [FromQuery] bool includeConversation = false)
     {
         var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
@@ -255,7 +259,7 @@ public class AgentController : ControllerBase
         // Reverse edges: the items that depend on this one ("blocks"). Resolved
         // here, one item at a time, so the lightweight list never pays for it.
         var blocks = await _workItems.GetDependentsAsync(id);
-        return Ok(new
+        var item = new
         {
             id = wi.Id,
             title = wi.Title,
@@ -288,12 +292,17 @@ public class AgentController : ControllerBase
                 contentType = a.ContentType,
                 sizeBytes = a.SizeBytes,
             }),
-            // The conversation is the largest field and rarely needed for
-            // planning, so it is gated behind an explicit flag (ADR scope note).
-            conversation = includeConversation
-                ? wi.Conversation.Select(m => new { role = m.Role, content = m.Content, timestamp = m.Timestamp, name = m.Name, runNodeId = m.RunNodeId })
-                : null,
-        });
+        };
+        if (!includeConversation) return Ok(item);
+
+        // The latest run's conversation, the largest field and rarely needed for
+        // planning, so it is only there when asked for.
+        var page = wi.LatestLoopRunId is { } runId ? await conversations.GetPageAsync(runId) : null;
+        var body = JsonSerializer.SerializeToNode(item, JsonSerializerOptions.Web)!.AsObject();
+        body["conversation"] = page is null
+            ? null
+            : JsonSerializer.SerializeToNode(new { runId = wi.LatestLoopRunId, messages = page.Messages }, JsonSerializerOptions.Web);
+        return Ok(body);
     }
 
     /// <summary>
@@ -784,6 +793,7 @@ public class AgentController : ControllerBase
             var filtered = await _db.LoopRuns.AsNoTracking()
                 .Where(r => r.WorkItemId == workItemId)
                 .OrderByDescending(r => r.StartedAt)
+                .ThenByDescending(r => r.Id)
                 .Skip(skip).Take(take)
                 .Select(r => new { r.Id, r.WorkItemId, r.Status, r.StartedAt, r.CompletedAt })
                 .ToListAsync();

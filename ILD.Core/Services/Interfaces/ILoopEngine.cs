@@ -123,6 +123,20 @@ public interface ILoopEngine
     /// </summary>
     Task SignalNodeResultAsync(Guid runId, Guid runNodeId, NodeSignal signal);
 
+    /// <summary>
+    /// Deliver a person's answer to the parked node <paramref name="runNodeId"/>:
+    /// record it as the run's HumanFeedbackReceived event (<paramref name="feedback"/>,
+    /// <paramref name="edgeName"/>) and resume the run with <paramref name="signal"/>,
+    /// the event and the resume committing together or not at all. Unlike
+    /// <see cref="SignalNodeResultAsync"/> it never drops the answer quietly:
+    /// a run or node that is not waiting — including one a concurrent answer has
+    /// just resumed — throws <c>HumanFeedbackRefusedException</c>, and a run that
+    /// has ended throws <see cref="ILD.Data.Stores.RunClosedException"/>, with
+    /// nothing written. Once delivered, a failure to move the work item to
+    /// Running is logged and the run is driven regardless.
+    /// </summary>
+    Task DeliverHumanFeedbackAsync(Guid runId, Guid runNodeId, NodeSignal signal, string feedback, string? edgeName);
+
     Task ResumeRecoveredRunAsync(Guid runId);
 
     /// <summary>

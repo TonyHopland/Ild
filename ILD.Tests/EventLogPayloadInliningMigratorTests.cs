@@ -14,17 +14,16 @@ public class EventLogPayloadInliningMigratorTests
         var payload = new string('x', 20_000);
         await File.WriteAllTextAsync(file, payload, TestContext.Current.CancellationToken);
 
-        var id = Guid.NewGuid();
-        db.Context.EventLogs.Add(new EventLog
+        var spilled = new EventLog
         {
-            Id = id,
-            Sequence = 1,
             EventType = EventType.NodeCompleted,
             Timestamp = DateTime.UtcNow,
             PayloadPath = file,
             Data = null,
-        });
+        };
+        db.Context.EventLogs.Add(spilled);
         db.Context.SaveChanges();
+        var id = spilled.Id;
 
         try
         {
@@ -51,26 +50,22 @@ public class EventLogPayloadInliningMigratorTests
 
         // A row whose payload file the ephemeral /app layer already wiped, plus a
         // normal inline row that must be left untouched.
-        var missingId = Guid.NewGuid();
-        var inlineId = Guid.NewGuid();
-        db.Context.EventLogs.Add(new EventLog
+        var missingRow = new EventLog
         {
-            Id = missingId,
-            Sequence = 1,
             EventType = EventType.NodeCompleted,
             Timestamp = DateTime.UtcNow,
             PayloadPath = Path.Combine(Path.GetTempPath(), "ild-missing-" + Guid.NewGuid() + ".json"),
             Data = null,
-        });
-        db.Context.EventLogs.Add(new EventLog
+        };
+        var inlineRow = new EventLog
         {
-            Id = inlineId,
-            Sequence = 2,
             EventType = EventType.NodeStarted,
             Timestamp = DateTime.UtcNow,
             Data = "already inline",
-        });
+        };
+        db.Context.EventLogs.AddRange(missingRow, inlineRow);
         db.Context.SaveChanges();
+        var (missingId, inlineId) = (missingRow.Id, inlineRow.Id);
 
         var migrated = await EventLogPayloadInliningMigrator.MigrateAsync(db.Context, TestContext.Current.CancellationToken);
         Assert.Equal(1, migrated);

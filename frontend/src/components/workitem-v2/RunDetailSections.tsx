@@ -47,7 +47,7 @@ function buildSessionSummary(preview: LoopRunSessionPreview): string[] {
 }
 
 /** A section that shows only its title until the user expands it. */
-function Collapsible({
+export function Collapsible({
   title,
   onOpen,
   children,

@@ -8,6 +8,7 @@ using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -45,7 +46,8 @@ internal sealed class LoopEngineHarness : IDisposable
     public LoopEngineHarness(
         IRunNotifier? notifier = null,
         IShutdownState? shutdown = null,
-        Action<IServiceCollection>? configure = null)
+        Action<IServiceCollection>? configure = null,
+        ILogger<LoopEngine>? logger = null)
     {
         Db = new TestDb();
 
@@ -77,8 +79,9 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<IPackageFeedResolver>(new PackageFeedResolver(Db.PackageFeeds, NullLogger<PackageFeedResolver>.Instance));
         // The engine resolves IEventLogService optionally; register it so node and
         // edge-traversal events are written exactly as they are in production.
-        services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, Db.LoopRuns));
-        services.AddSingleton<IRunNotifier>(notifier ?? new NoopRunNotifier());
+        var runNotifier = notifier ?? new NoopRunNotifier();
+        services.AddSingleton<IEventLogService>(new EventLogService(Db.EventLogs, runNotifier));
+        services.AddSingleton<IRunNotifier>(runNotifier);
         services.AddSingleton<IWorkItemManager>(WorkItemsMock.Object);
         services.AddSingleton<IWorkItemNotifier>(WorkItemNotifierMock.Object);
         services.AddSingleton<INodeExecutorRegistry>(Registry);
@@ -89,7 +92,7 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<ILoopEngine>(sp =>
         {
             return new LoopEngine(sp, Registry, sp.GetRequiredService<IRunNotifier>(),
-                NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>(),
+                logger ?? NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>(),
                 progressBuffer: null, shutdown: shutdown);
         });
         configure?.Invoke(services);
@@ -241,11 +244,11 @@ internal sealed class LoopEngineHarness : IDisposable
             .OrderBy(rn => rn.StartedAt)
             .ToList();
 
-    /// <summary>All event-log rows written for this run, in sequence order.</summary>
+    /// <summary>All event-log rows written for this run, in the order they were written.</summary>
     public IReadOnlyList<EventLog> ReloadEvents()
         => Db.Fresh().EventLogs.AsNoTracking()
             .Where(e => e.LoopRunId == RunId)
-            .OrderBy(e => e.Sequence)
+            .OrderBy(e => e.Id)
             .ToList();
 
     public void Dispose()

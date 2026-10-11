@@ -1,14 +1,18 @@
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Interfaces;
+using Moq;
 
 namespace ILD.Tests;
 
 public class EventLogServiceTests
 {
     private static (EventLogService svc, TestDb db, Guid runId, string workItemId) Setup()
+        => SetupOn(new TestDb(), new NoopRunNotifier());
+
+    private static (EventLogService svc, TestDb db, Guid runId, string workItemId) SetupOn(TestDb db, IRunNotifier notifier)
     {
-        var db = new TestDb();
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
         var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
@@ -23,49 +27,32 @@ public class EventLogServiceTests
         db.Context.LoopRuns.Add(run);
         db.Context.SaveChanges();
 
-        var svc = new EventLogService(db.EventLogs, db.LoopRuns);
+        var svc = new EventLogService(db.EventLogs, notifier);
         return (svc, db, run.Id, workItemId);
     }
 
     [Fact]
-    public async Task Append_returns_monotonically_increasing_sequence_per_run()
+    public async Task Append_returns_the_event_id_and_ids_increase_per_run()
     {
         var (svc, db, runId, _) = Setup();
         using var _ = db;
 
-        var s1 = await svc.AppendAsync(runId, "NodeStarted", "first");
-        var s2 = await svc.AppendAsync(runId, "NodeCompleted", "second");
-        var s3 = await svc.AppendAsync(runId, "NodeStarted", "third");
+        var s1 = await svc.AppendAsync(runId, EventType.NodeStarted, "first");
+        var s2 = await svc.AppendAsync(runId, EventType.NodeCompleted, "second");
+        var s3 = await svc.AppendAsync(runId, EventType.NodeStarted, "third");
 
-        Assert.Equal(1, s1);
-        Assert.Equal(2, s2);
-        Assert.Equal(3, s3);
-    }
-
-    [Theory]
-    [InlineData("PrMerged", EventType.PrMerged)]
-    [InlineData("PrMergeFailed", EventType.PrMergeFailed)]
-    [InlineData("BranchDeleteFailed", EventType.BranchDeleteFailed)]
-    public async Task PrMerge_event_strings_round_trip_and_are_not_coerced_to_Error(string eventType, EventType expected)
-    {
-        var (svc, db, runId, _) = Setup();
-        using var _d = db;
-
-        await svc.AppendAsync(runId, eventType, "merge flow event");
-
-        var row = db.Context.EventLogs.Single(e => e.LoopRunId == runId);
-        Assert.Equal(expected, row.EventType);
-        Assert.NotEqual(EventType.Error, row.EventType);
+        Assert.True(s1 < s2 && s2 < s3);
+        Assert.Equal(new[] { s1, s2, s3 }, db.Fresh().EventLogs.Where(e => e.LoopRunId == runId).OrderBy(e => e.Id).Select(e => e.Id));
     }
 
     [Fact]
-    public async Task GetByRunId_returns_events_in_sequence_order()
+    public async Task GetByRunId_returns_events_in_the_order_they_were_written()
     {
         var (svc, db, runId, _) = Setup();
         using var _ = db;
 
-        await svc.AppendAsync(runId, "NodeStarted", "a");
-        await svc.AppendAsync(runId, "NodeCompleted", "b");
+        await svc.AppendAsync(runId, EventType.NodeStarted, "a");
+        await svc.AppendAsync(runId, EventType.NodeCompleted, "b");
 
         var entries = (await svc.GetByRunIdAsync(runId)).ToList();
         Assert.Equal(2, entries.Count());
@@ -82,7 +69,7 @@ public class EventLogServiceTests
         // Well over the old 10 KB offload threshold: it must still land in the
         // Data column (PostgreSQL TOASTs it) rather than being written to disk.
         var bigMessage = new string('x', 20_000);
-        await svc.AppendAsync(runId, "NodeStarted", bigMessage);
+        await svc.AppendAsync(runId, EventType.NodeStarted, bigMessage);
 
         var entry = (await svc.GetByRunIdAsync(runId)).Single();
         Assert.Equal(bigMessage, entry.Data);
@@ -93,75 +80,31 @@ public class EventLogServiceTests
     }
 
     [Fact]
-    public async Task EnforceRetentionPolicy_deletes_only_events_for_eligible_runs()
-    {
-        var (svc, db, runIdA, _) = Setup();
-        using var _ = db;
-
-        var runB = new LoopRun { Id = Guid.NewGuid(), WorkItemId = Guid.NewGuid().ToString(), LoopTemplateVersionId = db.Context.LoopTemplateVersions.First().Id, RecoveryPolicy = RecoveryPolicy.Cancel };
-        db.Context.LoopRuns.Add(runB);
-        db.Context.SaveChanges();
-
-        await svc.AppendAsync(runIdA, "NodeStarted", "eligible");
-        await svc.AppendAsync(runB.Id, "NodeStarted", "preserved");
-
-        foreach (var e in db.Context.EventLogs)
-            e.Timestamp = DateTime.UtcNow.AddDays(-30);
-        db.Context.SaveChanges();
-
-        var removed = await svc.EnforceRetentionPolicyAsync(DateTimeOffset.UtcNow.AddDays(-1), new HashSet<Guid> { runIdA });
-
-        Assert.Equal(1, removed);
-        Assert.Empty((await svc.GetByRunIdAsync(runIdA)));
-        Assert.Single((await svc.GetByRunIdAsync(runB.Id)));
-    }
-
-    [Fact]
-    public async Task EnforceRetentionPolicy_with_empty_eligible_set_deletes_nothing()
-    {
-        var (svc, db, runId, _) = Setup();
-        using var _d = db;
-
-        await svc.AppendAsync(runId, "NodeStarted", "anything");
-        foreach (var e in db.Context.EventLogs)
-            e.Timestamp = DateTime.UtcNow.AddDays(-30);
-        db.Context.SaveChanges();
-
-        var removed = await svc.EnforceRetentionPolicyAsync(DateTimeOffset.UtcNow.AddDays(-1), new HashSet<Guid>());
-
-        Assert.Equal(0, removed);
-        Assert.Single((await svc.GetByRunIdAsync(runId)));
-    }
-
-    [Fact]
-    public async Task CursorPagination_returns_pages_in_sequence_order_with_correct_cursor()
+    public async Task CursorPagination_returns_pages_in_id_order_with_the_last_id_as_cursor()
     {
         var (svc, db, runId, _) = Setup();
         using var _ = db;
 
-        for (var i = 1; i <= 7; i++)
-            await svc.AppendAsync(runId, "NodeStarted", $"event-{i}");
+        var ids = new long[7];
+        for (var i = 0; i < ids.Length; i++)
+            ids[i] = await svc.AppendAsync(runId, EventType.NodeStarted, $"event-{i + 1}");
 
         var page1 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 0, limit: 3);
-        Assert.Equal(3, page1.Entries.Count());
-        Assert.Equal(1, page1.Entries[0].Sequence);
-        Assert.Equal(3, page1.Entries[2].Sequence);
+        Assert.Equal(ids[..3], page1.Entries.Select(e => e.Id));
         Assert.True(page1.HasMore);
-        Assert.Equal(3, page1.NextCursor);
+        Assert.Equal(ids[2], page1.NextCursor);
 
-        var page2 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 3, limit: 3);
-        Assert.Equal(3, page2.Entries.Count());
-        Assert.Equal(4, page2.Entries[0].Sequence);
-        Assert.Equal(6, page2.Entries[2].Sequence);
+        var page2 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: page1.NextCursor, limit: 3);
+        Assert.Equal(ids[3..6], page2.Entries.Select(e => e.Id));
         Assert.True(page2.HasMore);
-        Assert.Equal(6, page2.NextCursor);
+        Assert.Equal(ids[5], page2.NextCursor);
 
-        var page3 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: 6, limit: 3);
-        Assert.Single(page3.Entries);
-        Assert.Equal(7, page3.Entries[0].Sequence);
+        var page3 = await svc.GetByRunIdAfterCursorAsync(runId, cursor: page2.NextCursor, limit: 3);
+        Assert.Equal("event-7", Assert.Single(page3.Entries).Data);
         Assert.False(page3.HasMore);
-        Assert.Equal(7, page3.NextCursor);
+        Assert.Equal(ids[6], page3.NextCursor);
     }
+
 
     [Fact]
     public async Task CursorPagination_empty_run_returns_empty_page()
@@ -173,5 +116,88 @@ public class EventLogServiceTests
         Assert.Empty(page.Entries);
         Assert.False(page.HasMore);
         Assert.Equal(0, page.NextCursor);
+    }
+
+    private sealed record Sent(Guid RunId, long Id, string EventType, Guid? NodeId, Guid? RunNodeId, DateTime Timestamp, bool Stored);
+
+    private static Mock<IRunNotifier> Recorder(TestDb db, List<Sent> sent)
+    {
+        var notifier = new Mock<IRunNotifier>();
+        notifier.Setup(n => n.EventLoggedAsync(It.IsAny<Guid>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<DateTime>()))
+            .Callback<Guid, long, string, Guid?, Guid?, DateTime>((run, id, type, node, runNode, at) =>
+                sent.Add(new Sent(run, id, type, node, runNode, at, db.Fresh().EventLogs.Any(e => e.Id == id))))
+            .Returns(Task.CompletedTask);
+        return notifier;
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Every_stored_event_is_announced_once_with_its_id_type_nodes_and_stored_timestamp(bool alongside)
+    {
+        var sent = new List<Sent>();
+        var db = new TestDb();
+        using var _ = db;
+        var (svc, _, runId, _) = SetupOn(db, Recorder(db, sent).Object);
+        var nodeId = Guid.NewGuid();
+        var runNodeId = Guid.NewGuid();
+
+        var first = alongside
+            ? await svc.AppendAlongsideAsync(runId, EventType.NodeStarted, "a prompt", nodeId, runNodeId, null, () => Task.CompletedTask)
+            : await svc.AppendAsync(runId, EventType.NodeStarted, "a prompt", nodeId, runNodeId);
+        var second = alongside
+            ? await svc.AppendAlongsideAsync(runId, EventType.HumanFeedbackReceived, "yes", null, null, null, () => Task.CompletedTask)
+            : await svc.AppendAsync(runId, EventType.HumanFeedbackReceived, "yes");
+
+        var rows = db.Fresh().EventLogs.Where(e => e.LoopRunId == runId).OrderBy(e => e.Id).ToList();
+        Assert.Equal(
+            new[]
+            {
+                new Sent(runId, first, "NodeStarted", nodeId, runNodeId, rows[0].Timestamp, true),
+                new Sent(runId, second, "HumanFeedbackReceived", null, null, rows[1].Timestamp, true),
+            },
+            sent);
+        Assert.Equal(new[] { first, second }, rows.Select(r => r.Id));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_append_announces_nothing(bool alongside)
+    {
+        var sent = new List<Sent>();
+        var db = new TestDb();
+        using var _ = db;
+        var (svc, _, runId, _) = SetupOn(db, Recorder(db, sent).Object);
+
+        if (alongside)
+            await Assert.ThrowsAnyAsync<Exception>(() => svc.AppendAlongsideAsync(runId, EventType.NodeStarted, "x", null, null, null,
+                () => throw new InvalidOperationException("the write beside it failed")));
+        else
+            await Assert.ThrowsAnyAsync<Exception>(() => svc.AppendAsync(Guid.NewGuid(), EventType.NodeStarted, "no such run"));
+
+        Assert.Empty(sent);
+        Assert.Empty(db.Fresh().EventLogs);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failing_notifier_never_fails_the_append(bool throwsSynchronously)
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var notifier = new Mock<IRunNotifier>();
+        var setup = notifier.Setup(n => n.EventLoggedAsync(It.IsAny<Guid>(), It.IsAny<long>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<DateTime>()));
+        if (throwsSynchronously)
+            setup.Throws(new InvalidOperationException("hub down"));
+        else
+            setup.ThrowsAsync(new InvalidOperationException("hub down"));
+        var (svc, _, runId, _) = SetupOn(db, notifier.Object);
+
+        var id = await svc.AppendAsync(runId, EventType.NodeStarted, "still written");
+        var alongsideId = await svc.AppendAlongsideAsync(runId, EventType.NodeCompleted, "also written", null, null, null, () => Task.CompletedTask);
+
+        Assert.Equal(new[] { id, alongsideId }, db.Fresh().EventLogs.Where(e => e.LoopRunId == runId).OrderBy(e => e.Id).Select(e => e.Id));
     }
 }

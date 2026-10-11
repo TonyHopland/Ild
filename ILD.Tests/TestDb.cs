@@ -13,8 +13,11 @@ namespace ILD.Tests;
 ///
 /// Isolation guarantees:
 /// <list type="bullet">
-///   <item>Each <c>TestDb</c> instance opens its own private <see cref="SqliteConnection"/>
-///         (Filename=:memory:) so two tests never share data even when they run in parallel.</item>
+///   <item>Each <c>TestDb</c> instance opens its own in-memory database under a name no other
+///         instance uses, so two tests never share data even when they run in parallel.</item>
+///   <item>Code under test that reads from threads of its own must be given contexts from
+///         <see cref="OnOwnConnection"/>: those from <see cref="Fresh"/> share one connection,
+///         which cannot be used from two threads at once.</item>
 ///   <item>The connection lives only as long as this instance — schema is destroyed on <see cref="Dispose"/>.</item>
 ///   <item>The exposed stores all wrap the same tracked <c>Context</c>; tests that need to
 ///         observe writes done through one store from another should mutate via <c>Context</c>
@@ -28,6 +31,12 @@ namespace ILD.Tests;
 public sealed class TestDb : IDisposable
 {
     private readonly SqliteConnection _connection;
+    private readonly string _connectionString = new SqliteConnectionStringBuilder
+    {
+        DataSource = $"ild-test-{Guid.NewGuid():N}",
+        Mode = SqliteOpenMode.Memory,
+        Cache = SqliteCacheMode.Shared,
+    }.ToString();
 
     public AppDbContext Context { get; }
     public ILoopRunStore LoopRuns { get; }
@@ -62,7 +71,7 @@ public sealed class TestDb : IDisposable
     /// </param>
     public TestDb(FakeWorkItemServerHarness? server = null)
     {
-        _connection = SqliteSchemaTemplate<AppDbContext>.OpenCopy(options => new AppDbContext(options));
+        _connection = SqliteSchemaTemplate<AppDbContext>.OpenCopy(options => new AppDbContext(options), _connectionString);
         Context = Fresh();
         LoopRuns = new LoopRunStore(Context);
         LoopTemplates = new LoopTemplateStore(Context);
@@ -84,6 +93,14 @@ public sealed class TestDb : IDisposable
             .Options;
         return new AppDbContext(options);
     }
+
+    /// <summary>
+    /// An untracked context on a connection of its own to this database, as a
+    /// pooled production context has. The database lives as long as this
+    /// instance, whichever of these are still open.
+    /// </summary>
+    public AppDbContext OnOwnConnection()
+        => new(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connectionString).Options);
 
     public void Dispose()
     {

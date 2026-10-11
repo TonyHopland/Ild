@@ -18,7 +18,6 @@ public sealed class WorkItemView
     public RemoteWorkItemPriority Priority { get; set; }
     public RemoteWorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
-    public IReadOnlyList<RemoteConversationMessage> Conversation { get; set; } = Array.Empty<RemoteConversationMessage>();
     public string? HumanFeedbackActions { get; set; }
 
     /// <summary>
@@ -84,7 +83,19 @@ public sealed class WorkItemView
     public string? PrUrl { get; set; }
     public bool IsPrMerged { get; set; }
     public string? HumanFeedbackReason { get; set; }
+
+    /// <summary>
+    /// Why the item waits on a person when no run says so: a start that failed
+    /// before its run existed, or a manual move to HumanFeedback with no live
+    /// run. Null once a run starts. Kept on this ILD instance, not the server.
+    /// </summary>
+    public string? StatusReason { get; set; }
+    public DateTime? StatusReasonAt { get; set; }
+
     public Guid? CurrentLoopRunId { get; set; }
+
+    /// <summary>The item's newest run in any status, Completed included; null when it has none.</summary>
+    public Guid? LatestLoopRunId { get; set; }
 
     /// <summary>
     /// Label of the node the current run is executing (resolved from the run's

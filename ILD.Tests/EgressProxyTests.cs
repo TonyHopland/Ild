@@ -34,10 +34,10 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
     public EgressProxyTests()
     {
-        // Fresh contexts per scope: the proxy reads on its own threads, and a
-        // DbContext must not be shared across them.
+        // A connection per scope: the proxy reads on its own threads, and neither
+        // a DbContext nor a SQLite connection may be shared across them.
         var services = new ServiceCollection();
-        services.AddScoped(_ => _db.Fresh());
+        services.AddScoped(_ => _db.OnOwnConnection());
         services.AddScoped<INetworkPolicyStore, NetworkPolicyStore>();
         services.AddScoped<IAppSettingStore, AppSettingStore>();
         _services = services.BuildServiceProvider();

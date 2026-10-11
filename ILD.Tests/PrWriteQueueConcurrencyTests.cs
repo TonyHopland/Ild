@@ -123,8 +123,10 @@ public class PrWriteQueueConcurrencyTests
         var real = new LoopRunStore(db.Fresh());
         var pending = between;
         var store = new Mock<ILoopRunStore>();
-        store.Setup(s => s.GetCurrentByWorkItemAsync(It.IsAny<string>()))
-            .Returns((string wi) => real.GetCurrentByWorkItemAsync(wi));
+        store.Setup(s => s.GetActiveByWorkItemAsync(It.IsAny<string>()))
+            .Returns((string wi) => real.GetActiveByWorkItemAsync(wi));
+        store.Setup(s => s.GetLatestByWorkItemAsync(It.IsAny<string>()))
+            .Returns((string wi) => real.GetLatestByWorkItemAsync(wi));
         store.Setup(s => s.GetPrCommentQueueAsync(runId)).Returns(async () =>
         {
             var read = await real.GetPrCommentQueueAsync(runId);
@@ -176,8 +178,10 @@ public class PrWriteQueueConcurrencyTests
         }
 
         var store = new Mock<ILoopRunStore>();
-        store.Setup(s => s.GetCurrentByWorkItemAsync(It.IsAny<string>()))
-            .Returns((string wi) => real.GetCurrentByWorkItemAsync(wi));
+        store.Setup(s => s.GetActiveByWorkItemAsync(It.IsAny<string>()))
+            .Returns((string wi) => real.GetActiveByWorkItemAsync(wi));
+        store.Setup(s => s.GetLatestByWorkItemAsync(It.IsAny<string>()))
+            .Returns((string wi) => real.GetLatestByWorkItemAsync(wi));
         store.Setup(s => s.GetPrCommentQueueAsync(runId)).Returns(() => real.GetPrCommentQueueAsync(runId));
         store.Setup(s => s.TrySetPrCommentQueueAsync(runId, It.IsAny<string?>(), It.IsAny<string?>()))
             .Returns((Guid id, string? expected, string? json) => real.TrySetPrCommentQueueAsync(id, expected, json));

@@ -27,7 +27,7 @@ export default function NodeEventsSection({ events }: NodeEventsSectionProps) {
     <div className="node-events-list">
       {events.map((event) => {
         const color = eventTypeColors[event.eventType] ?? "#6b7280";
-        return <EventItem key={event.sequence} event={event} color={color} />;
+        return <EventItem key={event.id} event={event} color={color} />;
       })}
     </div>
   );

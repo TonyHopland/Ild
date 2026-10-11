@@ -79,27 +79,28 @@ public interface IWorkItemManager
     /// <summary>
     /// Generic transition entry point. Mirrors the remote server transition contract.
     /// </summary>
-    /// <param name="reason">Content stored in the server conversation thread.</param>
-    /// <param name="humanFeedbackReason">Short label stored on LoopRun for frontend UI routing. Falls back to <paramref name="reason"/> when null.</param>
-    /// <param name="name">Optional author display name for the conversation entry (e.g. the originating node's title).</param>
-    /// <param name="runNodeId">The node execution the conversation entry comes from.</param>
+    /// <param name="reason">Why the item needs a person, for the needs-attention notification.</param>
+    /// <param name="humanFeedbackReason">
+    /// Short label stored on the run for frontend UI routing; falls back to
+    /// <paramref name="reason"/> when null. Written only onto the run
+    /// <paramref name="currentLoopRunId"/> names: a run inferred from the work
+    /// item may have its label cleared, but is never given one.
+    /// </param>
     Task<bool> TransitionAsync(
         string workItemId,
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
         string? actions = null,
         Guid? currentLoopRunId = null,
-        string? humanFeedbackReason = null,
-        string? name = null,
-        Guid? runNodeId = null);
+        string? humanFeedbackReason = null);
 
     /// <summary>
-    /// Append an AI-authored conversation turn (e.g. an AI node's output) to the
-    /// work item's thread without changing its status. <paramref name="name"/> is
-    /// the author label shown in the UI, typically the node's title;
-    /// <paramref name="runNodeId"/> is the node execution that produced it.
+    /// Move the item to HumanFeedback for a reason no run carries — a start that
+    /// failed before its run existed — recording <paramref name="reason"/> as the
+    /// item's own status reason. No run is touched.
     /// </summary>
-    Task<bool> AppendAiTurnAsync(string workItemId, string name, string content, Guid? runNodeId = null);
+    Task<bool> ParkWithoutRunAsync(string workItemId, string reason);
+
     Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId);
 
     /// <summary>
@@ -170,16 +171,24 @@ public interface IWorkItemManager
     /// A failing check yields null rather than an exception.
     /// </summary>
     Task<string?> GetBranchUrlAsync(WorkItemView workItem);
-    Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, string input);
-    Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, string input);
+    /// <summary>
+    /// Answer the parked node of run <paramref name="runId"/> along its success
+    /// edge. Like every answer below, it is delivered only when that run is the
+    /// work item's active run and waits on a person; otherwise it throws
+    /// <c>HumanFeedbackRefusedException</c> (or
+    /// <see cref="ILD.Data.Stores.RunClosedException"/> for a run that has
+    /// ended) and nothing is written. False when there is no such work item.
+    /// </summary>
+    Task<bool> SubmitHumanFeedbackInputAsync(string workItemId, Guid runId, string input);
+    Task<bool> SubmitHumanFeedbackRespondAsync(string workItemId, Guid runId, string input);
 
     /// <summary>
     /// Route the parked node to its named output <paramref name="edgeName"/>
     /// (a Human node button), passing <paramref name="input"/> as the node's
     /// output for downstream <c>{{PreviousNode.Output}}</c>.
     /// </summary>
-    Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, string edgeName, string input);
-    Task<bool> RejectHumanFeedbackAsync(string workItemId, string? input = null);
+    Task<bool> SubmitHumanFeedbackEdgeAsync(string workItemId, Guid runId, string edgeName, string input);
+    Task<bool> RejectHumanFeedbackAsync(string workItemId, Guid runId, string? input = null);
 
     /// <summary>
     /// Merge the pull request linked to the work item's current run on the

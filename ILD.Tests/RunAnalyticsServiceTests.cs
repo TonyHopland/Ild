@@ -28,8 +28,8 @@ public class RunAnalyticsServiceTests
         var run1 = AddRun(db, version.Id, LoopRunStatus.Completed, t0);
         AddRunNode(db, run1.Id, aiNode.Id, t0, t0.AddSeconds(2), incomingEdgeId: null, input: 100, output: 40, cost: 0.10m, aiProvider: "claude");
         AddRunNode(db, run1.Id, failNode.Id, t0.AddSeconds(2), t0.AddSeconds(4), incomingEdgeId: onFailureEdge.Id);
-        AddFeedback(db, run1.Id, seq: 1, EventType.HumanFeedbackRequested, t0.AddSeconds(10));
-        AddFeedback(db, run1.Id, seq: 2, EventType.HumanFeedbackReceived, t0.AddSeconds(70));
+        AddFeedback(db, run1.Id, id: 1, EventType.HumanFeedbackRequested, t0.AddSeconds(10));
+        AddFeedback(db, run1.Id, id: 2, EventType.HumanFeedbackReceived, t0.AddSeconds(70));
 
         // Run 2: failed, one AI node with usage (4s), one node entered via the
         // reject edge.
@@ -263,13 +263,12 @@ public class RunAnalyticsServiceTests
         });
     }
 
-    private static void AddFeedback(TestDb db, Guid runId, int seq, EventType type, DateTime timestamp)
+    private static void AddFeedback(TestDb db, Guid runId, long id, EventType type, DateTime timestamp)
     {
         db.Context.EventLogs.Add(new EventLog
         {
-            Id = Guid.NewGuid(),
+            Id = id,
             LoopRunId = runId,
-            Sequence = seq,
             EventType = type,
             Timestamp = timestamp,
         });

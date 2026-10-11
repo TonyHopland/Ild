@@ -6,19 +6,27 @@ namespace ILD.Data.Entities;
 
 public class EventLog
 {
+    /// <summary>
+    /// Database identity. Within a run it is the event's position in the
+    /// timeline: appends commit in Id order (see <c>EventLogStore.AppendAsync</c>),
+    /// so a reader paging by Id never skips an event that commits later.
+    /// </summary>
     [Key]
-    public Guid Id { get; set; }
+    [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public long Id { get; set; }
 
     [ForeignKey("LoopRun")]
     public Guid? LoopRunId { get; set; }
-
-    public int Sequence { get; set; }
 
     public EventType EventType { get; set; }
 
     public Guid? NodeId { get; set; }
 
     public Guid? RunNodeId { get; set; }
+
+    /// <summary>The named edge a human chose, when the event records that choice.</summary>
+    [MaxLength(256)]
+    public string? EdgeName { get; set; }
 
     public DateTime Timestamp { get; set; }
 

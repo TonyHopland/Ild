@@ -136,8 +136,7 @@ public class LoopEngineRoutingTests
         Assert.Equal(LoopRunStatus.Failed, run.Status);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(),
-            It.IsAny<string?>(), It.IsAny<Guid?>()), Times.AtLeastOnce);
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.AtLeastOnce);
     }
 
     [Fact]
@@ -222,7 +221,9 @@ public class LoopEngineRoutingTests
 
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.Failed, run.Status);
-        Assert.Equal("missing edge connection: Escalate", run.HumanFeedbackReason);
+        Assert.Equal(HumanFeedbackReasons.NodeFailed, run.HumanFeedbackReason);
+        Assert.Equal("missing edge connection: Escalate",
+            Assert.Single(h.ReloadEvents(), e => e.EventType == EventType.LoopRunFailed).Data);
     }
 
     [Fact]
@@ -297,7 +298,9 @@ public class LoopEngineRoutingTests
         using var h = new LoopEngineHarness();
         h.AddNode("a", NodeType.Cmd);
         h.AddNode("b", NodeType.Cmd);
+        h.AddNode("h", NodeType.Human);
         h.AddEdge("a", "b", EdgeType.OnSuccess);
+        h.AddEdge("b", "h", EdgeType.OnFailure);
 
         h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
             new NodeOutcome.NodeStarting("a"),
@@ -305,15 +308,18 @@ public class LoopEngineRoutingTests
             .Then(
                 new NodeOutcome.NodeStarting("b"),
                 new NodeOutcome.Fail(EdgeType.OnFailure, "b failed", "from-b")));
+        h.Registry.Register(new ScriptedExecutor(NodeType.Human,
+            new NodeOutcome.NodeStarting("ask"),
+            new NodeOutcome.WaitingAction(HumanFeedbackReasons.HumanInputNeeded)));
 
         h.SeedRun("a");
         await h.RunAsync();
 
-        // b failed → run is Failed. Retry from b's run-node.
+        // b failed and the run parked at the human, still open. Retry from b's run-node.
+        Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
         var bNode = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.Failed);
 
         // Re-script b for a successful retry.
-        h.Registry.Get(NodeType.Cmd); // ensure registered
         ((ScriptedExecutor)h.Registry.Get(NodeType.Cmd)).Then(
             new NodeOutcome.NodeStarting("b-retry"),
             new NodeOutcome.Terminal("b-ok"));
@@ -327,13 +333,16 @@ public class LoopEngineRoutingTests
         // before re-entering b; after b's Terminal the final PreviousNodeOutput is unchanged
         // (Terminal does not update PreviousNodeOutput in the engine).
         // We assert by inspecting the run nodes: the retry produced a fresh Succeeded entry for b.
-        var nodes = h.ReloadRunNodes().OrderBy(n => n.StartedAt).ToList();
-        Assert.Equal(3, nodes.Count);
-        Assert.Equal(LoopRunNodeStatus.Succeeded, nodes[0].Status);
-        Assert.Equal(LoopRunNodeStatus.Failed, nodes[1].Status);
-        Assert.Equal(LoopRunNodeStatus.Succeeded, nodes[2].Status);
-        Assert.Equal("b-ok", nodes[2].Output);
+        var bVisits = h.ReloadRunNodes()
+            .Where(n => n.LoopNodeId == h.NodesById["b"].Id)
+            .OrderBy(n => n.StartedAt)
+            .ToList();
+        Assert.Equal(2, bVisits.Count);
+        Assert.Equal(LoopRunNodeStatus.Failed, bVisits[0].Status);
+        Assert.Equal(LoopRunNodeStatus.Succeeded, bVisits[1].Status);
+        Assert.Equal("b-ok", bVisits[1].Output);
     }
+
 
     [Fact]
     public async Task CleanupRunAsync_only_invokes_the_Cleanup_node()
@@ -470,7 +479,7 @@ public class LoopEngineRoutingTests
             h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(),
             It.Is<string?>(actions => ListsExactly(actions, "OnSuccess", "OnFailure", "Rework")),
-            It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
+            It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
 
         var waiting = h.ReloadRunNodes().Single(rn => rn.Status == LoopRunNodeStatus.WaitingHuman);
         await h.Engine.SignalNodeResultAsync(h.RunId, waiting.Id, taken switch

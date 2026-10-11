@@ -2,7 +2,10 @@ using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 
@@ -11,23 +14,26 @@ namespace ILD.Core.Services.Implementations;
 public class PrSyncService : IPrSyncService
 {
     private readonly ILoopRunStore _loopRunStore;
-    private readonly IEventLogStore _eventLogStore;
+    private readonly IEventLogService _eventLog;
     private readonly IWorkItemManager _workItems;
     private readonly ILoopEngine _loopEngine;
     private readonly IPrStatusPoller _poller;
+    private readonly ILogger<PrSyncService> _logger;
 
     public PrSyncService(
         ILoopRunStore loopRunStore,
-        IEventLogStore eventLogStore,
+        IEventLogService eventLog,
         IWorkItemManager workItems,
         ILoopEngine loopEngine,
-        IPrStatusPoller poller)
+        IPrStatusPoller poller,
+        ILogger<PrSyncService>? logger = null)
     {
         _loopRunStore = loopRunStore;
-        _eventLogStore = eventLogStore;
+        _eventLog = eventLog;
         _workItems = workItems;
         _loopEngine = loopEngine;
         _poller = poller;
+        _logger = logger ?? NullLogger<PrSyncService>.Instance;
     }
 
     public async Task HandleWebhookAsync(WebhookPayload payload)
@@ -37,16 +43,7 @@ public class PrSyncService : IPrSyncService
         if (run == null) return;
 
         if (!string.IsNullOrEmpty(payload.Comment))
-        {
-            await _eventLogStore.AppendAsync(new EventLog
-            {
-                Id = Guid.NewGuid(),
-                LoopRunId = run.Id,
-                EventType = EventType.HumanFeedbackReceived,
-                Data = payload.Comment,
-                Timestamp = DateTime.UtcNow,
-            });
-        }
+            await RecordCommentAsync(run, payload.Comment);
 
         var edgeName = MapWebhookToEdge(payload, out var merged);
 
@@ -72,8 +69,8 @@ public class PrSyncService : IPrSyncService
             // engine path left to resume) does the merge finish the item here.
             if (run.Status is LoopRunStatus.Failed or LoopRunStatus.Cancelled)
             {
-                var current = await _loopRunStore.GetCurrentByWorkItemAsync(run.WorkItemId);
-                if (current?.Id == run.Id)
+                var latest = await _loopRunStore.GetLatestByWorkItemAsync(run.WorkItemId);
+                if (latest?.Id == run.Id)
                     await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Done,
                         currentLoopRunId: run.Id);
             }
@@ -96,6 +93,35 @@ public class PrSyncService : IPrSyncService
         // none of them here.
         if (!string.IsNullOrEmpty(payload.Comment))
             _poller.Pulse();
+    }
+
+    /// <summary>
+    /// Record a PR comment as a human answer on the PR's run — but only while
+    /// that run is its work item's active run. The PR outlives its run: a
+    /// comment arriving after the run ended, or once another run has taken over
+    /// the item, is part of neither run's conversation and is not recorded.
+    /// </summary>
+    private async Task RecordCommentAsync(LoopRun run, string comment)
+    {
+        if ((await _loopRunStore.GetActiveByWorkItemAsync(run.WorkItemId))?.Id != run.Id)
+        {
+            _logger.LogInformation("PR comment for run {RunId}, which is not its work item's active run, not recorded", run.Id);
+            return;
+        }
+
+        try
+        {
+            await _eventLog.AppendAsync(run.Id, EventType.HumanFeedbackReceived, comment);
+        }
+        catch (RunClosedException ex)
+        {
+            // The run ended between the check above and the write.
+            _logger.LogInformation(ex, "PR comment for ended run {RunId} not recorded", run.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not record the PR comment on run {RunId}", run.Id);
+        }
     }
 
     /// <summary>
@@ -137,7 +163,7 @@ public class PrSyncService : IPrSyncService
 
     public async Task<string?> GetPrUrlForWorkItemAsync(string workItemId)
     {
-        var run = await _loopRunStore.GetCurrentByWorkItemAsync(workItemId);
+        var run = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
         return run?.PrUrl;
     }
 

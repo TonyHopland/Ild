@@ -120,9 +120,7 @@ public class LoopRunStoreGetByIdTests
         db.Context.LoopRuns.Add(run);
         db.Context.EventLogs.Add(new EventLog
         {
-            Id = Guid.NewGuid(),
             LoopRunId = run.Id,
-            Sequence = 1,
             EventType = EventType.LoopRunCompleted,
             Timestamp = DateTime.UtcNow,
             Data = "done",
@@ -137,5 +135,42 @@ public class LoopRunStoreGetByIdTests
         using var verify = db.Fresh();
         Assert.Null((await verify.LoopRuns.FindAsync([run.Id], TestContext.Current.CancellationToken)));
         Assert.Equal(0, (await verify.EventLogs.Where(e => e.LoopRunId == run.Id).CountAsync(TestContext.Current.CancellationToken)));
+    }
+
+    [Fact]
+    public async Task GetLatestByWorkItemAsync_returns_the_newest_run_whatever_its_state()
+    {
+        using var db = new TestDb();
+        var version = RunTimeline.SeedVersion(db);
+        var now = DateTime.UtcNow;
+        LoopRun Add(string workItemId, LoopRunStatus status, DateTime? startedAt, DateTime createdAt)
+        {
+            var run = new LoopRun
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = workItemId,
+                LoopTemplateVersionId = version,
+                Status = status,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+                StartedAt = startedAt,
+                CreatedAt = createdAt,
+            };
+            db.Context.LoopRuns.Add(run);
+            return run;
+        }
+
+        // Ordered by when a run started, or was created if it never started —
+        // not by either alone, and not by whether it is still alive.
+        var item = "WI-" + Guid.NewGuid().ToString("N");
+        Add(item, LoopRunStatus.Failed, now.AddHours(-3), now.AddHours(-3));
+        Add(item, LoopRunStatus.Running, now.AddHours(-2), now.AddMinutes(-30));
+        var newest = Add(item, LoopRunStatus.Completed, null, now.AddHours(-1));
+        Add("WI-" + Guid.NewGuid().ToString("N"), LoopRunStatus.Cancelled, now, now);
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var store = new LoopRunStore(db.Fresh());
+
+        Assert.Equal(newest.Id, (await store.GetLatestByWorkItemAsync(item))?.Id);
+        Assert.Null(await store.GetLatestByWorkItemAsync("WI-" + Guid.NewGuid().ToString("N")));
     }
 }

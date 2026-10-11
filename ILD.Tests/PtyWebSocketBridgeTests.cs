@@ -123,7 +123,7 @@ public class PtyWebSocketBridgeTests
             // The background sleep inherits the PTY and ignores the SIGHUP the shell's
             // exit sends it, so the output never reaches EOF and only the bridge's
             // bounded wait ends it.
-            CommandLine = new[] { "-c", $"(trap \"\" HUP; exec sleep 60) & echo $! > '{pidFile}'; echo boom; exit 3" },
+            CommandLine = new[] { "-c", $"echo ready; read line; (trap \"\" HUP; exec sleep 60) & echo $! > '{pidFile}'; echo boom; exit 3" },
             Environment = new Dictionary<string, string>(),
         };
 
@@ -131,8 +131,11 @@ public class PtyWebSocketBridgeTests
         {
             var run = PtyWebSocketBridge.RunAsync(server, options, NullLogger.Instance, cts.Token, reportExit: true, timeProvider: clock);
 
+            await ReadUntilAsync(client, "ready", cts.Token);
+            await client.SendAsync(
+                Encoding.UTF8.GetBytes("go\n"), WebSocketMessageType.Binary, endOfMessage: true, cts.Token);
             var output = await ReadUntilAsync(client, "boom", cts.Token);
-            // Every bounded wait times out from here on, as if its time had passed.
+            await clock.WaitForTimerAsync(cts.Token);
             clock.Release();
             var rest = await ReadUntilCloseAsync(client, cts.Token);
 
@@ -162,7 +165,10 @@ public class PtyWebSocketBridgeTests
     private sealed class HeldTimeProvider : TimeProvider
     {
         private readonly List<HeldTimer> _armed = new();
+        private readonly TaskCompletionSource _timerArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private bool _released;
+
+        public Task WaitForTimerAsync(CancellationToken ct) => _timerArmed.Task.WaitAsync(ct);
 
         public void Release()
         {
@@ -190,6 +196,7 @@ public class PtyWebSocketBridgeTests
                 if (!_released)
                 {
                     _armed.Add(timer);
+                    _timerArmed.TrySetResult();
                     return;
                 }
             }

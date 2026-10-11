@@ -48,7 +48,8 @@ public class PrReviewServiceConsumptionTests
                 PrUrl = PrUrl,
                 Status = LoopRunStatus.Running,
             };
-            Runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(Run);
             Runs.Setup(s => s.GetByIdAsync(Run.Id)).ReturnsAsync(() => Run);
             // The queue is mutated by compare-and-set: the service reads the
             // column, then writes only if it still holds what it read.

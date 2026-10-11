@@ -26,9 +26,7 @@ public class LoopRunStoreDeleteTests
         // Payloads now live inline in the Data column — no spilled files to clean up.
         db.Context.EventLogs.Add(new EventLog
         {
-            Id = Guid.NewGuid(),
             LoopRunId = run.Id,
-            Sequence = 1,
             EventType = EventType.NodeCompleted,
             Timestamp = DateTime.UtcNow,
             Data = new string('x', 20_000),

@@ -7,6 +7,7 @@ import {
   LoopRunStatus,
   LoopRunNodeStatus,
   NodeType,
+  type RunConversationMessage,
 } from "../../types";
 import { loopRunService } from "../../services/auth";
 import { formatDuration } from "../../utils/duration";
@@ -15,6 +16,7 @@ import LiveStream from "../NodeTimeline/LiveStream";
 import MarkdownRenderer from "../MarkdownRenderer";
 import EdgeArrow from "../NodeTimeline/EdgeArrow";
 import {
+  Collapsible,
   failureMessage,
   NodeEvents,
   RunSessions,
@@ -110,6 +112,69 @@ function NodeText({ text, nodeType }: { text: string; nodeType: NodeType | undef
   );
 }
 
+function RunConversationHistory({ runId }: { runId: string }) {
+  const [attempt, setAttempt] = useState(0);
+  const [messages, setMessages] = useState<RunConversationMessage[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (attempt === 0) return;
+    let cancelled = false;
+    loopRunService.getConversation(runId).then(
+      (page) => {
+        if (!cancelled) {
+          setMessages(page.messages);
+          setError(null);
+        }
+      },
+      (failure: unknown) => {
+        if (!cancelled) setError(failureMessage(failure, "Failed to load conversation."));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt, runId]);
+
+  return (
+    <Collapsible title="Conversation" onOpen={() => setAttempt((n) => n + 1)}>
+      {error ? (
+        <div className="wiv2-node-error" role="alert">
+          {error}
+        </div>
+      ) : messages === null ? (
+        <div className="wiv2-empty">Loading conversation…</div>
+      ) : messages.length === 0 ? (
+        <div className="wiv2-empty">No conversation recorded.</div>
+      ) : (
+        messages.map((message) =>
+          message.role === "system" ? (
+            <div key={message.id} className="wiv2-run-event">
+              <strong>{message.name}</strong>
+              <span className="wiv2-run-event-text">{message.text}</span>
+              <span>{new Date(message.timestamp).toLocaleString()}</span>
+            </div>
+          ) : (
+            <div key={message.id} className={`wiv2-bubble-row wiv2-bubble-row-${message.role}`}>
+              <div className="wiv2-bubble-meta">
+                <strong>{message.name}</strong>
+                <span>{new Date(message.timestamp).toLocaleString()}</span>
+              </div>
+              <div className={`wiv2-bubble wiv2-bubble-${message.role}`}>
+                {message.role === "human" && !message.text ? (
+                  "No comment"
+                ) : (
+                  <MarkdownRenderer content={message.text} />
+                )}
+              </div>
+            </div>
+          ),
+        )
+      )}
+    </Collapsible>
+  );
+}
+
 function NodeRow({
   node,
   nodeType,
@@ -128,7 +193,8 @@ function NodeRow({
   isLive: boolean;
   progressText: string;
   events: RunEvents;
-  onRetry: (runNodeId: string) => void;
+  /** Absent when the run has ended: an ended run is not started again. */
+  onRetry?: (runNodeId: string) => void;
   retryDisabled: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -159,7 +225,7 @@ function NodeRow({
           </span>
           <span className="wiv2-node-chevron">{expanded ? "▾" : "▸"}</span>
         </button>
-        {status !== LoopRunNodeStatus.Running && (
+        {onRetry && status !== LoopRunNodeStatus.Running && (
           <button
             type="button"
             className="wiv2-node-retry"
@@ -401,10 +467,12 @@ function RunDetail({
     );
   }
 
-  // Retrying restarts the run, so it is blocked while the run is actively
-  // executing (a paused run can still be retried) or while any action on it is
-  // in flight.
+  // Retrying sends a live run back to a node; an ended run is not started
+  // again. It is blocked while the run is actively executing (a paused run can
+  // still be retried) or while any action on it is in flight.
   const retryDisabled = busy || (runDetail.status === LoopRunStatus.Running && !runDetail.isPaused);
+  const canRetry =
+    runDetail.status === LoopRunStatus.Running || runDetail.status === LoopRunStatus.WaitingHuman;
 
   const isLiveRun =
     runDetail.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
@@ -566,6 +634,7 @@ function RunDetail({
       <RunCostSummary run={runDetail} />
       <RunVariables variables={runDetail.availableVariables ?? []} />
       <RunSessions runId={runDetail.id} sessions={runDetail.availableSessions ?? []} />
+      {runDetail.id !== workItem.latestLoopRunId && <RunConversationHistory runId={runDetail.id} />}
       <HaltSteerControls
         run={runDetail}
         workItemStatus={workItem.status}
@@ -601,7 +670,7 @@ function RunDetail({
                 }
                 progressText={progressText}
                 events={runEvents}
-                onRetry={(runNodeId) => void handleRetry(runNodeId)}
+                onRetry={canRetry ? (runNodeId) => void handleRetry(runNodeId) : undefined}
                 retryDisabled={retryDisabled}
               />
             </Fragment>

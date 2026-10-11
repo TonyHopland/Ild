@@ -153,7 +153,7 @@ public class LoopEngineAiTraversalCapTests
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.Is<string?>(r => r != null && r.Contains("3 steps without human input")),
-            null, h.RunId, HumanFeedbackReasons.MaxAiTraversalsReached, It.IsAny<string?>()), Times.Once);
+            null, h.RunId, HumanFeedbackReasons.MaxAiTraversalsReached), Times.Once);
     }
 
     [Fact]

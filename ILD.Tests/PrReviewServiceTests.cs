@@ -61,7 +61,8 @@ public class PrReviewServiceTests
                 Status = parkedAtPrNode ? LoopRunStatus.WaitingHuman : LoopRunStatus.Running,
                 HumanFeedbackReason = parkedAtPrNode ? HumanFeedbackReasons.PrAwaitingMerge : null,
             };
-            Runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync(Run);
+            Runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(Run);
             Runs.Setup(s => s.GetByIdAsync(Run.Id)).ReturnsAsync(() => Run);
             Runs.Setup(s => s.SetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>()))
                 .Callback<Guid, string?>((_, json) => { RecordedLedger = json; LedgerWrites++; })
@@ -314,7 +315,8 @@ public class PrReviewServiceTests
     public async Task A_work_item_with_no_run_at_all_is_an_answer_not_a_crash()
     {
         var runs = new Mock<ILoopRunStore>();
-        runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync((LoopRun?)null);
+        runs.Setup(s => s.GetActiveByWorkItemAsync("wi-1")).ReturnsAsync((LoopRun?)null);
+        runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync((LoopRun?)null);
         var service = new PrReviewService(runs.Object, new Mock<IRemoteProvider>().Object);
 
         Assert.Empty((await service.ReadAsync("wi-1", null, null)).Items);

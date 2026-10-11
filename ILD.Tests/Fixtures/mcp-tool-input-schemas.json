@@ -331,7 +331,7 @@
         "type": "string"
       },
       "includeConversation": {
-        "description": "Include the conversation thread (large; default false).",
+        "description": "Include the latest run's conversation, projected from its event log, with run id, event id and timestamp per message (large; default false).",
         "type": "boolean",
         "default": false
       }

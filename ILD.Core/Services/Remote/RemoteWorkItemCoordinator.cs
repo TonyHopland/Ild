@@ -2,6 +2,7 @@ namespace ILD.Core.Services.Remote;
 
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -112,9 +113,13 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         //    AI node has provider capacity (parallelism gate). The blocking
         //    provider is re-evaluated dynamically each pass: settings can
         //    change and a once-blocked item may now be unblocked.
+        //    An item with no live run here has nothing to resume, and moving it
+        //    to Running would leave it there undriven.
         foreach (var w in poll.ActiveItems.Where(w => w.Status == RemoteWorkItemStatus.WaitingForIld))
         {
-            if (!await HasProviderCapacityForResumeAsync(w, ct)) continue;
+            var run = await _loopRunStore.GetActiveByWorkItemAsync(w.Id);
+            if (run is null) continue;
+            if (!await HasProviderCapacityForResumeAsync(w, run, ct)) continue;
 
             var resp = await _client.TransitionAsync(opts, w.Id,
                 new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running }, ct);
@@ -133,8 +138,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             // from its current node" semantics we need here.
             try
             {
-                var run = await _loopRunStore.GetCurrentByWorkItemAsync(w.Id);
-                if (run != null) await _engine.ResumeRecoveredRunAsync(run.Id);
+                await _engine.ResumeRecoveredRunAsync(run.Id);
             }
             catch (Exception ex)
             {
@@ -208,11 +212,19 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                         $"Multiple loop templates match tags: {string.Join(", ", resolution.MatchingTemplateNames)}",
                     _ => "Unable to resolve template",
                 };
-                await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
+                var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
                 {
                     TargetStatus = RemoteWorkItemStatus.HumanFeedback,
-                    Reason = reason,
                 }, ct);
+                if (!transition.Success)
+                {
+                    _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback: {Reason}",
+                        ready.Id, transition.Reason);
+                    continue;
+                }
+                await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, reason);
+                await _workItemNotifier.WorkItemStateChangedAsync(
+                    ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.HumanFeedback);
                 escalated.Add(ready);
                 continue;
             }
@@ -249,21 +261,25 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                     _logger?.LogWarning(ex,
                         "Engine failed to start run for claimed work item {WorkItemId}", ready.Id);
                     // The claim stands on the server with nothing driving it, so
-                    // hand it back for review and give up the slot it took —
-                    // for the rest of this pass only. StartRunAsync commits the
-                    // LoopRun row before the transition that most often throws
-                    // here, so where a row did get written the derived set
-                    // legitimately takes that slot back on the next pass. The
-                    // item is heartbeated again from then on, and the resume
-                    // path drives the orphaned run as soon as a human responds.
+                    // hand it back for review. Release the slot even if the remote
+                    // transition fails: no live run can use this instance's capacity.
+                    // StartRunAsync ends any run it had already created as
+                    // Failed, so no orphan keeps the slot on the next pass, and
+                    // the reason belongs to the item rather than to that run.
+                    slotHolders.Remove(ready.Id);
                     try
                     {
-                        await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
+                        var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
                         {
                             TargetStatus = RemoteWorkItemStatus.HumanFeedback,
-                            Reason = $"Failed to start run: {ex.Message}",
                         }, ct);
-                        slotHolders.Remove(ready.Id);
+                        if (!transition.Success)
+                        {
+                            _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback after run start failure: {Reason}",
+                                ready.Id, transition.Reason);
+                            continue;
+                        }
+                        await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, $"Failed to start run: {ex.Message}");
                         await _workItemNotifier.WorkItemStateChangedAsync(
                             ready.Id, RemoteWorkItemStatus.Running, RemoteWorkItemStatus.HumanFeedback);
                         escalated.Add(ready);
@@ -291,7 +307,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     }
 
     /// <summary>
-    /// True if the run associated with <paramref name="item"/> is not parked on
+    /// True if <paramref name="item"/>'s <paramref name="run"/> is not parked on
     /// an AI node, or the provider it will actually execute against currently
     /// has spare capacity. That provider comes from
     /// <see cref="AiNodeProviderResolver"/>, the same resolution
@@ -302,13 +318,12 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     /// Re-evaluated each poll so changes to provider parallelism settings and
     /// tags take effect without restart.
     /// </summary>
-    private async Task<bool> HasProviderCapacityForResumeAsync(RemoteWorkItem item, CancellationToken ct)
+    private async Task<bool> HasProviderCapacityForResumeAsync(RemoteWorkItem item, LoopRun run, CancellationToken ct)
     {
         if (_providerStore == null || _aiTracker == null) return true;
         try
         {
-            var run = await _loopRunStore.GetCurrentByWorkItemAsync(item.Id);
-            if (run?.CurrentNodeId is not { } currentNodeId) return true;
+            if (run.CurrentNodeId is not { } currentNodeId) return true;
 
             var nodes = await _loopRunStore.GetNodesForVersionAsync(run.LoopTemplateVersionId);
             var node = nodes.FirstOrDefault(n => n.Id == currentNodeId);

@@ -26,7 +26,7 @@ public class RecoveryManagerTests
         var ts = new Mock<ILoopTemplateStore>();
         var rp = new Mock<IRepositoryManager>();
         var en = new Mock<ILoopEngine>();
-        return (new RecoveryManager(wi.Object, rn.Object, pr.Object, ts.Object, rp.Object, en.Object), wi, rn, pr, ts, rp, en);
+        return (new RecoveryManager(wi.Object, rn.Object, pr.Object, ts.Object, rp.Object, en.Object, new Mock<IEventLogService>().Object), wi, rn, pr, ts, rp, en);
     }
 
     [Fact]
@@ -60,13 +60,13 @@ public class RecoveryManagerTests
             Status = LoopRunStatus.Running,
             RecoveryPolicy = RecoveryPolicy.NeedsReview,
         });
-        wiMgr.Setup(m => m.TransitionAsync(wiId, RemoteWorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()))
+        wiMgr.Setup(m => m.TransitionAsync(wiId, RemoteWorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), runId, HumanFeedbackReasons.RecoveryRequiresReview))
             .ReturnsAsync(true);
 
         var ok = await mgr.RecoverRunAsync(runId);
 
         Assert.True(ok);
-        wiMgr.Verify(m => m.TransitionAsync(wiId, RemoteWorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
+        wiMgr.Verify(m => m.TransitionAsync(wiId, RemoteWorkItemStatus.HumanFeedback, It.IsAny<string?>(), It.IsAny<string?>(), runId, HumanFeedbackReasons.RecoveryRequiresReview), Times.Once);
         engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
     }
 
@@ -110,7 +110,7 @@ public class RecoveryManagerTests
                 RemoteWorkItemStatus.HumanFeedback,
                 It.Is<string?>(reason => reason != null && reason.Contains("worktree", StringComparison.OrdinalIgnoreCase)),
                 It.IsAny<string?>(),
-                It.IsAny<Guid?>()))
+                runId, HumanFeedbackReasons.RecoveryRequiresReview))
             .ReturnsAsync(true);
 
         var ok = await mgr.RecoverRunAsync(runId);
@@ -121,7 +121,7 @@ public class RecoveryManagerTests
             RemoteWorkItemStatus.HumanFeedback,
             It.Is<string?>(reason => reason != null && reason.Contains(worktreePath, StringComparison.Ordinal)),
             It.IsAny<string?>(),
-            It.IsAny<Guid?>()), Times.Once);
+            runId, HumanFeedbackReasons.RecoveryRequiresReview), Times.Once);
         engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
     }
 
@@ -389,7 +389,7 @@ public class RecoveryManagerTests
         engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
         wiMgr.Verify(m => m.TransitionAsync("wi-1", RemoteWorkItemStatus.HumanFeedback,
             It.Is<string?>(reason => reason != null && reason.Contains(worktreePath, StringComparison.Ordinal)),
-            It.IsAny<string?>(), It.IsAny<Guid?>()), Times.Once);
+            It.IsAny<string?>(), runId, HumanFeedbackReasons.RecoveryRequiresReview), Times.Once);
     }
 
     [Fact]

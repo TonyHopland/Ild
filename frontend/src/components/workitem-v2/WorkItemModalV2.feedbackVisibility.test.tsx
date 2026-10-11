@@ -39,7 +39,6 @@ function makeParkedWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     status: WorkItemStatus.HumanFeedback,
     priority: WorkItemPriority.Medium,
     tags: [],
-    conversation: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
     repositoryId: "repo-1",
@@ -51,6 +50,7 @@ function makeParkedWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     startedAt: null,
     completedAt: null,
     currentLoopRunId: "run-1",
+    latestLoopRunId: "run-1",
     dependencyIds: [],
     dependentIds: [],
     ...overrides,
@@ -81,6 +81,11 @@ function mockDialogServices() {
   vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(makeParkedWorkItem());
   vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
+  vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
+    runId,
+    messages: [],
+    lastEventId: null,
+  }));
   vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
     entries: [],
     nextCursor: 0,
@@ -291,7 +296,7 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
     });
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "Needs work", "Have a look");
+    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Needs work", "Have a look");
   });
 
   test("an output the parked node marks to confirm asks before it is sent", async () => {
@@ -314,7 +319,7 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
     });
 
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "Clean up", "");
+    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Clean up", "");
   });
 
   test("a valid colour stored on the parked node's output colours its button, and nothing else does", async () => {
@@ -349,7 +354,7 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
       fireEvent.click(button("Needs work"));
     });
     await waitFor(() => expect(answer).toHaveBeenCalledTimes(1));
-    expect(answer).toHaveBeenCalledWith("wi-1", "Needs work", "");
+    expect(answer).toHaveBeenCalledWith("wi-1", "run-1", "Needs work", "");
   });
 
   test("a confirmation open when the work item changes is dropped, and nothing is sent", async () => {
@@ -451,11 +456,6 @@ describe("the feedback pane never guesses the parked node's outputs", () => {
     {
       name: "the run names no current node",
       break: (staged) => staged.getRun.mockResolvedValue(parkedRun(null)),
-    },
-    {
-      name: "the item has no current run",
-      item: { currentLoopRunId: null },
-      break: () => {},
     },
   ];
 
@@ -589,13 +589,17 @@ describe("a work item's actions are filtered only with the node read for that sa
   });
 
   test("a run read answered late for an earlier state of the item changes nothing", async () => {
-    mockDialogServices();
+    const { emit } = mockDialogServices();
     const staged = stageTwoNodes();
     const { rerender } = await renderDialog(onHumanNode());
     const forHumanNode = staged.reads.length;
     expect(forHumanNode).toBeGreaterThan(0);
 
+    // The run moving on to the PR node is announced as well as read.
     rerender(dialogFor(onPrNode()));
+    await act(async () => {
+      emit("NodeStateChanged", { runId: "run-1" });
+    });
     await settled();
     for (const read of staged.reads.slice(forHumanNode)) read.resolve(parkedRun("n-b"));
     await settled();
@@ -692,7 +696,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
       expect(enter(box())).toBe(false);
     });
     await waitFor(() => expect(answers.approve).toHaveBeenCalledTimes(1));
-    expect(answers.approve).toHaveBeenCalledWith("wi-1", "Looks good");
+    expect(answers.approve).toHaveBeenCalledWith("wi-1", "run-1", "Looks good");
     expect(answers.reject).not.toHaveBeenCalled();
     expect(answers.edge).not.toHaveBeenCalled();
 
@@ -776,7 +780,7 @@ describe("Enter in the feedback box takes the parked node's default output", () 
       });
 
       await waitFor(() => expect(answers.edge).toHaveBeenCalledTimes(1));
-      expect(answers.edge).toHaveBeenCalledWith("wi-1", "Clean up", text);
+      expect(answers.edge).toHaveBeenCalledWith("wi-1", "run-1", "Clean up", text);
       expect(answers.approve).not.toHaveBeenCalled();
       expect(answers.reject).not.toHaveBeenCalled();
       expect(onClose).not.toHaveBeenCalled();

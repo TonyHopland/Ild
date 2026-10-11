@@ -33,7 +33,7 @@ The product should let a developer:
 - Work items carry title, description, status, priority, tags, dependencies, linked pull requests, and repository ID. Repository ID and the existing optional creating loop-run ID and human-feedback actions do not fit that contract and are left for the audit ADR-0025 calls for.
 - `Transition(Running)` must remain the only validated claim operation on the shared server.
 - Heartbeats must refresh active items so stale work can be reclaimed back to `Ready`.
-- Human responses must move items through `WaitingForIld` so the owning ILD instance can resume execution cleanly.
+- Human responses go only to the item's active run while it waits on a person, and move the item from `HumanFeedback` to `Running` as that run resumes; `WaitingForIld` is only for ILD-internal waits.
 
 ### Local ILD Execution
 

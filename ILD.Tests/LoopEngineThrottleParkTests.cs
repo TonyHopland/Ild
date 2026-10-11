@@ -96,11 +96,13 @@ public class LoopEngineThrottleParkTests
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             ParkReason, It.IsAny<string?>(), It.IsAny<Guid?>(),
-            HumanFeedbackReasons.AiProviderThrottled, "Coder", It.IsNotNull<Guid?>()), Times.Once);
+            HumanFeedbackReasons.AiProviderThrottled), Times.Once);
+        Assert.Equal(Assert.Single(h.ReloadRunNodes()).Id,
+            Assert.Single(h.ReloadEvents(), e => e.EventType == EventType.RunParked).RunNodeId);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<string>(), RemoteWorkItemStatus.WaitingForIld,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(),
-            It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<string?>()), Times.Never);
     }
 
     [Fact]

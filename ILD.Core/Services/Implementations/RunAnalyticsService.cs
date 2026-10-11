@@ -133,7 +133,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .Where(e => e.LoopRunId != null
                 && (e.EventType == EventType.HumanFeedbackRequested
                     || e.EventType == EventType.HumanFeedbackReceived))
-            .Select(e => new { RunId = e.LoopRunId!.Value, e.EventType, e.Sequence, e.Timestamp })
+            .Select(e => new { RunId = e.LoopRunId!.Value, e.EventType, e.Id, e.Timestamp })
             .ToListAsync(ct);
 
         var nodesByRun = nodes.ToLookup(n => n.LoopRunId);
@@ -148,7 +148,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
                     n.InputTokens ?? 0, n.OutputTokens ?? 0, n.CostUsd ?? 0m, n.AiProvider))
                 .ToList();
             var feedbackFacts = feedbackByRun[run.Id]
-                .Select(f => new FeedbackFact(f.EventType, f.Sequence, f.Timestamp))
+                .Select(f => new FeedbackFact(f.EventType, f.Id, f.Timestamp))
                 .ToList();
             result.Add(RunAnalyticsAggregator.BuildContribution(
                 run.TemplateId, run.TemplateName, run.Status, run.Started, nodeFacts, edges, feedbackFacts));

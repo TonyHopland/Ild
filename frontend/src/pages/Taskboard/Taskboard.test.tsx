@@ -762,18 +762,16 @@ describe("Taskboard editing item refetch", () => {
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
     vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
 
-    // First refetch returns stale data (conversation not yet persisted)
+    // First refetch returns stale data (not yet persisted)
     const staleItem = makeItem({
       status: WorkItemStatus.HumanFeedback,
       humanFeedbackReason: "Human Input Needed",
-      conversation: [],
     });
 
-    // Delayed refetch returns fresh data with conversation
+    // Delayed refetch returns fresh data
     const freshItem = makeItem({
       status: WorkItemStatus.HumanFeedback,
       humanFeedbackReason: "Human Input Needed",
-      conversation: [{ role: "ai", content: "AI response", timestamp: "2025-01-01T00:00:00Z" }],
     });
 
     let getByIdCallCount = 0;

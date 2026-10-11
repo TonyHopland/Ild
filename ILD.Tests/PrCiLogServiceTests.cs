@@ -31,7 +31,7 @@ public class PrCiLogServiceTests
     private static (PrCiLogService Service, Mock<IRemoteProvider> Remote) Build(LoopRun? run)
     {
         var runs = new Mock<ILoopRunStore>();
-        runs.Setup(s => s.GetCurrentByWorkItemAsync("wi-1")).ReturnsAsync(run);
+        runs.Setup(s => s.GetLatestByWorkItemAsync("wi-1")).ReturnsAsync(run);
         var remote = new Mock<IRemoteProvider>();
         return (new PrCiLogService(runs.Object, remote.Object), remote);
     }
