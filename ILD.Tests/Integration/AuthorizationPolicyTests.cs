@@ -185,6 +185,9 @@ public class AuthorizationPolicyTests
     [InlineData("/api/v1/agent/workitems/summary")]
     [InlineData("/api/v1/agent/loop-templates?skip=0&take=100")]
     [InlineData("/api/v1/agent/loop-runs")]
+    [InlineData("/api/v1/agent/loop-runs?from=2026-01-01&to=2026-12-31&templateId=6f1c2a4e-0b7d-4c55-9a8e-2f3d4c5b6a71")]
+    [InlineData("/api/v1/agent/analytics/templates")]
+    [InlineData("/api/v1/agent/analytics/templates?from=2026-01-01&to=2026-12-31&provider=claude")]
     public async Task The_agent_token_reaches_the_agent_surface(string path)
     {
         await using var factory = new ApiFactory();
@@ -196,6 +199,68 @@ public class AuthorizationPolicyTests
         var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    /// <summary>
+    /// The loop-retro read routes that need something to read: the agent token
+    /// reaches each of them from a loop run and from a chat alike.
+    /// </summary>
+    [Theory]
+    [InlineData("X-ILD-Run-Id")]
+    [InlineData("X-ILD-Chat-Session-Id")]
+    public async Task The_agent_token_reaches_the_loop_retro_read_routes_from_a_run_and_from_a_chat(string sessionHeader)
+    {
+        await using var factory = new ApiFactory();
+        var templateId = Guid.NewGuid();
+        var runId = Guid.NewGuid();
+        var chatSessionId = Guid.NewGuid();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ILD.Data.Entities.AppDbContext>();
+            var versionId = Guid.NewGuid();
+            db.LoopTemplates.Add(new ILD.Data.Entities.LoopTemplate { Id = templateId, Name = $"retro-auth-{templateId:N}" });
+            db.LoopTemplateVersions.Add(new ILD.Data.Entities.LoopTemplateVersion
+            {
+                Id = versionId, LoopTemplateId = templateId, VersionNumber = 1, CreatedAt = DateTime.UtcNow,
+            });
+            db.LoopRuns.Add(new ILD.Data.Entities.LoopRun
+            {
+                Id = runId,
+                WorkItemId = Guid.NewGuid().ToString(),
+                LoopTemplateVersionId = versionId,
+                Status = ILD.Data.Enums.LoopRunStatus.Running,
+                RecoveryPolicy = ILD.Data.Enums.RecoveryPolicy.AutoResume,
+                StartedAt = DateTime.UtcNow,
+            });
+            db.ChatSessions.Add(new ILD.Data.Entities.ChatSession
+            {
+                Id = chatSessionId,
+                UserId = "retro-auth-tester",
+                AiProviderId = Guid.NewGuid(),
+                ProviderType = "claude-code",
+                ToolAllowlistCsv = "ild",
+                ScratchPath = "/tmp/ild-test-chat-session",
+                CreatedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var client = factory.CreateClient();
+        var token = factory.Services.GetRequiredService<ILD.Api.Configuration.AgentAuthTokenProvider>().Token;
+        client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        client.DefaultRequestHeaders.Add(sessionHeader, sessionHeader == "X-ILD-Run-Id" ? runId.ToString() : chatSessionId.ToString());
+
+        foreach (var path in new[]
+        {
+            $"/api/v1/agent/loop-runs/{runId}",
+            $"/api/v1/agent/loop-templates/document?nameOrId={templateId}",
+            $"/api/v1/agent/analytics/templates?templateId={templateId}",
+            $"/api/v1/agent/loop-runs?from=2020-01-01&templateId={templateId}",
+        })
+        {
+            var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
+            Assert.True(response.StatusCode == HttpStatusCode.OK, $"{sessionHeader} GET {path} -> {(int)response.StatusCode}");
+        }
     }
 
     /// <summary>
