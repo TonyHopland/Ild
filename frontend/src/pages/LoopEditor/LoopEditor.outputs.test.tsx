@@ -49,7 +49,11 @@ const NODE_OUTPUTS = {
   AI: SUCCESS_AND_FAILURE,
   Human: SUCCESS_AND_FAILURE,
   Prompt: SUCCESS_AND_FAILURE,
-  PR: [...SUCCESS_AND_FAILURE, ...RESERVED.map((name) => ({ name, reserved: true }))],
+  PR: [
+    ...SUCCESS_AND_FAILURE,
+    ...RESERVED.map((name) => ({ name, reserved: true })),
+    { name: "on_existing_pr" },
+  ],
   Condition: [{ name: "OnFailure" }],
   Cleanup: [],
 };
@@ -599,6 +603,38 @@ describe("Loop Editor — node outputs", () => {
     expect(configOf(saved, "n-pr").prDescriptionTemplate).toBe("t");
   });
 
+  test.each([
+    ["createIfNoneExists", /create/i, "attachIfExists"],
+    ["attachIfExists", /attach/i, "createIfNoneExists"],
+  ])(
+    "a PR node whose config lacks them shows both PR toggles on, and turning %s off saves false",
+    async (key, label, other) => {
+      const pr: TemplateNode = {
+        id: "n-pr",
+        type: NodeType.PR,
+        label: "Pull Request",
+        config: { prDescriptionTemplate: "t", outputs: [] },
+      };
+      const { calls, dialog } = await openNode({ template: templateWith(pr) }, "Pull Request");
+
+      const prToggle = (name: RegExp) =>
+        within(dialog).queryByRole("checkbox", { name }) ??
+        within(dialog).getByRole("switch", { name });
+      const isChecked = (el: HTMLElement) =>
+        el instanceof HTMLInputElement ? el.checked : el.getAttribute("aria-checked") === "true";
+
+      expect(isChecked(prToggle(/create/i))).toBe(true);
+      expect(isChecked(prToggle(/attach/i))).toBe(true);
+
+      fireEvent.click(prToggle(label));
+      expect(isChecked(prToggle(label))).toBe(false);
+
+      const saved = await saveLoop(dialog, calls);
+      expect(configOf(saved, "n-pr")[key]).toBe(false);
+      expect(configOf(saved, "n-pr")[other]).not.toBe(false);
+    },
+  );
+
   test("the header names the node's type and there is no Type field", async () => {
     const human: TemplateNode = {
       id: "n-human",
@@ -973,7 +1009,7 @@ describe("Loop Editor — visible to user", () => {
       node: node(NodeType.PR, "Pull Request", {
         outputs: [{ name: "deploy" }, { name: "on_ci_failed", reserved: true }],
       }),
-      visible: ["OnSuccess", "deploy"],
+      visible: ["OnSuccess", "deploy", "on_existing_pr"],
       hidden: RESERVED,
       unwired: ["OnFailure"],
     },
@@ -988,7 +1024,7 @@ describe("Loop Editor — visible to user", () => {
           { name: "deploy", visible: false },
         ],
       }),
-      visible: ["on_merged"],
+      visible: ["on_merged", "on_existing_pr"],
       hidden: ["OnSuccess", "deploy", ...OTHER_RESERVED],
       unwired: ["OnFailure"],
     },
@@ -998,7 +1034,7 @@ describe("Loop Editor — visible to user", () => {
         outputs: [{ name: "OnFailure", visible: false }],
       }),
       failureWired: true,
-      visible: ["OnSuccess"],
+      visible: ["OnSuccess", "on_existing_pr"],
       hidden: ["OnFailure", ...RESERVED],
       unwired: [],
     },
@@ -1154,7 +1190,7 @@ describe("Loop Editor — visible to user", () => {
     const reopened = await saveNodeAndReopen(dialog, "Pull Request");
     expectToggles(
       reopened,
-      ["OnFailure", "on_ci_failed", "on_comment", "on_abandoned"],
+      ["OnFailure", "on_ci_failed", "on_comment", "on_abandoned", "on_existing_pr"],
       [
         "OnSuccess",
         "deploy",
@@ -1741,7 +1777,7 @@ describe("Loop Editor — default output", () => {
       "Pull Request",
     );
     const names = ["OnSuccess", "on_merged", "on_ci_failed"];
-    await waitFor(() => expect(defaultToggles(dialog)).toHaveLength(2 + RESERVED.length));
+    await waitFor(() => expect(defaultToggles(dialog)).toHaveLength(3 + RESERVED.length));
     expect(defaultToggles(dialog)).toHaveLength(toggles(dialog).length);
     expect(defaultToggle(dialog, "on_ci_failed").disabled).toBe(true);
 
@@ -2064,7 +2100,7 @@ describe("Loop Editor — button colour", () => {
       { template: templateWith(pr, ["on_merged"]) },
       "Pull Request",
     );
-    await waitFor(() => expect(squares(dialog)).toHaveLength(2 + RESERVED.length));
+    await waitFor(() => expect(squares(dialog)).toHaveLength(3 + RESERVED.length));
     expect(squares(dialog)).toHaveLength(toggles(dialog).length);
     expectSquare(dialog, "on_merged", "Button colour default: on_merged (hidden from user)", false);
 

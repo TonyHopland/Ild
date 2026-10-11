@@ -357,6 +357,64 @@ public class LoopDocumentEditorTests
         Assert.False(string.IsNullOrWhiteSpace(result.Error));
     }
 
+    // Start → PR (merged → Cleanup) → Cleanup.
+    private const string PrDocument =
+        "{\"$schema\":\"ild-loop-template/v2\",\"name\":\"Live\",\"description\":\"\",\"recoveryPolicy\":\"AutoResume\"," +
+        "\"nodes\":[" +
+        "{\"id\":\"start\",\"type\":\"Start\",\"label\":\"Start\",\"config\":{}}," +
+        "{\"id\":\"pr\",\"type\":\"PR\",\"label\":\"PR\",\"config\":{}}," +
+        "{\"id\":\"cleanup\",\"type\":\"Cleanup\",\"label\":\"Cleanup\",\"config\":{}}]," +
+        "\"edges\":[" +
+        "{\"id\":\"e1\",\"sourceNodeId\":\"start\",\"targetNodeId\":\"pr\",\"edgeType\":\"OnSuccess\",\"name\":null}," +
+        "{\"id\":\"e2\",\"sourceNodeId\":\"pr\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"Custom\",\"name\":\"on_merged\"}]}";
+
+    [Theory]
+    [InlineData("createIfNoneExists", "false", false)]
+    [InlineData("createIfNoneExists", "true", true)]
+    [InlineData("attachIfExists", "false", false)]
+    [InlineData("attachIfExists", "true", true)]
+    public void SetNodeField_stores_a_pr_toggle_as_a_json_boolean(string field, string value, bool expected)
+    {
+        var result = LoopDocumentEditor.SetNodeField(PrDocument, "pr", field, value);
+
+        Assert.True(result.Applied, string.Join("; ", result.ValidationErrors) + result.Error);
+        var stored = ConfigOf(result.Document!, "pr")[field];
+        Assert.Equal(expected ? JsonValueKind.True : JsonValueKind.False, stored!.GetValueKind());
+    }
+
+    [Fact]
+    public void A_pr_node_holds_on_existing_pr_as_a_fixed_output_that_is_not_reserved()
+    {
+        var result = LoopDocumentEditor.SetNodeField(PrDocument, "pr", "prompt", "Please review.");
+
+        Assert.True(result.Applied, string.Join("; ", result.ValidationErrors) + result.Error);
+        var outputs = ConfigOf(result.Document!, "pr")["outputs"]!.AsArray().Select(o => o!.AsObject()).ToList();
+        var existing = Assert.Single(outputs, o => (string)o["name"]! == "on_existing_pr");
+        Assert.False(existing.ContainsKey("reserved") && existing["reserved"]!.GetValueKind() == JsonValueKind.True);
+        Assert.Equal(JsonValueKind.True, outputs.Single(o => (string)o["name"]! == "on_merged")["reserved"]!.GetValueKind());
+    }
+
+    [Fact]
+    public void SetNodeField_refuses_a_pr_toggle_that_is_not_true_or_false()
+    {
+        var result = LoopDocumentEditor.SetNodeField(PrDocument, "pr", "attachIfExists", "yes");
+
+        Assert.False(result.Applied);
+        Assert.Null(result.Document);
+    }
+
+    [Fact]
+    public void SetNodeField_refuses_to_turn_off_the_second_pr_toggle()
+    {
+        var first = LoopDocumentEditor.SetNodeField(PrDocument, "pr", "createIfNoneExists", "false");
+        Assert.True(first.Applied, string.Join("; ", first.ValidationErrors) + first.Error);
+
+        var second = LoopDocumentEditor.SetNodeField(first.Document!, "pr", "attachIfExists", "false");
+
+        Assert.False(second.Applied);
+        Assert.Contains(second.ValidationErrors, e => e.Contains("createIfNoneExists") && e.Contains("attachIfExists"));
+    }
+
     [Fact]
     public void SetNodeField_keeps_a_text_field_as_text_even_when_it_looks_like_json()
     {

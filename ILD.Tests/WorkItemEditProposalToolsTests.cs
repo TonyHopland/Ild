@@ -68,6 +68,40 @@ public class WorkItemEditProposalToolsTests
         Assert.Contains("p-1", result);
     }
 
+    [Theory]
+    [InlineData("create_workitem", true)]
+    [InlineData("update_workitem", true)]
+    [InlineData("update_workitem", false)]
+    [InlineData("propose_workitem_edit", true)]
+    [InlineData("propose_workitem_edit", false)]
+    public async Task Attach_to_existing_branch_is_sent_as_given(string toolName, bool attach)
+    {
+        var (_, _, body) = await InvokeToolAsync(toolName, new Dictionary<string, object?>
+        {
+            [toolName == "create_workitem" ? "repositoryId" : "id"] = "wi-42",
+            ["title"] = "t",
+            ["attachToExistingBranch"] = attach,
+        }, "{}");
+
+        Assert.Equal(attach, JsonDocument.Parse(body!).RootElement.GetProperty("attachToExistingBranch").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("update_workitem")]
+    [InlineData("propose_workitem_edit")]
+    public async Task Attach_to_existing_branch_stays_off_the_wire_when_omitted(string toolName)
+    {
+        var (_, _, body) = await InvokeToolAsync(toolName, new Dictionary<string, object?>
+        {
+            ["id"] = "wi-42",
+            ["title"] = "t",
+        }, "{}");
+
+        var json = JsonDocument.Parse(body!).RootElement;
+        Assert.True(!json.TryGetProperty("attachToExistingBranch", out var v) || v.ValueKind == JsonValueKind.Null,
+            "attachToExistingBranch was sent");
+    }
+
     [Fact]
     public async Task propose_workitem_edit_carries_tags_as_given()
     {

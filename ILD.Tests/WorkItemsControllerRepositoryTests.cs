@@ -206,7 +206,7 @@ public class WorkItemsControllerRepositoryTests
             engine: new Mock<ILoopEngine>().Object);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
-        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
             .ReturnsAsync(BranchNameVerdict.Usable);
 
         var preview = new Mock<IWorktreePreviewService>();

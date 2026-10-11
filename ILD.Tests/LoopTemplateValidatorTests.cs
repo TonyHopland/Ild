@@ -519,6 +519,37 @@ public class LoopTemplateValidatorTests
         Assert.Empty(LoopTemplateValidator.Validate(g));
     }
 
+    [Theory]
+    [InlineData(null, null, false)]
+    [InlineData("true", "true", false)]
+    [InlineData("true", "false", false)]
+    [InlineData("false", "true", false)]
+    [InlineData(null, "false", false)]
+    [InlineData("false", "false", true)]
+    public void A_pr_node_must_be_allowed_to_create_or_attach(string? attachIfExists, string? createIfNoneExists, bool rejected)
+    {
+        var pr = Node("review-pr", "PR");
+        if (attachIfExists is not null) WithRawConfig(pr, "attachIfExists", attachIfExists);
+        if (createIfNoneExists is not null) WithRawConfig(pr, "createIfNoneExists", createIfNoneExists);
+        // on_existing_pr is one of the outputs every PR node holds, so wiring it needs no declaration.
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() { Node("s", "Start"), pr, Node("a", "AI"), Node("c", "Cleanup") },
+            new() {
+                Edge("s", "review-pr"),
+                Edge("review-pr", "a", "Custom", "on_existing_pr"),
+                Edge("review-pr", "c", "Custom", "on_merged"),
+                Edge("a", "c")
+            });
+
+        var errs = LoopTemplateValidator.Validate(g);
+
+        if (rejected)
+            Assert.Contains(errs, e => e.Contains("review-pr")
+                && e.Contains("createIfNoneExists") && e.Contains("attachIfExists"));
+        else
+            Assert.Empty(errs);
+    }
+
     [Fact]
     public void Reserved_pr_output_is_not_available_on_other_node_types()
     {

@@ -145,4 +145,29 @@ public sealed class SettingsControllerTests : IDisposable
         Assert.Equal(sent, StatedValue(result));
         Assert.Equal(sent, await Stored(key));
     }
+
+    [Theory]
+    [InlineData("pr.maxFindings", "1", true)]
+    [InlineData("pr.maxFindings", "1000", true)]
+    [InlineData("pr.maxFindings", "0", false)]
+    [InlineData("pr.maxFindings", "1001", false)]
+    [InlineData("pr.maxNits", "1", true)]
+    [InlineData("pr.maxNits", "1000", true)]
+    [InlineData("pr.maxNits", "0", false)]
+    [InlineData("pr.maxNits", "ten", false)]
+    public async Task The_pr_finding_caps_are_stored_only_within_their_range(string key, string sent, bool stored)
+    {
+        var result = await Put(key, sent);
+
+        if (stored)
+        {
+            Assert.Equal(sent, StatedValue(result));
+            Assert.Equal(sent, await Stored(key));
+        }
+        else
+        {
+            Assert.IsType<BadRequestObjectResult>(result);
+            Assert.Null(await Stored(key));
+        }
+    }
 }

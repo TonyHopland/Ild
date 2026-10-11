@@ -56,9 +56,12 @@ public class LoopTemplatesIntegrationTests
         Assert.Empty(OutputsOf(map, "Cleanup"));
 
         // The PR node's reserved outputs are the ones the heartbeat fires: one definition.
+        // on_existing_pr is the PR node's own, emitted when it attaches, so it is fixed but not reserved.
         var pr = OutputsOf(map, "PR");
         Assert.Equal(
-            LoopOutputs.ReservedPr.Select(n => (n, true)).Append(("OnSuccess", false)).Append(("OnFailure", false)).OrderBy(o => o.Item1, StringComparer.Ordinal),
+            LoopOutputs.ReservedPr.Select(n => (n, true))
+                .Append(("OnSuccess", false)).Append(("OnFailure", false)).Append(("on_existing_pr", false))
+                .OrderBy(o => o.Item1, StringComparer.Ordinal),
             pr.OrderBy(o => o.Name, StringComparer.Ordinal));
     }
 

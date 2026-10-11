@@ -223,6 +223,34 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Attach_to_existing_branch_defaults_to_false_and_is_stored_when_set_on_create()
+    {
+        var plain = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
+        var attached = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "y", AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
+
+        Assert.False(plain.AttachToExistingBranch);
+        Assert.False((await _svc.GetAsync(plain.Id, TestContext.Current.CancellationToken))!.AttachToExistingBranch);
+        Assert.True(attached.AttachToExistingBranch);
+        Assert.True((await _svc.GetAsync(attached.Id, TestContext.Current.CancellationToken))!.AttachToExistingBranch);
+    }
+
+    [Fact]
+    public async Task Update_sets_clears_and_leaves_attach_to_existing_branch_alone()
+    {
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
+
+        var set = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
+        Assert.True(set!.AttachToExistingBranch);
+
+        var titleOnly = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "renamed" }, TestContext.Current.CancellationToken);
+        Assert.True(titleOnly!.AttachToExistingBranch);
+
+        var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { AttachToExistingBranch = false }, TestContext.Current.CancellationToken);
+        Assert.False(cleared!.AttachToExistingBranch);
+        Assert.False((await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken))!.AttachToExistingBranch);
+    }
+
+    [Fact]
     public async Task Update_replaces_the_repository_and_leaves_it_alone_when_null()
     {
         var repoA = Guid.NewGuid();

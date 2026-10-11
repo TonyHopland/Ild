@@ -172,6 +172,8 @@ public class TemplateFieldRenderSiteTests
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
 
         var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         var services = BaseServices(workItem);
         services.AddSingleton(providerStore.Object);
         services.AddSingleton(remote.Object);

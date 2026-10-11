@@ -201,4 +201,27 @@ describe("what the round is about to say on the pull request", () => {
     await waitFor(() => expect(drop).toHaveBeenCalledWith("run-1", "wc"));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
+
+  test("names a queued review finding as a finding, not as a reply", () => {
+    render(
+      <QueuedPrWrites
+        workItem={workItem()}
+        detail={detail([
+          queued({
+            id: "wf",
+            kind: "finding" as PrQueuedWrite["kind"],
+            targetId: "",
+            body: "This loop never terminates when the list is empty.",
+            path: "src/C.cs",
+            line: 42,
+          }),
+        ])}
+      />,
+    );
+
+    const where = screen.getByText(/src\/C\.cs:42/);
+    expect(where.textContent).toMatch(/finding/i);
+    expect(where.textContent).not.toMatch(/Reply/);
+    expect(screen.getByText("This loop never terminates when the list is empty.")).toBeTruthy();
+  });
 });

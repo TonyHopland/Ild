@@ -868,6 +868,62 @@ public class RemoteProviderServiceTests
             Assert.Single(handler.Calls).Url);
     }
 
+    // Each forge's own answer to creating a pull request the branch already has:
+    // GitHub 422 (REST docs + live error body), Forgejo 409 with Gitea's
+    // ErrPullRequestAlreadyExists text, Azure DevOps 409 TF401179.
+    [Theory]
+    [InlineData("GitHub", "https://github.com", "https://github.com/team/repo", 422,
+        "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequest\",\"code\":\"custom\","
+        + "\"message\":\"A pull request already exists for team:ild/wi-7.\"}],"
+        + "\"documentation_url\":\"https://docs.github.com/rest/pulls/pulls#create-a-pull-request\",\"status\":\"422\"}")]
+    [InlineData("Forgejo", "https://gitea.example", "https://gitea.example/team/repo.git", 409,
+        "{\"message\":\"pull request already exists for these targets [id: 3, issue_id: 7, head_repo_id: 1, base_repo_id: 1, "
+        + "head_branch: ild/wi-7, base_branch: main]\",\"url\":\"https://gitea.example/api/swagger\"}")]
+    [InlineData("AzureDevOps", AzureOrganizationUrl, AzureRepoUrl, 409,
+        "{\"$id\":\"1\",\"innerException\":null,\"message\":\"TF401179: An active pull request for the source and target branch already exists.\","
+        + "\"typeName\":\"Microsoft.TeamFoundation.Git.Server.GitPullRequestExistsException, Microsoft.TeamFoundation.Git.Server\","
+        + "\"typeKey\":\"GitPullRequestExistsException\",\"errorCode\":0,\"eventId\":3000}")]
+    public async Task CreatePullRequestAsync_says_the_branch_already_has_a_pull_request_rather_than_a_status_code(
+        string type, string providerUrl, string repoUrl, int status, string refusal)
+    {
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(), Name = type, Type = type, Url = providerUrl, ApiKey = "k",
+        });
+        db.Context.SaveChanges();
+
+        var handler = new AzureHandler().OnRequest(_ => true, _ => new HttpResponseMessage((HttpStatusCode)status)
+        {
+            Content = new StringContent(refusal, Encoding.UTF8, "application/json"),
+        });
+        var result = await CreateService(db, handler).CreatePullRequestAsync(repoUrl, "ild/wi-7", "main", "t", "b");
+
+        Assert.NotNull(result.Error);
+        Assert.Contains("already exists", result.Error!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ild/wi-7", result.Error!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreatePullRequestAsync_does_not_call_every_github_validation_failure_an_existing_pull_request()
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new AzureHandler().OnRequest(_ => true, _ => new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+        {
+            Content = new StringContent(
+                "{\"message\":\"Validation Failed\",\"errors\":[{\"resource\":\"PullRequest\",\"code\":\"custom\","
+                + "\"message\":\"No commits between main and ild/wi-7\"}],"
+                + "\"documentation_url\":\"https://docs.github.com/rest/pulls/pulls#create-a-pull-request\",\"status\":\"422\"}",
+                Encoding.UTF8, "application/json"),
+        });
+        var result = await CreateService(db, handler).CreatePullRequestAsync("https://github.com/team/repo", "ild/wi-7", "main", "t", "b");
+
+        Assert.NotNull(result.Error);
+        Assert.DoesNotContain("already exists", result.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     // Another organisation on the shared host: PATs are organisation-scoped.
     [InlineData("https://dev.azure.com/fabrikam/widgets/_git/app")]

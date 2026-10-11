@@ -136,6 +136,30 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Attach_to_existing_branch_round_trips_through_create_get_and_update()
+    {
+        var created = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "attach",
+            AttachToExistingBranch = true,
+        }, TestContext.Current.CancellationToken);
+        Assert.True(created.AttachToExistingBranch);
+        Assert.True((await _client.GetAsync(_opts, created.Id, TestContext.Current.CancellationToken))!.AttachToExistingBranch);
+
+        var titleOnly = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
+        {
+            Title = "renamed",
+        }, TestContext.Current.CancellationToken);
+        Assert.True(titleOnly!.AttachToExistingBranch);
+
+        var cleared = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
+        {
+            AttachToExistingBranch = false,
+        }, TestContext.Current.CancellationToken);
+        Assert.False(cleared!.AttachToExistingBranch);
+    }
+
+    [Fact]
     public async Task Get_returns_null_on_not_found()
     {
         var item = await _client.GetAsync(_opts, Guid.NewGuid().ToString(), TestContext.Current.CancellationToken);

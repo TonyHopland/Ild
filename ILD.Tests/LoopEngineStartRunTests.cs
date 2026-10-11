@@ -201,6 +201,66 @@ public class LoopEngineStartRunTests
     }
 
     [Fact]
+    public async Task An_attaching_item_is_vetted_as_an_attach_and_its_flag_is_pinned_on_the_run()
+    {
+        // The service treats origin's copy as a conflict unless it is asked the
+        // attach question — so this run only starts if the flag reaches it.
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var wi = new WorkItemView { Id = workItemId, Tags = new[] { "tag" }, BranchNameOverride = "feature/foo", AttachToExistingBranch = true };
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi,
+            verdict: new BranchNameVerdict(null, "Branch `feature/foo` already exists on origin.", ExistsOnOrigin: true),
+            attachVerdict: new BranchNameVerdict(null, null, ExistsOnOrigin: true));
+
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
+        await DrainAsync(engine);
+
+        wi.AttachToExistingBranch = false;
+
+        var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
+        Assert.Equal("feature/foo", run.BranchName);
+        Assert.True(run.AttachToExistingBranch);
+    }
+
+    [Fact]
+    public async Task An_attaching_item_whose_branch_is_missing_from_origin_parks_without_a_run()
+    {
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        const string missing = "Branch `feature/foo` does not exist on origin, so there is nothing to attach to.";
+        var wi = new WorkItemView { Id = workItemId, Tags = new[] { "tag" }, BranchNameOverride = "feature/foo", AttachToExistingBranch = true };
+        var (engine, workItems) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi,
+            attachVerdict: new BranchNameVerdict(null, missing, ExistsOnOrigin: false));
+
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
+        await DrainAsync(engine);
+
+        Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
+        workItems.Verify(w => w.ParkWithoutRunAsync(workItemId, missing), Times.Once);
+    }
+
+    [Fact]
+    public async Task The_attach_flag_without_a_branch_name_is_not_pinned()
+    {
+        // There is nothing to attach to without a name; the run gets its own
+        // generated branch, built from the base like any other.
+        using var db = new TestDb();
+        var workItemId = $"WI-{Guid.NewGuid():N}";
+        var wi = new WorkItemView { Id = workItemId, Tags = new[] { "tag" }, BranchNameOverride = "  ", AttachToExistingBranch = true };
+        var (engine, _) = BuildEngine(db, workItemId, RecoveryPolicy.AutoResume, seedVersionAndStartNode: true,
+            workItemView: wi);
+
+        await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
+        await DrainAsync(engine);
+
+        var run = db.Fresh().LoopRuns.Single(r => r.WorkItemId == workItemId);
+        Assert.Null(run.BranchName);
+        Assert.False(run.AttachToExistingBranch);
+    }
+
+    [Fact]
     public async Task StartRun_pins_the_base_branch_override_on_the_run()
     {
         using var db = new TestDb();
@@ -276,7 +336,8 @@ public class LoopEngineStartRunTests
         TestDb db, string workItemId, RecoveryPolicy templatePolicy, bool seedVersionAndStartNode,
         string? branchNameOverride = null,
         BranchNameVerdict? verdict = null,
-        WorkItemView? workItemView = null)
+        WorkItemView? workItemView = null,
+        BranchNameVerdict? attachVerdict = null)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = templatePolicy };
         db.Context.LoopTemplates.Add(template);
@@ -327,8 +388,10 @@ public class LoopEngineStartRunTests
         services.AddSingleton<INodeExecutorRegistry>(registry);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
-        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), false))
             .ReturnsAsync(verdict ?? BranchNameVerdict.Usable);
+        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), true))
+            .ReturnsAsync(attachVerdict ?? verdict ?? BranchNameVerdict.Usable);
         services.AddSingleton(branchNames.Object);
         var sp = services.BuildServiceProvider();
 

@@ -264,6 +264,7 @@ describe("outputVisibilityOf", () => {
       { name: "OnSuccess" },
       { name: "OnFailure" },
       ...RESERVED.map((name) => ({ name, reserved: true })),
+      { name: "on_existing_pr" },
     ],
   });
 

@@ -71,6 +71,31 @@ describe("EditProposalCard", () => {
     expect(text).not.toContain("feature/untouched-branch");
   });
 
+  test.each([true, false])(
+    "shows a proposed attach-to-existing-branch change to %s, and nothing about it when not proposed",
+    (attach) => {
+      const proposal = makeProposal({
+        proposed: { attachToExistingBranch: attach } as WorkItemEditProposal["proposed"],
+        snapshot: {
+          ...makeProposal().snapshot,
+          attachToExistingBranch: !attach,
+        } as WorkItemEditProposal["snapshot"],
+      });
+      const { container, unmount } = render(
+        <EditProposalCard proposal={proposal} onSettled={vi.fn()} />,
+      );
+      const text = container.textContent ?? "";
+
+      expect(text).toMatch(/attach/i);
+      expect(text).not.toContain("Old title");
+      expect(text).not.toContain("develop-base");
+      unmount();
+
+      const without = render(<EditProposalCard proposal={makeProposal()} onSettled={vi.fn()} />);
+      expect(without.container.textContent).not.toMatch(/attach/i);
+    },
+  );
+
   test("shows each dependency change as a line naming the item, and no title it does not know", () => {
     const { container } = render(
       <EditProposalCard

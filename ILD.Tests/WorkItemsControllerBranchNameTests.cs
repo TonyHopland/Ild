@@ -106,10 +106,35 @@ public class WorkItemsControllerBranchNameTests
         using var _db = db;
 
         var result = Assert.IsType<OkObjectResult>(
-            await controller.CheckBranchName("feature/foo", repoId.ToString(), null, CancellationToken.None));
+            await controller.CheckBranchName("feature/foo", repoId.ToString(), null, cancellationToken: CancellationToken.None));
         var payload = result.Value!;
         Assert.Null(Read(payload, "error"));
         Assert.Contains("already exists on origin", Read(payload, "warning"));
+    }
+
+    /// <summary>
+    /// The dialog offers "Attach to existing branch" off <c>existsOnOrigin</c>,
+    /// and the check has to be asked the attach question for the warning to
+    /// drop once the box is ticked.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Branch_name_check_passes_the_attach_flag_and_reports_whether_origin_has_the_name(bool onOrigin)
+    {
+        var (controller, _, db, repoId, branchNames) = SetupWithService(
+            new BranchNameVerdict(null, null, ExistsOnOrigin: onOrigin));
+        using var _db = db;
+
+        var result = Assert.IsType<OkObjectResult>(
+            await controller.CheckBranchName("feature/foo", repoId.ToString(), "WI-1",
+                attachToExistingBranch: true, cancellationToken: CancellationToken.None));
+
+        Assert.Equal(onOrigin, ReadExistsOnOrigin(result.Value!));
+        branchNames.Verify(b => b.InspectAsync("feature/foo", repoId, "WI-1", It.IsAny<CancellationToken>(), true), Times.Once);
+
+        static bool? ReadExistsOnOrigin(object payload)
+            => (bool?)payload.GetType().GetProperty("existsOnOrigin")!.GetValue(payload);
     }
 
     [Fact]
@@ -185,10 +210,49 @@ public class WorkItemsControllerBranchNameTests
         Assert.Null((await mgr.GetWorkItemAsync(id))!.BaseBranchOverride);
     }
 
+    [Fact]
+    public async Task Attach_to_existing_branch_is_saved_on_create_kept_by_an_edit_that_omits_it_and_cleared_when_sent_false()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _db = db;
+
+        var created = Assert.IsType<CreatedAtActionResult>(await controller.Create(new WorkItemCreateRequest
+        {
+            Title = "t",
+            RepositoryId = repoId.ToString(),
+            BranchNameOverride = "feature/foo",
+            AttachToExistingBranch = true,
+        }));
+        var id = Assert.IsType<WorkItemView>(created.Value).Id;
+        Assert.True((await mgr.GetWorkItemAsync(id))!.AttachToExistingBranch);
+
+        Assert.IsType<OkObjectResult>(await controller.Update(id, new WorkItemCreateRequest
+        {
+            Title = "renamed",
+            RepositoryId = repoId.ToString(),
+        }));
+        Assert.True((await mgr.GetWorkItemAsync(id))!.AttachToExistingBranch);
+
+        Assert.IsType<OkObjectResult>(await controller.Update(id, new WorkItemCreateRequest
+        {
+            Title = "renamed",
+            RepositoryId = repoId.ToString(),
+            AttachToExistingBranch = false,
+        }));
+        Assert.False((await mgr.GetWorkItemAsync(id))!.AttachToExistingBranch);
+    }
+
     private static string? Read(object payload, string property)
         => payload.GetType().GetProperty(property)!.GetValue(payload) as string;
 
     private static (WorkItemsController controller, WorkItemManager mgr, TestDb db, Guid repoId) Setup(
+        BranchNameVerdict? verdict = null)
+    {
+        var (controller, mgr, db, repoId, _) = SetupWithService(verdict);
+        return (controller, mgr, db, repoId);
+    }
+
+    private static (WorkItemsController controller, WorkItemManager mgr, TestDb db, Guid repoId, Mock<IBranchNameOverrideService> branchNames) SetupWithService(
         BranchNameVerdict? verdict = null)
     {
         var db = new TestDb();
@@ -212,7 +276,7 @@ public class WorkItemsControllerBranchNameTests
             engine: new Mock<ILoopEngine>().Object);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
-        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
             .ReturnsAsync(verdict ?? BranchNameVerdict.Usable);
 
         var controller = new WorkItemsController(
@@ -227,6 +291,6 @@ public class WorkItemsControllerBranchNameTests
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
             NullLogger<WorkItemsController>.Instance);
 
-        return (controller, mgr, db, repo.Id);
+        return (controller, mgr, db, repo.Id, branchNames);
     }
 }

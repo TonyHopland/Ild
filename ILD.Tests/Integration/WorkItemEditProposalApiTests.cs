@@ -331,6 +331,31 @@ public class WorkItemEditProposalApiTests
     }
 
     [Fact]
+    public async Task Attach_to_existing_branch_alone_is_a_proposal_that_shows_the_flag_and_approving_sets_it()
+    {
+        await using var host = await StartHostAsync();
+        var itemId = await CreateHumanItemAsync(host);
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+
+        var proposalId = await ProposeOkAsync(agent, itemId, new { attachToExistingBranch = true });
+
+        var proposal = await ReadProposalAsync(host, itemId, proposalId);
+        var proposed = proposal.GetProperty("proposed");
+        Assert.True(proposed.GetProperty("attachToExistingBranch").GetBoolean());
+        foreach (var notProposed in new[] { "title", "description", "tags", "branchNameOverride", "baseBranchOverride" })
+            Assert.True(IsNullOrAbsent(proposed, notProposed), $"{notProposed} was not proposed");
+        Assert.False(proposal.GetProperty("snapshot").GetProperty("attachToExistingBranch").GetBoolean());
+        Assert.False((await GetItemAsync(host, itemId)).GetProperty("attachToExistingBranch").GetBoolean());
+
+        var resp = await ApproveAsync(host.Human, itemId, proposalId);
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var item = await GetItemAsync(host, itemId);
+        Assert.True(item.GetProperty("attachToExistingBranch").GetBoolean());
+        AssertUnchanged(item);
+    }
+
+    [Fact]
     public async Task Approving_after_a_human_edit_is_a_409_that_marks_the_proposal_stale_and_keeps_the_edit()
     {
         await using var host = await StartHostAsync();

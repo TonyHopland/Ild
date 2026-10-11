@@ -321,6 +321,46 @@ public class AgentApiIntegrationTests
         Assert.Equal(JsonValueKind.Null, cleared.GetProperty("baseBranchOverride").ValueKind);
     }
 
+    [Fact]
+    public async Task Attach_to_existing_branch_round_trips_through_agent_create_read_and_update()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+
+        var plainId = await CreateAsync(client, "plain", runId, repoId);
+        var plain = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{plainId}", TestContext.Current.CancellationToken);
+        Assert.False(plain.GetProperty("attachToExistingBranch").GetBoolean());
+
+        var createResp = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
+        {
+            Content = JsonContent.Create(new
+            {
+                title = "owned",
+                description = "",
+                repositoryId = repoId.ToString(),
+                branchNameOverride = "feature/foo",
+                attachToExistingBranch = true,
+            }),
+            Headers = { { "X-ILD-Run-Id", runId.ToString() } },
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, createResp.StatusCode);
+        var itemId = JsonDocument.Parse(await createResp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
+            .RootElement.GetProperty("id").GetString()!;
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
+        Assert.True(detail.GetProperty("attachToExistingBranch").GetBoolean());
+
+        // Omitted means "not part of this edit" — a title-only save keeps it.
+        var titleOnly = await PutAsync(client, itemId, runId, new { title = "renamed", description = "" });
+        Assert.True(titleOnly.GetProperty("attachToExistingBranch").GetBoolean());
+
+        var cleared = await PutAsync(client, itemId, runId, new { title = "renamed", description = "", attachToExistingBranch = false });
+        Assert.False(cleared.GetProperty("attachToExistingBranch").GetBoolean());
+        detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{itemId}", TestContext.Current.CancellationToken);
+        Assert.False(detail.GetProperty("attachToExistingBranch").GetBoolean());
+    }
+
     private static async Task<JsonElement> PutAsync(HttpClient client, string itemId, Guid runId, object body)
     {
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")

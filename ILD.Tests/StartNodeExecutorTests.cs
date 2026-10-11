@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
@@ -39,7 +41,8 @@ public class StartNodeExecutorTests : IDisposable
         Mock<IWorktreePreviewService>? preview = null,
         string? previewEnv = null,
         string? worktreesPath = null,
-        Repository? itemRepointedTo = null)
+        Repository? itemRepointedTo = null,
+        IRepositoryManager? git = null)
     {
         var repoId = Guid.NewGuid();
         var workItem = itemRepointedTo is null
@@ -68,7 +71,7 @@ public class StartNodeExecutorTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton(workItems.Object);
         services.AddSingleton(providerStore.Object);
-        services.AddSingleton(repoManager.Object);
+        services.AddSingleton(git ?? repoManager.Object);
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataPath })
             .Build());
@@ -421,5 +424,117 @@ public class StartNodeExecutorTests : IDisposable
 
         Assert.Contains(outcomes, o => o is NodeOutcome.Success);
         preview.Verify(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<PackageFeedCredential>?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task An_attaching_run_checks_out_the_origin_branch_as_it_is_without_rebasing_onto_the_base()
+    {
+        // feature/x and main have each moved on since they split. Rebasing would
+        // rewrite someone else's published history under them, so the worktree
+        // has to be origin/feature/x exactly.
+        var (origin, baseClone) = OriginAndBaseClone();
+        Git(origin, "checkout", "-b", "feature/x");
+        Commit(origin, "feature.txt", "feature work");
+        Git(origin, "checkout", "main");
+        Commit(origin, "main.txt", "main moved on");
+        var originTip = GitOut(origin, "rev-parse", "feature/x");
+
+        var git = new RepositoryManager(worktreesRoot: Path.Combine(_dataPath, "wt"));
+        var (_, sp, run, node) = BuildContext(new Mock<IRepositoryManager>(), worktreesPath: baseClone, git: git);
+        run.BranchName = "feature/x";
+        run.AttachToExistingBranch = true;
+
+        var outcomes = await RunStartAsync(run, node, sp);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        var ready = outcomes.OfType<NodeOutcome.WorktreeReady>().Single();
+        Assert.Equal(originTip, GitOut(ready.WorktreePath, "rev-parse", "HEAD"));
+        Assert.Equal("feature/x", GitOut(ready.WorktreePath, "rev-parse", "--abbrev-ref", "HEAD"));
+    }
+
+    [Fact]
+    public async Task An_attaching_run_whose_branch_is_missing_from_origin_fails_without_creating_the_branch()
+    {
+        var (_, baseClone) = OriginAndBaseClone();
+
+        var git = new RepositoryManager(worktreesRoot: Path.Combine(_dataPath, "wt"));
+        var (_, sp, run, node) = BuildContext(new Mock<IRepositoryManager>(), worktreesPath: baseClone, git: git);
+        run.BranchName = "feature/x";
+        run.AttachToExistingBranch = true;
+
+        var outcomes = await RunStartAsync(run, node, sp);
+
+        var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("feature/x", fail.Reason);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.WorktreeReady);
+        Assert.False(await git.LocalBranchExistsAsync(baseClone, "feature/x"));
+    }
+
+    [Fact]
+    public async Task The_attach_flag_is_read_from_the_run_not_from_the_work_item()
+    {
+        // Ticking the box on the item after its run was created must not turn
+        // that run into an attach halfway through.
+        var (mgr, sp, run, node) = BuildContext(HappyRepoManager());
+        run.BranchName = "feature/x";
+        run.AttachToExistingBranch = false;
+        (await sp.GetRequiredService<IWorkItemManager>().GetWorkItemAsync("WI-1"))!.AttachToExistingBranch = true;
+
+        var outcomes = await RunStartAsync(run, node, sp);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        mgr.Verify(m => m.CreateWorktreeAsync(_baseRepo, "feature/x"), Times.Once);
+        mgr.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        mgr.Verify(m => m.RebaseAsync("/tmp/worktree", "origin/main", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    private static async Task<List<NodeOutcome>> RunStartAsync(LoopRun run, LoopNode node, IServiceProvider sp)
+    {
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new StartNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+        return outcomes;
+    }
+
+    /// <summary>
+    /// A real origin with one commit on <c>main</c>, and a clone of it standing
+    /// in as the repository's base clone. Both live under the data path, which
+    /// <see cref="Dispose"/> removes.
+    /// </summary>
+    private (string Origin, string BaseClone) OriginAndBaseClone()
+    {
+        var root = Path.Combine(_dataPath, "git");
+        var origin = Path.Combine(root, "origin");
+        var baseClone = Path.Combine(root, "base");
+        Directory.CreateDirectory(origin);
+        Git(origin, "init", "-b", "main");
+        Git(origin, "config", "user.email", "t@example.test");
+        Git(origin, "config", "user.name", "Tester");
+        Commit(origin, "README.md", "init");
+        Git(root, "clone", origin, baseClone);
+        Git(baseClone, "config", "user.email", "t@example.test");
+        Git(baseClone, "config", "user.name", "Tester");
+        return (origin, baseClone);
+    }
+
+    private static void Commit(string repo, string file, string message)
+    {
+        File.WriteAllText(Path.Combine(repo, file), message + "\n");
+        Git(repo, "add", "-A");
+        Git(repo, "commit", "-m", message);
+    }
+
+    private static void Git(string cwd, params string[] args) => GitOut(cwd, args);
+
+    private static string GitOut(string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        var stdout = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        if (p.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', args)}: {p.StandardError.ReadToEnd()}");
+        return stdout.Trim();
     }
 }

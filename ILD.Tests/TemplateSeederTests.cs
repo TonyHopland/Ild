@@ -19,7 +19,7 @@ public class TemplateSeederTests
 
         var templates = (await db.LoopTemplates.GetAllAsync()).ToList();
         var names = templates.Select(t => t.Name).OrderBy(n => n).ToArray();
-        Assert.Equal(new[] { "Development", "DevTeam", "Plan", "Q&A" }, names);
+        Assert.Equal(new[] { "Development", "DevTeam", "Plan", "Q&A", "Review" }, names);
 
         // The pre-example seed loops must no longer be created.
         Assert.DoesNotContain("Simple Code Change", names);
@@ -49,6 +49,42 @@ public class TemplateSeederTests
         // The Start node's worktree flags survive the round-trip.
         var start = graph.Nodes.Single(n => n.NodeType == "Start");
         Assert.True(ReadBool(start.Config, "createWorktree"));
+    }
+
+    [Fact]
+    public async Task Review_loop_attaches_to_the_open_pr_and_routes_every_new_signal_back_to_the_reviewer()
+    {
+        using var db = new TestDb();
+        var mgr = new LoopTemplateManager(db.LoopTemplates);
+
+        await TemplateSeeder.SeedAsync(db.LoopTemplates, mgr);
+
+        var template = (await db.LoopTemplates.GetAllAsync()).Single(t => t.Name == "Review");
+        var graph = await mgr.GetVersionGraphAsync(template.Id, 1);
+        Assert.NotNull(graph);
+
+        var start = graph!.Nodes.Single(n => n.NodeType == "Start");
+        var pr = graph.Nodes.Single(n => n.NodeType == "PR");
+        Assert.Contains(graph.Edges, e => e.SourceNodeId == start.Id && e.TargetNodeId == pr.Id && e.EdgeType == "OnSuccess");
+
+        // Attach to the pull request that is there; never open one of its own.
+        Assert.True(!pr.Config.ContainsKey("attachIfExists") || ReadBool(pr.Config, "attachIfExists"));
+        Assert.False(ReadBool(pr.Config, "createIfNoneExists"));
+
+        var toReviewer = graph.Edges.Single(e =>
+            e.SourceNodeId == pr.Id && e.EdgeType == "Custom" && e.Name == "on_existing_pr");
+        var reviewer = graph.Nodes.Single(n => n.Id == toReviewer.TargetNodeId);
+        Assert.Equal("AI", reviewer.NodeType);
+        Assert.Contains(graph.Edges, e => e.SourceNodeId == reviewer.Id && e.TargetNodeId == pr.Id && e.EdgeType == "OnSuccess");
+
+        // A comment and new commits (CI turning over on a new head) send the reviewer round again.
+        foreach (var signal in new[] { "on_comment", "on_ci_passed", "on_ci_failed" })
+            Assert.Contains(graph.Edges, e =>
+                e.SourceNodeId == pr.Id && e.TargetNodeId == reviewer.Id && e.EdgeType == "Custom" && e.Name == signal);
+
+        var prompt = ReadString(reviewer.Config, "prompt") ?? string.Empty;
+        foreach (var tool in new[] { "pull_branch", "get_pr_review", "sinceCommit", "post_pr_review_finding" })
+            Assert.Contains(tool, prompt, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -100,6 +136,7 @@ public class TemplateSeederTests
     [InlineData("Development.json")]
     [InlineData("Plan.json")]
     [InlineData("Q&A.json")]
+    [InlineData("Review.json")]
     public void Example_loop_is_a_v2_document_the_upgrader_has_nothing_left_to_add_to(string file)
     {
         // The example loops are the seed templates: a name they route by but do not

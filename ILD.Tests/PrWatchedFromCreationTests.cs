@@ -57,6 +57,8 @@ public class PrWatchedFromCreationTests
             });
 
         var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         remote.Setup(r => r.CreatePullRequestAsync(CloneUrl, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrResult(PrUrl, PrUrl, RemotePrStatus.Open, null));
 

@@ -53,13 +53,14 @@ public class BranchNameOverrideServiceTests : IDisposable
         var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.True(verdict.IsUsable);
+        Assert.False(verdict.ExistsOnOrigin);
         _ = db;
     }
 
     [Fact]
     public async Task A_run_of_the_same_work_item_holding_the_branch_is_a_conflict_naming_that_run()
     {
-        var (svc, db, repoId, git) = Setup();
+        var (svc, db, repoId, _) = Setup();
         var run = SeedRun(db, "WI-1", "feature/foo", LoopRunStatus.Completed);
 
         var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
@@ -69,8 +70,29 @@ public class BranchNameOverrideServiceTests : IDisposable
         Assert.Contains("already used locally", verdict.Conflict);
         Assert.Contains(run.Id.ToString(), verdict.Conflict);
         Assert.Contains("this work item", verdict.Conflict);
-        // The remote is never consulted once a local holder is found.
-        git.Verify(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+    }
+
+    /// <summary>
+    /// Attaching only waives origin's claim on the name. A run row still means
+    /// a worktree of that name may exist under the shared root, so it blocks an
+    /// attach exactly as it blocks a fresh branch — and origin is still asked,
+    /// because the dialog offers the attach checkbox off that answer.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_run_holding_the_name_is_a_conflict_even_when_attaching_and_origin_is_still_reported(bool attach)
+    {
+        var (svc, db, repoId, git) = Setup();
+        SeedRun(db, "WI-1", "feature/foo", LoopRunStatus.Completed);
+        git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), "feature/foo", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+            attachToExistingBranch: attach);
+
+        Assert.Contains("already used locally", verdict.Conflict);
+        Assert.True(verdict.ExistsOnOrigin);
     }
 
     /// <summary>
@@ -119,15 +141,21 @@ public class BranchNameOverrideServiceTests : IDisposable
         Assert.Contains("work item WI-9", verdict.Conflict);
     }
 
-    [Fact]
-    public async Task A_local_branch_with_no_run_behind_it_is_still_a_conflict()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_local_branch_with_no_run_behind_it_is_still_a_conflict(bool attach)
     {
         var (svc, _, repoId, git) = Setup(baseRepoOnDisk: true);
         git.Setup(g => g.LocalBranchExistsAsync(It.IsAny<string>(), "feature/foo")).ReturnsAsync(true);
+        git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), "feature/foo", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+            attachToExistingBranch: attach);
 
         Assert.Contains("already exists locally", verdict.Conflict);
+        Assert.True(verdict.ExistsOnOrigin);
     }
 
     [Fact]
@@ -141,22 +169,61 @@ public class BranchNameOverrideServiceTests : IDisposable
         var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
 
         Assert.Contains("`feature/foo` already exists on origin", verdict.Conflict);
+        Assert.True(verdict.ExistsOnOrigin);
     }
 
     [Fact]
-    public async Task An_unreachable_origin_is_not_treated_as_a_conflict()
+    public async Task Attaching_to_a_branch_on_origin_is_not_a_conflict()
+    {
+        var (svc, _, repoId, git) = Setup(baseRepoOnDisk: true);
+        git.Setup(g => g.LocalBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false);
+        git.Setup(g => g.RemoteHasBranchAsync("https://example/repo.git", "feature/foo", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(true);
+
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+            attachToExistingBranch: true);
+
+        Assert.True(verdict.IsUsable);
+        Assert.True(verdict.ExistsOnOrigin);
+    }
+
+    [Fact]
+    public async Task Attaching_to_a_branch_missing_from_origin_is_a_conflict_saying_so()
+    {
+        // A fresh branch would otherwise be cut from the base and pushed under a
+        // name the human believes is someone else's existing work.
+        var (svc, _, repoId, git) = Setup(baseRepoOnDisk: true);
+        git.Setup(g => g.LocalBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false);
+        git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync(false);
+
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+            attachToExistingBranch: true);
+
+        Assert.Null(verdict.ValidationError);
+        Assert.Contains("`feature/foo`", verdict.Conflict);
+        Assert.Contains("does not exist on origin", verdict.Conflict);
+        Assert.False(verdict.ExistsOnOrigin);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task An_unreachable_origin_is_not_treated_as_a_conflict(bool attach)
     {
         // Refusing to start over an unanswered question would park work items
         // on a flaky network; the Start node fails the run on an unreachable
-        // origin anyway.
+        // origin anyway, and an attaching run on a missing origin branch.
         var (svc, _, repoId, git) = Setup();
         git.Setup(g => g.LocalBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false);
         git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((bool?)null);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+            attachToExistingBranch: attach);
 
         Assert.True(verdict.IsUsable);
+        Assert.Null(verdict.ExistsOnOrigin);
     }
 
     private static LoopRun SeedRun(TestDb db, string workItemId, string branchName, LoopRunStatus status)

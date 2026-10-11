@@ -172,6 +172,43 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         Assert.Equal(RemoteEditProposalStatus.Stale, (await ReadProposalAsync(item.Id, proposal.Id)).Status);
     }
 
+    [Fact]
+    public async Task A_proposal_of_only_attach_to_existing_branch_snapshots_it_and_approving_applies_it()
+    {
+        var item = await CreateItemAsync();
+
+        var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { AttachToExistingBranch = true });
+
+        Assert.True(proposal.Proposed.AttachToExistingBranch);
+        Assert.Null(proposal.Proposed.Title);
+        Assert.False(proposal.Snapshot.AttachToExistingBranch);
+        Assert.False((await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.AttachToExistingBranch);
+
+        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(EditProposalDecisionOutcome.Applied, approved.Outcome);
+        var stored = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!;
+        Assert.True(stored.AttachToExistingBranch);
+        AssertFieldsEqual(stored, "Old backlog item", "The original description.",
+            new[] { "legacy-tag", "HIL" }, "feature/original", "develop");
+    }
+
+    [Fact]
+    public async Task A_human_changing_attach_to_existing_branch_makes_a_pending_proposal_stale()
+    {
+        var item = await CreateItemAsync();
+        var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Agent title" });
+
+        await _client.UpdateAsync(_opts, item.Id, new RemoteUpdateWorkItemRequest { AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
+
+        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(EditProposalDecisionOutcome.Stale, result.Outcome);
+        var stored = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!;
+        Assert.Equal("Old backlog item", stored.Title);
+        Assert.True(stored.AttachToExistingBranch);
+    }
+
     /// <summary>
     /// Staleness is about the five editable fields only. A status transition
     /// moves the item's UpdatedAt without touching any of them, and must not make a proposal on an active item unapprovable.

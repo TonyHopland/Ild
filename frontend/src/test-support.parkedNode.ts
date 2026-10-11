@@ -26,7 +26,11 @@ export const FIXED_NODE_OUTPUTS: Record<string, NodeOutput[]> = {
   AI: SUCCESS_AND_FAILURE,
   Human: SUCCESS_AND_FAILURE,
   Prompt: SUCCESS_AND_FAILURE,
-  PR: [...SUCCESS_AND_FAILURE, ...RESERVED_PR_OUTPUTS.map((name) => ({ name, reserved: true }))],
+  PR: [
+    ...SUCCESS_AND_FAILURE,
+    ...RESERVED_PR_OUTPUTS.map((name) => ({ name, reserved: true })),
+    { name: "on_existing_pr" },
+  ],
   Condition: [{ name: "OnFailure" }],
   Cleanup: [],
 };

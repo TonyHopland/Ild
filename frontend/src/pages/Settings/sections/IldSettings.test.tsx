@@ -47,6 +47,31 @@ describe("Ild settings", () => {
     });
   });
 
+  test("shows the PR review finding and nit caps at their defaults, and saves each", async () => {
+    vi.spyOn(authServices.settingsService, "get").mockRejectedValue(new Error("not set"));
+    const put = vi.spyOn(authServices.settingsService, "put");
+
+    render(<IldSettings />);
+
+    const findings = (await screen.findByLabelText(/findings/i)) as HTMLInputElement;
+    const nits = screen.getByLabelText(/nits/i) as HTMLInputElement;
+    expect(findings.value).toBe("25");
+    expect(nits.value).toBe("10");
+
+    fireEvent.change(findings, { target: { value: "0" } });
+    fireEvent.click(findings.parentElement!.querySelector("button")!);
+    await screen.findByText("Must be an integer between 1 and 1000.");
+
+    fireEvent.change(findings, { target: { value: "30" } });
+    fireEvent.click(findings.parentElement!.querySelector("button")!);
+    fireEvent.change(nits, { target: { value: "4" } });
+    fireEvent.click(nits.parentElement!.querySelector("button")!);
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith("pr.maxFindings", "30");
+      expect(put).toHaveBeenCalledWith("pr.maxNits", "4");
+    });
+  });
+
   test("reads the scheduler pause and writes it back", async () => {
     vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
       key,
