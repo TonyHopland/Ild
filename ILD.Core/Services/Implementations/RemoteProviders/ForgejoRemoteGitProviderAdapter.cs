@@ -135,6 +135,7 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
                 var id = ReadId(comment);
                 if (id is null) continue;
                 var body = ReadString(comment, "body");
+                var (findingId, severity) = PrCommentMarker.FindingOf(body);
                 items.Add(new RemotePrReviewItem(
                     "review",
                     id,
@@ -150,7 +151,9 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
                     Resolved: comment.TryGetProperty("resolver", out var resolver)
                         && resolver.ValueKind == JsonValueKind.Object
                         && !string.IsNullOrEmpty(ReadString(resolver, "login")),
-                    PrCommentMarker.IsStamped(body)));
+                    PrCommentMarker.IsStamped(body),
+                    findingId,
+                    severity));
             }
         }
 
@@ -164,6 +167,7 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
             var id = ReadId(comment);
             if (id is null) continue;
             var body = ReadString(comment, "body");
+            var (findingId, severity) = PrCommentMarker.FindingOf(body);
             items.Add(new RemotePrReviewItem(
                 "issue", id, ThreadId: null, ReviewId: null, Path: null, Line: null,
                 Truncate(body, MaxReviewItemLength) ?? string.Empty,
@@ -171,7 +175,9 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
                 headSha,
                 ReadDate(comment, "created_at") ?? DateTime.MinValue,
                 Resolved: false,
-                PrCommentMarker.IsStamped(body)));
+                PrCommentMarker.IsStamped(body),
+                findingId,
+                severity));
         }
 
         return new RemotePrReviewLedger(reviews, items, headSha, null);
@@ -194,6 +200,20 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
             return new RemotePrWriteResult(false, null,
                 $"No review comment with id '{commentId}' on pull request #{prNumber}, so there is no file and line to answer on.");
 
+        return await PostOneCommentReviewAsync(http, repo, prNumber, answered.Path, answered.Line ?? 1, body, "reply");
+    }
+
+    /// <summary>
+    /// A finding is a one-comment review on the new side of
+    /// <paramref name="line"/>, the same shape a reply takes here.
+    /// </summary>
+    public override Task<RemotePrWriteResult> CreateReviewCommentAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body)
+        => PostOneCommentReviewAsync(http, repo, prNumber, path, line, body, "finding");
+
+    private async Task<RemotePrWriteResult> PostOneCommentReviewAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body, string what)
+    {
         ApplyHeaders(http, repo.Provider);
         using var resp = await http.PostAsJsonAsync(
             $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/reviews",
@@ -201,10 +221,10 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
             {
                 body = string.Empty,
                 @event = "COMMENT",
-                comments = new[] { new { path = answered.Path, body, new_position = answered.Line ?? 1 } },
+                comments = new[] { new { path, body, new_position = line } },
             });
         if (!resp.IsSuccessStatusCode)
-            return new RemotePrWriteResult(false, null, $"The reply was refused by {ProviderType} (HTTP {(int)resp.StatusCode}).");
+            return new RemotePrWriteResult(false, null, $"The {what} was refused by {ProviderType} (HTTP {(int)resp.StatusCode}).");
 
         // The response is the REVIEW that was created, and its id lives in a
         // different sequence from the comment ids this adapter's ledger keys on

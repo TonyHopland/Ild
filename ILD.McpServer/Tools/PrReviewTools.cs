@@ -12,8 +12,8 @@ namespace ILD.McpServer.Tools;
 /// back. Everything runs server-side with the forge credentials, which never
 /// reach the agent.
 ///
-/// Read, reply and resolve — plus seeing and taking back what the agent itself
-/// queued — is the whole surface: approving, merging, closing and dismissing are
+/// Read, reply and resolve, raise a finding of its own on a line — plus seeing
+/// and taking back what the agent itself queued — is the whole surface: approving, merging, closing and dismissing are
 /// deliberately absent. Reading happens immediately; a reply or a resolution is
 /// only ever QUEUED here — the PR node writes it at the end of the round, which
 /// is what keeps a human between an agent and a public pull request. Until then
@@ -76,14 +76,26 @@ public sealed class PrReviewTools
             $"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/pr-review/close",
             new { commentId, resolve });
 
+    [McpServerTool(Name = "post_pr_review_finding")]
+    [Description("Raise a finding of your own as a reviewer: a comment anchored on one line of the pull request's diff. Use it when you are reviewing the pull request; to answer something a reviewer said, use reply_to_pr_review_comment instead. Nothing is posted when you call this: the finding is QUEUED against the run and the PR node posts it at the end of the round, headed with its severity, where a human can read it and drop it first. Each finding has a stable id made from the path and its text (not the line or severity), so raising the same point again — on a later review, after the code moved — queues nothing while ILD's comment carrying it is still open on the pull request or it is already queued; a finding whose thread was resolved is raised again. Per pull request the number of findings, and of nits, is capped by the pr.maxFindings and pr.maxNits settings; a call past either is refused with a message naming the setting. To take a finding back before it is sent, pass its writeId to withdraw_pr_write. Returns {ok, writeId, message}; ok=false with a message is a refusal you can read, not a crash. Provider limits: GitHub refuses a line that is not part of the diff (the refusal is logged when the PR node sends it, and the round is not failed); Forgejo posts it as a one-comment review and cannot resolve its thread afterwards; Azure DevOps anchors it on the new version of the file.")]
+    public Task<string> PostPrReviewFinding(
+        [Description("Work item GUID.")] string workItemId,
+        [Description("The file, relative to the repository root, as the diff names it (e.g. src/App.cs).")] string path,
+        [Description("The line on the new side of the diff, counted from 1.")] int line,
+        [Description("important (must be addressed) or nit (minor, optional).")] string severity,
+        [Description("The finding: what is wrong and why. Keep it to one point.")] string body)
+        => _ild.PostJsonAsync(
+            $"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/pr-review/finding",
+            new { path, line, severity, body });
+
     [McpServerTool(Name = "list_queued_pr_writes")]
-    [Description("See what you have queued for the pull request and not yet had sent: your own pending replies, comments and resolves on the work item's current pull request, and nobody else's. Use it before withdraw_pr_write, or to check what the PR node is about to send on your behalf. Reads only the queue, never the forge. Returns {message, writes[]}: each write carries id, kind (reply=on a thread, comment=a new pull-request comment, resolve=closing a thread), targetId, itemId (the review item you answered or closed; null for comment_on_pr and resolve_pr_review_thread), body, path, line and queuedAt. With no pull request the list is empty and message says so.")]
+    [Description("See what you have queued for the pull request and not yet had sent: your own pending replies, comments, resolves and findings on the work item's current pull request, and nobody else's. Use it before withdraw_pr_write, or to check what the PR node is about to send on your behalf. Reads only the queue, never the forge. Returns {message, writes[]}: each write carries id, kind (reply=on a thread, comment=a new pull-request comment, resolve=closing a thread, finding=your own finding on a line), targetId, itemId (the review item you answered or closed, or the finding's id; null for comment_on_pr and resolve_pr_review_thread), body, path, line, severity and findingId (findings only) and queuedAt. With no pull request the list is empty and message says so.")]
     public Task<string> ListQueuedPrWrites(
         [Description("Work item GUID.")] string workItemId)
         => _ild.GetRawAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(workItemId)}/pr-review/queue");
 
     [McpServerTool(Name = "withdraw_pr_write")]
-    [Description("Take back a write you queued for the pull request — a reply, a comment or a resolve — before the PR node sends it, when you no longer want to say anything at all. To change what you said about a review item, answer or close it again instead: that replaces your pending answer. Only your own pending writes can be withdrawn: one already sent, one another run or chat session queued, or one that does not exist is refused with a message saying why, and a human can still drop anything from the run's queue. Returns {ok, writeId, message}; ok=false with a message is a refusal you can read, not a crash.")]
+    [Description("Take back a write you queued for the pull request — a reply, a comment, a resolve or a finding — before the PR node sends it, when you no longer want to say anything at all. To change what you said about a review item, answer or close it again instead: that replaces your pending answer. Only your own pending writes can be withdrawn: one already sent, one another run or chat session queued, or one that does not exist is refused with a message saying why, and a human can still drop anything from the run's queue. Returns {ok, writeId, message}; ok=false with a message is a refusal you can read, not a crash.")]
     public Task<string> WithdrawPrWrite(
         [Description("Work item GUID.")] string workItemId,
         [Description("The id the queuing tool returned for the write, or an id from list_queued_pr_writes.")] string writeId)

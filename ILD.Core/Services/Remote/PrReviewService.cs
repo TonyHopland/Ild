@@ -42,6 +42,15 @@ public interface IPrReviewService
     Task<RemotePrWriteResult> CommentAsync(
         string workItemId, string body, Guid? callerRunId, Guid? callerChatSessionId = null);
 
+    /// <summary>
+    /// A reviewer's own finding on a line of the diff. One already open on the
+    /// pull request, or already queued, queues nothing; one past the per-PR
+    /// caps is refused.
+    /// </summary>
+    Task<RemotePrWriteResult> FindingAsync(
+        string workItemId, string path, int line, string severity, string body,
+        Guid? callerRunId, Guid? callerChatSessionId = null);
+
     /// <summary>An item the round read and deliberately left alone.</summary>
     Task<RemotePrWriteResult> CloseAsync(
         string workItemId, string commentId, bool resolve, Guid? callerRunId, Guid? callerChatSessionId = null);
@@ -104,6 +113,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     private readonly IRemoteProvider _remote;
     private readonly IRunNotifier? _notifier;
     private readonly IEventLogService? _events;
+    private readonly ISchedulerSettingsService? _settings;
 
     /// <summary>
     /// <paramref name="notifier"/> and <paramref name="events"/> are optional
@@ -112,15 +122,18 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// answer sits in the database unseen until something else happens to
     /// refresh the run, which is most of the window a person has to drop it;
     /// without the event log a closed item leaves no trace, which costs the
-    /// record and not the decision.
+    /// record and not the decision. Without <paramref name="settings"/> the
+    /// finding caps are their defaults.
     /// </summary>
     public PrReviewService(
-        ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null, IEventLogService? events = null)
+        ILoopRunStore runs, IRemoteProvider remote, IRunNotifier? notifier = null, IEventLogService? events = null,
+        ISchedulerSettingsService? settings = null)
     {
         _runs = runs;
         _remote = remote;
         _notifier = notifier;
         _events = events;
+        _settings = settings;
     }
 
     private const string NoPullRequest =
@@ -287,6 +300,85 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
             new PrQueuedWrite(NewIntentId(), PrQueuedWrite.Comment, string.Empty, body, null, null, DateTime.UtcNow));
         return placed.Refusal ?? new RemotePrWriteResult(true, placed.Id,
             "Queued: this comment goes out when the PR node next runs, and can be dropped before then.");
+    }
+
+    /// <summary>
+    /// Queue a finding of the caller's own, anchored on <paramref name="line"/>
+    /// of <paramref name="path"/>, to go out as a review comment when the PR
+    /// node runs.
+    ///
+    /// A finding is known by its id (<see cref="PrFinding.IdFor"/>), so a
+    /// re-review that raises the same point again — on a line the code has since
+    /// moved to, say — queues nothing while ILD's comment carrying it is still
+    /// open on the pull request or a write for it is still queued. A resolved
+    /// one is raised again: it came back.
+    ///
+    /// The caps count distinct findings: every one ILD has posted on this pull
+    /// request, resolved or not, and every one queued. They are checked inside
+    /// the compare-and-set with the duplicate check, so two calls racing each
+    /// other cannot both slip under a cap or both queue the same finding.
+    /// </summary>
+    public async Task<RemotePrWriteResult> FindingAsync(
+        string workItemId, string path, int line, string severity, string body,
+        Guid? callerRunId, Guid? callerChatSessionId = null)
+    {
+        var target = await WriteTargetAsync(workItemId);
+        if (target is null)
+            return new RemotePrWriteResult(false, null, NoLivePullRequest);
+
+        var fetched = await _remote.GetPullRequestReviewLedgerAsync(target.RepoUrl, target.PrNumber);
+        if (!string.IsNullOrEmpty(fetched.Message))
+            return new RemotePrWriteResult(false, null, fetched.Message);
+
+        var findingId = PrFinding.IdFor(path, body);
+        var postedFindings = fetched.Items
+            .Where(i => i.FindingId is not null && PrCommentMarker.WasPostedByIld(i))
+            .ToList();
+        if (postedFindings.Any(i => i.FindingId == findingId && !i.Resolved))
+            return new RemotePrWriteResult(true, null,
+                "Already open: ILD raised this finding on the pull request and its thread is not resolved, so nothing was queued.");
+
+        var maxFindings = _settings is null ? AppSettingKeys.DefaultPrMaxFindings : await _settings.GetPrMaxFindingsAsync();
+        var maxNits = _settings is null ? AppSettingKeys.DefaultPrMaxNits : await _settings.GetPrMaxNitsAsync();
+        var caller = Caller.Of(callerRunId, callerChatSessionId);
+        var write = new PrQueuedWrite(
+            NewIntentId(), PrQueuedWrite.Finding, string.Empty, body, path.Trim(), line, DateTime.UtcNow,
+            ItemId: findingId, QueuedByRunId: caller.RunId, QueuedByChatSessionId: caller.ChatSessionId,
+            ItemKind: PrQueuedWrite.Finding, Severity: severity, FindingId: findingId);
+
+        string? refusal = null;
+        PrQueuedWrite? alreadyQueued = null;
+        var written = await MutateQueueAsync(target.Run.Id, queued =>
+        {
+            alreadyQueued = queued.FirstOrDefault(q => q.Kind == PrQueuedWrite.Finding && q.FindingId == findingId);
+            if (alreadyQueued is not null)
+                return null;
+
+            var raised = postedFindings.Select(i => (Id: i.FindingId!, Severity: i.FindingSeverity))
+                .Concat(queued.Where(q => q.Kind == PrQueuedWrite.Finding && q.FindingId is not null)
+                    .Select(q => (Id: q.FindingId!, q.Severity)))
+                .Append((Id: findingId, Severity: (string?)severity))
+                .ToList();
+            var findings = raised.Select(r => r.Id).Distinct().Count();
+            var nits = raised.Where(r => r.Severity == PrFinding.Nit).Select(r => r.Id).Distinct().Count();
+            refusal = severity == PrFinding.Nit && nits > maxNits
+                ? $"This pull request already has {maxNits} nits from ILD, on it or queued — the most the {AppSettingKeys.PrMaxNits} setting allows — so nothing was queued."
+                : findings > maxFindings
+                    ? $"This pull request already has {maxFindings} findings from ILD, on it or queued — the most the {AppSettingKeys.PrMaxFindings} setting allows — so nothing was queued."
+                    : queued.Count >= PrQueuedWrite.MaxQueued ? QueueFull : null;
+            return refusal is null ? queued.Append(write).ToList() : null;
+        });
+
+        if (alreadyQueued is not null)
+            return new RemotePrWriteResult(true, alreadyQueued.Id,
+                $"Already queued: write {alreadyQueued.Id} raises this finding when the PR node next runs, so nothing more was queued.");
+        if (refusal is not null)
+            return new RemotePrWriteResult(false, null, refusal);
+        if (!written)
+            return new RemotePrWriteResult(false, null, QueueContended);
+
+        return new RemotePrWriteResult(true, write.Id,
+            $"Queued: this finding goes out on {write.Path} line {line} when the PR node next runs, and can be dropped before then.");
     }
 
     /// <summary>
@@ -561,6 +653,12 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
 
     private static string NewIntentId() => Guid.NewGuid().ToString("N")[..12];
 
+    private static readonly string QueueFull =
+        $"This run already has {PrQueuedWrite.MaxQueued} pull-request writes waiting for the PR node; nothing more is queued until they go out.";
+
+    private const string QueueContended =
+        "The queue is being changed from somewhere else; nothing in it was changed. Try again.";
+
     /// <summary>Attempts before a contended queue gives up; each one re-reads the row it lost to.</summary>
     private const int QueueWriteAttempts = 5;
 
@@ -685,11 +783,9 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         });
 
         if (full)
-            return new Placement(new RemotePrWriteResult(false, null,
-                $"This run already has {PrQueuedWrite.MaxQueued} pull-request writes waiting for the PR node; nothing more is queued until they go out."));
+            return new Placement(new RemotePrWriteResult(false, null, QueueFull));
         if (!written && !unchanged)
-            return new Placement(new RemotePrWriteResult(false, null,
-                "The queue is being changed from somewhere else; nothing in it was changed. Try again."));
+            return new Placement(new RemotePrWriteResult(false, null, QueueContended));
 
         if (previous is not null && placed is not null)
             await RecordReplacedAsync(run.Id, caller, previous, placed);

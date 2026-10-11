@@ -75,4 +75,18 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
         return AppSettingKeys.DefaultMaxAiTraversals;
     }
+
+    public async Task<int> GetPrMaxFindingsAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.PrMaxFindings, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
+        return AppSettingKeys.DefaultPrMaxFindings;
+    }
+
+    public async Task<int> GetPrMaxNitsAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.PrMaxNits, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
+        return AppSettingKeys.DefaultPrMaxNits;
+    }
 }

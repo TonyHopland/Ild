@@ -46,6 +46,18 @@ public static class AppSettingKeys
     public const int DefaultMaxAiTraversals = 25;
 
     /// <summary>
+    /// How many distinct findings ILD's reviewers may raise on one pull request,
+    /// counting those already on it and those queued. Keeps a reviewer from
+    /// burying a pull request in comments.
+    /// </summary>
+    public const string PrMaxFindings = "pr.maxFindings";
+    public const int DefaultPrMaxFindings = 25;
+
+    /// <summary>How many of those findings may be nits, counted the same way.</summary>
+    public const string PrMaxNits = "pr.maxNits";
+    public const int DefaultPrMaxNits = 10;
+
+    /// <summary>
     /// Whether ILD retries a run parked by a Provider Interruption
     /// (<c>HaltReason.Throttled</c>) on its own, rather than leaving it for a
     /// person to Resume. Off by default, and a run whose automatic retries run
@@ -139,6 +151,12 @@ public interface ISchedulerSettingsService
 
     /// <summary>AI nodes a run may execute between human interactions (minimum 1).</summary>
     Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default);
+
+    /// <summary>Distinct findings ILD may raise on one pull request (minimum 1).</summary>
+    Task<int> GetPrMaxFindingsAsync(CancellationToken ct = default);
+
+    /// <summary>Distinct nits ILD may raise on one pull request (minimum 1).</summary>
+    Task<int> GetPrMaxNitsAsync(CancellationToken ct = default);
 
     /// <summary>Whether ILD retries a Provider Interruption park itself instead of a person.</summary>
     Task<bool> GetThrottleAutoResumeAsync(CancellationToken ct = default);

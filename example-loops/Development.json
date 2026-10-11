@@ -25,6 +25,7 @@
           { "name": "on_ci_passed", "reserved": true },
           { "name": "on_merged", "reserved": true },
           { "name": "on_abandoned", "reserved": true },
+          { "name": "on_existing_pr" },
           { "name": "Respond" }
         ]
       }

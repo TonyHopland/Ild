@@ -7,6 +7,15 @@ namespace ILD.Core.Services.Interfaces;
 public interface IRemoteProvider
 {
     Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body);
+
+    /// <summary>
+    /// The open pull request whose head is <paramref name="sourceBranch"/> in
+    /// this repository; when the branch has several, the one into
+    /// <paramref name="targetBranch"/>. Never throws: a forge that could not
+    /// answer comes back with <see cref="RemotePrLookup.Error"/> set, which a
+    /// caller must never read as "there is none".
+    /// </summary>
+    Task<RemotePrLookup> FindOpenPullRequestAsync(string repoUrl, string sourceBranch, string targetBranch);
     Task<bool> MergePullRequestAsync(string repoUrl, string prNumber);
 
     /// <summary>
@@ -48,6 +57,14 @@ public interface IRemoteProvider
     /// comes back as <see cref="RemotePrWriteResult.Ok"/> false with a message.
     /// </summary>
     Task<RemotePrWriteResult> ReplyToReviewThreadAsync(string repoUrl, string prNumber, string commentId, string body);
+
+    /// <summary>
+    /// Post a new review comment anchored on the new side of
+    /// <paramref name="line"/> in <paramref name="path"/>. Never throws; a
+    /// refusal (a line outside the diff, say) comes back as
+    /// <see cref="RemotePrWriteResult.Ok"/> false with a message.
+    /// </summary>
+    Task<RemotePrWriteResult> CreateReviewCommentAsync(string repoUrl, string prNumber, string path, int line, string body);
 
     /// <summary>
     /// Mark a review thread resolved. Providers whose API has no such concept

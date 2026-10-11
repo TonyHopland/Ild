@@ -1,0 +1,141 @@
+{
+  "$schema": "ild-loop-template/v2",
+  "name": "Review",
+  "description": "AI review of a pull request someone else opened: the run attaches to the work item's existing branch and its open pull request, an AI reviewer posts line-anchored findings, and every comment or new push sends it round again to review only what is new. Set the work item's branch name to the pull request's branch and tick Attach to existing branch.",
+  "recoveryPolicy": "AutoResume",
+  "nodes": [
+    {
+      "id": "b0aba913-8da6-46c5-926f-5d8babc2fc80",
+      "type": "Start",
+      "label": "Start",
+      "config": {
+        "__pos": {
+          "x": -320,
+          "y": 120
+        },
+        "createWorktree": true,
+        "runInstall": true,
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
+      }
+    },
+    {
+      "id": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "type": "PR",
+      "label": "Pull Request",
+      "config": {
+        "attachIfExists": true,
+        "createIfNoneExists": false,
+        "__pos": {
+          "x": -40,
+          "y": 120
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" },
+          { "name": "on_rejected", "reserved": true },
+          { "name": "on_merge_conflict", "reserved": true },
+          { "name": "on_ci_failed", "reserved": true },
+          { "name": "on_comment", "reserved": true },
+          { "name": "on_approved", "reserved": true },
+          { "name": "on_ci_passed", "reserved": true },
+          { "name": "on_merged", "reserved": true },
+          { "name": "on_abandoned", "reserved": true },
+          { "name": "on_existing_pr" }
+        ]
+      }
+    },
+    {
+      "id": "67dee1f0-f1bf-47ff-a906-112658e50c75",
+      "type": "AI",
+      "label": "Reviewer",
+      "config": {
+        "prompt": "You are reviewing a pull request that someone else opened. You did not write it, and you do not change it: your only job is to find what is wrong with it and say so on the lines it is about.\n\nWork item:\nTitle: {{WorkItem.Title}}\nDescription: {{WorkItem.Description}}\n\nWhy you are reviewing now:\n{{PreviousNode.Output}}\n\nHead commit you last reviewed (empty on the first review): `{{Var.ReviewedHead}}`\n\nWork in this order:\n1. Call pull_branch FIRST, so this worktree is at the pull request's head before you read a line of it. If its outcome is Conflict, DirtyWorktree or RebaseRefused, STOP: queue no findings, and reply saying which outcome you got and that this round could not review. Updated, AlreadyUpToDate and NoRemoteBranch are fine — carry on.\n2. Work out what to review. On the first review that is the whole change: `git log` and `git diff` from the merge base with the branch the pull request targets. When a head you last reviewed is set above, review only what came after it (`git diff <that commit>..HEAD`); if HEAD is still that commit there is nothing new, so queue nothing and say so.\n3. Call get_pr_review, passing sinceCommit = the head you last reviewed when one is set, and read what has been said. Items with postedByIld=true are findings you raised earlier: do not raise them again, and take the author's replies to them into account.\n4. For every problem you find, call post_pr_review_finding with the file path, the line on the new side of the diff, a severity (important for anything that must be fixed — bugs, missing tests, security, broken behaviour; nit for minor style or naming) and one point per finding: what is wrong and why. Raising a finding that is already open queues nothing, so you never need to check that yourself. If a call is refused because a cap is reached, stop raising nits first.\n5. Finally, record what you reviewed: call set_loop_variable with name ReviewedHead and the output of `git rev-parse HEAD` as the value.\n\nHard rules:\n- Do not edit, commit or push anything: a push from this run goes to someone else's pull request.\n- Do not use reply_to_pr_review_comment or comment_on_pr: your findings are your whole contribution.\n\nReply with a short summary: the head you reviewed and the findings you queued, or why you queued none.",
+        "useSession": false,
+        "aiProviderTag": "",
+        "timeout": 1800,
+        "toolAllowlist": [],
+        "__pos": {
+          "x": 240,
+          "y": 260
+        },
+        "outputs": [
+          { "name": "OnSuccess" },
+          { "name": "OnFailure" }
+        ]
+      }
+    },
+    {
+      "id": "9c8e24b4-63ab-47b4-b0af-ea6950fede57",
+      "type": "Cleanup",
+      "label": "Cleanup",
+      "config": {
+        "__pos": {
+          "x": 260,
+          "y": 40
+        },
+        "outputs": []
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "f96cd152-389f-44e7-bf9d-bab66e83633b",
+      "sourceNodeId": "b0aba913-8da6-46c5-926f-5d8babc2fc80",
+      "targetNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "3519ac6e-84ce-4c21-a3d1-2bca4eeaed74",
+      "sourceNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "targetNodeId": "67dee1f0-f1bf-47ff-a906-112658e50c75",
+      "edgeType": "Custom",
+      "name": "on_existing_pr"
+    },
+    {
+      "id": "e46efd00-1f89-46ab-b72c-81f5686e0155",
+      "sourceNodeId": "67dee1f0-f1bf-47ff-a906-112658e50c75",
+      "targetNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "edgeType": "OnSuccess",
+      "name": null
+    },
+    {
+      "id": "8da14242-e7b4-4702-840e-1426f04576c5",
+      "sourceNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "targetNodeId": "67dee1f0-f1bf-47ff-a906-112658e50c75",
+      "edgeType": "Custom",
+      "name": "on_comment"
+    },
+    {
+      "id": "7829a79c-ef7f-4ddc-921e-99d8c5eb237a",
+      "sourceNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "targetNodeId": "67dee1f0-f1bf-47ff-a906-112658e50c75",
+      "edgeType": "Custom",
+      "name": "on_ci_passed"
+    },
+    {
+      "id": "15d9ca29-04d4-4f99-a9c5-5325952434ad",
+      "sourceNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "targetNodeId": "67dee1f0-f1bf-47ff-a906-112658e50c75",
+      "edgeType": "Custom",
+      "name": "on_ci_failed"
+    },
+    {
+      "id": "bc38f3a1-3741-4265-810b-22ede1c1f6a7",
+      "sourceNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "targetNodeId": "9c8e24b4-63ab-47b4-b0af-ea6950fede57",
+      "edgeType": "Custom",
+      "name": "on_merged"
+    },
+    {
+      "id": "bd5f93c0-7ae4-44bd-8480-91fd8fb6b214",
+      "sourceNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
+      "targetNodeId": "9c8e24b4-63ab-47b4-b0af-ea6950fede57",
+      "edgeType": "Custom",
+      "name": "on_abandoned"
+    }
+  ]
+}

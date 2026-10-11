@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace ILD.Data.DTOs;
 
@@ -29,6 +30,9 @@ public record RemotePrReviewSummary(
 /// surfacing it as a thread, which therefore has no comment id of its own).
 /// <see cref="Commit"/> is the commit the comment was written against, not the
 /// head it has since drifted onto — the per-head repeat suppression keys on it.
+/// <see cref="FindingId"/> and <see cref="FindingSeverity"/> are read from the
+/// marker of a finding ILD posted (see <see cref="PrFinding"/>), from the full
+/// body like <see cref="PostedByIld"/>; null on everything else.
 /// </summary>
 public record RemotePrReviewItem(
     string Kind,
@@ -42,7 +46,9 @@ public record RemotePrReviewItem(
     string? Commit,
     DateTime CreatedAt,
     bool Resolved,
-    bool PostedByIld
+    bool PostedByIld,
+    string? FindingId = null,
+    string? FindingSeverity = null
 );
 
 /// <summary>
@@ -92,15 +98,37 @@ public record RemotePrWriteResult(bool Ok, string? Id, string? Message);
 /// so its comments and a human's arrive under one login and filtering by author
 /// would swallow the human's.
 /// </summary>
-public static class PrCommentMarker
+public static partial class PrCommentMarker
 {
     private const string Prefix = "<!-- ild:pr-reply run=";
 
-    public static string Stamp(string body, Guid runId)
-        => $"{body.TrimEnd()}\n\n{Prefix}{runId:N} -->";
+    /// <summary>
+    /// <paramref name="body"/> with the marker appended. A finding also carries
+    /// its id and severity in it, after the unchanged prefix, so recognising
+    /// ILD's comments works the same for findings as for replies.
+    /// </summary>
+    public static string Stamp(string body, Guid runId, string? findingId = null, string? severity = null)
+    {
+        var finding = findingId is null ? string.Empty : $" finding={findingId}";
+        var weight = severity is null ? string.Empty : $" severity={severity}";
+        return $"{body.TrimEnd()}\n\n{Prefix}{runId:N}{finding}{weight} -->";
+    }
 
     public static bool IsStamped(string? body)
         => body is not null && body.Contains(Prefix, StringComparison.Ordinal);
+
+    /// <summary>The finding id and severity a stamped finding carries, or nulls for anything else.</summary>
+    public static (string? FindingId, string? Severity) FindingOf(string? body)
+    {
+        if (body is null) return (null, null);
+        var match = FindingMarker().Match(body);
+        return match.Success
+            ? (match.Groups["id"].Value, match.Groups["severity"].Success ? match.Groups["severity"].Value : null)
+            : (null, null);
+    }
+
+    [GeneratedRegex(@"<!-- ild:pr-reply run=[0-9a-f]+ finding=(?<id>[0-9a-f]+)(?: severity=(?<severity>[a-z]+))? -->")]
+    private static partial Regex FindingMarker();
 
     /// <summary>
     /// Whether ILD wrote this item — the one place that question is answered,
@@ -115,6 +143,33 @@ public static class PrCommentMarker
     /// </summary>
     public static bool WasPostedByIld(RemotePrReviewItem item)
         => item.PostedByIld || IsStamped(item.Body);
+}
+
+/// <summary>
+/// A reviewer's line-anchored finding. Its id names the point being made rather
+/// than where it was made: the file and the prose, normalised (trimmed,
+/// whitespace collapsed, case folded), and never the line or the severity — a
+/// re-review after the code moved under it restates the same finding on a
+/// different line, and must be recognised as the one already raised.
+/// </summary>
+public static class PrFinding
+{
+    public const string Important = "important";
+    public const string Nit = "nit";
+
+    public static bool IsSeverity(string? severity) => severity is Important or Nit;
+
+    /// <summary>The finding as it reads on the pull request: its severity first, so a nit is seen as one.</summary>
+    public static string Headed(string? severity, string body)
+        => severity == Nit ? $"**Nit:** {body}" : $"**Important:** {body}";
+
+    public static string IdFor(string path, string body)
+    {
+        var normalized = string.Join(' ', body.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .ToLowerInvariant();
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"{path.Trim()}\n{normalized}"));
+        return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
+    }
 }
 
 /// <summary>
@@ -155,11 +210,20 @@ public record PrQueuedWrite(
     string? ItemId = null,
     Guid? QueuedByRunId = null,
     Guid? QueuedByChatSessionId = null,
-    string? ItemKind = null
+    string? ItemKind = null,
+    string? Severity = null,
+    string? FindingId = null
 )
 {
     public const string Reply = "reply";
     public const string Resolve = "resolve";
+
+    /// <summary>
+    /// A reviewer's own finding, posted as a new review comment anchored on
+    /// <see cref="Path"/> and <see cref="Line"/>, with its <see cref="Severity"/>
+    /// and <see cref="FindingId"/>.
+    /// </summary>
+    public const string Finding = "finding";
 
     /// <summary>
     /// A new pull-request comment answering something with no thread of its own

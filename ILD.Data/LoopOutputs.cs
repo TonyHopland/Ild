@@ -8,7 +8,8 @@ namespace ILD.Data;
 /// as an object in <c>config.outputs</c> (<c>{ "name": ..., ... }</c>); rules,
 /// cases and edge rows only refer to an output by name. Each node type also has
 /// <em>fixed</em> outputs it always holds — success and failure, and on a PR node
-/// the reserved outputs the PR heartbeat fires — which are filled in when missing
+/// the reserved outputs the PR heartbeat fires plus <see cref="OnExistingPr"/> —
+/// which are filled in when missing
 /// and cannot be removed. See "Output" in CONTEXT.md and ADR-0023.
 /// </summary>
 public static class LoopOutputs
@@ -25,6 +26,14 @@ public static class LoopOutputs
     public const string OnMerged = "on_merged";
     public const string OnAbandoned = "on_abandoned";
 
+    /// <summary>
+    /// Taken by the PR node itself, never the heartbeat, on the one visit where
+    /// it attaches the run to a pull request the branch already had. Fixed on
+    /// every PR node but not reserved: it has no place in the heartbeat's
+    /// priority order.
+    /// </summary>
+    public const string OnExistingPr = "on_existing_pr";
+
     /// <summary>The reserved PR outputs in descending firing priority (index 0 = highest).</summary>
     public static readonly IReadOnlyList<string> ReservedPr = new[]
     {
@@ -40,7 +49,7 @@ public static class LoopOutputs
 
     private static readonly string[] SuccessAndFailure = { OnSuccess, OnFailure };
     private static readonly string[] FailureOnly = { OnFailure };
-    private static readonly string[] PrFixed = SuccessAndFailure.Concat(ReservedPr).ToArray();
+    private static readonly string[] PrFixed = SuccessAndFailure.Concat(ReservedPr).Append(OnExistingPr).ToArray();
 
     /// <summary>
     /// The outputs a node of <paramref name="type"/> always holds. A Condition

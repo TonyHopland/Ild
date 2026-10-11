@@ -259,6 +259,14 @@ public static class LoopTemplateValidator
                     ValidateMatchRulePattern(node.Id, rule, errors);
                 }
             }
+            else if (string.Equals(node.NodeType, "PR", StringComparison.OrdinalIgnoreCase))
+            {
+                // On its first visit a node that may neither create nor attach
+                // can only fail.
+                var cfg = NodeConfig.Parse<NodeConfig.Pr>(System.Text.Json.JsonSerializer.Serialize(node.Config));
+                if (!cfg.MayCreate && !cfg.MayAttach)
+                    errors.Add($"PR node {node.Id}: createIfNoneExists and attachIfExists cannot both be off; turn at least one on.");
+            }
             else if (string.Equals(node.NodeType, "Condition", StringComparison.OrdinalIgnoreCase))
             {
                 var cfg = NodeConfig.Parse<NodeConfig.Condition>(System.Text.Json.JsonSerializer.Serialize(node.Config));

@@ -42,6 +42,27 @@ public class AgentPrCommentRequest
 }
 
 /// <summary>
+/// A reviewer's own finding on one line of the diff
+/// (<c>POST /api/v1/agent/workitems/{id}/pr-review/finding</c>).
+/// <see cref="Severity"/> is <c>important</c> or <c>nit</c>.
+/// </summary>
+public class AgentPrReviewFindingRequest
+{
+    /// <summary>The file, relative to the repository root, as the diff names it.</summary>
+    [StringLength(1024)]
+    public string Path { get; set; } = string.Empty;
+
+    /// <summary>The line on the new side of the diff, counted from 1.</summary>
+    public int Line { get; set; }
+
+    public string? Severity { get; set; }
+
+    /// <summary>The finding. ILD heads it with its severity and stamps it before posting.</summary>
+    [StringLength(65536)]
+    public string Body { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// An item the round read and chose not to answer. <see cref="Resolve"/> also
 /// closes its thread where the item has one and the forge can.
 /// </summary>

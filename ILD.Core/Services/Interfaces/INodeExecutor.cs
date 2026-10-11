@@ -120,6 +120,12 @@ public abstract record NodeOutcome
     public sealed record PrCreated(string PrUrl) : NodeOutcome;
 
     /// <summary>
+    /// PR node attached the run to a pull request the branch already had.
+    /// The engine records it exactly as it does <see cref="PrCreated"/>.
+    /// </summary>
+    public sealed record PrAttached(string PrUrl) : NodeOutcome;
+
+    /// <summary>
     /// Cleanup node destroyed the worktree.
     /// The engine clears WorktreePath on LoopRun.
     /// </summary>

@@ -43,6 +43,21 @@ public class RemoteProviderService : IRemoteProvider
         }
     }
 
+    public async Task<RemotePrLookup> FindOpenPullRequestAsync(string repoUrl, string sourceBranch, string targetBranch)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null) return new RemotePrLookup(null, null, null, "no provider configured");
+        try
+        {
+            return await resolved.Adapter.FindOpenPullRequestAsync(_http, resolved, sourceBranch, targetBranch);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Open pull request lookup failed for branch {Branch} on {RepoUrl}", sourceBranch, repoUrl);
+            return new RemotePrLookup(null, null, null, "the provider request failed");
+        }
+    }
+
     public async Task<bool> MergePullRequestAsync(string repoUrl, string prNumber)
     {
         var resolved = await ResolveAsync(repoUrl);
@@ -147,6 +162,14 @@ public class RemoteProviderService : IRemoteProvider
         if (resolved == null) return NoProvider;
         try { return await resolved.Adapter.ReplyToReviewThreadAsync(_http, resolved, prNumber, commentId, body); }
         catch (Exception ex) { return Refused(ex, "review reply", repoUrl); }
+    }
+
+    public async Task<RemotePrWriteResult> CreateReviewCommentAsync(string repoUrl, string prNumber, string path, int line, string body)
+    {
+        var resolved = await ResolveAsync(repoUrl);
+        if (resolved == null) return NoProvider;
+        try { return await resolved.Adapter.CreateReviewCommentAsync(_http, resolved, prNumber, path, line, body); }
+        catch (Exception ex) { return Refused(ex, "review comment", repoUrl); }
     }
 
     public async Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId)

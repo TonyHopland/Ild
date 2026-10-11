@@ -671,6 +671,34 @@ public class AgentController : ControllerBase
     }
 
     /// <summary>
+    /// Raise a finding of the round's own on one line of the diff, queued for
+    /// the PR node to post as a review comment. One already open or queued is
+    /// answered as such; one past the per-PR caps is a refusal, 200 with a
+    /// message, as a refused reply is.
+    /// </summary>
+    [HttpPost("workitems/{id}/pr-review/finding")]
+    public async Task<IActionResult> PostPrReviewFinding(
+        string id,
+        [FromServices] IPrReviewService reviews,
+        [FromBody] AgentPrReviewFindingRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request?.Path) || string.IsNullOrWhiteSpace(request.Body))
+            return BadRequest(new { error = "path and body are required." });
+        if (request.Line < 1)
+            return BadRequest(new { error = "line must be 1 or more: the line on the new side of the diff." });
+        if (!PrFinding.IsSeverity(request.Severity))
+            return BadRequest(new { error = $"severity must be '{PrFinding.Important}' or '{PrFinding.Nit}'." });
+
+        var workItem = await _workItems.GetWorkItemAsync(id);
+        if (workItem == null)
+            return NotFound();
+
+        var result = await reviews.FindingAsync(
+            id, request.Path, request.Line, request.Severity!, request.Body, CallerRunId(), CallerChatSessionId());
+        return Ok(new { ok = result.Ok, writeId = result.Id, message = result.Message });
+    }
+
+    /// <summary>
     /// Record that this round read an item and chose not to answer it, closing
     /// its thread as well when <c>resolve</c> is set and the forge can. Closing
     /// suppresses nothing that was not already suppressed: the item was recorded
@@ -719,6 +747,8 @@ public class AgentController : ControllerBase
                 body = w.Body,
                 path = w.Path,
                 line = w.Line,
+                severity = w.Severity,
+                findingId = w.FindingId,
                 queuedAt = w.QueuedAt,
             }),
         });

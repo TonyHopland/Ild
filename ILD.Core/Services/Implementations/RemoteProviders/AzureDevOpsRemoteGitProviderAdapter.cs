@@ -146,7 +146,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             });
 
         if (!resp.IsSuccessStatusCode)
-            return new RemotePrResult(null, null, RemotePrStatus.Open, $"HTTP {(int)resp.StatusCode}");
+            return new RemotePrResult(null, null, RemotePrStatus.Open, await CreateRefusalAsync(resp, sourceBranch));
 
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
         var prNumber = ReadScalar(doc.RootElement, "pullRequestId");
@@ -154,6 +154,54 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             return new RemotePrResult(null, null, RemotePrStatus.Open, "the created pull request carried no id");
 
         return new RemotePrResult(PrApi(repo, prNumber), WebUrl(repo, prNumber), RemotePrStatus.Open, null);
+    }
+
+    /// <summary>
+    /// Azure DevOps filters by source branch itself, and "open" is its
+    /// <c>active</c> status.
+    /// </summary>
+    public override async Task<RemotePrLookup> FindOpenPullRequestAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch)
+    {
+        ApplyHeaders(http, repo.Provider);
+        var query = $"searchCriteria.sourceRefName={Uri.EscapeDataString(RefName(sourceBranch))}&searchCriteria.status=active";
+        IReadOnlyList<JsonElement>? active;
+        try
+        {
+            using var resp = await http.GetAsync(Versioned($"{GitApi(repo)}/pullrequests", query));
+            active = resp.IsSuccessStatusCode ? await ReadCollectionAsync(resp) : null;
+        }
+        catch (JsonException)
+        {
+            active = null;
+        }
+        if (active is null)
+            return new RemotePrLookup(null, null, null, "could not list the active pull requests from Azure DevOps");
+
+        var candidates = active
+            .Where(pr => string.Equals(ReadString(pr, "sourceRefName"), RefName(sourceBranch), StringComparison.Ordinal))
+            .Select(pr => (Number: ReadScalar(pr, "pullRequestId"), Target: ReadString(pr, "targetRefName")))
+            .Where(pr => int.TryParse(pr.Number, out _))
+            .Select(pr => (
+                Number: (int?)int.Parse(pr.Number!),
+                Target: pr.Target is { } target && target.StartsWith("refs/heads/", StringComparison.Ordinal)
+                    ? target["refs/heads/".Length..]
+                    : pr.Target,
+                Url: (string?)PrApi(repo, pr.Number!),
+                HtmlUrl: (string?)WebUrl(repo, pr.Number!)))
+            .ToList();
+        return PickOpenPullRequest(candidates, sourceBranch, targetBranch);
+    }
+
+    /// <summary>The <c>value</c> array of a collection response, or null when the response is not one.</summary>
+    private static async Task<IReadOnlyList<JsonElement>?> ReadCollectionAsync(HttpResponseMessage resp)
+    {
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        if (doc.RootElement.ValueKind != JsonValueKind.Object
+            || !doc.RootElement.TryGetProperty(CollectionProperty, out var value)
+            || value.ValueKind != JsonValueKind.Array)
+            return null;
+        return value.EnumerateArray().Select(e => e.Clone()).ToList();
     }
 
     public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
@@ -218,6 +266,34 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     }
 
     /// <summary>
+    /// A finding is a new thread anchored on the right-hand (new) side of
+    /// <paramref name="line"/> in <paramref name="path"/>; Azure DevOps names
+    /// files from the repository root with a leading slash.
+    /// </summary>
+    public override async Task<RemotePrWriteResult> CreateReviewCommentAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body)
+    {
+        ApplyHeaders(http, repo.Provider);
+        using var resp = await http.PostAsJsonAsync(
+            Versioned($"{PrApi(repo, prNumber)}/threads"),
+            new
+            {
+                comments = new[] { new { parentCommentId = 0, content = body, commentType = "text" } },
+                status = "active",
+                threadContext = new
+                {
+                    filePath = "/" + path.TrimStart('/'),
+                    rightFileStart = new { line, offset = 1 },
+                    rightFileEnd = new { line, offset = 1 },
+                },
+            });
+        if (!resp.IsSuccessStatusCode)
+            return new RemotePrWriteResult(false, null, $"The finding was refused by Azure DevOps (HTTP {(int)resp.StatusCode}).");
+
+        return new RemotePrWriteResult(true, await ReadCreatedThreadCommentIdAsync(resp), null);
+    }
+
+    /// <summary>
     /// Every comment thread on the pull request, or null if the whole list could
     /// not be read. Azure DevOps serves this endpoint unpaged — there is no
     /// continuation token and no <c>$top</c>/<c>$skip</c> on PR threads, so the
@@ -231,14 +307,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         try
         {
             using var resp = await http.GetAsync(Versioned($"{PrApi(repo, prNumber)}/threads"));
-            if (!resp.IsSuccessStatusCode)
-                return null;
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-            if (doc.RootElement.ValueKind != JsonValueKind.Object
-                || !doc.RootElement.TryGetProperty(CollectionProperty, out var value)
-                || value.ValueKind != JsonValueKind.Array)
-                return null;
-            return value.EnumerateArray().Select(e => e.Clone()).ToList();
+            return resp.IsSuccessStatusCode ? await ReadCollectionAsync(resp) : null;
         }
         catch
         {
@@ -336,6 +405,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
                     || (comment.TryGetProperty("isDeleted", out var deleted) && deleted.ValueKind == JsonValueKind.True))
                     continue;
 
+                var (findingId, severity) = PrCommentMarker.FindingOf(content);
                 items.Add(new RemotePrReviewItem(
                     path is null ? "issue" : "review",
                     // Comment ids restart per thread, so they are qualified by it.
@@ -349,7 +419,9 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
                     commit,
                     ReadDate(comment, "publishedDate") ?? DateTime.MinValue,
                     resolved,
-                    PrCommentMarker.IsStamped(content)));
+                    PrCommentMarker.IsStamped(content),
+                    findingId,
+                    severity));
             }
         }
 

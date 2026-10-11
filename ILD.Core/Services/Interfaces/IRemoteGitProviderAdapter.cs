@@ -10,6 +10,12 @@ public interface IRemoteGitProviderAdapter
     string WebhookRouteSegment { get; }
     ResolvedRemoteRepository? TryResolve(RemoteProvider provider, Uri repoUri);
     Task<RemotePrResult> CreatePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch, string title, string body);
+
+    /// <summary>
+    /// The open pull request whose head is <paramref name="sourceBranch"/> (see
+    /// <see cref="IRemoteProvider.FindOpenPullRequestAsync"/>).
+    /// </summary>
+    Task<RemotePrLookup> FindOpenPullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch);
     Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
     Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
     Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);
@@ -38,6 +44,9 @@ public interface IRemoteGitProviderAdapter
 
     /// <summary>Answer one review comment on its own thread, with the provider credentials.</summary>
     Task<RemotePrWriteResult> ReplyToReviewThreadAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body);
+
+    /// <summary>Post a new review comment anchored on <paramref name="line"/> of <paramref name="path"/>, with the provider credentials.</summary>
+    Task<RemotePrWriteResult> CreateReviewCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body);
 
     /// <summary>Whether this provider can resolve a review thread at all.</summary>
     bool SupportsThreadResolution { get; }

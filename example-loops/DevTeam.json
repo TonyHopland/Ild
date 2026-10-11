@@ -237,7 +237,8 @@
           { "name": "on_approved", "reserved": true },
           { "name": "on_ci_passed", "reserved": true },
           { "name": "on_merged", "reserved": true },
-          { "name": "on_abandoned", "reserved": true }
+          { "name": "on_abandoned", "reserved": true },
+          { "name": "on_existing_pr" }
         ],
         "prDescriptionTemplate": "## Summary\n\n{{Var.DevHandoff}}\n\n## QA\n\n{{Var.QAReport}}\n\n## Review\n\n{{Var.ReviewFeedback}}\n\n---\n_Automated by the DevTeam loop."
       }

@@ -96,6 +96,23 @@ internal static class NodeConfig
     {
         public string? Prompt { get; init; }
         public string? PrDescriptionTemplate { get; init; }
+
+        /// <summary>
+        /// Whether the node may open a pull request when the run's branch has
+        /// none. Absent means yes, as every PR node did before this existed.
+        /// Read only on the visit where the run has no pull request yet.
+        /// </summary>
+        public bool? CreateIfNoneExists { get; init; }
+
+        /// <summary>
+        /// Whether the node may attach the run to an open pull request the
+        /// run's branch already has. Absent means yes. Read only on the visit
+        /// where the run has no pull request yet.
+        /// </summary>
+        public bool? AttachIfExists { get; init; }
+
+        public bool MayCreate => CreateIfNoneExists != false;
+        public bool MayAttach => AttachIfExists != false;
     }
 
     /// <summary>

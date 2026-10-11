@@ -89,6 +89,17 @@ public class AgentPrReviewApiTests
             return Task.FromResult(Queued ?? new RemotePrWriteResult(true, null, "Queued."));
         }
 
+        public Task<RemotePrWriteResult> FindingAsync(
+            string workItemId, string path, int line, string severity, string body,
+            Guid? callerRunId, Guid? callerChatSessionId = null)
+        {
+            WorkItemId = workItemId;
+            Body = body;
+            CallerRunId = callerRunId;
+            CallerChatSessionId = callerChatSessionId;
+            return Task.FromResult(Queued ?? new RemotePrWriteResult(true, null, "Queued."));
+        }
+
         public bool Resolved { get; private set; }
 
         public Task<RemotePrWriteResult> CloseAsync(

@@ -71,7 +71,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             new { title, body, head = sourceBranch, @base = targetBranch });
 
         if (!resp.IsSuccessStatusCode)
-            return new RemotePrResult(null, null, RemotePrStatus.Open, $"HTTP {(int)resp.StatusCode}");
+            return new RemotePrResult(null, null, RemotePrStatus.Open, await CreateRefusalAsync(resp, sourceBranch));
 
         using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
         return new RemotePrResult(
@@ -79,6 +79,81 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             doc.RootElement.TryGetProperty("html_url", out var htmlUrl) ? htmlUrl.GetString() : null,
             RemotePrStatus.Open,
             null);
+    }
+
+    /// <summary>
+    /// Why a forge refused to create a pull request. A branch that already has
+    /// one — a race between looking it up and creating it — is said in words:
+    /// each forge refuses it with a conflict (409) or a validation failure (422)
+    /// whose text says "already exists", and a bare status code would leave the
+    /// human guessing. Any other refusal keeps its status code.
+    /// </summary>
+    protected static async Task<string> CreateRefusalAsync(HttpResponseMessage resp, string sourceBranch)
+    {
+        var status = (int)resp.StatusCode;
+        if (status is 409 or 422
+            && (await resp.Content.ReadAsStringAsync()).Contains("already exists", StringComparison.OrdinalIgnoreCase))
+            return $"a pull request for branch `{sourceBranch}` already exists";
+        return $"HTTP {status}";
+    }
+
+    /// <summary>
+    /// The open pull request whose head is <paramref name="sourceBranch"/>, as
+    /// the REST list of open pull requests reports it. GitHub narrows the list
+    /// by head itself (see <see cref="OpenPullRequestsQuery"/>); a Forgejo has no
+    /// such filter, so every open pull request is read and picked out by
+    /// <c>head.ref</c> either way.
+    /// </summary>
+    public virtual async Task<RemotePrLookup> FindOpenPullRequestAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch)
+    {
+        ApplyHeaders(http, repo.Provider);
+        var open = await ReadAllPagesAsync(
+            http, $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls?{OpenPullRequestsQuery(repo, sourceBranch)}");
+        if (open is null)
+            return new RemotePrLookup(null, null, null,
+                $"could not list the open pull requests from {ProviderType}");
+
+        var candidates = open
+            .Where(pr => pr.TryGetProperty("head", out var head)
+                && string.Equals(ReadString(head, "ref"), sourceBranch, StringComparison.Ordinal))
+            .Select(pr => (
+                Number: ReadInt(pr, "number"),
+                Target: pr.TryGetProperty("base", out var @base) ? ReadString(@base, "ref") : null,
+                Url: ReadString(pr, "url"),
+                HtmlUrl: ReadString(pr, "html_url")))
+            .Where(pr => pr.Number is not null)
+            .ToList();
+        return PickOpenPullRequest(candidates, sourceBranch, targetBranch);
+    }
+
+    /// <summary>The query that lists open pull requests, narrowed to the head where the forge can.</summary>
+    protected virtual string OpenPullRequestsQuery(ResolvedRemoteRepository repo, string sourceBranch) => "state=open";
+
+    /// <summary>
+    /// One open pull request out of those on the branch: none, the only one, or
+    /// — when the branch is open against several bases — the one into
+    /// <paramref name="targetBranch"/>. Several and none of them into the target
+    /// is an error naming them: guessing would attach the run to a pull request
+    /// it was not built for.
+    /// </summary>
+    protected static RemotePrLookup PickOpenPullRequest(
+        IReadOnlyList<(int? Number, string? Target, string? Url, string? HtmlUrl)> candidates,
+        string sourceBranch, string targetBranch)
+    {
+        if (candidates.Count == 0)
+            return new RemotePrLookup(null, null, null, null);
+        var picked = candidates.Count == 1
+            ? candidates[0]
+            : candidates.Where(pr => string.Equals(pr.Target, targetBranch, StringComparison.Ordinal)).ToList() is [var only]
+                ? only
+                : default;
+        if (picked.Number is null)
+            return new RemotePrLookup(null, null, null,
+                $"branch `{sourceBranch}` has several open pull requests "
+                + $"({string.Join(", ", candidates.Select(pr => $"#{pr.Number} into {pr.Target}"))}) "
+                + $"and none or more than one of them targets `{targetBranch}`");
+        return new RemotePrLookup(picked.Number, picked.Url, picked.HtmlUrl, null);
     }
 
     public virtual async Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
@@ -646,6 +721,8 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             var id = ReadId(comment);
             if (id is null) continue;
             var thread = threadByComment.GetValueOrDefault(id);
+            var body = ReadString(comment, "body");
+            var (findingId, severity) = PrCommentMarker.FindingOf(body);
             items.Add(new RemotePrReviewItem(
                 "review",
                 id,
@@ -653,12 +730,14 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 ReadId(comment, "pull_request_review_id"),
                 ReadString(comment, "path"),
                 ReadInt(comment, "original_line") ?? ReadInt(comment, "line"),
-                Truncate(ReadString(comment, "body"), MaxReviewItemLength) ?? string.Empty,
+                Truncate(body, MaxReviewItemLength) ?? string.Empty,
                 ReadUserLogin(comment),
                 ReadString(comment, "original_commit_id") ?? ReadString(comment, "commit_id"),
                 ReadDate(comment, "created_at") ?? DateTime.MinValue,
                 thread?.Resolved ?? false,
-                PrCommentMarker.IsStamped(ReadString(comment, "body"))));
+                PrCommentMarker.IsStamped(body),
+                findingId,
+                severity));
         }
 
         var issueComments = await ReadAllPagesAsync(http, $"{apiRepo}/issues/{prNumber}/comments");
@@ -670,6 +749,8 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         {
             var id = ReadId(comment);
             if (id is null) continue;
+            var body = ReadString(comment, "body");
+            var (findingId, severity) = PrCommentMarker.FindingOf(body);
             items.Add(new RemotePrReviewItem(
                 "issue",
                 id,
@@ -677,12 +758,14 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 ReviewId: null,
                 Path: null,
                 Line: null,
-                Truncate(ReadString(comment, "body"), MaxReviewItemLength) ?? string.Empty,
+                Truncate(body, MaxReviewItemLength) ?? string.Empty,
                 ReadUserLogin(comment),
                 headSha,
                 ReadDate(comment, "created_at") ?? DateTime.MinValue,
                 Resolved: false,
-                PrCommentMarker.IsStamped(ReadString(comment, "body"))));
+                PrCommentMarker.IsStamped(body),
+                findingId,
+                severity));
         }
 
         return new RemotePrReviewLedger(reviews, items, headSha, null);
@@ -814,6 +897,15 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
         => Task.FromResult(new RemotePrWriteResult(
             false, null, $"Replying to a review thread is not supported for {ProviderType} — its API has no reply route on a review comment."));
+
+    /// <summary>
+    /// No line-anchored review comment by default, for the same reason as the
+    /// reply: each forge anchors one on a line its own way.
+    /// </summary>
+    public virtual Task<RemotePrWriteResult> CreateReviewCommentAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body)
+        => Task.FromResult(new RemotePrWriteResult(
+            false, null, $"Posting a review comment on a line is not supported for {ProviderType}."));
 
     /// <summary>A reply as GitHub's REST API takes one, for adapters of that shape.</summary>
     protected async Task<RemotePrWriteResult> PostRestThreadReplyAsync(

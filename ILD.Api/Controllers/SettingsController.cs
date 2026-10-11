@@ -33,6 +33,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.RunRetentionDays,
         AppSettingKeys.PrHeartbeatSeconds,
         AppSettingKeys.MaxAiTraversals,
+        AppSettingKeys.PrMaxFindings,
+        AppSettingKeys.PrMaxNits,
         AppSettingKeys.ThrottleAutoResume,
         AppSettingKeys.ThrottleRetryDelayMinutes,
         AppSettingKeys.ThrottleMaxRetries,
@@ -90,6 +92,10 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.PrHeartbeatSeconds] = AppSettingKeys.DefaultPrHeartbeatSeconds.ToString();
         if (!map.ContainsKey(AppSettingKeys.MaxAiTraversals))
             map[AppSettingKeys.MaxAiTraversals] = AppSettingKeys.DefaultMaxAiTraversals.ToString();
+        if (!map.ContainsKey(AppSettingKeys.PrMaxFindings))
+            map[AppSettingKeys.PrMaxFindings] = AppSettingKeys.DefaultPrMaxFindings.ToString();
+        if (!map.ContainsKey(AppSettingKeys.PrMaxNits))
+            map[AppSettingKeys.PrMaxNits] = AppSettingKeys.DefaultPrMaxNits.ToString();
         if (!map.ContainsKey(AppSettingKeys.ThrottleAutoResume))
             map[AppSettingKeys.ThrottleAutoResume] = AppSettingKeys.DefaultThrottleAutoResume.ToString().ToLowerInvariant();
         if (!map.ContainsKey(AppSettingKeys.ThrottleRetryDelayMinutes))
@@ -178,6 +184,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.RunRetentionDays => AppSettingKeys.DefaultRunRetentionDays.ToString(),
         AppSettingKeys.PrHeartbeatSeconds => AppSettingKeys.DefaultPrHeartbeatSeconds.ToString(),
         AppSettingKeys.MaxAiTraversals => AppSettingKeys.DefaultMaxAiTraversals.ToString(),
+        AppSettingKeys.PrMaxFindings => AppSettingKeys.DefaultPrMaxFindings.ToString(),
+        AppSettingKeys.PrMaxNits => AppSettingKeys.DefaultPrMaxNits.ToString(),
         AppSettingKeys.ThrottleAutoResume => AppSettingKeys.DefaultThrottleAutoResume.ToString().ToLowerInvariant(),
         AppSettingKeys.ThrottleRetryDelayMinutes => AppSettingKeys.DefaultThrottleRetryDelayMinutes.ToString(),
         AppSettingKeys.ThrottleMaxRetries => AppSettingKeys.DefaultThrottleMaxRetries.ToString(),
@@ -235,6 +243,14 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var aiSteps) || aiSteps < 1 || aiSteps > 1000)
                 {
                     error = "ai.maxTraversals must be an integer between 1 and 1000";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.PrMaxFindings:
+            case AppSettingKeys.PrMaxNits:
+                if (!int.TryParse(value, out var cap) || cap < 1 || cap > 1000)
+                {
+                    error = $"{key} must be an integer between 1 and 1000";
                     return false;
                 }
                 break;

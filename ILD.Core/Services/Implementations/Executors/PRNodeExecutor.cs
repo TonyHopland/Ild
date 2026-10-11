@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -88,29 +89,23 @@ public sealed class PRNodeExecutor : INodeExecutor
         var target = RunBaseBranch.Resolve(ctx.Run, repo);
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
-        if (!string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath))
+        var hasWorktree = !string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath);
+        if (hasWorktree)
         {
             string? prepError = null;
             try
             {
-                var diff = await repoManager.GetDiffAsync(ctx.Run.WorktreePath);
+                var diff = await repoManager.GetDiffAsync(ctx.Run.WorktreePath!);
                 if (!string.IsNullOrEmpty(diff)
-                    && !await repoManager.CommitAsync(ctx.Run.WorktreePath, wi.Title))
+                    && !await repoManager.CommitAsync(ctx.Run.WorktreePath!, wi.Title))
                 {
                     prepError = "Failed to commit uncommitted changes";
                 }
                 if (prepError is null)
                 {
-                    var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath, branch, ctx.CancellationToken, gitAuth);
+                    var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath!, branch, ctx.CancellationToken, gitAuth);
                     if (!pushResult.Success)
                         prepError = $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}";
-                }
-                if (prepError is null && string.IsNullOrEmpty(ctx.Run.PrUrl))
-                {
-                    await repoManager.FetchAsync(ctx.Run.WorktreePath, ctx.CancellationToken, gitAuth);
-                    var ahead = await repoManager.GetCommitsAheadCountAsync(ctx.Run.WorktreePath, $"origin/{target}");
-                    if (ahead == 0)
-                        prepError = $"Branch '{branch}' has no commits ahead of 'origin/{target}'";
                 }
             }
             catch (Exception ex) { prepError = ex.Message; }
@@ -124,55 +119,132 @@ public sealed class PRNodeExecutor : INodeExecutor
         string? prUrl = ctx.Run.PrUrl;
         if (string.IsNullOrEmpty(prUrl))
         {
+            // The visit where the run gets its pull request: the branch's open
+            // one if it has one, a new one if not, as the node's toggles allow.
+            // Later visits never come here, so the toggles and on_existing_pr
+            // apply exactly once per run.
             var remote = sp.GetRequiredService<IRemoteProvider>();
-            string body = wi.Description ?? string.Empty;
-            if (!string.IsNullOrEmpty(cfg.PrDescriptionTemplate) && rendering is not null)
+            var lookedUpAt = DateTime.UtcNow;
+            var existing = await remote.FindOpenPullRequestAsync(repo.CloneUrl, branch, target);
+            if (existing.Error is not null)
             {
-                try { body = await rendering.RenderAsync(cfg.PrDescriptionTemplate, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
-                catch { }
-            }
-            RemotePrResult? prResult = null;
-            string? err = null;
-            // Before the call, so the window it opens cannot start after a
-            // comment that was posted while the pull request was being created.
-            // Back-dated by the skew allowance: this stamp is ILD's clock and
-            // what it is compared against is the forge's.
-            var openedAt = DateTime.UtcNow - PrCommentLedger.ClockSkewAllowance;
-            try { var r = await remote.CreatePullRequestAsync(repo.CloneUrl, branch, target, wi.Title, body); prResult = r; }
-            catch (Exception ex) { err = ex.Message; }
-            if (err is not null || prResult is null || !string.IsNullOrEmpty(prResult.Error))
-            {
-                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"PR creation failed: {err ?? prResult?.Error ?? "unknown"}");
+                // Never read as "there is none": creating on a failed lookup is
+                // exactly the duplicate pull request the lookup is there to avoid.
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure,
+                    $"Could not look up an open PR for branch `{branch}`: {existing.Error}");
                 yield break;
             }
-            prUrl = prResult.HtmlUrl ?? prResult.Url ?? string.Empty;
-            yield return new NodeOutcome.PrCreated(prUrl);
 
-            // Start watching from the moment this pull request existed.
-            //
-            // Without this the ledger stays null until the node posts something,
-            // and the first heartbeat then treats EVERYTHING already on the pull
-            // request as history it has seen — so anything said between creating
-            // the pull request and that first poll is never handed over. Normally
-            // that is up to one heartbeat interval; if polls fail it is unbounded.
-            // A run that predates this still arrives with no ledger and still
-            // seeds from what is there, which is right: it did not open that
-            // pull request and has no claim to have been watching it.
-            if (sp.GetService<ILoopRunStore>() is { } opening)
+            if (existing.Number is { } number)
             {
-                await PrCommentLedgerWriter.MutateAsync(opening, ctx.Run.Id, state =>
-                    state ?? PrCommentLedger.Empty with { WatchedFrom = openedAt });
+                if (!cfg.MayAttach)
+                {
+                    yield return new NodeOutcome.Fail(EdgeType.OnFailure,
+                        $"PR #{number} already exists for branch `{branch}`; this node does not attach to existing PRs");
+                    yield break;
+                }
+
+                prUrl = existing.HtmlUrl ?? existing.Url ?? string.Empty;
+                yield return new NodeOutcome.PrAttached(prUrl);
+
+                // The run did not open this pull request, so what is already on
+                // it is history, not news: watch it from now on. No auto-merge
+                // either — it is not this run's pull request to merge unasked.
+                if (sp.GetService<ILoopRunStore>() is { } attaching)
+                {
+                    await PrCommentLedgerWriter.MutateAsync(attaching, ctx.Run.Id, state =>
+                        state ?? PrCommentLedger.Empty with { WatchedFrom = lookedUpAt });
+                }
+
+                var attachedNumber = number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (await HasQueuedWritesAsync(ctx, sp))
+                    await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, attachedNumber);
+
+                if (await IsOnExistingPrWiredAsync(ctx, sp))
+                {
+                    yield return new NodeOutcome.Success(EdgeType.Custom,
+                        $"Attached to existing PR #{attachedNumber}: {prUrl}", LoopOutputs.OnExistingPr);
+                    yield break;
+                }
             }
-
-            // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
-            // the provider to merge the PR once its checks pass. Best-effort — a
-            // repository that does not support auto-merge leaves the PR open for
-            // the heartbeat/human merge path, so a false result is not a failure.
-            if (wi.Tags.Any(t => string.Equals(t, AutoMergeTag, StringComparison.OrdinalIgnoreCase)))
+            else
             {
-                var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
-                if (!string.IsNullOrEmpty(prNumber))
-                    await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber);
+                if (!cfg.MayCreate)
+                {
+                    yield return new NodeOutcome.Fail(EdgeType.OnFailure,
+                        $"No open PR for branch `{branch}`; this node does not create PRs");
+                    yield break;
+                }
+
+                // Only a pull request this node is about to open needs commits
+                // of its own; one that already exists has nothing to guard.
+                if (hasWorktree)
+                {
+                    string? guardError = null;
+                    try
+                    {
+                        await repoManager.FetchAsync(ctx.Run.WorktreePath!, ctx.CancellationToken, gitAuth);
+                        var ahead = await repoManager.GetCommitsAheadCountAsync(ctx.Run.WorktreePath!, $"origin/{target}");
+                        if (ahead == 0)
+                            guardError = $"Branch '{branch}' has no commits ahead of 'origin/{target}'";
+                    }
+                    catch (Exception ex) { guardError = ex.Message; }
+                    if (guardError is not null)
+                    {
+                        yield return new NodeOutcome.Fail(EdgeType.OnFailure, guardError);
+                        yield break;
+                    }
+                }
+
+                string body = wi.Description ?? string.Empty;
+                if (!string.IsNullOrEmpty(cfg.PrDescriptionTemplate) && rendering is not null)
+                {
+                    try { body = await rendering.RenderAsync(cfg.PrDescriptionTemplate, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
+                    catch { }
+                }
+                RemotePrResult? prResult = null;
+                string? err = null;
+                // Before the call, so the window it opens cannot start after a
+                // comment that was posted while the pull request was being created.
+                // Back-dated by the skew allowance: this stamp is ILD's clock and
+                // what it is compared against is the forge's.
+                var openedAt = DateTime.UtcNow - PrCommentLedger.ClockSkewAllowance;
+                try { var r = await remote.CreatePullRequestAsync(repo.CloneUrl, branch, target, wi.Title, body); prResult = r; }
+                catch (Exception ex) { err = ex.Message; }
+                if (err is not null || prResult is null || !string.IsNullOrEmpty(prResult.Error))
+                {
+                    yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"PR creation failed: {err ?? prResult?.Error ?? "unknown"}");
+                    yield break;
+                }
+                prUrl = prResult.HtmlUrl ?? prResult.Url ?? string.Empty;
+                yield return new NodeOutcome.PrCreated(prUrl);
+
+                // Start watching from the moment this pull request existed.
+                //
+                // Without this the ledger stays null until the node posts something,
+                // and the first heartbeat then treats EVERYTHING already on the pull
+                // request as history it has seen — so anything said between creating
+                // the pull request and that first poll is never handed over. Normally
+                // that is up to one heartbeat interval; if polls fail it is unbounded.
+                // A run that predates this still arrives with no ledger and still
+                // seeds from what is there, which is right: it did not open that
+                // pull request and has no claim to have been watching it.
+                if (sp.GetService<ILoopRunStore>() is { } opening)
+                {
+                    await PrCommentLedgerWriter.MutateAsync(opening, ctx.Run.Id, state =>
+                        state ?? PrCommentLedger.Empty with { WatchedFrom = openedAt });
+                }
+
+                // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
+                // the provider to merge the PR once its checks pass. Best-effort — a
+                // repository that does not support auto-merge leaves the PR open for
+                // the heartbeat/human merge path, so a false result is not a failure.
+                if (wi.Tags.Any(t => string.Equals(t, AutoMergeTag, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
+                    if (!string.IsNullOrEmpty(prNumber))
+                        await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber);
+                }
             }
         }
         else if (await HasQueuedWritesAsync(ctx, sp))
@@ -198,6 +270,20 @@ public sealed class PRNodeExecutor : INodeExecutor
         // node's content — mirrors the Human node, which parks on its rendered
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
+    }
+
+    /// <summary>
+    /// Whether this node has an edge from <c>on_existing_pr</c>. With no store
+    /// there are no edges to read, so the node parks as it would unwired.
+    /// </summary>
+    private static async Task<bool> IsOnExistingPrWiredAsync(NodeExecutionContext ctx, IServiceProvider sp)
+    {
+        if (sp.GetService<ILoopRunStore>() is not { } runs)
+            return false;
+        var edges = await runs.GetEdgesForNodeIdsAsync(new[] { ctx.Node.Id });
+        return edges.Any(e => e.SourceNodeId == ctx.Node.Id
+            && e.EdgeType == EdgeType.Custom
+            && string.Equals(e.Name, LoopOutputs.OnExistingPr, StringComparison.Ordinal));
     }
 
     /// <summary>Attempts before a contended claim gives up; each re-reads the row it lost to.</summary>
@@ -352,10 +438,15 @@ public sealed class PRNodeExecutor : INodeExecutor
         {
             try
             {
-                var stamped = PrCommentMarker.Stamp(write.Body ?? string.Empty, ctx.Run.Id);
+                var stamped = write.Kind == PrQueuedWrite.Finding
+                    ? PrCommentMarker.Stamp(PrFinding.Headed(write.Severity, write.Body ?? string.Empty), ctx.Run.Id, write.FindingId, write.Severity)
+                    : PrCommentMarker.Stamp(write.Body ?? string.Empty, ctx.Run.Id);
                 var result = write.Kind switch
                 {
                     PrQueuedWrite.Resolve => await remote.ResolveReviewThreadAsync(cloneUrl, prNumber, write.TargetId),
+                    // A new review comment of the round's own, on the line it is about.
+                    PrQueuedWrite.Finding => await remote.CreateReviewCommentAsync(
+                        cloneUrl, prNumber, write.Path ?? string.Empty, write.Line ?? 1, stamped),
                     // Nothing to reply on, so it goes out as a comment of its own.
                     PrQueuedWrite.Comment => await remote.CreatePullRequestCommentAsync(cloneUrl, prNumber, stamped),
                     _ => await remote.ReplyToReviewThreadAsync(cloneUrl, prNumber, write.TargetId, stamped),

@@ -122,6 +122,14 @@
           "null"
         ],
         "default": null
+      },
+      "attachToExistingBranch": {
+        "description": "Optional: true makes every run check out branchNameOverride as it already stands on the remote (no new branch, no rebase onto the base) instead of creating it; the run fails to start if the branch is not on the remote. Needs branchNameOverride. Pushes from such a run go to that branch, and so to any pull request open on it — which may be someone else's. Omit for false.",
+        "type": [
+          "boolean",
+          "null"
+        ],
+        "default": null
       }
     },
     "required": [
@@ -518,6 +526,38 @@
       }
     }
   },
+  "post_pr_review_finding": {
+    "type": "object",
+    "properties": {
+      "workItemId": {
+        "description": "Work item GUID.",
+        "type": "string"
+      },
+      "path": {
+        "description": "The file, relative to the repository root, as the diff names it (e.g. src/App.cs).",
+        "type": "string"
+      },
+      "line": {
+        "description": "The line on the new side of the diff, counted from 1.",
+        "type": "integer"
+      },
+      "severity": {
+        "description": "important (must be addressed) or nit (minor, optional).",
+        "type": "string"
+      },
+      "body": {
+        "description": "The finding: what is wrong and why. Keep it to one point.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "workItemId",
+      "path",
+      "line",
+      "severity",
+      "body"
+    ]
+  },
   "propose_workitem_edit": {
     "type": "object",
     "properties": {
@@ -567,6 +607,14 @@
         "description": "Proposed base branch the item's runs start from and open PRs against. Pass an empty string to propose going back to the repository's default branch; omit to leave it out of the proposal.",
         "type": [
           "string",
+          "null"
+        ],
+        "default": null
+      },
+      "attachToExistingBranch": {
+        "description": "Proposed value for whether runs check out branchNameOverride as it already stands on the remote instead of creating it. Pushes from such a run go to that branch, and so to any pull request open on it — which may be someone else's. Omit to leave it out of the proposal.",
+        "type": [
+          "boolean",
           "null"
         ],
         "default": null
@@ -879,6 +927,14 @@
         "description": "Optional replacement base branch the item's runs start from and open PRs against. Omit to leave it unchanged; pass an empty string to go back to the repository's default branch. Only the item's next run is affected.",
         "type": [
           "string",
+          "null"
+        ],
+        "default": null
+      },
+      "attachToExistingBranch": {
+        "description": "Optional replacement for whether runs check out branchNameOverride as it already stands on the remote instead of creating it. Pushes from such a run go to that branch, and so to any pull request open on it — which may be someone else's. Omit to leave it unchanged. Only the item's next run is affected.",
+        "type": [
+          "boolean",
           "null"
         ],
         "default": null

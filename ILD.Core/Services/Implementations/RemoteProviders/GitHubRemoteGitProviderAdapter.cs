@@ -123,6 +123,34 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
         HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body)
         => PostRestThreadReplyAsync(http, repo, prNumber, commentId, body);
 
+    /// <summary>GitHub narrows the list to one head, named <c>owner:branch</c>.</summary>
+    protected override string OpenPullRequestsQuery(ResolvedRemoteRepository repo, string sourceBranch)
+        => $"state=open&head={Uri.EscapeDataString($"{repo.Owner}:{sourceBranch}")}";
+
+    /// <summary>
+    /// A review comment on the new side of <paramref name="line"/>. GitHub needs
+    /// the commit it is written against, so the pull request's head is read
+    /// first; a line outside the diff is refused (422).
+    /// </summary>
+    public override async Task<RemotePrWriteResult> CreateReviewCommentAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body)
+    {
+        ApplyHeaders(http, repo.Provider);
+        var apiPr = $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}";
+        var pr = await GetObjectAsync(http, apiPr);
+        var headSha = pr is { } found && found.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
+        if (headSha is null)
+            return new RemotePrWriteResult(false, null, $"Could not read the head commit of pull request #{prNumber} from GitHub.");
+
+        using var resp = await http.PostAsJsonAsync(
+            $"{apiPr}/comments",
+            new { body, commit_id = headSha, path, line, side = "RIGHT" });
+        if (!resp.IsSuccessStatusCode)
+            return new RemotePrWriteResult(false, null, $"The finding was refused by GitHub (HTTP {(int)resp.StatusCode}).");
+
+        return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
+    }
+
     private const string ReviewThreadsQuery =
         "query($owner: String!, $repo: String!, $number: Int!, $cursor: String) { "
         + "repository(owner: $owner, name: $repo) { pullRequest(number: $number) { "

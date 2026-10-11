@@ -128,6 +128,9 @@ internal static class TestHostServiceCollectionExtensions
         public Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body)
             => throw Unexpected(nameof(IRemoteProvider));
 
+        public Task<RemotePrLookup> FindOpenPullRequestAsync(string repoUrl, string sourceBranch, string targetBranch)
+            => throw Unexpected(nameof(IRemoteProvider));
+
         public Task<bool> MergePullRequestAsync(string repoUrl, string prNumber)
             => throw Unexpected(nameof(IRemoteProvider));
 
@@ -160,6 +163,9 @@ internal static class TestHostServiceCollectionExtensions
             => throw Unexpected(nameof(IRemoteProvider));
 
         public Task<RemotePrWriteResult> ReplyToReviewThreadAsync(string repoUrl, string prNumber, string commentId, string body)
+            => throw Unexpected(nameof(IRemoteProvider));
+
+        public Task<RemotePrWriteResult> CreateReviewCommentAsync(string repoUrl, string prNumber, string path, int line, string body)
             => throw Unexpected(nameof(IRemoteProvider));
 
         public Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId)

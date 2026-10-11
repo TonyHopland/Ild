@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Data;
 using ILD.Data.DTOs;
+using ILD.Data.Enums;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -139,11 +140,19 @@ public static class LoopDocumentEditor
         new(StringComparer.Ordinal) { "outputs", "matchRules", "cases", "toolAllowlist" };
 
     /// <summary>
+    /// Config fields that hold a JSON boolean. Stored as text, "false" would not
+    /// read as a boolean at all and the node's whole config would read as empty.
+    /// </summary>
+    private static readonly HashSet<string> BooleanFields =
+        new(StringComparer.Ordinal) { "createIfNoneExists", "attachIfExists" };
+
+    /// <summary>
     /// Overwrite a node config field wholesale with <paramref name="value"/> (the
     /// intentional replace-all path). The field is created if absent. A text field
     /// stores the value as plain text and the server owns the JSON encoding; a
     /// structured field (<see cref="StructuredFields"/>) takes the value as a JSON
-    /// array and refuses anything else, changing nothing.
+    /// array and refuses anything else, changing nothing, and a boolean field
+    /// (<see cref="BooleanFields"/>) takes only "true" or "false".
     /// </summary>
     public static LoopEditResult SetNodeField(string document, string nodeId, string field, string value)
     {
@@ -166,6 +175,13 @@ public static class LoopDocumentEditor
                     $"Field '{field}' holds a JSON array, and value is not one. Pass the whole array as JSON, "
                     + $"e.g. {StructuredFieldExample(field)}. No change made.");
             config[field] = array;
+        }
+        else if (BooleanFields.Contains(field))
+        {
+            if (value.Trim() is not ("true" or "false"))
+                return LoopEditResult.MatchFailure(0,
+                    $"Field '{field}' is true or false, and value is '{value}'. No change made.");
+            config[field] = value.Trim() == "true";
         }
         else
         {
@@ -253,6 +269,7 @@ public static class LoopDocumentEditor
     private static LoopEditResult Finalize(JsonObject root, int matchCount, string summary)
     {
         LoopDocumentUpgrader.TryUpgrade(root);
+        WriteOutFixedOutputs(root);
         var candidate = root.ToJsonString(OutputOptions);
         var validationErrors = Validate(candidate, out var parseError);
         // A DOM we just mutated always re-parses, so a parse error here would be a
@@ -263,6 +280,22 @@ public static class LoopDocumentEditor
             return LoopEditResult.Invalid(matchCount, validationErrors);
 
         return LoopEditResult.Success(matchCount, candidate, summary);
+    }
+
+    /// <summary>
+    /// A node with no <c>outputs</c> list still holds its fixed outputs, so
+    /// they are written in, as saving a loop does. A node that has a list is
+    /// left exactly as it is: an edit replaces outputs wholesale.
+    /// </summary>
+    private static void WriteOutFixedOutputs(JsonObject root)
+    {
+        foreach (var node in (root["nodes"] as JsonArray ?? new JsonArray()).OfType<JsonObject>())
+        {
+            if (node["config"] is JsonObject config && !config.ContainsKey("outputs")
+                && node["type"] is JsonValue type && type.TryGetValue<string>(out var name)
+                && Enum.TryParse<NodeType>(name, ignoreCase: true, out var nodeType) && Enum.IsDefined(nodeType))
+                LoopOutputs.NormalizeOutputs(nodeType, config);
+        }
     }
 
     private static bool TryResolveField(
