@@ -202,6 +202,24 @@ describe("Repositories page — providers", () => {
     expect(within(card("Alpha Forge")).queryByText("lost-app")).toBeNull();
   });
 
+  test("a repository whose provider is past the first page sits under that provider", async () => {
+    const providers = Array.from({ length: 501 }, (_, i) => provider(`prov-${i}`, `Forge ${i}`));
+    const fetchMock = routedFetch({ providers, repos: [repo("repo-1", "late-app", "prov-500")] });
+    const route = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      const list = /\/remoteproviders(?:\?skip=(\d+)&take=(\d+))?$/.exec(url);
+      if (!list || (init?.method ?? "GET") !== "GET") return route(url, init);
+      // The server answers 100 rows when no take is given.
+      const skip = Number(list[1] ?? 0);
+      return Promise.resolve(reply(providers.slice(skip, skip + Number(list[2] ?? 100))));
+    });
+    renderPage(fetchMock);
+
+    await screen.findByRole("region", { name: "Forge 500" });
+    expect(within(card("Forge 500")).getByText("late-app")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Provider not found" })).toBeNull();
+  });
+
   test("Add repository opens the repository form with that provider chosen", async () => {
     renderPage(
       routedFetch({

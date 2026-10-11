@@ -35,7 +35,9 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
       .catch((error) => console.error("Failed to load remote provider types:", error));
   }, []);
 
-  // The server matches types ignoring case, so a stored `github` is the catalog's `GitHub`.
+  // The server matches types ignoring case (RemoteProviderCatalog.IsSupported in
+  // ILD.Core/Services/Implementations/RemoteProviderCatalog.cs), so a stored `github`
+  // is the catalog's `GitHub`.
   const selectedType = providerTypes.find((option) => sameType(option.type, type))?.type ?? type;
   const selectableProviderTypes =
     selectedType && !providerTypes.some((option) => option.type === selectedType)
@@ -54,7 +56,8 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
     setError(null);
     try {
       if (provider) {
-        // The update overwrites the default flag, so it carries the stored one.
+        // RemoteProvidersController.Update assigns IsDefault from the request
+        // (ILD.Api/Controllers/RemoteProvidersController.cs), so the update carries the stored flag.
         data.isDefault = provider.isDefault;
         if (apiKey) {
           data.apiKey = apiKey;

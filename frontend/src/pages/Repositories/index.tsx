@@ -52,8 +52,8 @@ export default function Repositories() {
   const loadData = async () => {
     try {
       const [repos, provs] = await Promise.all([
-        repositoryService.getAll(),
-        remoteProviderService.getAll(),
+        repositoryService.getEvery(),
+        remoteProviderService.getEvery(),
       ]);
       setRepositories(repos);
       setProviders(provs);
