@@ -112,8 +112,9 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
       retryTimer = setTimeout(() => void start(), retryDelay(attempt++));
     };
 
-    // The automatic reconnect gives up on a connection that was never up and
-    // does not cover a start() that fails, so a closed hub is started again here.
+    // The automatic reconnect does not retry a start() that fails, and it does not
+    // restart a closed hub, so both are started again here. See
+    // https://learn.microsoft.com/aspnet/core/signalr/javascript-client#automatically-reconnect
     const start = async () => {
       if (stopped || starting || connection.state !== signalR.HubConnectionState.Disconnected) {
         return;

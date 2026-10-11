@@ -776,10 +776,10 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     const { input } = replyFor(runId);
     responding.current.add(runId);
     updateReply(runId, { loading: true, error: null });
-    // Set when the answer is in but the dialog could not be brought up to date:
-    // the controls stay held rather than offering to answer again a question the
-    // run has already been given an answer to.
-    let answeredButUnrefreshed = false;
+    // Set when the server has settled the answer (taken or refused) but the
+    // dialog could not be brought up to date: the controls stay held rather than
+    // offering again a question this view can no longer vouch for.
+    let heldUntilReload = false;
     try {
       await whileBusy(async () => {
         try {
@@ -797,6 +797,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
           setRefused({ workItemId: workItem.id, text: input });
           updateReply(runId, { input: "" });
           if (!(await refetchWorkItem())) {
+            heldUntilReload = true;
             updateReply(runId, {
               error:
                 "Your feedback was not sent, and this view could not be refreshed — reload the page to see where the run is now.",
@@ -810,7 +811,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         // back, this view is still showing the run as waiting, and the only
         // honest thing it can do is say so and stay held.
         if (!(await refetchWorkItem())) {
-          answeredButUnrefreshed = true;
+          heldUntilReload = true;
           updateReply(runId, {
             error:
               "Your answer was accepted, but this view could not be refreshed — reload the page to see where the run is now.",
@@ -818,7 +819,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         }
       });
     } finally {
-      if (!answeredButUnrefreshed) {
+      if (!heldUntilReload) {
         responding.current.delete(runId);
         updateReply(runId, { loading: false });
       }

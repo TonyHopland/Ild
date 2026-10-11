@@ -231,3 +231,26 @@ describe("an answer sent after the run has moved on", () => {
     expect(result.current.movedOn).toBeNull();
   });
 });
+
+describe("a refused answer whose re-read fails", () => {
+  test("keeps the controls held, so the stale box cannot send again", async () => {
+    stubServices();
+    const sent = refuse("approve", MOVED_ON);
+    vi.spyOn(workItemService, "getById").mockRejectedValue({ message: "Failed to fetch" });
+
+    const workItem = makeParkedWorkItem();
+    const { result } = renderHook(() => useWorkItemDetail(workItem, vi.fn()));
+    await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
+    await act(async () => {
+      result.current.setReplyInput("run-1", "Please also fix the flaky test");
+    });
+
+    await act(async () => await result.current.handleApprove("run-1"));
+    await act(async () => await result.current.handleApprove("run-1"));
+
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(result.current.movedOn).toEqual({ text: "Please also fix the flaky test" });
+    expect(result.current.replyFor("run-1").error).toContain("could not be refreshed");
+    expect(result.current.replyFor("run-1").loading).toBe(true);
+  });
+});
