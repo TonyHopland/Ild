@@ -17,6 +17,7 @@ export default function Repositories() {
   const [providers, setProviders] = useState<RemoteProvider[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingRepo, setEditingRepo] = useState<Repository | null>(null);
   const [name, setName] = useState("");
@@ -52,7 +53,6 @@ export default function Repositories() {
   }, []);
 
   const loadData = async () => {
-    setLoadError(null);
     try {
       const [repos, provs] = await Promise.all([
         repositoryService.getEvery(),
@@ -60,6 +60,7 @@ export default function Repositories() {
       ]);
       setRepositories(repos);
       setProviders(provs);
+      setLoadError(null);
     } catch (error) {
       setLoadError((error as ApiError | Error).message);
     } finally {
@@ -155,9 +156,19 @@ export default function Repositories() {
     setConfirmDelete(null);
   };
 
-  const reposOf = (providerId: string) =>
-    repositories.filter((r) => r.remoteProviderId === providerId);
-  const orphans = repositories.filter((r) => !providers.some((p) => p.id === r.remoteProviderId));
+  const providerIds = new Set(providers.map((p) => p.id));
+  const reposByProvider = new Map<string, Repository[]>();
+  const orphans: Repository[] = [];
+  for (const repo of repositories) {
+    if (!providerIds.has(repo.remoteProviderId)) {
+      orphans.push(repo);
+      continue;
+    }
+    const list = reposByProvider.get(repo.remoteProviderId);
+    if (list) list.push(repo);
+    else reposByProvider.set(repo.remoteProviderId, [repo]);
+  }
+  const reposOf = (providerId: string) => reposByProvider.get(providerId) ?? [];
 
   // Feed names are matched ignoring case, as the server does.
   const sameFeed = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -246,8 +257,15 @@ export default function Repositories() {
       {loadError !== null ? (
         <div className="repo-load-error" role="alert">
           <p>{`Couldn't load the providers and repositories: ${loadError}`}</p>
-          <button className="btn btn-secondary" onClick={() => void loadData()}>
-            Retry
+          <button
+            className="btn btn-secondary"
+            disabled={retrying}
+            onClick={() => {
+              setRetrying(true);
+              void loadData().finally(() => setRetrying(false));
+            }}
+          >
+            {retrying ? "Retrying…" : "Retry"}
           </button>
         </div>
       ) : providers.length === 0 && orphans.length === 0 ? (

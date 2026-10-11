@@ -329,6 +329,32 @@ describe("Repositories page — providers", () => {
     await screen.findByRole("region", { name: "Alpha Forge" });
     expect(screen.queryByText(/Couldn't load the providers and repositories/)).toBeNull();
   });
+  test("a retry in flight keeps the error up rather than an empty list", async () => {
+    const fetchMock = routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] });
+    const route = fetchMock.getMockImplementation()!;
+    let providerList: () => Promise<FakeResponse> = () =>
+      Promise.resolve(reply({ error: "database unavailable" }, 503));
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      /\/remoteproviders\?/.test(url) ? providerList() : route(url, init),
+    );
+    renderPage(fetchMock);
+    await screen.findByText(/Couldn't load the providers and repositories/);
+
+    const retry = deferred<FakeResponse>();
+    providerList = () => retry.promise;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    const retrying = await screen.findByRole("button", { name: "Retrying…" });
+    expect((retrying as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Couldn't load the providers and repositories/)).toBeTruthy();
+    expect(
+      screen.queryByText("Add a remote provider first — repositories are added under one."),
+    ).toBeNull();
+
+    retry.resolve(reply([provider("prov-1", "Alpha Forge")]));
+    await screen.findByRole("region", { name: "Alpha Forge" });
+    expect(screen.queryByText(/Couldn't load the providers and repositories/)).toBeNull();
+  });
 });
 
 describe("Repositories page — provider form", () => {
