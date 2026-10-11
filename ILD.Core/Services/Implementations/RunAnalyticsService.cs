@@ -227,7 +227,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
     {
         var buckets = await _db.ChatAnalyticsBuckets.ToListAsync(ct);
         return buckets.Select(b => new ChatContribution(
-            b.BucketDate, b.BucketDate,
+            b.BucketDate, b.LastRecordedAt,
             b.ScheduleId == Guid.Empty ? null : b.ScheduleId,
             b.ScheduleId == Guid.Empty ? null : b.ScheduleName,
             b.AiProvider, b.TurnCount, b.TotalInputTokens, b.TotalOutputTokens, b.TotalCostUsd)).ToList();

@@ -196,6 +196,9 @@ namespace ILD.Data.Migrations
                     b.Property<DateTime>("BucketDate")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTime>("LastRecordedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid>("ScheduleId")
                         .HasColumnType("uuid");
 

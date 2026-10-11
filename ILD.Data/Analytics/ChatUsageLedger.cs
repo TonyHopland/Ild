@@ -68,7 +68,8 @@ public static class ChatUsageLedger
             }
         }
 
-        await FoldAsync(db, DateTime.UtcNow.Date, Guid.Empty, string.Empty, provider,
+        var now = DateTime.UtcNow;
+        await FoldAsync(db, now.Date, Guid.Empty, string.Empty, now, provider,
             turns: 0, usage.InputTokens, usage.OutputTokens, usage.CostUsd ?? 0m, ct);
         await db.SaveChangesAsync(ct);
     }
@@ -87,8 +88,8 @@ public static class ChatUsageLedger
 
         foreach (var group in usages.GroupBy(u => (Day: u.CreatedAt.Date, ScheduleId: u.ScheduleId ?? Guid.Empty, u.AiProvider)))
         {
-            var scheduleName = group.OrderByDescending(u => u.CreatedAt).First().ScheduleName ?? string.Empty;
-            await FoldAsync(db, group.Key.Day, group.Key.ScheduleId, scheduleName, group.Key.AiProvider,
+            var newest = group.MaxBy(u => u.CreatedAt)!;
+            await FoldAsync(db, group.Key.Day, group.Key.ScheduleId, newest.ScheduleName ?? string.Empty, newest.CreatedAt, group.Key.AiProvider,
                 group.Count(u => u.Kind == ChatUsageKind.Turn),
                 group.Sum(u => u.InputTokens),
                 group.Sum(u => u.OutputTokens),
@@ -98,7 +99,7 @@ public static class ChatUsageLedger
     }
 
     private static async Task FoldAsync(
-        AppDbContext db, DateTime day, Guid scheduleId, string scheduleName, string provider,
+        AppDbContext db, DateTime day, Guid scheduleId, string scheduleName, DateTime recordedAt, string provider,
         int turns, long inputTokens, long outputTokens, decimal costUsd, CancellationToken ct)
     {
         var bucket = await db.ChatAnalyticsBuckets.FirstOrDefaultAsync(b =>
@@ -115,7 +116,11 @@ public static class ChatUsageLedger
             db.ChatAnalyticsBuckets.Add(bucket);
         }
 
-        bucket.ScheduleName = scheduleName;
+        if (recordedAt > bucket.LastRecordedAt)
+        {
+            bucket.ScheduleName = scheduleName;
+            bucket.LastRecordedAt = recordedAt;
+        }
         bucket.TurnCount += turns;
         bucket.TotalInputTokens += inputTokens;
         bucket.TotalOutputTokens += outputTokens;

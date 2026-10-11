@@ -23,9 +23,18 @@ public class ChatAnalyticsBucket
     /// </summary>
     public Guid ScheduleId { get; set; }
 
-    /// <summary>The schedule's last recorded name; empty for chats no schedule started.</summary>
+    /// <summary>
+    /// The schedule's name on the newest usage folded in, at <see cref="LastRecordedAt"/>;
+    /// empty for chats no schedule started.
+    /// </summary>
     [MaxLength(ChatSchedule.MaxNameLength)]
     public string ScheduleName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// When the newest usage folded in was recorded. Chats are deleted in any order,
+    /// so an older name must not replace a newer one.
+    /// </summary>
+    public DateTime LastRecordedAt { get; set; }
 
     [MaxLength(256)]
     public string AiProvider { get; set; } = string.Empty;

@@ -1,4 +1,5 @@
 using ILD.Core.Services.Implementations;
+using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -354,6 +355,41 @@ public class RunAnalyticsServiceTests
         Assert.Empty(claudeWeek2.Chats);
         Assert.Empty(claudeWeek2.Providers);
         Assert.Empty(claudeWeek2.Series);
+    }
+
+    [Theory]
+    [InlineData("renamed")]
+    [InlineData("renamed,original")]
+    [InlineData("original,renamed")]
+    public async Task A_deleted_schedules_row_keeps_its_newest_name_whichever_of_its_chats_were_deleted_first(string deletionOrder)
+    {
+        using var db = new TestDb();
+        var day = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var schedule = AddSchedule(db, "New");
+        var chats = new Dictionary<string, ChatSession>
+        {
+            ["original"] = AddChat(db, schedule.Id),
+            ["renamed"] = AddChat(db, schedule.Id),
+        };
+        AddChatUsage(db, chats["original"].Id, ChatUsageKind.Turn, "claude", 10, 1, 0.01m, day.AddHours(9), schedule.Id, "Old");
+        AddChatUsage(db, chats["renamed"].Id, ChatUsageKind.Turn, "claude", 20, 2, 0.02m, day.AddHours(10), schedule.Id, "New");
+        db.Context.SaveChanges();
+
+        foreach (var name in deletionOrder.Split(','))
+        {
+            using var ctx = db.Fresh();
+            await ChatUsageLedger.ArchiveAsync(ctx, chats[name].Id, TestContext.Current.CancellationToken);
+            ctx.ChatSessions.Remove(ctx.ChatSessions.Single(c => c.Id == chats[name].Id));
+            await ctx.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+        using (var ctx = db.Fresh())
+        {
+            ctx.ChatSchedules.Remove(ctx.ChatSchedules.Single(c => c.Id == schedule.Id));
+            await ctx.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
+        Assert.Equal(new ChatAnalytics(schedule.Id, "New", 2, 30, 3, 0.03m), Assert.Single(overview.Chats));
     }
 
     private static ChatSchedule AddSchedule(TestDb db, string name)
