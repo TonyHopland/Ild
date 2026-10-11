@@ -297,6 +297,7 @@ export default function Repositories() {
                         <div className="repo-actions">
                           {button}
                           <button
+                            id={`provider-edit-${provider.id}`}
                             className="btn btn-secondary btn-small"
                             onClick={() => setProviderDialog({ provider })}
                           >

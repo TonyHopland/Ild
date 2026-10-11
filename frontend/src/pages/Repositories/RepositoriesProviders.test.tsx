@@ -379,7 +379,7 @@ describe("Repositories page — provider form", () => {
 
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     expect(dialog.isConnected).toBe(false);
-    expect(document.activeElement).toBe(opener);
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
   test("types that fail to load say so, and Retry loads them", async () => {
@@ -402,6 +402,22 @@ describe("Repositories page — provider form", () => {
 
     await screen.findByRole("option", { name: "GitHub" });
     expect(screen.queryByText(/Couldn't load the provider types/)).toBeNull();
+  });
+
+  test("after a save, focus returns to the provider's Edit button", async () => {
+    renderPage(routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] }));
+    await screen.findByRole("region", { name: "Alpha Forge" });
+
+    const edit = within(card("Alpha Forge")).getByRole("button", { name: "Edit" });
+    edit.focus();
+    fireEvent.click(edit);
+    await screen.findByRole("dialog", { name: "Edit Provider" });
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const replacement = within(card("Alpha Forge")).getByRole("button", { name: "Edit" });
+    expect(replacement).not.toBe(edit);
+    expect(document.activeElement).toBe(replacement);
   });
 
   test("Tab and Shift+Tab stay inside the form", async () => {

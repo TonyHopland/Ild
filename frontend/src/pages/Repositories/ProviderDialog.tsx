@@ -34,8 +34,20 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
   useLayoutEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     nameRef.current?.focus();
+    const openerId = opener?.id;
     return () => {
-      if (opener?.isConnected) opener.focus();
+      // A save reloads the page behind the form, whose cards are keyed by version
+      // (docs/adr/0021-client-state-scoped-to-its-entity.md), so the commit that closes
+      // the form can replace the opener; once it is done, a replaced opener is found
+      // again by its id.
+      queueMicrotask(() => {
+        const target = opener?.isConnected
+          ? opener
+          : openerId
+            ? document.getElementById(openerId)
+            : null;
+        target?.focus();
+      });
     };
   }, []);
 

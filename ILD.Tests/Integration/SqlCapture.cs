@@ -10,7 +10,9 @@ namespace ILD.Tests.Integration;
 /// <summary>
 /// Records the SQL of every query the API runs. SQLite happens to return rows tied on
 /// the sort key in key order, which Postgres does not promise, so an ordering bug can
-/// only be seen in the query itself here.
+/// only be seen in the query itself here. Postgres returns rows equal on every
+/// ORDER BY expression "in an implementation-dependent order":
+/// https://www.postgresql.org/docs/current/sql-select.html#SQL-ORDERBY
 /// </summary>
 internal sealed class SqlCapture : DbCommandInterceptor
 {
