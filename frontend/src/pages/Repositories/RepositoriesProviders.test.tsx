@@ -209,7 +209,6 @@ describe("Repositories page — providers", () => {
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       const list = /\/remoteproviders(?:\?skip=(\d+)&take=(\d+))?$/.exec(url);
       if (!list || (init?.method ?? "GET") !== "GET") return route(url, init);
-      // The server answers 100 rows when no take is given.
       const skip = Number(list[1] ?? 0);
       return Promise.resolve(reply(providers.slice(skip, skip + Number(list[2] ?? 100))));
     });
@@ -308,6 +307,28 @@ describe("Repositories page — providers", () => {
     expect(webhookSecretInput.value).not.toBe("");
     expect(webhookSecretInput.value).not.toBe(initialValue);
   });
+  test("lists that fail to load say so instead of asking for a first provider, and Retry loads them", async () => {
+    const fetchMock = routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] });
+    const route = fetchMock.getMockImplementation()!;
+    let failProviders = true;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      /\/remoteproviders\?/.test(url) && failProviders
+        ? Promise.resolve(reply({ error: "database unavailable" }, 503))
+        : route(url, init),
+    );
+    renderPage(fetchMock);
+
+    await screen.findByText(/Couldn't load the providers and repositories: database unavailable/);
+    expect(
+      screen.queryByText("Add a remote provider first — repositories are added under one."),
+    ).toBeNull();
+
+    failProviders = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await screen.findByRole("region", { name: "Alpha Forge" });
+    expect(screen.queryByText(/Couldn't load the providers and repositories/)).toBeNull();
+  });
 });
 
 describe("Repositories page — provider form", () => {
@@ -355,6 +376,51 @@ describe("Repositories page — provider form", () => {
 
     await screen.findByRole("option", { name: "GitHub" });
     expect(screen.queryByText(/Couldn't load the provider types/)).toBeNull();
+  });
+
+  test("Tab and Shift+Tab stay inside the form", async () => {
+    renderPage(routedFetch({ providers: [], repos: [] }));
+    fireEvent.click(await screen.findByRole("button", { name: "+ New provider" }));
+    const dialog = await screen.findByRole("dialog", { name: "New Provider" });
+    const close = within(dialog).getByRole("button", { name: "Close" });
+    const create = within(dialog).getByRole("button", { name: "Create" });
+
+    create.focus();
+    fireEvent.keyDown(create, { key: "Tab" });
+    expect(document.activeElement).toBe(close);
+
+    fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(create);
+  });
+
+  test("the form cannot be closed while a save is in flight", async () => {
+    const fetchMock = routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] });
+    const route = fetchMock.getMockImplementation()!;
+    const save = deferred<FakeResponse>();
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      init?.method === "PUT" ? save.promise : route(url, init),
+    );
+    renderPage(fetchMock);
+    await screen.findByRole("region", { name: "Alpha Forge" });
+
+    fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Edit" }));
+    const dialog = await screen.findByRole("dialog", { name: "Edit Provider" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Update" }));
+    await waitFor(() =>
+      expect(
+        (within(dialog).getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled,
+      ).toBe(true),
+    );
+
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    fireEvent.mouseDown(dialog.parentElement!);
+    expect(dialog.isConnected).toBe(true);
+    expect(
+      (within(dialog).getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    save.resolve(reply(provider("prov-1", "Alpha Forge")));
+    await waitFor(() => expect(dialog.isConnected).toBe(false));
   });
 
   test("an empty required field stops the save before any request", async () => {

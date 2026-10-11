@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import {
+  ApiError,
   PackageFeed,
   Repository,
   RepositoryInput,
@@ -15,6 +16,7 @@ export default function Repositories() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [providers, setProviders] = useState<RemoteProvider[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [editingRepo, setEditingRepo] = useState<Repository | null>(null);
   const [name, setName] = useState("");
@@ -50,6 +52,7 @@ export default function Repositories() {
   }, []);
 
   const loadData = async () => {
+    setLoadError(null);
     try {
       const [repos, provs] = await Promise.all([
         repositoryService.getEvery(),
@@ -58,7 +61,7 @@ export default function Repositories() {
       setRepositories(repos);
       setProviders(provs);
     } catch (error) {
-      console.error("Failed to load repositories:", error);
+      setLoadError((error as ApiError | Error).message);
     } finally {
       setIsLoading(false);
     }
@@ -240,7 +243,14 @@ export default function Repositories() {
         )}
       </div>
 
-      {providers.length === 0 && orphans.length === 0 ? (
+      {loadError !== null ? (
+        <div className="repo-load-error" role="alert">
+          <p>{`Couldn't load the providers and repositories: ${loadError}`}</p>
+          <button className="btn btn-secondary" onClick={() => void loadData()}>
+            Retry
+          </button>
+        </div>
+      ) : providers.length === 0 && orphans.length === 0 ? (
         <div className="repo-empty-page">
           <p>Add a remote provider first — repositories are added under one.</p>
           <button className="btn btn-primary" onClick={() => setProviderDialog({ provider: null })}>
@@ -635,6 +645,7 @@ export default function Repositories() {
           gap: 0.25rem;
         }
 
+        .repo-load-error,
         .repo-empty-page {
           background-color: #1e1e30;
           border: 1px dashed #3a3a5c;
@@ -645,6 +656,7 @@ export default function Repositories() {
           font-size: 0.9rem;
         }
 
+        .repo-load-error p,
         .repo-empty-page p {
           margin: 0 0 1rem;
         }

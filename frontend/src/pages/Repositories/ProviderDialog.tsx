@@ -29,9 +29,8 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
-  // Mounted once per opening: focus goes into the form and, however it closes, back
-  // to whatever opened it.
   useLayoutEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     nameRef.current?.focus();
@@ -95,24 +94,57 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
     }
   };
 
+  const dismiss = () => {
+    if (!saving) onClose();
+  };
+
+  const keepTabInside = (e: React.KeyboardEvent) => {
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), select:not([disabled])",
+      ) ?? [],
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   const title = provider ? "Edit Provider" : "New Provider";
   return (
-    <div className="modal-overlay" onMouseDown={onClose}>
+    <div className="modal-overlay" onMouseDown={dismiss}>
       <div
+        ref={dialogRef}
         className="modal-content"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="rpDialogTitle"
         onKeyDown={(e) => {
+          if (e.key === "Tab") {
+            keepTabInside(e);
+            return;
+          }
           if (e.key !== "Escape") return;
           e.stopPropagation();
-          onClose();
+          dismiss();
         }}
       >
         <div className="modal-header">
           <h2 id="rpDialogTitle">{title}</h2>
-          <button type="button" className="btn-close" aria-label="Close" onClick={onClose}>
+          <button
+            type="button"
+            className="btn-close"
+            aria-label="Close"
+            disabled={saving}
+            onClick={dismiss}
+          >
             &times;
           </button>
         </div>
@@ -201,7 +233,7 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
             )}
           </div>
           <div className="modal-footer">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>
+            <button type="button" className="btn btn-secondary" disabled={saving} onClick={dismiss}>
               Cancel
             </button>
             <button type="submit" className="btn btn-primary" disabled={saving}>
