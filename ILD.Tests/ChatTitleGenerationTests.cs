@@ -2,12 +2,14 @@ using System.Collections.Concurrent;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
+using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -552,6 +554,40 @@ public sealed class ChatTitleGenerationTests : IDisposable
         Assert.Equal(new ChatAnalytics(null, null, 0, 40, 6, 0.002m), Assert.Single(overview.Chats));
         Assert.Equal(new ProviderAnalytics("Main", 0, 40, 6, 0.002m), Assert.Single(overview.Providers));
         Assert.Equal(0.002m, overview.TotalCostUsd);
+    }
+
+    [Fact]
+    public async Task A_title_whose_chat_is_deleted_as_its_usage_is_written_still_counts_in_analytics()
+    {
+        await SeedProviderAsync("Main", isDefault: true);
+        var id = await SeedChatAsync();
+        using var deleteContext = _db.Fresh();
+        var deleteOnWrite = new DeleteChatBeforeUsageWrite(() => NewChatService(deleteContext).DeleteAsync("alice", id, CancellationToken.None));
+        using var ledger = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(deleteOnWrite).Options);
+
+        await ChatUsageLedger.RecordTitleAsync(ledger, id, new TokenUsage(40, 6, 0.002m), "Main", TestContext.Current.CancellationToken);
+
+        Assert.True(deleteOnWrite.Deleted);
+        var overview = await AnalyticsAsync();
+        Assert.Equal(new ChatAnalytics(null, null, 0, 40, 6, 0.002m), Assert.Single(overview.Chats));
+        Assert.Equal(0.002m, overview.TotalCostUsd);
+    }
+
+    // The chat goes after the ledger saw it and before its usage row lands.
+    private sealed class DeleteChatBeforeUsageWrite(Func<Task<bool>> delete) : SaveChangesInterceptor
+    {
+        public bool Deleted { get; private set; }
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!Deleted && eventData.Context!.ChangeTracker.Entries<ChatUsage>().Any(e => e.State == EntityState.Added))
+                Deleted = await delete();
+            return result;
+        }
     }
 
     [Fact]
