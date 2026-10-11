@@ -298,10 +298,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   // An answer the server refused because the run had moved on. It belongs to
   // the work item, not to a run: the refusal usually comes with a newer run.
-  const [refused, setRefused] = useState<{ workItemId: string; text: string } | null>(null);
-  useEffect(() => setRefused(null), [workItem?.id]);
-  const movedOn = refused && refused.workItemId === workItem?.id ? { text: refused.text } : null;
-  const dismissMovedOn = () => setRefused(null);
+  const [movedOn, setMovedOn] = useState<{ text: string } | null>(null);
+  const dismissMovedOn = () => setMovedOn(null);
 
   const refreshPreview = useCallback(async () => {
     if (!workItem?.id || !workItem.worktreePath) {
@@ -794,7 +792,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
           // Nothing was waiting for this answer. The text is set aside with a
           // notice rather than left in a box that may outlive the refusal, and
           // the controls stay held until the dialog shows where the run is now.
-          setRefused({ workItemId: workItem.id, text: input });
+          setMovedOn({ text: input });
           updateReply(runId, { input: "" });
           if (!(await refetchWorkItem())) {
             heldUntilReload = true;

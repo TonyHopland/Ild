@@ -422,13 +422,20 @@ describe("an answer sent after the run has moved on", () => {
     vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
   }
 
-  /** The dialog as the board hosts it: what onSave hands back is what it shows next. */
+  /** The dialog as the board hosts it: keyed by the item, and what onSave hands back is what it shows next. */
   async function renderHosted(initial: WorkItem) {
     let show!: (workItem: WorkItem) => void;
     function Host() {
       const [workItem, setWorkItem] = useState(initial);
       show = setWorkItem;
-      return <WorkItemModalV2 workItem={workItem} onClose={vi.fn()} onSave={setWorkItem} />;
+      return (
+        <WorkItemModalV2
+          key={workItem.id}
+          workItem={workItem}
+          onClose={vi.fn()}
+          onSave={setWorkItem}
+        />
+      );
     }
     render(
       <MemoryRouter>

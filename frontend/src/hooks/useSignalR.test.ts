@@ -483,4 +483,83 @@ describe("useSignalR after the hub has closed", () => {
     expect(startMock.mock.calls.length).toBe(starts);
     unmount();
   });
+  function holdJoin() {
+    let release!: () => void;
+    let fail!: (error: Error) => void;
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          release = resolve;
+          fail = reject;
+        }),
+    );
+    return { release: () => release(), fail: (error: Error) => fail(error) };
+  }
+
+  test("the work-item hub is not reported connected until it has joined its group", async () => {
+    const join = holdJoin();
+    const { result, unmount } = renderHook(() => useSignalR("/hubs/work-item"));
+    await flush();
+    expect(invokeMock).toHaveBeenCalledWith("SubscribeToWorkItems");
+    expect(result.current.connectionState).toBe("connecting");
+
+    await act(async () => join.release());
+    await flush();
+    expect(result.current.connectionState).toBe("connected");
+    unmount();
+  });
+
+  test("a reconnected work-item hub is not reported connected until it has joined its group again", async () => {
+    const { result, unmount } = await mountConnected("/hubs/work-item");
+    const onreconnecting = onreconnectingMock.mock.calls[0][0] as () => void;
+    const onreconnected = onreconnectedMock.mock.calls[0][0] as () => void;
+    const join = holdJoin();
+
+    await act(async () => onreconnecting());
+    await act(async () => onreconnected());
+    await flush();
+    expect(result.current.connectionState).toBe("reconnecting");
+
+    await act(async () => join.release());
+    await flush();
+    expect(result.current.connectionState).toBe("connected");
+    unmount();
+  });
+
+  test.each([
+    ["starts", false],
+    ["reconnects", true],
+  ])(
+    "a work-item hub that %s but cannot join its group is stopped and started again",
+    async (_, reconnect) => {
+      const join = reconnect ? undefined : holdJoin();
+      const hook = renderHook(() => useSignalR("/hubs/work-item"));
+      await flush();
+      let failJoin = join?.fail;
+      if (reconnect) {
+        expect(hook.result.current.connectionState).toBe("connected");
+        failJoin = holdJoin().fail;
+        await act(async () => (onreconnectingMock.mock.calls[0][0] as () => void)());
+        await act(async () => (onreconnectedMock.mock.calls[0][0] as () => void)());
+        await flush();
+      }
+      const starts = startMock.mock.calls.length;
+
+      await act(async () => failJoin!(new Error("Invocation canceled")));
+      await flush();
+      expect(stopMock).toHaveBeenCalledTimes(1);
+      expect(hook.result.current.connectionState).not.toBe("connected");
+
+      // What the library does when stop() completes on a started connection.
+      await closeHub();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      await flush();
+
+      expect(startMock.mock.calls.length).toBe(starts + 1);
+      expect(hook.result.current.connectionState).toBe("connected");
+      hook.unmount();
+    },
+  );
 });

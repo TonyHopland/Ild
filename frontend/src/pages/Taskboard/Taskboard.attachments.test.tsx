@@ -277,4 +277,86 @@ describe("a dialog belongs to the work item it was opened for", () => {
     expect(dialog().textContent).not.toContain("Input must be 8192 characters or fewer.");
     expect(upload).not.toHaveBeenCalled();
   });
+  describe("an answer refused because the run had moved on", () => {
+    const TYPED = "Please also fix the flaky test";
+    const MOVED_ON = { status: 409, message: "The run is not waiting for an answer." };
+
+    function parkedPair() {
+      const parked = makeItem("wi-a", "Item A", {
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Human Input Needed",
+        currentLoopRunId: "run-1",
+        latestLoopRunId: "run-1",
+      });
+      return [
+        parked,
+        makeItem("wi-b", "Item B", {
+          status: WorkItemStatus.HumanFeedback,
+          humanFeedbackReason: "Human Input Needed",
+          currentLoopRunId: "run-2",
+          latestLoopRunId: "run-2",
+        }),
+      ];
+    }
+
+    async function answerOnItemA() {
+      renderBoard("wi-a");
+      await dialogSettled("Item A");
+      const feedback = await waitForNode(() =>
+        dialog().querySelector<HTMLElement>(".wiv2-feedback"),
+      );
+      await act(async () => {
+        fireEvent.change(feedback.querySelector("textarea") as HTMLTextAreaElement, {
+          target: { value: TYPED },
+        });
+        await Promise.resolve();
+      });
+      await click(await within(feedback).findByRole("button", { name: "Approve" }));
+    }
+
+    test("its notice stays with that item when another item is opened", async () => {
+      const items = parkedPair();
+      mockServices(items);
+      stageParkedNode();
+      vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockRejectedValue(MOVED_ON);
+      vi.spyOn(authServices.workItemService, "getById").mockImplementation((id: string) =>
+        Promise.resolve(items.find((item) => item.id === id) as WorkItem),
+      );
+
+      await answerOnItemA();
+      await waitFor(() => expect(within(dialog()).getByText(/moved on/i)).toBeTruthy());
+
+      await openCard("Item B");
+
+      await waitFor(() => expect(openTitle()).toBe("Item B"));
+      expect(within(dialog()).queryByText(/moved on/i)).toBeNull();
+      expect(dialog().textContent).not.toContain(TYPED);
+    });
+
+    test("a refusal that lands after another item is opened shows nothing there", async () => {
+      const items = parkedPair();
+      mockServices(items);
+      stageParkedNode();
+      let refuse!: (error: unknown) => void;
+      vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockReturnValue(
+        new Promise((_, reject) => {
+          refuse = reject;
+        }),
+      );
+      vi.spyOn(authServices.workItemService, "getById").mockImplementation((id: string) =>
+        Promise.resolve(items.find((item) => item.id === id) as WorkItem),
+      );
+
+      await answerOnItemA();
+      await openCard("Item B");
+      await waitFor(() => expect(openTitle()).toBe("Item B"));
+      await act(async () => {
+        refuse(MOVED_ON);
+        await Promise.resolve();
+      });
+
+      expect(within(dialog()).queryByText(/moved on/i)).toBeNull();
+      expect(dialog().textContent).not.toContain(TYPED);
+    });
+  });
 });

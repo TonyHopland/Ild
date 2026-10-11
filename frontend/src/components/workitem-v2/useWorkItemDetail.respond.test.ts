@@ -209,10 +209,9 @@ describe("an answer sent after the run has moved on", () => {
     const other = { ...makeParkedWorkItem(), id: "wi-2", title: "Other" };
     const onSave = vi.fn();
 
-    const { result, rerender } = renderHook(
-      ({ workItem }: { workItem: WorkItem }) => useWorkItemDetail(workItem, onSave),
-      { initialProps: { workItem: first } },
-    );
+    // The board keys the dialog by item, so switching items unmounts this
+    // instance and builds a fresh one for the other item.
+    const { result, unmount } = renderHook(() => useWorkItemDetail(first, onSave));
     await waitFor(() => expect(result.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
       result.current.setReplyInput("run-1", "Meant for wi-1");
@@ -222,13 +221,15 @@ describe("an answer sent after the run has moved on", () => {
       answered = result.current.handleApprove("run-1");
     });
 
-    rerender({ workItem: other });
+    unmount();
+    const { result: switched } = renderHook(() => useWorkItemDetail(other, onSave));
+    await waitFor(() => expect(switched.current.editAttachments.limits).not.toBeNull());
     await act(async () => {
       refuseAnswer(MOVED_ON);
       await answered;
     });
 
-    expect(result.current.movedOn).toBeNull();
+    expect(switched.current.movedOn).toBeNull();
   });
 });
 

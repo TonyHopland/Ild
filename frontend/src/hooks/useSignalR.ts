@@ -89,19 +89,6 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
       );
     };
 
-    connection.onreconnecting(() => {
-      updateState(signalR.HubConnectionState.Reconnecting);
-    });
-    connection.onreconnected(() => {
-      // .on() handlers survive automatic reconnects, so the dispatchers are still
-      // registered. A reconnect produces a new ConnectionId, though, so the
-      // work-items group membership is lost and must be re-joined.
-      if (hubUrl === "/hubs/work-item") {
-        connection.invoke("SubscribeToWorkItems").catch((err) => console.error(err));
-      }
-      updateState(signalR.HubConnectionState.Connected);
-    });
-
     let stopped = false;
     let starting = false;
     let attempt = 0;
@@ -111,6 +98,33 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
       clearTimeout(retryTimer);
       retryTimer = setTimeout(() => void start(), retryDelay(attempt++));
     };
+
+    // Every new ConnectionId starts outside the work-items group, so the hub is
+    // reported connected only once it has joined: a reader that catches up on
+    // "connected" must not miss what is sent before then. A join that fails
+    // stops the connection, and onclose starts it again.
+    const joinThenReportConnected = async () => {
+      if (hubUrl === "/hubs/work-item") {
+        try {
+          await connection.invoke("SubscribeToWorkItems");
+        } catch (err) {
+          if (stopped) return;
+          console.error(err);
+          void connection.stop();
+          return;
+        }
+      }
+      if (stopped) return;
+      attempt = 0;
+      updateState(signalR.HubConnectionState.Connected);
+    };
+
+    connection.onreconnecting(() => {
+      updateState(signalR.HubConnectionState.Reconnecting);
+    });
+    // .on() handlers survive automatic reconnects, so the dispatchers are still
+    // registered; only the group has to be joined again.
+    connection.onreconnected(() => void joinThenReportConnected());
 
     // The automatic reconnect does not retry a start() that fails, and it does not
     // restart a closed hub, so both are started again here. See
@@ -133,12 +147,8 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
         starting = false;
       }
       if (stopped) return;
-      attempt = 0;
-      updateState(signalR.HubConnectionState.Connected);
       handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
-      if (hubUrl === "/hubs/work-item") {
-        connection.invoke("SubscribeToWorkItems").catch((err) => console.error(err));
-      }
+      await joinThenReportConnected();
     };
 
     connection.onclose(() => {
