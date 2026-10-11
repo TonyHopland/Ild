@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AnalyticsGranularity,
   AnalyticsSeriesPoint,
+  ChatAnalytics,
   ProviderAnalytics,
   RunAnalyticsOverview,
   TemplateAnalytics,
@@ -176,6 +177,35 @@ function TemplateCard({ t }: { t: TemplateAnalytics }) {
   );
 }
 
+function chatLabel(c: ChatAnalytics): string {
+  return c.scheduleId === null ? "Chat" : `Scheduled: ${c.scheduleName}`;
+}
+
+function ChatCard({ c }: { c: ChatAnalytics }) {
+  // Providers that report no cost (subscription auth) leave it at 0.
+  const cost = c.totalCostUsd > 0 ? formatCost(c.totalCostUsd) : null;
+  return (
+    <div className="analytics-card">
+      <div className="analytics-card-head">
+        <span className="analytics-card-title">{chatLabel(c)}</span>
+        <span className="analytics-card-sub">{c.totalTurns} turns</span>
+      </div>
+      <dl className="analytics-stats">
+        <div>
+          <dt>Tokens (in / out)</dt>
+          <dd>
+            {formatTokens(c.totalInputTokens)} / {formatTokens(c.totalOutputTokens)}
+          </dd>
+        </div>
+        <div>
+          <dt>Cost</dt>
+          <dd>{cost ?? "—"}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
 export default function Analytics() {
   const [overview, setOverview] = useState<RunAnalyticsOverview | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -212,7 +242,12 @@ export default function Analytics() {
   }, [granularity, provider, from, to]);
 
   const maxCost = useMemo(
-    () => Math.max(0, ...(overview?.templates.map((t) => t.totalCostUsd) ?? [])),
+    () =>
+      Math.max(
+        0,
+        ...(overview?.templates.map((t) => t.totalCostUsd) ?? []),
+        ...(overview?.chats.map((c) => c.totalCostUsd) ?? []),
+      ),
     [overview],
   );
 
@@ -311,7 +346,7 @@ export default function Analytics() {
             </div>
           </div>
 
-          {overview.totalRuns === 0 ? (
+          {overview.totalRuns === 0 && overview.chats.length === 0 ? (
             <p className="analytics-empty">
               No run data for this filter. Metrics appear once loops have executed.
             </p>
@@ -325,7 +360,7 @@ export default function Analytics() {
 
               {maxCost > 0 && (
                 <section className="analytics-chart">
-                  <h2 className="analytics-section-title">Cost by template</h2>
+                  <h2 className="analytics-section-title">Cost by template and chat</h2>
                   {overview.templates.map((t) => (
                     <Bar
                       key={t.templateId}
@@ -336,14 +371,29 @@ export default function Analytics() {
                       tone="#3b82f6"
                     />
                   ))}
+                  {overview.chats
+                    .filter((c) => c.totalCostUsd > 0)
+                    .map((c) => (
+                      <Bar
+                        key={c.scheduleId ?? "chat"}
+                        label={chatLabel(c)}
+                        value={c.totalCostUsd}
+                        max={maxCost}
+                        text={formatCost(c.totalCostUsd) ?? "—"}
+                        tone="#14b8a6"
+                      />
+                    ))}
                 </section>
               )}
 
               <section className="analytics-templates">
-                <h2 className="analytics-section-title">Per template</h2>
+                <h2 className="analytics-section-title">Per template and chat</h2>
                 <div className="analytics-grid">
                   {overview.templates.map((t) => (
                     <TemplateCard key={t.templateId} t={t} />
+                  ))}
+                  {overview.chats.map((c) => (
+                    <ChatCard key={c.scheduleId ?? "chat"} c={c} />
                   ))}
                 </div>
               </section>
