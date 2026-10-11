@@ -1,6 +1,7 @@
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data;
+using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -97,6 +98,9 @@ public sealed class ChatTitleGenerator
                 chatSessionId, provider.Name, result.Error);
             return;
         }
+        // Spent whether or not the answer makes a title, and kept even if the job is cancelled now.
+        if (result.Usage is { HasData: true } usage)
+            await ChatUsageLedger.RecordTitleAsync(_db, chatSessionId, usage, provider.Name, CancellationToken.None);
         if (ChatTitles.CleanGenerated(result.Output ?? string.Empty) is not { } title)
         {
             _log.LogWarning("The title model for chat {ChatSessionId} answered with no usable title", chatSessionId);

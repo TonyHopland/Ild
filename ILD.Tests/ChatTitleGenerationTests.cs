@@ -2,12 +2,14 @@ using System.Collections.Concurrent;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
+using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -462,6 +464,130 @@ public sealed class ChatTitleGenerationTests : IDisposable
 
         AssertUntouched(id);
         Assert.Contains(LogLevel.Warning, _logs.Levels);
+    }
+
+    private Task<RunAnalyticsOverview> AnalyticsAsync()
+        => new RunAnalyticsService(_db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_title_call_that_reports_usage_is_counted_under_its_chat_on_the_title_provider(bool usableTitle)
+    {
+        await SeedProviderAsync("Main", isDefault: true);
+        await SeedProviderAsync("Fast", isDefault: false, tags: "Fast");
+        await SmartTitlesAsync(on: true, tag: "Fast");
+        var id = await SeedChatAsync();
+        _titleModel = _ => Task.FromResult(NodeExecutionResult.Ok(
+            usableTitle ? "Login page fix" : "  \"\"  ", usage: new TokenUsage(40, 6, 0.002m)));
+        using var services = BuildServices();
+        using var scheduler = NewScheduler(services);
+
+        await RunAsync(scheduler, id);
+
+        using (var ctx = _db.Fresh())
+        {
+            var usage = Assert.Single(ctx.ChatUsages.AsNoTracking());
+            Assert.Equal(id, usage.ChatSessionId);
+            Assert.Null(usage.ChatMessageId);
+        }
+        var overview = await AnalyticsAsync();
+        Assert.Equal(new ChatAnalytics(null, null, 0, 40, 6, 0.002m), Assert.Single(overview.Chats));
+        Assert.Equal(new ProviderAnalytics("Fast", 0, 40, 6, 0.002m), Assert.Single(overview.Providers));
+        Assert.Equal(0, overview.TotalRuns);
+    }
+
+    public enum UnrecordedTitle { ModelFails, NoUsage, ZeroUsage }
+
+    [Theory]
+    [InlineData(UnrecordedTitle.ModelFails)]
+    [InlineData(UnrecordedTitle.NoUsage)]
+    [InlineData(UnrecordedTitle.ZeroUsage)]
+    public async Task A_title_call_with_no_usage_to_record_stores_none(UnrecordedTitle call)
+    {
+        await SeedProviderAsync("Main", isDefault: true);
+        await SmartTitlesAsync(on: true);
+        var id = await SeedChatAsync();
+        _titleModel = _ => Task.FromResult(call switch
+        {
+            // A failure carrying usage still records nothing.
+            UnrecordedTitle.ModelFails => new NodeExecutionResult(false, null, "rate limited", Usage: new TokenUsage(40, 6, 0.002m)),
+            UnrecordedTitle.NoUsage => NodeExecutionResult.Ok("Login page fix"),
+            _ => NodeExecutionResult.Ok("Login page fix", usage: new TokenUsage(0, 0, null)),
+        });
+        using var services = BuildServices();
+        using var scheduler = NewScheduler(services);
+
+        await RunAsync(scheduler, id);
+
+        Assert.Single(_modelCalls);
+        var overview = await AnalyticsAsync();
+        Assert.Empty(overview.Chats);
+        Assert.Empty(overview.Providers);
+        Assert.Equal(0, overview.TotalInputTokens);
+        Assert.Equal(0m, overview.TotalCostUsd);
+    }
+
+    [Fact]
+    public async Task A_title_call_whose_chat_is_deleted_meanwhile_still_counts_in_analytics_without_throwing()
+    {
+        await SeedProviderAsync("Main", isDefault: true);
+        await SmartTitlesAsync(on: true);
+        var id = await SeedChatAsync();
+        using var deleteContext = _db.Fresh();
+        var deleteRequest = NewChatService(deleteContext);
+        _titleModel = async _ =>
+        {
+            Assert.True(await deleteRequest.DeleteAsync("alice", id, CancellationToken.None));
+            return NodeExecutionResult.Ok("Login page fix", usage: new TokenUsage(40, 6, 0.002m));
+        };
+        using var services = BuildServices();
+
+        // Called directly: the scheduler would swallow a throw.
+        await using (var scope = services.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<ChatTitleGenerator>()
+                .GenerateAsync(id, openWorkItemId: null, replySequence: 1, TestContext.Current.CancellationToken);
+
+        using (var ctx = _db.Fresh())
+            Assert.False(await ctx.ChatSessions.AnyAsync(c => c.Id == id, TestContext.Current.CancellationToken));
+        var overview = await AnalyticsAsync();
+        Assert.Equal(new ChatAnalytics(null, null, 0, 40, 6, 0.002m), Assert.Single(overview.Chats));
+        Assert.Equal(new ProviderAnalytics("Main", 0, 40, 6, 0.002m), Assert.Single(overview.Providers));
+        Assert.Equal(0.002m, overview.TotalCostUsd);
+    }
+
+    [Fact]
+    public async Task A_title_whose_chat_is_deleted_as_its_usage_is_written_still_counts_in_analytics()
+    {
+        await SeedProviderAsync("Main", isDefault: true);
+        var id = await SeedChatAsync();
+        using var deleteContext = _db.Fresh();
+        var deleteOnWrite = new DeleteChatBeforeUsageWrite(() => NewChatService(deleteContext).DeleteAsync("alice", id, CancellationToken.None));
+        using var ledger = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(deleteOnWrite).Options);
+
+        await ChatUsageLedger.RecordTitleAsync(ledger, id, new TokenUsage(40, 6, 0.002m), "Main", TestContext.Current.CancellationToken);
+
+        Assert.True(deleteOnWrite.Deleted);
+        var overview = await AnalyticsAsync();
+        Assert.Equal(new ChatAnalytics(null, null, 0, 40, 6, 0.002m), Assert.Single(overview.Chats));
+        Assert.Equal(0.002m, overview.TotalCostUsd);
+    }
+
+    // The chat goes after the ledger saw it and before its usage row lands.
+    private sealed class DeleteChatBeforeUsageWrite(Func<Task<bool>> delete) : SaveChangesInterceptor
+    {
+        public bool Deleted { get; private set; }
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!Deleted && eventData.Context!.ChangeTracker.Entries<ChatUsage>().Any(e => e.State == EntityState.Added))
+                Deleted = await delete();
+            return result;
+        }
     }
 
     [Fact]

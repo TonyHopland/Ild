@@ -11,9 +11,10 @@ public enum AnalyticsGranularity
 
 /// <summary>
 /// Filters for an analytics query. <see cref="From"/>/<see cref="To"/> bound the
-/// run start date (inclusive, UTC days); null means unbounded. <see cref="Provider"/>
-/// restricts to one agent provider (matched against the run's primary provider);
-/// null means all. <see cref="Granularity"/> controls the time-series bucket size.
+/// run start date, or the day a chat's usage was recorded (inclusive, UTC days);
+/// null means unbounded. <see cref="Provider"/> restricts to one agent provider
+/// (matched against the run's primary provider, or the provider of the chat's
+/// call); null means all. <see cref="Granularity"/> controls the time-series bucket size.
 /// </summary>
 public sealed record AnalyticsQuery(
     DateOnly? From = null,
@@ -54,10 +55,28 @@ public sealed record TemplateAnalytics(
     long TotalOutputTokens,
     decimal TotalCostUsd);
 
-/// <summary>Per-agent-provider cost/token/run rollup. Provider is "(none)" for runs with no AI node.</summary>
+/// <summary>
+/// Per-agent-provider cost/token/run rollup, chats' usage included; <c>TotalRuns</c>
+/// counts loop runs only. Provider is "(none)" for runs with no AI node.
+/// </summary>
 public sealed record ProviderAnalytics(
     string Provider,
     int TotalRuns,
+    long TotalInputTokens,
+    long TotalOutputTokens,
+    decimal TotalCostUsd);
+
+/// <summary>
+/// What chats cost, one row for the chats a person started (<see cref="ScheduleId"/>
+/// null) and one per Chat Schedule for the chats it started. Only usage the provider
+/// reported is counted; title calls add to the figures but not to
+/// <see cref="TotalTurns"/>. <see cref="ScheduleName"/> is the schedule's current
+/// name, or the last one recorded once it is deleted.
+/// </summary>
+public sealed record ChatAnalytics(
+    Guid? ScheduleId,
+    string? ScheduleName,
+    int TotalTurns,
     long TotalInputTokens,
     long TotalOutputTokens,
     decimal TotalCostUsd);
@@ -72,8 +91,10 @@ public sealed record AnalyticsSeriesPoint(
 
 /// <summary>
 /// The analytics dashboard payload: account-wide totals (within the active
-/// filters) plus per-template and per-provider breakdowns, a time series at the
-/// requested granularity, and the full provider list for the filter control.
+/// filters) plus per-template, per-chat-row and per-provider breakdowns, a time
+/// series at the requested granularity, and the full provider list for the filter
+/// control. Chats add tokens and cost to the totals, providers and series, never
+/// runs.
 /// </summary>
 public sealed record RunAnalyticsOverview(
     int TotalRuns,
@@ -81,6 +102,7 @@ public sealed record RunAnalyticsOverview(
     long TotalOutputTokens,
     decimal TotalCostUsd,
     IReadOnlyList<TemplateAnalytics> Templates,
+    IReadOnlyList<ChatAnalytics> Chats,
     IReadOnlyList<ProviderAnalytics> Providers,
     IReadOnlyList<AnalyticsSeriesPoint> Series,
     IReadOnlyList<string> AvailableProviders,

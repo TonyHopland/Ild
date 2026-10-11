@@ -1,3 +1,4 @@
+using System.Data;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Analytics;
 using ILD.Data.DTOs;
@@ -14,8 +15,11 @@ namespace ILD.Core.Services.Implementations;
 /// and the durable <c>LoopRunAnalyticsBucket</c> archive of reclaimed runs. A run
 /// is in exactly one source — live until deleted, archived after — so they never
 /// double-count, and the dashboard keeps reporting history after cleanup.
-/// Filtering (date range, provider) and rollup (template, provider, time series)
-/// happen in memory over the small per-run contribution set, which keeps the
+/// Chats are merged the same way, from <c>ChatUsage</c> and the
+/// <c>ChatAnalyticsBucket</c> archive of deleted chats: they add tokens and cost
+/// to the totals, providers and series, and have rows of their own instead of
+/// templates. Filtering (date range, provider) and rollup (template, provider,
+/// time series) happen in memory over the small contribution sets, which keeps the
 /// queries provider-agnostic (SQLite in tests, Postgres in production).
 /// </summary>
 public sealed class RunAnalyticsService : IRunAnalyticsService
@@ -29,19 +33,41 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
 
     public async Task<RunAnalyticsOverview> GetOverviewAsync(AnalyticsQuery query, CancellationToken cancellationToken = default)
     {
+        // One snapshot for every read: a run or chat deleted between the live and the
+        // archive reads would otherwise be counted in both.
         var contributions = new List<RunContribution>();
-        contributions.AddRange(await BuildLiveContributionsAsync(cancellationToken));
-        contributions.AddRange(await LoadArchivedContributionsAsync(cancellationToken));
+        var chatContributions = new List<ChatContribution>();
+        Dictionary<Guid, string> schedules;
+        await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
+        {
+            contributions.AddRange(await BuildLiveContributionsAsync(cancellationToken));
+            contributions.AddRange(await LoadArchivedContributionsAsync(cancellationToken));
+            chatContributions.AddRange(await BuildLiveChatContributionsAsync(cancellationToken));
+            chatContributions.AddRange(await LoadArchivedChatContributionsAsync(cancellationToken));
+            schedules = await _db.ChatSchedules
+                .Select(s => new { s.Id, s.Name })
+                .ToDictionaryAsync(s => s.Id, s => s.Name, cancellationToken);
+            await snapshot.CommitAsync(cancellationToken);
+        }
 
         // Provider list for the filter control is the full (unfiltered) set so a
         // provider stays selectable even after its only runs fall outside the range.
         var availableProviders = contributions
             .Select(c => c.AiProvider)
+            .Concat(chatContributions.Select(c => c.AiProvider))
             .Distinct()
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var filtered = contributions.Where(c => Matches(c, query)).ToList();
+        var filtered = contributions.Where(c => Matches(c.BucketDate, c.AiProvider, query)).ToList();
+        var filteredChats = chatContributions.Where(c => Matches(c.BucketDate, c.AiProvider, query)).ToList();
+        var spend = filtered
+            .Select(c => new Spend(
+                c.BucketDate, c.AiProvider, c.Metrics.RunCount,
+                c.Metrics.TotalInputTokens, c.Metrics.TotalOutputTokens, c.Metrics.TotalCostUsd))
+            .Concat(filteredChats.Select(c => new Spend(
+                c.BucketDate, c.AiProvider, 0, c.InputTokens, c.OutputTokens, c.CostUsd)))
+            .ToList();
 
         var templates = filtered
             .GroupBy(c => c.TemplateId)
@@ -60,38 +86,44 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .ThenByDescending(t => t.TotalRuns)
             .ToList();
 
-        var providers = filtered
-            .GroupBy(c => c.AiProvider)
-            .Select(g =>
-            {
-                var metrics = Sum(g.Select(c => c.Metrics));
-                return new ProviderAnalytics(
-                    g.Key, metrics.RunCount, metrics.TotalInputTokens, metrics.TotalOutputTokens, metrics.TotalCostUsd);
-            })
+        var chats = filteredChats
+            .GroupBy(c => c.ScheduleId)
+            .Select(g => new ChatAnalytics(
+                g.Key,
+                g.Key is not Guid scheduleId ? null
+                    : schedules.TryGetValue(scheduleId, out var current) ? current
+                    : g.OrderByDescending(c => c.RecordedAt).First().ScheduleName,
+                g.Sum(c => c.Turns),
+                g.Sum(c => c.InputTokens),
+                g.Sum(c => c.OutputTokens),
+                g.Sum(c => c.CostUsd)))
+            .OrderByDescending(c => c.TotalCostUsd)
+            .ThenByDescending(c => c.TotalTurns)
+            .ToList();
+
+        var providers = spend
+            .GroupBy(s => s.AiProvider)
+            .Select(g => new ProviderAnalytics(
+                g.Key, g.Sum(s => s.Runs), g.Sum(s => s.InputTokens), g.Sum(s => s.OutputTokens), g.Sum(s => s.CostUsd)))
             .OrderByDescending(p => p.TotalCostUsd)
             .ThenByDescending(p => p.TotalRuns)
             .ToList();
 
-        var series = filtered
-            .GroupBy(c => PeriodStart(c.BucketDate, query.Granularity))
+        var series = spend
+            .GroupBy(s => PeriodStart(s.BucketDate, query.Granularity))
             .OrderBy(g => g.Key)
-            .Select(g =>
-            {
-                var metrics = Sum(g.Select(c => c.Metrics));
-                return new AnalyticsSeriesPoint(
-                    DateOnly.FromDateTime(g.Key),
-                    metrics.RunCount, metrics.TotalInputTokens, metrics.TotalOutputTokens, metrics.TotalCostUsd);
-            })
+            .Select(g => new AnalyticsSeriesPoint(
+                DateOnly.FromDateTime(g.Key),
+                g.Sum(s => s.Runs), g.Sum(s => s.InputTokens), g.Sum(s => s.OutputTokens), g.Sum(s => s.CostUsd)))
             .ToList();
 
-        var totals = Sum(filtered.Select(c => c.Metrics));
-
         return new RunAnalyticsOverview(
-            totals.RunCount,
-            totals.TotalInputTokens,
-            totals.TotalOutputTokens,
-            totals.TotalCostUsd,
+            spend.Sum(s => s.Runs),
+            spend.Sum(s => s.InputTokens),
+            spend.Sum(s => s.OutputTokens),
+            spend.Sum(s => s.CostUsd),
             templates,
+            chats,
             providers,
             series,
             availableProviders,
@@ -179,13 +211,43 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             })).ToList();
     }
 
-    private static bool Matches(RunContribution c, AnalyticsQuery query)
+    private async Task<List<ChatContribution>> BuildLiveChatContributionsAsync(CancellationToken ct)
     {
-        var day = DateOnly.FromDateTime(c.BucketDate);
+        var usages = await _db.ChatUsages
+            .Select(u => new
+            {
+                u.CreatedAt,
+                u.ScheduleId,
+                u.ScheduleName,
+                u.AiProvider,
+                u.Kind,
+                u.InputTokens,
+                u.OutputTokens,
+                u.CostUsd,
+            })
+            .ToListAsync(ct);
+        return usages.Select(u => new ChatContribution(
+            u.CreatedAt.Date, u.CreatedAt, u.ScheduleId, u.ScheduleName, u.AiProvider,
+            u.Kind == ChatUsageKind.Turn ? 1 : 0, u.InputTokens, u.OutputTokens, u.CostUsd ?? 0m)).ToList();
+    }
+
+    private async Task<List<ChatContribution>> LoadArchivedChatContributionsAsync(CancellationToken ct)
+    {
+        var buckets = await _db.ChatAnalyticsBuckets.ToListAsync(ct);
+        return buckets.Select(b => new ChatContribution(
+            b.BucketDate, b.LastRecordedAt,
+            b.ScheduleId,
+            b.ScheduleName,
+            b.AiProvider, b.TurnCount, b.TotalInputTokens, b.TotalOutputTokens, b.TotalCostUsd)).ToList();
+    }
+
+    private static bool Matches(DateTime bucketDate, string aiProvider, AnalyticsQuery query)
+    {
+        var day = DateOnly.FromDateTime(bucketDate);
         if (query.From is DateOnly from && day < from) return false;
         if (query.To is DateOnly to && day > to) return false;
         if (!string.IsNullOrEmpty(query.Provider)
-            && !string.Equals(c.AiProvider, query.Provider, StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(aiProvider, query.Provider, StringComparison.OrdinalIgnoreCase))
             return false;
         return true;
     }
@@ -196,6 +258,18 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         foreach (var m in metrics) total.Add(m);
         return total;
     }
+
+    /// <summary>
+    /// What chats spent on one day for one (schedule, provider): a single call while
+    /// its chat lives, or a deleted chats' archive bucket. <see cref="RecordedAt"/>
+    /// orders the names recorded for a schedule.
+    /// </summary>
+    private sealed record ChatContribution(
+        DateTime BucketDate, DateTime RecordedAt, Guid? ScheduleId, string? ScheduleName, string AiProvider,
+        int Turns, long InputTokens, long OutputTokens, decimal CostUsd);
+
+    /// <summary>Tokens and cost on one day for one provider, from a run or a chat; only runs carry a run count.</summary>
+    private sealed record Spend(DateTime BucketDate, string AiProvider, int Runs, long InputTokens, long OutputTokens, decimal CostUsd);
 
     /// <summary>First UTC day of the bucket containing <paramref name="date"/> at the given granularity.</summary>
     private static DateTime PeriodStart(DateTime date, AnalyticsGranularity granularity) => granularity switch

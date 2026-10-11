@@ -37,6 +37,8 @@ public class AppDbContext : DbContext
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<ChatSchedule> ChatSchedules => Set<ChatSchedule>();
     public DbSet<ChatScheduleFiring> ChatScheduleFirings => Set<ChatScheduleFiring>();
+    public DbSet<ChatUsage> ChatUsages => Set<ChatUsage>();
+    public DbSet<ChatAnalyticsBucket> ChatAnalyticsBuckets => Set<ChatAnalyticsBucket>();
     public DbSet<NetworkPolicyEntry> NetworkPolicyEntries => Set<NetworkPolicyEntry>();
     public DbSet<NetworkLogEntry> NetworkLogEntries => Set<NetworkLogEntry>();
     public DbSet<NetworkForwardEntry> NetworkForwardEntries => Set<NetworkForwardEntry>();
@@ -134,6 +136,16 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<LoopRunAnalyticsBucket>()
             .Property(b => b.TotalCostUsd)
             .HasPrecision(18, 6);
+        modelBuilder.Entity<ChatUsage>()
+            .Property(u => u.CostUsd)
+            .HasPrecision(18, 6);
+        modelBuilder.Entity<ChatAnalyticsBucket>()
+            .Property(b => b.TotalCostUsd)
+            .HasPrecision(18, 6);
+        modelBuilder.Entity<ChatUsage>()
+            .Property(u => u.Kind)
+            .HasConversion<string>()
+            .HasMaxLength(32);
         modelBuilder.Entity<LoopTemplate>()
             .Property(t => t.RecoveryPolicy)
             .HasConversion<string>()
@@ -262,6 +274,17 @@ public class AppDbContext : DbContext
             e.HasIndex(f => new { f.ScheduleId, f.Sequence }).IsUnique();
             e.HasIndex(f => f.TurnId);
             e.HasIndex(f => f.Outcome);
+        });
+
+        modelBuilder.Entity<ChatUsage>(e =>
+        {
+            e.HasIndex(u => u.ChatSessionId);
+            e.HasIndex(u => u.CreatedAt);
+        });
+
+        modelBuilder.Entity<ChatAnalyticsBucket>(e =>
+        {
+            e.HasIndex(b => b.BucketDate);
         });
 
         modelBuilder.Entity<LoopRunSessionBinding>(e =>

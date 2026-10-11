@@ -66,7 +66,7 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ![Network](docs/screenshots/SettingsNetwork.png)
 
-**Run analytics** — what the loops actually cost. Totals and per-day spend, broken down by agent provider and by loop template, so an expensive template is visible before the bill is.
+**Run analytics** — what the loops and chats actually cost. Totals and per-day spend, broken down by agent provider, by loop template and by chat, so an expensive template is visible before the bill is.
 
 ![Run analytics](docs/screenshots/AnalyticsCost.png)
 

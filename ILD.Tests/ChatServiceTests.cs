@@ -1,6 +1,7 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -1225,6 +1226,264 @@ public sealed class ChatServiceTests : IDisposable
             v.Id == committed.Id && v.Role == "assistant" && v.Interrupted && v.Sequence == committed.Sequence)), Times.Once);
         chatNotifier.Verify(n => n.UnreadChangedAsync("alice", chat.Id), Times.Once);
         chatNotifier.Verify(n => n.ActivityChangedAsync("alice", chat.Id), Times.Once);
+    }
+
+    // Through the service's own context, as the turn reads its tracked session.
+    private async Task LinkToScheduleAsync(Guid chatId, ChatSchedule schedule)
+    {
+        _db.Context.ChatSchedules.Add(schedule);
+        _db.Context.ChatSessions.Single(c => c.Id == chatId).ScheduleId = schedule.Id;
+        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+    }
+
+    private Task<RunAnalyticsOverview> AnalyticsAsync(AnalyticsQuery? query = null)
+        => new RunAnalyticsService(_db.Fresh()).GetOverviewAsync(query ?? new AnalyticsQuery(), TestContext.Current.CancellationToken);
+
+    [Theory]
+    [InlineData(false, "0.07")]
+    [InlineData(true, null)]
+    public async Task A_successful_turn_that_reports_usage_records_it_once_under_the_chats_provider_name(bool interrupted, string? cost)
+    {
+        var provider = await SeedProviderAsync();
+        var costUsd = cost is null ? (decimal?)null : decimal.Parse(cost, System.Globalization.CultureInfo.InvariantCulture);
+        using var cts = new CancellationTokenSource();
+        var svc = NewService(new FakeAdapter(async ctx =>
+        {
+            await ctx.ProgressCallback!("partial");
+            if (interrupted) cts.Cancel();
+            return NodeExecutionResult.Ok("reply", usage: new TokenUsage(120, 30, costUsd, AiProvider: "claude-code"));
+        }));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hi", cts.Token);
+
+        using var ctx = _db.Fresh();
+        var assistant = ctx.ChatMessages.AsNoTracking().Single(m => m.ChatSessionId == chat.Id && m.Role == "assistant");
+        Assert.Equal(interrupted, assistant.Interrupted);
+        var usage = Assert.Single(ctx.ChatUsages.AsNoTracking());
+        Assert.Equal(chat.Id, usage.ChatSessionId);
+        Assert.Equal(assistant.Id, usage.ChatMessageId);
+        Assert.Equal(120, usage.InputTokens);
+        Assert.Equal(30, usage.OutputTokens);
+        Assert.Equal(costUsd, usage.CostUsd);
+        Assert.Equal("p1", usage.AiProvider);
+
+        var overview = await AnalyticsAsync();
+        Assert.Equal(new ChatAnalytics(null, null, 1, 120, 30, costUsd ?? 0m), Assert.Single(overview.Chats));
+        Assert.Equal("p1", Assert.Single(overview.Providers).Provider);
+    }
+
+    public enum NothingToRecord { AdapterFails, AdapterThrows, AdapterCancelled, ProviderGone, NoAdapter, NoUsage, ZeroUsage }
+
+    [Theory]
+    [InlineData(NothingToRecord.AdapterFails)]
+    [InlineData(NothingToRecord.AdapterThrows)]
+    [InlineData(NothingToRecord.AdapterCancelled)]
+    [InlineData(NothingToRecord.ProviderGone)]
+    [InlineData(NothingToRecord.NoAdapter)]
+    [InlineData(NothingToRecord.NoUsage)]
+    [InlineData(NothingToRecord.ZeroUsage)]
+    public async Task A_turn_with_no_usage_to_record_stores_none(NothingToRecord turn)
+    {
+        var provider = await SeedProviderAsync();
+        var usage = new TokenUsage(120, 30, 0.07m);
+        var adapter = new FakeAdapter(_ => turn switch
+        {
+            // A failure carrying usage still records nothing.
+            NothingToRecord.AdapterFails => Task.FromResult(new NodeExecutionResult(false, "out", "rate limited", Usage: usage)),
+            NothingToRecord.AdapterThrows => throw new InvalidOperationException("crashed"),
+            NothingToRecord.AdapterCancelled => throw new OperationCanceledException(),
+            NothingToRecord.NoUsage => Task.FromResult(NodeExecutionResult.Ok("reply")),
+            NothingToRecord.ZeroUsage => Task.FromResult(NodeExecutionResult.Ok("reply", usage: new TokenUsage(0, 0, 0m))),
+            _ => Task.FromResult(NodeExecutionResult.Ok("reply", usage: usage)),
+        });
+        Func<IAgentAdapter> noAdapter = () => throw new InvalidOperationException("no adapter");
+        var registry = turn == NothingToRecord.NoAdapter
+            ? Mock.Of<IAgentAdapterRegistry>(r => r.ResolveForProvider(It.IsAny<AiProvider>()) == noAdapter)
+            : RegistryFor(adapter);
+        var svc = new ChatService(_db.Context, _db.Providers, registry, _notifier, Options, _db.LoopRuns, _loopScratchpad);
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        if (turn == NothingToRecord.ProviderGone)
+        {
+            _db.Context.AiProviders.Remove(provider);
+            await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hi", CancellationToken.None);
+
+        Assert.Single(_db.Fresh().ChatMessages.AsNoTracking().Where(m => m.ChatSessionId == chat.Id && m.Role == "assistant"));
+        var overview = await AnalyticsAsync();
+        Assert.Empty(overview.Chats);
+        Assert.Equal(0, overview.TotalInputTokens);
+        Assert.Equal(0, overview.TotalOutputTokens);
+        Assert.Equal(0m, overview.TotalCostUsd);
+    }
+
+    [Fact]
+    public async Task A_scheduled_chats_usage_stays_on_its_schedule_row_after_the_schedule_and_the_chat_are_deleted()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ =>
+            Task.FromResult(NodeExecutionResult.Ok("reply", usage: new TokenUsage(100, 10, 0.10m)))));
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var schedule = new ChatSchedule
+        {
+            Id = Guid.NewGuid(),
+            UserId = "alice",
+            Name = "Nightly check",
+            Prompt = "Check.",
+            CronExpression = "0 3 * * *",
+            TimeZone = "UTC",
+            CreatedAt = DateTime.UtcNow,
+        };
+        await LinkToScheduleAsync(chat.Id, schedule);
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "first", CancellationToken.None);
+        schedule.Name = "Nightly retro";
+        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        // While the schedule exists its row carries the current name.
+        Assert.Equal(new ChatAnalytics(schedule.Id, "Nightly retro", 1, 100, 10, 0.10m), Assert.Single((await AnalyticsAsync()).Chats));
+
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "second", CancellationToken.None);
+        _db.Context.ChatSchedules.Remove(schedule);
+        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        Assert.Null(ReadSession(chat.Id).ScheduleId);
+
+        // Gone, it keeps its figures under the last name recorded.
+        Assert.Equal(new ChatAnalytics(schedule.Id, "Nightly retro", 2, 200, 20, 0.20m), Assert.Single((await AnalyticsAsync()).Chats));
+
+        // The unlinked chat's next turn is a plain chat's.
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "third", CancellationToken.None);
+        var before = await AnalyticsAsync();
+        Assert.Equal(new ChatAnalytics(schedule.Id, "Nightly retro", 2, 200, 20, 0.20m), Assert.Single(before.Chats, c => c.ScheduleId == schedule.Id));
+        Assert.Equal(new ChatAnalytics(null, null, 1, 100, 10, 0.10m), Assert.Single(before.Chats, c => c.ScheduleId == null));
+
+        Assert.True(await svc.DeleteAsync("alice", chat.Id, TestContext.Current.CancellationToken));
+
+        var after = await AnalyticsAsync();
+        Assert.Equal(before.Chats.OrderBy(c => c.ScheduleId), after.Chats.OrderBy(c => c.ScheduleId));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Deleting_chats_keeps_their_figures_in_analytics_counted_once(bool deleteAll)
+    {
+        var provider = await SeedProviderAsync();
+        var turnUsage = new Queue<TokenUsage>([
+            new(100, 10, 0.10m), new(200, 20, 0.20m), new(300, 30, null), new(400, 40, 0.40m), new(1000, 100, 1.00m),
+        ]);
+        var svc = NewService(new FakeAdapter(_ =>
+            Task.FromResult(NodeExecutionResult.Ok("reply", usage: turnUsage.Dequeue()))));
+        // Two plain chats and a scheduled one of alice's on the same day and provider, and one of bob's.
+        var first = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var second = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var scheduled = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        var schedule = new ChatSchedule
+        {
+            Id = Guid.NewGuid(),
+            UserId = "alice",
+            Name = "Nightly check",
+            Prompt = "Check.",
+            CronExpression = "0 3 * * *",
+            TimeZone = "UTC",
+            CreatedAt = DateTime.UtcNow,
+        };
+        await LinkToScheduleAsync(scheduled.Id, schedule);
+        await svc.ExecuteTurnAsync(first.Id, Guid.NewGuid(), "a", CancellationToken.None);
+        await svc.ExecuteTurnAsync(first.Id, Guid.NewGuid(), "b", CancellationToken.None);
+        await svc.ExecuteTurnAsync(second.Id, Guid.NewGuid(), "c", CancellationToken.None);
+        await svc.ExecuteTurnAsync(scheduled.Id, Guid.NewGuid(), "d", CancellationToken.None);
+        await svc.ExecuteTurnAsync(bobs.Id, Guid.NewGuid(), "e", CancellationToken.None);
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var queries = new[]
+        {
+            new AnalyticsQuery(),
+            new AnalyticsQuery(Provider: "P1"),
+            new AnalyticsQuery(From: today, To: today, Granularity: AnalyticsGranularity.Month),
+            new AnalyticsQuery(From: today.AddDays(1)),
+            new AnalyticsQuery(Provider: "someone-else"),
+        };
+        var before = new List<RunAnalyticsOverview>();
+        foreach (var query in queries) before.Add(await AnalyticsAsync(query));
+        Assert.Equal(1000 + 1000, before[0].TotalInputTokens);
+        Assert.Equal(new ChatAnalytics(null, null, 4, 1600, 160, 1.30m), Assert.Single(before[0].Chats, c => c.ScheduleId == null));
+
+        if (deleteAll)
+        {
+            Assert.Equal(3, await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            Assert.True(await svc.DeleteAsync("alice", first.Id, TestContext.Current.CancellationToken));
+            Assert.True(await svc.DeleteAsync("alice", second.Id, TestContext.Current.CancellationToken));
+            Assert.True(await svc.DeleteAsync("alice", scheduled.Id, TestContext.Current.CancellationToken));
+        }
+        Assert.Equal([bobs.Id], _db.Fresh().ChatSessions.AsNoTracking().Select(c => c.Id).ToList());
+
+        for (var i = 0; i < queries.Length; i++)
+        {
+            var after = await AnalyticsAsync(queries[i]);
+            Assert.Equal(before[i].TotalRuns, after.TotalRuns);
+            Assert.Equal(before[i].TotalInputTokens, after.TotalInputTokens);
+            Assert.Equal(before[i].TotalOutputTokens, after.TotalOutputTokens);
+            Assert.Equal(before[i].TotalCostUsd, after.TotalCostUsd);
+            Assert.Equal(before[i].Providers, after.Providers);
+            Assert.Equal(before[i].Series, after.Series);
+            Assert.Equal(before[i].Chats.OrderBy(c => c.ScheduleId), after.Chats.OrderBy(c => c.ScheduleId));
+        }
+
+        // The rest of the day's usage is still counted live, and archived like the others once deleted.
+        Assert.Equal(1, await svc.DeleteAllForUserAsync("bob", TestContext.Current.CancellationToken));
+        var final = await AnalyticsAsync();
+        Assert.Equal(before[0].TotalInputTokens, final.TotalInputTokens);
+        Assert.Equal(before[0].TotalCostUsd, final.TotalCostUsd);
+        Assert.Equal(before[0].Chats.OrderBy(c => c.ScheduleId), final.Chats.OrderBy(c => c.ScheduleId));
+    }
+
+    [Fact]
+    public async Task Usage_recorded_after_a_chat_delete_has_read_the_chats_usage_is_still_counted_once()
+    {
+        var provider = await SeedProviderAsync();
+        var lateTitle = new RecordTitleBeforeChatDelete(_db.Fresh);
+        using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(lateTitle).Options);
+        var svc = new ChatService(deleting, _db.Providers, RegistryFor(new FakeAdapter(_ =>
+            Task.FromResult(NodeExecutionResult.Ok("reply", usage: new TokenUsage(100, 10, 0.10m))))),
+            _notifier, Options, _db.LoopRuns, _loopScratchpad);
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hi", CancellationToken.None);
+
+        Assert.True(await svc.DeleteAsync("alice", chat.Id, TestContext.Current.CancellationToken));
+
+        Assert.True(lateTitle.Recorded);
+        var overview = await AnalyticsAsync();
+        Assert.Equal(new ChatAnalytics(null, null, 1, 140, 16, 0.102m), Assert.Single(overview.Chats));
+        Assert.Equal(0.102m, overview.TotalCostUsd);
+    }
+
+    // A title call lands after the delete read the chat's usage and before the delete commits.
+    private sealed class RecordTitleBeforeChatDelete(Func<AppDbContext> context) : SaveChangesInterceptor
+    {
+        public bool Recorded { get; private set; }
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            var deleted = eventData.Context!.ChangeTracker.Entries<ChatSession>().FirstOrDefault(e => e.State == EntityState.Deleted);
+            if (!Recorded && deleted is not null)
+            {
+                using var other = context();
+                await ChatUsageLedger.RecordTitleAsync(other, deleted.Entity.Id, new TokenUsage(40, 6, 0.002m), "p1", CancellationToken.None);
+                Recorded = true;
+            }
+            return result;
+        }
     }
 
     private ChatScheduleService NewRecovery(AppDbContext db, IChatNotifier chatNotifier, IChatScheduleNotifier scheduleNotifier)

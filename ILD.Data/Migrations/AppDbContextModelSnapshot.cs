@@ -182,6 +182,50 @@ namespace ILD.Data.Migrations
                     b.ToTable("AppSettings");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.ChatAnalyticsBucket", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AiProvider")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<DateTime>("BucketDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("LastRecordedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ScheduleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ScheduleName")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<decimal>("TotalCostUsd")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("numeric(18,6)");
+
+                    b.Property<long>("TotalInputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("TotalOutputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("TurnCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BucketDate");
+
+                    b.ToTable("ChatAnalyticsBuckets");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.ChatMessage", b =>
                 {
                     b.Property<Guid>("Id")
@@ -410,6 +454,57 @@ namespace ILD.Data.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("ChatSessions");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.ChatUsage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AiProvider")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<Guid?>("ChatMessageId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("CostUsd")
+                        .HasPrecision(18, 6)
+                        .HasColumnType("numeric(18,6)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("InputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<long>("OutputTokens")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid?>("ScheduleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ScheduleName")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChatSessionId");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.ToTable("ChatUsages");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.EventLog", b =>

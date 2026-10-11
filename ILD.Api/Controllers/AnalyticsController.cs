@@ -16,10 +16,11 @@ public class AnalyticsController : ControllerBase
     }
 
     /// <summary>
-    /// Account-wide token/cost totals plus per-loop-template and per-provider
-    /// breakdowns and a time series — the data the run analytics dashboard
-    /// renders. Optional filters: <c>from</c>/<c>to</c> (yyyy-MM-dd, inclusive,
-    /// on the run's start day), <c>provider</c> (agent provider name), and
+    /// Account-wide token/cost totals plus per-loop-template, per-chat-row and
+    /// per-provider breakdowns and a time series — the data the run analytics
+    /// dashboard renders. Optional filters: <c>from</c>/<c>to</c> (yyyy-MM-dd,
+    /// inclusive, on the run's start day or the day a chat's usage was recorded),
+    /// <c>provider</c> (agent provider name), and
     /// <c>granularity</c> (day|week|month|year) for the series buckets.
     /// </summary>
     [HttpGet]

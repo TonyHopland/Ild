@@ -1290,6 +1290,19 @@ export interface TemplateAnalytics {
   totalCostUsd: number;
 }
 
+/**
+ * What chats cost: one row for the chats a person started (scheduleId null) and one
+ * per chat schedule (mirrors ILD.Data.DTOs.ChatAnalytics).
+ */
+export interface ChatAnalytics {
+  scheduleId: string | null;
+  scheduleName: string | null;
+  totalTurns: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCostUsd: number;
+}
+
 /** Per agent-provider rollup (mirrors ILD.Data.DTOs.ProviderAnalytics). */
 export interface ProviderAnalytics {
   provider: string;
@@ -1326,6 +1339,7 @@ export interface RunAnalyticsOverview {
   totalOutputTokens: number;
   totalCostUsd: number;
   templates: TemplateAnalytics[];
+  chats: ChatAnalytics[];
   providers: ProviderAnalytics[];
   series: AnalyticsSeriesPoint[];
   availableProviders: string[];
