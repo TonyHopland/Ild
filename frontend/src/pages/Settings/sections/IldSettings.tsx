@@ -75,6 +75,32 @@ export default function IldSettings() {
 
       <section className="settings-card">
         <div className="settings-card-header">
+          <h3 className="settings-card-title">PR review</h3>
+        </div>
+        <NumericSettingField
+          settingKey={SchedulerSettingKeys.PrMaxFindings}
+          label="Max findings per PR"
+          min={1}
+          max={1000}
+          fallback={25}
+        >
+          How many findings ILD&apos;s reviewers may raise on one pull request, counting those
+          already on it and those waiting to be sent. Past it a reviewer is told so and nothing more
+          is queued.
+        </NumericSettingField>
+        <NumericSettingField
+          settingKey={SchedulerSettingKeys.PrMaxNits}
+          label="Max nits per PR"
+          min={1}
+          max={1000}
+          fallback={10}
+        >
+          How many of those may be nits — minor points that need not hold the pull request up.
+        </NumericSettingField>
+      </section>
+
+      <section className="settings-card">
+        <div className="settings-card-header">
           <h3 className="settings-card-title">Provider interruptions</h3>
         </div>
         <ToggleSettingField

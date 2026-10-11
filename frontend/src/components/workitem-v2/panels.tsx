@@ -126,8 +126,18 @@ export function QueuedPrWrites({
  * were answers to something — misreads the one write a person is most likely to
  * want to stop.
  */
-function writeLabel(write: { kind: string; targetId?: string | null }): string {
+function writeLabel(write: {
+  kind: string;
+  targetId?: string | null;
+  severity?: string | null;
+}): string {
   if (write.kind === "resolve") return "Resolve thread";
+  if (write.kind === "finding")
+    return write.severity === "nit"
+      ? "Nit finding"
+      : write.severity === "important"
+        ? "Important finding"
+        : "Finding";
   if (write.kind === "comment" && !write.targetId) return "Comment on the pull request";
   return "Reply";
 }

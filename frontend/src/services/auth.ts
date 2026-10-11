@@ -255,11 +255,12 @@ export const workItemService = {
    */
   checkBranchName: async (
     name: string,
-    opts?: { repositoryId?: string; workItemId?: string },
+    opts?: { repositoryId?: string; workItemId?: string; attachToExistingBranch?: boolean },
   ): Promise<BranchNameCheck> => {
     const params = new URLSearchParams({ name });
     if (opts?.repositoryId) params.set("repositoryId", opts.repositoryId);
     if (opts?.workItemId) params.set("workItemId", opts.workItemId);
+    if (opts?.attachToExistingBranch) params.set("attachToExistingBranch", "true");
     return api.get<BranchNameCheck>(`/workitems/branch-name-check?${params}`);
   },
 
@@ -956,6 +957,9 @@ export const SchedulerSettingKeys = {
   RunRetentionDays: "run.retentionDays",
   PrHeartbeatSeconds: "pr.heartbeatSeconds",
   MaxAiTraversals: "ai.maxTraversals",
+  /** How many findings, and how many nits, ILD's reviewers may raise on one pull request. */
+  PrMaxFindings: "pr.maxFindings",
+  PrMaxNits: "pr.maxNits",
   /** Retry a run parked by a provider interruption without waiting for a person. */
   ThrottleAutoResume: "throttle.autoResume",
   /** Minutes between those automatic retries, and how many a run may spend. */

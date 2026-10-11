@@ -53,6 +53,7 @@ export default function EditPanel({
   // "base" here is the baseline-value prefix every field above uses, applied to
   // the field named baseBranchOverride — not a doubling of the branch's base.
   const baseBaseBranchOverride = workItem?.baseBranchOverride ?? "";
+  const baseAttachToExistingBranch = workItem?.attachToExistingBranch ?? false;
 
   const [title, setTitle] = useState(baseTitle);
   const [description, setDescription] = useState(baseDescription);
@@ -64,7 +65,13 @@ export default function EditPanel({
     useState<AiProviderOverrideMode>(baseAiProviderOverride);
   const [aiProviderOverrideId, setAiProviderOverrideId] = useState(baseAiProviderOverrideId);
   const [branchNameOverride, setBranchNameOverride] = useState(baseBranchNameOverride);
-  const [branchNameCheck, setBranchNameCheck] = useState<BranchNameCheck | null>(null);
+  // Keyed by the name it was asked about: the checkbox below may only follow an
+  // answer about the name in the field now, never one about what was typed before.
+  const [branchNameCheck, setBranchNameCheck] = useState<{
+    name: string;
+    result: BranchNameCheck;
+  } | null>(null);
+  const [attachToExistingBranch, setAttachToExistingBranch] = useState(baseAttachToExistingBranch);
   const [baseBranchOverride, setBaseBranchOverride] = useState(baseBaseBranchOverride);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -87,9 +94,13 @@ export default function EditPanel({
     let cancelled = false;
     const timer = setTimeout(() => {
       workItemService
-        .checkBranchName(name, { repositoryId, workItemId: workItem?.id })
+        .checkBranchName(name, { repositoryId, workItemId: workItem?.id, attachToExistingBranch })
         .then((result) => {
-          if (!cancelled) setBranchNameCheck(result);
+          if (cancelled) return;
+          setBranchNameCheck({ name, result });
+          // Origin says it has no such branch: there is nothing to attach to.
+          // An unanswered check (null) is not that answer, so it clears nothing.
+          if (result.existsOnOrigin === false) setAttachToExistingBranch(false);
         })
         .catch(() => {
           // Advice only — a failed lookup must not surface as a form error.
@@ -100,9 +111,16 @@ export default function EditPanel({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [branchNameOverride, repositoryId, workItem?.id]);
+  }, [branchNameOverride, repositoryId, workItem?.id, attachToExistingBranch]);
 
-  const branchNameProblem = branchNameCheck?.error ?? branchNameCheck?.warning ?? null;
+  const branchNameProblem =
+    branchNameCheck?.result.error ?? branchNameCheck?.result.warning ?? null;
+  // Offered only on a completed check, for the name in the field, that found it
+  // on origin; anything else — still checking, a failed check, another name —
+  // shows nothing rather than a guess.
+  const canAttach =
+    branchNameCheck?.name === branchNameOverride.trim() &&
+    branchNameCheck.result.existsOnOrigin === true;
 
   const dirty =
     title !== baseTitle ||
@@ -115,6 +133,7 @@ export default function EditPanel({
     aiProviderOverrideId !== baseAiProviderOverrideId ||
     branchNameOverride !== baseBranchNameOverride ||
     baseBranchOverride !== baseBaseBranchOverride ||
+    attachToExistingBranch !== baseAttachToExistingBranch ||
     attachments.staged.length > 0;
 
   useEffect(() => {
@@ -149,6 +168,7 @@ export default function EditPanel({
       // Same convention: empty is a deliberate "back to the repository's
       // default branch", not "leave it alone".
       baseBranchOverride: baseBranchOverride.trim(),
+      attachToExistingBranch,
     };
 
     try {
@@ -340,7 +360,11 @@ export default function EditPanel({
           id="wiv2-branch-name"
           type="text"
           value={branchNameOverride}
-          onChange={(e) => setBranchNameOverride(e.target.value)}
+          onChange={(e) => {
+            setBranchNameOverride(e.target.value);
+            // No name, no branch to attach to.
+            if (!e.target.value.trim()) setAttachToExistingBranch(false);
+          }}
           placeholder="Leave empty for a generated branch per run"
           aria-describedby="wiv2-branch-name-hint"
         />
@@ -351,6 +375,24 @@ export default function EditPanel({
           {branchNameProblem ??
             "Used verbatim by every run of this item. Only the next run is affected."}
         </small>
+        {canAttach && (
+          <>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={attachToExistingBranch}
+                onChange={(e) => setAttachToExistingBranch(e.target.checked)}
+                aria-describedby="wiv2-attach-branch-hint"
+              />
+              Attach to existing branch
+            </label>
+            <small id="wiv2-attach-branch-hint" className="form-hint">
+              Runs check this branch out as it is on the remote instead of creating it, and never
+              rebase it. It may be someone else&apos;s: anything a run pushes goes to that branch,
+              and to any pull request open on it.
+            </small>
+          </>
+        )}
       </div>
       <div className="form-group">
         <label htmlFor="wiv2-base-branch">Base branch (optional)</label>

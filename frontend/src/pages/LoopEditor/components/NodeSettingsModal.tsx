@@ -69,6 +69,8 @@ interface NodeSettingsModalProps {
   humanPrompt: string;
   promptNodePrompt: string;
   prDescriptionTemplate: string;
+  prCreateIfNoneExists: boolean;
+  prAttachIfExists: boolean;
   conditionCases: ConditionCase[];
   conditionDefaultEdge: string;
   conditionOutput: string;
@@ -97,6 +99,8 @@ interface NodeSettingsModalProps {
   onHumanPromptChange: (value: string) => void;
   onPromptNodePromptChange: (value: string) => void;
   onPrDescriptionTemplateChange: (value: string) => void;
+  onPrCreateIfNoneExistsChange: (value: boolean) => void;
+  onPrAttachIfExistsChange: (value: boolean) => void;
   onConditionCasesChange: (value: ConditionCase[]) => void;
   onConditionDefaultEdgeChange: (value: string) => void;
   onConditionOutputChange: (value: string) => void;
@@ -735,6 +739,8 @@ export function NodeSettingsModal({
   humanPrompt,
   promptNodePrompt,
   prDescriptionTemplate,
+  prCreateIfNoneExists,
+  prAttachIfExists,
   conditionCases,
   conditionDefaultEdge,
   conditionOutput,
@@ -763,6 +769,8 @@ export function NodeSettingsModal({
   onHumanPromptChange,
   onPromptNodePromptChange,
   onPrDescriptionTemplateChange,
+  onPrCreateIfNoneExistsChange,
+  onPrAttachIfExistsChange,
   onConditionCasesChange,
   onConditionDefaultEdgeChange,
   onConditionOutputChange,
@@ -1079,6 +1087,29 @@ export function NodeSettingsModal({
                   value={prDescriptionTemplate}
                   onChange={onPrDescriptionTemplateChange}
                 />
+              </div>
+              <div className="config-field">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={prCreateIfNoneExists}
+                    onChange={(event) => onPrCreateIfNoneExistsChange(event.target.checked)}
+                  />
+                  Create a PR when the branch has none
+                </label>
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={prAttachIfExists}
+                    onChange={(event) => onPrAttachIfExistsChange(event.target.checked)}
+                  />
+                  Attach to an open PR the branch already has
+                </label>
+                <small className="config-help-text">
+                  Read once, when the run has no PR yet. Attaching watches the PR from that moment
+                  and takes <strong>on_existing_pr</strong> when it is wired; creating parks as
+                  always. At least one must stay on.
+                </small>
               </div>
               <small className="config-help-text">
                 The PR heartbeat fires the reserved outputs listed below on PR state changes; they

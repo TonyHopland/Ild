@@ -32,6 +32,8 @@ export interface NodeSettingsSnapshot {
   humanPrompt: string;
   promptNodePrompt: string;
   prDescriptionTemplate: string;
+  prCreateIfNoneExists: boolean;
+  prAttachIfExists: boolean;
   conditionCases: ConditionCase[];
   conditionDefaultEdge: string;
   conditionOutput: string;

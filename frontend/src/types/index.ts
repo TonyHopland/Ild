@@ -84,6 +84,12 @@ export interface WorkItem {
    * must exist on the remote when that run starts.
    */
   baseBranchOverride?: string | null;
+  /**
+   * Whether runs check out {@link branchNameOverride} as it already stands on
+   * the remote — someone else's branch and pull request, typically — instead of
+   * creating it. Only takes effect with a branch name, on the item's next run.
+   */
+  attachToExistingBranch?: boolean;
   prUrl: string | null;
   pullRequestBranch: string | null;
   humanFeedbackReason: string | null;
@@ -161,6 +167,7 @@ export interface WorkItemEditProposal {
     tags?: string[] | null;
     branchNameOverride?: string | null;
     baseBranchOverride?: string | null;
+    attachToExistingBranch?: boolean | null;
     addDependencies?: EditProposalDependency[] | null;
     removeDependencies?: EditProposalDependency[] | null;
   };
@@ -170,6 +177,7 @@ export interface WorkItemEditProposal {
     tags: string[] | null;
     branchNameOverride: string | null;
     baseBranchOverride: string | null;
+    attachToExistingBranch?: boolean;
     dependencies?: string[] | null;
   };
   rationale: string | null;
@@ -373,6 +381,8 @@ export interface WorkItemPage {
 export interface BranchNameCheck {
   error: string | null;
   warning: string | null;
+  /** Whether origin has a branch of this name; null when origin could not be asked. */
+  existsOnOrigin?: boolean | null;
 }
 
 export interface WorktreeFileContent {
@@ -621,8 +631,8 @@ export interface LoopRun {
 }
 
 /**
- * A reply or a thread resolution an agent has asked for, recorded against the
- * run rather than sent. Agents never write to a pull request: the PR node
+ * A reply, a thread resolution or a finding an agent has asked for, recorded
+ * against the run rather than sent. Agents never write to a pull request: the PR node
  * drains this at the end of the round, so everything here can still be dropped.
  */
 export interface PrQueuedWrite {
@@ -631,12 +641,15 @@ export interface PrQueuedWrite {
    * "comment" is a pull-request comment of its own: either an answer to
    * something with no thread (a top-level comment, a review body), which carries
    * the id it answers, or the round's own general comment, which has no target.
+   * "finding" is a reviewer's own finding, posted as a new comment on path:line.
    */
-  kind: "reply" | "resolve" | "comment";
+  kind: "reply" | "resolve" | "comment" | "finding";
   targetId: string;
   body?: string | null;
   path?: string | null;
   line?: number | null;
+  /** A finding's severity: "important" or "nit". */
+  severity?: string | null;
   queuedAt: string;
 }
 

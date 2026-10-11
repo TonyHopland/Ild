@@ -262,6 +262,8 @@ export default function LoopEditor() {
   const [humanPrompt, setHumanPrompt] = useState("");
   const [promptNodePrompt, setPromptNodePrompt] = useState("");
   const [prDescriptionTemplate, setPrDescriptionTemplate] = useState("");
+  const [prCreateIfNoneExists, setPrCreateIfNoneExists] = useState(true);
+  const [prAttachIfExists, setPrAttachIfExists] = useState(true);
   const [conditionCases, setConditionCases] = useState<ConditionCase[]>([]);
   const [conditionDefaultEdge, setConditionDefaultEdge] = useState("");
   const [conditionOutput, setConditionOutput] = useState(CONDITION_DEFAULT_TEMPLATE);
@@ -1104,6 +1106,8 @@ export default function LoopEditor() {
       setHumanPrompt((config.prompt as string) || "");
       setPromptNodePrompt((config.prompt as string) || "");
       setPrDescriptionTemplate((config.prDescriptionTemplate as string) || "");
+      setPrCreateIfNoneExists((config.createIfNoneExists as boolean | undefined) ?? true);
+      setPrAttachIfExists((config.attachIfExists as boolean | undefined) ?? true);
       setConditionCases(readConditionCases(config));
       setConditionDefaultEdge(readConditionDefaultEdge(config));
       setConditionOutput((config.output as string) ?? CONDITION_DEFAULT_TEMPLATE);
@@ -1125,6 +1129,8 @@ export default function LoopEditor() {
         humanPrompt: (config.prompt as string) || "",
         promptNodePrompt: (config.prompt as string) || "",
         prDescriptionTemplate: (config.prDescriptionTemplate as string) || "",
+        prCreateIfNoneExists: (config.createIfNoneExists as boolean | undefined) ?? true,
+        prAttachIfExists: (config.attachIfExists as boolean | undefined) ?? true,
         conditionCases: readConditionCases(config),
         conditionDefaultEdge: readConditionDefaultEdge(config),
         conditionOutput: (config.output as string) ?? CONDITION_DEFAULT_TEMPLATE,
@@ -1234,6 +1240,8 @@ export default function LoopEditor() {
       if (promptNodePrompt) config.prompt = promptNodePrompt;
     } else if (selectedNodeType === NodeType.PR) {
       if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
+      config.createIfNoneExists = prCreateIfNoneExists;
+      config.attachIfExists = prAttachIfExists;
       config.prCommentTemplate = undefined;
     } else if (selectedNodeType === NodeType.Condition) {
       // Persist the switch: each case keeps only the params its variant uses,
@@ -1306,6 +1314,8 @@ export default function LoopEditor() {
     humanPrompt,
     nodeLabel,
     prDescriptionTemplate,
+    prCreateIfNoneExists,
+    prAttachIfExists,
     promptNodePrompt,
     conditionCases,
     conditionDefaultEdge,
@@ -1334,6 +1344,8 @@ export default function LoopEditor() {
       setHumanPrompt(originalNodeConfig.humanPrompt);
       setPromptNodePrompt(originalNodeConfig.promptNodePrompt);
       setPrDescriptionTemplate(originalNodeConfig.prDescriptionTemplate);
+      setPrCreateIfNoneExists(originalNodeConfig.prCreateIfNoneExists);
+      setPrAttachIfExists(originalNodeConfig.prAttachIfExists);
       setConditionCases(originalNodeConfig.conditionCases);
       setConditionDefaultEdge(originalNodeConfig.conditionDefaultEdge);
       setConditionOutput(originalNodeConfig.conditionOutput);
@@ -1774,6 +1786,8 @@ export default function LoopEditor() {
                       humanPrompt={humanPrompt}
                       promptNodePrompt={promptNodePrompt}
                       prDescriptionTemplate={prDescriptionTemplate}
+                      prCreateIfNoneExists={prCreateIfNoneExists}
+                      prAttachIfExists={prAttachIfExists}
                       conditionCases={conditionCases}
                       conditionDefaultEdge={conditionDefaultEdge}
                       conditionOutput={conditionOutput}
@@ -1806,6 +1820,8 @@ export default function LoopEditor() {
                       onHumanPromptChange={setHumanPrompt}
                       onPromptNodePromptChange={setPromptNodePrompt}
                       onPrDescriptionTemplateChange={setPrDescriptionTemplate}
+                      onPrCreateIfNoneExistsChange={setPrCreateIfNoneExists}
+                      onPrAttachIfExistsChange={setPrAttachIfExists}
                       onConditionCasesChange={setConditionCases}
                       onConditionDefaultEdgeChange={setConditionDefaultEdge}
                       onConditionOutputChange={setConditionOutput}
