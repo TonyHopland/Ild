@@ -458,4 +458,29 @@ describe("useSignalR after the hub has closed", () => {
     expect(startMock.mock.calls.length).toBe(before);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  test("the connection replaced on a new token closing late leaves the new one connected", async () => {
+    const { result, unmount } = await mountConnected();
+    const closeOld = oncloseMock.mock.calls[0][0] as (error?: Error) => void;
+    stopMock.mockImplementationOnce(() => {
+      connectionState = "Disconnected";
+      return Promise.resolve();
+    });
+
+    await act(async () => {
+      authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-2");
+    });
+    await flush();
+    expect(result.current.connectionState).toBe("connected");
+    const starts = startMock.mock.calls.length;
+
+    await act(async () => closeOld());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000);
+    });
+
+    expect(result.current.connectionState).toBe("connected");
+    expect(startMock.mock.calls.length).toBe(starts);
+    unmount();
+  });
 });

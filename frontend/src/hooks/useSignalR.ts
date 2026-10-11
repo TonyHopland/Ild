@@ -141,8 +141,11 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
     };
 
     connection.onclose(() => {
+      // A connection torn down for a new token closes after its successor has
+      // taken over the shared state, so it must not report it.
+      if (stopped) return;
       updateState(signalR.HubConnectionState.Disconnected);
-      if (!stopped) scheduleStart();
+      scheduleStart();
     });
 
     const startNow = () => {

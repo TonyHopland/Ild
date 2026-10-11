@@ -356,9 +356,11 @@ function RunThread({
     <div className="wiv2-thread" ref={threadRef}>
       {entries}
       {detail.movedOn && (
-        <div className="preview-message preview-error wiv2-moved-on" role="status">
+        <div className="preview-message preview-error wiv2-moved-on" role="alert">
           <p>The run moved on before your feedback was sent, so it was not delivered.</p>
-          <blockquote className="wiv2-moved-on-text">{detail.movedOn.text}</blockquote>
+          {detail.movedOn.text && (
+            <blockquote className="wiv2-moved-on-text">{detail.movedOn.text}</blockquote>
+          )}
           <button
             type="button"
             className="btn btn-sm btn-secondary"
