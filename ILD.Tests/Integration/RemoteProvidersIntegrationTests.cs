@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ILD.Data.Entities;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -108,4 +109,32 @@ public class RemoteProvidersIntegrationTests
     {
         public string Type { get; set; } = string.Empty;
     }
+
+    [Fact]
+    public async Task GetAll_pages_providers_with_the_same_name_in_a_stable_order()
+    {
+        var sql = new SqlCapture();
+        await using var factory = new ApiFactory(configureServices: sql.Register);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var ids = new[] { "33333333-0000-0000-0000-000000000000", "22222222-0000-0000-0000-000000000000", "11111111-0000-0000-0000-000000000000" };
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            foreach (var id in ids)
+                db.RemoteProviders.Add(new RemoteProvider { Id = Guid.Parse(id), Name = "forge", Type = "Forgejo", Url = "https://git.example.com" });
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        var paged = new List<string>();
+        for (var skip = 0; skip < ids.Length; skip++)
+        {
+            var page = await client.GetFromJsonAsync<JsonElement[]>($"/api/v1/remoteproviders?skip={skip}&take=1", TestContext.Current.CancellationToken);
+            paged.Add(Assert.Single(page!).GetProperty("id").GetString()!);
+        }
+
+        Assert.Equal(new[] { ids[2], ids[1], ids[0] }, paged);
+        Assert.Contains(sql.Commands, c => SortsByNameThenId.IsMatch(c));
+    }
+
+    private static readonly Regex SortsByNameThenId = new("ORDER BY \"\\w+\"\\.\"Name\", \"\\w+\"\\.\"Id\"");
 }
