@@ -348,7 +348,8 @@ export default function Analytics() {
 
           {overview.totalRuns === 0 && overview.chats.length === 0 ? (
             <p className="analytics-empty">
-              No run data for this filter. Metrics appear once loops have executed.
+              No run data for this filter. Metrics appear once loops have run or chats have reported
+              usage.
             </p>
           ) : (
             <>

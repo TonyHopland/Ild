@@ -17,8 +17,9 @@ namespace ILD.Data.Migrations
                 {
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
                     BucketDate = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    ScheduleId = table.Column<Guid>(type: "uuid", nullable: false),
-                    ScheduleName = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
+                    ScheduleId = table.Column<Guid>(type: "uuid", nullable: true),
+                    ScheduleName = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: true),
+                    LastRecordedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     AiProvider = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: false),
                     TurnCount = table.Column<int>(type: "integer", nullable: false),
                     TotalInputTokens = table.Column<long>(type: "bigint", nullable: false),
@@ -49,35 +50,12 @@ namespace ILD.Data.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_ChatUsages", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_ChatUsages_ChatMessages_ChatMessageId",
-                        column: x => x.ChatMessageId,
-                        principalTable: "ChatMessages",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_ChatUsages_ChatSessions_ChatSessionId",
-                        column: x => x.ChatSessionId,
-                        principalTable: "ChatSessions",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
                 });
 
             migrationBuilder.CreateIndex(
                 name: "IX_ChatAnalyticsBuckets_BucketDate",
                 table: "ChatAnalyticsBuckets",
                 column: "BucketDate");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_ChatAnalyticsBuckets_BucketDate_ScheduleId_AiProvider",
-                table: "ChatAnalyticsBuckets",
-                columns: new[] { "BucketDate", "ScheduleId", "AiProvider" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_ChatUsages_ChatMessageId",
-                table: "ChatUsages",
-                column: "ChatMessageId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_ChatUsages_ChatSessionId",
