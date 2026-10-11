@@ -831,7 +831,7 @@ public class AgentController : ControllerBase
 
         var graph = await _templates.GetVersionGraphAsync(template.Id, chosen.VersionNumber);
         if (graph == null)
-            return NotFound(new { error = $"Loop template not found: {key}" });
+            return NotFound(new { error = $"Loop template {template.Id} has no version {chosen.VersionNumber}." });
         return Ok(new
         {
             templateId = template.Id,

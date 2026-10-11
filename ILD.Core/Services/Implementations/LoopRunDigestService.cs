@@ -1,3 +1,4 @@
+using System.Data;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -22,6 +23,8 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
 
     public async Task<LoopRunDigest?> GetAsync(Guid runId, CancellationToken cancellationToken = default)
     {
+        // One snapshot: deleting a run removes its visits and events with it, so separate reads could pair its header with an empty path.
+        await using var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
         var run = await _db.LoopRuns.AsNoTracking()
             .Where(r => r.Id == runId)
             .Select(r => new
@@ -57,7 +60,7 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
             {
                 n.Id,
                 n.LoopNodeId,
-                n.LoopNode.Label,
+                Label = n.NodeLabel ?? n.LoopNode.Label,
                 n.LoopNode.NodeType,
                 n.Status,
                 n.StartedAt,
@@ -83,6 +86,7 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
             .OrderBy(e => e.Id)
             .Select(e => new { e.Id, e.EventType, e.Data, e.RunNodeId, e.NodeId, e.EdgeName, e.Timestamp })
             .ToListAsync(cancellationToken);
+        await snapshot.CommitAsync(cancellationToken);
 
         var successors = visits.Where(v => v.PreviousNodeId.HasValue).ToLookup(v => v.PreviousNodeId!.Value);
         var nodes = visits.Select(v =>
@@ -127,7 +131,7 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
         if (snapshot is null)
             return new LoopRunPrDigest(url, merged, null, null, null, null, null, []);
 
-        var comments = snapshot.Conversation.Select(c =>
+        var comments = (snapshot.Conversation ?? []).Select(c =>
         {
             var (body, bodyTruncated) = Bound(c.Body);
             return new LoopRunPrComment(c.Kind, c.Author, c.State, c.CreatedAt, body ?? string.Empty, bodyTruncated);
