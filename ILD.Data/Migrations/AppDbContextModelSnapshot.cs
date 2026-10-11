@@ -199,11 +199,10 @@ namespace ILD.Data.Migrations
                     b.Property<DateTime>("LastRecordedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Guid>("ScheduleId")
+                    b.Property<Guid?>("ScheduleId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("ScheduleName")
-                        .IsRequired()
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
 
@@ -223,9 +222,6 @@ namespace ILD.Data.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("BucketDate");
-
-                    b.HasIndex("BucketDate", "ScheduleId", "AiProvider")
-                        .IsUnique();
 
                     b.ToTable("ChatAnalyticsBuckets");
                 });
@@ -503,8 +499,6 @@ namespace ILD.Data.Migrations
                         .HasColumnType("character varying(120)");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ChatMessageId");
 
                     b.HasIndex("ChatSessionId");
 
@@ -1487,20 +1481,6 @@ namespace ILD.Data.Migrations
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("Schedule");
-                });
-
-            modelBuilder.Entity("ILD.Data.Entities.ChatUsage", b =>
-                {
-                    b.HasOne("ILD.Data.Entities.ChatMessage", null)
-                        .WithMany()
-                        .HasForeignKey("ChatMessageId")
-                        .OnDelete(DeleteBehavior.Cascade);
-
-                    b.HasOne("ILD.Data.Entities.ChatSession", null)
-                        .WithMany()
-                        .HasForeignKey("ChatSessionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.EventLog", b =>

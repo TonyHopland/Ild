@@ -284,7 +284,6 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<ChatAnalyticsBucket>(e =>
         {
-            e.HasIndex(b => new { b.BucketDate, b.ScheduleId, b.AiProvider }).IsUnique();
             e.HasIndex(b => b.BucketDate);
         });
 
@@ -533,18 +532,6 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(f => f.ChatSessionId)
             .OnDelete(DeleteBehavior.SetNull);
-
-        modelBuilder.Entity<ChatUsage>()
-            .HasOne<ChatSession>()
-            .WithMany()
-            .HasForeignKey(u => u.ChatSessionId)
-            .OnDelete(DeleteBehavior.Cascade);
-
-        modelBuilder.Entity<ChatUsage>()
-            .HasOne<ChatMessage>()
-            .WithMany()
-            .HasForeignKey(u => u.ChatMessageId)
-            .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<LoopRunSessionBinding>()
             .HasOne(s => s.LoopRun)

@@ -626,9 +626,9 @@ public sealed class ChatService : IChatService
         // is cleared too, but never holds the delete up.
         await AgentRunFiles.DeleteAsync(session.Id, ct);
 
-        // Messages, usage and adapter snapshots cascade-delete via their FKs, the
-        // usage once its figures are archived for analytics; the loop scratchpad is
-        // in-memory only, so drop its entry explicitly.
+        // Messages and adapter snapshots cascade-delete via their FKs; the usage
+        // moves into the analytics archive in the same commit; the loop scratchpad
+        // is in-memory only, so drop its entry explicitly.
         _loopScratchpad.Clear(session.Id);
         await ChatUsageLedger.ArchiveAsync(_db, session.Id, ct);
         _db.ChatSessions.Remove(session);

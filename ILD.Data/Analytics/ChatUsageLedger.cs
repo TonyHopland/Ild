@@ -6,9 +6,13 @@ using Microsoft.EntityFrameworkCore;
 namespace ILD.Data.Analytics;
 
 /// <summary>
-/// Writes what chats cost: a <see cref="ChatUsage"/> per model call while the chat
-/// exists, folded into <see cref="ChatAnalyticsBucket"/> when it is deleted. A call
-/// is counted in exactly one of the two, so analytics never count it twice.
+/// Writes what chats cost. Every figure is counted from exactly one place: its
+/// <see cref="ChatUsage"/> row, until a chat delete moves that row into a
+/// <see cref="ChatAnalyticsBucket"/> in the same commit as the delete. Nothing
+/// cascades from a chat to its usage and archive rows are only ever added, so a
+/// call recorded while its chat is being deleted, which the move did not take,
+/// stays counted as a live row instead of being deleted unarchived or lost to
+/// two archives updating the same row.
 /// </summary>
 public static class ChatUsageLedger
 {
@@ -54,76 +58,53 @@ public static class ChatUsageLedger
         if (chat is not null)
         {
             await AddAsync(db, chatSessionId, chat.ScheduleId, chatMessageId: null, ChatUsageKind.Title, usage, provider, ct);
-            try
-            {
-                await db.SaveChangesAsync(ct);
-                return;
-            }
-            catch (DbUpdateException)
-            {
-                // Deleted between the read and the write; anything else is not ours to absorb.
-                foreach (var entry in db.ChangeTracker.Entries<ChatUsage>().Where(e => e.State == EntityState.Added).ToList())
-                    entry.State = EntityState.Detached;
-                if (await db.ChatSessions.AnyAsync(c => c.Id == chatSessionId, ct)) throw;
-            }
         }
-
-        var now = DateTime.UtcNow;
-        await FoldAsync(db, now.Date, Guid.Empty, string.Empty, now, provider,
-            turns: 0, usage.InputTokens, usage.OutputTokens, usage.CostUsd ?? 0m, ct);
+        else
+        {
+            var now = DateTime.UtcNow;
+            db.ChatAnalyticsBuckets.Add(new ChatAnalyticsBucket
+            {
+                Id = Guid.NewGuid(),
+                BucketDate = now.Date,
+                AiProvider = provider,
+                LastRecordedAt = now,
+                TotalInputTokens = usage.InputTokens,
+                TotalOutputTokens = usage.OutputTokens,
+                TotalCostUsd = usage.CostUsd ?? 0m,
+            });
+        }
         await db.SaveChangesAsync(ct);
     }
 
     /// <summary>
-    /// Folds a soon-to-be-deleted chat's usage into the daily archive keyed by
+    /// Moves a soon-to-be-deleted chat's usage rows into the archive, one row per
     /// (day, schedule, provider). Queued on the context and committed by the
     /// caller's <c>SaveChanges</c> alongside the deletion.
     /// </summary>
     public static async Task ArchiveAsync(AppDbContext db, Guid chatSessionId, CancellationToken ct)
     {
         // Summed in memory: SQLite cannot sum decimals in SQL.
-        var usages = await db.ChatUsages.AsNoTracking()
+        var usages = await db.ChatUsages
             .Where(u => u.ChatSessionId == chatSessionId)
             .ToListAsync(ct);
 
-        foreach (var group in usages.GroupBy(u => (Day: u.CreatedAt.Date, ScheduleId: u.ScheduleId ?? Guid.Empty, u.AiProvider)))
+        foreach (var group in usages.GroupBy(u => (Day: u.CreatedAt.Date, u.ScheduleId, u.AiProvider)))
         {
             var newest = group.MaxBy(u => u.CreatedAt)!;
-            await FoldAsync(db, group.Key.Day, group.Key.ScheduleId, newest.ScheduleName ?? string.Empty, newest.CreatedAt, group.Key.AiProvider,
-                group.Count(u => u.Kind == ChatUsageKind.Turn),
-                group.Sum(u => u.InputTokens),
-                group.Sum(u => u.OutputTokens),
-                group.Sum(u => u.CostUsd ?? 0m),
-                ct);
-        }
-    }
-
-    private static async Task FoldAsync(
-        AppDbContext db, DateTime day, Guid scheduleId, string scheduleName, DateTime recordedAt, string provider,
-        int turns, long inputTokens, long outputTokens, decimal costUsd, CancellationToken ct)
-    {
-        var bucket = await db.ChatAnalyticsBuckets.FirstOrDefaultAsync(b =>
-            b.BucketDate == day && b.ScheduleId == scheduleId && b.AiProvider == provider, ct);
-        if (bucket is null)
-        {
-            bucket = new ChatAnalyticsBucket
+            db.ChatAnalyticsBuckets.Add(new ChatAnalyticsBucket
             {
                 Id = Guid.NewGuid(),
-                BucketDate = day,
-                ScheduleId = scheduleId,
-                AiProvider = provider,
-            };
-            db.ChatAnalyticsBuckets.Add(bucket);
+                BucketDate = group.Key.Day,
+                ScheduleId = group.Key.ScheduleId,
+                ScheduleName = newest.ScheduleName,
+                LastRecordedAt = newest.CreatedAt,
+                AiProvider = group.Key.AiProvider,
+                TurnCount = group.Count(u => u.Kind == ChatUsageKind.Turn),
+                TotalInputTokens = group.Sum(u => u.InputTokens),
+                TotalOutputTokens = group.Sum(u => u.OutputTokens),
+                TotalCostUsd = group.Sum(u => u.CostUsd ?? 0m),
+            });
         }
-
-        if (recordedAt > bucket.LastRecordedAt)
-        {
-            bucket.ScheduleName = scheduleName;
-            bucket.LastRecordedAt = recordedAt;
-        }
-        bucket.TurnCount += turns;
-        bucket.TotalInputTokens += inputTokens;
-        bucket.TotalOutputTokens += outputTokens;
-        bucket.TotalCostUsd += costUsd;
+        db.ChatUsages.RemoveRange(usages);
     }
 }

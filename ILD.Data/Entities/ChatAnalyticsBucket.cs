@@ -3,11 +3,13 @@ using System.ComponentModel.DataAnnotations;
 namespace ILD.Data.Entities;
 
 /// <summary>
-/// A durable rollup of one day's <see cref="ChatUsage"/> for a (schedule,
-/// AI-provider) pair, written when a chat is deleted so what it cost survives the
-/// chat — the chat counterpart of <see cref="LoopRunAnalyticsBucket"/>. A usage
-/// record is counted live until its chat is deleted, then here, never both. All
-/// metric columns are additive.
+/// A durable rollup of one deleted chat's <see cref="ChatUsage"/> for one day and
+/// (schedule, AI-provider) pair, written in the same commit that deletes the chat
+/// and its usage rows, so what it cost survives the chat — the chat counterpart of
+/// <see cref="LoopRunAnalyticsBucket"/>. A usage record is counted live until its
+/// chat is deleted, then here, never both. Rows are only ever added, never
+/// updated, so two chats archived at once cannot overwrite each other's figures;
+/// analytics add them up. All metric columns are additive.
 /// </summary>
 public class ChatAnalyticsBucket
 {
@@ -17,22 +19,19 @@ public class ChatAnalyticsBucket
     /// <summary>The usage's day, truncated to UTC midnight.</summary>
     public DateTime BucketDate { get; set; }
 
-    /// <summary>
-    /// The schedule that started the chats, or <see cref="Guid.Empty"/> for chats no
-    /// schedule started: the unique index would never match a null.
-    /// </summary>
-    public Guid ScheduleId { get; set; }
+    /// <summary>The schedule that had started the chat, or null for a chat no schedule started.</summary>
+    public Guid? ScheduleId { get; set; }
 
     /// <summary>
-    /// The schedule's name on the newest usage folded in, at <see cref="LastRecordedAt"/>;
-    /// empty for chats no schedule started.
+    /// The schedule's name on the newest usage archived here, at <see cref="LastRecordedAt"/>;
+    /// null for a chat no schedule started.
     /// </summary>
     [MaxLength(ChatSchedule.MaxNameLength)]
-    public string ScheduleName { get; set; } = string.Empty;
+    public string? ScheduleName { get; set; }
 
     /// <summary>
-    /// When the newest usage folded in was recorded. Chats are deleted in any order,
-    /// so an older name must not replace a newer one.
+    /// When the newest usage archived here was recorded, so the newest name a
+    /// schedule had wins whatever order its chats were deleted in.
     /// </summary>
     public DateTime LastRecordedAt { get; set; }
 

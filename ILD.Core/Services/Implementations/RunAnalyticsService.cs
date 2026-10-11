@@ -1,3 +1,4 @@
+using System.Data;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Analytics;
 using ILD.Data.DTOs;
@@ -32,12 +33,22 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
 
     public async Task<RunAnalyticsOverview> GetOverviewAsync(AnalyticsQuery query, CancellationToken cancellationToken = default)
     {
+        // One snapshot for every read: a run or chat deleted between the live and the
+        // archive reads would otherwise be counted in both.
         var contributions = new List<RunContribution>();
-        contributions.AddRange(await BuildLiveContributionsAsync(cancellationToken));
-        contributions.AddRange(await LoadArchivedContributionsAsync(cancellationToken));
         var chatContributions = new List<ChatContribution>();
-        chatContributions.AddRange(await BuildLiveChatContributionsAsync(cancellationToken));
-        chatContributions.AddRange(await LoadArchivedChatContributionsAsync(cancellationToken));
+        Dictionary<Guid, string> schedules;
+        await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
+        {
+            contributions.AddRange(await BuildLiveContributionsAsync(cancellationToken));
+            contributions.AddRange(await LoadArchivedContributionsAsync(cancellationToken));
+            chatContributions.AddRange(await BuildLiveChatContributionsAsync(cancellationToken));
+            chatContributions.AddRange(await LoadArchivedChatContributionsAsync(cancellationToken));
+            schedules = await _db.ChatSchedules
+                .Select(s => new { s.Id, s.Name })
+                .ToDictionaryAsync(s => s.Id, s => s.Name, cancellationToken);
+            await snapshot.CommitAsync(cancellationToken);
+        }
 
         // Provider list for the filter control is the full (unfiltered) set so a
         // provider stays selectable even after its only runs fall outside the range.
@@ -75,9 +86,6 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .ThenByDescending(t => t.TotalRuns)
             .ToList();
 
-        var schedules = await _db.ChatSchedules
-            .Select(s => new { s.Id, s.Name })
-            .ToDictionaryAsync(s => s.Id, s => s.Name, cancellationToken);
         var chats = filteredChats
             .GroupBy(c => c.ScheduleId)
             .Select(g => new ChatAnalytics(
@@ -228,8 +236,8 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         var buckets = await _db.ChatAnalyticsBuckets.ToListAsync(ct);
         return buckets.Select(b => new ChatContribution(
             b.BucketDate, b.LastRecordedAt,
-            b.ScheduleId == Guid.Empty ? null : b.ScheduleId,
-            b.ScheduleId == Guid.Empty ? null : b.ScheduleName,
+            b.ScheduleId,
+            b.ScheduleName,
             b.AiProvider, b.TurnCount, b.TotalInputTokens, b.TotalOutputTokens, b.TotalCostUsd)).ToList();
     }
 

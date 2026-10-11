@@ -7,8 +7,9 @@ namespace ILD.Data.Entities;
 /// The tokens and cost one model call of a <see cref="ChatSession"/> reported: a
 /// turn's reply or the call that titled the chat. Written only when the provider
 /// reported usage, so a chat from before usage was recorded contributes nothing.
-/// Goes with its chat, whose figures are first folded into
-/// <see cref="ChatAnalyticsBucket"/>.
+/// Moved into <see cref="ChatAnalyticsBucket"/> when its chat is deleted. Neither
+/// id is a foreign key: a cascade from the chat would delete a row recorded after
+/// the move unarchived, so a row the move missed outlives its chat and stays counted.
 /// </summary>
 public class ChatUsage
 {

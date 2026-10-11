@@ -1,6 +1,7 @@
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
+using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -1441,6 +1442,48 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Equal(before[0].TotalInputTokens, final.TotalInputTokens);
         Assert.Equal(before[0].TotalCostUsd, final.TotalCostUsd);
         Assert.Equal(before[0].Chats.OrderBy(c => c.ScheduleId), final.Chats.OrderBy(c => c.ScheduleId));
+    }
+
+    [Fact]
+    public async Task Usage_recorded_after_a_chat_delete_has_read_the_chats_usage_is_still_counted_once()
+    {
+        var provider = await SeedProviderAsync();
+        var lateTitle = new RecordTitleBeforeChatDelete(_db.Fresh);
+        using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(lateTitle).Options);
+        var svc = new ChatService(deleting, _db.Providers, RegistryFor(new FakeAdapter(_ =>
+            Task.FromResult(NodeExecutionResult.Ok("reply", usage: new TokenUsage(100, 10, 0.10m))))),
+            _notifier, Options, _db.LoopRuns, _loopScratchpad);
+        var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(chat.Id, Guid.NewGuid(), "hi", CancellationToken.None);
+
+        Assert.True(await svc.DeleteAsync("alice", chat.Id, TestContext.Current.CancellationToken));
+
+        Assert.True(lateTitle.Recorded);
+        var overview = await AnalyticsAsync();
+        Assert.Equal(new ChatAnalytics(null, null, 1, 140, 16, 0.102m), Assert.Single(overview.Chats));
+        Assert.Equal(0.102m, overview.TotalCostUsd);
+    }
+
+    // A title call lands after the delete read the chat's usage and before the delete commits.
+    private sealed class RecordTitleBeforeChatDelete(Func<AppDbContext> context) : SaveChangesInterceptor
+    {
+        public bool Recorded { get; private set; }
+
+        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            var deleted = eventData.Context!.ChangeTracker.Entries<ChatSession>().FirstOrDefault(e => e.State == EntityState.Deleted);
+            if (!Recorded && deleted is not null)
+            {
+                using var other = context();
+                await ChatUsageLedger.RecordTitleAsync(other, deleted.Entity.Id, new TokenUsage(40, 6, 0.002m), "p1", CancellationToken.None);
+                Recorded = true;
+            }
+            return result;
+        }
     }
 
     private ChatScheduleService NewRecovery(AppDbContext db, IChatNotifier chatNotifier, IChatScheduleNotifier scheduleNotifier)
