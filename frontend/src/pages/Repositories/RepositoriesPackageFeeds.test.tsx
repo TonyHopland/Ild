@@ -60,7 +60,6 @@ function mockServices(repos: unknown[]) {
   };
 }
 
-/** The repository row's Edit button; its provider card has one too. */
 async function repoEditButton() {
   const row = (await screen.findByText("my-repo")).closest(".repo-row") as HTMLElement;
   return within(row).getByRole("button", { name: "Edit" });

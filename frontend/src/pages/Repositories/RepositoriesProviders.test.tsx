@@ -34,11 +34,6 @@ function deferred<T>() {
 
 type Row = Record<string, unknown>;
 
-/**
- * Answers the page's provider and repository calls from `state`. Provider tests go
- * to `onTest` and repository tests to `onRepoTest`, so a test decides when (and
- * how) each one settles.
- */
 function routedFetch(
   state: { providers: Row[]; repos: Row[] },
   onTest: (id: string) => Promise<FakeResponse> = () => Promise.resolve(reply(null, 404)),
@@ -248,7 +243,6 @@ describe("Repositories page — providers", () => {
     expect(postCall).toBeTruthy();
     expect(JSON.parse(String(postCall?.[1]?.body ?? "{}")).webhookSecret).toBeTruthy();
 
-    // The new provider gets its card, and the page no longer asks for one.
     await waitFor(() => expect(card("GitHub")).toBeTruthy());
     expect(
       screen.queryByText("Add a remote provider first — repositories are added under one."),
@@ -295,6 +289,104 @@ describe("Repositories page — providers", () => {
 
     expect(webhookSecretInput.value).not.toBe("");
     expect(webhookSecretInput.value).not.toBe(initialValue);
+  });
+});
+
+describe("Repositories page — provider form", () => {
+  test("it is a named modal dialog with a labelled close button", async () => {
+    renderPage(routedFetch({ providers: [], repos: [] }));
+    fireEvent.click(await screen.findByRole("button", { name: "+ New provider" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "New Provider" });
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  test("an empty required field stops the save before any request", async () => {
+    const fetchMock = routedFetch({ providers: [], repos: [] });
+    renderPage(fetchMock);
+    fireEvent.click(await screen.findByRole("button", { name: "+ New provider" }));
+    await screen.findByRole("option", { name: "GitHub" });
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "GitHub" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "GitHub" } });
+    fireEvent.click(screen.getByText("Create"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([, options]) => (options as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(false);
+    expect(screen.getByRole("dialog", { name: "New Provider" })).toBeTruthy();
+  });
+
+  test("a refused save says why and keeps the form open", async () => {
+    const fetchMock = routedFetch({ providers: [], repos: [] });
+    const route = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      String(url).endsWith("/remoteproviders") && init?.method === "POST"
+        ? Promise.resolve(reply({ error: "Unsupported remote provider type." }, 400))
+        : route(url, init),
+    );
+    renderPage(fetchMock);
+    fireEvent.click(await screen.findByRole("button", { name: "+ New provider" }));
+    await screen.findByRole("option", { name: "GitHub" });
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "GitHub" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "GitHub" } });
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://github.example" },
+    });
+    fireEvent.click(screen.getByText("Create"));
+
+    await screen.findByText("Couldn't save the provider: Unsupported remote provider type.");
+    expect(screen.getByRole("dialog", { name: "New Provider" })).toBeTruthy();
+  });
+
+  test("saving a provider keeps it the default", async () => {
+    const fetchMock = routedFetch({
+      providers: [provider("prov-1", "Alpha Forge", { isDefault: true })],
+      repos: [],
+    });
+    renderPage(fetchMock);
+    await screen.findByRole("region", { name: "Alpha Forge" });
+
+    fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Provider");
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeNull());
+
+    const putCall = fetchMock.mock.calls.find(
+      ([, options]) => (options as RequestInit | undefined)?.method === "PUT",
+    );
+    const putBody = (putCall?.[1] as RequestInit | undefined)?.body as string;
+    expect(JSON.parse(putBody).isDefault).toBe(true);
+  });
+
+  test("a stored type in other casing is the catalog's type, listed once", async () => {
+    renderPage(
+      routedFetch({
+        providers: [provider("prov-1", "Alpha Forge", { type: "github" })],
+        repos: [],
+      }),
+    );
+    await screen.findByRole("region", { name: "Alpha Forge" });
+
+    fireEvent.click(within(card("Alpha Forge")).getByRole("button", { name: "Edit" }));
+    await screen.findByRole("option", { name: "GitHub" });
+
+    expect(screen.queryByRole("option", { name: "github" })).toBeNull();
+    expect((screen.getByLabelText("Type") as HTMLSelectElement).value).toBe("GitHub");
+  });
+
+  test("with only repositories whose provider is missing, a provider can still be added", async () => {
+    renderPage(routedFetch({ providers: [], repos: [repo("repo-1", "lost-app", "prov-gone")] }));
+
+    await screen.findByRole("region", { name: "Provider not found" });
+    fireEvent.click(screen.getByRole("button", { name: "+ New provider" }));
+    expect(await screen.findByRole("dialog", { name: "New Provider" })).toBeTruthy();
   });
 });
 
@@ -427,7 +519,6 @@ describe("Repositories page — provider Test button", () => {
     fireEvent.click(within(repoRow("alpha-app")).getByRole("button", { name: "Test" }));
     await within(repoRow("alpha-app")).findByText("Reached branch main.");
 
-    // Only the provider's own Edit button: the card also holds the repository's.
     const providerEdit = within(card("Alpha Forge"))
       .getAllByRole("button", { name: "Edit" })
       .find((b) => !repoRow("alpha-app").contains(b))!;

@@ -26,7 +26,6 @@ export default function Repositories() {
     WorkItemStatus.Backlog,
   );
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  // The provider form, open when set: for creating one when `provider` is null.
   const [providerDialog, setProviderDialog] = useState<{ provider: RemoteProvider | null } | null>(
     null,
   );
@@ -155,7 +154,6 @@ export default function Repositories() {
 
   const reposOf = (providerId: string) =>
     repositories.filter((r) => r.remoteProviderId === providerId);
-  // A repository whose provider is not among those loaded still shows, in a card of its own.
   const orphans = repositories.filter((r) => !providers.some((p) => p.id === r.remoteProviderId));
 
   // Feed names are matched ignoring case, as the server does.
@@ -235,7 +233,7 @@ export default function Repositories() {
     <div className="page-container">
       <div className="repo-header">
         <h1 className="page-title">Repositories</h1>
-        {providers.length > 0 && (
+        {(providers.length > 0 || orphans.length > 0) && (
           <button className="btn btn-primary" onClick={() => setProviderDialog({ provider: null })}>
             + New provider
           </button>
@@ -255,8 +253,8 @@ export default function Repositories() {
             const repos = reposOf(provider.id);
             return (
               <section key={provider.id} className="provider-card" aria-label={provider.name}>
-                {/* Keyed by the provider's version: a save clears its test outcome, and
-                    leaves its repositories' outcomes alone. */}
+                {/* Keyed by the provider's version apart from its repositories, so a save
+                    clears its own test outcome only. See docs/adr/0021-client-state-scoped-to-its-entity.md */}
                 <ConnectionTest
                   key={`${provider.id}|${provider.updatedAt ?? provider.createdAt}`}
                   run={() => remoteProviderService.test(provider.id)}

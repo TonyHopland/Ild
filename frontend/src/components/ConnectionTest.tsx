@@ -4,10 +4,6 @@ import "./ConnectionTest.css";
 
 interface ConnectionTestProps {
   run: () => Promise<ConnectionTestResult>;
-  /**
-   * Places the button and the outcome where the caller wants them; `outcome` is
-   * null until there is one. Without it the outcome sits under the button.
-   */
   children?: (parts: { button: ReactNode; outcome: ReactNode }) => ReactNode;
 }
 
