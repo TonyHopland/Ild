@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, RemoteProvider, RemoteProviderTypeOption } from "../../types";
 import { remoteProviderService } from "../../services/auth";
 
@@ -18,6 +18,7 @@ interface ProviderDialogProps {
 
 export default function ProviderDialog({ provider, onClose, onSaved }: ProviderDialogProps) {
   const [providerTypes, setProviderTypes] = useState<RemoteProviderTypeOption[]>([]);
+  const [typesError, setTypesError] = useState<string | null>(null);
   const [name, setName] = useState(provider?.name ?? "");
   const [type, setType] = useState(provider?.type ?? "");
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? "");
@@ -28,12 +29,26 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const nameRef = useRef<HTMLInputElement>(null);
+  // Mounted once per opening: focus goes into the form and, however it closes, back
+  // to whatever opened it.
+  useLayoutEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    nameRef.current?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
+
+  const loadTypes = useCallback(() => {
+    setTypesError(null);
     remoteProviderService
       .getAvailableTypes()
       .then(setProviderTypes)
-      .catch((error) => console.error("Failed to load remote provider types:", error));
+      .catch((e) => setTypesError((e as ApiError | Error).message));
   }, []);
+
+  useEffect(loadTypes, [loadTypes]);
 
   // The server matches types ignoring case (RemoteProviderCatalog.IsSupported in
   // ILD.Core/Services/Implementations/RemoteProviderCatalog.cs), so a stored `github`
@@ -107,6 +122,7 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
               <label htmlFor="rpName">Name</label>
               <input
                 id="rpName"
+                ref={nameRef}
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -128,6 +144,14 @@ export default function ProviderDialog({ provider, onClose, onSaved }: ProviderD
                   </option>
                 ))}
               </select>
+              {typesError && (
+                <span className="repo-hint repo-hint-error" role="alert">
+                  {`Couldn't load the provider types: ${typesError}`}{" "}
+                  <button type="button" className="btn btn-secondary btn-small" onClick={loadTypes}>
+                    Retry
+                  </button>
+                </span>
+              )}
             </div>
             <div className="form-group">
               <label htmlFor="rpBaseUrl">Base URL</label>

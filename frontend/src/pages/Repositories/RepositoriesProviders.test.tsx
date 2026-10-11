@@ -321,6 +321,42 @@ describe("Repositories page — provider form", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
+  test("focus moves into the form, and Escape hands it back to the opener", async () => {
+    renderPage(routedFetch({ providers: [provider("prov-1", "Alpha Forge")], repos: [] }));
+    const opener = await screen.findByRole("button", { name: "+ New provider" });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const dialog = await screen.findByRole("dialog", { name: "New Provider" });
+    expect(document.activeElement).toBe(screen.getByLabelText("Name"));
+
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(dialog.isConnected).toBe(false);
+    expect(document.activeElement).toBe(opener);
+  });
+
+  test("types that fail to load say so, and Retry loads them", async () => {
+    const fetchMock = routedFetch({ providers: [], repos: [] });
+    const route = fetchMock.getMockImplementation()!;
+    let failTypes = true;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+      String(url).includes("/remoteproviders/types") && failTypes
+        ? Promise.resolve(reply({ error: "catalog unavailable" }, 503))
+        : route(url, init),
+    );
+    renderPage(fetchMock);
+    fireEvent.click(await screen.findByRole("button", { name: "+ New provider" }));
+
+    await screen.findByText(/Couldn't load the provider types: catalog unavailable/);
+    expect(screen.queryByRole("option", { name: "GitHub" })).toBeNull();
+
+    failTypes = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await screen.findByRole("option", { name: "GitHub" });
+    expect(screen.queryByText(/Couldn't load the provider types/)).toBeNull();
+  });
+
   test("an empty required field stops the save before any request", async () => {
     const fetchMock = routedFetch({ providers: [], repos: [] });
     renderPage(fetchMock);
