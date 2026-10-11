@@ -141,6 +141,13 @@ public sealed class StartNodeExecutor : INodeExecutor
         // a fresh branch under that name is not what the human pointed at.
         if (run.AttachToExistingBranch && run.BranchName is not null)
         {
+            // Every push the run makes lands on the attached branch; on the
+            // branch its pull request would target, that is a push straight
+            // to the base with no pull request in between.
+            if (string.Equals(branch, baseBranch, StringComparison.Ordinal))
+                return (false, null, null,
+                    $"cannot attach to '{branch}': it is the branch this run's pull request would target. "
+                    + "Attach to a pull request's own branch instead");
             if (!await repoManager.RemoteBranchExistsAsync(basePath!, branch))
                 return (false, null, null,
                     $"branch 'origin/{branch}' does not exist on the remote — nothing to attach to. "

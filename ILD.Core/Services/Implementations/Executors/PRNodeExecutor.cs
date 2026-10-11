@@ -101,7 +101,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                 {
                     prepError = "Failed to commit uncommitted changes";
                 }
-                if (prepError is null)
+                if (prepError is null && await HasCommitsToPushAsync(ctx, repoManager, branch, gitAuth))
                 {
                     var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath!, branch, ctx.CancellationToken, gitAuth);
                     if (!pushResult.Success)
@@ -145,7 +145,6 @@ public sealed class PRNodeExecutor : INodeExecutor
                 }
 
                 prUrl = existing.HtmlUrl ?? existing.Url ?? string.Empty;
-                yield return new NodeOutcome.PrAttached(prUrl);
 
                 // The run did not open this pull request, so what is already on
                 // it is history, not news: watch it from now on. No auto-merge
@@ -159,6 +158,12 @@ public sealed class PRNodeExecutor : INodeExecutor
                 var attachedNumber = number.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 if (await HasQueuedWritesAsync(ctx, sp))
                     await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, attachedNumber);
+
+                // Recorded last, right before the node routes on: a run that
+                // stops anywhere above comes back with no pull request, so it
+                // looks up and attaches again rather than resuming as a later
+                // visit that would never take on_existing_pr.
+                yield return new NodeOutcome.PrAttached(prUrl);
 
                 if (await IsOnExistingPrWiredAsync(ctx, sp))
                 {
@@ -270,6 +275,22 @@ public sealed class PRNodeExecutor : INodeExecutor
         // node's content — mirrors the Human node, which parks on its rendered
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
+    }
+
+    /// <summary>
+    /// Whether the run has anything to push. A run's own branch always does.
+    /// A branch it attached to is someone else's, who may push to it while a
+    /// round runs: with nothing of the run's own on top of origin's copy the
+    /// push is skipped, since one that is merely behind would be refused and
+    /// fail the node before the round's findings went out.
+    /// </summary>
+    private static async Task<bool> HasCommitsToPushAsync(
+        NodeExecutionContext ctx, IRepositoryManager repoManager, string branch, GitAuthOptions? gitAuth)
+    {
+        if (!ctx.Run.AttachToExistingBranch)
+            return true;
+        await repoManager.FetchAsync(ctx.Run.WorktreePath!, ctx.CancellationToken, gitAuth);
+        return await repoManager.GetCommitsAheadCountAsync(ctx.Run.WorktreePath!, $"origin/{branch}") > 0;
     }
 
     /// <summary>

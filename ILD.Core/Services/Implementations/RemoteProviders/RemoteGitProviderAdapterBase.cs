@@ -102,7 +102,8 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// the REST list of open pull requests reports it. GitHub narrows the list
     /// by head itself (see <see cref="OpenPullRequestsQuery"/>); a Forgejo has no
     /// such filter, so every open pull request is read and picked out by
-    /// <c>head.ref</c> either way.
+    /// <c>head.ref</c> either way — and by the head's repository where the forge
+    /// names it, so a fork's branch of the same name is never taken for this one.
     /// </summary>
     public virtual async Task<RemotePrLookup> FindOpenPullRequestAsync(
         HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch)
@@ -116,7 +117,10 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
 
         var candidates = open
             .Where(pr => pr.TryGetProperty("head", out var head)
-                && string.Equals(ReadString(head, "ref"), sourceBranch, StringComparison.Ordinal))
+                && string.Equals(ReadString(head, "ref"), sourceBranch, StringComparison.Ordinal)
+                && (!head.TryGetProperty("repo", out var headRepo) || headRepo.ValueKind != JsonValueKind.Object
+                    || ReadString(headRepo, "full_name") is not { } fullName
+                    || string.Equals(fullName, $"{repo.Owner}/{repo.Repo}", StringComparison.OrdinalIgnoreCase)))
             .Select(pr => (
                 Number: ReadInt(pr, "number"),
                 Target: pr.TryGetProperty("base", out var @base) ? ReadString(@base, "ref") : null,

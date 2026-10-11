@@ -14,7 +14,7 @@
           "y": 120
         },
         "createWorktree": true,
-        "runInstall": true,
+        "runInstall": false,
         "outputs": [
           { "name": "OnSuccess" },
           { "name": "OnFailure" }

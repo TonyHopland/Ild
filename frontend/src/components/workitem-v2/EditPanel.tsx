@@ -65,10 +65,11 @@ export default function EditPanel({
     useState<AiProviderOverrideMode>(baseAiProviderOverride);
   const [aiProviderOverrideId, setAiProviderOverrideId] = useState(baseAiProviderOverrideId);
   const [branchNameOverride, setBranchNameOverride] = useState(baseBranchNameOverride);
-  // Keyed by the name it was asked about: the checkbox below may only follow an
-  // answer about the name in the field now, never one about what was typed before.
+  // Keyed by what it was asked about: the checkbox below may only follow an
+  // answer about the name and repository in the form now, never an older one.
   const [branchNameCheck, setBranchNameCheck] = useState<{
     name: string;
+    repositoryId: string;
     result: BranchNameCheck;
   } | null>(null);
   const [attachToExistingBranch, setAttachToExistingBranch] = useState(baseAttachToExistingBranch);
@@ -97,7 +98,7 @@ export default function EditPanel({
         .checkBranchName(name, { repositoryId, workItemId: workItem?.id, attachToExistingBranch })
         .then((result) => {
           if (cancelled) return;
-          setBranchNameCheck({ name, result });
+          setBranchNameCheck({ name, repositoryId, result });
           // Origin says it has no such branch: there is nothing to attach to.
           // An unanswered check (null) is not that answer, so it clears nothing.
           if (result.existsOnOrigin === false) setAttachToExistingBranch(false);
@@ -120,6 +121,7 @@ export default function EditPanel({
   // shows nothing rather than a guess.
   const canAttach =
     branchNameCheck?.name === branchNameOverride.trim() &&
+    branchNameCheck.repositoryId === repositoryId &&
     branchNameCheck.result.existsOnOrigin === true;
 
   const dirty =
@@ -168,7 +170,11 @@ export default function EditPanel({
       // Same convention: empty is a deliberate "back to the repository's
       // default branch", not "leave it alone".
       baseBranchOverride: baseBranchOverride.trim(),
-      attachToExistingBranch,
+      // A tick nobody can see right now — the check is pending, failed, or
+      // about another name — is not sent, so the server keeps what it has
+      // rather than taking an attach the person never confirmed.
+      attachToExistingBranch:
+        attachToExistingBranch && !canAttach ? undefined : attachToExistingBranch,
     };
 
     try {

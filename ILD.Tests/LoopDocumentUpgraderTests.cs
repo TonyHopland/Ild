@@ -80,7 +80,7 @@ public class LoopDocumentUpgraderTests
             ["review"] = new[] { "OnSuccess", "OnFailure", "Respond", "Escalate" },
             ["ai"] = new[] { "OnSuccess", "OnFailure", "Reject" },
             ["gate"] = new[] { "OnFailure", "has-pr", "otherwise" },
-            ["pr"] = new[] { "OnSuccess", "OnFailure", "deploy" }.Concat(Reserved).ToArray(),
+            ["pr"] = new[] { "OnSuccess", "OnFailure", "deploy", "on_existing_pr" }.Concat(Reserved).ToArray(),
             ["cleanup"] = Array.Empty<string>(),
         };
         foreach (var (id, names) in expected)
