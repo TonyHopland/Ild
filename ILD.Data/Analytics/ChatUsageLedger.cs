@@ -33,6 +33,7 @@ public static class ChatUsageLedger
             InputTokens = usage.InputTokens,
             OutputTokens = usage.OutputTokens,
             CostUsd = usage.CostUsd,
+            // A schedule deleted meanwhile has unlinked the chat: it is a plain chat now.
             ScheduleId = scheduleName is null ? null : scheduleId,
             ScheduleName = scheduleName,
             CreatedAt = DateTime.UtcNow,

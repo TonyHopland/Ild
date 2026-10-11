@@ -17,8 +17,8 @@ namespace ILD.Core.Services.Implementations;
 /// Chats are merged the same way, from <c>ChatUsage</c> and the
 /// <c>ChatAnalyticsBucket</c> archive of deleted chats: they add tokens and cost
 /// to the totals, providers and series, and have rows of their own instead of
-/// templates. Filtering (date range, provider) and rollup (template, provider, time series)
-/// happen in memory over the small per-run contribution set, which keeps the
+/// templates. Filtering (date range, provider) and rollup (template, provider,
+/// time series) happen in memory over the small contribution sets, which keeps the
 /// queries provider-agnostic (SQLite in tests, Postgres in production).
 /// </summary>
 public sealed class RunAnalyticsService : IRunAnalyticsService
