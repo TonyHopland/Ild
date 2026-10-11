@@ -1194,6 +1194,19 @@
 
 /* ---------- qa / misc ---------- */
 
+.wiv2-moved-on p {
+  margin: 0;
+}
+
+.wiv2-moved-on-text {
+  margin: 0.4rem 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid currentColor;
+  color: #d0d0dc;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 .wiv2-empty {
   color: #606070;
   font-style: italic;

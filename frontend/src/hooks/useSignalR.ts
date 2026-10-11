@@ -5,6 +5,16 @@ import { authService } from "../services/auth";
 
 type MessageHandler<E extends string = string> = (message: TypedSignalRMessage<E>) => void;
 
+const retryDelays = [0, 2_000, 10_000, 30_000];
+
+/** The library default schedule, except that it keeps retrying every 30 s instead of giving up. */
+const retryDelay = (previousRetryCount: number) =>
+  retryDelays[Math.min(previousRetryCount, retryDelays.length - 1)];
+
+const reconnectPolicy: signalR.IRetryPolicy = {
+  nextRetryDelayInMilliseconds: ({ previousRetryCount }) => retryDelay(previousRetryCount),
+};
+
 export function useSignalR(hubUrl = "/hubs/work-item") {
   const [connectionState, setConnectionState] = useState<
     "disconnected" | "connecting" | "connected" | "reconnecting"
@@ -60,7 +70,7 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
         // Read the token dynamically so reconnects use the latest value.
         accessTokenFactory: () => authService.getToken() ?? "",
       })
-      .withAutomaticReconnect()
+      .withAutomaticReconnect(reconnectPolicy)
       .configureLogging({ log: () => {} })
       .build();
 
@@ -91,27 +101,68 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
       }
       updateState(signalR.HubConnectionState.Connected);
     });
-    connection.onclose(() => updateState(signalR.HubConnectionState.Disconnected));
 
     let stopped = false;
+    let starting = false;
+    let attempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
-    void connection
-      .start()
-      .then(async () => {
-        if (stopped) return;
-        updateState(signalR.HubConnectionState.Connected);
-        handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
-        if (hubUrl === "/hubs/work-item") {
-          await connection.invoke("SubscribeToWorkItems");
-        }
-      })
-      .catch((err) => {
+    const scheduleStart = () => {
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => void start(), retryDelay(attempt++));
+    };
+
+    // The automatic reconnect gives up on a connection that was never up and
+    // does not cover a start() that fails, so a closed hub is started again here.
+    const start = async () => {
+      if (stopped || starting || connection.state !== signalR.HubConnectionState.Disconnected) {
+        return;
+      }
+      starting = true;
+      updateState(signalR.HubConnectionState.Connecting);
+      try {
+        await connection.start();
+      } catch (err) {
         if (stopped) return; // expected during teardown
         console.error(err);
-      });
+        updateState(signalR.HubConnectionState.Disconnected);
+        scheduleStart();
+        return;
+      } finally {
+        starting = false;
+      }
+      if (stopped) return;
+      attempt = 0;
+      updateState(signalR.HubConnectionState.Connected);
+      handlersRef.current.forEach((_, eventType) => ensureDispatcher(connection, eventType));
+      if (hubUrl === "/hubs/work-item") {
+        connection.invoke("SubscribeToWorkItems").catch((err) => console.error(err));
+      }
+    };
+
+    connection.onclose(() => {
+      updateState(signalR.HubConnectionState.Disconnected);
+      if (!stopped) scheduleStart();
+    });
+
+    const startNow = () => {
+      clearTimeout(retryTimer);
+      attempt = 0;
+      void start();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") startNow();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("online", startNow);
+
+    void start();
 
     return () => {
       stopped = true;
+      clearTimeout(retryTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("online", startNow);
       void connection.stop();
       connectionRef.current = null;
       dispatchersRef.current = new Set();

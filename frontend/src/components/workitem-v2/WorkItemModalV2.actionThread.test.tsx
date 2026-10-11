@@ -651,8 +651,8 @@ describe("the shown run's controls", () => {
         runId === "run-A"
           ? answerForA.promise
           : Promise.reject({
-              status: 409,
-              message: "Run run-B is no longer waiting for an answer.",
+              status: 500,
+              message: "Run run-B could not take the answer.",
             }),
       );
 
@@ -684,14 +684,12 @@ describe("the shown run's controls", () => {
     });
     expect(answer).toHaveBeenLastCalledWith("wi-1", "run-B", "");
     await waitFor(() =>
-      expect(feedbackIn(panel).textContent).toContain(
-        "Run run-B is no longer waiting for an answer.",
-      ),
+      expect(feedbackIn(panel).textContent).toContain("Run run-B could not take the answer."),
     );
 
     await rerenderDialog(parkedItem("run-A"));
     await flush();
-    expect(panel.textContent).not.toContain("Run run-B is no longer waiting for an answer.");
+    expect(panel.textContent).not.toContain("Run run-B could not take the answer.");
   });
 
   test.each([LoopRunStatus.Completed, LoopRunStatus.Failed, LoopRunStatus.Cancelled])(

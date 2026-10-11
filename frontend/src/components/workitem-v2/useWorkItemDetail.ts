@@ -296,6 +296,13 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   const setReplyInput = (runId: string, input: string) => updateReply(runId, { input });
 
+  // An answer the server refused because the run had moved on. It belongs to
+  // the work item, not to a run: the refusal usually comes with a newer run.
+  const [refused, setRefused] = useState<{ workItemId: string; text: string } | null>(null);
+  useEffect(() => setRefused(null), [workItem?.id]);
+  const movedOn = refused && refused.workItemId === workItem?.id ? { text: refused.text } : null;
+  const dismissMovedOn = () => setRefused(null);
+
   const refreshPreview = useCallback(async () => {
     if (!workItem?.id || !workItem.worktreePath) {
       setPreview(null);
@@ -778,9 +785,23 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         try {
           await submit(workItem.id, runId, input);
         } catch (error) {
-          updateReply(runId, {
-            error: (error as { message?: string })?.message ?? "Failed to submit the answer.",
-          });
+          if ((error as { status?: number })?.status !== 409) {
+            updateReply(runId, {
+              error: (error as { message?: string })?.message ?? "Failed to submit the answer.",
+            });
+            return;
+          }
+          // Nothing was waiting for this answer. The text is set aside with a
+          // notice rather than left in a box that may outlive the refusal, and
+          // the controls stay held until the dialog shows where the run is now.
+          setRefused({ workItemId: workItem.id, text: input });
+          updateReply(runId, { input: "" });
+          if (!(await refetchWorkItem())) {
+            updateReply(runId, {
+              error:
+                "Your feedback was not sent, and this view could not be refreshed — reload the page to see where the run is now.",
+            });
+          }
           return;
         }
         // The answer is in, and the run has moved on: the controls stay held
@@ -947,6 +968,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     aiProviders,
     replyFor,
     setReplyInput,
+    movedOn,
+    dismissMovedOn,
     progressText,
     shouldStream,
     preview,

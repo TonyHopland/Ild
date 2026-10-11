@@ -94,25 +94,25 @@ export default function Taskboard() {
     return () => clearTimeout(timer);
   }, [filter.search]);
 
+  const syncWorkItem = (workItemId: string, { itemChanged }: { itemChanged: boolean }) => {
+    if (itemChanged) itemChangedRef.current.add(workItemId);
+    const seq = (syncSeqRef.current.get(workItemId) ?? 0) + 1;
+    syncSeqRef.current.set(workItemId, seq);
+    void workItemService
+      .getById(workItemId)
+      .then((wi) => {
+        // Drop a response that a newer request has already superseded — the
+        // later request reflects a fresher server state, so honoring this one
+        // would revert the card to a stale status.
+        if (syncSeqRef.current.get(workItemId) !== seq) return;
+        if (itemChangedRef.current.delete(workItemId)) showLiveItem(wi, { countAsNew: false });
+        else refreshShownItem(wi);
+      })
+      .catch(() => {});
+  };
+
   useEffect(() => {
     const delayedTimers: number[] = [];
-
-    const syncWorkItem = (workItemId: string, { itemChanged }: { itemChanged: boolean }) => {
-      if (itemChanged) itemChangedRef.current.add(workItemId);
-      const seq = (syncSeqRef.current.get(workItemId) ?? 0) + 1;
-      syncSeqRef.current.set(workItemId, seq);
-      void workItemService
-        .getById(workItemId)
-        .then((wi) => {
-          // Drop a response that a newer request has already superseded — the
-          // later request reflects a fresher server state, so honoring this one
-          // would revert the card to a stale status.
-          if (syncSeqRef.current.get(workItemId) !== seq) return;
-          if (itemChangedRef.current.delete(workItemId)) showLiveItem(wi, { countAsNew: false });
-          else refreshShownItem(wi);
-        })
-        .catch(() => {});
-    };
 
     const onHumanFeedback = async (message: TypedSignalRMessage<"HumanFeedbackRequired">) => {
       const { workItemId, reason } = message.payload;
@@ -195,8 +195,9 @@ export default function Taskboard() {
   // first connect is skipped because the board's first pages are already
   // loading; every later transition follows a dropout during which the
   // work-item hub buffered nothing, so reloading what each column shows is the
-  // only way to recover missed events. The scheduler paused state and the tags
-  // in use are re-synced for the same reason.
+  // only way to recover missed events. The item open in the dialog is re-read
+  // too, since it may not be on any column. The scheduler paused state and the
+  // tags in use are re-synced for the same reason.
   useEffect(() => {
     if (connectionState !== "connected") return;
     if (!hasConnectedRef.current) {
@@ -204,6 +205,7 @@ export default function Taskboard() {
       return;
     }
     reloadAll({ windowed: true });
+    if (openWorkItemId) syncWorkItem(openWorkItemId, { itemChanged: false });
     void loadSchedulerPaused();
     requestTagsRefresh();
   }, [connectionState]);

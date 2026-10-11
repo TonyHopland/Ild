@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An open work item catches up after the device sleeps or goes offline, and feedback sent after the run has moved on says it was not delivered.**
+
 - **Finished runs refuse late conversation replies, and failed escalations no longer appear to have succeeded.**
 
 - **Answering a run that is no longer waiting shows an error instead of leaving the work item stuck.**
