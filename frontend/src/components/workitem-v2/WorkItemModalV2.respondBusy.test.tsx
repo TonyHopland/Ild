@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { useState } from "react";
 import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
@@ -408,5 +409,130 @@ describe("closing with feedback typed in the pane", () => {
       expect(screen.getByText(/Discard unsaved changes/)).toBeTruthy();
     });
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("an answer sent after the run has moved on", () => {
+  const TYPED = "Please also fix the flaky test";
+  const MOVED_ON = { status: 409, message: "The run is not waiting for an answer." };
+
+  function mockAnswerServices() {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
+  }
+
+  /** The dialog as the board hosts it: what onSave hands back is what it shows next. */
+  async function renderHosted(initial: WorkItem) {
+    let show!: (workItem: WorkItem) => void;
+    function Host() {
+      const [workItem, setWorkItem] = useState(initial);
+      show = setWorkItem;
+      return <WorkItemModalV2 workItem={workItem} onClose={vi.fn()} onSave={setWorkItem} />;
+    }
+    render(
+      <MemoryRouter>
+        <Host />
+      </MemoryRouter>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    return { show: (workItem: WorkItem) => act(async () => show(workItem)) };
+  }
+
+  const notice = () => screen.queryByText(/moved on/i);
+
+  async function answerRefusedWithRunNow(now: WorkItem) {
+    mockAnswerServices();
+    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockRejectedValue(MOVED_ON);
+    const hosted = await renderHosted(makeParkedWorkItem());
+    await settle();
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(now);
+    await type(TYPED);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(notice()).toBeTruthy());
+    return hosted;
+  }
+
+  const runningOn = (runId: string): WorkItem => ({
+    ...makeParkedWorkItem(),
+    status: WorkItemStatus.Running,
+    humanFeedbackReason: null,
+    currentLoopRunId: runId,
+    latestLoopRunId: runId,
+  });
+
+  test("says it was not sent, quotes the text outside the box, and the box is gone once the item is re-read", async () => {
+    await answerRefusedWithRunNow(runningOn("run-1"));
+
+    await waitFor(() => expect(feedback()).toBeNull());
+    expect(notice()!.textContent).toMatch(/\bnot\b[^.]*\b(sent|delivered)\b/i);
+    const quoted = screen.getByText(TYPED);
+    expect(["TEXTAREA", "INPUT"]).not.toContain(quoted.tagName);
+    expect(quoted.closest(".wiv2-feedback")).toBeNull();
+    expect(notice()!.closest(".wiv2-feedback")).toBeNull();
+  });
+
+  test("stays when the re-read item's latest run is a different run", async () => {
+    await answerRefusedWithRunNow(runningOn("run-2"));
+
+    await waitFor(() => expect(feedback()).toBeNull());
+    expect(notice()).toBeTruthy();
+    expect(screen.getByText(TYPED)).toBeTruthy();
+  });
+
+  test("Dismiss removes the notice and its text", async () => {
+    await answerRefusedWithRunNow(runningOn("run-1"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      await Promise.resolve();
+    });
+
+    expect(notice()).toBeNull();
+    expect(screen.queryByText(TYPED)).toBeNull();
+  });
+
+  test("does not carry over to another work item", async () => {
+    const { show } = await answerRefusedWithRunNow(runningOn("run-1"));
+
+    await show({ ...runningOn("run-9"), id: "wi-2", title: "Another item" });
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Another item" })).toBeTruthy());
+    expect(notice()).toBeNull();
+    expect(screen.queryByText(TYPED)).toBeNull();
+  });
+
+  test("the run parking for an answer again opens an empty box", async () => {
+    const { show } = await answerRefusedWithRunNow(runningOn("run-1"));
+    await waitFor(() => expect(feedback()).toBeNull());
+
+    await show(makeParkedWorkItem());
+
+    await waitFor(() => expect(feedback()).toBeTruthy());
+    expect((feedback().querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  test("a successful answer leaves no notice", async () => {
+    mockAnswerServices();
+    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+    await renderHosted(makeParkedWorkItem());
+    await settle();
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(runningOn("run-1"));
+    await type(TYPED);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(feedback()).toBeNull());
+    expect(notice()).toBeNull();
+    expect(screen.queryByText(TYPED)).toBeNull();
   });
 });

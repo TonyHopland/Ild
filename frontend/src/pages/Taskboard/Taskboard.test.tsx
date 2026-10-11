@@ -3,7 +3,15 @@ import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testi
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import Taskboard from "./index";
 import { mockTaskboardServer, pressEscapeUntil } from "../../test-support";
-import { WorkItemStatus, WorkItemPriority, WorkItem, Repository, LoopTemplate } from "../../types";
+import {
+  NodeType,
+  WorkItemStatus,
+  WorkItemPriority,
+  WorkItem,
+  Repository,
+  LoopTemplate,
+} from "../../types";
+import { stageParkedNode } from "../../test-support.parkedNode";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
 
@@ -703,6 +711,68 @@ describe("Taskboard reconnect", () => {
         [...ALL_STATUSES].sort(),
       );
     });
+  });
+});
+
+describe("Taskboard reconnect with a work item open", () => {
+  test("the dialog of an item opened by link and not on the board shows its current state after a reconnect", async () => {
+    let connectionState: "connected" | "reconnecting" | "disconnected" = "connected";
+    const hub = { on: vi.fn(), off: vi.fn(), invoke: vi.fn() };
+    vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({ ...hub, connectionState }));
+    mockModalServices();
+    mockTaskboardServer([]);
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: "scheduler.isPaused",
+      value: "false",
+    });
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
+    vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
+      runId,
+      messages: [],
+      lastEventId: null,
+    }));
+    vi.spyOn(authServices.loopRunService, "getEvents").mockResolvedValue({
+      entries: [],
+      nextCursor: 0,
+      hasMore: false,
+    });
+    stageParkedNode({ type: NodeType.PR });
+    let onServer = makeItem({
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "PR Awaiting Merge",
+      currentLoopRunId: "run-1",
+      latestLoopRunId: "run-1",
+    });
+    vi.spyOn(authServices.workItemService, "getById").mockImplementation(async () => ({
+      ...onServer,
+    }));
+    const tree = () => (
+      <MemoryRouter initialEntries={["/taskboard/wi-1"]}>
+        <Routes>
+          <Route path="/taskboard" element={<Taskboard />} />
+          <Route path="/taskboard/:workItemId" element={<Taskboard />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const feedbackBox = () => document.querySelector(".wiv2-feedback");
+
+    const { rerender } = render(tree());
+    await waitFor(() => expect(feedbackBox()?.textContent).toContain("PR Feedback"));
+
+    // The phone sleeps; the hub drops, and the run moves on meanwhile.
+    connectionState = "disconnected";
+    await act(async () => {
+      rerender(tree());
+    });
+    onServer = { ...onServer, status: WorkItemStatus.Running, humanFeedbackReason: null };
+    connectionState = "connected";
+    await act(async () => {
+      rerender(tree());
+    });
+
+    await waitFor(() => expect(feedbackBox()).toBeNull());
+    expect(screen.getByRole("dialog")).toBeTruthy();
   });
 });
 
