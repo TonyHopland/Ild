@@ -200,6 +200,212 @@ public class RunAnalyticsServiceTests
         Assert.Equal(0.30m, point.CostUsd);
     }
 
+    [Fact]
+    public async Task Chat_usage_adds_tokens_and_cost_to_totals_providers_and_series_but_never_to_runs_or_templates()
+    {
+        using var db = new TestDb();
+        var template = AddTemplate(db, "coder");
+        var version = AddVersion(db, template.Id);
+        var aiNode = AddNode(db, version.Id, NodeType.AI);
+        var june1 = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc);
+        var june8 = new DateTime(2026, 6, 8, 23, 30, 0, DateTimeKind.Utc);
+
+        var run = AddRun(db, version.Id, LoopRunStatus.Completed, june1);
+        AddRunNode(db, run.Id, aiNode.Id, june1, june1.AddSeconds(1), incomingEdgeId: null, input: 100, output: 10, cost: 0.10m, aiProvider: "claude");
+
+        var chat = AddChat(db);
+        AddChatUsage(db, chat.Id, ChatUsageKind.Turn, "claude", 50, 5, 0.05m, june1.AddHours(2));
+        // The title ran on a provider no loop run has used.
+        AddChatUsage(db, chat.Id, ChatUsageKind.Title, "haiku-fast", 7, 3, 0.01m, june1.AddHours(2));
+        AddChatUsage(db, chat.Id, ChatUsageKind.Turn, "claude", 20, 2, null, june8);
+        db.Context.SaveChanges();
+
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, overview.TotalRuns);
+        Assert.Equal(177, overview.TotalInputTokens);
+        Assert.Equal(20, overview.TotalOutputTokens);
+        Assert.Equal(0.16m, overview.TotalCostUsd);
+
+        var t = Assert.Single(overview.Templates);
+        Assert.Equal(1, t.TotalRuns);
+        Assert.Equal(100, t.TotalInputTokens);
+        Assert.Equal(10, t.TotalOutputTokens);
+        Assert.Equal(0.10m, t.TotalCostUsd);
+
+        Assert.Equal(2, overview.Providers.Count);
+        var claude = Assert.Single(overview.Providers, p => p.Provider == "claude");
+        Assert.Equal(1, claude.TotalRuns);
+        Assert.Equal(170, claude.TotalInputTokens);
+        Assert.Equal(17, claude.TotalOutputTokens);
+        Assert.Equal(0.15m, claude.TotalCostUsd);
+        var fast = Assert.Single(overview.Providers, p => p.Provider == "haiku-fast");
+        Assert.Equal(0, fast.TotalRuns);
+        Assert.Equal(7, fast.TotalInputTokens);
+        Assert.Equal(3, fast.TotalOutputTokens);
+        Assert.Equal(0.01m, fast.TotalCostUsd);
+        Assert.Contains("haiku-fast", overview.AvailableProviders);
+
+        // Titles are counted under the chat but are not turns.
+        var row = Assert.Single(overview.Chats);
+        Assert.Null(row.ScheduleId);
+        Assert.Null(row.ScheduleName);
+        Assert.Equal(2, row.TotalTurns);
+        Assert.Equal(77, row.TotalInputTokens);
+        Assert.Equal(10, row.TotalOutputTokens);
+        Assert.Equal(0.06m, row.TotalCostUsd);
+
+        var expectedSeries = new Dictionary<AnalyticsGranularity, AnalyticsSeriesPoint[]>
+        {
+            [AnalyticsGranularity.Day] =
+            [
+                new(new DateOnly(2026, 6, 1), 1, 157, 18, 0.16m),
+                new(new DateOnly(2026, 6, 8), 0, 20, 2, 0m),
+            ],
+            // 2026-06-01 and 2026-06-08 are both Mondays.
+            [AnalyticsGranularity.Week] =
+            [
+                new(new DateOnly(2026, 6, 1), 1, 157, 18, 0.16m),
+                new(new DateOnly(2026, 6, 8), 0, 20, 2, 0m),
+            ],
+            [AnalyticsGranularity.Month] = [new(new DateOnly(2026, 6, 1), 1, 177, 20, 0.16m)],
+            [AnalyticsGranularity.Year] = [new(new DateOnly(2026, 1, 1), 1, 177, 20, 0.16m)],
+        };
+        foreach (var (granularity, expected) in expectedSeries)
+        {
+            var byPeriod = await new RunAnalyticsService(db.Fresh())
+                .GetOverviewAsync(new AnalyticsQuery(Granularity: granularity), TestContext.Current.CancellationToken);
+            Assert.Equal(expected, byPeriod.Series);
+        }
+    }
+
+    [Fact]
+    public async Task Chat_rows_split_by_schedule_and_take_the_schedules_current_name_else_the_last_recorded_one()
+    {
+        using var db = new TestDb();
+        var day = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc);
+
+        // A live schedule renamed since its usage was recorded.
+        var live = AddSchedule(db, "Nightly retro");
+        var liveChat = AddChat(db, live.Id);
+        AddChatUsage(db, liveChat.Id, ChatUsageKind.Turn, "claude", 10, 1, 0.01m, day, live.Id, "Retro");
+        AddChatUsage(db, liveChat.Id, ChatUsageKind.Title, "claude", 2, 1, 0.001m, day, live.Id, "Retro");
+
+        // A deleted schedule: its chat was unlinked, the usage still names it.
+        var goneId = Guid.NewGuid();
+        var orphaned = AddChat(db);
+        AddChatUsage(db, orphaned.Id, ChatUsageKind.Turn, "claude", 20, 2, 0.02m, day, goneId, "Digest");
+        AddChatUsage(db, orphaned.Id, ChatUsageKind.Turn, "claude", 30, 3, 0.03m, day.AddHours(1), goneId, "Weekly digest");
+
+        var plain = AddChat(db);
+        AddChatUsage(db, plain.Id, ChatUsageKind.Turn, "claude", 40, 4, 0.04m, day);
+        db.Context.SaveChanges();
+
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
+
+        Assert.Empty(overview.Templates);
+        Assert.Equal(0, overview.TotalRuns);
+        Assert.Equal(3, overview.Chats.Count);
+        Assert.Equal(new ChatAnalytics(live.Id, "Nightly retro", 1, 12, 2, 0.011m), Assert.Single(overview.Chats, c => c.ScheduleId == live.Id));
+        Assert.Equal(new ChatAnalytics(goneId, "Weekly digest", 2, 50, 5, 0.05m), Assert.Single(overview.Chats, c => c.ScheduleId == goneId));
+        Assert.Equal(new ChatAnalytics(null, null, 1, 40, 4, 0.04m), Assert.Single(overview.Chats, c => c.ScheduleId == null));
+    }
+
+    [Fact]
+    public async Task Date_and_provider_filters_apply_to_chat_usage_and_drop_chat_rows_left_empty()
+    {
+        using var db = new TestDb();
+        var june1 = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc);
+        var june8Late = new DateTime(2026, 6, 8, 23, 59, 0, DateTimeKind.Utc);
+        var schedule = AddSchedule(db, "Nightly retro");
+
+        var plain = AddChat(db);
+        AddChatUsage(db, plain.Id, ChatUsageKind.Turn, "claude", 100, 10, 0.10m, june1);
+        var scheduled = AddChat(db, schedule.Id);
+        AddChatUsage(db, scheduled.Id, ChatUsageKind.Turn, "opencode", 200, 20, 0.20m, june8Late, schedule.Id, "Nightly retro");
+        // A title of the plain chat on another provider, inside the date range.
+        AddChatUsage(db, plain.Id, ChatUsageKind.Title, "opencode", 5, 1, 0.005m, june8Late);
+        db.Context.SaveChanges();
+
+        var claudeOnly = await new RunAnalyticsService(db.Fresh())
+            .GetOverviewAsync(new AnalyticsQuery(Provider: "CLAUDE"), TestContext.Current.CancellationToken);
+        Assert.Equal(100, claudeOnly.TotalInputTokens);
+        Assert.Equal(0.10m, claudeOnly.TotalCostUsd);
+        Assert.Equal("claude", Assert.Single(claudeOnly.Providers).Provider);
+        Assert.Equal(new AnalyticsSeriesPoint(new DateOnly(2026, 6, 1), 0, 100, 10, 0.10m), Assert.Single(claudeOnly.Series));
+        Assert.Equal(new ChatAnalytics(null, null, 1, 100, 10, 0.10m), Assert.Single(claudeOnly.Chats));
+        Assert.Contains("opencode", claudeOnly.AvailableProviders);
+
+        var week2 = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(
+            From: new DateOnly(2026, 6, 5),
+            To: new DateOnly(2026, 6, 8)), TestContext.Current.CancellationToken);
+        Assert.Equal(205, week2.TotalInputTokens);
+        Assert.Equal(0.205m, week2.TotalCostUsd);
+        Assert.Equal(2, week2.Chats.Count);
+        Assert.Equal(new ChatAnalytics(schedule.Id, "Nightly retro", 1, 200, 20, 0.20m), Assert.Single(week2.Chats, c => c.ScheduleId == schedule.Id));
+        // Only the title is left of the plain chat: a row, but no turns.
+        Assert.Equal(new ChatAnalytics(null, null, 0, 5, 1, 0.005m), Assert.Single(week2.Chats, c => c.ScheduleId == null));
+
+        var claudeWeek2 = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(
+            From: new DateOnly(2026, 6, 5),
+            To: new DateOnly(2026, 6, 8),
+            Provider: "claude"), TestContext.Current.CancellationToken);
+        Assert.Equal(0, claudeWeek2.TotalInputTokens);
+        Assert.Empty(claudeWeek2.Chats);
+        Assert.Empty(claudeWeek2.Providers);
+        Assert.Empty(claudeWeek2.Series);
+    }
+
+    private static ChatSchedule AddSchedule(TestDb db, string name)
+    {
+        var schedule = new ChatSchedule
+        {
+            Id = Guid.NewGuid(),
+            UserId = "alice",
+            Name = name,
+            Prompt = "Check.",
+            CronExpression = "0 3 * * *",
+            TimeZone = "UTC",
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.ChatSchedules.Add(schedule);
+        return schedule;
+    }
+
+    private static ChatSession AddChat(TestDb db, Guid? scheduleId = null)
+    {
+        var chat = new ChatSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = "alice",
+            AiProviderId = Guid.NewGuid(),
+            ProviderType = "claude-code",
+            ScheduleId = scheduleId,
+            CreatedAt = DateTime.UtcNow,
+        };
+        db.Context.ChatSessions.Add(chat);
+        return chat;
+    }
+
+    private static void AddChatUsage(
+        TestDb db, Guid chatId, ChatUsageKind kind, string provider, long input, long output, decimal? cost,
+        DateTime createdAt, Guid? scheduleId = null, string? scheduleName = null)
+    {
+        db.Context.ChatUsages.Add(new ChatUsage
+        {
+            Id = Guid.NewGuid(),
+            ChatSessionId = chatId,
+            Kind = kind,
+            AiProvider = provider,
+            InputTokens = input,
+            OutputTokens = output,
+            CostUsd = cost,
+            ScheduleId = scheduleId,
+            ScheduleName = scheduleName,
+            CreatedAt = createdAt,
+        });
+    }
+
     private static LoopTemplate AddTemplate(TestDb db, string name)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = name, RecoveryPolicy = RecoveryPolicy.AutoResume };

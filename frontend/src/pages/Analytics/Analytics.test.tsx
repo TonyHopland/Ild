@@ -73,7 +73,21 @@ const overview: RunAnalyticsOverview = {
     { periodStart: "2026-06-01", runs: 3, inputTokens: 12_300, outputTokens: 4_000, costUsd: 1.25 },
   ],
   availableProviders: ["claude", "opencode"],
+  chats: [],
 };
+
+const noRuns = {
+  totalRuns: 0,
+  totalInputTokens: 0,
+  totalOutputTokens: 0,
+  totalCostUsd: 0,
+  granularity: "Day",
+  templates: [],
+  providers: [],
+  series: [],
+  availableProviders: [],
+  chats: [],
+} satisfies RunAnalyticsOverview;
 
 function lastFetchUrl(fetchFn: ReturnType<typeof mockFetch>): string {
   const calls = fetchFn.mock.calls;
@@ -122,20 +136,75 @@ describe("Analytics page", () => {
   });
 
   test("shows an empty-state message when no run data exists yet", async () => {
+    renderPage(mockFetch(noRuns));
+
+    await waitFor(() => expect(screen.getByText(/No run data/)).toBeTruthy());
+  });
+
+  test("shows chat rows as their own cards and cost bars next to the templates", async () => {
     renderPage(
       mockFetch({
-        totalRuns: 0,
-        totalInputTokens: 0,
-        totalOutputTokens: 0,
-        totalCostUsd: 0,
-        granularity: "Day",
-        templates: [],
-        providers: [],
-        series: [],
-        availableProviders: [],
+        ...overview,
+        chats: [
+          {
+            scheduleId: null,
+            scheduleName: null,
+            totalTurns: 4,
+            totalInputTokens: 2_500,
+            totalOutputTokens: 300,
+            totalCostUsd: 0.42,
+          },
+          {
+            scheduleId: "sched-1",
+            scheduleName: "Nightly retro",
+            totalTurns: 2,
+            totalInputTokens: 900,
+            totalOutputTokens: 80,
+            totalCostUsd: 0,
+          },
+        ],
       } satisfies RunAnalyticsOverview),
     );
 
-    await waitFor(() => expect(screen.getByText(/No run data/)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getAllByText("Scheduled: Nightly retro").length).toBeGreaterThan(0),
+    );
+
+    expect(screen.getAllByText("coder-loop").length).toBeGreaterThan(0);
+    // The plain chats' card, and their bar in the cost chart.
+    expect(screen.getAllByText("Chat")).toHaveLength(2);
+    expect(screen.getAllByText("$0.42")).toHaveLength(2);
+    expect(screen.getByText("4 turns")).toBeTruthy();
+    expect(screen.getByText("2.5k / 300")).toBeTruthy();
+    expect(screen.getByText("2 turns")).toBeTruthy();
+    expect(screen.getByText("900 / 80")).toBeTruthy();
+  });
+
+  test("shows chat usage instead of the empty state when there are no runs", async () => {
+    renderPage(
+      mockFetch({
+        ...noRuns,
+        totalInputTokens: 900,
+        totalOutputTokens: 80,
+        chats: [
+          {
+            scheduleId: "sched-1",
+            scheduleName: "Nightly retro",
+            totalTurns: 2,
+            totalInputTokens: 900,
+            totalOutputTokens: 80,
+            totalCostUsd: 0,
+          },
+        ],
+      } satisfies RunAnalyticsOverview),
+    );
+
+    await waitFor(() => expect(screen.getByText("Scheduled: Nightly retro")).toBeTruthy());
+
+    expect(screen.queryByText(/No run data/)).toBeNull();
+    expect(screen.getByText("2 turns")).toBeTruthy();
+    expect(screen.getByText("900 / 80")).toBeTruthy();
+    // No cost reported: the card shows a dash, as template cards do.
+    expect(screen.getByText("—")).toBeTruthy();
   });
 });
