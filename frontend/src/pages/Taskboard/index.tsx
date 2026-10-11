@@ -64,6 +64,10 @@ export default function Taskboard() {
   // apply a fetch's result only when it is still the latest request for that
   // item, so a late, stale response is dropped instead of reverting the card.
   const syncSeqRef = useRef<Map<string, number>>(new Map());
+  // Items whose latest getById is still out. A copy this client reads back after
+  // changing the item may postdate that read, so the read is started again
+  // rather than let land on top of it.
+  const syncInFlightRef = useRef(new Set<string>());
   // Items announced as created, edited or moved whose fresh copy has not landed
   // yet. Only those can change the totals or the tags in use, and the mark
   // outlives any fetch a later run or preview event supersedes, so both are
@@ -94,25 +98,30 @@ export default function Taskboard() {
     return () => clearTimeout(timer);
   }, [filter.search]);
 
+  const syncWorkItem = (workItemId: string, { itemChanged }: { itemChanged: boolean }) => {
+    if (itemChanged) itemChangedRef.current.add(workItemId);
+    const seq = (syncSeqRef.current.get(workItemId) ?? 0) + 1;
+    syncSeqRef.current.set(workItemId, seq);
+    syncInFlightRef.current.add(workItemId);
+    const isLatest = () => syncSeqRef.current.get(workItemId) === seq;
+    void workItemService
+      .getById(workItemId)
+      .then((wi) => {
+        // Drop a response that a newer request has already superseded — the
+        // later request reflects a fresher server state, so honoring this one
+        // would revert the card to a stale status.
+        if (!isLatest()) return;
+        syncInFlightRef.current.delete(workItemId);
+        if (itemChangedRef.current.delete(workItemId)) showLiveItem(wi, { countAsNew: false });
+        else refreshShownItem(wi);
+      })
+      .catch(() => {
+        if (isLatest()) syncInFlightRef.current.delete(workItemId);
+      });
+  };
+
   useEffect(() => {
     const delayedTimers: number[] = [];
-
-    const syncWorkItem = (workItemId: string, { itemChanged }: { itemChanged: boolean }) => {
-      if (itemChanged) itemChangedRef.current.add(workItemId);
-      const seq = (syncSeqRef.current.get(workItemId) ?? 0) + 1;
-      syncSeqRef.current.set(workItemId, seq);
-      void workItemService
-        .getById(workItemId)
-        .then((wi) => {
-          // Drop a response that a newer request has already superseded — the
-          // later request reflects a fresher server state, so honoring this one
-          // would revert the card to a stale status.
-          if (syncSeqRef.current.get(workItemId) !== seq) return;
-          if (itemChangedRef.current.delete(workItemId)) showLiveItem(wi, { countAsNew: false });
-          else refreshShownItem(wi);
-        })
-        .catch(() => {});
-    };
 
     const onHumanFeedback = async (message: TypedSignalRMessage<"HumanFeedbackRequired">) => {
       const { workItemId, reason } = message.payload;
@@ -195,8 +204,9 @@ export default function Taskboard() {
   // first connect is skipped because the board's first pages are already
   // loading; every later transition follows a dropout during which the
   // work-item hub buffered nothing, so reloading what each column shows is the
-  // only way to recover missed events. The scheduler paused state and the tags
-  // in use are re-synced for the same reason.
+  // only way to recover missed events. The item open in the dialog is re-read
+  // too, since it may not be on any column. The scheduler paused state and the
+  // tags in use are re-synced for the same reason.
   useEffect(() => {
     if (connectionState !== "connected") return;
     if (!hasConnectedRef.current) {
@@ -204,6 +214,7 @@ export default function Taskboard() {
       return;
     }
     reloadAll({ windowed: true });
+    if (openWorkItemId) syncWorkItem(openWorkItemId, { itemChanged: false });
     void loadSchedulerPaused();
     requestTagsRefresh();
   }, [connectionState]);
@@ -292,12 +303,19 @@ export default function Taskboard() {
     setEditingItem((open) => (open?.id === wi.id ? wi : open));
   };
 
+  // A copy read back after this client changed the item: an answer, an edit, a
+  // move or a creation.
+  const showReadBack = (wi: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
+    showLiveItem(wi, { countAsNew });
+    if (syncInFlightRef.current.has(wi.id)) syncWorkItem(wi.id, { itemChanged: false });
+  };
+
   const handleWorkItemUpdate = (updated: WorkItem) => {
-    showLiveItem(updated, { countAsNew: false });
+    showReadBack(updated, { countAsNew: false });
   };
 
   const handleCreated = (created: WorkItem) => {
-    showLiveItem(created, { countAsNew: true });
+    showReadBack(created, { countAsNew: true });
   };
 
   const openCreateModal = () => {

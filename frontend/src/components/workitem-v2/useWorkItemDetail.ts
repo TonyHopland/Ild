@@ -296,6 +296,11 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
 
   const setReplyInput = (runId: string, input: string) => updateReply(runId, { input });
 
+  // An answer the server refused because the run had moved on. It belongs to
+  // the work item, not to a run: the refusal usually comes with a newer run.
+  const [movedOn, setMovedOn] = useState<{ text: string } | null>(null);
+  const dismissMovedOn = () => setMovedOn(null);
+
   const refreshPreview = useCallback(async () => {
     if (!workItem?.id || !workItem.worktreePath) {
       setPreview(null);
@@ -769,18 +774,33 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     const { input } = replyFor(runId);
     responding.current.add(runId);
     updateReply(runId, { loading: true, error: null });
-    // Set when the answer is in but the dialog could not be brought up to date:
-    // the controls stay held rather than offering to answer again a question the
-    // run has already been given an answer to.
-    let answeredButUnrefreshed = false;
+    // Set when the server has settled the answer (taken or refused) but the
+    // dialog could not be brought up to date: the controls stay held rather than
+    // offering again a question this view can no longer vouch for.
+    let heldUntilReload = false;
     try {
       await whileBusy(async () => {
         try {
           await submit(workItem.id, runId, input);
         } catch (error) {
-          updateReply(runId, {
-            error: (error as { message?: string })?.message ?? "Failed to submit the answer.",
-          });
+          if ((error as { status?: number })?.status !== 409) {
+            updateReply(runId, {
+              error: (error as { message?: string })?.message ?? "Failed to submit the answer.",
+            });
+            return;
+          }
+          // Nothing was waiting for this answer. The text is set aside with a
+          // notice rather than left in a box that may outlive the refusal, and
+          // the controls stay held until the dialog shows where the run is now.
+          setMovedOn({ text: input });
+          updateReply(runId, { input: "" });
+          if (!(await refetchWorkItem())) {
+            heldUntilReload = true;
+            updateReply(runId, {
+              error:
+                "Your feedback was not sent, and this view could not be refreshed — reload the page to see where the run is now.",
+            });
+          }
           return;
         }
         // The answer is in, and the run has moved on: the controls stay held
@@ -789,7 +809,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         // back, this view is still showing the run as waiting, and the only
         // honest thing it can do is say so and stay held.
         if (!(await refetchWorkItem())) {
-          answeredButUnrefreshed = true;
+          heldUntilReload = true;
           updateReply(runId, {
             error:
               "Your answer was accepted, but this view could not be refreshed — reload the page to see where the run is now.",
@@ -797,7 +817,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
         }
       });
     } finally {
-      if (!answeredButUnrefreshed) {
+      if (!heldUntilReload) {
         responding.current.delete(runId);
         updateReply(runId, { loading: false });
       }
@@ -947,6 +967,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     aiProviders,
     replyFor,
     setReplyInput,
+    movedOn,
+    dismissMovedOn,
     progressText,
     shouldStream,
     preview,

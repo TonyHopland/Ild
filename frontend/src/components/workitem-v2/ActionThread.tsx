@@ -283,6 +283,7 @@ function RunThread({
     !view.error &&
     !streaming &&
     !awaitingHuman &&
+    !detail.movedOn &&
     !hasPrDetails(workItem, detail, runId) &&
     live.length === 0 &&
     end.length === 0;
@@ -354,6 +355,21 @@ function RunThread({
   return (
     <div className="wiv2-thread" ref={threadRef}>
       {entries}
+      {detail.movedOn && (
+        <div className="preview-message preview-error wiv2-moved-on" role="alert">
+          <p>The run moved on before your feedback was sent, so it was not delivered.</p>
+          {detail.movedOn.text && (
+            <blockquote className="wiv2-moved-on-text">{detail.movedOn.text}</blockquote>
+          )}
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={detail.dismissMovedOn}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       {view.error && (
         <div className="preview-message preview-error">
           The conversation could not be loaded: {view.error}

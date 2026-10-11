@@ -277,4 +277,154 @@ describe("a dialog belongs to the work item it was opened for", () => {
     expect(dialog().textContent).not.toContain("Input must be 8192 characters or fewer.");
     expect(upload).not.toHaveBeenCalled();
   });
+  test("a reconnect read that lands after an accepted answer does not bring the answered box back", async () => {
+    const parked = makeItem("wi-a", "Item A", {
+      status: WorkItemStatus.HumanFeedback,
+      humanFeedbackReason: "Human Input Needed",
+      currentLoopRunId: "run-1",
+      latestLoopRunId: "run-1",
+    });
+    const running = { ...parked, status: WorkItemStatus.Running, humanFeedbackReason: null };
+    mockServices([parked]);
+    stageParkedNode();
+    let connectionState: "connected" | "disconnected" = "connected";
+    const hub = { on: vi.fn(), off: vi.fn(), invoke: vi.fn() };
+    vi.spyOn(signalRHook, "useSignalR").mockImplementation(
+      () => ({ ...hub, connectionState }) as unknown as ReturnType<typeof signalRHook.useSignalR>,
+    );
+    vi.spyOn(authServices.workItemService, "listEditProposals").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "listRequestedEditProposals").mockResolvedValue([]);
+    vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockResolvedValue(undefined);
+    // The reconnect's read of the open item is answered with what the server had
+    // before the answer, and only after the answer has been taken and read back.
+    const reconnectRead = deferred<WorkItem>();
+    const getById = vi
+      .spyOn(authServices.workItemService, "getById")
+      .mockReturnValueOnce(reconnectRead.promise)
+      .mockResolvedValue(running);
+    const tree = () => (
+      <MemoryRouter initialEntries={["/taskboard/wi-a"]}>
+        <Routes>
+          <Route path="/taskboard" element={<Taskboard />} />
+          <Route path="/taskboard/:workItemId" element={<Taskboard />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    const feedbackBox = () => dialog().querySelector<HTMLElement>(".wiv2-feedback");
+
+    const { rerender } = render(tree());
+    await dialogSettled("Item A");
+    const feedback = await waitForNode(feedbackBox);
+
+    connectionState = "disconnected";
+    await act(async () => rerender(tree()));
+    connectionState = "connected";
+    await act(async () => rerender(tree()));
+    expect(getById).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.change(feedback.querySelector("textarea") as HTMLTextAreaElement, {
+        target: { value: "Looks good" },
+      });
+      await Promise.resolve();
+    });
+    await click(await within(feedback).findByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(feedbackBox()).toBeNull());
+
+    // The read-back took the place of the reconnect read, which was started again.
+    expect(getById).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      reconnectRead.resolve(parked);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(feedbackBox()).toBeNull();
+    expect(openTitle()).toBe("Item A");
+  });
+
+  describe("an answer refused because the run had moved on", () => {
+    const TYPED = "Please also fix the flaky test";
+    const MOVED_ON = { status: 409, message: "The run is not waiting for an answer." };
+
+    function parkedPair() {
+      const parked = makeItem("wi-a", "Item A", {
+        status: WorkItemStatus.HumanFeedback,
+        humanFeedbackReason: "Human Input Needed",
+        currentLoopRunId: "run-1",
+        latestLoopRunId: "run-1",
+      });
+      return [
+        parked,
+        makeItem("wi-b", "Item B", {
+          status: WorkItemStatus.HumanFeedback,
+          humanFeedbackReason: "Human Input Needed",
+          currentLoopRunId: "run-2",
+          latestLoopRunId: "run-2",
+        }),
+      ];
+    }
+
+    async function answerOnItemA() {
+      renderBoard("wi-a");
+      await dialogSettled("Item A");
+      const feedback = await waitForNode(() =>
+        dialog().querySelector<HTMLElement>(".wiv2-feedback"),
+      );
+      await act(async () => {
+        fireEvent.change(feedback.querySelector("textarea") as HTMLTextAreaElement, {
+          target: { value: TYPED },
+        });
+        await Promise.resolve();
+      });
+      await click(await within(feedback).findByRole("button", { name: "Approve" }));
+    }
+
+    test("its notice stays with that item when another item is opened", async () => {
+      const items = parkedPair();
+      mockServices(items);
+      stageParkedNode();
+      vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockRejectedValue(MOVED_ON);
+      vi.spyOn(authServices.workItemService, "getById").mockImplementation((id: string) =>
+        Promise.resolve(items.find((item) => item.id === id) as WorkItem),
+      );
+
+      await answerOnItemA();
+      await waitFor(() => expect(within(dialog()).getByText(/moved on/i)).toBeTruthy());
+
+      await openCard("Item B");
+
+      await waitFor(() => expect(openTitle()).toBe("Item B"));
+      expect(within(dialog()).queryByText(/moved on/i)).toBeNull();
+      expect(dialog().textContent).not.toContain(TYPED);
+    });
+
+    test("a refusal that lands after another item is opened shows nothing there", async () => {
+      const items = parkedPair();
+      mockServices(items);
+      stageParkedNode();
+      let refuse!: (error: unknown) => void;
+      vi.spyOn(authServices.workItemService, "humanFeedbackInput").mockReturnValue(
+        new Promise((_, reject) => {
+          refuse = reject;
+        }),
+      );
+      vi.spyOn(authServices.workItemService, "getById").mockImplementation((id: string) =>
+        Promise.resolve(items.find((item) => item.id === id) as WorkItem),
+      );
+
+      await answerOnItemA();
+      await openCard("Item B");
+      await waitFor(() => expect(openTitle()).toBe("Item B"));
+      await act(async () => {
+        refuse(MOVED_ON);
+        await Promise.resolve();
+      });
+
+      expect(within(dialog()).queryByText(/moved on/i)).toBeNull();
+      expect(dialog().textContent).not.toContain(TYPED);
+    });
+  });
 });
