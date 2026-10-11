@@ -13,7 +13,6 @@ import Analytics from "./pages/Analytics";
 import Chat from "./pages/Chat";
 import Settings from "./pages/Settings";
 import Repositories from "./pages/Repositories";
-import RemoteProviders from "./pages/RemoteProviders";
 import AiProviders from "./pages/AiProviders";
 import "./App.css";
 
@@ -156,14 +155,7 @@ function AppRoutes() {
                 </ProtectedRoute>
               }
             />
-            <Route
-              path="/remote-providers"
-              element={
-                <ProtectedRoute>
-                  <RemoteProviders />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/remote-providers" element={<Navigate to="/repositories" replace />} />
             <Route
               path="/ai-providers"
               element={

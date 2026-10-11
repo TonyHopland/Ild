@@ -30,7 +30,6 @@ export const ROUTES = {
   CHAT_SCHEDULES: "/chat/schedules",
   SETTINGS: "/settings",
   REPOSITORIES: "/repositories",
-  REMOTE_PROVIDERS: "/remote-providers",
   AI_PROVIDERS: "/ai-providers",
 } as const;
 
@@ -41,7 +40,6 @@ export const NAV_ITEMS = [
   { label: "Chat", path: ROUTES.CHAT },
   { label: "Settings", path: ROUTES.SETTINGS },
   { label: "Repositories", path: ROUTES.REPOSITORIES },
-  { label: "Remote Providers", path: ROUTES.REMOTE_PROVIDERS },
   { label: "AI Providers", path: ROUTES.AI_PROVIDERS },
 ] as const;
 
