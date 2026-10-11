@@ -50,18 +50,21 @@
       .repos { border-top: 1px solid #2d2d44; background: #1a1a2b; }
       .repos-head {
         display: flex; justify-content: space-between; align-items: center;
-        padding: 0.85rem 1.25rem; font-size: 0.75rem; font-weight: 600; color: #a0a0b0;
+        padding: 0.85rem 1.25rem; font-size: 0.8rem; font-weight: 700; color: #c0c0d0;
         text-transform: uppercase; letter-spacing: 0.05em;
       }
       .repo-row {
-        display: grid; grid-template-columns: 11rem 1fr auto auto; gap: 1.5rem; align-items: center;
-        padding: 0.9rem 1.25rem; border-top: 1px solid #25253a; font-size: 0.875rem;
+        display: grid; grid-template-columns: 1fr auto auto; gap: 1.5rem; align-items: center;
+        padding: 0.85rem 1.25rem 0.85rem 1rem; border-top: 1px solid #25253a;
       }
-      .repo-name { color: #e0e0e0; font-weight: 600; }
-      .repo-url { color: #707090; font-family: ui-monospace, "Liberation Mono", monospace; font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .repo-id { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+      .repo-name { color: #e8e8f0; font-weight: 600; font-size: 1rem; }
+      .repo-url { color: #5c5c78; font-family: ui-monospace, "Liberation Mono", monospace; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .badge { padding: 0.125rem 0.5rem; border-radius: 0.25rem; font-size: 0.72rem; font-weight: 600; }
       .status-Backlog { background: #3a3a5c; color: #a0a0b0; }
       .status-WorkQueue { background: #1a3a2a; color: #22c55e; }
+      .repo-list { margin: 0 0 0.75rem 2.25rem; border-left: 2px solid #3a3a5c; }
+      .repo-list .result { margin-left: 1rem; }
       .result {
         margin: 0 1.25rem 0.9rem; border-left: 3px solid #22c55e; padding: 0.5rem 0.75rem;
         font-size: 0.8rem; color: #c0c0d0; background: #17172a; border-radius: 0.25rem;
@@ -69,7 +72,7 @@
       .result.failed { border-left-color: #ef4444; }
       .result b { color: #22c55e; margin-right: 0.5rem; }
       .result.failed b { color: #ef4444; }
-      .empty { padding: 1rem 1.25rem; border-top: 1px solid #25253a; font-size: 0.82rem; color: #707090; }
+      .empty { padding: 1rem 1.25rem 0.25rem 1rem; border-top: 1px solid #25253a; font-size: 0.82rem; color: #707090; }
       .empty-page {
         background: #1e1e30; border: 1px dashed #3a3a5c; border-radius: 0.5rem;
         padding: 2rem; text-align: center; color: #a0a0b0; font-size: 0.9rem;
@@ -120,9 +123,12 @@
               <span>Repositories (3)</span>
               <button class="btn btn-primary btn-small">+ Add repository</button>
             </div>
+            <div class="repo-list">
             <div class="repo-row">
-              <span class="repo-name">ild</span>
-              <span class="repo-url">https://github.com/example/ild.git</span>
+              <div class="repo-id">
+                <span class="repo-name">ild</span>
+                <span class="repo-url">https://github.com/example/ild.git</span>
+              </div>
               <span class="badge status-WorkQueue">WorkQueue</span>
               <span class="actions">
                 <button class="btn btn-secondary btn-small">Test</button>
@@ -132,8 +138,10 @@
             </div>
             <div class="result"><b>OK</b>Cloned and read the default branch <code>main</code>.</div>
             <div class="repo-row">
-              <span class="repo-name">website</span>
-              <span class="repo-url">https://github.com/example/website.git</span>
+              <div class="repo-id">
+                <span class="repo-name">website</span>
+                <span class="repo-url">https://github.com/example/website.git</span>
+              </div>
               <span class="badge status-Backlog">Backlog</span>
               <span class="actions">
                 <button class="btn btn-secondary btn-small">Test</button>
@@ -142,8 +150,10 @@
               </span>
             </div>
             <div class="repo-row">
-              <span class="repo-name">infra</span>
-              <span class="repo-url">https://github.com/example/infra.git</span>
+              <div class="repo-id">
+                <span class="repo-name">infra</span>
+                <span class="repo-url">https://github.com/example/infra.git</span>
+              </div>
               <span class="badge status-Backlog">Backlog</span>
               <span class="actions">
                 <button class="btn btn-secondary btn-small">Test</button>
@@ -151,6 +161,7 @@
                 <button class="btn btn-danger btn-small">Confirm</button>
                 <button class="btn btn-small">Cancel</button>
               </span>
+            </div>
             </div>
           </div>
         </section>
@@ -175,7 +186,9 @@
               <span>Repositories (0)</span>
               <button class="btn btn-primary btn-small">+ Add repository</button>
             </div>
+            <div class="repo-list">
             <div class="empty">No repositories yet.</div>
+            </div>
           </div>
         </section>
       </div>
