@@ -40,7 +40,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         Dictionary<Guid, string> schedules;
         await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
         {
-            contributions.AddRange(await BuildLiveContributionsAsync(cancellationToken));
+            contributions.AddRange((await BuildLiveContributionsAsync(cancellationToken)).Select(r => r.Contribution));
             contributions.AddRange(await LoadArchivedContributionsAsync(cancellationToken));
             chatContributions.AddRange(await BuildLiveChatContributionsAsync(cancellationToken));
             chatContributions.AddRange(await LoadArchivedChatContributionsAsync(cancellationToken));
@@ -69,22 +69,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
                 c.BucketDate, c.AiProvider, 0, c.InputTokens, c.OutputTokens, c.CostUsd)))
             .ToList();
 
-        var templates = filtered
-            .GroupBy(c => c.TemplateId)
-            .Select(g =>
-            {
-                var metrics = Sum(g.Select(c => c.Metrics));
-                var name = g.OrderByDescending(c => c.BucketDate).First().TemplateName;
-                return new TemplateAnalytics(
-                    g.Key, name,
-                    metrics.RunCount, metrics.CompletedRuns, metrics.FailedRuns, metrics.CancelledRuns,
-                    metrics.SuccessRate, metrics.AvgNodeSeconds,
-                    metrics.OnFailureRoutings, metrics.RejectRoutings, metrics.AvgFeedbackSeconds,
-                    metrics.TotalInputTokens, metrics.TotalOutputTokens, metrics.TotalCostUsd);
-            })
-            .OrderByDescending(t => t.TotalCostUsd)
-            .ThenByDescending(t => t.TotalRuns)
-            .ToList();
+        var templates = RollUpTemplates(filtered);
 
         var chats = filteredChats
             .GroupBy(c => c.ScheduleId)
@@ -130,12 +115,89 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             query.Granularity);
     }
 
-    private async Task<List<RunContribution>> BuildLiveContributionsAsync(CancellationToken ct)
+    public async Task<IReadOnlyList<TemplateAnalyticsDetail>> GetTemplateAnalyticsAsync(
+        AnalyticsQuery query, Guid? templateId, CancellationToken cancellationToken = default)
+    {
+        bool Includes(RunContribution c)
+            => Matches(c.BucketDate, c.AiProvider, query) && (templateId is null || c.TemplateId == templateId);
+
+        List<LiveRun> liveRuns;
+        List<RunContribution> archived;
+        List<TemplateNode> templateNodes;
+        // One snapshot, as in GetOverviewAsync: a run deleted between the reads would otherwise count twice.
+        await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
+        {
+            liveRuns = (await BuildLiveContributionsAsync(cancellationToken)).Where(r => Includes(r.Contribution)).ToList();
+            archived = (await LoadArchivedContributionsAsync(cancellationToken)).Where(Includes).ToList();
+            var versionIds = liveRuns.Select(r => r.VersionId).Distinct().ToList();
+            templateNodes = await _db.LoopNodes
+                .Where(n => versionIds.Contains(n.LoopTemplateVersionId))
+                .Select(n => new TemplateNode(
+                    n.Id, n.LoopTemplateVersion.LoopTemplateId, n.Label, n.NodeType, n.LoopTemplateVersion.VersionNumber))
+                .ToListAsync(cancellationToken);
+            await snapshot.CommitAsync(cancellationToken);
+        }
+
+        var runsByTemplate = liveRuns.ToLookup(r => r.Contribution.TemplateId);
+        var nodesByTemplate = templateNodes.ToLookup(n => n.TemplateId);
+        return RollUpTemplates(liveRuns.Select(r => r.Contribution).Concat(archived))
+            .Select(totals =>
+            {
+                var runs = runsByTemplate[totals.TemplateId].ToList();
+                var visits = runs.SelectMany(r => r.Visits).ToLookup(v => v.LoopNodeId);
+                var nodes = nodesByTemplate[totals.TemplateId]
+                    .OrderBy(n => n.VersionNumber)
+                    .ThenBy(n => n.Label, StringComparer.Ordinal)
+                    .ThenBy(n => n.Id)
+                    .Select(n => NodeFigures(n, visits[n.Id].ToList()))
+                    .ToList();
+                return new TemplateAnalyticsDetail(totals, runs.Count, nodes);
+            })
+            .ToList();
+    }
+
+    private static TemplateNodeAnalytics NodeFigures(TemplateNode node, IReadOnlyList<NodeVisit> visits)
+    {
+        var timed = visits
+            .Where(v => v.StartedAt.HasValue && v.CompletedAt.HasValue)
+            .Select(v => (v.CompletedAt!.Value - v.StartedAt!.Value).TotalSeconds)
+            .ToList();
+        return new TemplateNodeAnalytics(
+            node.Id, node.Label, node.NodeType, node.VersionNumber,
+            visits.Count,
+            visits.Count(v => v.Status == LoopRunNodeStatus.Failed),
+            timed.Count == 0 ? null : timed.Average());
+    }
+
+    /// <summary>
+    /// The dashboard's template rows: one per template, named by its newest
+    /// contribution, costliest first and then busiest.
+    /// </summary>
+    private static List<TemplateAnalytics> RollUpTemplates(IEnumerable<RunContribution> contributions)
+        => contributions
+            .GroupBy(c => c.TemplateId)
+            .Select(g =>
+            {
+                var metrics = Sum(g.Select(c => c.Metrics));
+                var name = g.OrderByDescending(c => c.BucketDate).First().TemplateName;
+                return new TemplateAnalytics(
+                    g.Key, name,
+                    metrics.RunCount, metrics.CompletedRuns, metrics.FailedRuns, metrics.CancelledRuns,
+                    metrics.SuccessRate, metrics.AvgNodeSeconds,
+                    metrics.OnFailureRoutings, metrics.RejectRoutings, metrics.AvgFeedbackSeconds,
+                    metrics.TotalInputTokens, metrics.TotalOutputTokens, metrics.TotalCostUsd);
+            })
+            .OrderByDescending(t => t.TotalCostUsd)
+            .ThenByDescending(t => t.TotalRuns)
+            .ToList();
+
+    private async Task<List<LiveRun>> BuildLiveContributionsAsync(CancellationToken ct)
     {
         var runs = await _db.LoopRuns
             .Select(r => new
             {
                 r.Id,
+                r.LoopTemplateVersionId,
                 TemplateId = r.LoopTemplateVersion.LoopTemplateId,
                 TemplateName = r.LoopTemplateVersion.LoopTemplate.Name,
                 r.Status,
@@ -147,6 +209,8 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .Select(n => new
             {
                 n.LoopRunId,
+                n.LoopNodeId,
+                n.Status,
                 n.StartedAt,
                 n.CompletedAt,
                 n.IncomingEdgeId,
@@ -171,10 +235,11 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         var nodesByRun = nodes.ToLookup(n => n.LoopRunId);
         var feedbackByRun = feedback.ToLookup(f => f.RunId);
 
-        var result = new List<RunContribution>(runs.Count);
+        var result = new List<LiveRun>(runs.Count);
         foreach (var run in runs)
         {
-            var nodeFacts = nodesByRun[run.Id]
+            var runNodes = nodesByRun[run.Id].ToList();
+            var nodeFacts = runNodes
                 .Select(n => new NodeFact(
                     n.StartedAt, n.CompletedAt, n.IncomingEdgeId,
                     n.InputTokens ?? 0, n.OutputTokens ?? 0, n.CostUsd ?? 0m, n.AiProvider))
@@ -182,8 +247,11 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             var feedbackFacts = feedbackByRun[run.Id]
                 .Select(f => new FeedbackFact(f.EventType, f.Id, f.Timestamp))
                 .ToList();
-            result.Add(RunAnalyticsAggregator.BuildContribution(
-                run.TemplateId, run.TemplateName, run.Status, run.Started, nodeFacts, edges, feedbackFacts));
+            result.Add(new LiveRun(
+                run.LoopTemplateVersionId,
+                RunAnalyticsAggregator.BuildContribution(
+                    run.TemplateId, run.TemplateName, run.Status, run.Started, nodeFacts, edges, feedbackFacts),
+                runNodes.Select(n => new NodeVisit(n.LoopNodeId, n.Status, n.StartedAt, n.CompletedAt)).ToList()));
         }
         return result;
     }
@@ -258,6 +326,13 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         foreach (var m in metrics) total.Add(m);
         return total;
     }
+
+    /// <summary>A still-existing run's contribution, with the version it ran and its node visits.</summary>
+    private sealed record LiveRun(Guid VersionId, RunContribution Contribution, IReadOnlyList<NodeVisit> Visits);
+
+    private sealed record NodeVisit(Guid LoopNodeId, LoopRunNodeStatus Status, DateTime? StartedAt, DateTime? CompletedAt);
+
+    private sealed record TemplateNode(Guid Id, Guid TemplateId, string Label, NodeType NodeType, int VersionNumber);
 
     /// <summary>
     /// What chats spent on one day for one (schedule, provider): a single call while

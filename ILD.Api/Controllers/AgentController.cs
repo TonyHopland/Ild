@@ -778,34 +778,226 @@ public class AgentController : ControllerBase
         }));
     }
 
+    /// <summary>
+    /// A saved loop template version as an <c>ild-loop-template/v2</c> document, the
+    /// format <c>current-loop</c> reads and takes. <paramref name="nameOrId"/> is a
+    /// template id, or an exact name (case and surrounding whitespace ignored,
+    /// archived templates included); a name more than one template has is 409 with
+    /// the candidates. No <paramref name="version"/> means the latest.
+    /// </summary>
+    [HttpGet("loop-templates/document")]
+    public async Task<IActionResult> GetLoopTemplateDocument([FromQuery] string? nameOrId = null, [FromQuery] int? version = null)
+    {
+        if (string.IsNullOrWhiteSpace(nameOrId))
+            return BadRequest(new { error = "nameOrId is required: a loop template id or name." });
+        if (version < 1)
+            return BadRequest(new { error = "version must be 1 or greater." });
+
+        var key = nameOrId.Trim();
+        LoopTemplate? template;
+        if (Guid.TryParse(key, out var templateId))
+        {
+            template = await _db.LoopTemplates.AsNoTracking().SingleOrDefaultAsync(t => t.Id == templateId);
+        }
+        else
+        {
+            // Matched in memory: SQL case folding differs between SQLite and Postgres.
+            var named = (await _db.LoopTemplates.AsNoTracking().ToListAsync())
+                .Where(t => string.Equals(t.Name.Trim(), key, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (named.Count > 1)
+                return Conflict(new
+                {
+                    error = $"{named.Count} loop templates are named '{key}'; pass the id of the one you mean.",
+                    candidates = named.OrderBy(t => t.IsArchived).ThenBy(t => t.Name, StringComparer.Ordinal)
+                        .Select(t => new { id = t.Id, name = t.Name, isArchived = t.IsArchived }),
+                });
+            template = named.SingleOrDefault();
+        }
+        if (template == null)
+            return NotFound(new { error = $"Loop template not found: {key}" });
+
+        var versions = (await _templates.GetVersionsAsync(template.Id)).ToList();
+        var latest = versions.MaxBy(v => v.VersionNumber);
+        if (latest == null)
+            return NotFound(new { error = $"Loop template {template.Id} has no saved version." });
+        var chosen = version is int number ? versions.SingleOrDefault(v => v.VersionNumber == number) : latest;
+        if (chosen == null)
+            return NotFound(new
+            {
+                error = $"Loop template {template.Id} has no version {version}; the latest is {latest.VersionNumber}.",
+                latestVersion = latest.VersionNumber,
+            });
+
+        var graph = await _templates.GetVersionGraphAsync(template.Id, chosen.VersionNumber);
+        if (graph == null)
+            return NotFound(new { error = $"Loop template not found: {key}" });
+        return Ok(new
+        {
+            templateId = template.Id,
+            version = chosen.VersionNumber,
+            latestVersion = latest.VersionNumber,
+            isLatest = chosen.VersionNumber == latest.VersionNumber,
+            versionCreatedAt = chosen.CreatedAt,
+            isArchived = template.IsArchived,
+            document = LoopTemplateDocument.From(template, graph),
+        });
+    }
+
+    /// <summary>
+    /// The analytics dashboard's per-template rows for the same filters, each with
+    /// per-node figures from the runs that still exist (<c>runsWithNodeDetail</c>
+    /// of them; deleted runs keep no per-node history).
+    /// </summary>
+    [HttpGet("analytics/templates")]
+    public async Task<IActionResult> GetTemplateAnalytics(
+        [FromServices] IRunAnalyticsService analytics,
+        [FromQuery] string? from = null,
+        [FromQuery] string? to = null,
+        [FromQuery] string? provider = null,
+        [FromQuery] string? templateId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (ParseRunFilters(from, to, templateId, out var fromDate, out var toDate, out var templateGuid) is { } invalid)
+            return invalid;
+
+        var query = new AnalyticsQuery(fromDate, toDate, string.IsNullOrWhiteSpace(provider) ? null : provider);
+        var rows = await analytics.GetTemplateAnalyticsAsync(query, templateGuid, cancellationToken);
+        return Ok(new
+        {
+            from = query.From,
+            to = query.To,
+            provider = query.Provider,
+            templateId = templateGuid,
+            templates = rows.Select(r => new
+            {
+                templateId = r.Totals.TemplateId,
+                templateName = r.Totals.TemplateName,
+                totalRuns = r.Totals.TotalRuns,
+                completedRuns = r.Totals.CompletedRuns,
+                failedRuns = r.Totals.FailedRuns,
+                cancelledRuns = r.Totals.CancelledRuns,
+                successRate = r.Totals.SuccessRate,
+                avgNodeSeconds = r.Totals.AvgNodeSeconds,
+                onFailureRoutings = r.Totals.OnFailureRoutings,
+                rejectRoutings = r.Totals.RejectRoutings,
+                avgFeedbackSeconds = r.Totals.AvgHumanFeedbackSeconds,
+                totalInputTokens = r.Totals.TotalInputTokens,
+                totalOutputTokens = r.Totals.TotalOutputTokens,
+                totalCostUsd = r.Totals.TotalCostUsd,
+                runsWithNodeDetail = r.RunsWithNodeDetail,
+                nodes = r.Nodes,
+            }),
+        });
+    }
+
+    /// <summary>
+    /// Loop runs, newest first by start (creation for a run not yet started).
+    /// <paramref name="from"/>/<paramref name="to"/> are inclusive UTC days on that
+    /// same start, as on the analytics dashboard.
+    /// </summary>
     [HttpGet("loop-runs")]
     public async Task<IActionResult> ListLoopRuns(
         [FromQuery] string? workItemId = null,
+        [FromQuery] string? from = null,
+        [FromQuery] string? to = null,
+        [FromQuery] string? templateId = null,
         [FromQuery] int skip = 0,
         [FromQuery] int take = 100)
     {
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
+        if (ParseRunFilters(from, to, templateId, out var fromDate, out var toDate, out var templateGuid) is { } invalid)
+            return invalid;
 
+        var query = _db.LoopRuns.AsNoTracking();
         if (!string.IsNullOrEmpty(workItemId))
+            query = query.Where(r => r.WorkItemId == workItemId);
+        if (templateGuid is Guid template)
+            query = query.Where(r => r.LoopTemplateVersion.LoopTemplateId == template);
+        if (fromDate is DateOnly fromDay)
         {
-            var filtered = await _db.LoopRuns.AsNoTracking()
-                .Where(r => r.WorkItemId == workItemId)
-                .OrderByDescending(r => r.StartedAt)
-                .ThenByDescending(r => r.Id)
-                .Skip(skip).Take(take)
-                .Select(r => new { r.Id, r.WorkItemId, r.Status, r.StartedAt, r.CompletedAt })
-                .ToListAsync();
-
-            var costs = await AggregateRunCostsAsync(filtered.Select(r => r.Id).ToList());
-            return Ok(filtered.Select(r => ProjectRun(r.Id, r.WorkItemId, r.Status.ToString(), r.StartedAt, r.CompletedAt, costs)));
+            var start = fromDay.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            query = query.Where(r => (r.StartedAt ?? r.CreatedAt) >= start);
+        }
+        if (toDate is DateOnly toDay && toDay < DateOnly.MaxValue)
+        {
+            var end = toDay.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            query = query.Where(r => (r.StartedAt ?? r.CreatedAt) < end);
         }
 
-        var runs = await _runs.GetAllAsync(skip, take);
-        var runList = runs.ToList();
-        var allCosts = await AggregateRunCostsAsync(runList.Select(r => r.Id).ToList());
-        return Ok(runList.Select(r => ProjectRun(r.Id, r.WorkItemId, r.Status.ToString(), r.StartedAt, r.CompletedAt, allCosts)));
+        var runs = await query
+            .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
+            .ThenByDescending(r => r.Id)
+            .Skip(skip).Take(take)
+            .Select(r => new
+            {
+                r.Id,
+                r.WorkItemId,
+                r.Status,
+                r.StartedAt,
+                r.CompletedAt,
+                TemplateId = r.LoopTemplateVersion.LoopTemplateId,
+                TemplateName = r.LoopTemplateVersion.LoopTemplate.Name,
+                TemplateVersion = r.LoopTemplateVersion.VersionNumber,
+            })
+            .ToListAsync();
+
+        var costs = await AggregateRunCostsAsync(runs.Select(r => r.Id).ToList());
+        return Ok(runs.Select(r =>
+        {
+            costs.TryGetValue(r.Id, out var cost);
+            return new
+            {
+                id = r.Id,
+                workItemId = r.WorkItemId,
+                status = r.Status.ToString(),
+                startedAt = r.StartedAt,
+                completedAt = r.CompletedAt,
+                costUsd = cost?.CostUsd,
+                inputTokens = cost?.InputTokens ?? 0,
+                outputTokens = cost?.OutputTokens ?? 0,
+                templateId = r.TemplateId,
+                templateName = r.TemplateName,
+                templateVersion = r.TemplateVersion,
+            };
+        }));
+    }
+
+    /// <summary>
+    /// One run's path through its template, its human feedback, its counters and its
+    /// pull request's last stored review state, as a bounded summary. Read from what
+    /// is stored; nothing is fetched from the forge.
+    /// </summary>
+    [HttpGet("loop-runs/{id}")]
+    public async Task<IActionResult> GetLoopRun(
+        string id, [FromServices] ILoopRunDigestService digests, CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(id, out var runId))
+            return BadRequest(new { error = $"Invalid run id '{id}'; expected a GUID." });
+
+        var digest = await digests.GetAsync(runId, cancellationToken);
+        return digest == null ? NotFound(new { error = $"Loop run not found: {runId}" }) : Ok(digest);
+    }
+
+    /// <summary>The run filters shared by the run list and template analytics, or the 400 naming the malformed one.</summary>
+    private IActionResult? ParseRunFilters(
+        string? from, string? to, string? templateId,
+        out DateOnly? fromDate, out DateOnly? toDate, out Guid? templateGuid)
+    {
+        toDate = null;
+        templateGuid = null;
+        if (!AnalyticsController.TryParseDate(from, out fromDate))
+            return BadRequest(new { error = "Invalid 'from' date; expected yyyy-MM-dd." });
+        if (!AnalyticsController.TryParseDate(to, out toDate))
+            return BadRequest(new { error = "Invalid 'to' date; expected yyyy-MM-dd." });
+        if (string.IsNullOrWhiteSpace(templateId))
+            return null;
+        if (!Guid.TryParse(templateId, out var parsed))
+            return BadRequest(new { error = "Invalid 'templateId'; expected a loop template GUID." });
+        templateGuid = parsed;
+        return null;
     }
 
     private sealed record RunCost(decimal? CostUsd, long InputTokens, long OutputTokens);
@@ -833,22 +1025,6 @@ public class AgentController : ControllerBase
             .ToListAsync();
 
         return rows.ToDictionary(r => r.RunId, r => new RunCost(r.CostUsd, r.InputTokens, r.OutputTokens));
-    }
-
-    private static object ProjectRun(Guid id, string workItemId, string status, DateTime? startedAt, DateTime? completedAt, Dictionary<Guid, RunCost> costs)
-    {
-        costs.TryGetValue(id, out var cost);
-        return new
-        {
-            id,
-            workItemId,
-            status,
-            startedAt,
-            completedAt,
-            costUsd = cost?.CostUsd,
-            inputTokens = cost?.InputTokens ?? 0,
-            outputTokens = cost?.OutputTokens ?? 0,
-        };
     }
 
     [HttpGet("variables")]

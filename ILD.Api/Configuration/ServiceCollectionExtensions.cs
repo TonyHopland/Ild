@@ -147,6 +147,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ILoopEngine, LoopEngine>();
         services.AddScoped<IMetricsCollector, MetricsCollector>();
         services.AddScoped<IRunAnalyticsService, RunAnalyticsService>();
+        services.AddScoped<ILoopRunDigestService, LoopRunDigestService>();
         services.AddSingleton<IAgentAdapterRegistry, AgentAdapterRegistry>();
         services.AddSingleton<IAgentAdapter, OpenCodeAdapter>();
         services.AddSingleton<IAgentAdapter, PiAdapter>();

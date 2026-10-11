@@ -47,7 +47,7 @@ public class AnalyticsController : ControllerBase
         return Ok(overview);
     }
 
-    private static bool TryParseDate(string? value, out DateOnly? date)
+    internal static bool TryParseDate(string? value, out DateOnly? date)
     {
         date = null;
         if (string.IsNullOrWhiteSpace(value)) return true;

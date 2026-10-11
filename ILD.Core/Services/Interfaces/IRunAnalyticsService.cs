@@ -11,4 +11,12 @@ namespace ILD.Core.Services.Interfaces;
 public interface IRunAnalyticsService
 {
     Task<RunAnalyticsOverview> GetOverviewAsync(AnalyticsQuery query, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The overview's template rows, in its order and with its figures, each with
+    /// per-node figures from the still-existing runs behind it. <paramref name="templateId"/>
+    /// narrows to one template; <c>query.Granularity</c> is not used.
+    /// </summary>
+    Task<IReadOnlyList<TemplateAnalyticsDetail>> GetTemplateAnalyticsAsync(
+        AnalyticsQuery query, Guid? templateId, CancellationToken cancellationToken = default);
 }
