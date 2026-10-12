@@ -249,6 +249,38 @@
       "nodeId"
     ]
   },
+  "get_loop_run": {
+    "type": "object",
+    "properties": {
+      "runId": {
+        "description": "Loop run GUID (from list_loop_runs).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "runId"
+    ]
+  },
+  "get_loop_template": {
+    "type": "object",
+    "properties": {
+      "nameOrId": {
+        "description": "Loop template GUID, or its exact name (case-insensitive; archived templates included). A GUID that is no template's id is tried as a name.",
+        "type": "string"
+      },
+      "version": {
+        "description": "Optional version number; default the latest.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "nameOrId"
+    ]
+  },
   "get_loop_variables": {
     "type": "object",
     "properties": {}
@@ -323,6 +355,43 @@
       "service"
     ]
   },
+  "get_template_analytics": {
+    "type": "object",
+    "properties": {
+      "from": {
+        "description": "Optional first day, yyyy-MM-dd (UTC, inclusive), on the run's start day.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "to": {
+        "description": "Optional last day, yyyy-MM-dd (UTC, inclusive), on the run's start day.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "provider": {
+        "description": "Optional agent provider name (the run's primary AI provider, case-insensitive).",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "templateId": {
+        "description": "Optional loop template GUID to report on alone.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    }
+  },
   "get_workitem": {
     "type": "object",
     "properties": {
@@ -362,6 +431,30 @@
     "properties": {
       "workItemId": {
         "description": "Optional WorkItem GUID to scope by.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "from": {
+        "description": "Optional first day, yyyy-MM-dd (UTC, inclusive), on the run's start day.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "to": {
+        "description": "Optional last day, yyyy-MM-dd (UTC, inclusive), on the run's start day.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "templateId": {
+        "description": "Optional loop template GUID to scope by (any of its versions).",
         "type": [
           "string",
           "null"

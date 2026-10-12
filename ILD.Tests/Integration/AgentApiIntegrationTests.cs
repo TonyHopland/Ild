@@ -699,6 +699,49 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task GetLoopTemplate_finds_a_guid_shaped_name_unless_a_template_has_that_id()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var byId = Guid.NewGuid();
+        var guidNamed = Guid.NewGuid();
+        var shadowed = Guid.NewGuid();
+        var guidName = Guid.NewGuid().ToString();
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            foreach (var (id, name) in new[]
+            {
+                (byId, "by-id"),
+                (guidNamed, guidName),
+                (shadowed, byId.ToString()),
+            })
+            {
+                db.LoopTemplates.Add(new LoopTemplate { Id = id, Name = name });
+                db.LoopTemplateVersions.Add(new LoopTemplateVersion
+                {
+                    Id = Guid.NewGuid(), LoopTemplateId = id, VersionNumber = 1, CreatedAt = DateTime.UtcNow,
+                });
+            }
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        }
+
+        async Task<Guid> ResolveAsync(string nameOrId)
+        {
+            var resp = await client.GetAsync(
+                $"/api/v1/agent/loop-templates/document?nameOrId={Uri.EscapeDataString(nameOrId)}",
+                TestContext.Current.CancellationToken);
+            var body = await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            Assert.True(resp.StatusCode == HttpStatusCode.OK, $"{nameOrId}: {(int)resp.StatusCode} {body}");
+            return JsonDocument.Parse(body).RootElement.GetProperty("templateId").GetGuid();
+        }
+
+        Assert.Equal(guidNamed, await ResolveAsync(guidName.ToUpperInvariant()));
+        Assert.Equal(byId, await ResolveAsync(byId.ToString()));
+    }
+
+    [Fact]
     public async Task ListLoopRuns_includes_cost_and_token_totals_per_run()
     {
         await using var factory = new ApiFactory();
