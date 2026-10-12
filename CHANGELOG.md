@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A PR node can route on new commits pushed to its pull request.**
 
+- **A work item can attach its runs to a branch that already exists on the remote, someone else's pull request included.**
+
+- **A PR node can be set to create a pull request, attach to the one its branch already has, or both.**
+
+- **Agents can post review findings on a specific file and line of a pull request.**
+
+- **Settings cap how many findings, and how many nits, ILD may raise on one pull request.**
+
 - **Analytics count what chats cost, scheduled chats and chat titles included, beside the loop templates.**
 
 - **Agents can read loop analytics, any saved loop template version, and a run's path, feedback and review comments.**
