@@ -192,6 +192,41 @@ describe("EditPanel attach to existing branch, unconfirmed", () => {
     },
   );
 
+  test.each([
+    ["the branch is renamed", "branch"],
+    ["the repository is changed", "repository"],
+  ])("a warning about the old target is not shown once %s", async (_label, what) => {
+    const warning = "Branch `feature/shared` already exists on origin.";
+    vi.spyOn(authServices.workItemService, "checkBranchName").mockResolvedValue({
+      error: null,
+      warning,
+      existsOnOrigin: true,
+    });
+    vi.useFakeTimers();
+    render(
+      <EditPanel
+        workItem={makeWorkItem({ branchNameOverride: ON_ORIGIN })}
+        detail={makeDetail()}
+        onSave={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    await settleCheck();
+    expect(screen.getByText(warning)).toBeTruthy();
+
+    await act(async () => {
+      if (what === "branch")
+        fireEvent.change(screen.getByLabelText("Branch name (optional)"), {
+          target: { value: "feature/renamed" },
+        });
+      else fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "repo-b" } });
+      await Promise.resolve();
+    });
+
+    // Inside the debounce: nothing has been said about the new target yet.
+    expect(screen.queryByText(warning)).toBeNull();
+  });
+
   test("a tick the check clears does not set off a second check", async () => {
     const check = vi
       .spyOn(authServices.workItemService, "checkBranchName")

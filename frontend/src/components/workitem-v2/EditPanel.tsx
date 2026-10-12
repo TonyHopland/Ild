@@ -126,15 +126,16 @@ export default function EditPanel({
     };
   }, [branchNameOverride, repositoryId, workItem?.id, attachAsked]);
 
-  const branchNameProblem =
-    branchNameCheck?.result.error ?? branchNameCheck?.result.warning ?? null;
-  // Offered only on a completed check, for the name in the field, that found it
-  // on origin; anything else — still checking, a failed check, another name —
-  // shows nothing rather than a guess.
-  const canAttach =
+  // Only a completed check about the name and repository in the form says
+  // anything; still checking, a failed check, or another target shows nothing
+  // rather than a guess.
+  const currentCheck =
     branchNameCheck?.name === branchNameOverride.trim() &&
-    branchNameCheck.repositoryId === repositoryId &&
-    branchNameCheck.result.existsOnOrigin === true;
+    branchNameCheck.repositoryId === repositoryId
+      ? branchNameCheck.result
+      : null;
+  const branchNameProblem = currentCheck?.error ?? currentCheck?.warning ?? null;
+  const canAttach = currentCheck?.existsOnOrigin === true;
 
   const dirty =
     title !== baseTitle ||
