@@ -134,7 +134,7 @@ public abstract record NodeOutcome
     /// snapshot with <paramref name="Snapshot"/> when the node read one — so the
     /// heartbeat's <c>on_new_commits</c> does not report it back.
     /// </summary>
-    public sealed record PrSeen(string HeadSha, ILD.Data.DTOs.RemotePrSnapshot? Snapshot = null) : NodeOutcome;
+    public sealed record PrSeen(string? HeadSha, ILD.Data.DTOs.RemotePrSnapshot? Snapshot = null) : NodeOutcome;
 
     /// <summary>
     /// Cleanup node destroyed the worktree.

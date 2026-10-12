@@ -23,30 +23,29 @@ internal static class NodeConfig
     {
         if (string.IsNullOrWhiteSpace(json)) return new T();
         try { return JsonSerializer.Deserialize<T>(json, Options) ?? new T(); }
-        catch (JsonException) { return ParseFieldByField<T>(json); }
-        catch (NotSupportedException) { return ParseFieldByField<T>(json); }
+        catch { return ParseFieldByField<T>(json); }
     }
 
     private static T ParseFieldByField<T>(string json) where T : new()
     {
-        JsonObject? config;
-        try { config = JsonNode.Parse(json) as JsonObject; }
-        catch (JsonException) { return new T(); }
-        if (config is null) return new T();
-
-        var readable = new JsonObject();
-        foreach (var (name, value) in config)
+        try
         {
-            var field = new JsonObject { [name] = value?.DeepClone() };
-            try
+            if (JsonNode.Parse(json) is not JsonObject config) return new T();
+
+            var readable = new JsonObject();
+            foreach (var (name, value) in config)
             {
-                JsonSerializer.Deserialize<T>(field.ToJsonString(), Options);
-                readable[name] = value?.DeepClone();
+                var field = new JsonObject { [name] = value?.DeepClone() };
+                try
+                {
+                    JsonSerializer.Deserialize<T>(field.ToJsonString(), Options);
+                    readable[name] = value?.DeepClone();
+                }
+                catch { }
             }
-            catch (JsonException) { }
-            catch (NotSupportedException) { }
+            return readable.Deserialize<T>(Options) ?? new T();
         }
-        return readable.Deserialize<T>(Options) ?? new T();
+        catch { return new T(); }
     }
 
     public sealed record Cmd

@@ -1138,7 +1138,7 @@ public sealed class LoopEngine : ILoopEngine
                         var stored = seen.Snapshot ?? ILD.Data.DTOs.PrSnapshotJson.TryParse(run.PrSnapshot);
                         if (stored is not null)
                         {
-                            run.PrSnapshot = ILD.Data.DTOs.PrSnapshotJson.Serialize(stored with { HeadSha = seen.HeadSha });
+                            run.PrSnapshot = ILD.Data.DTOs.PrSnapshotJson.Serialize(stored with { HeadSha = seen.HeadSha ?? stored.HeadSha });
                             await loopRunStore.UpdateRunAsync(run);
                             await _notifier.PrSnapshotChangedAsync(run.Id);
                         }

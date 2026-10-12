@@ -191,7 +191,7 @@ public class SettingsController : ControllerBase
         var findings = key == AppSettingKeys.PrMaxFindings ? cap : await _schedulerSettings.GetPrMaxFindingsAsync(ct);
         var nits = key == AppSettingKeys.PrMaxNits ? cap : await _schedulerSettings.GetPrMaxNitsAsync(ct);
         return nits > findings
-            ? $"{AppSettingKeys.PrMaxNits} ({nits}) cannot be more than {AppSettingKeys.PrMaxFindings} ({findings}): nits count toward the findings cap."
+            ? $"Max nits per PR ({AppSettingKeys.PrMaxNits}, {nits}) cannot be more than Max findings per PR ({AppSettingKeys.PrMaxFindings}, {findings}): nits count toward the findings cap. Lower the nit cap first to lower the findings cap below it."
             : null;
     }
 

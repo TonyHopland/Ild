@@ -169,9 +169,9 @@ public class RepositoryManager : IRepositoryManager
         return code == 0;
     }
 
-    public async Task<string?> GetHeadShaAsync(string worktreePath)
+    public async Task<string?> ResolveCommitAsync(string worktreePath, string revision)
     {
-        var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "HEAD");
+        var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "--verify", "--quiet", $"{revision}^{{commit}}");
         return code == 0 && stdout.Trim() is { Length: > 0 } sha ? sha : null;
     }
 

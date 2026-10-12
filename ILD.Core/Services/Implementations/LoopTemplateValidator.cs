@@ -263,10 +263,14 @@ public static class LoopTemplateValidator
             {
                 // A toggle that is not a JSON boolean reads as absent — on — at
                 // run time, which is not what whoever wrote "false" meant.
+                // Keys are matched as the runtime reads them, ignoring case.
                 var raw = JsonSerializer.SerializeToNode(node.Config) as JsonObject;
-                foreach (var toggle in new[] { "createIfNoneExists", "attachIfExists" })
+                foreach (var (key, value) in raw ?? new JsonObject())
                 {
-                    if (raw?[toggle] is { } value && value.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null))
+                    var toggle = new[] { "createIfNoneExists", "attachIfExists" }
+                        .FirstOrDefault(t => string.Equals(t, key, StringComparison.OrdinalIgnoreCase));
+                    if (toggle is not null && value is not null
+                        && value.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False))
                         errors.Add($"PR node {node.Id}: {toggle} must be true or false, not {value.ToJsonString()}.");
                 }
 

@@ -169,7 +169,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                 if (await HasQueuedWritesAsync(ctx, sp))
                     await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, attachedNumber);
 
-                if (await SeeAsync(remote, repo.CloneUrl, attachedNumber, ctx.CancellationToken) is { } attachedSeen)
+                if (await SeeAsync(remote, repoManager, ctx, pushed, repo.CloneUrl, attachedNumber) is { } attachedSeen)
                     yield return attachedSeen;
 
                 // Recorded last, right before the node routes on: a run that
@@ -254,7 +254,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                 }
 
                 if (RemotePrUrl.ExtractPrNumber(prUrl) is { Length: > 0 } createdNumber
-                    && await SeeAsync(remote, repo.CloneUrl, createdNumber, ctx.CancellationToken) is { } createdSeen)
+                    && await SeeAsync(remote, repoManager, ctx, pushed, repo.CloneUrl, createdNumber) is { } createdSeen)
                     yield return createdSeen;
 
                 // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
@@ -293,7 +293,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         // what the forge may not have caught up to — it is not reported back
         // to the run as new commits. The visit that got the pull request has
         // already recorded what it found, which includes this push.
-        if (pushed && hadPullRequest && await repoManager.GetHeadShaAsync(ctx.Run.WorktreePath!) is { } pushedHead)
+        if (pushed && hadPullRequest && await repoManager.ResolveCommitAsync(ctx.Run.WorktreePath!, "HEAD") is { } pushedHead)
             yield return new NodeOutcome.PrSeen(pushedHead);
 
         // Surface the rendered prompt template to the work item as the parked
@@ -303,15 +303,21 @@ public sealed class PRNodeExecutor : INodeExecutor
     }
 
     /// <summary>
-    /// The pull request as it stands, for the run to have seen. Best-effort: a
-    /// forge that does not answer leaves the stored snapshot as it was, which
-    /// costs at most one <c>on_new_commits</c> the run did not need.
+    /// The pull request as the visit that got it found it. Best-effort: a forge
+    /// that does not answer leaves the stored snapshot as it was, which costs
+    /// at most one <c>on_new_commits</c> the run did not need. When this visit
+    /// pushed, the head recorded is the commit it pushed, not what the forge
+    /// may not have caught up to yet.
     /// </summary>
     private static async Task<NodeOutcome.PrSeen?> SeeAsync(
-        IRemoteProvider remote, string cloneUrl, string prNumber, CancellationToken cancellationToken)
-        => await remote.GetPullRequestSnapshotAsync(cloneUrl, prNumber, cancellationToken) is { HeadSha: { } head } snapshot
-            ? new NodeOutcome.PrSeen(head, snapshot)
-            : null;
+        IRemoteProvider remote, IRepositoryManager repoManager, NodeExecutionContext ctx, bool pushed,
+        string cloneUrl, string prNumber)
+    {
+        if (await remote.GetPullRequestSnapshotAsync(cloneUrl, prNumber, ctx.CancellationToken) is not { } snapshot)
+            return null;
+        var head = pushed ? await repoManager.ResolveCommitAsync(ctx.Run.WorktreePath!, "HEAD") : null;
+        return new NodeOutcome.PrSeen(head ?? snapshot.HeadSha, snapshot);
+    }
 
     /// <summary>
     /// Bring the worktree up to what origin has of the branch before pushing,
@@ -321,39 +327,62 @@ public sealed class PRNodeExecutor : INodeExecutor
     /// commits — so origin's copy can be ahead of the worktree:
     /// <list type="bullet">
     ///   <item>the run has commits of its own as well: they are rebased onto
-    ///         origin's copy, and a rebase that cannot complete fails the node
-    ///         saying so — a plain push would be refused anyway;</item>
+    ///         origin's copy when origin moved past the head the run last saw,
+    ///         and a rebase that cannot complete fails the node saying so — a
+    ///         plain push would be refused anyway;</item>
     ///   <item>the run has nothing of its own: nothing is pushed, and the round
     ///         goes on to send its queued writes.</item>
     /// </list>
     /// A run's own branch that origin does not have yet is pushed as before,
     /// as it is when origin cannot be asked: the push itself says whether it
-    /// went through. A branch the run attached to is held to more: it must be
-    /// readable on origin, and one that is gone is never pushed again — that
-    /// would recreate someone else's deleted branch.
+    /// went through. A branch the run attached to is held to more: commits of
+    /// the run's own go to it only once origin has been read, and one that is
+    /// gone is never pushed again — that would recreate someone else's deleted
+    /// branch.
     /// </summary>
     private static async Task<(bool Push, string? Error)> IntegrateWithOriginAsync(
         NodeExecutionContext ctx, IRepositoryManager repoManager, string branch, GitAuthOptions? gitAuth)
     {
         var worktree = ctx.Run.WorktreePath!;
         var attached = ctx.Run.AttachToExistingBranch;
-        var fetched = await repoManager.FetchAsync(worktree, ctx.CancellationToken, gitAuth);
-        if (!fetched)
-            return attached
-                ? (false, $"Could not fetch origin to check branch `{branch}` before pushing to it; nothing was pushed")
-                : (true, null);
+        var upstream = $"origin/{branch}";
+        if (!await repoManager.FetchAsync(worktree, ctx.CancellationToken, gitAuth))
+        {
+            if (!attached)
+                return (true, null);
+            // Nothing of the run's own even on the copy fetched last: there is
+            // nothing to push, and the round's writes still go out.
+            return await repoManager.GetCommitsAheadCountAsync(worktree, upstream) > 0
+                ? (false, $"Could not fetch origin to check branch `{branch}` before pushing the run's commits to it; nothing was pushed")
+                : (false, null);
+        }
 
         if (!await repoManager.RemoteBranchExistsAsync(worktree, branch))
             return attached
                 ? (false, $"Branch `{branch}` no longer exists on origin; this run attached to it and will not recreate it")
                 : (true, null);
 
-        var upstream = $"origin/{branch}";
         var ahead = await repoManager.GetCommitsAheadCountAsync(worktree, upstream);
+        var behind = await repoManager.GetCommitsBehindCountAsync(worktree, upstream);
+        // A run's own branch is pushed as it always was unless there is plainly
+        // nothing of its own to push; a branch it attached to only with
+        // commits of its own on it. Either way, behind with nothing ahead is
+        // nothing to push.
+        if (behind == 0)
+            return (!attached || ahead > 0, null);
         if (ahead == 0)
             return (false, null);
 
-        if (await repoManager.GetCommitsBehindCountAsync(worktree, upstream) > 0)
+        // Ahead and behind: rebase only onto what someone else pushed — origin
+        // past the head the run last saw. A run that rewrote its own pushed
+        // history (rebased onto its base, say) is behind its own old commits,
+        // and replaying them would push copies of the base; that push is left
+        // to be refused, as it always was.
+        var seen = PrSnapshotJson.TryParse(ctx.Run.PrSnapshot)?.HeadSha;
+        var pushedByOthers = seen is null
+            ? attached
+            : !string.Equals(await repoManager.ResolveCommitAsync(worktree, upstream), seen, StringComparison.Ordinal);
+        if (pushedByOthers)
         {
             var rebase = await repoManager.RebaseAsync(worktree, upstream, ctx.CancellationToken);
             if (!rebase.Success)

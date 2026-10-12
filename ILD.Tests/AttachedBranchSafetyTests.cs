@@ -206,7 +206,7 @@ public class AttachedBranchSafetyTests : IDisposable
         var worktree = Directory.CreateDirectory(Path.Combine(_baseRepo, "wt-seen")).FullName;
         var (sp, git, remote, _) = Services();
         git.Setup(m => m.GetCommitsAheadCountAsync(worktree, $"origin/{Branch}")).ReturnsAsync(ahead);
-        git.Setup(m => m.GetHeadShaAsync(worktree)).ReturnsAsync("def456");
+        git.Setup(m => m.ResolveCommitAsync(worktree, "HEAD")).ReturnsAsync("def456");
         // What the forge reports may not have caught up with the push yet.
         remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17", It.IsAny<CancellationToken>())).ReturnsAsync(SnapshotAt("stale"));
         var run = new LoopRun
@@ -235,8 +235,11 @@ public class AttachedBranchSafetyTests : IDisposable
     {
         var (sp, git, _, _) = Services();
         var run = AttachedRunWithPr("wt-behind-" + attached, attached);
+        run.PrSnapshot = PrSnapshotJson.Serialize(SnapshotAt("seen1"));
         git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
         git.Setup(m => m.GetCommitsBehindCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(2);
+        // The author pushed past what the run last saw.
+        git.Setup(m => m.ResolveCommitAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync("author2");
         git.Setup(m => m.RebaseAsync(run.WorktreePath!, $"origin/{Branch}", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
 
@@ -248,10 +251,43 @@ public class AttachedBranchSafetyTests : IDisposable
     }
 
     [Fact]
+    public async Task A_run_that_rewrote_its_own_pushed_history_is_not_rebased_onto_its_old_commits()
+    {
+        // Origin is still at the head the run pushed and saw; the run rebased
+        // its branch onto its base since. Replaying origin's old commits under
+        // it would push copies of the base: the push is left to be refused.
+        var (sp, git, _, _) = Services();
+        var run = AttachedRunWithPr("wt-rewritten", attached: false);
+        run.PrSnapshot = PrSnapshotJson.Serialize(SnapshotAt("pushed1"));
+        git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(5);
+        git.Setup(m => m.GetCommitsBehindCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(2);
+        git.Setup(m => m.ResolveCommitAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync("pushed1");
+        git.Setup(m => m.PushAsync(run.WorktreePath!, Branch, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync((false, "rejected: non-fast-forward"));
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        git.Verify(m => m.RebaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Contains("non-fast-forward", outcomes.OfType<NodeOutcome.Fail>().Single().Reason);
+    }
+
+    [Fact]
+    public async Task A_runs_own_branch_is_pushed_as_before_when_git_reports_nothing_either_way()
+    {
+        var (sp, git, _, _) = Services();
+        var run = AttachedRunWithPr("wt-own-plain", attached: false);
+
+        await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        git.Verify(m => m.PushAsync(run.WorktreePath!, Branch, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Once);
+    }
+
+    [Fact]
     public async Task A_rebase_onto_an_author_push_that_conflicts_fails_saying_so_and_pushes_nothing()
     {
         var (sp, git, _, _) = Services();
         var run = AttachedRunWithPr("wt-conflict");
+        git.Setup(m => m.ResolveCommitAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync("author2");
         git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
         git.Setup(m => m.GetCommitsBehindCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
         git.Setup(m => m.RebaseAsync(run.WorktreePath!, $"origin/{Branch}", It.IsAny<CancellationToken>()))
@@ -295,10 +331,34 @@ public class AttachedBranchSafetyTests : IDisposable
         var (sp, git, _, _) = Services();
         var run = AttachedRunWithPr("wt-nofetch");
         git.Setup(m => m.FetchAsync(run.WorktreePath!, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>())).ReturnsAsync(false);
+        git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
 
         var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
 
         Assert.Contains("Could not fetch origin", outcomes.OfType<NodeOutcome.Fail>().Single().Reason);
+        git.Verify(m => m.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_fetch_failure_with_nothing_of_the_runs_own_to_push_still_sends_the_rounds_findings()
+    {
+        var (sp, git, remote, runs) = Services();
+        var run = AttachedRunWithPr("wt-nofetch-review");
+        git.Setup(m => m.FetchAsync(run.WorktreePath!, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>())).ReturnsAsync(false);
+        string? queue = PrCommentQueueJson.Serialize(new[]
+        {
+            new PrQueuedWrite("w1", PrQueuedWrite.Comment, string.Empty, "round findings", null, null, DateTime.UtcNow),
+        });
+        runs.Setup(s => s.GetPrCommentQueueAsync(It.IsAny<Guid>())).ReturnsAsync(() => queue);
+        runs.Setup(s => s.TrySetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((Guid _, string? expected, string? json) => { queue = json; return true; });
+        remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "17", It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrWriteResult(true, "900", null));
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        remote.Verify(r => r.CreatePullRequestCommentAsync(CloneUrl, "17", It.Is<string>(b => b.Contains("round findings"))), Times.Once);
         git.Verify(m => m.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
     }
 
@@ -324,7 +384,7 @@ public class AttachedBranchSafetyTests : IDisposable
         var run = AttachedRunWithPr("wt-attach-once");
         run.PrUrl = null;
         git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
-        git.Setup(m => m.GetHeadShaAsync(run.WorktreePath!)).ReturnsAsync("abc123");
+        git.Setup(m => m.ResolveCommitAsync(run.WorktreePath!, "HEAD")).ReturnsAsync("pushed1");
         remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(17, PrUrl, PrUrl, null, opened));
         remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17", It.IsAny<CancellationToken>())).ReturnsAsync(SnapshotAt("abc123"));
@@ -340,7 +400,8 @@ public class AttachedBranchSafetyTests : IDisposable
         }
 
         Assert.Equal(opened, outcomes.OfType<NodeOutcome.PrAttached>().Single().CreatedAt);
-        Assert.Single(outcomes.OfType<NodeOutcome.PrSeen>());
+        // It pushed on this visit, and the forge may not have caught up yet.
+        Assert.Equal("pushed1", Assert.Single(outcomes.OfType<NodeOutcome.PrSeen>()).HeadSha);
         remote.Verify(r => r.GetPullRequestSnapshotAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 

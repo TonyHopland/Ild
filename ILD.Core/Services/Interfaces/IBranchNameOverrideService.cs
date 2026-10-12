@@ -39,10 +39,11 @@ public interface IBranchNameOverrideService
     /// Whether <paramref name="branchName"/> can be the branch of the next run
     /// of <paramref name="workItemId"/> in <paramref name="repositoryId"/>.
     /// Free means: no run row holds it, the repository's base clone has no such
-    /// branch, and <c>origin</c> does not publish one. A remote that cannot be
-    /// reached is not treated as a conflict — the Start node fails the run on an
-    /// unreachable origin anyway, and refusing to start over an unanswered
-    /// question would park work items over a flaky network.
+    /// branch, and <c>origin</c> does not publish one. For a fresh branch a
+    /// remote that cannot be reached is not treated as a conflict — the Start
+    /// node fails the run on an unreachable origin anyway, and refusing to
+    /// start over an unanswered question would park work items over a flaky
+    /// network. An attach is the exception (see below).
     /// </summary>
     /// <param name="attachToExistingBranch">
     /// Judge the name as an attach: origin publishing it is then what the item

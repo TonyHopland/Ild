@@ -95,7 +95,8 @@ export default function IldSettings() {
           max={1000}
           fallback={10}
         >
-          How many of those may be nits — minor points that need not hold the pull request up.
+          How many of those may be nits — minor points that need not hold the pull request up. It
+          cannot be more than the findings cap, so lower it first to lower that cap below it.
         </NumericSettingField>
       </section>
 

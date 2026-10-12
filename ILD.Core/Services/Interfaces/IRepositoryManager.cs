@@ -47,8 +47,11 @@ public interface IRepositoryManager
     /// </summary>
     Task<string> CreateWorktreeAsync(string repoPath, string branchName, string startPoint);
 
-    /// <summary>The commit checked out in <paramref name="worktreePath"/>, or null when git cannot say.</summary>
-    Task<string?> GetHeadShaAsync(string worktreePath);
+    /// <summary>
+    /// The commit <paramref name="revision"/> (<c>HEAD</c>, <c>origin/feature/x</c>)
+    /// names in <paramref name="worktreePath"/>, or null when git cannot say.
+    /// </summary>
+    Task<string?> ResolveCommitAsync(string worktreePath, string revision);
     Task DestroyWorktreeAsync(string worktreePath);
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);
     Task<bool> CheckoutBranchAsync(string worktreePath, string branchName);
