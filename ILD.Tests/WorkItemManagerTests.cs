@@ -373,6 +373,25 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task Linking_a_different_PR_drops_the_snapshot_of_the_one_before()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        SeedLoopRun(db, id);
+        var run = db.Context.LoopRuns.Single(r => r.WorkItemId == id);
+        run.PrUrl = "https://forgejo/pr/41";
+        run.PrSnapshot = "{\"headSha\":\"old\"}";
+        db.Context.SaveChanges();
+
+        await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/41");
+        Assert.NotNull(db.Fresh().LoopRuns.Single(r => r.WorkItemId == id).PrSnapshot);
+
+        await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/42");
+        Assert.Null(db.Fresh().LoopRuns.Single(r => r.WorkItemId == id).PrSnapshot);
+    }
+
+    [Fact]
     public async Task GetWorkItemAsync_leaves_StartedAt_and_CompletedAt_null_when_no_run()
     {
         var (mgr, db, repoId, _, _) = Setup();

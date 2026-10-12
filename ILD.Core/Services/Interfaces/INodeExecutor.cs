@@ -126,6 +126,14 @@ public abstract record NodeOutcome
     public sealed record PrAttached(string PrUrl) : NodeOutcome;
 
     /// <summary>
+    /// PR node read the pull request as it stands after giving the run its
+    /// pull request, or after pushing to it. The engine stores it as the run's
+    /// PR snapshot, so the head commit in it is one the run has already seen
+    /// and the heartbeat's <c>on_new_commits</c> does not report it.
+    /// </summary>
+    public sealed record PrSeen(ILD.Data.DTOs.RemotePrSnapshot Snapshot) : NodeOutcome;
+
+    /// <summary>
     /// Cleanup node destroyed the worktree.
     /// The engine clears WorktreePath on LoopRun.
     /// </summary>

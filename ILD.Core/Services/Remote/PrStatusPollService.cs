@@ -88,7 +88,9 @@ public sealed class PrStatusPollService : IPrStatusPollService
         var baseline = PrNodeEdges.ParseStates(run.PrPolledEdgeStates);
         var newlyTrue = new HashSet<string>(newStates, StringComparer.Ordinal);
         newlyTrue.ExceptWith(baseline);
-        if (PrNodeEdges.HeadMoved(PrSnapshotJson.TryParse(run.PrSnapshot), snapshot))
+        var previous = PrSnapshotJson.TryParse(run.PrSnapshot);
+        var headMoved = PrNodeEdges.HeadMoved(previous, snapshot);
+        if (headMoved)
             newlyTrue.Add(LoopOutputs.OnNewCommits);
 
         // Connected-only: emit nothing for a newly-true state whose named edge
@@ -111,7 +113,9 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // instance was loaded before the forge fetch above and stays tracked for
         // the whole pass — so writing its copy back, here or on any later save in
         // this scope, would revert whatever was recorded meanwhile.
-        run.PrSnapshot = PrSnapshotJson.Serialize(snapshot);
+        // A snapshot that names no head says nothing about where it is, so the
+        // head the run last saw is kept rather than forgotten.
+        run.PrSnapshot = PrSnapshotJson.Serialize(snapshot with { HeadSha = snapshot.HeadSha ?? previous?.HeadSha });
         run.PrPolledEdgeStates = string.Join(",", newStates);
         run.UpdatedAt = DateTime.UtcNow;
         await _runs.UpdateRunAsync(run);
@@ -160,6 +164,16 @@ public sealed class PrStatusPollService : IPrStatusPollService
         }
 
         var edge = PrNodeEdges.HighestPriority(candidates);
+
+        // A push that lost this tick to a higher-priority output is still news:
+        // keep the head it moved from, so a later poll reports it. A state
+        // would come back on the next re-park; this event would not.
+        if (headMoved && edge != LoopOutputs.OnNewCommits && connected.Contains(LoopOutputs.OnNewCommits))
+        {
+            run.PrSnapshot = PrSnapshotJson.Serialize(snapshot with { HeadSha = previous!.HeadSha });
+            await _runs.UpdateRunAsync(run);
+        }
+
         if (edge is null)
             return;
 

@@ -1129,6 +1129,14 @@ public sealed class LoopEngine : ILoopEngine
                     case NodeOutcome.PrAttached pa:
                         await RecordRunPullRequestAsync(pa.PrUrl);
                         break;
+                    case NodeOutcome.PrSeen seen:
+                    {
+                        await TrySafe(run.Id, () => loopRunStore.ReloadAsync(run));
+                        run.PrSnapshot = ILD.Data.DTOs.PrSnapshotJson.Serialize(seen.Snapshot);
+                        await loopRunStore.UpdateRunAsync(run);
+                        await _notifier.PrSnapshotChangedAsync(run.Id);
+                        break;
+                    }
                     case NodeOutcome.WorktreeDestroyed _:
                     {
                         await TrySafe(run.Id, () => loopRunStore.ReloadAsync(run));

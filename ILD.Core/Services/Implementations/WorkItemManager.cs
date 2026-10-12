@@ -1009,6 +1009,11 @@ public class WorkItemManager : IWorkItemManager
         // that is what the PR heartbeat and the PR node's re-visit path read.
         if (run != null)
         {
+            // The stored snapshot describes the pull request it was read from;
+            // kept across a re-link it would show the old one and hand its head
+            // to the heartbeat as the one this pull request moved from.
+            if (!string.Equals(run.PrUrl, prUrl, StringComparison.Ordinal))
+                run.PrSnapshot = null;
             run.PrUrl = prUrl;
             run.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(run);

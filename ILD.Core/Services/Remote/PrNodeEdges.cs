@@ -190,13 +190,15 @@ public static class PrNodeEdges
     /// Whether the pull request's head moved between the snapshot the run last
     /// stored and <paramref name="current"/>. Never on the first look: with no
     /// stored head there is nothing it moved from, so attaching to or opening a
-    /// pull request is not news of new commits. Read from the stored snapshot,
+    /// pull request is not news of new commits, and nor is a closed pull
+    /// request, which has only its terminal state left to report. Read from the stored snapshot,
     /// which a re-park leaves alone, rather than from the edge-state baseline,
     /// which a re-park clears: a run that comes back to the same head has seen
     /// no new commits.
     /// </summary>
     public static bool HeadMoved(RemotePrSnapshot? previous, RemotePrSnapshot current)
-        => !string.IsNullOrEmpty(previous?.HeadSha)
+        => !string.Equals(current.State, "closed", StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrEmpty(previous?.HeadSha)
             && !string.IsNullOrEmpty(current.HeadSha)
             && !string.Equals(previous.HeadSha, current.HeadSha, StringComparison.Ordinal);
 

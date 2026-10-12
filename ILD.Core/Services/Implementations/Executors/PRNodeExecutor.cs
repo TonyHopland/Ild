@@ -90,6 +90,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
         var hasWorktree = !string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath);
+        var pushed = false;
         if (hasWorktree)
         {
             string? prepError = null;
@@ -106,6 +107,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                     var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath!, branch, ctx.CancellationToken, gitAuth);
                     if (!pushResult.Success)
                         prepError = $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}";
+                    pushed = pushResult.Success;
                 }
             }
             catch (Exception ex) { prepError = ex.Message; }
@@ -158,6 +160,9 @@ public sealed class PRNodeExecutor : INodeExecutor
                 var attachedNumber = number.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 if (await HasQueuedWritesAsync(ctx, sp))
                     await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, attachedNumber);
+
+                if (await SeeAsync(remote, repo.CloneUrl, attachedNumber) is { } attachedSeen)
+                    yield return attachedSeen;
 
                 // Recorded last, right before the node routes on: a run that
                 // stops anywhere above comes back with no pull request, so it
@@ -240,6 +245,10 @@ public sealed class PRNodeExecutor : INodeExecutor
                         state ?? PrCommentLedger.Empty with { WatchedFrom = openedAt });
                 }
 
+                if (RemotePrUrl.ExtractPrNumber(prUrl) is { Length: > 0 } createdNumber
+                    && await SeeAsync(remote, repo.CloneUrl, createdNumber) is { } createdSeen)
+                    yield return createdSeen;
+
                 // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
                 // the provider to merge the PR once its checks pass. Best-effort — a
                 // repository that does not support auto-merge leaves the PR open for
@@ -271,11 +280,28 @@ public sealed class PRNodeExecutor : INodeExecutor
             await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, prNumber);
         }
 
+        // A push of the run's own moves the head the heartbeat compares
+        // against; seen here, it is not reported back to the run as new commits.
+        if (pushed && !string.IsNullOrEmpty(ctx.Run.PrUrl)
+            && RemotePrUrl.ExtractPrNumber(ctx.Run.PrUrl) is { Length: > 0 } pushedNumber
+            && await SeeAsync(sp.GetRequiredService<IRemoteProvider>(), repo.CloneUrl, pushedNumber) is { } pushedSeen)
+            yield return pushedSeen;
+
         // Surface the rendered prompt template to the work item as the parked
         // node's content — mirrors the Human node, which parks on its rendered
         // prompt. Falls back to the PR URL when the node has no prompt template.
         yield return new NodeOutcome.WaitingAction(HumanFeedbackReasons.PrAwaitingMerge, renderedPrompt ?? prUrl);
     }
+
+    /// <summary>
+    /// The pull request as it stands, for the run to have seen. Best-effort: a
+    /// forge that does not answer leaves the stored snapshot as it was, which
+    /// costs at most one <c>on_new_commits</c> the run did not need.
+    /// </summary>
+    private static async Task<NodeOutcome.PrSeen?> SeeAsync(IRemoteProvider remote, string cloneUrl, string prNumber)
+        => await remote.GetPullRequestSnapshotAsync(cloneUrl, prNumber) is { } snapshot
+            ? new NodeOutcome.PrSeen(snapshot)
+            : null;
 
     /// <summary>
     /// Whether the run has anything to push. A run's own branch always does.

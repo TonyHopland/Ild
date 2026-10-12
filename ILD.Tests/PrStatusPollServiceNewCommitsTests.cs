@@ -26,8 +26,8 @@ public class PrStatusPollServiceNewCommitsTests
     private const string OldHead = "1111111111111111111111111111111111111111";
     private const string NewHead = "2222222222222222222222222222222222222222";
 
-    private static RemotePrSnapshot Snapshot(string? head, RemotePrCiStatus ci = RemotePrCiStatus.Passed)
-        => new("t", "b", "open", false, null, null, ci, Array.Empty<RemotePrCheck>(), false, false,
+    private static RemotePrSnapshot Snapshot(string? head, RemotePrCiStatus ci = RemotePrCiStatus.Passed, string state = "open", bool merged = false)
+        => new("t", "b", state, merged, null, null, ci, Array.Empty<RemotePrCheck>(), false, false,
             Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow, head);
 
     private sealed class Harness
@@ -139,6 +139,46 @@ public class PrStatusPollServiceNewCommitsTests
         await h.PollAsync(Snapshot(head: null));
 
         h.VerifyNewCommitsFired(Times.Never());
+    }
+
+    [Fact]
+    public async Task A_snapshot_without_a_head_keeps_the_head_the_run_saw_so_the_next_push_still_fires()
+    {
+        var h = new Harness(Snapshot(OldHead), LoopOutputs.OnNewCommits);
+
+        await h.PollAsync(Snapshot(head: null));
+        await h.PollAsync(Snapshot(NewHead));
+
+        h.VerifyNewCommitsFired(Times.Once());
+    }
+
+    [Fact]
+    public async Task A_push_outranked_on_its_tick_is_reported_on_a_later_poll()
+    {
+        var h = new Harness(Snapshot(OldHead), LoopOutputs.OnNewCommits, LoopOutputs.OnCiFailed);
+
+        await h.PollAsync(Snapshot(NewHead, ci: RemotePrCiStatus.Failed));
+        h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
+            It.Is<NodeSignal>(s => s.EdgeName == LoopOutputs.OnCiFailed)), Times.Once);
+        h.VerifyNewCommitsFired(Times.Never());
+
+        // The run went round its fix loop and parked again; CI is green now.
+        h.Repark();
+        await h.PollAsync(Snapshot(NewHead, ci: RemotePrCiStatus.Passed));
+
+        h.VerifyNewCommitsFired(Times.Once());
+    }
+
+    [Fact]
+    public async Task A_closed_pull_request_reports_only_how_it_closed()
+    {
+        var h = new Harness(Snapshot(OldHead), LoopOutputs.OnNewCommits, LoopOutputs.OnMerged);
+
+        await h.PollAsync(Snapshot(NewHead, state: "closed", merged: true));
+
+        h.VerifyNewCommitsFired(Times.Never());
+        h.Engine.Verify(e => e.SignalNodeResultAsync(h.Run.Id, h.RunNode.Id,
+            It.Is<NodeSignal>(s => s.EdgeName == LoopOutputs.OnMerged)), Times.Once);
     }
 
     // ---- The head each provider's snapshot carries ----

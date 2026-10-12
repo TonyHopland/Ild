@@ -160,6 +160,65 @@ public class AttachedBranchSafetyTests : IDisposable
         Assert.Contains("comment", order);
     }
 
+    private static RemotePrSnapshot SnapshotAt(string head)
+        => new("t", "b", "open", false, null, null, RemotePrCiStatus.None, Array.Empty<RemotePrCheck>(), false, false,
+            Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow, head);
+
+    [Fact]
+    public async Task Attaching_hands_the_engine_the_pull_request_as_the_run_found_it()
+    {
+        var (sp, _, remote, runs) = Services();
+        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main"))
+            .ReturnsAsync(new RemotePrLookup(17, PrUrl, PrUrl, null));
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17")).ReturnsAsync(SnapshotAt("abc123"));
+        runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>())).ReturnsAsync(true);
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", BranchName = Branch };
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        var seen = outcomes.FindIndex(o => o is NodeOutcome.PrSeen { Snapshot.HeadSha: "abc123" });
+        Assert.InRange(seen, 0, outcomes.FindIndex(o => o is NodeOutcome.PrAttached) - 1);
+    }
+
+    [Fact]
+    public async Task Creating_hands_the_engine_the_new_pull_request_as_it_stands()
+    {
+        var (sp, _, remote, runs) = Services();
+        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main"))
+            .ReturnsAsync(new RemotePrLookup(null, null, null, null));
+        remote.Setup(r => r.CreatePullRequestAsync(CloneUrl, Branch, "main", It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(PrUrl, PrUrl, RemotePrStatus.Open, null));
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17")).ReturnsAsync(SnapshotAt("abc123"));
+        runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>())).ReturnsAsync(true);
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", BranchName = Branch };
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrSeen { Snapshot.HeadSha: "abc123" });
+    }
+
+    [Theory]
+    [InlineData(2, true)]
+    [InlineData(0, false)]
+    public async Task A_push_of_the_runs_own_is_seen_so_it_is_not_reported_back_as_new_commits(int ahead, bool seen)
+    {
+        var worktree = Directory.CreateDirectory(Path.Combine(_baseRepo, "wt-seen")).FullName;
+        var (sp, git, remote, _) = Services();
+        git.Setup(m => m.GetCommitsAheadCountAsync(worktree, $"origin/{Branch}")).ReturnsAsync(ahead);
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17")).ReturnsAsync(SnapshotAt("def456"));
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(), WorkItemId = "WI-1", BranchName = Branch, AttachToExistingBranch = true,
+            WorktreePath = worktree, PrUrl = PrUrl,
+        };
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        Assert.Equal(seen, outcomes.Any(o => o is NodeOutcome.PrSeen { Snapshot.HeadSha: "def456" }));
+        Assert.IsType<NodeOutcome.WaitingAction>(outcomes[^1]);
+    }
+
     [Fact]
     public async Task A_forgejo_pull_request_from_a_fork_with_the_same_branch_name_is_not_taken_for_the_runs()
     {
