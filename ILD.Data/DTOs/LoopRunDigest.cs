@@ -36,7 +36,9 @@ public sealed record LoopRunDigest(
 /// One node visit, in execution order. <see cref="IncomingEdge"/> is the edge
 /// traversed to enter it; <see cref="EdgeTaken"/> is the edge the next visit
 /// entered by, and only when that visit came from this one over an edge leaving
-/// this node — otherwise null.
+/// this node. For the last visit, which no visit follows yet, it is the edge the
+/// run has followed but not yet entered, when that edge leaves this node for the
+/// run's current node. Otherwise null.
 /// </summary>
 public sealed record LoopRunVisitDigest(
     Guid RunNodeId,

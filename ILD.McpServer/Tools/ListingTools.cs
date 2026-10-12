@@ -102,7 +102,7 @@ public sealed class ListingTools
     }
 
     [McpServerTool(Name = "get_loop_run")]
-    [Description("Read one loop run as a summary (read-only): status, template version, work item, timings; the node visits in execution order, each with its outcome, duration, error, tokens, cost, the edge it was entered by (incomingEdge) and the edge it took (edgeTaken, null when no later visit followed from it); the human-feedback requests, parks and answers; the AI traversal and throttle counters; and the pull request with its merge state and the review comments from the last stored PR snapshot (fetchedAt says how old). Long texts are cut at 2,000 characters and flagged (errorTruncated, textTruncated, bodyTruncated). No AI transcripts or node outputs. Node ids match get_loop_template's document.")]
+    [Description("Read one loop run as a summary (read-only): status, template version, work item, timings; the node visits in execution order, each with its outcome, duration, error, tokens, cost, the edge it was entered by (incomingEdge) and the edge it took (edgeTaken; for the last visit, the edge the run has followed toward its current node; null when the run recorded none); the human-feedback requests, parks and answers; the AI traversal and throttle counters; and the pull request with its merge state and the review comments from the last stored PR snapshot (fetchedAt says how old). Long texts are cut at 2,000 characters and flagged (errorTruncated, textTruncated, bodyTruncated). No AI transcripts or node outputs. Node ids match get_loop_template's document.")]
     public Task<string> GetLoopRun(
         [Description("Loop run GUID (from list_loop_runs).")] string runId)
         => _ild.GetRawAsync($"api/v1/agent/loop-runs/{Uri.EscapeDataString(runId)}");

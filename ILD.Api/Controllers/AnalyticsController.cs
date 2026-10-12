@@ -51,7 +51,7 @@ public class AnalyticsController : ControllerBase
     {
         date = null;
         if (string.IsNullOrWhiteSpace(value)) return true;
-        if (DateOnly.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        if (DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
         {
             date = parsed;
             return true;

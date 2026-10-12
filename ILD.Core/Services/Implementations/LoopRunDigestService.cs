@@ -46,6 +46,8 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
                 r.ThrottleAutoResumeCount,
                 r.NodeExecutionCount,
                 r.ThrottleResetAt,
+                r.CurrentNodeId,
+                r.IncomingEdgeId,
                 r.PrUrl,
                 r.IsPrMerged,
                 r.PrSnapshot,
@@ -75,7 +77,8 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
             })
             .ToListAsync(cancellationToken);
 
-        var edgeIds = visits.Where(v => v.IncomingEdgeId.HasValue).Select(v => v.IncomingEdgeId!.Value).Distinct().ToList();
+        var edgeIds = visits.Select(v => v.IncomingEdgeId).Append(run.IncomingEdgeId)
+            .OfType<Guid>().Distinct().ToList();
         var edges = await _db.LoopNodeEdges.AsNoTracking()
             .Where(e => edgeIds.Contains(e.Id))
             .Select(e => new { e.Id, e.EdgeType, e.Name, e.SourceNodeId, e.TargetNodeId, TargetLabel = e.TargetNode.Label })
@@ -89,14 +92,21 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
         await snapshot.CommitAsync(cancellationToken);
 
         var successors = visits.Where(v => v.PreviousNodeId.HasValue).ToLookup(v => v.PreviousNodeId!.Value);
+        var lastVisitId = visits.Count == 0 ? (Guid?)null : visits[^1].Id;
         var nodes = visits.Select(v =>
         {
             var incoming = v.IncomingEdgeId is Guid inId && edges.TryGetValue(inId, out var inEdge)
                 ? new LoopRunIncomingEdge(inEdge.Id, inEdge.EdgeType, inEdge.Name, inEdge.SourceNodeId)
                 : null;
             var next = successors[v.Id].FirstOrDefault();
-            var taken = next?.IncomingEdgeId is Guid outId && edges.TryGetValue(outId, out var outEdge)
+            // The edge the engine has followed but not yet entered is kept on the run, so it
+            // is the last visit's edge when it leads from that node to where the run now is.
+            var takenId = next is not null ? next.IncomingEdgeId
+                : v.Id == lastVisitId ? run.IncomingEdgeId
+                : null;
+            var taken = takenId is Guid outId && edges.TryGetValue(outId, out var outEdge)
                     && outEdge.SourceNodeId == v.LoopNodeId
+                    && (next is not null || outEdge.TargetNodeId == run.CurrentNodeId)
                 ? new LoopRunEdgeTaken(outEdge.Id, outEdge.EdgeType, outEdge.Name, outEdge.TargetNodeId, outEdge.TargetLabel)
                 : null;
             var (error, errorTruncated) = Bound(v.Error);
