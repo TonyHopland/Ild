@@ -94,6 +94,9 @@ public sealed class PRNodeExecutor : INodeExecutor
         // the visit that gets it is still going.
         var hadPullRequest = !string.IsNullOrEmpty(ctx.Run.PrUrl);
         var pushed = false;
+        // Whether this visit's push carries commits someone else pushed: the
+        // run's own were rebased onto them.
+        var pushedOntoOthers = false;
         if (hasWorktree)
         {
             string? prepError = null;
@@ -107,9 +110,10 @@ public sealed class PRNodeExecutor : INodeExecutor
                 }
                 if (prepError is null)
                 {
-                    var (push, integrateError) = await IntegrateWithOriginAsync(ctx, repoManager, branch, gitAuth);
-                    prepError = integrateError;
-                    if (prepError is null && push)
+                    var integration = await IntegrateWithOriginAsync(ctx, repoManager, branch, gitAuth);
+                    prepError = integration.Error;
+                    pushedOntoOthers = integration.OntoOthers;
+                    if (prepError is null && integration.Push)
                     {
                         var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath!, branch, ctx.CancellationToken, gitAuth);
                         if (!pushResult.Success)
@@ -291,9 +295,13 @@ public sealed class PRNodeExecutor : INodeExecutor
         // A push of the run's own moves the head the heartbeat compares
         // against; recorded as the commit pushed — what the worktree has, not
         // what the forge may not have caught up to — it is not reported back
-        // to the run as new commits. The visit that got the pull request has
-        // already recorded what it found, which includes this push.
-        if (pushed && hadPullRequest && await repoManager.ResolveCommitAsync(ctx.Run.WorktreePath!, "HEAD") is { } pushedHead)
+        // to the run as new commits. Not when it was rebased onto someone
+        // else's push: that head carries their commits too, which the run has
+        // not been told of, so the next park reports new commits. The visit
+        // that got the pull request has already recorded what it found, which
+        // includes this push and everything already on the pull request.
+        if (pushed && hadPullRequest && !pushedOntoOthers
+            && await repoManager.ResolveCommitAsync(ctx.Run.WorktreePath!, "HEAD") is { } pushedHead)
             yield return new NodeOutcome.PrSeen(pushedHead);
 
         // Surface the rendered prompt template to the work item as the parked
@@ -340,7 +348,7 @@ public sealed class PRNodeExecutor : INodeExecutor
     /// gone is never pushed again — that would recreate someone else's deleted
     /// branch.
     /// </summary>
-    private static async Task<(bool Push, string? Error)> IntegrateWithOriginAsync(
+    private static async Task<Integration> IntegrateWithOriginAsync(
         NodeExecutionContext ctx, IRepositoryManager repoManager, string branch, GitAuthOptions? gitAuth)
     {
         var worktree = ctx.Run.WorktreePath!;
@@ -349,18 +357,18 @@ public sealed class PRNodeExecutor : INodeExecutor
         if (!await repoManager.FetchAsync(worktree, ctx.CancellationToken, gitAuth))
         {
             if (!attached)
-                return (true, null);
+                return new Integration(true);
             // Nothing of the run's own even on the copy fetched last: there is
             // nothing to push, and the round's writes still go out.
             return await repoManager.GetCommitsAheadCountAsync(worktree, upstream) > 0
-                ? (false, $"Could not fetch origin to check branch `{branch}` before pushing the run's commits to it; nothing was pushed")
-                : (false, null);
+                ? new Integration(false, $"Could not fetch origin to check branch `{branch}` before pushing the run's commits to it; nothing was pushed")
+                : new Integration(false);
         }
 
         if (!await repoManager.RemoteBranchExistsAsync(worktree, branch))
             return attached
-                ? (false, $"Branch `{branch}` no longer exists on origin; this run attached to it and will not recreate it")
-                : (true, null);
+                ? new Integration(false, $"Branch `{branch}` no longer exists on origin; this run attached to it and will not recreate it")
+                : new Integration(true);
 
         var ahead = await repoManager.GetCommitsAheadCountAsync(worktree, upstream);
         var behind = await repoManager.GetCommitsBehindCountAsync(worktree, upstream);
@@ -369,9 +377,9 @@ public sealed class PRNodeExecutor : INodeExecutor
         // commits of its own on it. Either way, behind with nothing ahead is
         // nothing to push.
         if (behind == 0)
-            return (!attached || ahead > 0, null);
+            return new Integration(!attached || ahead > 0);
         if (ahead == 0)
-            return (false, null);
+            return new Integration(false);
 
         // Ahead and behind: rebase only onto what someone else pushed — origin
         // past the head the run last saw. A run that rewrote its own pushed
@@ -390,13 +398,20 @@ public sealed class PRNodeExecutor : INodeExecutor
                 var where = rebase.ConflictedFiles.Count > 0
                     ? $" (conflicts in {string.Join(", ", rebase.ConflictedFiles)})"
                     : rebase.Error is { Length: > 0 } error ? $": {error}" : string.Empty;
-                return (false,
+                return new Integration(false,
                     $"Branch `{branch}` moved on origin while this round ran, and the run's commits do not rebase onto it{where}; nothing was pushed");
             }
         }
 
-        return (true, null);
+        return new Integration(true, OntoOthers: pushedByOthers);
     }
+
+    /// <summary>
+    /// What <see cref="IntegrateWithOriginAsync"/> found: whether to push, why
+    /// not when the node must fail, and whether the run's commits now sit on
+    /// top of someone else's push.
+    /// </summary>
+    private sealed record Integration(bool Push, string? Error = null, bool OntoOthers = false);
 
     /// <summary>
     /// Whether this node has an edge from <c>on_existing_pr</c>. With no store

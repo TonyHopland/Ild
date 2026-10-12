@@ -242,12 +242,16 @@ public class AttachedBranchSafetyTests : IDisposable
         git.Setup(m => m.ResolveCommitAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync("author2");
         git.Setup(m => m.RebaseAsync(run.WorktreePath!, $"origin/{Branch}", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+        git.Setup(m => m.ResolveCommitAsync(run.WorktreePath!, "HEAD")).ReturnsAsync("rebased3");
 
         var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
 
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
         git.Verify(m => m.RebaseAsync(run.WorktreePath!, $"origin/{Branch}", It.IsAny<CancellationToken>()), Times.Once);
         git.Verify(m => m.PushAsync(run.WorktreePath!, Branch, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Once);
+        // The pushed head carries the author's commits, which the run has not
+        // been told of: recording it as seen would keep on_new_commits quiet.
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrSeen);
     }
 
     [Fact]
