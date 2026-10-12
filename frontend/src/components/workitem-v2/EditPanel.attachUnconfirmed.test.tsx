@@ -227,6 +227,45 @@ describe("EditPanel attach to existing branch, unconfirmed", () => {
     expect(screen.queryByText(warning)).toBeNull();
   });
 
+  test.each([
+    ["the branch is renamed to another branch on origin", "branch"],
+    ["the repository is changed to one that also has it", "repository"],
+  ])("a tick is not carried over when %s", async (_label, what) => {
+    vi.spyOn(authServices.workItemService, "checkBranchName").mockResolvedValue({
+      error: null,
+      warning: null,
+      existsOnOrigin: true,
+    });
+    const update = vi
+      .spyOn(authServices.workItemService, "update")
+      .mockImplementation(async (_id, data) => makeWorkItem(data as Partial<WorkItem>));
+    vi.useFakeTimers();
+    render(
+      <EditPanel
+        workItem={makeWorkItem({ branchNameOverride: ON_ORIGIN, attachToExistingBranch: true })}
+        detail={makeDetail()}
+        onSave={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    await settleCheck();
+    expect((attachBox() as HTMLInputElement).checked).toBe(true);
+
+    await act(async () => {
+      if (what === "branch")
+        fireEvent.change(screen.getByLabelText("Branch name (optional)"), {
+          target: { value: "feature/also-on-origin" },
+        });
+      else fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "repo-b" } });
+      await Promise.resolve();
+    });
+    await settleCheck();
+
+    // Confirmed on origin too, but nobody chose to attach to it.
+    expect((attachBox() as HTMLInputElement).checked).toBe(false);
+    expect((await saveAndReadPayload(update)).attachToExistingBranch).toBe(false);
+  });
+
   test("a tick the check clears does not set off a second check", async () => {
     const check = vi
       .spyOn(authServices.workItemService, "checkBranchName")

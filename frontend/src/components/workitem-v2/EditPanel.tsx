@@ -72,7 +72,18 @@ export default function EditPanel({
     repositoryId: string;
     result: BranchNameCheck;
   } | null>(null);
-  const [attachToExistingBranch, setAttachToExistingBranch] = useState(baseAttachToExistingBranch);
+  // A tick is a choice about one branch in one repository, so it is held as
+  // that target: another name or repository, even one on origin too, shows
+  // unticked, and coming back to the ticked one shows it ticked again.
+  const [attachedTo, setAttachedTo] = useState<{ name: string; repositoryId: string } | null>(
+    baseAttachToExistingBranch
+      ? { name: baseBranchNameOverride.trim(), repositoryId: baseRepositoryId }
+      : null,
+  );
+  const attachToExistingBranch =
+    attachedTo !== null &&
+    attachedTo.name === branchNameOverride.trim() &&
+    attachedTo.repositoryId === repositoryId;
   // The check is asked whether the item attaches, but only re-asked when the
   // person ticks or unticks the box: a tick the check itself cleared changes
   // nothing worth asking again about.
@@ -113,7 +124,7 @@ export default function EditPanel({
           setBranchNameCheck({ name, repositoryId, result });
           // Origin says it has no such branch: there is nothing to attach to.
           // An unanswered check (null) is not that answer, so it clears nothing.
-          if (result.existsOnOrigin === false) setAttachToExistingBranch(false);
+          if (result.existsOnOrigin === false) setAttachedTo(null);
         })
         .catch(() => {
           // Advice only — a failed lookup must not surface as a form error.
@@ -391,7 +402,7 @@ export default function EditPanel({
           onChange={(e) => {
             setBranchNameOverride(e.target.value);
             // No name, no branch to attach to.
-            if (!e.target.value.trim()) setAttachToExistingBranch(false);
+            if (!e.target.value.trim()) setAttachedTo(null);
           }}
           placeholder="Leave empty for a generated branch per run"
           aria-describedby="wiv2-branch-name-hint"
@@ -410,7 +421,9 @@ export default function EditPanel({
                 type="checkbox"
                 checked={attachToExistingBranch}
                 onChange={(e) => {
-                  setAttachToExistingBranch(e.target.checked);
+                  setAttachedTo(
+                    e.target.checked ? { name: branchNameOverride.trim(), repositoryId } : null,
+                  );
                   setAttachAsked((n) => n + 1);
                 }}
                 aria-describedby="wiv2-attach-branch-hint"
