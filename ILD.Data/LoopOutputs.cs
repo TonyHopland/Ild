@@ -23,9 +23,11 @@ public static class LoopOutputs
     public const string OnComment = "on_comment";
 
     /// <summary>
-    /// The pull request's head moved: a commit was pushed since the run last
-    /// polled it. An event rather than a state, so a re-park on the same head
-    /// never fires it again.
+    /// The pull request's head moved to a commit the run has not seen — a push
+    /// by someone else. An event rather than a state: reported once per new
+    /// head a poll finds (held over a tick it was outranked on), never on a
+    /// re-park at an unchanged head, and never for the run's own pushes or the
+    /// head it found on attaching or opening the pull request.
     /// </summary>
     public const string OnNewCommits = "on_new_commits";
     public const string OnApproved = "on_approved";

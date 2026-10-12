@@ -16,7 +16,7 @@ The change is a storage and model rework only: the engine routes over edge rows 
 
 ## Amendment: a reserved output that is an event
 
-`on_new_commits` joins the PR node's reserved outputs, between `on_comment` and `on_approved`. Like `on_comment` it is not a state of the snapshot: the heartbeat fires it when the pull request's head commit differs from the one stored on the run, which a re-park does not clear, so it fires once per push rather than on every park. It is filled in on every PR node like the others and the PR node never takes it itself.
+`on_new_commits` joins the PR node's reserved outputs, between `on_comment` and `on_approved`. Like `on_comment` it is not a state of the snapshot: the heartbeat fires it when the pull request's head commit differs from the one stored on the run, which a re-park does not clear and which the PR node refreshes whenever it attaches, creates or pushes, so it reports each new head someone else pushed rather than firing on every park. It is filled in on every PR node like the others and the PR node never takes it itself.
 
 ## Amendment: a fixed output that is not reserved
 

@@ -16,7 +16,7 @@ namespace ILD.Tests;
 
 /// <summary>
 /// <c>on_new_commits</c>: the heartbeat fires it when the pull request's head is
-/// not the head the run last saw — once per push, never again on a re-park at
+/// not the head the run last saw — once per new head, never again on a re-park at
 /// the same head (the edge-state baseline a re-park clears is not what it reads),
 /// and never on the first look, when there is no earlier head to have moved from.
 /// </summary>

@@ -1116,11 +1116,11 @@ export function NodeSettingsModal({
                 are always present and cannot be renamed or removed. Only wired outputs route; there
                 is no fallback to success/failure, so wire <strong>on_merged</strong> and{" "}
                 <strong>on_abandoned</strong> to a Cleanup path or the run parks forever once the PR
-                closes. <strong>on_new_commits</strong> fires once per push to the PR, never again
-                on a re-park at the same commit. <strong>on_comment</strong> carries review and
-                comment items the run has not been handed yet — while a review has changes
-                requested, on_rejected outranks it every tick, and that round reads the comments
-                with the get_pr_review tool instead.
+                closes. <strong>on_new_commits</strong> fires when someone else pushes to the PR,
+                never again on a re-park at the same commit. <strong>on_comment</strong> carries
+                review and comment items the run has not been handed yet — while a review has
+                changes requested, on_rejected outranks it every tick, and that round reads the
+                comments with the get_pr_review tool instead.
               </small>
               {outputsEditor}
             </>
