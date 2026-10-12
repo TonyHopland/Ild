@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace ILD.Core.Services.Implementations.Executors;
@@ -12,11 +13,40 @@ internal static class NodeConfig
 {
     private static readonly JsonSerializerOptions Options = new() { PropertyNameCaseInsensitive = true };
 
+    /// <summary>
+    /// The config read as <typeparamref name="T"/>. A field whose value does
+    /// not fit its type (a "false" string where a boolean belongs) is left out
+    /// on its own rather than taking every other field with it; a blob that is
+    /// not a JSON object at all reads as the empty config.
+    /// </summary>
     public static T Parse<T>(string? json) where T : new()
     {
         if (string.IsNullOrWhiteSpace(json)) return new T();
         try { return JsonSerializer.Deserialize<T>(json, Options) ?? new T(); }
-        catch { return new T(); }
+        catch (JsonException) { return ParseFieldByField<T>(json); }
+        catch (NotSupportedException) { return ParseFieldByField<T>(json); }
+    }
+
+    private static T ParseFieldByField<T>(string json) where T : new()
+    {
+        JsonObject? config;
+        try { config = JsonNode.Parse(json) as JsonObject; }
+        catch (JsonException) { return new T(); }
+        if (config is null) return new T();
+
+        var readable = new JsonObject();
+        foreach (var (name, value) in config)
+        {
+            var field = new JsonObject { [name] = value?.DeepClone() };
+            try
+            {
+                JsonSerializer.Deserialize<T>(field.ToJsonString(), Options);
+                readable[name] = value?.DeepClone();
+            }
+            catch (JsonException) { }
+            catch (NotSupportedException) { }
+        }
+        return readable.Deserialize<T>(Options) ?? new T();
     }
 
     public sealed record Cmd

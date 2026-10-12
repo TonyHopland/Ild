@@ -261,6 +261,15 @@ public static class LoopTemplateValidator
             }
             else if (string.Equals(node.NodeType, "PR", StringComparison.OrdinalIgnoreCase))
             {
+                // A toggle that is not a JSON boolean reads as absent — on — at
+                // run time, which is not what whoever wrote "false" meant.
+                var raw = JsonSerializer.SerializeToNode(node.Config) as JsonObject;
+                foreach (var toggle in new[] { "createIfNoneExists", "attachIfExists" })
+                {
+                    if (raw?[toggle] is { } value && value.GetValueKind() is not (JsonValueKind.True or JsonValueKind.False or JsonValueKind.Null))
+                        errors.Add($"PR node {node.Id}: {toggle} must be true or false, not {value.ToJsonString()}.");
+                }
+
                 // On its first visit a node that may neither create nor attach
                 // can only fail.
                 var cfg = NodeConfig.Parse<NodeConfig.Pr>(System.Text.Json.JsonSerializer.Serialize(node.Config));
