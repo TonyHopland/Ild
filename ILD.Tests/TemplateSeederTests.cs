@@ -91,6 +91,13 @@ public class TemplateSeederTests
         var prompt = ReadString(reviewer.Config, "prompt") ?? string.Empty;
         foreach (var tool in new[] { "pull_branch", "get_pr_review", "sinceCommit", "post_pr_review_finding" })
             Assert.Contains(tool, prompt, StringComparison.Ordinal);
+
+        // A reviewer reads and runs; it never writes to someone else's branch.
+        var tools = ((JsonElement)reviewer.Config["toolAllowlist"]).EnumerateArray().Select(t => t.GetString()).ToArray();
+        Assert.Equal(new[] { "read", "execute", "ild" }, tools);
+        // Its earlier findings were posted against the head it last reviewed,
+        // so reading the review with sinceCommit would hide them.
+        Assert.Contains("get_pr_review WITHOUT sinceCommit", prompt, StringComparison.Ordinal);
     }
 
     [Fact]
