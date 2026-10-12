@@ -252,6 +252,7 @@ describe("outputVisibilityOf", () => {
     "on_merge_conflict",
     "on_ci_failed",
     "on_comment",
+    "on_new_commits",
     "on_approved",
     "on_ci_passed",
     "on_merged",

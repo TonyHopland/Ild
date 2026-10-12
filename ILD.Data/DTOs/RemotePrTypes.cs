@@ -123,7 +123,8 @@ public record RemotePrSnapshot(
     bool Approved,
     bool ChangesRequested,
     IReadOnlyList<RemotePrConversationEntry> Conversation,
-    DateTime FetchedAt
+    DateTime FetchedAt,
+    string? HeadSha = null
 );
 
 /// <summary>

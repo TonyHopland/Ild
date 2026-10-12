@@ -554,7 +554,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             approved,
             changesRequested,
             conversation,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            ReadString(Child(pr, "lastMergeSourceCommit"), "commitId"));
     }
 
     /// <summary>

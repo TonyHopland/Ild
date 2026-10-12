@@ -5,7 +5,7 @@ using ILD.Data.DTOs;
 namespace ILD.Core.Services.Remote;
 
 /// <summary>
-/// The state each of the eight reserved PR outputs fires on (the names and their
+/// The state each of the reserved PR outputs fires on (the names and their
 /// priority are defined once, in <see cref="LoopOutputs.ReservedPr"/>), and the
 /// pick of a single one when several states newly become true in one heartbeat
 /// tick. The PR heartbeat poller emits a <c>NodeSignal.Custom</c> for the
@@ -128,6 +128,7 @@ public static class PrNodeEdges
         LoopOutputs.OnMergeConflict => "The pull request conflicts with its target branch and cannot be merged.",
         LoopOutputs.OnCiFailed => "CI failed on the pull request.",
         LoopOutputs.OnComment => "New comments arrived on the pull request.",
+        LoopOutputs.OnNewCommits => "New commits were pushed to the pull request.",
         LoopOutputs.OnApproved => "The pull request was approved.",
         LoopOutputs.OnCiPassed => "CI passed on the pull request.",
         LoopOutputs.OnMerged => "The pull request was merged.",
@@ -143,6 +144,7 @@ public static class PrNodeEdges
         {
             LoopOutputs.OnCiFailed => DescribeFailedChecks(snapshot, workItemId),
             LoopOutputs.OnRejected => LatestChangesRequestedReview(snapshot),
+            LoopOutputs.OnNewCommits when !string.IsNullOrEmpty(snapshot.HeadSha) => $"The head is now {snapshot.HeadSha}.",
             _ => string.Empty,
         };
     }
@@ -183,6 +185,20 @@ public static class PrNodeEdges
             .FirstOrDefault();
         return review is null ? string.Empty : $"{review.Author}:\n{review.Body.Trim()}";
     }
+
+    /// <summary>
+    /// Whether the pull request's head moved between the snapshot the run last
+    /// stored and <paramref name="current"/>. Never on the first look: with no
+    /// stored head there is nothing it moved from, so attaching to or opening a
+    /// pull request is not news of new commits. Read from the stored snapshot,
+    /// which a re-park leaves alone, rather than from the edge-state baseline,
+    /// which a re-park clears: a run that comes back to the same head has seen
+    /// no new commits.
+    /// </summary>
+    public static bool HeadMoved(RemotePrSnapshot? previous, RemotePrSnapshot current)
+        => !string.IsNullOrEmpty(previous?.HeadSha)
+            && !string.IsNullOrEmpty(current.HeadSha)
+            && !string.Equals(previous.HeadSha, current.HeadSha, StringComparison.Ordinal);
 
     /// <summary>Parse the comma-separated persisted baseline back into a set.</summary>
     public static HashSet<string> ParseStates(string? csv)

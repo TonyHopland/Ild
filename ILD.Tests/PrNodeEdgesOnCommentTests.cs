@@ -27,7 +27,7 @@ public class PrNodeEdgesOnCommentTests
             conversation ?? Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow);
 
     [Fact]
-    public void On_comment_sits_below_ci_failed_and_above_approved_leaving_the_other_seven_in_order()
+    public void On_comment_sits_below_ci_failed_and_above_new_commits_and_approved_leaving_the_others_in_order()
     {
         Assert.Equal(
             new[]
@@ -36,6 +36,7 @@ public class PrNodeEdgesOnCommentTests
                 LoopOutputs.OnMergeConflict,
                 LoopOutputs.OnCiFailed,
                 LoopOutputs.OnComment,
+                LoopOutputs.OnNewCommits,
                 LoopOutputs.OnApproved,
                 LoopOutputs.OnCiPassed,
                 LoopOutputs.OnMerged,

@@ -249,7 +249,8 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             approved,
             changesRequested,
             conversation,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            headSha);
     }
 
     private async Task<(bool Approved, bool ChangesRequested, List<RemotePrConversationEntry> Reviews)> ReadReviewsAsync(

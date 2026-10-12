@@ -14,6 +14,10 @@ The change is a storage and model rework only: the engine routes over edge rows 
 
 **Auto-declare every name a rule or case mentions at save.** Rejected for the server: it would make the "references an undeclared output" check dead and hide typos. The editor still declares a new name typed into a rule, case or default when its settings are saved, so authoring a rule stays one step, and a name no output can take — blank, or success/failure — is refused in the settings themselves. Deleting an output that something uses asks first and then removes its edges, rules and cases with it, so a delete leaves no reference behind that would quietly declare it again; typing the name back in declares it anew.
 
+## Amendment: a reserved output that is an event
+
+`on_new_commits` joins the PR node's reserved outputs, between `on_comment` and `on_approved`. Like `on_comment` it is not a state of the snapshot: the heartbeat fires it when the pull request's head commit differs from the one stored on the run, which a re-park does not clear, so it fires once per push rather than on every park. It is filled in on every PR node like the others and the PR node never takes it itself.
+
 ## Amendment: a fixed output that is not reserved
 
 Every PR node also holds `on_existing_pr`, taken by the PR node itself on the visit where it attaches the run to a pull request the branch already had. It is fixed — filled in on save, listed in the editor, removable by nobody — but not reserved: the PR heartbeat never fires it and it has no place in the reserved outputs' priority order, so it carries no `reserved` flag and the run UI shows it like any other output.

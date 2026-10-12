@@ -21,6 +21,13 @@ public static class LoopOutputs
     public const string OnMergeConflict = "on_merge_conflict";
     public const string OnCiFailed = "on_ci_failed";
     public const string OnComment = "on_comment";
+
+    /// <summary>
+    /// The pull request's head moved: a commit was pushed since the run last
+    /// polled it. An event rather than a state, so a re-park on the same head
+    /// never fires it again.
+    /// </summary>
+    public const string OnNewCommits = "on_new_commits";
     public const string OnApproved = "on_approved";
     public const string OnCiPassed = "on_ci_passed";
     public const string OnMerged = "on_merged";
@@ -41,6 +48,7 @@ public static class LoopOutputs
         OnMergeConflict,
         OnCiFailed,
         OnComment,
+        OnNewCommits,
         OnApproved,
         OnCiPassed,
         OnMerged,

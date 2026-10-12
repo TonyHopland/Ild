@@ -121,7 +121,7 @@ public class LoopTemplateManagerTests
 
     private static readonly string[] Reserved =
     {
-        "on_rejected", "on_merge_conflict", "on_ci_failed", "on_comment",
+        "on_rejected", "on_merge_conflict", "on_ci_failed", "on_comment", "on_new_commits",
         "on_approved", "on_ci_passed", "on_merged", "on_abandoned",
     };
 

@@ -77,10 +77,16 @@ public class TemplateSeederTests
         Assert.Equal("AI", reviewer.NodeType);
         Assert.Contains(graph.Edges, e => e.SourceNodeId == reviewer.Id && e.TargetNodeId == pr.Id && e.EdgeType == "OnSuccess");
 
-        // A comment and new commits (CI turning over on a new head) send the reviewer round again.
-        foreach (var signal in new[] { "on_comment", "on_ci_passed", "on_ci_failed" })
+        // A comment and new commits send the reviewer round again.
+        foreach (var signal in new[] { "on_comment", "on_new_commits" })
             Assert.Contains(graph.Edges, e =>
                 e.SourceNodeId == pr.Id && e.TargetNodeId == reviewer.Id && e.EdgeType == "Custom" && e.Name == signal);
+
+        // CI states are re-seen on every re-park, so wired back to the reviewer
+        // they would send it round again on every heartbeat while CI held.
+        foreach (var signal in new[] { "on_ci_passed", "on_ci_failed" })
+            Assert.DoesNotContain(graph.Edges, e =>
+                e.SourceNodeId == pr.Id && e.TargetNodeId == reviewer.Id && e.Name == signal);
 
         var prompt = ReadString(reviewer.Config, "prompt") ?? string.Empty;
         foreach (var tool in new[] { "pull_branch", "get_pr_review", "sinceCommit", "post_pr_review_finding" })

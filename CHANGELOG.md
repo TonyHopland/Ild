@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A Review loop lets an AI review a pull request someone else opened, posting its findings on the lines they are about.**
 
+- **A PR node can route on new commits pushed to its pull request.**
+
 - **Analytics count what chats cost, scheduled chats and chat titles included, beside the loop templates.**
 
 - **Chat schedules start a chat on a timer with a set prompt, to run checks that file work items for what they find.**

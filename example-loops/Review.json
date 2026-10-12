@@ -39,6 +39,7 @@
           { "name": "on_merge_conflict", "reserved": true },
           { "name": "on_ci_failed", "reserved": true },
           { "name": "on_comment", "reserved": true },
+          { "name": "on_new_commits", "reserved": true },
           { "name": "on_approved", "reserved": true },
           { "name": "on_ci_passed", "reserved": true },
           { "name": "on_merged", "reserved": true },
@@ -114,14 +115,7 @@
       "sourceNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
       "targetNodeId": "67dee1f0-f1bf-47ff-a906-112658e50c75",
       "edgeType": "Custom",
-      "name": "on_ci_passed"
-    },
-    {
-      "id": "15d9ca29-04d4-4f99-a9c5-5325952434ad",
-      "sourceNodeId": "334d26c8-c060-424a-b18e-c55baf18638e",
-      "targetNodeId": "67dee1f0-f1bf-47ff-a906-112658e50c75",
-      "edgeType": "Custom",
-      "name": "on_ci_failed"
+      "name": "on_new_commits"
     },
     {
       "id": "bc38f3a1-3741-4265-810b-22ede1c1f6a7",

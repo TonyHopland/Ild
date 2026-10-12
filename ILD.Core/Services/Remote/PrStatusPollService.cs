@@ -88,6 +88,8 @@ public sealed class PrStatusPollService : IPrStatusPollService
         var baseline = PrNodeEdges.ParseStates(run.PrPolledEdgeStates);
         var newlyTrue = new HashSet<string>(newStates, StringComparer.Ordinal);
         newlyTrue.ExceptWith(baseline);
+        if (PrNodeEdges.HeadMoved(PrSnapshotJson.TryParse(run.PrSnapshot), snapshot))
+            newlyTrue.Add(LoopOutputs.OnNewCommits);
 
         // Connected-only: emit nothing for a newly-true state whose named edge
         // isn't wired, otherwise the engine would fail the run ("missing edge
