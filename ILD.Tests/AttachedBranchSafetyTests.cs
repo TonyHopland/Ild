@@ -432,7 +432,7 @@ public class AttachedBranchSafetyTests : IDisposable
         var service = new RemoteProviderService(db.Providers,
             new IRemoteGitProviderAdapter[] { new ForgejoRemoteGitProviderAdapter() }, new HttpClient(handler));
 
-        var found = await service.FindOpenPullRequestAsync("https://gitea.example/team/repo.git", "feature", "release");
+        var found = await service.FindOpenPullRequestAsync("https://gitea.example/team/repo.git", "feature", "release", TestContext.Current.CancellationToken);
 
         Assert.Null(found.Error);
         Assert.Equal(5, found.Number);
