@@ -372,6 +372,8 @@ function ScheduleForm({
             providers={providers}
             onChange={(aiTag) => set({ aiTag })}
             cannotRun="this schedule cannot run"
+            fieldClassName="form-group"
+            hintClassName="form-hint"
           />
           <div className="form-group">
             <div className="chat-schedule-presets" role="group" aria-label="Presets">
