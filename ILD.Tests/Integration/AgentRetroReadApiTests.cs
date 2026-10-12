@@ -132,6 +132,7 @@ public class AgentRetroReadApiTests
     [Theory]
     [InlineData("from=2026-02-30", "from")]
     [InlineData("to=last-week", "to")]
+    [InlineData("to=06/01/2026", "to")]
     [InlineData("templateId=retro", "templateId")]
     public async Task Template_analytics_reject_a_malformed_filter_naming_it(string query, string parameter)
     {
@@ -206,6 +207,7 @@ public class AgentRetroReadApiTests
 
     [Theory]
     [InlineData("from=yesterday")]
+    [InlineData("from=06/01/2026")]
     [InlineData("to=2026-13-01")]
     [InlineData("templateId=not-a-guid")]
     public async Task ListLoopRuns_rejects_a_malformed_filter(string query)
@@ -543,6 +545,57 @@ public class AgentRetroReadApiTests
         Assert.True(IsNullOrMissing(none, "pr"));
         Assert.Empty(none.GetProperty("nodes").EnumerateArray());
         Assert.Empty(none.GetProperty("feedback").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task GetLoopRun_credits_the_last_visit_with_the_edge_the_run_followed_toward_its_current_node()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var t0 = At(6, 2, 10);
+        Guid between, wrongSource, wrongTarget, review, fix, toReview, toFix;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var t = AddTemplate(db, $"between-{Guid.NewGuid():N}");
+            var version = AddVersion(db, t.Id, 1);
+            var nPlan = AddNode(db, version.Id, NodeType.AI, "Plan");
+            var nReview = AddNode(db, version.Id, NodeType.AI, "Review");
+            var nFix = AddNode(db, version.Id, NodeType.Cmd, "Fix");
+            var eToReview = AddEdge(db, nPlan.Id, nReview.Id, EdgeType.OnSuccess, null);
+            var eToFix = AddEdge(db, nReview.Id, nFix.Id, EdgeType.OnFailure, null);
+
+            // Each run did Plan then Review, and stopped after following an edge but before entering its target.
+            LoopRun StoppedBetweenNodes(Guid storedEdge, Guid currentNode)
+            {
+                var run = AddRun(db, version.Id, LoopRunStatus.Running, t0, t0);
+                run.IncomingEdgeId = storedEdge;
+                run.CurrentNodeId = currentNode;
+                var first = AddVisit(db, run.Id, nPlan.Id, LoopRunNodeStatus.Succeeded, t0, t0.AddSeconds(10), created: t0);
+                var last = AddVisit(db, run.Id, nReview.Id, LoopRunNodeStatus.Failed, t0.AddSeconds(10), t0.AddSeconds(20),
+                    incomingEdgeId: eToReview.Id, created: t0.AddSeconds(10));
+                last.PreviousNodeId = first.Id;
+                return run;
+            }
+
+            between = StoppedBetweenNodes(eToFix.Id, nFix.Id).Id;
+            wrongSource = StoppedBetweenNodes(eToReview.Id, nReview.Id).Id;
+            wrongTarget = StoppedBetweenNodes(eToFix.Id, nPlan.Id).Id;
+            await db.SaveChangesAsync(Ct);
+            (review, fix, toReview, toFix) = (nReview.Id, nFix.Id, eToReview.Id, eToFix.Id);
+        }
+
+        var nodes = (await GetOkAsync(client, $"/api/v1/agent/loop-runs/{between}")).GetProperty("nodes").EnumerateArray().ToList();
+        AssertEdgeTaken(nodes[0], toReview, "OnSuccess", null, review, "Review");
+        AssertEdgeTaken(nodes[1], toFix, "OnFailure", null, fix, "Fix");
+
+        foreach (var runId in new[] { wrongSource, wrongTarget })
+        {
+            nodes = (await GetOkAsync(client, $"/api/v1/agent/loop-runs/{runId}")).GetProperty("nodes").EnumerateArray().ToList();
+            AssertEdgeTaken(nodes[0], toReview, "OnSuccess", null, review, "Review");
+            Assert.True(IsNullOrMissing(nodes[1], "edgeTaken"), $"run {runId}: a stored edge not leading from the last visit to the current node is not credited");
+        }
     }
 
     [Fact]
