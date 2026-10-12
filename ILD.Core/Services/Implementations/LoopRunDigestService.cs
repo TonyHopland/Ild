@@ -92,23 +92,26 @@ public sealed class LoopRunDigestService : ILoopRunDigestService
         await snapshot.CommitAsync(cancellationToken);
 
         var successors = visits.Where(v => v.PreviousNodeId.HasValue).ToLookup(v => v.PreviousNodeId!.Value);
-        var lastVisitId = visits.Count == 0 ? (Guid?)null : visits[^1].Id;
+        LoopRunEdgeTaken? Leaving(Guid? edgeId, Guid nodeId)
+            => edgeId is Guid id && edges.TryGetValue(id, out var edge) && edge.SourceNodeId == nodeId
+                ? new LoopRunEdgeTaken(edge.Id, edge.EdgeType, edge.Name, edge.TargetNodeId, edge.TargetLabel)
+                : null;
+
+        // The engine keeps the edge it has followed but not yet entered on the run. It left the
+        // visit that completed last (the one the next visit will name as its predecessor), so it
+        // is credited only when that visit is also the last one.
+        var lastCompleted = visits.Where(v => v.CompletedAt.HasValue).MaxBy(v => v.CompletedAt);
+        var pendingEdgeFrom = lastCompleted is not null && lastCompleted.Id == visits[^1].Id ? lastCompleted.Id : (Guid?)null;
         var nodes = visits.Select(v =>
         {
             var incoming = v.IncomingEdgeId is Guid inId && edges.TryGetValue(inId, out var inEdge)
                 ? new LoopRunIncomingEdge(inEdge.Id, inEdge.EdgeType, inEdge.Name, inEdge.SourceNodeId)
                 : null;
-            var next = successors[v.Id].FirstOrDefault();
-            // The edge the engine has followed but not yet entered is kept on the run, so it
-            // is the last visit's edge when it leads from that node to where the run now is.
-            var takenId = next is not null ? next.IncomingEdgeId
-                : v.Id == lastVisitId ? run.IncomingEdgeId
-                : null;
-            var taken = takenId is Guid outId && edges.TryGetValue(outId, out var outEdge)
-                    && outEdge.SourceNodeId == v.LoopNodeId
-                    && (next is not null || outEdge.TargetNodeId == run.CurrentNodeId)
-                ? new LoopRunEdgeTaken(outEdge.Id, outEdge.EdgeType, outEdge.Name, outEdge.TargetNodeId, outEdge.TargetLabel)
-                : null;
+            var taken = successors[v.Id].Select(next => Leaving(next.IncomingEdgeId, v.LoopNodeId)).FirstOrDefault(e => e is not null)
+                ?? (v.Id == pendingEdgeFrom && Leaving(run.IncomingEdgeId, v.LoopNodeId) is { } pending
+                    && pending.TargetNodeId == run.CurrentNodeId
+                        ? pending
+                        : null);
             var (error, errorTruncated) = Bound(v.Error);
             return new LoopRunVisitDigest(
                 v.Id, v.LoopNodeId, v.Label, v.NodeType, v.Status, v.StartedAt, v.CompletedAt,
