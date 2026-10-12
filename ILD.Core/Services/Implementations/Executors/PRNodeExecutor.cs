@@ -301,9 +301,11 @@ public sealed class PRNodeExecutor : INodeExecutor
         // the run has not been told of, so nothing is recorded and the next
         // park reports new commits. The visit that got the pull request has
         // already recorded what it found, everything already on it included.
+        // With no head seen yet there is nothing to compare: the heartbeat's
+        // first look reports nothing either way.
         var seenBefore = PrSnapshotJson.TryParse(ctx.Run.PrSnapshot)?.HeadSha;
-        if (pushed && hadPullRequest && seenBefore is not null
-            && string.Equals(originBeforePush, seenBefore, StringComparison.Ordinal)
+        if (pushed && hadPullRequest
+            && (seenBefore is null || string.Equals(originBeforePush, seenBefore, StringComparison.Ordinal))
             && await repoManager.ResolveCommitAsync(ctx.Run.WorktreePath!, "HEAD") is { } pushedHead)
             yield return new NodeOutcome.PrSeen(pushedHead);
 
