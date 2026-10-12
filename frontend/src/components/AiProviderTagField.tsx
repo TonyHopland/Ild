@@ -34,7 +34,6 @@ export function AiProviderTagField({
   disabled?: boolean;
   /** Ends the sentence shown when nothing can be resolved, e.g. "this node cannot run". */
   cannotRun?: string;
-  /** The wrapper and hint classes, so the field matches the form it sits in. */
   fieldClassName?: string;
   hintClassName?: string;
 }) {
