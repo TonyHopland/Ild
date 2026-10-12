@@ -33,8 +33,8 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
         string? branchName,
         Guid? repositoryId,
         string? workItemId,
-        CancellationToken cancellationToken = default,
-        bool attachToExistingBranch = false)
+        bool attachToExistingBranch = false,
+        CancellationToken cancellationToken = default)
     {
         var name = BranchNameRules.Normalize(branchName);
         if (name is null)
@@ -88,9 +88,18 @@ public sealed class BranchNameOverrideService : IBranchNameOverrideService
         var auth = await ResolveAuthAsync(repo);
         var onOrigin = await _git.RemoteHasBranchAsync(repo.CloneUrl, name, cancellationToken, auth);
         if (onOrigin is null)
+        {
             _log?.LogWarning(
-                "Could not ask origin whether branch '{Branch}' exists for repository {RepositoryId}; treating it as free",
+                "Could not ask origin whether branch '{Branch}' exists for repository {RepositoryId}",
                 name, repo.Id);
+            // A fresh branch loses nothing to the unanswered question — the
+            // Start node fails the run on the same unreachable origin — but an
+            // attach needs the answer: without it nothing confirms there is a
+            // branch to attach to.
+            if (conflict is null && attachToExistingBranch)
+                conflict = $"Could not reach origin to confirm that branch `{name}` exists, so there is nothing confirmed to attach to. " +
+                    "Try again once origin answers.";
+        }
         else if (conflict is null && onOrigin.Value != attachToExistingBranch)
             conflict = attachToExistingBranch
                 ? $"Branch `{name}` does not exist on origin, so there is nothing to attach to. " +

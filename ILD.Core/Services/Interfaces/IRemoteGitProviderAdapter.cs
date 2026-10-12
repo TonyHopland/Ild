@@ -15,13 +15,13 @@ public interface IRemoteGitProviderAdapter
     /// The open pull request whose head is <paramref name="sourceBranch"/> (see
     /// <see cref="IRemoteProvider.FindOpenPullRequestAsync"/>).
     /// </summary>
-    Task<RemotePrLookup> FindOpenPullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch);
+    Task<RemotePrLookup> FindOpenPullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default);
     Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
     Task<bool> EnablePullRequestAutoMergeAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
     Task RegisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);
     Task UnregisterWebhookAsync(HttpClient http, ResolvedRemoteRepository repo, string callbackUrl);
     Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
-    Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber);
+    Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, CancellationToken cancellationToken = default);
     /// <summary>
     /// A window onto one failing check's log, fetched with the provider
     /// credentials the agent does not hold. <paramref name="checkId"/> is the
@@ -46,7 +46,7 @@ public interface IRemoteGitProviderAdapter
     Task<RemotePrWriteResult> ReplyToReviewThreadAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string commentId, string body);
 
     /// <summary>Post a new review comment anchored on <paramref name="line"/> of <paramref name="path"/>, with the provider credentials.</summary>
-    Task<RemotePrWriteResult> CreateReviewCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body);
+    Task<RemotePrWriteResult> CreateReviewCommentAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body, CancellationToken cancellationToken = default);
 
     /// <summary>Whether this provider can resolve a review thread at all.</summary>
     bool SupportsThreadResolution { get; }

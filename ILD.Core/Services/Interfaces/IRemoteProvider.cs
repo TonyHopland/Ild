@@ -15,7 +15,7 @@ public interface IRemoteProvider
     /// answer comes back with <see cref="RemotePrLookup.Error"/> set, which a
     /// caller must never read as "there is none".
     /// </summary>
-    Task<RemotePrLookup> FindOpenPullRequestAsync(string repoUrl, string sourceBranch, string targetBranch);
+    Task<RemotePrLookup> FindOpenPullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default);
     Task<bool> MergePullRequestAsync(string repoUrl, string prNumber);
 
     /// <summary>
@@ -33,7 +33,7 @@ public interface IRemoteProvider
     /// review decision, conversation). Returns null when the PR cannot be
     /// resolved or fetched. Backs the PR heartbeat poller and the feedback UI.
     /// </summary>
-    Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber);
+    Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// A window onto one failing check's log (see
@@ -64,7 +64,7 @@ public interface IRemoteProvider
     /// refusal (a line outside the diff, say) comes back as
     /// <see cref="RemotePrWriteResult.Ok"/> false with a message.
     /// </summary>
-    Task<RemotePrWriteResult> CreateReviewCommentAsync(string repoUrl, string prNumber, string path, int line, string body);
+    Task<RemotePrWriteResult> CreateReviewCommentAsync(string repoUrl, string prNumber, string path, int line, string body, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Mark a review thread resolved. Providers whose API has no such concept

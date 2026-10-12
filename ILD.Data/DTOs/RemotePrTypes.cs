@@ -13,13 +13,15 @@ public record RemotePrResult(
 /// <summary>
 /// The open pull request a branch already has, as the forge reports it: none
 /// (<see cref="Number"/> null) or one. <see cref="Error"/> is set when the forge
-/// could not answer, which is never the same as "none".
+/// could not answer, which is never the same as "none". <see cref="CreatedAt"/>
+/// is when the forge says the pull request was opened, where it says.
 /// </summary>
 public record RemotePrLookup(
     int? Number,
     string? Url,
     string? HtmlUrl,
-    string? Error
+    string? Error,
+    DateTime? CreatedAt = null
 );
 
 public enum RemotePrStatus

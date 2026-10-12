@@ -57,8 +57,12 @@ public class AgentPrReviewFindingRequest
 
     public string? Severity { get; set; }
 
-    /// <summary>The finding. ILD heads it with its severity and stamps it before posting.</summary>
-    [StringLength(65536)]
+    /// <summary>
+    /// The finding. ILD heads it with its severity and stamps it before
+    /// posting, so the cap leaves room for both under GitHub's 65,536-character
+    /// comment limit.
+    /// </summary>
+    [StringLength(65000)]
     public string Body { get; set; } = string.Empty;
 }
 

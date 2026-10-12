@@ -43,15 +43,16 @@ public class RemoteProviderService : IRemoteProvider
         }
     }
 
-    public async Task<RemotePrLookup> FindOpenPullRequestAsync(string repoUrl, string sourceBranch, string targetBranch)
+    public async Task<RemotePrLookup> FindOpenPullRequestAsync(
+        string repoUrl, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default)
     {
         var resolved = await ResolveAsync(repoUrl);
         if (resolved == null) return new RemotePrLookup(null, null, null, "no provider configured");
         try
         {
-            return await resolved.Adapter.FindOpenPullRequestAsync(_http, resolved, sourceBranch, targetBranch);
+            return await resolved.Adapter.FindOpenPullRequestAsync(_http, resolved, sourceBranch, targetBranch, cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             _log?.LogWarning(ex, "Open pull request lookup failed for branch {Branch} on {RepoUrl}", sourceBranch, repoUrl);
             return new RemotePrLookup(null, null, null, "the provider request failed");
@@ -99,12 +100,13 @@ public class RemoteProviderService : IRemoteProvider
         catch { return RemotePrStatus.Open; }
     }
 
-    public async Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber)
+    public async Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(
+        string repoUrl, string prNumber, CancellationToken cancellationToken = default)
     {
         var resolved = await ResolveAsync(repoUrl);
         if (resolved == null) return null;
-        try { return await resolved.Adapter.GetPullRequestSnapshotAsync(_http, resolved, prNumber); }
-        catch { return null; }
+        try { return await resolved.Adapter.GetPullRequestSnapshotAsync(_http, resolved, prNumber, cancellationToken); }
+        catch when (!cancellationToken.IsCancellationRequested) { return null; }
     }
 
     public async Task<RemoteCiLog> GetCheckLogAsync(string repoUrl, string checkId, int tailLines, int offset)
@@ -164,12 +166,13 @@ public class RemoteProviderService : IRemoteProvider
         catch (Exception ex) { return Refused(ex, "review reply", repoUrl); }
     }
 
-    public async Task<RemotePrWriteResult> CreateReviewCommentAsync(string repoUrl, string prNumber, string path, int line, string body)
+    public async Task<RemotePrWriteResult> CreateReviewCommentAsync(
+        string repoUrl, string prNumber, string path, int line, string body, CancellationToken cancellationToken = default)
     {
         var resolved = await ResolveAsync(repoUrl);
         if (resolved == null) return NoProvider;
-        try { return await resolved.Adapter.CreateReviewCommentAsync(_http, resolved, prNumber, path, line, body); }
-        catch (Exception ex) { return Refused(ex, "review comment", repoUrl); }
+        try { return await resolved.Adapter.CreateReviewCommentAsync(_http, resolved, prNumber, path, line, body, cancellationToken); }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested) { return Refused(ex, "review comment", repoUrl); }
     }
 
     public async Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId)

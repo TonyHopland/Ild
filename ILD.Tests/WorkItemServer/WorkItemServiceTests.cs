@@ -226,7 +226,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     public async Task Attach_to_existing_branch_defaults_to_false_and_is_stored_when_set_on_create()
     {
         var plain = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
-        var attached = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "y", AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
+        var attached = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "y", BranchNameOverride = "feature/y", AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
 
         Assert.False(plain.AttachToExistingBranch);
         Assert.False((await _svc.GetAsync(plain.Id, TestContext.Current.CancellationToken))!.AttachToExistingBranch);
@@ -237,7 +237,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     [Fact]
     public async Task Update_sets_clears_and_leaves_attach_to_existing_branch_alone()
     {
-        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, TestContext.Current.CancellationToken);
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", BranchNameOverride = "feature/x" }, TestContext.Current.CancellationToken);
 
         var set = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
         Assert.True(set!.AttachToExistingBranch);
@@ -248,6 +248,37 @@ public class WorkItemServiceTests : IAsyncLifetime
         var cleared = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { AttachToExistingBranch = false }, TestContext.Current.CancellationToken);
         Assert.False(cleared!.AttachToExistingBranch);
         Assert.False((await _svc.GetAsync(created.Id, TestContext.Current.CancellationToken))!.AttachToExistingBranch);
+    }
+
+    [Fact]
+    public async Task Attach_to_existing_branch_is_never_stored_without_a_branch_name()
+    {
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x", AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
+        Assert.False(created.AttachToExistingBranch);
+
+        var updated = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
+        Assert.False(updated!.AttachToExistingBranch);
+    }
+
+    [Theory]
+    [InlineData("feature/other", null, false)]
+    [InlineData("", null, false)]
+    [InlineData("feature/other", true, true)]
+    [InlineData("feature/x", null, true)]
+    public async Task Changing_or_clearing_the_branch_name_drops_attach_unless_the_same_edit_sets_it(
+        string branch, bool? attach, bool expected)
+    {
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "x", BranchNameOverride = "feature/x", AttachToExistingBranch = true,
+        }, TestContext.Current.CancellationToken);
+
+        var updated = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest
+        {
+            BranchNameOverride = branch, AttachToExistingBranch = attach,
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, updated!.AttachToExistingBranch);
     }
 
     [Fact]

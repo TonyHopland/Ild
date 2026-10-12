@@ -132,7 +132,7 @@ public class AttachedBranchSafetyTests : IDisposable
     {
         var (sp, _, remote, runs) = Services();
         var order = new List<string>();
-        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main"))
+        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(17, PrUrl, PrUrl, null));
         string? queue = PrCommentQueueJson.Serialize(new[]
         {
@@ -168,15 +168,15 @@ public class AttachedBranchSafetyTests : IDisposable
     public async Task Attaching_hands_the_engine_the_pull_request_as_the_run_found_it()
     {
         var (sp, _, remote, runs) = Services();
-        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main"))
+        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(17, PrUrl, PrUrl, null));
-        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17")).ReturnsAsync(SnapshotAt("abc123"));
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17", It.IsAny<CancellationToken>())).ReturnsAsync(SnapshotAt("abc123"));
         runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>())).ReturnsAsync(true);
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", BranchName = Branch };
 
         var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
 
-        var seen = outcomes.FindIndex(o => o is NodeOutcome.PrSeen { Snapshot.HeadSha: "abc123" });
+        var seen = outcomes.FindIndex(o => o is NodeOutcome.PrSeen { HeadSha: "abc123" });
         Assert.InRange(seen, 0, outcomes.FindIndex(o => o is NodeOutcome.PrAttached) - 1);
     }
 
@@ -184,18 +184,18 @@ public class AttachedBranchSafetyTests : IDisposable
     public async Task Creating_hands_the_engine_the_new_pull_request_as_it_stands()
     {
         var (sp, _, remote, runs) = Services();
-        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main"))
+        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         remote.Setup(r => r.CreatePullRequestAsync(CloneUrl, Branch, "main", It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrResult(PrUrl, PrUrl, RemotePrStatus.Open, null));
-        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17")).ReturnsAsync(SnapshotAt("abc123"));
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17", It.IsAny<CancellationToken>())).ReturnsAsync(SnapshotAt("abc123"));
         runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>())).ReturnsAsync(true);
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", BranchName = Branch };
 
         var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
 
         Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
-        Assert.Contains(outcomes, o => o is NodeOutcome.PrSeen { Snapshot.HeadSha: "abc123" });
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrSeen { HeadSha: "abc123" });
     }
 
     [Theory]
@@ -206,7 +206,9 @@ public class AttachedBranchSafetyTests : IDisposable
         var worktree = Directory.CreateDirectory(Path.Combine(_baseRepo, "wt-seen")).FullName;
         var (sp, git, remote, _) = Services();
         git.Setup(m => m.GetCommitsAheadCountAsync(worktree, $"origin/{Branch}")).ReturnsAsync(ahead);
-        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17")).ReturnsAsync(SnapshotAt("def456"));
+        git.Setup(m => m.GetHeadShaAsync(worktree)).ReturnsAsync("def456");
+        // What the forge reports may not have caught up with the push yet.
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17", It.IsAny<CancellationToken>())).ReturnsAsync(SnapshotAt("stale"));
         var run = new LoopRun
         {
             Id = Guid.NewGuid(), WorkItemId = "WI-1", BranchName = Branch, AttachToExistingBranch = true,
@@ -215,8 +217,131 @@ public class AttachedBranchSafetyTests : IDisposable
 
         var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
 
-        Assert.Equal(seen, outcomes.Any(o => o is NodeOutcome.PrSeen { Snapshot.HeadSha: "def456" }));
+        Assert.Equal(seen, outcomes.Any(o => o is NodeOutcome.PrSeen { HeadSha: "def456", Snapshot: null }));
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrSeen { HeadSha: "stale" });
         Assert.IsType<NodeOutcome.WaitingAction>(outcomes[^1]);
+    }
+
+    private LoopRun AttachedRunWithPr(string worktreeName, bool attached = true) => new()
+    {
+        Id = Guid.NewGuid(), WorkItemId = "WI-1", BranchName = Branch, AttachToExistingBranch = attached,
+        WorktreePath = Directory.CreateDirectory(Path.Combine(_baseRepo, worktreeName)).FullName, PrUrl = PrUrl,
+    };
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Commits_of_the_runs_own_are_rebased_onto_an_author_push_before_they_are_pushed(bool attached)
+    {
+        var (sp, git, _, _) = Services();
+        var run = AttachedRunWithPr("wt-behind-" + attached, attached);
+        git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
+        git.Setup(m => m.GetCommitsBehindCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(2);
+        git.Setup(m => m.RebaseAsync(run.WorktreePath!, $"origin/{Branch}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        git.Verify(m => m.RebaseAsync(run.WorktreePath!, $"origin/{Branch}", It.IsAny<CancellationToken>()), Times.Once);
+        git.Verify(m => m.PushAsync(run.WorktreePath!, Branch, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_rebase_onto_an_author_push_that_conflicts_fails_saying_so_and_pushes_nothing()
+    {
+        var (sp, git, _, _) = Services();
+        var run = AttachedRunWithPr("wt-conflict");
+        git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
+        git.Setup(m => m.GetCommitsBehindCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
+        git.Setup(m => m.RebaseAsync(run.WorktreePath!, $"origin/{Branch}", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RebaseResult(false, new[] { "src/A.cs" }, "conflict"));
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        var fail = outcomes.OfType<NodeOutcome.Fail>().Single();
+        Assert.Equal(EdgeType.OnFailure, fail.Edge);
+        Assert.Contains("moved on origin", fail.Reason);
+        Assert.Contains("src/A.cs", fail.Reason);
+        git.Verify(m => m.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Behind_an_author_push_with_nothing_of_its_own_the_run_pushes_nothing_and_still_sends_its_queue()
+    {
+        var (sp, git, remote, runs) = Services();
+        var run = AttachedRunWithPr("wt-behind-only");
+        git.Setup(m => m.GetCommitsBehindCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(3);
+        string? queue = PrCommentQueueJson.Serialize(new[]
+        {
+            new PrQueuedWrite("w1", PrQueuedWrite.Comment, string.Empty, "round findings", null, null, DateTime.UtcNow),
+        });
+        runs.Setup(s => s.GetPrCommentQueueAsync(It.IsAny<Guid>())).ReturnsAsync(() => queue);
+        runs.Setup(s => s.TrySetPrCommentQueueAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((Guid _, string? expected, string? json) => { queue = json; return true; });
+        remote.Setup(r => r.CreatePullRequestCommentAsync(CloneUrl, "17", It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrWriteResult(true, "900", null));
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        git.Verify(m => m.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+        remote.Verify(r => r.CreatePullRequestCommentAsync(CloneUrl, "17", It.Is<string>(b => b.Contains("round findings"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task An_attached_branch_that_cannot_be_fetched_is_not_pushed_to()
+    {
+        var (sp, git, _, _) = Services();
+        var run = AttachedRunWithPr("wt-nofetch");
+        git.Setup(m => m.FetchAsync(run.WorktreePath!, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>())).ReturnsAsync(false);
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        Assert.Contains("Could not fetch origin", outcomes.OfType<NodeOutcome.Fail>().Single().Reason);
+        git.Verify(m => m.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task An_attached_branch_deleted_on_origin_is_never_pushed_back()
+    {
+        var (sp, git, _, _) = Services();
+        var run = AttachedRunWithPr("wt-gone");
+        git.Setup(m => m.RemoteBranchExistsAsync(run.WorktreePath!, Branch)).ReturnsAsync(false);
+        git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, It.IsAny<string>())).ReturnsAsync(1);
+
+        var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
+
+        Assert.Contains("no longer exists on origin", outcomes.OfType<NodeOutcome.Fail>().Single().Reason);
+        git.Verify(m => m.PushAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task The_visit_that_attaches_reads_the_pull_request_once_and_dates_it_from_the_forge()
+    {
+        var (sp, git, remote, runs) = Services();
+        var opened = new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc);
+        var run = AttachedRunWithPr("wt-attach-once");
+        run.PrUrl = null;
+        git.Setup(m => m.GetCommitsAheadCountAsync(run.WorktreePath!, $"origin/{Branch}")).ReturnsAsync(1);
+        git.Setup(m => m.GetHeadShaAsync(run.WorktreePath!)).ReturnsAsync("abc123");
+        remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new RemotePrLookup(17, PrUrl, PrUrl, null, opened));
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17", It.IsAny<CancellationToken>())).ReturnsAsync(SnapshotAt("abc123"));
+        runs.Setup(s => s.TrySetPrCommentLedgerAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>())).ReturnsAsync(true);
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new PRNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+        {
+            outcomes.Add(o);
+            // As the engine does: the run has its pull request from here on.
+            if (o is NodeOutcome.PrAttached attached) run.PrUrl = attached.PrUrl;
+        }
+
+        Assert.Equal(opened, outcomes.OfType<NodeOutcome.PrAttached>().Single().CreatedAt);
+        Assert.Single(outcomes.OfType<NodeOutcome.PrSeen>());
+        remote.Verify(r => r.GetPullRequestSnapshotAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

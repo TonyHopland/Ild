@@ -106,11 +106,13 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// names it, so a fork's branch of the same name is never taken for this one.
     /// </summary>
     public virtual async Task<RemotePrLookup> FindOpenPullRequestAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch)
+        HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch,
+        CancellationToken cancellationToken = default)
     {
         ApplyHeaders(http, repo.Provider);
         var open = await ReadAllPagesAsync(
-            http, $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls?{OpenPullRequestsQuery(repo, sourceBranch)}");
+            http, $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls?{OpenPullRequestsQuery(repo, sourceBranch)}",
+            cancellationToken);
         if (open is null)
             return new RemotePrLookup(null, null, null,
                 $"could not list the open pull requests from {ProviderType}");
@@ -118,17 +120,30 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         var candidates = open
             .Where(pr => pr.TryGetProperty("head", out var head)
                 && string.Equals(ReadString(head, "ref"), sourceBranch, StringComparison.Ordinal)
-                && (!head.TryGetProperty("repo", out var headRepo) || headRepo.ValueKind != JsonValueKind.Object
-                    || ReadString(headRepo, "full_name") is not { } fullName
-                    || string.Equals(fullName, $"{repo.Owner}/{repo.Repo}", StringComparison.OrdinalIgnoreCase)))
+                && IsThisRepository(head, repo))
             .Select(pr => (
                 Number: ReadInt(pr, "number"),
                 Target: pr.TryGetProperty("base", out var @base) ? ReadString(@base, "ref") : null,
                 Url: ReadString(pr, "url"),
-                HtmlUrl: ReadString(pr, "html_url")))
+                HtmlUrl: ReadString(pr, "html_url"),
+                CreatedAt: ReadDate(pr, "created_at")))
             .Where(pr => pr.Number is not null)
             .ToList();
         return PickOpenPullRequest(candidates, sourceBranch, targetBranch);
+    }
+
+    /// <summary>
+    /// Whether a pull request's head lives in this repository. A head whose
+    /// repository is null is a fork that has since been deleted — never this
+    /// one; a head that does not mention its repository at all is taken at the
+    /// branch's word.
+    /// </summary>
+    private static bool IsThisRepository(JsonElement head, ResolvedRemoteRepository repo)
+    {
+        if (!head.TryGetProperty("repo", out var headRepo))
+            return true;
+        return headRepo.ValueKind == JsonValueKind.Object
+            && string.Equals(ReadString(headRepo, "full_name"), $"{repo.Owner}/{repo.Repo}", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>The query that lists open pull requests, narrowed to the head where the forge can.</summary>
@@ -142,7 +157,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// it was not built for.
     /// </summary>
     protected static RemotePrLookup PickOpenPullRequest(
-        IReadOnlyList<(int? Number, string? Target, string? Url, string? HtmlUrl)> candidates,
+        IReadOnlyList<(int? Number, string? Target, string? Url, string? HtmlUrl, DateTime? CreatedAt)> candidates,
         string sourceBranch, string targetBranch)
     {
         if (candidates.Count == 0)
@@ -157,7 +172,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 $"branch `{sourceBranch}` has several open pull requests "
                 + $"({string.Join(", ", candidates.Select(pr => $"#{pr.Number} into {pr.Target}"))}) "
                 + $"and none or more than one of them targets `{targetBranch}`");
-        return new RemotePrLookup(picked.Number, picked.Url, picked.HtmlUrl, null);
+        return new RemotePrLookup(picked.Number, picked.Url, picked.HtmlUrl, null, picked.CreatedAt);
     }
 
     public virtual async Task<RemotePrStatus> GetPullRequestStatusAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
@@ -193,7 +208,8 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     protected virtual string NormalizeReviewState(string? state)
         => (state ?? string.Empty).ToUpperInvariant();
 
-    public virtual async Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+    public virtual async Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, CancellationToken cancellationToken = default)
     {
         ApplyHeaders(http, repo.Provider);
         var apiRepo = $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}";
@@ -202,10 +218,10 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         var gotPr = false;
         for (var attempt = 0; attempt < Math.Max(1, MergeableRetryAttempts); attempt++)
         {
-            using var resp = await http.GetAsync($"{apiRepo}/pulls/{prNumber}");
+            using var resp = await http.GetAsync($"{apiRepo}/pulls/{prNumber}", cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return null;
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
             pr = doc.RootElement.Clone();
             gotPr = true;
 
@@ -213,7 +229,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             var mergeableKnown = pr.TryGetProperty("mergeable", out var m) && m.ValueKind != JsonValueKind.Null;
             if (closed || mergeableKnown || attempt == Math.Max(1, MergeableRetryAttempts) - 1)
                 break;
-            await Task.Delay(MergeableRetryDelay);
+            await Task.Delay(MergeableRetryDelay, cancellationToken);
         }
         if (!gotPr)
             return null;
@@ -231,11 +247,11 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         var mergeableState = ReadString(pr, "mergeable_state");
         var headSha = pr.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
 
-        var (approved, changesRequested, reviewEntries) = await ReadReviewsAsync(http, apiRepo, prNumber);
+        var (approved, changesRequested, reviewEntries) = await ReadReviewsAsync(http, apiRepo, prNumber, cancellationToken);
         var (ci, failedChecks) = headSha is null
             ? (RemotePrCiStatus.None, (IReadOnlyList<RemotePrCheck>)Array.Empty<RemotePrCheck>())
-            : await ReadCiStatusAsync(http, apiRepo, headSha);
-        var conversation = await ReadConversationAsync(http, apiRepo, prNumber, reviewEntries);
+            : await ReadCiStatusAsync(http, apiRepo, headSha, cancellationToken);
+        var conversation = await ReadConversationAsync(http, apiRepo, prNumber, reviewEntries, cancellationToken);
 
         return new RemotePrSnapshot(
             ReadString(pr, "title"),
@@ -254,9 +270,9 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     }
 
     private async Task<(bool Approved, bool ChangesRequested, List<RemotePrConversationEntry> Reviews)> ReadReviewsAsync(
-        HttpClient http, string apiRepo, string prNumber)
+        HttpClient http, string apiRepo, string prNumber, CancellationToken cancellationToken)
     {
-        var reviews = await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/reviews");
+        var reviews = await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/reviews", cancellationToken: cancellationToken);
         var entries = new List<RemotePrConversationEntry>();
         // A reviewer's stance is their latest *decisive* review (APPROVED /
         // CHANGES_REQUESTED / DISMISSED). COMMENTED and PENDING reviews never
@@ -301,14 +317,14 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// job logs, which the <c>details_url</c> links to instead.
     /// </summary>
     private async Task<(RemotePrCiStatus Status, IReadOnlyList<RemotePrCheck> FailedChecks)> ReadCiStatusAsync(
-        HttpClient http, string apiRepo, string headSha)
+        HttpClient http, string apiRepo, string headSha, CancellationToken cancellationToken)
     {
         var sha = Uri.EscapeDataString(headSha);
         var anyPresent = false;
         var anyPending = false;
         var failed = new List<RemotePrCheck>();
 
-        foreach (var run in await GetArrayAsync(http, $"{apiRepo}/commits/{sha}/check-runs", "check_runs"))
+        foreach (var run in await GetArrayAsync(http, $"{apiRepo}/commits/{sha}/check-runs", "check_runs", cancellationToken))
         {
             anyPresent = true;
             var status = (ReadString(run, "status") ?? string.Empty).ToLowerInvariant();
@@ -332,7 +348,7 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
         // Combined commit status (the legacy statuses API): state is the rollup
         // of all contexts (success | pending | failure | error), and the
         // individual contexts carry the detail for the failing ones.
-        var combined = await GetObjectAsync(http, $"{apiRepo}/commits/{sha}/status");
+        var combined = await GetObjectAsync(http, $"{apiRepo}/commits/{sha}/status", cancellationToken);
         if (combined.HasValue
             && combined.Value.TryGetProperty("statuses", out var statuses)
             && statuses.ValueKind == JsonValueKind.Array
@@ -552,15 +568,16 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     }
 
     private async Task<IReadOnlyList<RemotePrConversationEntry>> ReadConversationAsync(
-        HttpClient http, string apiRepo, string prNumber, List<RemotePrConversationEntry> reviews)
+        HttpClient http, string apiRepo, string prNumber, List<RemotePrConversationEntry> reviews,
+        CancellationToken cancellationToken)
     {
         var conversation = new List<RemotePrConversationEntry>(reviews);
 
-        foreach (var c in await GetArrayAsync(http, $"{apiRepo}/issues/{prNumber}/comments"))
+        foreach (var c in await GetArrayAsync(http, $"{apiRepo}/issues/{prNumber}/comments", cancellationToken: cancellationToken))
             conversation.Add(new RemotePrConversationEntry(
                 "comment", ReadUserLogin(c), ReadString(c, "body") ?? string.Empty, ReadDate(c, "created_at") ?? DateTime.MinValue, null));
 
-        foreach (var c in await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/comments"))
+        foreach (var c in await GetArrayAsync(http, $"{apiRepo}/pulls/{prNumber}/comments", cancellationToken: cancellationToken))
             conversation.Add(new RemotePrConversationEntry(
                 "review_comment", ReadUserLogin(c), ReadString(c, "body") ?? string.Empty, ReadDate(c, "created_at") ?? DateTime.MinValue, null));
 
@@ -571,16 +588,18 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// GET a JSON array, returning cloned elements; empty on any failure (404,
     /// non-array). <paramref name="property"/> names the field the array is
     /// wrapped in, for the providers that wrap it (<c>check_runs</c>,
-    /// <c>value</c>, <c>records</c>).
+    /// <c>value</c>, <c>records</c>). Only the caller's own cancellation
+    /// escapes; a client timeout is a failure like any other.
     /// </summary>
-    protected static async Task<IReadOnlyList<JsonElement>> GetArrayAsync(HttpClient http, string url, string? property = null)
+    protected static async Task<IReadOnlyList<JsonElement>> GetArrayAsync(
+        HttpClient http, string url, string? property = null, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var resp = await http.GetAsync(url);
+            using var resp = await http.GetAsync(url, cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return Array.Empty<JsonElement>();
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
             var root = doc.RootElement;
             if (property is not null)
             {
@@ -591,24 +610,27 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
                 return Array.Empty<JsonElement>();
             return root.EnumerateArray().Select(e => e.Clone()).ToList();
         }
-        catch
+        catch when (!cancellationToken.IsCancellationRequested)
         {
             return Array.Empty<JsonElement>();
         }
     }
 
-    /// <summary>GET a JSON object, returning a cloned element; null on any failure.</summary>
-    protected static async Task<JsonElement?> GetObjectAsync(HttpClient http, string url)
+    /// <summary>
+    /// GET a JSON object, returning a cloned element; null on any failure other
+    /// than the caller's own cancellation.
+    /// </summary>
+    protected static async Task<JsonElement?> GetObjectAsync(HttpClient http, string url, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var resp = await http.GetAsync(url);
+            using var resp = await http.GetAsync(url, cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return null;
-            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
             return doc.RootElement.ValueKind == JsonValueKind.Object ? doc.RootElement.Clone() : null;
         }
-        catch
+        catch when (!cancellationToken.IsCancellationRequested)
         {
             return null;
         }
@@ -803,21 +825,23 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// exists; a response with no <c>Link</c> at all is the one case left to a
     /// short page, and neither supported forge both caps and omits it.
     /// </summary>
-    protected static async Task<IReadOnlyList<JsonElement>?> ReadAllPagesAsync(HttpClient http, string url)
+    protected static async Task<IReadOnlyList<JsonElement>?> ReadAllPagesAsync(
+        HttpClient http, string url, CancellationToken cancellationToken = default)
     {
         var all = new List<JsonElement>();
         var separator = url.Contains('?', StringComparison.Ordinal) ? '&' : '?';
 
         for (var page = 1; page <= MaxListPages; page++)
         {
-            using var resp = await http.GetAsync($"{url}{separator}per_page={ListPageSize}&limit={ListPageSize}&page={page}");
+            using var resp = await http.GetAsync(
+                $"{url}{separator}per_page={ListPageSize}&limit={ListPageSize}&page={page}", cancellationToken);
             if (!resp.IsSuccessStatusCode)
                 return null;
 
             List<JsonElement> batch;
             try
             {
-                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+                using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
                 if (doc.RootElement.ValueKind != JsonValueKind.Array)
                     return null;
                 batch = doc.RootElement.EnumerateArray().Select(e => e.Clone()).ToList();
@@ -908,7 +932,8 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     /// reply: each forge anchors one on a line its own way.
     /// </summary>
     public virtual Task<RemotePrWriteResult> CreateReviewCommentAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body)
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body,
+        CancellationToken cancellationToken = default)
         => Task.FromResult(new RemotePrWriteResult(
             false, null, $"Posting a review comment on a line is not supported for {ProviderType}."));
 

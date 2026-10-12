@@ -71,7 +71,7 @@ public class LoopEngineStartRunEventsTests
             Db.Context.Repositories.Add(repo);
             Db.Context.SaveChanges();
             RepoId = repo.Id;
-            Branches.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
+            Branches.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(BranchNameVerdict.Usable);
 
             var registry = new ScriptedExecutorRegistry();
@@ -250,7 +250,7 @@ public class LoopEngineStartRunEventsTests
             case PreRun.NoStartNode: rig.Resolves(LoopTemplateResolutionKind.Single, rig.Template(withStart: false), "t"); break;
             case PreRun.BranchTaken:
                 rig.Resolves(LoopTemplateResolutionKind.Single, rig.Template(), "t");
-                rig.Branches.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
+                rig.Branches.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
                     .ReturnsAsync(new BranchNameVerdict(null, reason));
                 break;
         }
@@ -275,7 +275,7 @@ public class LoopEngineStartRunEventsTests
         Assert.Equal(view.StatusReasonAt, listed.StatusReasonAt);
 
         rig.Resolves(LoopTemplateResolutionKind.Single, rig.Template(), "t");
-        rig.Branches.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
+        rig.Branches.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(BranchNameVerdict.Usable);
 
         await rig.Engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);

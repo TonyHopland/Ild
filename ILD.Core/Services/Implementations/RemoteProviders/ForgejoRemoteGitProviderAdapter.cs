@@ -208,11 +208,13 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
     /// <paramref name="line"/>, the same shape a reply takes here.
     /// </summary>
     public override Task<RemotePrWriteResult> CreateReviewCommentAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body)
-        => PostOneCommentReviewAsync(http, repo, prNumber, path, line, body, "finding");
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body,
+        CancellationToken cancellationToken = default)
+        => PostOneCommentReviewAsync(http, repo, prNumber, path, line, body, "finding", cancellationToken);
 
     private async Task<RemotePrWriteResult> PostOneCommentReviewAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body, string what)
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body, string what,
+        CancellationToken cancellationToken = default)
     {
         ApplyHeaders(http, repo.Provider);
         using var resp = await http.PostAsJsonAsync(
@@ -222,9 +224,10 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
                 body = string.Empty,
                 @event = "COMMENT",
                 comments = new[] { new { path, body, new_position = line } },
-            });
+            },
+            cancellationToken);
         if (!resp.IsSuccessStatusCode)
-            return new RemotePrWriteResult(false, null, $"The {what} was refused by {ProviderType} (HTTP {(int)resp.StatusCode}).");
+            return new RemotePrWriteResult(false, null, await PrCommentHelper.RefusalAsync(resp, what, ProviderType));
 
         // The response is the REVIEW that was created, and its id lives in a
         // different sequence from the comment ids this adapter's ledger keys on
@@ -232,15 +235,17 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
         // own and swallow it. Read the one comment the review carries instead,
         // and hand back nothing rather than a wrong-space id if that read fails.
         var reviewId = await PrCommentHelper.ReadCreatedIdAsync(resp);
-        return new RemotePrWriteResult(true, reviewId is null ? null : await ReadOnlyCommentIdAsync(http, repo, prNumber, reviewId), null);
+        return new RemotePrWriteResult(
+            true, reviewId is null ? null : await ReadOnlyCommentIdAsync(http, repo, prNumber, reviewId, cancellationToken), null);
     }
 
     /// <summary>The id of the single comment a just-created one-comment review holds.</summary>
     private static async Task<string?> ReadOnlyCommentIdAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string reviewId)
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string reviewId, CancellationToken cancellationToken)
     {
         var comments = await GetArrayAsync(
-            http, $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/reviews/{Uri.EscapeDataString(reviewId)}/comments");
+            http, $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}/reviews/{Uri.EscapeDataString(reviewId)}/comments",
+            cancellationToken: cancellationToken);
         return comments.Count == 1 ? ReadId(comments[0]) : null;
     }
 

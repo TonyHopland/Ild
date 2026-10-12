@@ -140,7 +140,7 @@ public sealed class LoopEngine : ILoopEngine
         {
             var branchNames = sp.GetRequiredService<IBranchNameOverrideService>();
             var verdict = await branchNames.InspectAsync(
-                branchOverride, wi.RepositoryId, workItemId, cancellationToken, attachToExistingBranch);
+                branchOverride, wi.RepositoryId, workItemId, attachToExistingBranch, cancellationToken);
             if (!verdict.IsUsable)
             {
                 await workItems.ParkWithoutRunAsync(workItemId, verdict.Problem!);
@@ -854,7 +854,7 @@ public sealed class LoopEngine : ILoopEngine
                 await _notifier.NodeProgressAsync(run.Id, node.Id, line, seq);
             });
 
-        async Task RecordRunPullRequestAsync(string prUrl)
+        async Task RecordRunPullRequestAsync(string prUrl, DateTime? createdAt)
         {
             await TrySafe(run.Id, () => loopRunStore.ReloadAsync(run));
             run.PrUrl = prUrl;
@@ -864,7 +864,7 @@ public sealed class LoopEngine : ILoopEngine
             // this instance being reset — the manager re-reports it on read if
             // this write is lost.
             await TrySafe(run.Id, () => workItems.RecordPullRequestAsync(
-                run.WorkItemId, prUrl, run.Id, merged: false, createdAt: run.StartedAt ?? run.CreatedAt));
+                run.WorkItemId, prUrl, run.Id, merged: false, createdAt: createdAt ?? run.StartedAt ?? run.CreatedAt));
         }
 
         IAsyncEnumerator<NodeOutcome>? enumerator = null;
@@ -1124,17 +1124,24 @@ public sealed class LoopEngine : ILoopEngine
                         break;
                     }
                     case NodeOutcome.PrCreated pc:
-                        await RecordRunPullRequestAsync(pc.PrUrl);
+                        await RecordRunPullRequestAsync(pc.PrUrl, createdAt: null);
                         break;
                     case NodeOutcome.PrAttached pa:
-                        await RecordRunPullRequestAsync(pa.PrUrl);
+                        await RecordRunPullRequestAsync(pa.PrUrl, pa.CreatedAt);
                         break;
                     case NodeOutcome.PrSeen seen:
                     {
                         await TrySafe(run.Id, () => loopRunStore.ReloadAsync(run));
-                        run.PrSnapshot = ILD.Data.DTOs.PrSnapshotJson.Serialize(seen.Snapshot);
-                        await loopRunStore.UpdateRunAsync(run);
-                        await _notifier.PrSnapshotChangedAsync(run.Id);
+                        // With no snapshot read and none stored there is nothing to
+                        // hang the head on; the heartbeat's first look then has no
+                        // earlier head and reports nothing, which is the same answer.
+                        var stored = seen.Snapshot ?? ILD.Data.DTOs.PrSnapshotJson.TryParse(run.PrSnapshot);
+                        if (stored is not null)
+                        {
+                            run.PrSnapshot = ILD.Data.DTOs.PrSnapshotJson.Serialize(stored with { HeadSha = seen.HeadSha });
+                            await loopRunStore.UpdateRunAsync(run);
+                            await _notifier.PrSnapshotChangedAsync(run.Id);
+                        }
                         break;
                     }
                     case NodeOutcome.WorktreeDestroyed _:

@@ -71,9 +71,26 @@ public class AgentPrReviewFindingApiTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Fact]
+    public async Task A_finding_too_long_to_post_with_its_heading_and_marker_is_a_bad_request()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var workItemId = await SeedWorkItemAsync(factory, client);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/v1/agent/workitems/{workItemId}/pr-review/finding",
+            new { path = "src/A.cs", line = 12, severity = "nit", body = new string('x', 65001) },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     [Theory]
     [InlineData("important")]
     [InlineData("nit")]
+    [InlineData("Important")]
+    [InlineData(" NIT ")]
     public async Task A_finding_on_an_item_with_no_live_pull_request_is_refused_with_a_reason(string severity)
     {
         await using var factory = new ApiFactory();

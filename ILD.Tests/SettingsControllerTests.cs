@@ -157,6 +157,10 @@ public sealed class SettingsControllerTests : IDisposable
     [InlineData("pr.maxNits", "ten", false)]
     public async Task The_pr_finding_caps_are_stored_only_within_their_range(string key, string sent, bool stored)
     {
+        // The other cap as wide apart as it goes, so only the range decides.
+        _schedulerSettings.Setup(x => x.GetPrMaxFindingsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000);
+        _schedulerSettings.Setup(x => x.GetPrMaxNitsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
         var result = await Put(key, sent);
 
         if (stored)
@@ -167,6 +171,28 @@ public sealed class SettingsControllerTests : IDisposable
         else
         {
             Assert.IsType<BadRequestObjectResult>(result);
+            Assert.Null(await Stored(key));
+        }
+    }
+
+    [Theory]
+    [InlineData("pr.maxNits", "10", true)]
+    [InlineData("pr.maxNits", "11", false)]
+    [InlineData("pr.maxFindings", "10", true)]
+    [InlineData("pr.maxFindings", "9", false)]
+    public async Task The_nit_cap_is_never_stored_above_the_findings_cap(string key, string sent, bool stored)
+    {
+        _schedulerSettings.Setup(x => x.GetPrMaxFindingsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(10);
+        _schedulerSettings.Setup(x => x.GetPrMaxNitsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(10);
+
+        var result = await Put(key, sent);
+
+        if (stored)
+            Assert.Equal(sent, await Stored(key));
+        else
+        {
+            var error = Assert.IsType<BadRequestObjectResult>(result);
+            Assert.Contains("pr.maxNits", System.Text.Json.JsonSerializer.Serialize(error.Value));
             Assert.Null(await Stored(key));
         }
     }

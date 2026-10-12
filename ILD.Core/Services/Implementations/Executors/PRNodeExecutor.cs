@@ -90,6 +90,9 @@ public sealed class PRNodeExecutor : INodeExecutor
         var repoManager = sp.GetRequiredService<IRepositoryManager>();
 
         var hasWorktree = !string.IsNullOrEmpty(ctx.Run.WorktreePath) && Directory.Exists(ctx.Run.WorktreePath);
+        // Read now: the engine records the pull request on this same run while
+        // the visit that gets it is still going.
+        var hadPullRequest = !string.IsNullOrEmpty(ctx.Run.PrUrl);
         var pushed = false;
         if (hasWorktree)
         {
@@ -102,12 +105,17 @@ public sealed class PRNodeExecutor : INodeExecutor
                 {
                     prepError = "Failed to commit uncommitted changes";
                 }
-                if (prepError is null && await HasCommitsToPushAsync(ctx, repoManager, branch, gitAuth))
+                if (prepError is null)
                 {
-                    var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath!, branch, ctx.CancellationToken, gitAuth);
-                    if (!pushResult.Success)
-                        prepError = $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}";
-                    pushed = pushResult.Success;
+                    var (push, integrateError) = await IntegrateWithOriginAsync(ctx, repoManager, branch, gitAuth);
+                    prepError = integrateError;
+                    if (prepError is null && push)
+                    {
+                        var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath!, branch, ctx.CancellationToken, gitAuth);
+                        if (!pushResult.Success)
+                            prepError = $"Failed to push branch '{branch}': {pushResult.Error ?? "unknown error"}";
+                        pushed = pushResult.Success;
+                    }
                 }
             }
             catch (Exception ex) { prepError = ex.Message; }
@@ -127,7 +135,7 @@ public sealed class PRNodeExecutor : INodeExecutor
             // apply exactly once per run.
             var remote = sp.GetRequiredService<IRemoteProvider>();
             var lookedUpAt = DateTime.UtcNow;
-            var existing = await remote.FindOpenPullRequestAsync(repo.CloneUrl, branch, target);
+            var existing = await remote.FindOpenPullRequestAsync(repo.CloneUrl, branch, target, ctx.CancellationToken);
             if (existing.Error is not null)
             {
                 // Never read as "there is none": creating on a failed lookup is
@@ -161,14 +169,14 @@ public sealed class PRNodeExecutor : INodeExecutor
                 if (await HasQueuedWritesAsync(ctx, sp))
                     await DrainQueuedWritesAsync(ctx, sp, remote, repo.CloneUrl, attachedNumber);
 
-                if (await SeeAsync(remote, repo.CloneUrl, attachedNumber) is { } attachedSeen)
+                if (await SeeAsync(remote, repo.CloneUrl, attachedNumber, ctx.CancellationToken) is { } attachedSeen)
                     yield return attachedSeen;
 
                 // Recorded last, right before the node routes on: a run that
                 // stops anywhere above comes back with no pull request, so it
                 // looks up and attaches again rather than resuming as a later
                 // visit that would never take on_existing_pr.
-                yield return new NodeOutcome.PrAttached(prUrl);
+                yield return new NodeOutcome.PrAttached(prUrl, existing.CreatedAt);
 
                 if (await IsOnExistingPrWiredAsync(ctx, sp))
                 {
@@ -246,7 +254,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                 }
 
                 if (RemotePrUrl.ExtractPrNumber(prUrl) is { Length: > 0 } createdNumber
-                    && await SeeAsync(remote, repo.CloneUrl, createdNumber) is { } createdSeen)
+                    && await SeeAsync(remote, repo.CloneUrl, createdNumber, ctx.CancellationToken) is { } createdSeen)
                     yield return createdSeen;
 
                 // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
@@ -281,11 +289,12 @@ public sealed class PRNodeExecutor : INodeExecutor
         }
 
         // A push of the run's own moves the head the heartbeat compares
-        // against; seen here, it is not reported back to the run as new commits.
-        if (pushed && !string.IsNullOrEmpty(ctx.Run.PrUrl)
-            && RemotePrUrl.ExtractPrNumber(ctx.Run.PrUrl) is { Length: > 0 } pushedNumber
-            && await SeeAsync(sp.GetRequiredService<IRemoteProvider>(), repo.CloneUrl, pushedNumber) is { } pushedSeen)
-            yield return pushedSeen;
+        // against; recorded as the commit pushed — what the worktree has, not
+        // what the forge may not have caught up to — it is not reported back
+        // to the run as new commits. The visit that got the pull request has
+        // already recorded what it found, which includes this push.
+        if (pushed && hadPullRequest && await repoManager.GetHeadShaAsync(ctx.Run.WorktreePath!) is { } pushedHead)
+            yield return new NodeOutcome.PrSeen(pushedHead);
 
         // Surface the rendered prompt template to the work item as the parked
         // node's content — mirrors the Human node, which parks on its rendered
@@ -298,25 +307,66 @@ public sealed class PRNodeExecutor : INodeExecutor
     /// forge that does not answer leaves the stored snapshot as it was, which
     /// costs at most one <c>on_new_commits</c> the run did not need.
     /// </summary>
-    private static async Task<NodeOutcome.PrSeen?> SeeAsync(IRemoteProvider remote, string cloneUrl, string prNumber)
-        => await remote.GetPullRequestSnapshotAsync(cloneUrl, prNumber) is { } snapshot
-            ? new NodeOutcome.PrSeen(snapshot)
+    private static async Task<NodeOutcome.PrSeen?> SeeAsync(
+        IRemoteProvider remote, string cloneUrl, string prNumber, CancellationToken cancellationToken)
+        => await remote.GetPullRequestSnapshotAsync(cloneUrl, prNumber, cancellationToken) is { HeadSha: { } head } snapshot
+            ? new NodeOutcome.PrSeen(head, snapshot)
             : null;
 
     /// <summary>
-    /// Whether the run has anything to push. A run's own branch always does.
-    /// A branch it attached to is someone else's, who may push to it while a
-    /// round runs: with nothing of the run's own on top of origin's copy the
-    /// push is skipped, since one that is merely behind would be refused and
-    /// fail the node before the round's findings went out.
+    /// Bring the worktree up to what origin has of the branch before pushing,
+    /// and say whether there is anything of the run's own to push. Someone
+    /// else can push to the branch while a round runs — always on a branch the
+    /// run attached to, and on its own once that author is told of new
+    /// commits — so origin's copy can be ahead of the worktree:
+    /// <list type="bullet">
+    ///   <item>the run has commits of its own as well: they are rebased onto
+    ///         origin's copy, and a rebase that cannot complete fails the node
+    ///         saying so — a plain push would be refused anyway;</item>
+    ///   <item>the run has nothing of its own: nothing is pushed, and the round
+    ///         goes on to send its queued writes.</item>
+    /// </list>
+    /// A run's own branch that origin does not have yet is pushed as before,
+    /// as it is when origin cannot be asked: the push itself says whether it
+    /// went through. A branch the run attached to is held to more: it must be
+    /// readable on origin, and one that is gone is never pushed again — that
+    /// would recreate someone else's deleted branch.
     /// </summary>
-    private static async Task<bool> HasCommitsToPushAsync(
+    private static async Task<(bool Push, string? Error)> IntegrateWithOriginAsync(
         NodeExecutionContext ctx, IRepositoryManager repoManager, string branch, GitAuthOptions? gitAuth)
     {
-        if (!ctx.Run.AttachToExistingBranch)
-            return true;
-        await repoManager.FetchAsync(ctx.Run.WorktreePath!, ctx.CancellationToken, gitAuth);
-        return await repoManager.GetCommitsAheadCountAsync(ctx.Run.WorktreePath!, $"origin/{branch}") > 0;
+        var worktree = ctx.Run.WorktreePath!;
+        var attached = ctx.Run.AttachToExistingBranch;
+        var fetched = await repoManager.FetchAsync(worktree, ctx.CancellationToken, gitAuth);
+        if (!fetched)
+            return attached
+                ? (false, $"Could not fetch origin to check branch `{branch}` before pushing to it; nothing was pushed")
+                : (true, null);
+
+        if (!await repoManager.RemoteBranchExistsAsync(worktree, branch))
+            return attached
+                ? (false, $"Branch `{branch}` no longer exists on origin; this run attached to it and will not recreate it")
+                : (true, null);
+
+        var upstream = $"origin/{branch}";
+        var ahead = await repoManager.GetCommitsAheadCountAsync(worktree, upstream);
+        if (ahead == 0)
+            return (false, null);
+
+        if (await repoManager.GetCommitsBehindCountAsync(worktree, upstream) > 0)
+        {
+            var rebase = await repoManager.RebaseAsync(worktree, upstream, ctx.CancellationToken);
+            if (!rebase.Success)
+            {
+                var where = rebase.ConflictedFiles.Count > 0
+                    ? $" (conflicts in {string.Join(", ", rebase.ConflictedFiles)})"
+                    : rebase.Error is { Length: > 0 } error ? $": {error}" : string.Empty;
+                return (false,
+                    $"Branch `{branch}` moved on origin while this round ran, and the run's commits do not rebase onto it{where}; nothing was pushed");
+            }
+        }
+
+        return (true, null);
     }
 
     /// <summary>
@@ -493,7 +543,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                     PrQueuedWrite.Resolve => await remote.ResolveReviewThreadAsync(cloneUrl, prNumber, write.TargetId),
                     // A new review comment of the round's own, on the line it is about.
                     PrQueuedWrite.Finding => await remote.CreateReviewCommentAsync(
-                        cloneUrl, prNumber, write.Path ?? string.Empty, write.Line ?? 1, stamped),
+                        cloneUrl, prNumber, write.Path ?? string.Empty, write.Line ?? 1, stamped, ctx.CancellationToken),
                     // Nothing to reply on, so it goes out as a comment of its own.
                     PrQueuedWrite.Comment => await remote.CreatePullRequestCommentAsync(cloneUrl, prNumber, stamped),
                     _ => await remote.ReplyToReviewThreadAsync(cloneUrl, prNumber, write.TargetId, stamped),

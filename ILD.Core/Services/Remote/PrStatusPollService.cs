@@ -76,7 +76,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         if (repoUrl is null || prNumber is null)
             return;
 
-        var snapshot = await _remote.GetPullRequestSnapshotAsync(repoUrl, prNumber);
+        var snapshot = await _remote.GetPullRequestSnapshotAsync(repoUrl, prNumber, ct);
         if (snapshot is null)
             return;
 

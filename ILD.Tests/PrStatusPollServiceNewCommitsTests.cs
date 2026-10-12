@@ -64,7 +64,7 @@ public class PrStatusPollServiceNewCommitsTests
 
         public async Task PollAsync(RemotePrSnapshot current)
         {
-            Remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7")).ReturnsAsync(current);
+            Remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7", It.IsAny<CancellationToken>())).ReturnsAsync(current);
             await new PrStatusPollService(Runs.Object, Remote.Object, Engine.Object, Mock.Of<IRunNotifier>(),
                 NullLogger<PrStatusPollService>.Instance).PollOnceAsync(TestContext.Current.CancellationToken);
         }

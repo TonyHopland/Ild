@@ -35,7 +35,7 @@ public class BranchNameOverrideServiceTests : IDisposable
     {
         var (svc, _, _, _) = Setup();
 
-        var verdict = await svc.InspectAsync("feature foo", null, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature foo", null, "WI-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(verdict.ValidationError);
         Assert.Null(verdict.Conflict);
@@ -50,7 +50,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(false);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(verdict.IsUsable);
         Assert.False(verdict.ExistsOnOrigin);
@@ -63,7 +63,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, db, repoId, _) = Setup();
         var run = SeedRun(db, "WI-1", "feature/foo", LoopRunStatus.Completed);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(verdict.ValidationError);
         Assert.Contains("`feature/foo`", verdict.Conflict);
@@ -88,7 +88,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), "feature/foo", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken,
             attachToExistingBranch: attach);
 
         Assert.Contains("already used locally", verdict.Conflict);
@@ -108,7 +108,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, db, repoId, _) = Setup();
         SeedRun(db, "WI-1", "feature/foo", status);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("still active", verdict.Conflict);
         Assert.Contains("cancel it", verdict.Conflict);
@@ -123,7 +123,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, db, repoId, _) = Setup();
         SeedRun(db, "WI-1", "feature/foo", status);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("Clean up that run", verdict.Conflict);
         Assert.Contains("keeping its history", verdict.Conflict);
@@ -136,7 +136,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         var (svc, db, repoId, _) = Setup();
         SeedRun(db, "WI-9", "feature/foo", LoopRunStatus.Running);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("work item WI-9", verdict.Conflict);
     }
@@ -151,7 +151,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), "feature/foo", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken,
             attachToExistingBranch: attach);
 
         Assert.Contains("already exists locally", verdict.Conflict);
@@ -166,7 +166,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync("https://example/repo.git", "feature/foo", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken);
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains("`feature/foo` already exists on origin", verdict.Conflict);
         Assert.True(verdict.ExistsOnOrigin);
@@ -180,7 +180,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync("https://example/repo.git", "feature/foo", It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(true);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken,
             attachToExistingBranch: true);
 
         Assert.True(verdict.IsUsable);
@@ -197,7 +197,7 @@ public class BranchNameOverrideServiceTests : IDisposable
         git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync(false);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken,
             attachToExistingBranch: true);
 
         Assert.Null(verdict.ValidationError);
@@ -209,20 +209,23 @@ public class BranchNameOverrideServiceTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task An_unreachable_origin_is_not_treated_as_a_conflict(bool attach)
+    public async Task An_unreachable_origin_is_not_a_conflict_for_a_fresh_branch_but_cannot_confirm_an_attach(bool attach)
     {
-        // Refusing to start over an unanswered question would park work items
-        // on a flaky network; the Start node fails the run on an unreachable
-        // origin anyway, and an attaching run on a missing origin branch.
+        // Refusing to start a fresh branch over an unanswered question would
+        // park work items on a flaky network; the Start node fails the run on
+        // an unreachable origin anyway. An attach needs the answer: nothing
+        // else confirms there is a branch to attach to.
         var (svc, _, repoId, git) = Setup();
         git.Setup(g => g.LocalBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false);
         git.Setup(g => g.RemoteHasBranchAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
             .ReturnsAsync((bool?)null);
 
-        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", TestContext.Current.CancellationToken,
+        var verdict = await svc.InspectAsync("feature/foo", repoId, "WI-1", cancellationToken: TestContext.Current.CancellationToken,
             attachToExistingBranch: attach);
 
-        Assert.True(verdict.IsUsable);
+        Assert.Equal(!attach, verdict.IsUsable);
+        if (attach)
+            Assert.Contains("Could not reach origin to confirm that branch `feature/foo` exists", verdict.Conflict);
         Assert.Null(verdict.ExistsOnOrigin);
     }
 

@@ -161,15 +161,16 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     /// <c>active</c> status.
     /// </summary>
     public override async Task<RemotePrLookup> FindOpenPullRequestAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch)
+        HttpClient http, ResolvedRemoteRepository repo, string sourceBranch, string targetBranch,
+        CancellationToken cancellationToken = default)
     {
         ApplyHeaders(http, repo.Provider);
         var query = $"searchCriteria.sourceRefName={Uri.EscapeDataString(RefName(sourceBranch))}&searchCriteria.status=active";
         IReadOnlyList<JsonElement>? active;
         try
         {
-            using var resp = await http.GetAsync(Versioned($"{GitApi(repo)}/pullrequests", query));
-            active = resp.IsSuccessStatusCode ? await ReadCollectionAsync(resp) : null;
+            using var resp = await http.GetAsync(Versioned($"{GitApi(repo)}/pullrequests", query), cancellationToken);
+            active = resp.IsSuccessStatusCode ? await ReadCollectionAsync(resp, cancellationToken) : null;
         }
         catch (JsonException)
         {
@@ -178,9 +179,12 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         if (active is null)
             return new RemotePrLookup(null, null, null, "could not list the active pull requests from Azure DevOps");
 
+        // A fork's pull request names the same source ref and carries forkSource.
         var candidates = active
-            .Where(pr => string.Equals(ReadString(pr, "sourceRefName"), RefName(sourceBranch), StringComparison.Ordinal))
-            .Select(pr => (Number: ReadScalar(pr, "pullRequestId"), Target: ReadString(pr, "targetRefName")))
+            .Where(pr => string.Equals(ReadString(pr, "sourceRefName"), RefName(sourceBranch), StringComparison.Ordinal)
+                && (!pr.TryGetProperty("forkSource", out var fork) || fork.ValueKind == JsonValueKind.Null))
+            .Select(pr => (Number: ReadScalar(pr, "pullRequestId"), Target: ReadString(pr, "targetRefName"),
+                CreatedAt: ReadDate(pr, "creationDate")))
             .Where(pr => int.TryParse(pr.Number, out _))
             .Select(pr => (
                 Number: (int?)int.Parse(pr.Number!),
@@ -188,15 +192,17 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
                     ? target["refs/heads/".Length..]
                     : pr.Target,
                 Url: (string?)PrApi(repo, pr.Number!),
-                HtmlUrl: (string?)WebUrl(repo, pr.Number!)))
+                HtmlUrl: (string?)WebUrl(repo, pr.Number!),
+                pr.CreatedAt))
             .ToList();
         return PickOpenPullRequest(candidates, sourceBranch, targetBranch);
     }
 
     /// <summary>The <c>value</c> array of a collection response, or null when the response is not one.</summary>
-    private static async Task<IReadOnlyList<JsonElement>?> ReadCollectionAsync(HttpResponseMessage resp)
+    private static async Task<IReadOnlyList<JsonElement>?> ReadCollectionAsync(
+        HttpResponseMessage resp, CancellationToken cancellationToken = default)
     {
-        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(cancellationToken));
         if (doc.RootElement.ValueKind != JsonValueKind.Object
             || !doc.RootElement.TryGetProperty(CollectionProperty, out var value)
             || value.ValueKind != JsonValueKind.Array)
@@ -271,7 +277,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     /// files from the repository root with a leading slash.
     /// </summary>
     public override async Task<RemotePrWriteResult> CreateReviewCommentAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body)
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body,
+        CancellationToken cancellationToken = default)
     {
         ApplyHeaders(http, repo.Provider);
         using var resp = await http.PostAsJsonAsync(
@@ -286,9 +293,10 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
                     rightFileStart = new { line, offset = 1 },
                     rightFileEnd = new { line, offset = 1 },
                 },
-            });
+            },
+            cancellationToken);
         if (!resp.IsSuccessStatusCode)
-            return new RemotePrWriteResult(false, null, $"The finding was refused by Azure DevOps (HTTP {(int)resp.StatusCode}).");
+            return new RemotePrWriteResult(false, null, await PrCommentHelper.RefusalAsync(resp, "finding", "Azure DevOps"));
 
         return new RemotePrWriteResult(true, await ReadCreatedThreadCommentIdAsync(resp), null);
     }
@@ -499,7 +507,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     }
 
     public override async Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, CancellationToken cancellationToken = default)
     {
         ApplyHeaders(http, repo.Provider);
 
@@ -509,7 +517,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         string mergeStatus;
         for (var attempt = 0; ; attempt++)
         {
-            var fetched = await GetObjectAsync(http, Versioned(PrApi(repo, prNumber)));
+            var fetched = await GetObjectAsync(http, Versioned(PrApi(repo, prNumber)), cancellationToken);
             if (fetched is null)
                 return null;
 
@@ -522,7 +530,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             var stillComputing = mergeStatus is "" or "queued" or "notset";
             if (!stillComputing || status is "completed" or "abandoned" || attempt == attempts - 1)
                 break;
-            await Task.Delay(MergeableRetryDelay);
+            await Task.Delay(MergeableRetryDelay, cancellationToken);
         }
 
         var merged = status == "completed";
@@ -537,8 +545,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         };
 
         var (approved, changesRequested, reviews) = ReadReviewers(pr);
-        var conversation = await ReadConversationAsync(http, repo, prNumber, reviews);
-        var (ci, failedChecks) = await ReadCiStatusAsync(http, repo, pr, prNumber);
+        var conversation = await ReadConversationAsync(http, repo, prNumber, reviews, cancellationToken);
+        var (ci, failedChecks) = await ReadCiStatusAsync(http, repo, pr, prNumber, cancellationToken);
 
         return new RemotePrSnapshot(
             ReadString(pr, "title"),
@@ -856,10 +864,11 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     }
 
     private async Task<IReadOnlyList<RemotePrConversationEntry>> ReadConversationAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber, List<RemotePrConversationEntry> reviews)
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, List<RemotePrConversationEntry> reviews,
+        CancellationToken cancellationToken)
     {
         var conversation = new List<RemotePrConversationEntry>(reviews);
-        foreach (var comment in await ReadThreadCommentsAsync(http, repo, prNumber))
+        foreach (var comment in await ReadThreadCommentsAsync(http, repo, prNumber, cancellationToken))
             conversation.Add(new RemotePrConversationEntry(comment.Kind, comment.Author, comment.Body, comment.At, null));
 
         return conversation.OrderBy(e => e.CreatedAt).ToList();
@@ -878,11 +887,12 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     /// id carried out is qualified by the thread's.
     /// </summary>
     private async Task<IReadOnlyList<ThreadComment>> ReadThreadCommentsAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber)
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, CancellationToken cancellationToken = default)
     {
         var flattened = new List<ThreadComment>();
 
-        foreach (var thread in await GetArrayAsync(http, Versioned($"{PrApi(repo, prNumber)}/threads"), CollectionProperty))
+        foreach (var thread in await GetArrayAsync(
+            http, Versioned($"{PrApi(repo, prNumber)}/threads"), CollectionProperty, cancellationToken))
         {
             var threadId = ReadScalar(thread, "id") ?? "0";
             var kind = ReadString(Child(thread, "threadContext"), "filePath") is null ? "comment" : "review_comment";
@@ -917,7 +927,7 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     /// CI and are left out of the verdict.
     /// </summary>
     private async Task<(RemotePrCiStatus Status, IReadOnlyList<RemotePrCheck> FailedChecks)> ReadCiStatusAsync(
-        HttpClient http, ResolvedRemoteRepository repo, JsonElement pr, string prNumber)
+        HttpClient http, ResolvedRemoteRepository repo, JsonElement pr, string prNumber, CancellationToken cancellationToken)
     {
         var anyPresent = false;
         var anyPending = false;
@@ -928,7 +938,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
         {
             var artifactId = $"vstfs:///CodeReview/CodeReviewId/{projectId}/{prNumber}";
             var evaluations = await GetArrayAsync(http, Versioned(
-                $"{repo.ApiBase}/_apis/policy/evaluations", $"artifactId={Uri.EscapeDataString(artifactId)}"), CollectionProperty);
+                $"{repo.ApiBase}/_apis/policy/evaluations", $"artifactId={Uri.EscapeDataString(artifactId)}"), CollectionProperty,
+                cancellationToken);
 
             foreach (var evaluation in evaluations)
             {
@@ -956,7 +967,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             }
         }
 
-        foreach (var status in await GetArrayAsync(http, Versioned($"{PrApi(repo, prNumber)}/statuses"), CollectionProperty))
+        foreach (var status in await GetArrayAsync(
+            http, Versioned($"{PrApi(repo, prNumber)}/statuses"), CollectionProperty, cancellationToken))
         {
             var state = (ReadString(status, "state") ?? string.Empty).ToLowerInvariant();
             if (state is "" or "notset" or "notapplicable")

@@ -146,7 +146,7 @@ public class PRNodeExecutorTests
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         remote.Setup(r => r.CreatePullRequestAsync(repo.CloneUrl, It.IsAny<string>(), "release/1.0", "T", It.IsAny<string>()))
             .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
@@ -198,7 +198,7 @@ public class PRNodeExecutorTests
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/a/pull/42", RemotePrStatus.Open, null));
@@ -254,7 +254,7 @@ public class PRNodeExecutorTests
             services.AddSingleton(workItems.Object);
             services.AddSingleton(providerStore.Object);
             var remote = new Mock<IRemoteProvider>();
-            remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(new RemotePrLookup(null, null, null, null));
             services.AddSingleton(remote.Object);
             services.AddSingleton(repoManager.Object);
@@ -305,7 +305,7 @@ public class PRNodeExecutorTests
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         remote.Setup(r => r.CreatePullRequestAsync(repo.CloneUrl, It.IsAny<string>(), "main", "T", It.IsAny<string>()))
             .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
@@ -347,7 +347,7 @@ public class PRNodeExecutorTests
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
@@ -392,7 +392,7 @@ public class PRNodeExecutorTests
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/7", RemotePrStatus.Open, null));
@@ -429,7 +429,7 @@ public class PRNodeExecutorTests
         providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
         providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        remote.Setup(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrLookup(null, null, null, null));
         remote.Setup(r => r.CreatePullRequestCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(new RemotePrWriteResult(false, null, null));

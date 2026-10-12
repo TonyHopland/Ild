@@ -66,7 +66,7 @@ public class PrStatusPollServiceTests
             Runs.Setup(s => s.GetPrAwaitingMergeRunsAsync()).ReturnsAsync(new[] { Run });
             Runs.Setup(s => s.GetRunNodeAsync(Run.Id, loopNodeId)).ReturnsAsync(RunNode);
             Runs.Setup(s => s.GetEdgesForNodeIdsAsync(It.IsAny<IReadOnlyList<Guid>>())).ReturnsAsync(edges);
-            Remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7"))
+            Remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7", It.IsAny<CancellationToken>()))
                 .ReturnsAsync(snapshot);
         }
 

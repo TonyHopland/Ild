@@ -112,7 +112,7 @@ public class PrPollHandoverTests
                     return true;
                 });
 
-            Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Snapshot(approved));
+            Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7", It.IsAny<CancellationToken>())).ReturnsAsync(Snapshot(approved));
             Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(fetched);
             Engine.Setup(e => e.SignalNodeResultAsync(Run.Id, RunNode.Id, It.IsAny<NodeSignal>()))
                 .Callback<Guid, Guid, NodeSignal>((_, _, signal) => Fired = signal)

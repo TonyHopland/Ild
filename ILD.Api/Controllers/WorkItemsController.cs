@@ -258,6 +258,9 @@ public class WorkItemsController : ControllerBase
             && BranchNameRules.Validate(baseBranchOverride, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
 
+        if (BranchNameRules.AttachProblem(request.AttachToExistingBranch, branchNameOverride) is { } attachError)
+            return BadRequest(new { error = attachError });
+
         var id = await _workItemManager.CreateWorkItemAsync(
             request.Title, request.Description,
             repositoryId,
@@ -304,6 +307,20 @@ public class WorkItemsController : ControllerBase
             && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
 
+        // An omitted branch name keeps the stored one, so that is the one an
+        // attach in this edit would need.
+        if (request.AttachToExistingBranch == true)
+        {
+            var branchAfter = request.BranchNameOverride;
+            if (branchAfter is null)
+            {
+                if (await _workItemManager.GetWorkItemAsync(id) is not { } stored) return NotFound();
+                branchAfter = stored.BranchNameOverride;
+            }
+            if (BranchNameRules.AttachProblem(true, branchAfter) is { } attachError)
+                return BadRequest(new { error = attachError });
+        }
+
         // A blank repository leaves the stored one alone, so agent edits and
         // older clients that never send it keep working. The WorkItemServer has
         // no repository table to check against, so an unknown id is refused here.
@@ -346,7 +363,7 @@ public class WorkItemsController : ControllerBase
             return Ok(new { error = (string?)null, warning = (string?)null, existsOnOrigin = (bool?)null });
 
         Guid? repoId = Guid.TryParse(repositoryId, out var parsed) ? parsed : null;
-        var verdict = await _branchNames.InspectAsync(name, repoId, workItemId, cancellationToken, attachToExistingBranch);
+        var verdict = await _branchNames.InspectAsync(name, repoId, workItemId, attachToExistingBranch, cancellationToken);
         return Ok(new { error = verdict.ValidationError, warning = verdict.Conflict, existsOnOrigin = verdict.ExistsOnOrigin });
     }
 

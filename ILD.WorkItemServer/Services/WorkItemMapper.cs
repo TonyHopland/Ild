@@ -137,4 +137,18 @@ internal static class WorkItemMapper
     /// </summary>
     public static string? NormalizeBranchRef(string? raw)
         => string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
+
+    /// <summary>
+    /// <see cref="Domain.WorkItem.AttachToExistingBranch"/> after a write that
+    /// leaves the branch name override at <paramref name="branch"/>. Never on
+    /// without a name — there is nothing to attach to — and a name that changed
+    /// drops it unless the same write sets it: a tick confirmed for one branch
+    /// says nothing about another.
+    /// </summary>
+    public static bool AttachAfter(string? previousBranch, string? branch, bool previousAttach, bool? requestedAttach)
+    {
+        if (branch is null) return false;
+        if (requestedAttach is { } requested) return requested;
+        return previousAttach && string.Equals(previousBranch, branch, StringComparison.Ordinal);
+    }
 }

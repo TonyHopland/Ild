@@ -219,6 +219,31 @@ public class RemotePrFindingAndLookupTests
         Assert.False(string.IsNullOrWhiteSpace(result.Message));
     }
 
+    [Theory]
+    [MemberData(nameof(RefusedFindings))]
+    public async Task A_refused_finding_says_why_in_the_forges_own_words(
+        string type, string providerUrl, string repoUrl, string postRoute, string refusal)
+    {
+        using var db = new TestDb();
+        var handler = new ForgeHandler()
+            .On(HttpMethod.Get, u => u.Contains("/pulls/7", StringComparison.Ordinal),
+                "{\"number\":7,\"state\":\"open\",\"head\":{\"ref\":\"feature\",\"sha\":\"" + Head + "\"}}")
+            .On(HttpMethod.Post, u => u.Contains(postRoute, StringComparison.Ordinal), refusal,
+                type == "AzureDevOps" ? HttpStatusCode.BadRequest : HttpStatusCode.UnprocessableEntity);
+
+        var result = await CreateService(db, handler, type, providerUrl)
+            .CreateReviewCommentAsync(repoUrl, "7", "src/A.cs", 9999, "Null is not handled.");
+
+        var said = type switch
+        {
+            "GitHub" => "could not be resolved",
+            "Forgejo" => "position is out of range",
+            _ => "The thread context is invalid.",
+        };
+        Assert.Contains(said, result.Message, StringComparison.Ordinal);
+        Assert.Contains("HTTP", result.Message, StringComparison.Ordinal);
+    }
+
     // ---- Finding the open pull request a branch already has ----
 
     private static string GitHubPull(int number, string head, string @base) =>
@@ -398,6 +423,89 @@ public class RemotePrFindingAndLookupTests
 
         Assert.Null(found.Number);
         Assert.NotNull(found.Error);
+    }
+
+    [Fact]
+    public async Task An_azure_pull_request_from_a_fork_is_not_taken_for_the_branch()
+    {
+        using var db = new TestDb();
+        var handler = new ForgeHandler().On(HttpMethod.Get, u => u.StartsWith($"{AzureGitApi}/pullrequests?", StringComparison.Ordinal),
+            "{\"value\":["
+            + "{\"pullRequestId\":41,\"status\":\"active\",\"sourceRefName\":\"refs/heads/feature\",\"targetRefName\":\"refs/heads/main\","
+            + "\"forkSource\":{\"name\":\"refs/heads/feature\",\"repository\":{\"name\":\"someone-app\"}}},"
+            + "{\"pullRequestId\":42,\"status\":\"active\",\"sourceRefName\":\"refs/heads/feature\",\"targetRefName\":\"refs/heads/main\"}"
+            + "],\"count\":2}");
+
+        var found = await CreateService(db, handler, "AzureDevOps", "https://dev.azure.com/contoso")
+            .FindOpenPullRequestAsync(AzureRepo, "feature", "release");
+
+        Assert.Null(found.Error);
+        Assert.Equal(42, found.Number);
+    }
+
+    [Fact]
+    public async Task A_pull_request_whose_fork_was_deleted_is_not_taken_for_the_branch()
+    {
+        using var db = new TestDb();
+        var handler = new ForgeHandler().On(HttpMethod.Get, u => u.StartsWith($"{ForgejoApi}/pulls?", StringComparison.Ordinal), url =>
+            (HttpStatusCode.OK, Query(url, "page") is "" or "1"
+                ? "[{\"number\":3,\"head\":{\"ref\":\"feature\",\"repo\":null},\"base\":{\"ref\":\"main\"}},"
+                  + "{\"number\":5,\"html_url\":\"https://gitea.example/team/repo/pulls/5\","
+                  + "\"head\":{\"ref\":\"feature\",\"repo\":{\"full_name\":\"team/repo\"}},\"base\":{\"ref\":\"main\"}}]"
+                : "[]"));
+
+        var found = await CreateService(db, handler, "Forgejo", "https://gitea.example")
+            .FindOpenPullRequestAsync(ForgejoRepo, "feature", "release");
+
+        Assert.Null(found.Error);
+        Assert.Equal(5, found.Number);
+    }
+
+    [Theory]
+    [InlineData("GitHub", "https://github.com", GitHubRepo)]
+    [InlineData("AzureDevOps", "https://dev.azure.com/contoso", AzureRepo)]
+    public async Task A_lookup_dates_the_pull_request_from_the_forge(string type, string providerUrl, string repoUrl)
+    {
+        using var db = new TestDb();
+        var handler = new ForgeHandler().On(HttpMethod.Get, _ => true, url =>
+            (HttpStatusCode.OK, type == "GitHub"
+                ? (Query(url, "page") is "" or "1"
+                    ? "[{\"number\":12,\"created_at\":\"2026-09-01T08:00:00Z\",\"head\":{\"ref\":\"feature\"},\"base\":{\"ref\":\"main\"}}]"
+                    : "[]")
+                : "{\"value\":[{\"pullRequestId\":42,\"creationDate\":\"2026-09-01T08:00:00Z\",\"sourceRefName\":\"refs/heads/feature\",\"targetRefName\":\"refs/heads/main\"}],\"count\":1}"));
+
+        var found = await CreateService(db, handler, type, providerUrl).FindOpenPullRequestAsync(repoUrl, "feature", "main");
+
+        Assert.Equal(new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc), found.CreatedAt!.Value.ToUniversalTime());
+    }
+
+    [Fact]
+    public async Task A_cancelled_lookup_is_cancelled_rather_than_reported_as_a_forge_error()
+    {
+        using var db = new TestDb();
+        var handler = new HangingHandler();
+        using var cancel = new CancellationTokenSource();
+        var lookup = CreateService(db, handler, "GitHub", "https://github.com")
+            .FindOpenPullRequestAsync(GitHubRepo, "feature", "main", cancel.Token);
+        await handler.Entered;
+
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => lookup);
+    }
+
+    /// <summary>A forge that does not answer until the request is cancelled.</summary>
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Entered => _entered.Task;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            _entered.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
     }
 
     // ---- Reading a posted finding back off the forge ----

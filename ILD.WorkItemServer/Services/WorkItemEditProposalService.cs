@@ -219,6 +219,14 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
 
         var now = _clock.GetUtcNow().UtcDateTime;
         var proposedTags = proposal.ProposedTagsJson;
+        // The compare below pins the item to the snapshot, so the branch the
+        // write leaves is known here.
+        var branchAfter = proposal.ProposedBranchNameOverride is { } proposedBranch
+            ? WorkItemMapper.NormalizeBranchRef(proposedBranch)
+            : proposal.SnapshotBranchNameOverride;
+        var attachAfter = WorkItemMapper.AttachAfter(
+            proposal.SnapshotBranchNameOverride, branchAfter, proposal.SnapshotAttachToExistingBranch,
+            proposal.ProposedAttachToExistingBranch);
         var (expectedDependencies, proposedDependencies) = await DependencyWriteAsync(proposal, ct);
         var applied = await _db.WorkItems
             .Where(w => w.InternalId == proposal.WorkItemId
@@ -241,8 +249,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
                     s.SetProperty(w => w.BranchNameOverride, WorkItemMapper.NormalizeBranchRef(branch));
                 if (proposal.ProposedBaseBranchOverride is { } baseBranch)
                     s.SetProperty(w => w.BaseBranchOverride, WorkItemMapper.NormalizeBranchRef(baseBranch));
-                if (proposal.ProposedAttachToExistingBranch is { } attach)
-                    s.SetProperty(w => w.AttachToExistingBranch, attach);
+                s.SetProperty(w => w.AttachToExistingBranch, attachAfter);
                 if (proposedDependencies is not null)
                     s.SetProperty(w => w.DependenciesJson, proposedDependencies);
                 s.SetProperty(w => w.UpdatedAt, now);

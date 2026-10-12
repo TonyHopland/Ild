@@ -35,6 +35,40 @@ internal static class PrCommentHelper
         return new RemotePrWriteResult(true, await ReadCreatedIdAsync(resp), null);
     }
 
+    /// <summary>Longest stretch of a forge's own refusal text carried into a write's message.</summary>
+    private const int MaxRefusalDetail = 300;
+
+    /// <summary>
+    /// Why the forge refused a write, in its own words where it gave any: the
+    /// top-level <c>message</c> every supported forge sends, followed by the
+    /// first entry of GitHub's <c>errors</c> list, which is where the useful
+    /// part ("could not be resolved") lives. The status code is always kept.
+    /// </summary>
+    internal static async Task<string> RefusalAsync(HttpResponseMessage resp, string what, string provider)
+    {
+        var status = $"The {what} was refused by {provider} (HTTP {(int)resp.StatusCode})";
+        var detail = new List<string>();
+        try
+        {
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+            if (doc.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                if (doc.RootElement.TryGetProperty("message", out var message) && message.ValueKind == JsonValueKind.String)
+                    detail.Add(message.GetString()!);
+                if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array
+                    && errors.GetArrayLength() > 0 && errors[0].ValueKind == JsonValueKind.Object
+                    && errors[0].TryGetProperty("message", out var first) && first.ValueKind == JsonValueKind.String)
+                    detail.Add(first.GetString()!);
+            }
+        }
+        catch (JsonException) { }
+
+        var said = string.Join(": ", detail.Where(d => !string.IsNullOrWhiteSpace(d)).Select(d => d.Trim()));
+        if (said.Length == 0)
+            return status + ".";
+        return $"{status}: {(said.Length <= MaxRefusalDetail ? said : said[..MaxRefusalDetail] + "…")}";
+    }
+
     /// <summary>
     /// The id the provider gave whatever was just created, or null when the
     /// response did not name one. Best-effort by design: a write the provider

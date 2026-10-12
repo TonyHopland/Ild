@@ -147,7 +147,7 @@ public class PRNodeExecutorPrCommentTests
         });
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.GetPullRequestSnapshotAsync("https://example.com/owner/repo", "42"))
+        remote.Setup(r => r.GetPullRequestSnapshotAsync("https://example.com/owner/repo", "42", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrSnapshot("t", "b", "open", false, null, null, RemotePrCiStatus.None,
                 Array.Empty<RemotePrCheck>(), false, false, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow));
         remote.Setup(r => r.GetPullRequestReviewLedgerAsync("https://example.com/owner/repo", "42"))

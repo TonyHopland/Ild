@@ -194,6 +194,21 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Approving_a_new_branch_name_drops_an_attach_confirmed_for_the_old_one()
+    {
+        var item = await CreateItemAsync();
+        await _client.UpdateAsync(_opts, item.Id, new RemoteUpdateWorkItemRequest { AttachToExistingBranch = true }, TestContext.Current.CancellationToken);
+        var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { BranchNameOverride = "feature/renamed" });
+
+        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+
+        Assert.Equal(EditProposalDecisionOutcome.Applied, approved.Outcome);
+        var stored = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!;
+        Assert.Equal("feature/renamed", stored.BranchNameOverride);
+        Assert.False(stored.AttachToExistingBranch);
+    }
+
+    [Fact]
     public async Task A_human_changing_attach_to_existing_branch_makes_a_pending_proposal_stale()
     {
         var item = await CreateItemAsync();

@@ -148,6 +148,7 @@ public class SettingsController : ControllerBase
         if (!KnownKeys.Contains(key)) return NotFound(new { error = $"Unknown setting key '{key}'" });
         if (request.Value is not { } sent) return BadRequest(new { error = "A value is required." });
         if (!TryCanonicalize(key, sent, out var value, out var error)) return BadRequest(new { error });
+        if (await FindingCapsProblemAsync(key, value, ct) is { } capsError) return BadRequest(new { error = capsError });
 
         await _store.UpsertAsync(key, value, ct);
 
@@ -175,6 +176,23 @@ public class SettingsController : ControllerBase
         }
 
         return Ok(new { key, value });
+    }
+
+    /// <summary>
+    /// The nits are counted among the findings, so a nit cap above the
+    /// findings cap could never be reached; refused from whichever side it is
+    /// written, against the other cap as it now reads.
+    /// </summary>
+    private async Task<string?> FindingCapsProblemAsync(string key, string value, CancellationToken ct)
+    {
+        if (key is not (AppSettingKeys.PrMaxFindings or AppSettingKeys.PrMaxNits))
+            return null;
+        var cap = int.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+        var findings = key == AppSettingKeys.PrMaxFindings ? cap : await _schedulerSettings.GetPrMaxFindingsAsync(ct);
+        var nits = key == AppSettingKeys.PrMaxNits ? cap : await _schedulerSettings.GetPrMaxNitsAsync(ct);
+        return nits > findings
+            ? $"{AppSettingKeys.PrMaxNits} ({nits}) cannot be more than {AppSettingKeys.PrMaxFindings} ({findings}): nits count toward the findings cap."
+            : null;
     }
 
     private static string DefaultFor(string key) => key switch

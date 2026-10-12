@@ -39,11 +39,16 @@ public interface IRepositoryManager
     Task<string> CreateWorktreeAsync(string repoPath, string branchName);
 
     /// <summary>
-    /// Like <see cref="CreateWorktreeAsync(string, string)"/>, but a new
-    /// <paramref name="branchName"/> starts at <paramref name="startPoint"/>
-    /// (for example <c>origin/feature/x</c>) instead of at the repository's HEAD.
+    /// Like <see cref="CreateWorktreeAsync(string, string)"/>, but the worktree
+    /// always ends up at <paramref name="startPoint"/> (for example
+    /// <c>origin/feature/x</c>): a leftover directory or local branch of that
+    /// name is replaced rather than reused, and a branch another worktree has
+    /// checked out is refused.
     /// </summary>
     Task<string> CreateWorktreeAsync(string repoPath, string branchName, string startPoint);
+
+    /// <summary>The commit checked out in <paramref name="worktreePath"/>, or null when git cannot say.</summary>
+    Task<string?> GetHeadShaAsync(string worktreePath);
     Task DestroyWorktreeAsync(string worktreePath);
     Task<bool> ValidateWorktreeHealthAsync(string worktreePath);
     Task<bool> CheckoutBranchAsync(string worktreePath, string branchName);

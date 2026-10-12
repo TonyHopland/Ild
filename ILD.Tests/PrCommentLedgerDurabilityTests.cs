@@ -182,7 +182,7 @@ public class PrCommentLedgerDurabilityTests
 
         var fetched = Fetched(Inline("4049159495"));
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Snapshot());
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7", It.IsAny<CancellationToken>())).ReturnsAsync(Snapshot());
         remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(fetched);
         var engine = new Mock<ILoopEngine>();
 
@@ -209,7 +209,7 @@ public class PrCommentLedgerDurabilityTests
         await db.LoopRuns.SetPrCommentLedgerAsync(seeded.Run.Id, watching);
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Snapshot());
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7", It.IsAny<CancellationToken>())).ReturnsAsync(Snapshot());
         remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(alreadySeen);
         var engine = new Mock<ILoopEngine>();
 

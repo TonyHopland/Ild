@@ -24,6 +24,17 @@ public static class BranchNameRules
     public const int MaxLength = 256;
 
     /// <summary>
+    /// Why attaching was refused for a work item that would be left with no
+    /// branch name, or null when it is not: attaching names no branch of its
+    /// own, so without an override there is nothing to attach to.
+    /// <paramref name="branchAfter"/> is the override the write leaves.
+    /// </summary>
+    public static string? AttachProblem(bool? attachToExistingBranch, string? branchAfter)
+        => attachToExistingBranch == true && Normalize(branchAfter) is null
+            ? "attachToExistingBranch needs a branch name: set branchNameOverride to the branch to attach to."
+            : null;
+
+    /// <summary>
     /// A custom branch name as it is stored and compared: trimmed, with blank
     /// collapsed to null so "no override" has exactly one representation.
     /// </summary>

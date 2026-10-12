@@ -100,7 +100,7 @@ public class PrFindingTests
         public void VerifyNothingWritten()
         {
             Remote.Verify(r => r.CreateReviewCommentAsync(
-                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>()), Times.Never);
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
             Remote.Verify(r => r.CreatePullRequestCommentAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
             Remote.Verify(r => r.ReplyToReviewThreadAsync(
                 It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
@@ -167,6 +167,27 @@ public class PrFindingTests
             Assert.Equal(2, h.Queue.Count);
             Assert.NotEqual(h.Queue[0].FindingId, h.Queue[1].FindingId);
         }
+    }
+
+    [Theory]
+    [InlineData("./src/a.cs", "/src/a.cs")]
+    [InlineData("/src/a.cs", "src\\a.cs")]
+    [InlineData("src\\a.cs", "./src/a.cs")]
+    public async Task One_file_written_two_ways_is_one_finding_stored_and_posted_under_one_path(string first, string again)
+    {
+        var h = new Harness();
+        var service = h.Build();
+
+        var queued = await service.FindingAsync("wi-1", first, 3, "important", "This leaks the file handle.", h.Run.Id);
+        var restated = await service.FindingAsync("wi-1", again, 3, "important", "This leaks the file handle.", h.Run.Id);
+
+        Assert.True(queued.Ok, queued.Message);
+        Assert.True(restated.Ok, restated.Message);
+        Assert.Contains("already", restated.Message, StringComparison.OrdinalIgnoreCase);
+        var write = Assert.Single(h.Queue);
+        Assert.Equal("src/a.cs", write.Path);
+        Assert.Equal(PrFinding.IdFor("src/a.cs", "This leaks the file handle."), write.FindingId);
+        Assert.Equal(PrFinding.IdFor(first, "x"), PrFinding.IdFor(again, "x"));
     }
 
     [Theory]
@@ -304,7 +325,7 @@ public class PrFindingTests
             });
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7"))
+        remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrSnapshot("t", "b", "open", false, null, null, RemotePrCiStatus.None,
                 Array.Empty<RemotePrCheck>(), false, false, Array.Empty<RemotePrConversationEntry>(), DateTime.UtcNow));
         remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7"))
@@ -329,8 +350,8 @@ public class PrFindingTests
         var findingId = Assert.Single(h.Queue).FindingId!;
 
         string? posted = null;
-        h.Remote.Setup(r => r.CreateReviewCommentAsync(CloneUrl, "7", "src/A.cs", 12, It.IsAny<string>()))
-            .Callback<string, string, string, int, string>((_, _, _, _, body) => posted = body)
+        h.Remote.Setup(r => r.CreateReviewCommentAsync(CloneUrl, "7", "src/A.cs", 12, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, string, int, string, CancellationToken>((_, _, _, _, body, _) => posted = body)
             .ReturnsAsync(new RemotePrWriteResult(true, "5001", null));
 
         var outcomes = await RunPrNodeAsync(h);
@@ -362,7 +383,7 @@ public class PrFindingTests
         var h = new Harness();
         var queued = await h.Build().FindingAsync("wi-1", "src/A.cs", 9000, "nit", "Off the end of the diff.", h.Run.Id);
         Assert.True(queued.Ok, queued.Message);
-        h.Remote.Setup(r => r.CreateReviewCommentAsync(CloneUrl, "7", "src/A.cs", 9000, It.IsAny<string>()))
+        h.Remote.Setup(r => r.CreateReviewCommentAsync(CloneUrl, "7", "src/A.cs", 9000, It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePrWriteResult(false, null, "HTTP 422: line must be part of the diff"));
 
         var outcomes = await RunPrNodeAsync(h);
@@ -370,6 +391,6 @@ public class PrFindingTests
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
         Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
         Assert.Empty(h.Queue);
-        h.Remote.Verify(r => r.CreateReviewCommentAsync(CloneUrl, "7", "src/A.cs", 9000, It.IsAny<string>()), Times.Once);
+        h.Remote.Verify(r => r.CreateReviewCommentAsync(CloneUrl, "7", "src/A.cs", 9000, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

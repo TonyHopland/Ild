@@ -141,6 +141,7 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         var created = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
         {
             Title = "attach",
+            BranchNameOverride = "feature/attach",
             AttachToExistingBranch = true,
         }, TestContext.Current.CancellationToken);
         Assert.True(created.AttachToExistingBranch);

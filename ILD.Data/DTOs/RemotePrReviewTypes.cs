@@ -167,8 +167,21 @@ public static class PrFinding
     {
         var normalized = string.Join(' ', body.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
             .ToLowerInvariant();
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"{path.Trim()}\n{normalized}"));
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes($"{CanonicalPath(path)}\n{normalized}"));
         return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// The one way a finding's file is written — repository-relative, forward
+    /// slashes, no leading "./" or "/" — used for its id, the queue and the
+    /// post alike, so "./src/a.cs", "/src/a.cs" and "src\a.cs" are one file.
+    /// </summary>
+    public static string CanonicalPath(string path)
+    {
+        var canonical = path.Trim().Replace('\\', '/');
+        while (canonical.StartsWith("./", StringComparison.Ordinal) || canonical.StartsWith('/'))
+            canonical = canonical.StartsWith("./", StringComparison.Ordinal) ? canonical[2..] : canonical[1..];
+        return canonical;
     }
 }
 

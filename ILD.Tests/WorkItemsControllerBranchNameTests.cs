@@ -131,7 +131,7 @@ public class WorkItemsControllerBranchNameTests
                 attachToExistingBranch: true, cancellationToken: CancellationToken.None));
 
         Assert.Equal(onOrigin, ReadExistsOnOrigin(result.Value!));
-        branchNames.Verify(b => b.InspectAsync("feature/foo", repoId, "WI-1", It.IsAny<CancellationToken>(), true), Times.Once);
+        branchNames.Verify(b => b.InspectAsync("feature/foo", repoId, "WI-1", true, It.IsAny<CancellationToken>()), Times.Once);
 
         static bool? ReadExistsOnOrigin(object payload)
             => (bool?)payload.GetType().GetProperty("existsOnOrigin")!.GetValue(payload);
@@ -242,6 +242,47 @@ public class WorkItemsControllerBranchNameTests
         Assert.False((await mgr.GetWorkItemAsync(id))!.AttachToExistingBranch);
     }
 
+    [Fact]
+    public async Task Attaching_needs_a_branch_name_on_create_and_on_edit()
+    {
+        var (controller, mgr, db, repoId) = Setup();
+        using var _db = db;
+
+        Assert.IsType<BadRequestObjectResult>(await controller.Create(new WorkItemCreateRequest
+        {
+            Title = "t", RepositoryId = repoId.ToString(), AttachToExistingBranch = true,
+        }));
+
+        var created = Assert.IsType<CreatedAtActionResult>(await controller.Create(new WorkItemCreateRequest
+        {
+            Title = "t", RepositoryId = repoId.ToString(),
+        }));
+        var id = Assert.IsType<WorkItemView>(created.Value).Id;
+
+        // No name stored and none sent.
+        Assert.IsType<BadRequestObjectResult>(await controller.Update(id, new WorkItemCreateRequest
+        {
+            Title = "t", RepositoryId = repoId.ToString(), AttachToExistingBranch = true,
+        }));
+        // A name sent blank is a clear, not a name.
+        Assert.IsType<BadRequestObjectResult>(await controller.Update(id, new WorkItemCreateRequest
+        {
+            Title = "t", RepositoryId = repoId.ToString(), BranchNameOverride = "", AttachToExistingBranch = true,
+        }));
+        Assert.IsType<OkObjectResult>(await controller.Update(id, new WorkItemCreateRequest
+        {
+            Title = "t", RepositoryId = repoId.ToString(), BranchNameOverride = "feature/foo", AttachToExistingBranch = true,
+        }));
+        Assert.True((await mgr.GetWorkItemAsync(id))!.AttachToExistingBranch);
+
+        // Clearing the name takes the attach with it.
+        Assert.IsType<OkObjectResult>(await controller.Update(id, new WorkItemCreateRequest
+        {
+            Title = "t", RepositoryId = repoId.ToString(), BranchNameOverride = "",
+        }));
+        Assert.False((await mgr.GetWorkItemAsync(id))!.AttachToExistingBranch);
+    }
+
     private static string? Read(object payload, string property)
         => payload.GetType().GetProperty(property)!.GetValue(payload) as string;
 
@@ -276,7 +317,7 @@ public class WorkItemsControllerBranchNameTests
             engine: new Mock<ILoopEngine>().Object);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
-        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()))
+        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(verdict ?? BranchNameVerdict.Usable);
 
         var controller = new WorkItemsController(

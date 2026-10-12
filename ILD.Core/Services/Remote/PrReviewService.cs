@@ -316,7 +316,11 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
     /// The caps count distinct findings: every one ILD has posted on this pull
     /// request, resolved or not, and every one queued. They are checked inside
     /// the compare-and-set with the duplicate check, so two calls racing each
-    /// other cannot both slip under a cap or both queue the same finding.
+    /// other cannot both slip under a cap or both queue the same finding. What
+    /// neither check sees is a finding the PR node has claimed off the queue and
+    /// not yet posted: for that moment it is in neither place, so a call landing
+    /// then can queue it again or count one short — a known limitation, the
+    /// window being one PR-node drain.
     /// </summary>
     public async Task<RemotePrWriteResult> FindingAsync(
         string workItemId, string path, int line, string severity, string body,
@@ -330,6 +334,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         if (!string.IsNullOrEmpty(fetched.Message))
             return new RemotePrWriteResult(false, null, fetched.Message);
 
+        path = PrFinding.CanonicalPath(path);
         var findingId = PrFinding.IdFor(path, body);
         var postedFindings = fetched.Items
             .Where(i => i.FindingId is not null && PrCommentMarker.WasPostedByIld(i))
@@ -342,7 +347,7 @@ public sealed class PrReviewService : IPrReviewService, IPrWriteQueue
         var maxNits = _settings is null ? AppSettingKeys.DefaultPrMaxNits : await _settings.GetPrMaxNitsAsync();
         var caller = Caller.Of(callerRunId, callerChatSessionId);
         var write = new PrQueuedWrite(
-            NewIntentId(), PrQueuedWrite.Finding, string.Empty, body, path.Trim(), line, DateTime.UtcNow,
+            NewIntentId(), PrQueuedWrite.Finding, string.Empty, body, path, line, DateTime.UtcNow,
             ItemId: findingId, QueuedByRunId: caller.RunId, QueuedByChatSessionId: caller.ChatSessionId,
             ItemKind: PrQueuedWrite.Finding, Severity: severity, FindingId: findingId);
 

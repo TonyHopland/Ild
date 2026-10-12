@@ -60,7 +60,7 @@ public class EngineFeedbackResumeTransitionTests
         h.Db.Context.SaveChanges();
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7"))
+        remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7", It.IsAny<CancellationToken>()))
             .ReturnsAsync(CiFailedSnapshot());
         var poller = new PrStatusPollService(
             h.Db.LoopRuns, remote.Object, h.Engine, new Mock<IRunNotifier>().Object,
@@ -171,7 +171,7 @@ public class EngineFeedbackResumeTransitionTests
         h.Db.Context.SaveChanges();
 
         var remote = new Mock<IRemoteProvider>();
-        remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7"))
+        remote.Setup(r => r.GetPullRequestSnapshotAsync("https://github.com/team/repo", "7", It.IsAny<CancellationToken>()))
             .ReturnsAsync(CiFailedSnapshot());
         var poller = new PrStatusPollService(
             h.Db.LoopRuns, remote.Object, h.Engine, new Mock<IRunNotifier>().Object,

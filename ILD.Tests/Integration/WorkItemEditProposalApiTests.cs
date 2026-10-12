@@ -356,6 +356,18 @@ public class WorkItemEditProposalApiTests
     }
 
     [Fact]
+    public async Task Proposing_to_attach_while_also_clearing_the_branch_name_is_a_bad_request()
+    {
+        await using var host = await StartHostAsync();
+        var itemId = await CreateHumanItemAsync(host);
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+
+        var resp = await ProposeAsync(agent, itemId, new { branchNameOverride = "", attachToExistingBranch = true });
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    [Fact]
     public async Task Approving_after_a_human_edit_is_a_409_that_marks_the_proposal_stale_and_keeps_the_edit()
     {
         await using var host = await StartHostAsync();

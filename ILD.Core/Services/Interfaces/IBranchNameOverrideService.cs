@@ -47,8 +47,9 @@ public interface IBranchNameOverrideService
     /// <param name="attachToExistingBranch">
     /// Judge the name as an attach: origin publishing it is then what the item
     /// wants rather than a conflict, and origin NOT publishing it is the
-    /// conflict, since there is nothing to attach to. A run row or a local
-    /// branch holding the name is a conflict either way.
+    /// conflict, since there is nothing to attach to — as is an origin that
+    /// cannot be asked, since nothing then confirms there is. A run row or a
+    /// local branch holding the name is a conflict either way.
     /// </param>
     /// <param name="workItemId">
     /// The item the name is being vetted for, so a conflict can say whether the
@@ -59,6 +60,6 @@ public interface IBranchNameOverrideService
         string? branchName,
         Guid? repositoryId,
         string? workItemId,
-        CancellationToken cancellationToken = default,
-        bool attachToExistingBranch = false);
+        bool attachToExistingBranch = false,
+        CancellationToken cancellationToken = default);
 }

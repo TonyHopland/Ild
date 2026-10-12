@@ -103,7 +103,7 @@ public class PrStatusPollServiceOnCommentTests
                     LedgerWrites.Add(json);
                     return true;
                 });
-            Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(snapshot);
+            Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7", It.IsAny<CancellationToken>())).ReturnsAsync(snapshot);
             if (ledger is not null)
                 Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(ledger);
         }

@@ -361,6 +361,30 @@ public class AgentApiIntegrationTests
         Assert.False(detail.GetProperty("attachToExistingBranch").GetBoolean());
     }
 
+    [Fact]
+    public async Task Attaching_without_a_branch_name_is_refused_on_agent_create_update_and_proposal()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+
+        var create = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, "/api/v1/agent/workitems")
+        {
+            Content = JsonContent.Create(new { title = "t", description = "", repositoryId = repoId.ToString(), attachToExistingBranch = true }),
+            Headers = { { "X-ILD-Run-Id", runId.ToString() } },
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, create.StatusCode);
+
+        var itemId = await CreateAsync(client, "plain", runId, repoId);
+        var update = await client.SendAsync(new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")
+        {
+            Content = JsonContent.Create(new { title = "t", description = "", attachToExistingBranch = true }),
+            Headers = { { "X-ILD-Run-Id", runId.ToString() } },
+        }, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, update.StatusCode);
+    }
+
     private static async Task<JsonElement> PutAsync(HttpClient client, string itemId, Guid runId, object body)
     {
         var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{itemId}")

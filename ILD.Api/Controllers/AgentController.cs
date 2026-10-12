@@ -683,11 +683,13 @@ public class AgentController : ControllerBase
         [FromServices] IPrReviewService reviews,
         [FromBody] AgentPrReviewFindingRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request?.Path) || string.IsNullOrWhiteSpace(request.Body))
+        if (string.IsNullOrWhiteSpace(request?.Path) || string.IsNullOrWhiteSpace(PrFinding.CanonicalPath(request.Path))
+            || string.IsNullOrWhiteSpace(request.Body))
             return BadRequest(new { error = "path and body are required." });
         if (request.Line < 1)
             return BadRequest(new { error = "line must be 1 or more: the line on the new side of the diff." });
-        if (!PrFinding.IsSeverity(request.Severity))
+        var severity = request.Severity?.Trim().ToLowerInvariant();
+        if (!PrFinding.IsSeverity(severity))
             return BadRequest(new { error = $"severity must be '{PrFinding.Important}' or '{PrFinding.Nit}'." });
 
         var workItem = await _workItems.GetWorkItemAsync(id);
@@ -695,7 +697,7 @@ public class AgentController : ControllerBase
             return NotFound();
 
         var result = await reviews.FindingAsync(
-            id, request.Path, request.Line, request.Severity!, request.Body, CallerRunId(), CallerChatSessionId());
+            id, request.Path, request.Line, severity!, request.Body, CallerRunId(), CallerChatSessionId());
         return Ok(new { ok = result.Ok, writeId = result.Id, message = result.Message });
     }
 
@@ -1357,6 +1359,9 @@ public class AgentController : ControllerBase
             && BranchNameRules.Validate(baseBranchOverride, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
 
+        if (BranchNameRules.AttachProblem(request.AttachToExistingBranch, branchNameOverride) is { } attachError)
+            return BadRequest(new { error = attachError });
+
         // Legacy `loopTemplateId` (if any) is ignored — template is now
         // resolved from tags at run start (PRD §3.7).
 
@@ -1445,6 +1450,9 @@ public class AgentController : ControllerBase
         if (BranchNameRules.Normalize(request.BaseBranchOverride) is { } baseBranch
             && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
+
+        if (BranchNameRules.AttachProblem(request.AttachToExistingBranch, request.BranchNameOverride ?? wi.BranchNameOverride) is { } attachError)
+            return BadRequest(new { error = attachError });
 
         var ok = await _workItems.UpdateAsync(
             id, request.Title, request.Description ?? string.Empty, request.Tags,
@@ -1586,6 +1594,18 @@ public class AgentController : ControllerBase
         if (BranchNameRules.Normalize(request.BaseBranchOverride) is { } baseBranch
             && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
+
+        if (request.AttachToExistingBranch == true)
+        {
+            var branchAfter = request.BranchNameOverride;
+            if (branchAfter is null)
+            {
+                if (await _workItems.GetWorkItemAsync(id) is not { } stored) return NotFound();
+                branchAfter = stored.BranchNameOverride;
+            }
+            if (BranchNameRules.AttachProblem(true, branchAfter) is { } attachError)
+                return BadRequest(new { error = attachError });
+        }
 
         var addDependencies = TrimIds(request.AddDependencies);
         var removeDependencies = TrimIds(request.RemoveDependencies);

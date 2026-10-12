@@ -88,7 +88,7 @@ public class PrStatusPollServiceReviewFailureTests
                     Name = LoopOutputs.OnComment,
                 },
             });
-            Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7")).ReturnsAsync(Snapshot());
+            Remote.Setup(r => r.GetPullRequestSnapshotAsync(RepoUrl, "7", It.IsAny<CancellationToken>())).ReturnsAsync(Snapshot());
             Remote.Setup(r => r.GetPullRequestReviewLedgerAsync(RepoUrl, "7")).ReturnsAsync(ledger);
         }
 

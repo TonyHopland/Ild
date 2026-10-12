@@ -53,6 +53,26 @@ public class RepositoryManager : IRepositoryManager
 
         await RunAsync(repoPath, "worktree", "prune");
 
+        if (startPoint is not null)
+        {
+            // Started from a point, the worktree must be at that point and
+            // nowhere else: a directory or a local branch left from an earlier
+            // attempt holds history the start point may since have moved past,
+            // so neither is reused. -B points the branch at the start point,
+            // and refuses while another worktree has the branch checked out.
+            if (Directory.Exists(worktreePath))
+            {
+                await DestroyWorktreeAsync(worktreePath);
+                await RunAsync(repoPath, "worktree", "prune");
+            }
+
+            var (atCode, _, atError) = await RunAsync(repoPath, "worktree", "add", "-B", branchName, worktreePath, startPoint);
+            if (atCode != 0)
+                throw new InvalidOperationException(
+                    $"Failed to create worktree at {worktreePath} from {startPoint}: {FormatGitError(atError)}");
+            return worktreePath;
+        }
+
         if (Directory.Exists(worktreePath))
         {
             if (await ValidateWorktreeHealthAsync(worktreePath))
@@ -63,9 +83,7 @@ public class RepositoryManager : IRepositoryManager
         }
 
         // Try add as new branch first; if branch already exists, attach to it.
-        var (code, _, stderr) = startPoint is null
-            ? await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath)
-            : await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath, startPoint);
+        var (code, _, stderr) = await RunAsync(repoPath, "worktree", "add", "-b", branchName, worktreePath);
         if (code != 0)
         {
             var (code2, _, stderr2) = await RunAsync(repoPath, "worktree", "add", worktreePath, branchName);
@@ -146,8 +164,15 @@ public class RepositoryManager : IRepositoryManager
 
     public async Task<bool> FetchAsync(string worktreePath, CancellationToken cancellationToken = default, GitAuthOptions? auth = null)
     {
-        var (code, _, _) = await RunAsync(worktreePath, new[] { "fetch", "origin" }, cancellationToken, auth);
+        // --prune, so a branch deleted on origin stops reading as present.
+        var (code, _, _) = await RunAsync(worktreePath, new[] { "fetch", "--prune", "origin" }, cancellationToken, auth);
         return code == 0;
+    }
+
+    public async Task<string?> GetHeadShaAsync(string worktreePath)
+    {
+        var (code, stdout, _) = await RunAsync(worktreePath, "rev-parse", "HEAD");
+        return code == 0 && stdout.Trim() is { Length: > 0 } sha ? sha : null;
     }
 
 

@@ -128,7 +128,7 @@ internal static class TestHostServiceCollectionExtensions
         public Task<RemotePrResult> CreatePullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, string title, string body)
             => throw Unexpected(nameof(IRemoteProvider));
 
-        public Task<RemotePrLookup> FindOpenPullRequestAsync(string repoUrl, string sourceBranch, string targetBranch)
+        public Task<RemotePrLookup> FindOpenPullRequestAsync(string repoUrl, string sourceBranch, string targetBranch, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IRemoteProvider));
 
         public Task<bool> MergePullRequestAsync(string repoUrl, string prNumber)
@@ -147,7 +147,7 @@ internal static class TestHostServiceCollectionExtensions
         public Task<RemotePrStatus> GetPullRequestStatusAsync(string repoUrl, string prNumber)
             => throw Unexpected(nameof(IRemoteProvider));
 
-        public Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber)
+        public Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(string repoUrl, string prNumber, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IRemoteProvider));
 
         public Task<RemoteCiLog> GetCheckLogAsync(string repoUrl, string checkId, int tailLines, int offset)
@@ -165,7 +165,7 @@ internal static class TestHostServiceCollectionExtensions
         public Task<RemotePrWriteResult> ReplyToReviewThreadAsync(string repoUrl, string prNumber, string commentId, string body)
             => throw Unexpected(nameof(IRemoteProvider));
 
-        public Task<RemotePrWriteResult> CreateReviewCommentAsync(string repoUrl, string prNumber, string path, int line, string body)
+        public Task<RemotePrWriteResult> CreateReviewCommentAsync(string repoUrl, string prNumber, string path, int line, string body, CancellationToken cancellationToken = default)
             => throw Unexpected(nameof(IRemoteProvider));
 
         public Task<RemotePrWriteResult> ResolveReviewThreadAsync(string repoUrl, string prNumber, string threadId)

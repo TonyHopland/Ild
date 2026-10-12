@@ -133,20 +133,22 @@ public sealed class GitHubRemoteGitProviderAdapter : RemoteGitProviderAdapterBas
     /// first; a line outside the diff is refused (422).
     /// </summary>
     public override async Task<RemotePrWriteResult> CreateReviewCommentAsync(
-        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body)
+        HttpClient http, ResolvedRemoteRepository repo, string prNumber, string path, int line, string body,
+        CancellationToken cancellationToken = default)
     {
         ApplyHeaders(http, repo.Provider);
         var apiPr = $"{repo.ApiBase}/repos/{repo.Owner}/{repo.Repo}/pulls/{prNumber}";
-        var pr = await GetObjectAsync(http, apiPr);
+        var pr = await GetObjectAsync(http, apiPr, cancellationToken);
         var headSha = pr is { } found && found.TryGetProperty("head", out var head) ? ReadString(head, "sha") : null;
         if (headSha is null)
             return new RemotePrWriteResult(false, null, $"Could not read the head commit of pull request #{prNumber} from GitHub.");
 
         using var resp = await http.PostAsJsonAsync(
             $"{apiPr}/comments",
-            new { body, commit_id = headSha, path, line, side = "RIGHT" });
+            new { body, commit_id = headSha, path, line, side = "RIGHT" },
+            cancellationToken);
         if (!resp.IsSuccessStatusCode)
-            return new RemotePrWriteResult(false, null, $"The finding was refused by GitHub (HTTP {(int)resp.StatusCode}).");
+            return new RemotePrWriteResult(false, null, await PrCommentHelper.RefusalAsync(resp, "finding", "GitHub"));
 
         return new RemotePrWriteResult(true, await PrCommentHelper.ReadCreatedIdAsync(resp), null);
     }

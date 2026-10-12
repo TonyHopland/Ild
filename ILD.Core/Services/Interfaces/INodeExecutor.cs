@@ -121,17 +121,20 @@ public abstract record NodeOutcome
 
     /// <summary>
     /// PR node attached the run to a pull request the branch already had.
-    /// The engine records it exactly as it does <see cref="PrCreated"/>.
+    /// The engine records it as it does <see cref="PrCreated"/>, dated from
+    /// <paramref name="CreatedAt"/> — when the forge says the pull request was
+    /// opened — where the forge said.
     /// </summary>
-    public sealed record PrAttached(string PrUrl) : NodeOutcome;
+    public sealed record PrAttached(string PrUrl, DateTime? CreatedAt = null) : NodeOutcome;
 
     /// <summary>
-    /// PR node read the pull request as it stands after giving the run its
-    /// pull request, or after pushing to it. The engine stores it as the run's
-    /// PR snapshot, so the head commit in it is one the run has already seen
-    /// and the heartbeat's <c>on_new_commits</c> does not report it.
+    /// PR node has seen the pull request at <paramref name="HeadSha"/>: the head
+    /// it found on getting its pull request, or the commit it just pushed. The
+    /// engine records that head on the run's PR snapshot — replacing the
+    /// snapshot with <paramref name="Snapshot"/> when the node read one — so the
+    /// heartbeat's <c>on_new_commits</c> does not report it back.
     /// </summary>
-    public sealed record PrSeen(ILD.Data.DTOs.RemotePrSnapshot Snapshot) : NodeOutcome;
+    public sealed record PrSeen(string HeadSha, ILD.Data.DTOs.RemotePrSnapshot? Snapshot = null) : NodeOutcome;
 
     /// <summary>
     /// Cleanup node destroyed the worktree.

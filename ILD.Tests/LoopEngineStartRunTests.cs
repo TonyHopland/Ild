@@ -388,9 +388,9 @@ public class LoopEngineStartRunTests
         services.AddSingleton<INodeExecutorRegistry>(registry);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
-        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), false))
+        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), false, It.IsAny<CancellationToken>()))
             .ReturnsAsync(verdict ?? BranchNameVerdict.Usable);
-        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>(), true))
+        branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), true, It.IsAny<CancellationToken>()))
             .ReturnsAsync(attachVerdict ?? verdict ?? BranchNameVerdict.Usable);
         services.AddSingleton(branchNames.Object);
         var sp = services.BuildServiceProvider();

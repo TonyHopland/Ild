@@ -78,7 +78,7 @@ public class PRNodeExecutorAttachTests
         }
 
         public void Finds(RemotePrLookup lookup)
-            => Remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main")).ReturnsAsync(lookup);
+            => Remote.Setup(r => r.FindOpenPullRequestAsync(CloneUrl, Branch, "main", It.IsAny<CancellationToken>())).ReturnsAsync(lookup);
 
         public void WireOnExistingPr()
             => Edges.Add(new LoopNodeEdge
@@ -338,7 +338,7 @@ public class PRNodeExecutorAttachTests
         Assert.Equal(HumanFeedbackReasons.PrAwaitingMerge, outcomes.OfType<NodeOutcome.WaitingAction>().Single().Reason);
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail or NodeOutcome.PrAttached or NodeOutcome.PrCreated);
         Assert.DoesNotContain(outcomes, IsOnExistingPr);
-        h.Remote.Verify(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        h.Remote.Verify(r => r.FindOpenPullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         h.VerifyNeverCreated();
         h.Remote.Verify(r => r.CreatePullRequestCommentAsync(CloneUrl, "17",
             It.Is<string>(b => b.Contains("Second round of findings sent."))), Times.Once);
