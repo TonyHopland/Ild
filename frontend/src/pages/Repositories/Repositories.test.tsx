@@ -161,7 +161,7 @@ describe("Repositories page", () => {
     });
 
     // Open create form
-    fireEvent.click(screen.getByText("+ New Repository"));
+    fireEvent.click(screen.getByText("+ Add repository"));
     await waitFor(() => {
       expect(screen.getByText("New Repository")).toBeTruthy();
     });
@@ -263,7 +263,7 @@ describe("Repositories page", () => {
       expect(screen.getByText("Repositories")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("+ New Repository"));
+    fireEvent.click(screen.getByText("+ Add repository"));
     await waitFor(() => {
       expect(screen.getByText("New Repository")).toBeTruthy();
     });
@@ -327,7 +327,7 @@ describe("Repositories page", () => {
 
     // A second New Repository form starts blank — the previous repository's .env
     // must not be sitting in it, silently unsent because it looks unchanged.
-    fireEvent.click(screen.getByText("+ New Repository"));
+    fireEvent.click(screen.getByText("+ Add repository"));
     await waitFor(() => {
       expect(screen.getByText("New Repository")).toBeTruthy();
     });
@@ -399,7 +399,7 @@ describe("Repositories page", () => {
       }),
     );
 
-    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(within(repoRow("my-repo")).getByText("Edit"));
     await waitFor(() => {
       expect(screen.getByText("Edit Repository")).toBeTruthy();
     });
@@ -488,7 +488,7 @@ describe("Repositories page", () => {
     });
 
     fetchMock.mockReturnValueOnce(ok({ previewEnv: "API_TOKEN=stored" }));
-    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(within(repoRow("my-repo")).getByText("Edit"));
 
     const envField = screen.getByLabelText("Custom .env") as HTMLTextAreaElement;
     await waitFor(() => {
@@ -570,7 +570,7 @@ describe("Repositories page", () => {
         text: () => Promise.resolve(""),
       }),
     );
-    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(within(repoRow("my-repo")).getByText("Edit"));
 
     // An empty field would otherwise be indistinguishable from "no .env stored".
     const alert = await screen.findByRole("alert");
@@ -635,7 +635,7 @@ describe("Repositories page", () => {
       expect(screen.getByText("Repositories")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("+ New Repository"));
+    fireEvent.click(screen.getByText("+ Add repository"));
     await waitFor(() => {
       expect(screen.getByText("New Repository")).toBeTruthy();
     });
@@ -703,7 +703,7 @@ describe("Repositories page", () => {
       expect(screen.getByText("Repositories")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("+ New Repository"));
+    fireEvent.click(screen.getByText("+ Add repository"));
     await waitFor(() => {
       expect(screen.getByText("New Repository")).toBeTruthy();
     });
@@ -953,7 +953,7 @@ describe("Repositories page", () => {
     });
 
     // Click edit button
-    fireEvent.click(screen.getByText("Edit"));
+    fireEvent.click(within(repoRow("my-repo")).getByText("Edit"));
 
     // Modal should open with "Edit Repository" title
     await waitFor(() => {
@@ -1025,8 +1025,8 @@ function routedFetch(
   });
 }
 
-function repoCard(name: string): HTMLElement {
-  return screen.getByText(name).closest(".repo-card") as HTMLElement;
+function repoRow(name: string): HTMLElement {
+  return screen.getByText(name).closest(".repo-row") as HTMLElement;
 }
 
 describe("Repositories page — Test button", () => {
@@ -1045,17 +1045,15 @@ describe("Repositories page — Test button", () => {
     renderPage(fetchMock);
     await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
 
-    expect(within(repoCard("alpha-app")).getByRole("button", { name: "Test" })).toBeTruthy();
-    fireEvent.click(within(repoCard("beta-app")).getByRole("button", { name: "Test" }));
+    expect(within(repoRow("alpha-app")).getByRole("button", { name: "Test" })).toBeTruthy();
+    fireEvent.click(within(repoRow("beta-app")).getByRole("button", { name: "Test" }));
 
-    await within(repoCard("beta-app")).findByText(
-      "The default branch 'main' is not on the remote.",
-    );
+    await within(repoRow("beta-app")).findByText("The default branch 'main' is not on the remote.");
     expect(
-      within(repoCard("beta-app")).getByText("ls-remote exited 2").closest("pre"),
+      within(repoRow("beta-app")).getByText("ls-remote exited 2").closest("pre"),
     ).not.toBeNull();
     expect(
-      within(repoCard("alpha-app")).queryByText("The default branch 'main' is not on the remote."),
+      within(repoRow("alpha-app")).queryByText("The default branch 'main' is not on the remote."),
     ).toBeNull();
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining("/repositories/repo-2/test"),
@@ -1074,10 +1072,10 @@ describe("Repositories page — Test button", () => {
     );
     await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
 
-    fireEvent.click(within(repoCard("alpha-app")).getByRole("button", { name: "Test" }));
-    await within(repoCard("alpha-app")).findByText("Reached branch main.");
+    fireEvent.click(within(repoRow("alpha-app")).getByRole("button", { name: "Test" }));
+    await within(repoRow("alpha-app")).findByText("Reached branch main.");
 
-    fireEvent.click(within(repoCard("alpha-app")).getByRole("button", { name: "Edit" }));
+    fireEvent.click(within(repoRow("alpha-app")).getByRole("button", { name: "Edit" }));
     await screen.findByText("Edit Repository");
     fireEvent.click(screen.getByText("Update"));
     await waitFor(() => expect(screen.queryByText("Edit Repository")).toBeNull());

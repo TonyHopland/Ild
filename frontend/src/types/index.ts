@@ -789,6 +789,7 @@ export interface RemoteProvider {
   apiKey: string;
   hasApiKey?: boolean;
   webhookSecret: string;
+  isDefault: boolean;
   createdAt: string;
   updatedAt?: string | null;
 }

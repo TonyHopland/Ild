@@ -47,11 +47,11 @@ public class AnalyticsController : ControllerBase
         return Ok(overview);
     }
 
-    private static bool TryParseDate(string? value, out DateOnly? date)
+    internal static bool TryParseDate(string? value, out DateOnly? date)
     {
         date = null;
         if (string.IsNullOrWhiteSpace(value)) return true;
-        if (DateOnly.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        if (DateOnly.TryParseExact(value, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed))
         {
             date = parsed;
             return true;

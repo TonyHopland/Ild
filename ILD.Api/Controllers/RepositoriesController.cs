@@ -54,7 +54,7 @@ public class RepositoriesController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
         var items = await _db.Repositories.AsNoTracking().Include(r => r.PackageFeeds)
-            .OrderBy(r => r.Name).Skip(skip).Take(take).ToListAsync();
+            .OrderBy(r => r.Name).ThenBy(r => r.Id).Skip(skip).Take(take).ToListAsync();
         var existingFeeds = await ExistingFeedsAsync();
         return Ok(items.Select(r => ToResponse(r, existingFeeds)));
     }

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Analytics count what chats cost, scheduled chats and chat titles included, beside the loop templates.**
 
+- **Agents can read loop analytics, any saved loop template version, and a run's path, feedback and review comments.**
+
 - **Chat schedules start a chat on a timer with a set prompt, to run checks that file work items for what they find.**
 
 - **Agents can add and remove dependencies on the work items they created, and propose dependency changes on any other for you to approve.**
@@ -28,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A searchable list of your chats sits beside the chat, marks unread ones, lets you star favourites, and replaces the Back button.**
 
 ### Changed
+
+- **Remote providers and repositories share one page, with each provider's repositories listed in its card.**
 
 - **A chat named from its first message keeps up to 120 characters of it instead of 60.**
 

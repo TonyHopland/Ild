@@ -1,3 +1,5 @@
+using ILD.Data.Enums;
+
 namespace ILD.Data.DTOs;
 
 /// <summary>Time bucket size for the analytics series.</summary>
@@ -54,6 +56,34 @@ public sealed record TemplateAnalytics(
     long TotalInputTokens,
     long TotalOutputTokens,
     decimal TotalCostUsd);
+
+/// <summary>
+/// One template node's visits in the runs behind a <see cref="TemplateAnalyticsDetail"/>:
+/// how often it ran, how often a visit ended <c>Failed</c>, and the mean seconds of
+/// the visits that both started and completed (null when none did).
+/// <see cref="TemplateVersion"/> is the version number the node belongs to; each
+/// version stores its own nodes, so two versions' "Coder" are two rows.
+/// </summary>
+public sealed record TemplateNodeAnalytics(
+    Guid NodeId,
+    string Label,
+    NodeType NodeType,
+    int TemplateVersion,
+    int Executions,
+    int Failures,
+    double? AvgSeconds);
+
+/// <summary>
+/// A template's dashboard row with per-node figures beside it. The figures in
+/// <see cref="Totals"/> include deleted runs' archive buckets; <see cref="Nodes"/>
+/// cannot, because a bucket keeps no per-node history, so they come from the
+/// <see cref="RunsWithNodeDetail"/> still-existing runs only and list the nodes of
+/// the versions those runs used.
+/// </summary>
+public sealed record TemplateAnalyticsDetail(
+    TemplateAnalytics Totals,
+    int RunsWithNodeDetail,
+    IReadOnlyList<TemplateNodeAnalytics> Nodes);
 
 /// <summary>
 /// Per-agent-provider cost/token/run rollup, chats' usage included; <c>TotalRuns</c>

@@ -736,6 +736,9 @@ export const remoteProviderService = {
     return api.get<RemoteProvider[]>(`/remoteproviders${pageQuery(opts)}`);
   },
 
+  getEvery: async (): Promise<RemoteProvider[]> =>
+    readEveryPage((opts) => remoteProviderService.getAll(opts)),
+
   getAvailableTypes: async (): Promise<RemoteProviderTypeOption[]> => {
     return api.get<RemoteProviderTypeOption[]>("/remoteproviders/types");
   },

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Text;
 using System.Web;
 using ModelContextProtocol.Server;
@@ -7,7 +8,9 @@ namespace ILD.McpServer.Tools;
 
 /// <summary>
 /// MCP tools that let an agent inspect the ILD platform: list work items,
-/// repositories, loop templates, and loop runs.
+/// repositories, loop templates, and loop runs; read a saved template version,
+/// one run's path and feedback, and the per-template analytics, so an agent can
+/// review how loops performed.
 ///
 /// All tools are read-only. The companion <see cref="WorkItemTools"/> exposes
 /// the single mutating operation: creating a work item in Backlog. Agents
@@ -84,14 +87,46 @@ public sealed class ListingTools
         => _ild.GetRawAsync($"api/v1/agent/loop-templates?skip={skip}&take={take}&includeArchived={(includeArchived ? "true" : "false")}");
 
     [McpServerTool(Name = "list_loop_runs")]
-    [Description("List loop runs. Pass workItemId to scope to a specific work item. Use the returned run id to find work items the run created via list_workitems(createdByLoopRunId=...).")]
+    [Description("List loop runs, newest first by start time (creation time for a run not yet started). Each row carries the run's template id, name and version number. Pass workItemId to scope to a specific work item, from/to for a date range and templateId for one template; the filters combine. Use the returned run id with get_loop_run for its path and feedback, or to find work items the run created via list_workitems(createdByLoopRunId=...).")]
     public Task<string> ListLoopRuns(
         [Description("Optional WorkItem GUID to scope by.")] string? workItemId = null,
+        [Description("Optional first day, yyyy-MM-dd (UTC, inclusive), on the run's start day.")] string? from = null,
+        [Description("Optional last day, yyyy-MM-dd (UTC, inclusive), on the run's start day.")] string? to = null,
+        [Description("Optional loop template GUID to scope by (any of its versions).")] string? templateId = null,
         [Description("Pagination skip (default 0).")] int skip = 0,
         [Description("Pagination take (default 100, max 500).")] int take = 100)
     {
-        var qs = BuildQuery(("workItemId", workItemId), ("skip", skip.ToString()), ("take", take.ToString()));
+        var qs = BuildQuery(("workItemId", workItemId), ("from", from), ("to", to), ("templateId", templateId),
+                            ("skip", skip.ToString()), ("take", take.ToString()));
         return _ild.GetRawAsync($"api/v1/agent/loop-runs{qs}");
+    }
+
+    [McpServerTool(Name = "get_loop_run")]
+    [Description("Read one loop run as a summary (read-only): status, template version, work item, timings; the node visits in execution order, each with its outcome, duration, error, tokens, cost, the edge it was entered by (incomingEdge) and the edge it took (edgeTaken: the edge a later visit that came from this one entered by, when that edge leaves this node; for the last visit, if it completed last, the edge the run has followed from it toward its current node; otherwise null); the human-feedback requests and answers, and the run's parks (kind parked, which also covers ILD's own waits such as an AI provider throttle; text gives the reason); the AI traversal and throttle counters; and the pull request with its merge state and the review comments from the last stored PR snapshot (fetchedAt says how old). Long texts are cut at 2,000 characters and flagged (errorTruncated, textTruncated, bodyTruncated). No AI transcripts or node outputs. Node ids match get_loop_template's document.")]
+    public Task<string> GetLoopRun(
+        [Description("Loop run GUID (from list_loop_runs).")] string runId)
+        => _ild.GetRawAsync($"api/v1/agent/loop-runs/{Uri.EscapeDataString(runId)}");
+
+    [McpServerTool(Name = "get_loop_template")]
+    [Description("Read a saved loop template version (read-only) as an ild-loop-template/v2 document, the same format get_current_loop returns, so it can be compared with or handed to update_current_loop. Returns { templateId, version, latestVersion, isLatest, versionCreatedAt, isArchived, document }. The document's nodes, edges and configs are that version's; its name, description and recoveryPolicy are the template's current values, because they are not versioned. Node ids match the nodeId values from get_loop_run and get_template_analytics. A name shared by several templates is refused with the candidates' ids.")]
+    public Task<string> GetLoopTemplate(
+        [Description("Loop template GUID, or its exact name (case-insensitive; archived templates included). A GUID that is no template's id is tried as a name.")] string nameOrId,
+        [Description("Optional version number; default the latest.")] int? version = null)
+    {
+        var qs = BuildQuery(("nameOrId", nameOrId), ("version", version?.ToString(CultureInfo.InvariantCulture)));
+        return _ild.GetRawAsync($"api/v1/agent/loop-templates/document{qs}");
+    }
+
+    [McpServerTool(Name = "get_template_analytics")]
+    [Description("Per-loop-template performance (read-only), the figures the analytics dashboard shows: total, completed, failed and cancelled runs, success rate, average seconds per node, on-failure and reject routings, average human-feedback wait, tokens and cost — deleted runs included. Each template also lists per-node figures (executions, failures, avgSeconds) keyed by node id and template version; those come only from runs that still exist, and runsWithNodeDetail says how many. Templates are ordered costliest first.")]
+    public Task<string> GetTemplateAnalytics(
+        [Description("Optional first day, yyyy-MM-dd (UTC, inclusive), on the run's start day.")] string? from = null,
+        [Description("Optional last day, yyyy-MM-dd (UTC, inclusive), on the run's start day.")] string? to = null,
+        [Description("Optional agent provider name (the run's primary AI provider, case-insensitive).")] string? provider = null,
+        [Description("Optional loop template GUID to report on alone.")] string? templateId = null)
+    {
+        var qs = BuildQuery(("from", from), ("to", to), ("provider", provider), ("templateId", templateId));
+        return _ild.GetRawAsync($"api/v1/agent/analytics/templates{qs}");
     }
 
     /// <summary>

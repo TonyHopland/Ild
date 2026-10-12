@@ -42,7 +42,7 @@ public class RemoteProvidersController : ControllerBase
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
-        var items = await _db.RemoteProviders.AsNoTracking().OrderBy(p => p.Name).Skip(skip).Take(take).ToListAsync();
+        var items = await _db.RemoteProviders.AsNoTracking().OrderBy(p => p.Name).ThenBy(p => p.Id).Skip(skip).Take(take).ToListAsync();
         return Ok(items.Select(ToResponse));
     }
 
