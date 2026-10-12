@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   WorkItem,
   WorkItemStatus,
@@ -73,6 +73,14 @@ export default function EditPanel({
     result: BranchNameCheck;
   } | null>(null);
   const [attachToExistingBranch, setAttachToExistingBranch] = useState(baseAttachToExistingBranch);
+  // The check is asked whether the item attaches, but only re-asked when the
+  // person ticks or unticks the box: a tick the check itself cleared changes
+  // nothing worth asking again about.
+  const attachRef = useRef(attachToExistingBranch);
+  const [attachAsked, setAttachAsked] = useState(0);
+  useEffect(() => {
+    attachRef.current = attachToExistingBranch;
+  }, [attachToExistingBranch]);
   const [baseBranchOverride, setBaseBranchOverride] = useState(baseBaseBranchOverride);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -95,7 +103,11 @@ export default function EditPanel({
     let cancelled = false;
     const timer = setTimeout(() => {
       workItemService
-        .checkBranchName(name, { repositoryId, workItemId: workItem?.id, attachToExistingBranch })
+        .checkBranchName(name, {
+          repositoryId,
+          workItemId: workItem?.id,
+          attachToExistingBranch: attachRef.current,
+        })
         .then((result) => {
           if (cancelled) return;
           setBranchNameCheck({ name, repositoryId, result });
@@ -112,7 +124,7 @@ export default function EditPanel({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [branchNameOverride, repositoryId, workItem?.id, attachToExistingBranch]);
+  }, [branchNameOverride, repositoryId, workItem?.id, attachAsked]);
 
   const branchNameProblem =
     branchNameCheck?.result.error ?? branchNameCheck?.result.warning ?? null;
@@ -142,6 +154,19 @@ export default function EditPanel({
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
 
+  // A tick goes out only when the check has confirmed the branch in the form.
+  // Unconfirmed — still checking, failed, or about another name — it goes out
+  // as false when the branch or repository changed, since a tick confirmed
+  // for the old one says nothing about the new one, and is left off otherwise,
+  // so the server keeps the item's own setting rather than a guess.
+  const attachPayload = (): boolean | undefined => {
+    if (canAttach || !attachToExistingBranch) return attachToExistingBranch;
+    const moved =
+      branchNameOverride.trim() !== baseBranchNameOverride.trim() ||
+      repositoryId !== baseRepositoryId;
+    return moved ? false : undefined;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
@@ -170,11 +195,7 @@ export default function EditPanel({
       // Same convention: empty is a deliberate "back to the repository's
       // default branch", not "leave it alone".
       baseBranchOverride: baseBranchOverride.trim(),
-      // A tick nobody can see right now — the check is pending, failed, or
-      // about another name — is not sent, so the server keeps what it has
-      // rather than taking an attach the person never confirmed.
-      attachToExistingBranch:
-        attachToExistingBranch && !canAttach ? undefined : attachToExistingBranch,
+      attachToExistingBranch: attachPayload(),
     };
 
     try {
@@ -387,7 +408,10 @@ export default function EditPanel({
               <input
                 type="checkbox"
                 checked={attachToExistingBranch}
-                onChange={(e) => setAttachToExistingBranch(e.target.checked)}
+                onChange={(e) => {
+                  setAttachToExistingBranch(e.target.checked);
+                  setAttachAsked((n) => n + 1);
+                }}
                 aria-describedby="wiv2-attach-branch-hint"
               />
               Attach to existing branch

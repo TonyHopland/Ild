@@ -636,6 +636,21 @@ describe("Loop Editor — node outputs", () => {
     },
   );
 
+  test("a PR node saved with both toggles on stores neither, as an absent toggle is already on", async () => {
+    const pr: TemplateNode = {
+      id: "n-pr",
+      type: NodeType.PR,
+      label: "Pull Request",
+      config: { prDescriptionTemplate: "t", createIfNoneExists: true, outputs: [] },
+    };
+    const { calls, dialog } = await openNode({ template: templateWith(pr) }, "Pull Request");
+
+    const saved = await saveLoop(dialog, calls);
+
+    expect(configOf(saved, "n-pr")).not.toHaveProperty("createIfNoneExists");
+    expect(configOf(saved, "n-pr")).not.toHaveProperty("attachIfExists");
+  });
+
   test("the header names the node's type and there is no Type field", async () => {
     const human: TemplateNode = {
       id: "n-human",

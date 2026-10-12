@@ -1240,8 +1240,9 @@ export default function LoopEditor() {
       if (promptNodePrompt) config.prompt = promptNodePrompt;
     } else if (selectedNodeType === NodeType.PR) {
       if (prDescriptionTemplate) config.prDescriptionTemplate = prDescriptionTemplate;
-      config.createIfNoneExists = prCreateIfNoneExists;
-      config.attachIfExists = prAttachIfExists;
+      // Written only when off: on is what an absent toggle already means.
+      config.createIfNoneExists = prCreateIfNoneExists ? undefined : false;
+      config.attachIfExists = prAttachIfExists ? undefined : false;
       config.prCommentTemplate = undefined;
     } else if (selectedNodeType === NodeType.Condition) {
       // Persist the switch: each case keeps only the params its variant uses,

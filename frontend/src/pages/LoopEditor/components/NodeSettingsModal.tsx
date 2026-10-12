@@ -1093,6 +1093,10 @@ export function NodeSettingsModal({
                   <input
                     type="checkbox"
                     checked={prCreateIfNoneExists}
+                    // The last one on cannot be turned off: a node that may
+                    // neither create nor attach could only fail.
+                    disabled={prCreateIfNoneExists && !prAttachIfExists}
+                    aria-describedby="pr-toggles-help"
                     onChange={(event) => onPrCreateIfNoneExistsChange(event.target.checked)}
                   />
                   Create a PR when the branch has none
@@ -1101,14 +1105,16 @@ export function NodeSettingsModal({
                   <input
                     type="checkbox"
                     checked={prAttachIfExists}
+                    disabled={prAttachIfExists && !prCreateIfNoneExists}
+                    aria-describedby="pr-toggles-help"
                     onChange={(event) => onPrAttachIfExistsChange(event.target.checked)}
                   />
                   Attach to an open PR the branch already has
                 </label>
-                <small className="config-help-text">
+                <small id="pr-toggles-help" className="config-help-text">
                   Read once, when the run has no PR yet. Attaching watches the PR from that moment
                   and takes <strong>on_existing_pr</strong> when it is wired; creating parks as
-                  always. At least one must stay on.
+                  always. At least one must stay on, so the last one on cannot be turned off.
                 </small>
               </div>
               <small className="config-help-text">

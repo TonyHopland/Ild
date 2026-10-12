@@ -143,4 +143,96 @@ describe("EditPanel attach to existing branch, unconfirmed", () => {
     });
     expect(attachBox()).not.toBeNull();
   });
+
+  async function saveAndReadPayload(update: { mock: { calls: unknown[][] } }) {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Update" }));
+      await Promise.resolve();
+    });
+    return update.mock.calls[0][1] as Record<string, unknown>;
+  }
+
+  test.each([
+    ["the branch is renamed", "branch"],
+    ["the repository is changed", "repository"],
+  ])(
+    "a tick saved before the check confirms the new target goes out false when %s",
+    async (_label, what) => {
+      vi.spyOn(authServices.workItemService, "checkBranchName").mockResolvedValue({
+        error: null,
+        warning: null,
+        existsOnOrigin: true,
+      });
+      const update = vi
+        .spyOn(authServices.workItemService, "update")
+        .mockImplementation(async (_id, data) => makeWorkItem(data as Partial<WorkItem>));
+      vi.useFakeTimers();
+      render(
+        <EditPanel
+          workItem={makeWorkItem({ branchNameOverride: ON_ORIGIN, attachToExistingBranch: true })}
+          detail={makeDetail()}
+          onSave={vi.fn()}
+          onDone={vi.fn()}
+        />,
+      );
+      await settleCheck();
+      expect((attachBox() as HTMLInputElement).checked).toBe(true);
+
+      await act(async () => {
+        if (what === "branch")
+          fireEvent.change(screen.getByLabelText("Branch name (optional)"), {
+            target: { value: "feature/renamed" },
+          });
+        else fireEvent.change(screen.getByLabelText("Repository"), { target: { value: "repo-b" } });
+        await Promise.resolve();
+      });
+
+      // Saved inside the debounce: nothing has confirmed the new target yet.
+      expect((await saveAndReadPayload(update)).attachToExistingBranch).toBe(false);
+    },
+  );
+
+  test("a tick the check clears does not set off a second check", async () => {
+    const check = vi
+      .spyOn(authServices.workItemService, "checkBranchName")
+      .mockImplementation(async (name: string) => ({
+        error: null,
+        warning: null,
+        existsOnOrigin: name === ON_ORIGIN,
+      }));
+    vi.useFakeTimers();
+    render(
+      <EditPanel
+        workItem={makeWorkItem({ branchNameOverride: ON_ORIGIN, attachToExistingBranch: true })}
+        detail={makeDetail()}
+        onSave={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+    await settleCheck();
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Branch name (optional)"), {
+        target: { value: "feature/gone" },
+      });
+      await Promise.resolve();
+    });
+    await settleCheck();
+    await settleCheck();
+
+    expect(check.mock.calls.map((c) => c[0])).toEqual([ON_ORIGIN, "feature/gone"]);
+    // Ticking again is a new question, so it is asked.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Branch name (optional)"), {
+        target: { value: ON_ORIGIN },
+      });
+      await Promise.resolve();
+    });
+    await settleCheck();
+    fireEvent.click(attachBox()!);
+    await settleCheck();
+    expect(check.mock.calls[check.mock.calls.length - 1]).toEqual([
+      ON_ORIGIN,
+      expect.objectContaining({ attachToExistingBranch: true }),
+    ]);
+  });
 });

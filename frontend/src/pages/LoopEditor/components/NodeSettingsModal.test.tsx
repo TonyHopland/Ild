@@ -296,3 +296,34 @@ describe("NodeSettingsModal condition node", () => {
     ]);
   });
 });
+
+describe("NodeSettingsModal PR toggles", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  const prToggle = (name: RegExp) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+
+  test("both on, either can be turned off, and each is described by the help text", () => {
+    const props = renderModal({ selectedNode: makeNode(NodeType.PR), nodeLabel: "PR" });
+
+    expect(prToggle(/create/i).disabled).toBe(false);
+    expect(prToggle(/attach/i).disabled).toBe(false);
+    expect(prToggle(/attach/i).getAttribute("aria-describedby")).toBe("pr-toggles-help");
+    expect(document.getElementById("pr-toggles-help")?.textContent).toMatch(/at least one/i);
+
+    fireEvent.click(prToggle(/attach/i));
+    expect(props.onPrAttachIfExistsChange).toHaveBeenCalledWith(false);
+  });
+
+  test.each([
+    [{ prCreateIfNoneExists: true, prAttachIfExists: false }, /create/i, /attach/i],
+    [{ prCreateIfNoneExists: false, prAttachIfExists: true }, /attach/i, /create/i],
+  ])("the last one on cannot be turned off", (state, lastOn, off) => {
+    renderModal({ selectedNode: makeNode(NodeType.PR), nodeLabel: "PR", ...state });
+
+    expect(prToggle(lastOn).disabled).toBe(true);
+    expect(prToggle(lastOn).checked).toBe(true);
+    expect(prToggle(off).disabled).toBe(false);
+  });
+});
