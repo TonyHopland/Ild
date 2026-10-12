@@ -24,6 +24,8 @@ export function AiProviderTagField({
   id = "ai-provider-tag",
   disabled = false,
   cannotRun = "this node cannot run",
+  fieldClassName = "config-field",
+  hintClassName = "config-help-text",
 }: {
   tag: string;
   providers: AiProvider[] | null;
@@ -32,12 +34,14 @@ export function AiProviderTagField({
   disabled?: boolean;
   /** Ends the sentence shown when nothing can be resolved, e.g. "this node cannot run". */
   cannotRun?: string;
+  fieldClassName?: string;
+  hintClassName?: string;
 }) {
   const suggestions = [
     ...new Set((providers ?? []).flatMap((provider) => provider.tags ?? [])),
   ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
   return (
-    <div className="config-field">
+    <div className={fieldClassName}>
       <label htmlFor={id}>Provider tag</label>
       <input
         id={id}
@@ -54,9 +58,7 @@ export function AiProviderTagField({
         ))}
       </datalist>
       {providers && (
-        <small className="config-help-text">
-          {describeProviderForTag(providers, tag, cannotRun)}
-        </small>
+        <small className={hintClassName}>{describeProviderForTag(providers, tag, cannotRun)}</small>
       )}
     </div>
   );
