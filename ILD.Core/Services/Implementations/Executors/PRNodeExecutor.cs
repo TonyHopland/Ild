@@ -94,9 +94,8 @@ public sealed class PRNodeExecutor : INodeExecutor
         // the visit that gets it is still going.
         var hadPullRequest = !string.IsNullOrEmpty(ctx.Run.PrUrl);
         var pushed = false;
-        // Whether this visit's push carries commits someone else pushed: the
-        // run's own were rebased onto them.
-        var pushedOntoOthers = false;
+        // Where origin had the branch before this visit pushed, when it could be read.
+        string? originBeforePush = null;
         if (hasWorktree)
         {
             string? prepError = null;
@@ -112,7 +111,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                 {
                     var integration = await IntegrateWithOriginAsync(ctx, repoManager, branch, gitAuth);
                     prepError = integration.Error;
-                    pushedOntoOthers = integration.OntoOthers;
+                    originBeforePush = integration.OriginHead;
                     if (prepError is null && integration.Push)
                     {
                         var pushResult = await repoManager.PushAsync(ctx.Run.WorktreePath!, branch, ctx.CancellationToken, gitAuth);
@@ -295,12 +294,16 @@ public sealed class PRNodeExecutor : INodeExecutor
         // A push of the run's own moves the head the heartbeat compares
         // against; recorded as the commit pushed — what the worktree has, not
         // what the forge may not have caught up to — it is not reported back
-        // to the run as new commits. Not when it was rebased onto someone
-        // else's push: that head carries their commits too, which the run has
-        // not been told of, so the next park reports new commits. The visit
-        // that got the pull request has already recorded what it found, which
-        // includes this push and everything already on the pull request.
-        if (pushed && hadPullRequest && !pushedOntoOthers
+        // to the run as new commits. Only when origin was still at the head
+        // the run had already seen: then the push added nothing but the run's
+        // own commits. Otherwise someone else's commits are under it — rebased
+        // onto here, on an earlier attempt, or pulled in by the round — which
+        // the run has not been told of, so nothing is recorded and the next
+        // park reports new commits. The visit that got the pull request has
+        // already recorded what it found, everything already on it included.
+        var seenBefore = PrSnapshotJson.TryParse(ctx.Run.PrSnapshot)?.HeadSha;
+        if (pushed && hadPullRequest && seenBefore is not null
+            && string.Equals(originBeforePush, seenBefore, StringComparison.Ordinal)
             && await repoManager.ResolveCommitAsync(ctx.Run.WorktreePath!, "HEAD") is { } pushedHead)
             yield return new NodeOutcome.PrSeen(pushedHead);
 
@@ -370,6 +373,7 @@ public sealed class PRNodeExecutor : INodeExecutor
                 ? new Integration(false, $"Branch `{branch}` no longer exists on origin; this run attached to it and will not recreate it")
                 : new Integration(true);
 
+        var originHead = await repoManager.ResolveCommitAsync(worktree, upstream);
         var ahead = await repoManager.GetCommitsAheadCountAsync(worktree, upstream);
         var behind = await repoManager.GetCommitsBehindCountAsync(worktree, upstream);
         // A run's own branch is pushed as it always was unless there is plainly
@@ -377,9 +381,9 @@ public sealed class PRNodeExecutor : INodeExecutor
         // commits of its own on it. Either way, behind with nothing ahead is
         // nothing to push.
         if (behind == 0)
-            return new Integration(!attached || ahead > 0);
+            return new Integration(!attached || ahead > 0, OriginHead: originHead);
         if (ahead == 0)
-            return new Integration(false);
+            return new Integration(false, OriginHead: originHead);
 
         // Ahead and behind: rebase only onto what someone else pushed — origin
         // past the head the run last saw. A run that rewrote its own pushed
@@ -387,9 +391,7 @@ public sealed class PRNodeExecutor : INodeExecutor
         // and replaying them would push copies of the base; that push is left
         // to be refused, as it always was.
         var seen = PrSnapshotJson.TryParse(ctx.Run.PrSnapshot)?.HeadSha;
-        var pushedByOthers = seen is null
-            ? attached
-            : !string.Equals(await repoManager.ResolveCommitAsync(worktree, upstream), seen, StringComparison.Ordinal);
+        var pushedByOthers = seen is null ? attached : !string.Equals(originHead, seen, StringComparison.Ordinal);
         if (pushedByOthers)
         {
             var rebase = await repoManager.RebaseAsync(worktree, upstream, ctx.CancellationToken);
@@ -403,15 +405,15 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
         }
 
-        return new Integration(true, OntoOthers: pushedByOthers);
+        return new Integration(true, OriginHead: originHead);
     }
 
     /// <summary>
     /// What <see cref="IntegrateWithOriginAsync"/> found: whether to push, why
-    /// not when the node must fail, and whether the run's commits now sit on
-    /// top of someone else's push.
+    /// not when the node must fail, and the commit origin had the branch at
+    /// before anything was pushed, when origin could be read.
     /// </summary>
-    private sealed record Integration(bool Push, string? Error = null, bool OntoOthers = false);
+    private sealed record Integration(bool Push, string? Error = null, string? OriginHead = null);
 
     /// <summary>
     /// Whether this node has an edge from <c>on_existing_pr</c>. With no store

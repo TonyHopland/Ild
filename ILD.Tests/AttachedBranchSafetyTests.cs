@@ -199,24 +199,30 @@ public class AttachedBranchSafetyTests : IDisposable
     }
 
     [Theory]
-    [InlineData(2, true)]
-    [InlineData(0, false)]
-    public async Task A_push_of_the_runs_own_is_seen_so_it_is_not_reported_back_as_new_commits(int ahead, bool seen)
+    [InlineData(2, "seen1", true)]
+    [InlineData(0, "seen1", false)]
+    // Origin already past the seen head with the run not behind it: the run's
+    // commits went onto someone else's on an earlier attempt whose push
+    // failed, or the round pulled them in. They are under this push too.
+    [InlineData(2, "other2", false)]
+    public async Task A_push_of_the_runs_own_is_seen_so_it_is_not_reported_back_as_new_commits(int ahead, string originHead, bool seen)
     {
         var worktree = Directory.CreateDirectory(Path.Combine(_baseRepo, "wt-seen")).FullName;
         var (sp, git, remote, _) = Services();
         git.Setup(m => m.GetCommitsAheadCountAsync(worktree, $"origin/{Branch}")).ReturnsAsync(ahead);
+        git.Setup(m => m.ResolveCommitAsync(worktree, $"origin/{Branch}")).ReturnsAsync(originHead);
         git.Setup(m => m.ResolveCommitAsync(worktree, "HEAD")).ReturnsAsync("def456");
         // What the forge reports may not have caught up with the push yet.
         remote.Setup(r => r.GetPullRequestSnapshotAsync(CloneUrl, "17", It.IsAny<CancellationToken>())).ReturnsAsync(SnapshotAt("stale"));
         var run = new LoopRun
         {
             Id = Guid.NewGuid(), WorkItemId = "WI-1", BranchName = Branch, AttachToExistingBranch = true,
-            WorktreePath = worktree, PrUrl = PrUrl,
+            WorktreePath = worktree, PrUrl = PrUrl, PrSnapshot = PrSnapshotJson.Serialize(SnapshotAt("seen1")),
         };
 
         var outcomes = await RunAsync(new PRNodeExecutor(), run, NodeType.PR, sp);
 
+        git.Verify(m => m.PushAsync(worktree, Branch, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Exactly(ahead > 0 ? 1 : 0));
         Assert.Equal(seen, outcomes.Any(o => o is NodeOutcome.PrSeen { HeadSha: "def456", Snapshot: null }));
         Assert.DoesNotContain(outcomes, o => o is NodeOutcome.PrSeen { HeadSha: "stale" });
         Assert.IsType<NodeOutcome.WaitingAction>(outcomes[^1]);
