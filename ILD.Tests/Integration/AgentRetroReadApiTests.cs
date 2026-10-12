@@ -554,7 +554,7 @@ public class AgentRetroReadApiTests
         var client = await factory.CreateAuthenticatedClientAsync();
 
         var t0 = At(6, 2, 10);
-        Guid between, wrongSource, wrongTarget, review, fix, toReview, toFix;
+        Guid between, wrongSource, wrongTarget, retriedPending, retriedEntered, review, fix, toReview, toFix;
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -582,6 +582,35 @@ public class AgentRetroReadApiTests
             between = StoppedBetweenNodes(eToFix.Id, nFix.Id).Id;
             wrongSource = StoppedBetweenNodes(eToReview.Id, nReview.Id).Id;
             wrongTarget = StoppedBetweenNodes(eToFix.Id, nPlan.Id).Id;
+
+            // Review was retried while it waited (a newer visit), then the original visit got its answer,
+            // completed last and followed Review -> Fix: the edge left the original, not the retry.
+            LoopRun RetriedWhileWaiting(bool fixEntered)
+            {
+                var run = AddRun(db, version.Id, LoopRunStatus.Running, t0, t0);
+                run.CurrentNodeId = nFix.Id;
+                var plan = AddVisit(db, run.Id, nPlan.Id, LoopRunNodeStatus.Succeeded, t0, t0.AddSeconds(10), created: t0);
+                var answered = AddVisit(db, run.Id, nReview.Id, LoopRunNodeStatus.Succeeded, t0.AddSeconds(10), t0.AddSeconds(40),
+                    incomingEdgeId: eToReview.Id, created: t0.AddSeconds(10));
+                var retry = AddVisit(db, run.Id, nReview.Id, LoopRunNodeStatus.WaitingHuman, t0.AddSeconds(30), t0.AddSeconds(31),
+                    created: t0.AddSeconds(30));
+                answered.PreviousNodeId = plan.Id;
+                retry.PreviousNodeId = answered.Id;
+                if (fixEntered)
+                {
+                    var fixVisit = AddVisit(db, run.Id, nFix.Id, LoopRunNodeStatus.Running, t0.AddSeconds(45), null,
+                        incomingEdgeId: eToFix.Id, created: t0.AddSeconds(45));
+                    fixVisit.PreviousNodeId = answered.Id;
+                }
+                else
+                {
+                    run.IncomingEdgeId = eToFix.Id;
+                }
+                return run;
+            }
+
+            retriedPending = RetriedWhileWaiting(fixEntered: false).Id;
+            retriedEntered = RetriedWhileWaiting(fixEntered: true).Id;
             await db.SaveChangesAsync(Ct);
             (review, fix, toReview, toFix) = (nReview.Id, nFix.Id, eToReview.Id, eToFix.Id);
         }
@@ -596,6 +625,17 @@ public class AgentRetroReadApiTests
             AssertEdgeTaken(nodes[0], toReview, "OnSuccess", null, review, "Review");
             Assert.True(IsNullOrMissing(nodes[1], "edgeTaken"), $"run {runId}: a stored edge not leading from the last visit to the current node is not credited");
         }
+
+        nodes = (await GetOkAsync(client, $"/api/v1/agent/loop-runs/{retriedPending}")).GetProperty("nodes").EnumerateArray().ToList();
+        Assert.Equal(3, nodes.Count);
+        Assert.True(IsNullOrMissing(nodes[1], "edgeTaken"), "the answered visit's edge is not entered yet and it is not the last visit");
+        Assert.True(IsNullOrMissing(nodes[2], "edgeTaken"), "the retry is the last visit but did not complete last, so the stored edge is not its");
+
+        nodes = (await GetOkAsync(client, $"/api/v1/agent/loop-runs/{retriedEntered}")).GetProperty("nodes").EnumerateArray().ToList();
+        Assert.Equal(4, nodes.Count);
+        AssertEdgeTaken(nodes[1], toFix, "OnFailure", null, fix, "Fix");
+        Assert.True(IsNullOrMissing(nodes[2], "edgeTaken"));
+        Assert.True(IsNullOrMissing(nodes[3], "edgeTaken"));
     }
 
     [Fact]
