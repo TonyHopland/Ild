@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.Json;
 using ILD.Api.Authentication;
 using ILD.Api.Contracts;
@@ -794,6 +795,8 @@ public class AgentController : ControllerBase
             return BadRequest(new { error = "version must be 1 or greater." });
 
         var key = nameOrId.Trim();
+        // One snapshot: a save writes the template's name and policy with its new version, so separate reads could mix them.
+        await using var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead);
         LoopTemplate? template;
         if (Guid.TryParse(key, out var templateId))
         {
@@ -832,6 +835,7 @@ public class AgentController : ControllerBase
         var graph = await _templates.GetVersionGraphAsync(template.Id, chosen.VersionNumber);
         if (graph == null)
             return NotFound(new { error = $"Loop template {template.Id} has no version {chosen.VersionNumber}." });
+        await snapshot.CommitAsync();
         return Ok(new
         {
             templateId = template.Id,
@@ -927,6 +931,8 @@ public class AgentController : ControllerBase
             query = query.Where(r => (r.StartedAt ?? r.CreatedAt) < end);
         }
 
+        // One snapshot, so each row's cost totals come from the same moment as the row.
+        await using var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead);
         var runs = await query
             .OrderByDescending(r => r.StartedAt ?? r.CreatedAt)
             .ThenByDescending(r => r.Id)
@@ -945,6 +951,7 @@ public class AgentController : ControllerBase
             .ToListAsync();
 
         var costs = await AggregateRunCostsAsync(runs.Select(r => r.Id).ToList());
+        await snapshot.CommitAsync();
         return Ok(runs.Select(r =>
         {
             costs.TryGetValue(r.Id, out var cost);
