@@ -64,9 +64,10 @@ public sealed record LoopRunIncomingEdge(Guid Id, EdgeType Type, string? Name, G
 public sealed record LoopRunEdgeTaken(Guid Id, EdgeType Type, string? Name, Guid TargetNodeId, string TargetLabel);
 
 /// <summary>
-/// A human-feedback event: <c>requested</c> (a node asked), <c>parked</c> (the
-/// engine stopped the run for a human) or <c>received</c> (the human's answer,
-/// with the edge it chose).
+/// A feedback event: <c>requested</c> (a node asked a human), <c>parked</c> (the
+/// run stopped to wait, for a human or for ILD itself, such as on an AI provider
+/// throttle; <see cref="Text"/> gives the reason) or <c>received</c> (the human's
+/// answer, with the edge it chose).
 /// </summary>
 public sealed record LoopRunFeedbackDigest(
     long EventId,

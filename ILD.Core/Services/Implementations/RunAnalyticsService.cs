@@ -124,11 +124,17 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         List<LiveRun> liveRuns;
         List<RunContribution> archived;
         List<TemplateNode> templateNodes;
+        List<NodeVisit> visits;
         // One snapshot, as in GetOverviewAsync: a run deleted between the reads would otherwise count twice.
         await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
         {
             liveRuns = (await BuildLiveContributionsAsync(cancellationToken)).Where(r => Includes(r.Contribution)).ToList();
             archived = (await LoadArchivedContributionsAsync(cancellationToken)).Where(Includes).ToList();
+            var runIds = liveRuns.Select(r => r.RunId).ToList();
+            visits = await _db.LoopRunNodes
+                .Where(n => runIds.Contains(n.LoopRunId))
+                .Select(n => new NodeVisit(n.LoopNodeId, n.Status, n.StartedAt, n.CompletedAt))
+                .ToListAsync(cancellationToken);
             var versionIds = liveRuns.Select(r => r.VersionId).Distinct().ToList();
             templateNodes = await _db.LoopNodes
                 .Where(n => versionIds.Contains(n.LoopTemplateVersionId))
@@ -140,18 +146,17 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
 
         var runsByTemplate = liveRuns.ToLookup(r => r.Contribution.TemplateId);
         var nodesByTemplate = templateNodes.ToLookup(n => n.TemplateId);
+        var visitsByNode = visits.ToLookup(v => v.LoopNodeId);
         return RollUpTemplates(liveRuns.Select(r => r.Contribution).Concat(archived))
             .Select(totals =>
             {
-                var runs = runsByTemplate[totals.TemplateId].ToList();
-                var visits = runs.SelectMany(r => r.Visits).ToLookup(v => v.LoopNodeId);
                 var nodes = nodesByTemplate[totals.TemplateId]
                     .OrderBy(n => n.VersionNumber)
                     .ThenBy(n => n.Label, StringComparer.Ordinal)
                     .ThenBy(n => n.Id)
-                    .Select(n => NodeFigures(n, visits[n.Id].ToList()))
+                    .Select(n => NodeFigures(n, visitsByNode[n.Id].ToList()))
                     .ToList();
-                return new TemplateAnalyticsDetail(totals, runs.Count, nodes);
+                return new TemplateAnalyticsDetail(totals, runsByTemplate[totals.TemplateId].Count(), nodes);
             })
             .ToList();
     }
@@ -209,8 +214,6 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .Select(n => new
             {
                 n.LoopRunId,
-                n.LoopNodeId,
-                n.Status,
                 n.StartedAt,
                 n.CompletedAt,
                 n.IncomingEdgeId,
@@ -238,8 +241,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         var result = new List<LiveRun>(runs.Count);
         foreach (var run in runs)
         {
-            var runNodes = nodesByRun[run.Id].ToList();
-            var nodeFacts = runNodes
+            var nodeFacts = nodesByRun[run.Id]
                 .Select(n => new NodeFact(
                     n.StartedAt, n.CompletedAt, n.IncomingEdgeId,
                     n.InputTokens ?? 0, n.OutputTokens ?? 0, n.CostUsd ?? 0m, n.AiProvider))
@@ -248,10 +250,10 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
                 .Select(f => new FeedbackFact(f.EventType, f.Id, f.Timestamp))
                 .ToList();
             result.Add(new LiveRun(
+                run.Id,
                 run.LoopTemplateVersionId,
                 RunAnalyticsAggregator.BuildContribution(
-                    run.TemplateId, run.TemplateName, run.Status, run.Started, nodeFacts, edges, feedbackFacts),
-                runNodes.Select(n => new NodeVisit(n.LoopNodeId, n.Status, n.StartedAt, n.CompletedAt)).ToList()));
+                    run.TemplateId, run.TemplateName, run.Status, run.Started, nodeFacts, edges, feedbackFacts)));
         }
         return result;
     }
@@ -327,8 +329,8 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         return total;
     }
 
-    /// <summary>A still-existing run's contribution, with the version it ran and its node visits.</summary>
-    private sealed record LiveRun(Guid VersionId, RunContribution Contribution, IReadOnlyList<NodeVisit> Visits);
+    /// <summary>A still-existing run's contribution, with the run and the version it ran.</summary>
+    private sealed record LiveRun(Guid RunId, Guid VersionId, RunContribution Contribution);
 
     private sealed record NodeVisit(Guid LoopNodeId, LoopRunNodeStatus Status, DateTime? StartedAt, DateTime? CompletedAt);
 

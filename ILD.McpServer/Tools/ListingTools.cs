@@ -102,7 +102,7 @@ public sealed class ListingTools
     }
 
     [McpServerTool(Name = "get_loop_run")]
-    [Description("Read one loop run as a summary (read-only): status, template version, work item, timings; the node visits in execution order, each with its outcome, duration, error, tokens, cost, the edge it was entered by (incomingEdge) and the edge it took (edgeTaken: the edge a later visit that came from this one entered by, when that edge leaves this node; for the last visit, if it completed last, the edge the run has followed from it toward its current node; otherwise null); the human-feedback requests, parks and answers; the AI traversal and throttle counters; and the pull request with its merge state and the review comments from the last stored PR snapshot (fetchedAt says how old). Long texts are cut at 2,000 characters and flagged (errorTruncated, textTruncated, bodyTruncated). No AI transcripts or node outputs. Node ids match get_loop_template's document.")]
+    [Description("Read one loop run as a summary (read-only): status, template version, work item, timings; the node visits in execution order, each with its outcome, duration, error, tokens, cost, the edge it was entered by (incomingEdge) and the edge it took (edgeTaken: the edge a later visit that came from this one entered by, when that edge leaves this node; for the last visit, if it completed last, the edge the run has followed from it toward its current node; otherwise null); the human-feedback requests and answers, and the run's parks (kind parked, which also covers ILD's own waits such as an AI provider throttle; text gives the reason); the AI traversal and throttle counters; and the pull request with its merge state and the review comments from the last stored PR snapshot (fetchedAt says how old). Long texts are cut at 2,000 characters and flagged (errorTruncated, textTruncated, bodyTruncated). No AI transcripts or node outputs. Node ids match get_loop_template's document.")]
     public Task<string> GetLoopRun(
         [Description("Loop run GUID (from list_loop_runs).")] string runId)
         => _ild.GetRawAsync($"api/v1/agent/loop-runs/{Uri.EscapeDataString(runId)}");
@@ -110,7 +110,7 @@ public sealed class ListingTools
     [McpServerTool(Name = "get_loop_template")]
     [Description("Read a saved loop template version (read-only) as an ild-loop-template/v2 document, the same format get_current_loop returns, so it can be compared with or handed to update_current_loop. Returns { templateId, version, latestVersion, isLatest, versionCreatedAt, isArchived, document }. The document's nodes, edges and configs are that version's; its name, description and recoveryPolicy are the template's current values, because they are not versioned. Node ids match the nodeId values from get_loop_run and get_template_analytics. A name shared by several templates is refused with the candidates' ids.")]
     public Task<string> GetLoopTemplate(
-        [Description("Loop template GUID, or its exact name (case-insensitive; archived templates included).")] string nameOrId,
+        [Description("Loop template GUID, or its exact name (case-insensitive; archived templates included). A GUID that is no template's id is tried as a name.")] string nameOrId,
         [Description("Optional version number; default the latest.")] int? version = null)
     {
         var qs = BuildQuery(("nameOrId", nameOrId), ("version", version?.ToString(CultureInfo.InvariantCulture)));

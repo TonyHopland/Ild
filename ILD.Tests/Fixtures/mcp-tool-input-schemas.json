@@ -265,7 +265,7 @@
     "type": "object",
     "properties": {
       "nameOrId": {
-        "description": "Loop template GUID, or its exact name (case-insensitive; archived templates included).",
+        "description": "Loop template GUID, or its exact name (case-insensitive; archived templates included). A GUID that is no template's id is tried as a name.",
         "type": "string"
       },
       "version": {

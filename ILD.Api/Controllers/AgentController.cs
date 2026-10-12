@@ -782,7 +782,7 @@ public class AgentController : ControllerBase
     /// <summary>
     /// A saved loop template version as an <c>ild-loop-template/v2</c> document, the
     /// format <c>current-loop</c> reads and takes. <paramref name="nameOrId"/> is a
-    /// template id, or an exact name (case and surrounding whitespace ignored,
+    /// template id, or else an exact name (case and surrounding whitespace ignored,
     /// archived templates included); a name more than one template has is 409 with
     /// the candidates. No <paramref name="version"/> means the latest.
     /// </summary>
@@ -797,12 +797,11 @@ public class AgentController : ControllerBase
         var key = nameOrId.Trim();
         // One snapshot: a save writes the template's name and policy with its new version, so separate reads could mix them.
         await using var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead);
-        LoopTemplate? template;
-        if (Guid.TryParse(key, out var templateId))
-        {
-            template = await _db.LoopTemplates.AsNoTracking().SingleOrDefaultAsync(t => t.Id == templateId);
-        }
-        else
+        // An id wins; a value that only looks like one may still be a template's name.
+        var template = Guid.TryParse(key, out var templateId)
+            ? await _db.LoopTemplates.AsNoTracking().SingleOrDefaultAsync(t => t.Id == templateId)
+            : null;
+        if (template == null)
         {
             // Matched in memory: SQL case folding differs between SQLite and Postgres.
             var named = (await _db.LoopTemplates.AsNoTracking().ToListAsync())
