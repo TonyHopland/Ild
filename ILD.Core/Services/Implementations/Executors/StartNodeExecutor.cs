@@ -176,7 +176,7 @@ public sealed class StartNodeExecutor : INodeExecutor
         var (ok, path, error) = await BaseRepoClone.EnsureAsync(
             repoManager, repo, sp.GetService<IConfiguration>(), gitAuth, ctx.CancellationToken);
         if (!ok)
-            return (false, null, $"{error} — refusing to start run from a stale origin/{baseBranch}");
+            return (false, null, $"could not bring the base repo up to date ({error}) — refusing to start run without a current origin/{baseBranch}");
         var basePath = path!;
 
         // A base the human typed can simply not be there. Say so once, plainly,

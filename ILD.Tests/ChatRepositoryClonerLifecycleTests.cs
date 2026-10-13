@@ -299,6 +299,29 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         Assert.Contains("could not be removed", result.Error, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task A_killed_clone_into_an_empty_folder_that_was_already_there_leaves_no_partial_clone()
+    {
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "widgets", CloneUrl = "https://forge.example.test/team/widgets.git" };
+        var target = BaseRepoPath.Fallback(repo.Id, Config);
+        Directory.CreateDirectory(target);
+        using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var git = new Mock<IRepositoryManager>();
+        git.Setup(g => g.CloneAsync(repo.CloneUrl, target, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .Returns((string _, string path, CancellationToken _, GitAuthOptions? _) =>
+            {
+                Directory.CreateDirectory(Path.Combine(path, ".git", "objects"));
+                shutdown.Cancel();
+                return Task.FromException<(bool, string?)>(new OperationCanceledException(shutdown.Token));
+            });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, shutdown.Token));
+
+        Assert.False(Directory.Exists(Path.Combine(target, ".git")));
+        Assert.Null(BaseRepoPath.Existing(repo, Config));
+    }
+
     // -- Setup -------------------------------------------------------------------------
 
     /// <summary>As ChatService deletes a chat: the row, then its clone work, then its scratch folder.</summary>

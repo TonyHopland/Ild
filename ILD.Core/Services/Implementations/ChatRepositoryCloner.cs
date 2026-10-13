@@ -306,7 +306,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// Switch to <paramref name="branch"/>, creating it at its remote head or
     /// moving it forward to that head; a local branch is never moved back or
     /// sideways, so one already at or ahead of its remote head is checked out as
-    /// it is, and one that has diverged from it is refused. Every step either
+    /// it is, upstream included, and one that has diverged from it is refused. Every step either
     /// does all it says or nothing, so a refusal leaves HEAD, the branches, the
     /// index and the working tree as they were.
     /// </summary>
