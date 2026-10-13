@@ -782,6 +782,48 @@ export interface GlobalVariable {
   usedBy: { id: string; name: string }[];
 }
 
+export type GlobalVariableProposalStatus =
+  | "Pending"
+  | "Approved"
+  | "Rejected"
+  | "Stale"
+  | "Superseded";
+
+/**
+ * An agent's suggested whole new value for a {@link GlobalVariable}, applied only
+ * when a human approves it. `currentValue` is the variable as it is now, null when
+ * there is none: the suggestion then creates it.
+ */
+export interface GlobalVariableProposal {
+  id: string;
+  name: string;
+  value: string;
+  rationale: string;
+  status: GlobalVariableProposalStatus;
+  rejectionReason: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  snapshotUpdatedAt: string | null;
+  currentValue: string | null;
+  variableExists: boolean;
+  createdByLoopRunId: string | null;
+  /** The loop run step that was running when it was made; places its card in the Action tab. */
+  createdByRunNodeId: string | null;
+  createdByChatSessionId: string | null;
+  /** The sequence of the chat reply its card follows. */
+  chatReplySequence: number | null;
+  /**
+   * Where it came from while that still exists: a run (with its work item) or a
+   * chat; "deleted" once it does not. A chat is linkable only for its owner.
+   */
+  source: {
+    kind: "run" | "chat" | "deleted";
+    workItemId: string | null;
+    chatSessionId: string | null;
+    linkable: boolean;
+  };
+}
+
 export interface RemoteProvider {
   id: string;
   name: string;
@@ -968,6 +1010,14 @@ export interface WorkItemEditProposalsChangedPayload {
 }
 
 export interface ChatEditProposalsChangedPayload {
+  chatSessionId: string;
+}
+
+export interface GlobalVariableProposalsChangedPayload {
+  name: string;
+}
+
+export interface ChatGlobalVariableProposalsChangedPayload {
   chatSessionId: string;
 }
 

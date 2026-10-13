@@ -33,9 +33,11 @@ const OVERVIEW_STATUSES: ReadonlySet<WorkItemStatus> = new Set([
 
 /**
  * Items at rest open on Overview; every other status, including any added later,
- * has work in flight and opens on Action.
+ * has work in flight and opens on Action. A link to a suggestion opens Action,
+ * where its card is.
  */
-function openingTab(workItem: WorkItem | null): TabId {
+function openingTab(workItem: WorkItem | null, revealGlobalProposalId?: string | null): TabId {
+  if (workItem && revealGlobalProposalId) return "action";
   return !workItem || OVERVIEW_STATUSES.has(workItem.status) ? "overview" : "action";
 }
 
@@ -45,6 +47,8 @@ interface WorkItemModalV2Props {
   onClose: () => void;
   onSave: (workItem: WorkItem) => void;
   onDelete?: (id: string) => void;
+  /** A global variable suggestion one of the item's runs made, to open the Action tab scrolled to. */
+  revealGlobalProposalId?: string | null;
 }
 
 /**
@@ -63,11 +67,18 @@ export default function WorkItemModalV2({
   onClose,
   onSave,
   onDelete,
+  revealGlobalProposalId,
 }: WorkItemModalV2Props) {
   const detail = useWorkItemDetail(workItem, onSave);
   // Chosen from the item's status, regardless of which tab was last viewed on a
   // previously-opened item.
-  const [activeTab, setActiveTab] = useState<TabId>(openingTab(workItem));
+  const [activeTab, setActiveTab] = useState<TabId>(openingTab(workItem, revealGlobalProposalId));
+  // A link to another suggestion while the dialog is open goes to its card too.
+  const [linkedProposal, setLinkedProposal] = useState(revealGlobalProposalId);
+  if (revealGlobalProposalId !== linkedProposal) {
+    setLinkedProposal(revealGlobalProposalId);
+    if (workItem && revealGlobalProposalId) setActiveTab("action");
+  }
   const [editMode, setEditMode] = useState(false);
   const [editDirty, setEditDirty] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -117,7 +128,7 @@ export default function WorkItemModalV2({
   useEffect(() => {
     setEditMode(false);
     setEditDirty(false);
-    setActiveTab(openingTab(workItem));
+    setActiveTab(openingTab(workItem, revealGlobalProposalId));
     // A terminal session belongs to the item it was opened on; switching items
     // must tear it down rather than leak the previous worktree's shell.
     setShowTerminal(false);
@@ -299,6 +310,7 @@ export default function WorkItemModalV2({
           detail={detail}
           feedbackPrompt={feedbackPrompt}
           active={activeTab === "action"}
+          revealGlobalProposalId={revealGlobalProposalId}
         />
       </section>
       <section

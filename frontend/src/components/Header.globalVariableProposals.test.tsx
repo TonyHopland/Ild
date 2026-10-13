@@ -1,0 +1,92 @@
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { render, screen, cleanup, within, waitFor, act } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
+import { AuthContext } from "../hooks/useAuth";
+import * as signalRHook from "../hooks/useSignalR";
+import Header from "./Header";
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+type HubHandler = (msg: { payload: unknown }) => void;
+
+function mockHub() {
+  const handlers: Record<string, Set<HubHandler>> = {};
+  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+    on: (event: string, handler: HubHandler) => {
+      (handlers[event] ??= new Set()).add(handler);
+    },
+    off: (event: string, handler: HubHandler) => {
+      handlers[event]?.delete(handler);
+    },
+    invoke: vi.fn(() => Promise.resolve()),
+    connectionState: "connected",
+  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
+  return (event: string, payload: unknown) =>
+    act(async () => {
+      for (const h of Array.from(handlers[event] ?? [])) h({ payload });
+    });
+}
+
+/** Serves the pending-suggestion count the server holds now; every other request fails. */
+function stubCount(server: { count: number | null }) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string) => {
+      const path = new URL(input, "http://localhost").pathname;
+      const ok =
+        path === "/api/v1/global-variables/proposals/pending-count" && server.count !== null;
+      const body = ok ? { count: server.count } : { error: "not stubbed" };
+      return {
+        ok,
+        status: ok ? 200 : 404,
+        statusText: "",
+        text: () => Promise.resolve(JSON.stringify(body)),
+      } as Response;
+    }),
+  );
+}
+
+function renderHeader() {
+  const authValue = {
+    user: { id: "1", username: "test", createdAt: "" },
+    token: "test-token",
+    isAuthenticated: true,
+    isLoading: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+  };
+  render(
+    <MemoryRouter initialEntries={["/taskboard"]}>
+      <AuthContext.Provider value={authValue}>
+        <Header />
+      </AuthContext.Provider>
+    </MemoryRouter>,
+  );
+}
+
+const globalVariablesLink = () =>
+  within(screen.getByRole("navigation")).getByRole("link", { name: /Global Variables/ });
+
+describe("the Global Variables menu entry", () => {
+  test("carries the number of pending suggestions, follows hints, and shows nothing at zero", async () => {
+    const hint = mockHub();
+    const server = { count: 3 as number | null };
+    stubCount(server);
+
+    renderHeader();
+
+    await waitFor(() => expect(globalVariablesLink().textContent).toMatch(/\b3\b/));
+
+    server.count = 4;
+    await hint("GlobalVariableProposalsChanged", { name: "review_rules" });
+    await waitFor(() => expect(globalVariablesLink().textContent).toMatch(/\b4\b/));
+
+    server.count = 0;
+    await hint("GlobalVariableProposalsChanged", { name: "review_rules" });
+    await waitFor(() => expect(globalVariablesLink().textContent).toBe("Global Variables"));
+  });
+});

@@ -3,11 +3,14 @@ import { NavLink } from "react-router";
 import { useAuth } from "../hooks/useAuth";
 import { NAV_ITEMS, APP_NAME, ROUTES } from "../utils/constants";
 import { useChatInbox } from "./ChatInbox";
+import { usePendingGlobalVariableProposalCount } from "../hooks/usePendingGlobalVariableProposalCount";
 
 export default function Header() {
   const { user, logout } = useAuth();
   const { unreadCount } = useChatInbox();
   const unreadBadgeId = useId();
+  const pendingSuggestions = usePendingGlobalVariableProposalCount();
+  const suggestionsBadgeId = useId();
 
   return (
     <header className="header">
@@ -17,21 +20,29 @@ export default function Header() {
         </div>
         <nav className="header-nav">
           {NAV_ITEMS.map((item) => {
-            const showUnreadBadge = item.path === ROUTES.CHAT && unreadCount > 0;
+            const badge =
+              item.path === ROUTES.CHAT && unreadCount > 0
+                ? { id: unreadBadgeId, count: unreadCount }
+                : item.path === ROUTES.GLOBAL_VARIABLES && pendingSuggestions > 0
+                  ? { id: suggestionsBadgeId, count: pendingSuggestions }
+                  : null;
             return (
               <NavLink
                 key={item.path}
                 to={item.path}
                 className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-                aria-describedby={showUnreadBadge ? unreadBadgeId : undefined}
+                aria-describedby={badge?.id}
               >
                 {item.label}
                 {/* The link's name stays its label; the count reaches screen
                     readers as its description. */}
-                {showUnreadBadge && (
-                  <span id={unreadBadgeId} className="nav-badge" aria-hidden="true">
-                    {unreadCount}
-                  </span>
+                {badge && (
+                  <>
+                    {" "}
+                    <span id={badge.id} className="nav-badge" aria-hidden="true">
+                      {badge.count}
+                    </span>
+                  </>
                 )}
               </NavLink>
             );
@@ -129,7 +140,7 @@ export default function Header() {
         }
 
         .nav-badge {
-          margin-left: 0.4rem;
+          margin-left: 0.15rem;
           min-width: 1rem;
           padding: 0 0.3rem;
           border-radius: 0.5rem;

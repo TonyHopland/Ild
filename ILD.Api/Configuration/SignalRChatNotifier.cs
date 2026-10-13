@@ -40,6 +40,9 @@ public class SignalRChatNotifier : IChatNotifier, IChatScheduleNotifier
     public Task EditProposalsChangedAsync(Guid chatSessionId)
         => SendAsync(chatSessionId, "ChatEditProposalsChanged", new ChatEditProposalsChangedPayload(chatSessionId));
 
+    public Task GlobalVariableProposalsChangedAsync(Guid chatSessionId)
+        => SendAsync(chatSessionId, "ChatGlobalVariableProposalsChanged", new ChatGlobalVariableProposalsChangedPayload(chatSessionId));
+
     public Task UnreadChangedAsync(string userId, Guid chatSessionId)
         => SendAsync(ChatHub.InboxGroup(userId), chatSessionId, "ChatUnreadChanged", new ChatUnreadChangedPayload(chatSessionId));
 

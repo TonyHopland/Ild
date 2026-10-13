@@ -11,6 +11,8 @@ export interface RunView {
   messages: RunConversationMessage[];
   /** Why the last conversation read failed; null once one succeeds. */
   error: string | null;
+  /** Whether a conversation read has answered, or there is no run to read. */
+  conversationRead: boolean;
 }
 
 function merge(
@@ -43,6 +45,7 @@ export function useRunView(
   const shared = current.isCurrent && current.run?.id === runId ? current.run : null;
   const [messages, setMessages] = useState<RunConversationMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [conversationRead, setConversationRead] = useState(!runId);
   const mounted = useRef(true);
   // The newest event a conversation read has covered; reads go on from it.
   const cursor = useRef(0);
@@ -87,6 +90,7 @@ export function useRunView(
         )
         .finally(() => {
           reading.current = false;
+          if (mounted.current) setConversationRead(true);
           if (mounted.current && readAgain.current) {
             readAgain.current = false;
             read();
@@ -173,5 +177,5 @@ export function useRunView(
     };
   }, [runId, connectionState, on, off, invoke, readConversation, readRun]);
 
-  return { run: ownRead ? run : shared, messages, error };
+  return { run: ownRead ? run : shared, messages, error, conversationRead };
 }

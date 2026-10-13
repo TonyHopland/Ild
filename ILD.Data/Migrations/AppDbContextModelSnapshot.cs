@@ -582,6 +582,82 @@ namespace ILD.Data.Migrations
                     b.ToTable("GlobalVariables");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.GlobalVariableProposal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("ChatReplySequence")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByLoopRunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByRunNodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DecisionDeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Rationale")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTime?>("SnapshotUpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(8192)
+                        .HasColumnType("character varying(8192)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByChatSessionId");
+
+                    b.HasIndex("CreatedByLoopRunId");
+
+                    b.HasIndex("NormalizedName");
+
+                    b.HasIndex(new[] { "CreatedByChatSessionId", "NormalizedName" }, "IX_GlobalVariableProposals_ChatSession_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.HasIndex(new[] { "CreatedByLoopRunId", "NormalizedName" }, "IX_GlobalVariableProposals_LoopRun_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.ToTable("GlobalVariableProposals");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.LoopNode", b =>
                 {
                     b.Property<Guid>("Id")

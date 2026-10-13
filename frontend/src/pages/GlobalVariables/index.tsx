@@ -1,15 +1,44 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, GlobalVariable } from "../../types";
+import { Link } from "react-router";
+import { ApiError, GlobalVariable, GlobalVariableProposal } from "../../types";
 import {
   GlobalVariableSettingKeys,
   globalVariableService,
   settingsService,
 } from "../../services/auth";
+import { useSignalR } from "../../hooks/useSignalR";
+import GlobalVariableProposalCard from "../../components/GlobalVariableProposalCard";
+import { ROUTES } from "../../utils/constants";
 import VariableDialog from "./VariableDialog";
 import VariableRow from "./VariableRow";
 
 /** The setting's default, used while it is being read or when it cannot be. */
 const DEFAULT_LIMIT = 4000;
+
+const sameName = (a: string, b: string) => a.toUpperCase() === b.toUpperCase();
+
+/**
+ * Where a suggestion came from, linked to the card it shows as there. A source
+ * that is gone, or another user's chat, is named without a link.
+ */
+function SuggestionSource({ proposal }: { proposal: GlobalVariableProposal }) {
+  const { source } = proposal;
+  const link = `?globalProposal=${encodeURIComponent(proposal.id)}`;
+  if (source.kind === "run" && source.workItemId)
+    return (
+      <Link to={`${ROUTES.TASKBOARD}/${encodeURIComponent(source.workItemId)}${link}`}>
+        Suggested by a run of work item #{source.workItemId}
+      </Link>
+    );
+  if (source.kind === "chat" && source.chatSessionId && source.linkable)
+    return (
+      <Link to={`${ROUTES.CHAT}/${encodeURIComponent(source.chatSessionId)}${link}`}>
+        Suggested in a chat
+      </Link>
+    );
+  if (source.kind === "chat") return <>Suggested in another user&apos;s chat</>;
+  return <>Source deleted</>;
+}
 
 export default function GlobalVariables() {
   const [variables, setVariables] = useState<GlobalVariable[]>([]);
@@ -17,28 +46,67 @@ export default function GlobalVariables() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [dialog, setDialog] = useState<{ variable: GlobalVariable | null } | null>(null);
-  // Only the latest read fills the list: a reload after a save must not be
+  const [proposals, setProposals] = useState<GlobalVariableProposal[]>([]);
+  const [proposalsError, setProposalsError] = useState<string | null>(null);
+  // Why the last decision made here was refused: its card leaves the list on the
+  // re-read, so the reason is shown on the page instead.
+  const [refusal, setRefusal] = useState<{ name: string; reason: string } | null>(null);
+  // Only the latest read fills the lists: a reload after a save must not be
   // overwritten by an earlier read that answers after it.
   const loadSeq = useRef(0);
 
   const load = useCallback(async () => {
     const seq = ++loadSeq.current;
-    try {
-      const list = await globalVariableService.getAll();
-      if (seq !== loadSeq.current) return;
-      setVariables(list);
+    const [list, pending] = await Promise.allSettled([
+      globalVariableService.getAll(),
+      globalVariableService.listProposals({ status: "Pending" }),
+    ]);
+    if (seq !== loadSeq.current) return;
+    if (list.status === "fulfilled") {
+      setVariables(list.value);
       setLoadError(null);
-    } catch (error) {
-      if (seq !== loadSeq.current) return;
-      setLoadError((error as ApiError | Error).message);
-    } finally {
-      if (seq === loadSeq.current) setIsLoading(false);
+    } else {
+      setLoadError((list.reason as ApiError | Error).message);
     }
+    if (pending.status === "fulfilled") {
+      setProposals(pending.value);
+      setProposalsError(null);
+    } else {
+      setProposalsError((pending.reason as ApiError | Error).message);
+    }
+    setIsLoading(false);
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A suggestion made or decided anywhere, or a variable written that made some
+  // stale, is a hint to read both lists again. Read once more after every
+  // (re)connect, since a hint sent while away is lost.
+  const { connectionState, on, off, invoke } = useSignalR("/hubs/work-item");
+  useEffect(() => {
+    if (connectionState !== "connected") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await invoke("SubscribeToWorkItems");
+      } catch (err) {
+        console.error(err);
+        return;
+      }
+      if (!cancelled) void load();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionState, invoke, load]);
+
+  useEffect(() => {
+    const onChanged = () => void load();
+    on("GlobalVariableProposalsChanged", onChanged);
+    return () => off("GlobalVariableProposalsChanged", onChanged);
+  }, [on, off, load]);
 
   useEffect(() => {
     let active = true;
@@ -54,6 +122,28 @@ export default function GlobalVariables() {
       active = false;
     };
   }, []);
+
+  const listed = (p: GlobalVariableProposal) => variables.some((v) => sameName(p.name, v.name));
+  // Grouped by what the server said of each, never by the variables list alone,
+  // which may not have loaded.
+  const newVariableProposals = proposals.filter((p) => !p.variableExists && !listed(p));
+  const unlistedProposals = proposals.filter((p) => p.variableExists && !listed(p));
+  const suggestionCards = (list: GlobalVariableProposal[]) =>
+    list.length > 0 && (
+      <div className="gv-suggestions">
+        {list.map((p) => (
+          <GlobalVariableProposalCard
+            key={p.id}
+            proposal={p}
+            onSettled={(reason) => {
+              setRefusal(reason === null ? null : { name: p.name, reason });
+              void load();
+            }}
+            source={<SuggestionSource proposal={p} />}
+          />
+        ))}
+      </div>
+    );
 
   if (isLoading) {
     return (
@@ -74,12 +164,29 @@ export default function GlobalVariables() {
       <p className="gv-intro">
         Values every loop prompt can read with <code>{"{{Global.<name>}}"}</code>, for conventions
         that apply across all repositories. A run halts before a node that uses one that is missing
-        or empty. Edits apply to the next prompt that is rendered; there is no history.
+        or empty. Edits apply to the next prompt that is rendered; there is no history. Agents
+        cannot change them: they suggest a new value, which waits here for a human to approve.
       </p>
 
       {loadError && (
         <div className="gv-error" role="alert">
           {`Couldn't load the global variables: ${loadError}`}{" "}
+          <button className="btn btn-secondary btn-small" onClick={() => void load()}>
+            Retry
+          </button>
+        </div>
+      )}
+      {refusal && (
+        <div className="gv-error" role="alert">
+          {`The suggestion for ${refusal.name} was not applied: ${refusal.reason}`}{" "}
+          <button className="btn btn-secondary btn-small" onClick={() => setRefusal(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
+      {proposalsError && (
+        <div className="gv-error" role="alert">
+          {`Couldn't load the suggestions: ${proposalsError}`}{" "}
           <button className="btn btn-secondary btn-small" onClick={() => void load()}>
             Retry
           </button>
@@ -91,14 +198,26 @@ export default function GlobalVariables() {
       ) : (
         <div className="gv-list">
           {variables.map((v) => (
-            <VariableRow
-              key={v.id}
-              variable={v}
-              onEdit={() => setDialog({ variable: v })}
-              reload={load}
-            />
+            <div key={v.id} className="gv-entry">
+              <VariableRow variable={v} onEdit={() => setDialog({ variable: v })} reload={load} />
+              {suggestionCards(proposals.filter((p) => sameName(p.name, v.name)))}
+            </div>
           ))}
         </div>
+      )}
+
+      {newVariableProposals.length > 0 && (
+        <section className="gv-new" aria-label="New variables">
+          <h2 className="gv-new-title">New variables</h2>
+          {suggestionCards(newVariableProposals)}
+        </section>
+      )}
+
+      {unlistedProposals.length > 0 && (
+        <section className="gv-new" aria-label="Suggestions for variables not listed">
+          <h2 className="gv-new-title">Suggestions for variables not listed above</h2>
+          {suggestionCards(unlistedProposals)}
+        </section>
       )}
 
       {dialog && (
@@ -133,6 +252,19 @@ export default function GlobalVariables() {
           display: flex;
           flex-direction: column;
           gap: 0.75rem;
+        }
+
+        .gv-suggestions {
+          margin: 0.5rem 0 0 1.5rem;
+        }
+
+        .gv-new {
+          margin-top: 1.5rem;
+        }
+
+        .gv-new-title {
+          color: #e0e0e0;
+          font-size: 1rem;
         }
 
         .gv-row {

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { TurnVariableChange, WorkItem, WorkItemEditProposal } from "../../types";
+import { TurnVariableChange, WorkItem } from "../../types";
 import { useEditProposals } from "../../hooks/useEditProposals";
+import { useGlobalVariableProposals } from "../../hooks/useGlobalVariableProposals";
 import { workItemService } from "../../services/auth";
 import EditProposalCard from "../EditProposalCard";
+import GlobalVariableProposalCard from "../GlobalVariableProposalCard";
 import { placeActionProposals } from "../editProposalPlacement";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
@@ -204,13 +206,17 @@ interface ActionThreadProps {
   detail: WorkItemDetail;
   feedbackPrompt: string | null;
   active: boolean;
+  /** The global variable suggestion a link points at, scrolled to once its card shows. */
+  revealGlobalProposalId?: string | null;
 }
 
 /**
  * The Action tab as one chronological thread for the item's latest run,
  * finished or not: its conversation so far, the live run as the latest AI
- * bubble, and the pending human feedback as the latest human bubble. Opens
- * scrolled to the newest entry. Earlier runs are on the Runs tab.
+ * bubble, and the pending human feedback as the latest human bubble, with the
+ * edit proposals and global variable suggestions its runs made after the turns
+ * that made them. Opens scrolled to the newest entry, or to the suggestion a
+ * link points at. Earlier runs are on the Runs tab.
  */
 export default function ActionThread(props: ActionThreadProps) {
   const runId = props.workItem.latestLoopRunId ?? null;
@@ -223,6 +229,7 @@ function RunThread({
   detail,
   feedbackPrompt,
   active,
+  revealGlobalProposalId,
 }: ActionThreadProps & { runId: string | null }) {
   const view = useRunView(runId, detail.runLock.settledOf(runId), {
     isCurrent: !!runId && workItem.currentLoopRunId === runId,
@@ -231,6 +238,7 @@ function RunThread({
   const { messages } = view;
   const turnVariables = useTurnVariables(workItem.id, messages.length);
   const { proposals, refresh } = useEditProposals({ requestedByWorkItemId: workItem.id });
+  const suggestions = useGlobalVariableProposals({ workItemId: workItem.id });
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const savedScrollTop = useRef(0);
@@ -272,11 +280,31 @@ function RunThread({
     el.scrollIntoView?.({ block: "start" });
   };
 
-  const { afterTurn, live, end } = placeActionProposals(runId, messages, proposals ?? []);
-  const cards = (list: WorkItemEditProposal[] = []) =>
-    list.map((proposal) => (
-      <EditProposalCard key={`proposal:${proposal.id}`} proposal={proposal} onSettled={refresh} />
-    ));
+  const { afterTurn, live, end } = placeActionProposals(runId, messages, [
+    ...(proposals ?? []).map((proposal) => ({
+      ...proposal,
+      card: (
+        <EditProposalCard key={`proposal:${proposal.id}`} proposal={proposal} onSettled={refresh} />
+      ),
+    })),
+    ...(suggestions.proposals ?? []).map((proposal) => ({
+      ...proposal,
+      card: (
+        <GlobalVariableProposalCard
+          key={`gvproposal:${proposal.id}`}
+          proposal={proposal}
+          onSettled={suggestions.refresh}
+          // Revealed once the turns it follows are in place, so none lands above it afterwards.
+          reveal={
+            view.conversationRead && proposal.id === revealGlobalProposalId
+              ? revealFromTop
+              : undefined
+          }
+        />
+      ),
+    })),
+  ]);
+  const cards = (list: { card: ReactNode }[] = []) => list.map((placed) => placed.card);
 
   const isEmpty =
     messages.length === 0 &&

@@ -48,6 +48,12 @@ public interface IChatNotifier
     Task EditProposalsChangedAsync(Guid chatSessionId);
 
     /// <summary>
+    /// A global variable suggestion this chat made was created or decided, or
+    /// went stale, so the chat's inline suggestion cards re-read them. A hint only.
+    /// </summary>
+    Task GlobalVariableProposalsChangedAsync(Guid chatSessionId);
+
+    /// <summary>
     /// Whether the chat is unread may have changed — a reply was stored, the read
     /// marker rose, or the chat was deleted — so the owner's bubbles re-read their
     /// history. Goes to the owner's inbox rather than the chat's group, since a

@@ -45,6 +45,7 @@ public class AppDbContext : DbContext
     public DbSet<PackageFeed> PackageFeeds => Set<PackageFeed>();
     public DbSet<RepositoryPackageFeed> RepositoryPackageFeeds => Set<RepositoryPackageFeed>();
     public DbSet<GlobalVariable> GlobalVariables => Set<GlobalVariable>();
+    public DbSet<GlobalVariableProposal> GlobalVariableProposals => Set<GlobalVariableProposal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -381,6 +382,22 @@ public class AppDbContext : DbContext
             // Prompts look a global up by name ignoring case, so two names differing
             // only in case would be one placeholder resolving to either.
             e.HasIndex(g => g.NormalizedName).IsUnique();
+        });
+
+        modelBuilder.Entity<GlobalVariableProposal>(e =>
+        {
+            e.HasIndex(p => p.NormalizedName);
+            e.HasIndex(p => p.CreatedByLoopRunId);
+            e.HasIndex(p => p.CreatedByChatSessionId);
+            // One pending suggestion per source per variable, enforced where the
+            // race is: two suggestions that both pass the supersede step must not
+            // both stay pending. The filter is GlobalVariableProposalStatus.Pending (0).
+            e.HasIndex(p => new { p.CreatedByLoopRunId, p.NormalizedName }, "IX_GlobalVariableProposals_LoopRun_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
+            e.HasIndex(p => new { p.CreatedByChatSessionId, p.NormalizedName }, "IX_GlobalVariableProposals_ChatSession_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
         });
     }
 

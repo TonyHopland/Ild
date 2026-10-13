@@ -1,13 +1,24 @@
-import type { ChatMessage, RunConversationMessage, WorkItemEditProposal } from "../types";
+import type { ChatMessage, RunConversationMessage } from "../types";
+import { compareCreatedAt } from "../utils/createdAt";
 
-/** Oldest first, by the WorkItem server's clock, then by id. */
-function byCreation(a: WorkItemEditProposal, b: WorkItemEditProposal): number {
-  return (
-    Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-  );
+/**
+ * What placing a card needs. Work item edit proposals and global variable
+ * suggestions both carry it, so a thread places both kinds in one order.
+ */
+export interface PlacedProposal {
+  id: string;
+  createdAt: string;
+  createdByLoopRunId: string | null;
+  createdByRunNodeId?: string | null;
+  chatReplySequence?: number | null;
 }
 
-function push<K>(slots: Map<K, WorkItemEditProposal[]>, key: K, proposal: WorkItemEditProposal) {
+/** Oldest first, by the server's clock, then by id. */
+function byCreation(a: PlacedProposal, b: PlacedProposal): number {
+  return compareCreatedAt(a.createdAt, b.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+}
+
+function push<K, P>(slots: Map<K, P[]>, key: K, proposal: P) {
   const slot = slots.get(key);
   if (slot) slot.push(proposal);
   else slots.set(key, [proposal]);
@@ -18,20 +29,20 @@ function lastIndexWhere<T>(items: T[], match: (item: T) => boolean): number {
   return -1;
 }
 
-function sortSlots<K>(slots: Map<K, WorkItemEditProposal[]>) {
+function sortSlots<K, P extends PlacedProposal>(slots: Map<K, P[]>) {
   for (const slot of slots.values()) slot.sort(byCreation);
 }
 
-export interface ChatPlacement {
+export interface ChatPlacement<P extends PlacedProposal> {
   /** The cards that name a reply older than every message: before the transcript. */
-  head: WorkItemEditProposal[];
+  head: P[];
   /** The cards that follow each message, by message id. */
-  afterMessage: Map<string, WorkItemEditProposal[]>;
+  afterMessage: Map<string, P[]>;
   /**
    * The cards after the whole transcript: those whose reply has not landed
    * yet, then those that name no reply.
    */
-  tail: WorkItemEditProposal[];
+  tail: P[];
 }
 
 /**
@@ -40,14 +51,14 @@ export interface ChatPlacement {
  * is still in flight nothing follows it yet, so the card goes to the tail,
  * which renders after the streaming text, where the reply will land.
  */
-export function placeChatProposals(
+export function placeChatProposals<P extends PlacedProposal>(
   messages: ChatMessage[],
-  proposals: WorkItemEditProposal[],
-): ChatPlacement {
-  const head: WorkItemEditProposal[] = [];
-  const afterMessage = new Map<string, WorkItemEditProposal[]>();
-  const pending: WorkItemEditProposal[] = [];
-  const unanchored: WorkItemEditProposal[] = [];
+  proposals: P[],
+): ChatPlacement<P> {
+  const head: P[] = [];
+  const afterMessage = new Map<string, P[]>();
+  const pending: P[] = [];
+  const unanchored: P[] = [];
   for (const proposal of proposals) {
     const anchor = proposal.chatReplySequence;
     if (anchor == null) {
@@ -68,13 +79,13 @@ export function placeChatProposals(
   };
 }
 
-export interface ActionPlacement {
+export interface ActionPlacement<P extends PlacedProposal> {
   /** The cards that follow each conversation turn, by its index. */
-  afterTurn: Map<number, WorkItemEditProposal[]>;
+  afterTurn: Map<number, P[]>;
   /** The cards whose step has no turn yet: they follow the live bubble. */
-  live: WorkItemEditProposal[];
+  live: P[];
   /** The cards that name no step, or come from another run: they close the thread. */
-  end: WorkItemEditProposal[];
+  end: P[];
 }
 
 /**
@@ -84,14 +95,14 @@ export interface ActionPlacement {
  * so they close the thread, where they can still be decided. A chat's cards
  * belong to that chat and are left out.
  */
-export function placeActionProposals(
+export function placeActionProposals<P extends PlacedProposal>(
   runId: string | null,
   messages: RunConversationMessage[],
-  proposals: WorkItemEditProposal[],
-): ActionPlacement {
-  const afterTurn = new Map<number, WorkItemEditProposal[]>();
-  const live: WorkItemEditProposal[] = [];
-  const end: WorkItemEditProposal[] = [];
+  proposals: P[],
+): ActionPlacement<P> {
+  const afterTurn = new Map<number, P[]>();
+  const live: P[] = [];
+  const end: P[] = [];
   for (const proposal of proposals) {
     if (!proposal.createdByLoopRunId) continue;
     const step = proposal.createdByRunNodeId;

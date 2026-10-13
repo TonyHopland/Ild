@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Global variables hold text every loop prompt can use, and a run waits for you when one it needs is missing.**
 
+- **Agents can suggest changes to global variables, which you approve or reject where they were made or on the Global Variables page.**
+
 - **Analytics count what chats cost, scheduled chats and chat titles included, beside the loop templates.**
 
 - **Agents can read loop analytics, any saved loop template version, and a run's path, feedback and review comments.**

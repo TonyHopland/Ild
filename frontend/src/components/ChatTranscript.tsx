@@ -1,14 +1,18 @@
 import type { ReactNode } from "react";
 import EditProposalCard from "./EditProposalCard";
+import GlobalVariableProposalCard from "./GlobalVariableProposalCard";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { placeChatProposals } from "./editProposalPlacement";
 import { useEditProposals } from "../hooks/useEditProposals";
-import type { ChatMessage, WorkItemEditProposal } from "../types";
+import { useGlobalVariableProposals } from "../hooks/useGlobalVariableProposals";
+import type { ChatMessage } from "../types";
+
+const revealCard = (card: HTMLElement) => card.scrollIntoView?.({ block: "center" });
 
 /**
- * One chat's transcript with the edit proposals it made, each after the reply
- * of the turn that made it, then the reply still streaming. Render it keyed by
- * the chat's id.
+ * One chat's transcript with the edit proposals and global variable suggestions
+ * it made, each after the reply of the turn that made it, then the reply still
+ * streaming. Render it keyed by the chat's id.
  *
  * Everything is one keyed list, so a card that moves to a new slot (its reply
  * landing) is moved rather than remounted, and keeps a decision in progress.
@@ -17,17 +21,36 @@ export default function ChatTranscript({
   chatSessionId,
   messages,
   streaming,
+  revealGlobalProposalId,
 }: {
   chatSessionId: string;
   messages: ChatMessage[];
   streaming: string;
+  /** The global variable suggestion a link points at, scrolled to once its card shows. */
+  revealGlobalProposalId?: string | null;
 }) {
   const { proposals, refresh } = useEditProposals({ chatSessionId });
-  const { head, afterMessage, tail } = placeChatProposals(messages, proposals ?? []);
-  const cards = (list: WorkItemEditProposal[] = []) =>
-    list.map((proposal) => (
-      <EditProposalCard key={`proposal:${proposal.id}`} proposal={proposal} onSettled={refresh} />
-    ));
+  const suggestions = useGlobalVariableProposals({ chatSessionId });
+  const { head, afterMessage, tail } = placeChatProposals(messages, [
+    ...(proposals ?? []).map((proposal) => ({
+      ...proposal,
+      card: (
+        <EditProposalCard key={`proposal:${proposal.id}`} proposal={proposal} onSettled={refresh} />
+      ),
+    })),
+    ...(suggestions.proposals ?? []).map((proposal) => ({
+      ...proposal,
+      card: (
+        <GlobalVariableProposalCard
+          key={`gvproposal:${proposal.id}`}
+          proposal={proposal}
+          onSettled={suggestions.refresh}
+          reveal={proposal.id === revealGlobalProposalId ? revealCard : undefined}
+        />
+      ),
+    })),
+  ]);
+  const cards = (list: { card: ReactNode }[] = []) => list.map((placed) => placed.card);
 
   const entries: ReactNode[] = [...cards(head)];
   for (const m of messages) {

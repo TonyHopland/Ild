@@ -14,6 +14,8 @@ import {
   RepositoryInput,
   PackageFeed,
   GlobalVariable,
+  GlobalVariableProposal,
+  GlobalVariableProposalStatus,
   RemoteProvider,
   RemoteProviderTypeOption,
   ConnectionTestResult,
@@ -747,6 +749,43 @@ export const globalVariableService = {
 
   delete: async (id: string): Promise<void> => {
     return api.delete<void>(`/global-variables/${id}`);
+  },
+
+  /** Newest first. */
+  listProposals: async (filter: {
+    status?: GlobalVariableProposalStatus;
+    workItemId?: string;
+    chatSessionId?: string;
+  }): Promise<GlobalVariableProposal[]> => {
+    const params = new URLSearchParams();
+    if (filter.status) params.set("status", filter.status);
+    if (filter.workItemId) params.set("workItemId", filter.workItemId);
+    if (filter.chatSessionId) params.set("chatSessionId", filter.chatSessionId);
+    const query = params.toString();
+    return api.get<GlobalVariableProposal[]>(
+      `/global-variables/proposals${query ? `?${query}` : ""}`,
+    );
+  },
+
+  pendingProposalCount: async (): Promise<number> => {
+    return (await api.get<{ count: number }>("/global-variables/proposals/pending-count")).count;
+  },
+
+  /** Applies the suggested text exactly as it was made. */
+  approveProposal: async (
+    proposalId: string,
+  ): Promise<{ proposal: GlobalVariableProposal; variable: GlobalVariable | null }> => {
+    return api.post<{ proposal: GlobalVariableProposal; variable: GlobalVariable | null }>(
+      `/global-variables/proposals/${proposalId}/approve`,
+      {},
+    );
+  },
+
+  rejectProposal: async (proposalId: string, reason?: string): Promise<GlobalVariableProposal> => {
+    return api.post<GlobalVariableProposal>(
+      `/global-variables/proposals/${proposalId}/reject`,
+      reason ? { reason } : {},
+    );
   },
 };
 
