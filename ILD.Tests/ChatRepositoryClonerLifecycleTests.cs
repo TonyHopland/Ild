@@ -215,6 +215,31 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         Assert.Equal(cloned.Path, again.Path);
     }
 
+    // -- Branches --------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_branch_with_local_commits_ahead_of_its_remote_is_switched_back_to_as_it_is()
+    {
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var cloner = Cloner();
+        var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        var folder = Path.Combine(scratch, cloned.Path!);
+        File.WriteAllText(Path.Combine(folder, "LOCAL.md"), "the agent's own commit");
+        Git(folder, "add", "LOCAL.md");
+        Git(folder, "commit", "-q", "-m", "local work");
+        var local = Git(folder, "rev-parse", "HEAD");
+
+        var switched = await cloner.CloneAsync(chatId, repo.Id.ToString(), "feature", Ct);
+        var back = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+
+        Assert.Equal(ChatRepositoryCloneOutcome.Updated, switched.Outcome);
+        Assert.Equal(ChatRepositoryCloneOutcome.Updated, back.Outcome);
+        Assert.Equal("main", back.Branch);
+        Assert.Equal(local, back.Commit);
+        Assert.Equal(local, Git(folder, "rev-parse", "refs/heads/main"));
+        Assert.True(File.Exists(Path.Combine(folder, "LOCAL.md")));
+    }
+
     // -- Hooks -------------------------------------------------------------------------
 
     [Fact]
@@ -349,7 +374,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
             File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)));
     }
 
-    private static void Git(string cwd, params string[] args)
+    private static string Git(string cwd, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = cwd, RedirectStandardError = true, RedirectStandardOutput = true };
         foreach (var a in new[] { "-c", "user.name=Test", "-c", "user.email=test@example.test", "-c", "commit.gpgsign=false" })
@@ -357,8 +382,9 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
         var stderr = p.StandardError.ReadToEndAsync();
-        p.StandardOutput.ReadToEnd();
+        var stdout = p.StandardOutput.ReadToEnd();
         p.WaitForExit();
         if (p.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', args)}: {stderr.Result}");
+        return stdout.Trim();
     }
 }

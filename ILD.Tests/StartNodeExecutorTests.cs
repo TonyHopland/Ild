@@ -334,6 +334,44 @@ public class StartNodeExecutorTests : IDisposable
         mgr.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_fresh_base_clone_that_fails_or_is_killed_leaves_nothing_so_the_next_start_clones_again(bool killed)
+    {
+        var clones = 0;
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.CloneAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .Returns((string _, string path, CancellationToken _, GitAuthOptions? _) =>
+            {
+                clones++;
+                Directory.CreateDirectory(Path.Combine(path, ".git", "objects"));
+                return killed
+                    ? Task.FromException<(bool, string?)>(new OperationCanceledException())
+                    : Task.FromResult<(bool, string?)>((false, "fatal: the remote hung up unexpectedly"));
+            });
+        var (_, sp, run, node) = BuildContext(repoManager, worktreesPath: string.Empty);
+        var target = BaseRepoPath.Fallback(run.RepositoryId!.Value, sp.GetRequiredService<IConfiguration>());
+
+        async Task StartAsync()
+        {
+            try
+            {
+                await foreach (var _ in new StartNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+                {
+                }
+            }
+            catch (OperationCanceledException) when (killed)
+            {
+            }
+        }
+
+        await StartAsync();
+        Assert.False(Directory.Exists(target), "the failed clone left a partial base clone behind");
+        await StartAsync();
+        Assert.Equal(2, clones);
+    }
+
     [Fact]
     public async Task Without_an_override_the_base_is_the_repository_default_and_is_not_probed()
     {

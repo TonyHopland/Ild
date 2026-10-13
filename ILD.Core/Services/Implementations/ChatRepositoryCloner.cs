@@ -303,10 +303,12 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     }
 
     /// <summary>
-    /// Switch to <paramref name="branch"/> at its remote head, creating it or
-    /// fast-forwarding it as needed. Every step either does all it says or
-    /// nothing, so a refusal leaves HEAD, the branches, the index and the
-    /// working tree as they were.
+    /// Switch to <paramref name="branch"/>, creating it at its remote head or
+    /// moving it forward to that head; a local branch is never moved back or
+    /// sideways, so one already at or ahead of its remote head is checked out as
+    /// it is, and one that has diverged from it is refused. Every step either
+    /// does all it says or nothing, so a refusal leaves HEAD, the branches, the
+    /// index and the working tree as they were.
     /// </summary>
     private static async Task<GitResult> SwitchOrFastForwardAsync(
         Func<string[], Task<GitResult>> git, string branch, string remoteRef)
@@ -318,6 +320,12 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         var current = await git(["symbolic-ref", "-q", "--short", "HEAD"]);
         if (current.ExitCode == 0 && current.Stdout.Trim() == branch)
             return await git(["merge", "-q", "--ff-only", remoteRef]);
+
+        var upToDate = await git(["merge-base", "--is-ancestor", remoteRef, $"refs/heads/{branch}"]);
+        if (upToDate.ExitCode == 0)
+            return await git(["checkout", "-q", branch]);
+        if (upToDate.ExitCode != 1)
+            throw new CloneFailedException($"git could not compare {branch} with origin/{branch}: {upToDate.Stderr.Trim()}");
 
         // Git's own fast-forward check, which moves nothing; the checkout then
         // moves the branch only once the switch has succeeded.
