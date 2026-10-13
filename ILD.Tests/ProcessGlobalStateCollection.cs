@@ -11,6 +11,9 @@ namespace ILD.Tests;
 /// <item><see cref="WorktreePreviewServiceEnvironmentIsolationTests"/> seeds the
 /// orchestrator's secrets and topology into the real process environment, because
 /// what it proves is that a preview child does not inherit them.</item>
+/// <item><see cref="ChatRepositoryClonerStartInfoTests"/> seeds git's credential
+/// variables and the orchestrator's secrets into the real process environment,
+/// because what it proves is that git in a chat's clone does not inherit them.</item>
 /// <item><see cref="PiAdapterAgentDirectoryTests"/> swaps pi's shared, fixed-name
 /// scratch directories for links, which every pi turn in the process goes
 /// through.</item>
