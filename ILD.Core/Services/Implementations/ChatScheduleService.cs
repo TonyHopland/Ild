@@ -579,7 +579,7 @@ public sealed class ChatScheduleService
         }
     }
 
-    private static List<Guid> RepositoryIdsOf(ChatSchedule schedule)
+    internal static List<Guid> RepositoryIdsOf(ChatSchedule schedule)
         => schedule.RepositoryIdsCsv.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(Guid.Parse).ToList();
 
     private async Task<ChatScheduleView> ViewAsync(ChatSchedule schedule, CancellationToken ct)

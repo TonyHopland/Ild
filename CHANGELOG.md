@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A scheduled chat can have ILD clone or update the repositories its schedule allows into its own folder, private ones included, without ever seeing their credentials.**
+
 - **Global variables hold text every loop prompt can use, and a run waits for you when one it needs is missing.**
 
 - **Agents can suggest changes to global variables, which you approve or reject where they were made or on the Global Variables page.**
