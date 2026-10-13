@@ -76,6 +76,7 @@ public sealed class ChatTurnLifecycleTests
 
         public Task LoopUpdateRequestedAsync(Guid chatSessionId, string document) => Task.CompletedTask;
         public Task EditProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
+        public Task GlobalVariableProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
         public Task UnreadChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
         public Task TitleChangedAsync(string userId, Guid chatSessionId) => Task.CompletedTask;
 

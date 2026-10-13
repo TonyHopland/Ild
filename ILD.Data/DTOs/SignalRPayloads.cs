@@ -26,6 +26,8 @@ public record WorkItemRunProgressedPayload(string WorkItemId);
 
 public record WorkItemEditProposalsChangedPayload(string WorkItemId);
 
+public record GlobalVariableProposalsChangedPayload(string Name);
+
 public record NodeProgressPayload(Guid RunId, Guid NodeId, string Line, long Seq);
 
 public record PrSnapshotChangedPayload(Guid RunId);
@@ -58,6 +60,8 @@ public record ChatTurnCompletedPayload(Guid ChatSessionId, Guid TurnId, bool Int
 public record ChatLoopUpdatePayload(Guid ChatSessionId, string Document);
 
 public record ChatEditProposalsChangedPayload(Guid ChatSessionId);
+
+public record ChatGlobalVariableProposalsChangedPayload(Guid ChatSessionId);
 
 public record ChatUnreadChangedPayload(Guid ChatSessionId);
 

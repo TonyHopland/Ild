@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { Repository, WorkItem, WorkItemStatus } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
 import {
@@ -34,6 +34,7 @@ export default function Taskboard() {
   // The id in the URL is the source of truth for which item's detail dialog is
   // open, so a work item can be linked to directly (e.g. /taskboard/<id>).
   const { workItemId: openWorkItemId } = useParams<{ workItemId?: string }>();
+  const [searchParams] = useSearchParams();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<WorkItem | null>(null);
   const [errorText, setErrorText] = useState("");
@@ -504,6 +505,7 @@ export default function Taskboard() {
           onClose={() => void navigate("/taskboard")}
           onSave={handleWorkItemUpdate}
           onDelete={handleDeleted}
+          revealGlobalProposalId={searchParams.get("globalProposal")}
         />
       )}
       {createModalOpen && (

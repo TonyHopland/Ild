@@ -34,6 +34,8 @@ import type {
   LogEntryAppendedPayload,
   WorkItemEditProposalsChangedPayload,
   ChatEditProposalsChangedPayload,
+  GlobalVariableProposalsChangedPayload,
+  ChatGlobalVariableProposalsChangedPayload,
   ChatUnreadChangedPayload,
   ChatTitleChangedPayload,
   ChatActivityChangedPayload,
@@ -67,6 +69,8 @@ export interface SignalREventPayloads {
   LogEntryAppended: LogEntryAppendedPayload;
   WorkItemEditProposalsChanged: WorkItemEditProposalsChangedPayload;
   ChatEditProposalsChanged: ChatEditProposalsChangedPayload;
+  GlobalVariableProposalsChanged: GlobalVariableProposalsChangedPayload;
+  ChatGlobalVariableProposalsChanged: ChatGlobalVariableProposalsChangedPayload;
   ChatUnreadChanged: ChatUnreadChangedPayload;
   ChatTitleChanged: ChatTitleChangedPayload;
   ChatActivityChanged: ChatActivityChangedPayload;

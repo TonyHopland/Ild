@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Text.Json;
 using ILD.Api.Authentication;
 using ILD.Api.Contracts;
@@ -36,6 +37,10 @@ namespace ILD.Api.Controllers;
 ///    and read back what became of it. Proposing applies nothing: a human
 ///    approves or rejects each proposal on the human-only
 ///    <c>WorkItemsController</c>, and no route here can decide one,
+///  - read the global variables and suggest a whole new value for one (a
+///    Global Variable Proposal, ADR-0027), and read back what became of the
+///    caller's own suggestions. Only a human decides a suggestion, on the
+///    human-only <c>GlobalVariablesController</c>,
 ///  - read and write per-run loop variables (scoped by the X-ILD-Run-Id
 ///    header) so one node can hand off state to a later node — the values
 ///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>,
@@ -1647,6 +1652,100 @@ public class AgentController : ControllerBase
         {
             return StatusCode(503, new { error = "WorkItemServer unreachable", detail = ex.Message });
         }
+    }
+
+    // -- Global Variable Proposals (ADR-0027) ---------------------------------
+    //
+    // Agents read the global variables and suggest a whole new value for one.
+    // Approving and rejecting are human-only and live on GlobalVariablesController.
+
+    [HttpGet("global-variables")]
+    public async Task<IActionResult> ListGlobalVariables(
+        [FromServices] IGlobalVariableStore globals, CancellationToken cancellationToken)
+        => Ok((await globals.GetAllAsync(cancellationToken)).Select(v => new
+        {
+            name = v.Name,
+            value = v.Value,
+            updatedAt = v.UpdatedAt,
+        }));
+
+    [HttpPost("global-variables/proposals")]
+    public async Task<IActionResult> ProposeGlobalVariableChange(
+        [FromBody] AgentGlobalVariableProposalRequest request,
+        [FromServices] IGlobalVariableProposalStore proposals,
+        [FromServices] ISchedulerSettingsService settings,
+        CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        if (sessionError is not null)
+            return sessionError;
+
+        var name = (request.Name ?? string.Empty).Trim();
+        if (!PromptPlaceholderRegistry.IsValidVariableName(name))
+            return BadRequest(new { error = "A name is a letter followed by up to 127 letters, digits or underscores, e.g. review_rules." });
+        if (request.Value is null)
+            return BadRequest(new { error = "Suggest a value: the complete new text, which may be empty." });
+        if (string.IsNullOrWhiteSpace(request.Rationale))
+            return BadRequest(new { error = "Give a rationale: why the variable should say this." });
+        var limit = await settings.GetGlobalVariableMaxLengthAsync(cancellationToken);
+        if (request.Value.Length > limit)
+            return BadRequest(new
+            {
+                error = string.Create(CultureInfo.InvariantCulture,
+                    $"The value is {request.Value.Length:N0} / {limit:N0} characters; consolidate it and suggest it again."),
+            });
+
+        var proposal = await proposals.ProposeAsync(new GlobalVariableProposal
+        {
+            Name = name,
+            Value = request.Value,
+            Rationale = request.Rationale.Trim(),
+            CreatedByLoopRunId = runId,
+            CreatedByChatSessionId = chatSessionId,
+            CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
+            ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
+        }, cancellationToken);
+
+        await _notifier.GlobalVariableProposalsChangedAsync(proposal.Name);
+        if (chatSessionId is { } chat)
+            await _chatNotifier.GlobalVariableProposalsChangedAsync(chat);
+        return CreatedAtAction(nameof(ListGlobalVariableProposals), null, new
+        {
+            id = proposal.Id,
+            name = proposal.Name,
+            status = proposal.Status.ToString(),
+        });
+    }
+
+    /// <summary>
+    /// What became of the calling run's or chat's own suggestions — how a loop
+    /// run learns a decision, having no next chat turn to carry it.
+    /// </summary>
+    [HttpGet("global-variables/proposals")]
+    public async Task<IActionResult> ListGlobalVariableProposals(
+        [FromServices] IGlobalVariableProposalStore proposals, CancellationToken cancellationToken)
+    {
+        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        if (sessionError is not null)
+            return sessionError;
+
+        var own = await proposals.ListAsync(
+            new GlobalVariableProposalQuery(CreatedByLoopRunId: runId, CreatedByChatSessionId: chatSessionId),
+            cancellationToken);
+        return Ok(own.Select(e => new
+        {
+            id = e.Proposal.Id,
+            name = e.Proposal.Name,
+            value = e.Proposal.Value,
+            rationale = e.Proposal.Rationale,
+            status = e.Proposal.Status.ToString(),
+            rejectionReason = e.Proposal.RejectionReason,
+            createdAt = e.Proposal.CreatedAt,
+            decidedAt = e.Proposal.DecidedAt,
+        }));
     }
 
     /// <summary>

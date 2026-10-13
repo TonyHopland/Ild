@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from "react";
-import { NavLink, useLocation, useNavigate, useParams } from "react-router";
+import { NavLink, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 import { useChatInbox } from "../../components/ChatInbox";
 import ChatWorkspace from "../../components/ChatWorkspace";
 import { ROUTES } from "../../utils/constants";
@@ -13,12 +13,14 @@ const chatPath = (chatSessionId: string) => `${ROUTES.CHAT}/${chatSessionId}`;
 
 /**
  * Chat full screen, laid out like an inbox: the chat list beside the open chat, or
- * beside the user's chat schedules. The chat is the one in the URL. A message sent
+ * beside the user's chat schedules. The chat is the one in the URL, scrolled to the
+ * global variable suggestion its `globalProposal` parameter names. A message sent
  * from here carries no Chat Context (ADR-0011): nothing is open beside it for the
  * agent to see.
  */
 export default function Chat({ view = "chat" }: { view?: "chat" | "schedules" }) {
   const { chatId } = useParams();
+  const [searchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
   const { history, loaded, activeChatId } = useChatInbox();
@@ -83,6 +85,7 @@ export default function Chat({ view = "chat" }: { view?: "chat" | "schedules" })
         </NavLink>
       }
       scheduleMarks
+      revealGlobalProposalId={schedules ? null : searchParams.get("globalProposal")}
     >
       {({ title, error, sidebar, content }) => (
         <div className="chat-page">

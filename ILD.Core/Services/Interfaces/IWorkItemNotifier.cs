@@ -28,6 +28,13 @@ public interface IWorkItemNotifier
     /// card re-read them. A hint only: listeners re-fetch.
     /// </summary>
     Task WorkItemEditProposalsChangedAsync(string workItemId);
+
+    /// <summary>
+    /// Signals that suggestions for a global variable changed — one was made,
+    /// decided, or went stale — so the Global Variables page, the work items'
+    /// Action tabs and the menu badge re-read them. A hint only: listeners re-fetch.
+    /// </summary>
+    Task GlobalVariableProposalsChangedAsync(string name);
 }
 
 public sealed class NoopWorkItemNotifier : IWorkItemNotifier
@@ -39,4 +46,5 @@ public sealed class NoopWorkItemNotifier : IWorkItemNotifier
     public Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent) => Task.CompletedTask;
     public Task RunProgressedAsync(string workItemId) => Task.CompletedTask;
     public Task WorkItemEditProposalsChangedAsync(string workItemId) => Task.CompletedTask;
+    public Task GlobalVariableProposalsChangedAsync(string name) => Task.CompletedTask;
 }

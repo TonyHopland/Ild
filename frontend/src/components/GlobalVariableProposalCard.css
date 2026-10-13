@@ -1,0 +1,23 @@
+.edit-proposal-card--superseded {
+  border-left-color: #6b6b85;
+}
+
+.edit-proposal-status--superseded {
+  background: #2d2d44;
+  color: #a0a0b0;
+}
+
+.gv-proposal-new {
+  margin: 0 0 0.35rem;
+  color: #56d364;
+  font-weight: 600;
+}
+
+.gv-proposal-source {
+  margin-top: 0.5rem;
+  color: #a0a0b0;
+}
+
+.gv-proposal-source a {
+  color: #a5b4fc;
+}

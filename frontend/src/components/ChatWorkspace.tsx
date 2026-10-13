@@ -45,6 +45,7 @@ function ChatConversation({
   covered,
   messages,
   streaming,
+  revealGlobalProposalId,
   busy,
   stopping,
   scrollRef,
@@ -55,6 +56,7 @@ function ChatConversation({
   covered: boolean;
   messages: ChatMessage[];
   streaming: string;
+  revealGlobalProposalId: string | null;
   busy: boolean;
   stopping: boolean;
   scrollRef: React.RefObject<HTMLDivElement | null>;
@@ -67,7 +69,12 @@ function ChatConversation({
   return (
     <div className="chat-panel-content">
       <div className="chat-panel-body" ref={scrollRef}>
-        <ChatTranscript chatSessionId={chatSessionId} messages={messages} streaming={streaming} />
+        <ChatTranscript
+          chatSessionId={chatSessionId}
+          messages={messages}
+          streaming={streaming}
+          revealGlobalProposalId={revealGlobalProposalId}
+        />
         {/* Visible for the whole turn — including while text streams — so it
             is clear the agent is still working rather than done. */}
         {busy && (
@@ -145,6 +152,7 @@ export default function ChatWorkspace({
   onOpenChat,
   sidebarExtras,
   scheduleMarks = false,
+  revealGlobalProposalId = null,
   children,
 }: {
   /** The chat opened on mount. Read once: later changes are not followed. */
@@ -169,6 +177,8 @@ export default function ChatWorkspace({
   sidebarExtras?: React.ReactNode;
   /** Whether the chat list marks the chats a schedule started. */
   scheduleMarks?: boolean;
+  /** The global variable suggestion a link points at, scrolled to once its card shows. */
+  revealGlobalProposalId?: string | null;
   children: (view: ChatWorkspaceView) => React.ReactNode;
 }) {
   const inbox = useChatInbox();
@@ -842,6 +852,7 @@ export default function ChatWorkspace({
       covered={covered}
       messages={messages}
       streaming={streaming}
+      revealGlobalProposalId={revealGlobalProposalId}
       busy={busy}
       stopping={stopping}
       scrollRef={scrollRef}

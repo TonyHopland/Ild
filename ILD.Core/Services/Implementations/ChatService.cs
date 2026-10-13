@@ -284,12 +284,14 @@ public sealed class ChatService : IChatService
         var (contextPreamble, additionalAllowedDirectories) =
             await BuildChatContextAsync(openWorkItemId, loopEditor, tools);
 
-        // Decisions on this chat's edit proposals ride the prompt until a turn
-        // that reached the agent acknowledges them below.
+        // Decisions on this chat's edit proposals and global variable suggestions
+        // ride the prompt until a turn that reached the agent acknowledges them below.
         var decidedProposals = await ReadUndeliveredProposalDecisionsAsync(chatSessionId, ct);
+        var decidedSuggestions = await ReadUndeliveredSuggestionDecisionsAsync(chatSessionId, ct);
         var promptForAgent = string.Join("\n\n", new[]
         {
             FormatProposalDecisions(decidedProposals),
+            FormatSuggestionDecisions(decidedSuggestions),
             contextPreamble,
             userMessage,
         }.Where(part => part is not null));
@@ -372,6 +374,8 @@ public sealed class ChatService : IChatService
         // reached an agent, so a failed launch announces them again next turn.
         if (decidedProposals.Count > 0 && boundThisTurn is not null)
             await MarkProposalDecisionsDeliveredAsync(decidedProposals);
+        if (decidedSuggestions.Count > 0 && boundThisTurn is not null)
+            await MarkSuggestionDecisionsDeliveredAsync(decidedSuggestions);
 
         // An interrupted turn's usage still counts: the provider billed what it ran.
         (TokenUsage, string)? spent = result is { Success: true, Usage: { HasData: true } usage } ? (usage, provider.Name) : null;
@@ -590,6 +594,53 @@ public sealed class ChatService : IChatService
                     + "Propose again against its current values if the edit still makes sense.",
             };
             lines.Add($"- Proposal {p.Id} on work item {p.WorkItemId}: {outcome}");
+        }
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>
+    /// The decided global variable suggestions this chat made and has not been
+    /// told about. A superseded one was replaced by the chat itself, not decided.
+    /// </summary>
+    private Task<List<GlobalVariableProposal>> ReadUndeliveredSuggestionDecisionsAsync(Guid chatSessionId, CancellationToken ct)
+        => _db.GlobalVariableProposals.AsNoTracking()
+            .Where(p => p.CreatedByChatSessionId == chatSessionId
+                && p.DecisionDeliveredAt == null
+                && (p.Status == GlobalVariableProposalStatus.Approved
+                    || p.Status == GlobalVariableProposalStatus.Rejected
+                    || p.Status == GlobalVariableProposalStatus.Stale))
+            .OrderBy(p => p.DecidedAt)
+            .ToListAsync(ct);
+
+    private async Task MarkSuggestionDecisionsDeliveredAsync(IReadOnlyList<GlobalVariableProposal> delivered)
+    {
+        var ids = delivered.Select(p => p.Id).ToList();
+        var now = DateTime.UtcNow;
+        await _db.GlobalVariableProposals
+            .Where(p => ids.Contains(p.Id) && p.DecisionDeliveredAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.DecisionDeliveredAt, now), CancellationToken.None);
+    }
+
+    private static string? FormatSuggestionDecisions(IReadOnlyList<GlobalVariableProposal> decided)
+    {
+        if (decided.Count == 0) return null;
+        var lines = new List<string>
+        {
+            "[Global variable suggestion decisions]",
+            "A human decided these global variable suggestions you made in this chat since you last heard:",
+        };
+        foreach (var p in decided)
+        {
+            var outcome = p.Status switch
+            {
+                GlobalVariableProposalStatus.Approved => "Approved; the variable now holds your suggested text.",
+                GlobalVariableProposalStatus.Rejected => p.RejectionReason is { } reason
+                    ? $"Rejected. Reason: {OneLine(reason)}"
+                    : "Rejected, with no reason given.",
+                _ => "Stale; the variable changed before it was approved, so nothing was applied. "
+                    + "Read it again with get_global_variables and suggest again if the change still makes sense.",
+            };
+            lines.Add($"- Suggestion {p.Id} for {p.Name}: {outcome}");
         }
         return string.Join("\n", lines);
     }

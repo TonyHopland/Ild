@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { workItemService } from "../services/auth";
 import { computeLineDiff } from "../utils/jsonDiff";
-import type { ApiError, EditProposalDependency, WorkItemEditProposal } from "../types";
+import ProposalDecision from "./ProposalDecision";
+import type { EditProposalDependency, WorkItemEditProposal } from "../types";
 import "./EditProposalCard.css";
 
 interface EditProposalCardProps {
@@ -10,13 +11,7 @@ interface EditProposalCardProps {
   onSettled: () => void;
 }
 
-function failureMessage(err: unknown): string | null {
-  const status = (err as Partial<ApiError> | null)?.status;
-  if (status === 409) return null;
-  return (err as Partial<ApiError> | null)?.message || "The request failed.";
-}
-
-function DescriptionDiff({ before, after }: { before: string; after: string }) {
+export function DescriptionDiff({ before, after }: { before: string; after: string }) {
   const diff = useMemo(() => computeLineDiff(before, after), [before, after]);
   return (
     <div className="edit-proposal-diff">
@@ -100,55 +95,6 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
   const { proposed, snapshot } = proposal;
   const addedDependencies = proposed.addDependencies ?? [];
   const removedDependencies = proposed.removeDependencies ?? [];
-  const isPending = proposal.status === "Pending";
-
-  const [approveBusy, setApproveBusy] = useState(false);
-  const [approveError, setApproveError] = useState<string | null>(null);
-  const [rejectOpen, setRejectOpen] = useState(false);
-  const [reasonDraft, setReasonDraft] = useState("");
-  const [rejectBusy, setRejectBusy] = useState(false);
-  const [rejectError, setRejectError] = useState<string | null>(null);
-  const decisionBusy = approveBusy || rejectBusy;
-
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  const approve = async () => {
-    setApproveBusy(true);
-    setApproveError(null);
-    try {
-      await workItemService.approveEditProposal(proposal.workItemId, proposal.id);
-    } catch (err) {
-      if (mountedRef.current) setApproveError(failureMessage(err));
-    }
-    if (!mountedRef.current) return;
-    setApproveBusy(false);
-    onSettled();
-  };
-
-  const reject = async () => {
-    setRejectBusy(true);
-    setRejectError(null);
-    const reason = reasonDraft.trim();
-    try {
-      await workItemService.rejectEditProposal(
-        proposal.workItemId,
-        proposal.id,
-        reason || undefined,
-      );
-    } catch (err) {
-      if (mountedRef.current) setRejectError(failureMessage(err));
-    }
-    if (!mountedRef.current) return;
-    setRejectBusy(false);
-    onSettled();
-  };
-
   return (
     <div className={`edit-proposal-card edit-proposal-card--${proposal.status.toLowerCase()}`}>
       <div className="edit-proposal-header">
@@ -227,72 +173,14 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
         <p className="edit-proposal-reason">Reason: {proposal.rejectionReason}</p>
       )}
 
-      {isPending && (
-        <div className="edit-proposal-actions">
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => void approve()}
-            disabled={decisionBusy}
-          >
-            Approve
-          </button>
-          {!rejectOpen && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setRejectOpen(true)}
-              disabled={decisionBusy}
-            >
-              Reject
-            </button>
-          )}
-        </div>
-      )}
-      {isPending && rejectOpen && (
-        <div className="edit-proposal-reject">
-          <textarea
-            aria-label="Rejection reason (optional)"
-            placeholder="Why not? (optional)"
-            value={reasonDraft}
-            onChange={(e) => setReasonDraft(e.target.value)}
-            maxLength={2000}
-            rows={2}
-            disabled={rejectBusy}
-          />
-          <div className="edit-proposal-actions">
-            <button
-              type="button"
-              className="btn btn-danger btn-sm"
-              onClick={() => void reject()}
-              disabled={decisionBusy}
-            >
-              Confirm reject
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => {
-                setRejectOpen(false);
-                setRejectError(null);
-              }}
-              disabled={rejectBusy}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      {approveError && (
-        <p className="edit-proposal-error" role="alert">
-          {approveError}
-        </p>
-      )}
-      {rejectError && (
-        <p className="edit-proposal-error" role="alert">
-          {rejectError}
-        </p>
-      )}
+      <ProposalDecision
+        pending={proposal.status === "Pending"}
+        approve={() => workItemService.approveEditProposal(proposal.workItemId, proposal.id)}
+        reject={(reason) =>
+          workItemService.rejectEditProposal(proposal.workItemId, proposal.id, reason)
+        }
+        onSettled={onSettled}
+      />
     </div>
   );
 }
