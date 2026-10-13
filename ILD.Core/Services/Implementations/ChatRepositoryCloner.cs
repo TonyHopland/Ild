@@ -36,11 +36,9 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         ["GIT_ASKPASS", "ILD_GIT_PASSWORD", "ILD_GIT_USERNAME", "GIT_DIR", "GIT_WORK_TREE"];
 
     // One clone or update at a time per chat, so two calls never pick the same
-    // folder or interleave their git commands; and one base clone or fetch at a
-    // time per repository across chats. Static because the service is scoped
-    // while the work it guards outlives the request that started it.
+    // folder or interleave their git commands. Static because the service is
+    // scoped while the work it guards outlives the request that started it.
     private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> ChatLocks = new();
-    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> BaseCloneLocks = new();
 
     private readonly AppDbContext _db;
     private readonly IProviderStore _providers;
@@ -96,6 +94,9 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         var branchName = BranchNameRules.Normalize(branch) ?? BranchNameRules.Normalize(repo.DefaultBranch) ?? "main";
         if (BranchNameRules.Validate(branchName) is { } invalid)
             return Refused(ChatRepositoryCloneOutcome.InvalidBranch, invalid);
+        // A valid ref name but never a branch: git refuses to create one by it.
+        if (branchName == "HEAD")
+            return Refused(ChatRepositoryCloneOutcome.InvalidBranch, "Branch name cannot be 'HEAD'.");
 
         var provider = await _providers.GetRemoteProviderByIdAsync(repo.RemoteProviderId);
         var auth = provider is null ? null : new GitAuthOptions(repo.CloneUrl, provider.ApiKey, provider.Type);
@@ -131,10 +132,13 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         await chatLock.WaitAsync(ct);
         try
         {
+            // The chat may have been deleted, and its scratch folder with it, while
+            // this call waited; cloning now would bring the folder back for good.
+            if (!Directory.Exists(job.ScratchPath))
+                return Refused(ChatRepositoryCloneOutcome.UnknownChat, "The chat was deleted.");
+
             string basePath;
-            var baseLock = BaseCloneLocks.GetOrAdd(job.Repo.Id, _ => new SemaphoreSlim(1, 1));
-            await baseLock.WaitAsync(ct);
-            try
+            using (await BaseRepoClone.LockAsync(job.Repo.Id, ct))
             {
                 var (ok, path, error) = await BaseRepoClone.EnsureAsync(_git, job.Repo, _config, job.Auth, ct);
                 if (!ok)
@@ -145,12 +149,15 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
                         $"The repository '{job.Repo.Name}' has no branch '{job.Branch}' on its remote.");
                 basePath = path!;
             }
-            finally
-            {
-                baseLock.Release();
-            }
 
-            return await FillChatCloneAsync(job, basePath, ct);
+            try
+            {
+                return await FillChatCloneAsync(job, basePath, ct);
+            }
+            catch (CloneFailedException e)
+            {
+                return Refused(ChatRepositoryCloneOutcome.CloneFailed, e.Message);
+            }
         }
         finally
         {
@@ -172,63 +179,65 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 
         if (!exists)
         {
-            await AgentWritableFiles.CreateDirectoryAsync(folder, ct);
-            await CheckedAsync(Git("init", "-q"));
-            await CheckedAsync(Git("config", "--local", MarkerKey, job.Repo.Id.ToString()));
+            try
+            {
+                await AgentWritableFiles.CreateDirectoryAsync(folder, ct);
+            }
+            catch (IOException e)
+            {
+                throw new CloneFailedException($"Could not create {relativePath}: {e.Message}");
+            }
+            await CheckedAsync(Git("init", "-q"), relativePath);
+            await CheckedAsync(Git("config", "--local", MarkerKey, job.Repo.Id.ToString()), relativePath);
         }
 
-        // A folder whose first clone was cut short has its marker but no commit:
-        // it is completed as a fresh clone, so its origin is (re)set too.
+        // A clone without a commit is a fresh one, including one whose first call
+        // was cut short after its marker was written: the call completes it.
         var previous = await Git("rev-parse", "--verify", "-q", "HEAD^{commit}");
         var fresh = previous.ExitCode != 0;
-        if (fresh)
-        {
-            await CheckedAsync(Git("config", "--local", "remote.origin.url", WithoutUserInfo(job.Repo.CloneUrl)));
-            await CheckedAsync(Git("config", "--local", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"));
-        }
+        await CheckedAsync(Git("config", "--local", "remote.origin.url", WithoutUserInfo(job.Repo.CloneUrl)), relativePath);
+        await CheckedAsync(Git("config", "--local", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"), relativePath);
 
         var fetch = await Git("fetch", "-q", "--no-tags", basePath, $"+{remoteRef}:{remoteRef}");
         if (fetch.ExitCode != 0)
-            return Refused(ChatRepositoryCloneOutcome.FetchFailed,
-                $"ILD could not fetch '{branch}' into {relativePath} from its own copy of the repository: {fetch.Stderr.Trim()}");
+            throw new CloneFailedException(
+                $"Could not fetch '{branch}' into {relativePath} from ILD's own copy of the repository: {fetch.Stderr.Trim()}");
 
-        var update = fresh
-            ? await Git("checkout", "-q", "--track", "-b", branch, remoteRef)
-            : await SwitchOrFastForwardAsync(Git, branch, remoteRef);
+        var update = await SwitchOrFastForwardAsync(Git, branch, remoteRef);
         if (update.ExitCode != 0)
             return Refused(ChatRepositoryCloneOutcome.UpdateRefused,
                 $"git refused to bring {relativePath} to origin/{branch}, so nothing in it was changed:\n{update.Stderr.Trim()}\n"
-                + "Revert or commit the local work git names (git checkout, git reset, git clean), then call clone_repository again.");
+                + "Revert the local work git names (git checkout, git reset, git clean), then call clone_repository again.");
 
-        var commit = (await CheckedAsync(Git("rev-parse", "HEAD"))).Stdout.Trim();
+        var commit = (await CheckedAsync(Git("rev-parse", "HEAD"), relativePath)).Stdout.Trim();
         var previousCommit = fresh ? null : previous.Stdout.Trim();
         var changed = previousCommit != commit;
         var message = fresh
             ? $"Cloned {job.Repo.Name} on {branch} at {commit} into {relativePath}."
             : changed
                 ? $"Updated {relativePath} on {branch} from {previousCommit} to {commit}."
-                : $"{relativePath} on {branch} is already at {commit}: nothing changed on the remote since it was last updated.";
+                : $"{relativePath} on {branch} is already at {commit}: the update changed nothing.";
         return new ChatRepositoryCloneResult(
             fresh ? ChatRepositoryCloneOutcome.Cloned : ChatRepositoryCloneOutcome.Updated,
             message, relativePath, branch, commit, previousCommit, changed);
     }
 
     /// <summary>
-    /// Fast-forward the current branch, or switch to <paramref name="branch"/>,
-    /// fast-forwarding it first when it already exists. Every step either does
-    /// all it says or nothing, so a refusal leaves HEAD, the branches, the index
-    /// and the working tree as they were.
+    /// Switch to <paramref name="branch"/> at its remote head, creating it or
+    /// fast-forwarding it as needed. Every step either does all it says or
+    /// nothing, so a refusal leaves HEAD, the branches, the index and the
+    /// working tree as they were.
     /// </summary>
     private static async Task<GitResult> SwitchOrFastForwardAsync(
         Func<string[], Task<GitResult>> git, string branch, string remoteRef)
     {
-        var current = await git(["symbolic-ref", "-q", "--short", "HEAD"]);
-        if (current.ExitCode == 0 && current.Stdout.Trim() == branch)
-            return await git(["merge", "-q", "--ff-only", remoteRef]);
-
         var local = await git(["rev-parse", "--verify", "-q", $"refs/heads/{branch}"]);
         if (local.ExitCode != 0)
             return await git(["checkout", "-q", "--track", "-b", branch, remoteRef]);
+
+        var current = await git(["symbolic-ref", "-q", "--short", "HEAD"]);
+        if (current.ExitCode == 0 && current.Stdout.Trim() == branch)
+            return await git(["merge", "-q", "--ff-only", remoteRef]);
 
         // Git's own fast-forward check, which moves nothing; the checkout then
         // moves the branch only once the switch has succeeded.
@@ -265,7 +274,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 
         return free is not null
             ? (free, false)
-            : throw new IOException($"No free folder for '{name}' under {reposDir}: {MaxFolderCandidates} are taken.");
+            : throw new CloneFailedException($"Every folder name for '{name}' under {ReposFolder}/ is taken ({MaxFolderCandidates}); delete the clones you no longer need and call again.");
     }
 
     /// <summary>
@@ -299,11 +308,14 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 
     private sealed record GitResult(int ExitCode, string Stdout, string Stderr);
 
-    private static async Task<GitResult> CheckedAsync(Task<GitResult> run)
+    /// <summary>A step in the chat's clone failed for a reason other than the agent's local work.</summary>
+    private sealed class CloneFailedException(string message) : Exception(message);
+
+    private static async Task<GitResult> CheckedAsync(Task<GitResult> run, string relativePath)
     {
         var result = await run;
         if (result.ExitCode != 0)
-            throw new IOException($"git failed in a chat's clone: {result.Stderr.Trim()} (exit {result.ExitCode})");
+            throw new CloneFailedException($"git failed in {relativePath}: {result.Stderr.Trim()} (exit {result.ExitCode})");
         return result;
     }
 

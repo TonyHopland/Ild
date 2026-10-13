@@ -50,6 +50,13 @@ public enum ChatRepositoryCloneOutcome
     FetchFailed,
 
     /// <summary>
+    /// A step in the chat's own clone failed for a reason other than local work
+    /// in the way: its folder could not be made, or git failed there. The message
+    /// carries git's text.
+    /// </summary>
+    CloneFailed,
+
+    /// <summary>
     /// Git refused the update or the branch switch because it would lose local
     /// work (uncommitted changes in the way, or local commits that make the
     /// branch diverge). Nothing was changed; the message carries git's own text.

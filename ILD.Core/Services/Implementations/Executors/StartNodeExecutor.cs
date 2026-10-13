@@ -131,8 +131,13 @@ public sealed class StartNodeExecutor : INodeExecutor
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
         var baseBranch = RunBaseBranch.Resolve(run, repo);
 
-        var (baseOk, basePath, baseError) = await PrepareBaseRepoAsync(
-            ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
+        bool baseOk;
+        string? basePath, baseError;
+        using (await BaseRepoClone.LockAsync(repo.Id, ctx.CancellationToken))
+        {
+            (baseOk, basePath, baseError) = await PrepareBaseRepoAsync(
+                ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
+        }
         if (!baseOk) return (false, null, null, baseError);
 
         var path = await repoManager.CreateWorktreeAsync(basePath!, branch);

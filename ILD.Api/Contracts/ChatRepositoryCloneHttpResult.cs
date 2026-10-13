@@ -36,6 +36,7 @@ public static class ChatRepositoryCloneHttpResult
             ChatRepositoryCloneOutcome.InvalidBranch => StatusCodes.Status400BadRequest,
             ChatRepositoryCloneOutcome.UpdateRefused => StatusCodes.Status409Conflict,
             ChatRepositoryCloneOutcome.FetchFailed => StatusCodes.Status502BadGateway,
+            ChatRepositoryCloneOutcome.CloneFailed => StatusCodes.Status500InternalServerError,
             _ => throw new ArgumentOutOfRangeException(nameof(result), result.Outcome, "not a refusal"),
         };
         return new ObjectResult(new { error = result.Message, outcome = result.Outcome.ToString() }) { StatusCode = status };
