@@ -119,8 +119,8 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
 
     public async Task<GlobalVariableProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct = default)
     {
-        var trimmed = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
-        if (await DecideAsync(id, GlobalVariableProposalStatus.Rejected, trimmed, DateTime.UtcNow, ct) == 0)
+        var trimmed = reason is null ? null : AppDbContext.WithoutNul(reason).Trim();
+        if (await DecideAsync(id, GlobalVariableProposalStatus.Rejected, trimmed is "" ? null : trimmed, DateTime.UtcNow, ct) == 0)
             return await RefusedAsync(id, ct);
         var entry = await GetAsync(id, ct);
         return new(

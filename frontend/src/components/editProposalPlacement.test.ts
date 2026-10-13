@@ -48,3 +48,14 @@ describe("placeChatProposals", () => {
     expect(placed.tail).toEqual([]);
   });
 });
+
+describe("card order within a slot", () => {
+  test("follows the server's clock below the millisecond, not the ids", () => {
+    const later = { ...proposal("a", 1), createdAt: "2026-09-26T10:00:00.0004002Z" };
+    const earlier = { ...proposal("b", 1), createdAt: "2026-09-26T10:00:00.0004001Z" };
+
+    const placed = placeChatProposals([message(0), message(1)], [later, earlier]);
+
+    expect(ids(placed.afterMessage.get("m1"))).toEqual(["b", "a"]);
+  });
+});

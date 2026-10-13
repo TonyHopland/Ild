@@ -1,4 +1,5 @@
 import type { ChatMessage, RunConversationMessage } from "../types";
+import { compareCreatedAt } from "../utils/createdAt";
 
 /**
  * What placing a card needs. Work item edit proposals and global variable
@@ -14,9 +15,7 @@ export interface PlacedProposal {
 
 /** Oldest first, by the server's clock, then by id. */
 function byCreation(a: PlacedProposal, b: PlacedProposal): number {
-  return (
-    Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-  );
+  return compareCreatedAt(a.createdAt, b.createdAt) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
 function push<K, P>(slots: Map<K, P[]>, key: K, proposal: P) {
