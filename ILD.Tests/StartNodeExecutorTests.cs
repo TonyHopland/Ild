@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
@@ -161,6 +162,38 @@ public class StartNodeExecutorTests : IDisposable
         mgr.Verify(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()), Times.Once);
         mgr.Verify(m => m.FetchAsync(editedRepoPath, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
         mgr.Verify(m => m.CreateWorktreeAsync(editedRepoPath, It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Everything_written_to_the_base_clones_refs_is_held_under_the_repositorys_lock_and_the_rebase_is_not()
+    {
+        var repoId = Guid.Empty;
+        var steps = new List<(string Step, bool Locked)>();
+        void Record(string step) => steps.Add((step, BaseRepoClone.IsTracked(repoId)));
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .Callback((string path, CancellationToken _, GitAuthOptions? _) => Record($"fetch {path}"))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.ResetHardAsync(_baseRepo, "origin/main", It.IsAny<CancellationToken>()))
+            .Callback(() => Record("reset"))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()))
+            .Callback(() => Record("add worktree"))
+            .ReturnsAsync("/tmp/worktree");
+        repoManager.Setup(m => m.RebaseAsync("/tmp/worktree", "origin/main", It.IsAny<CancellationToken>()))
+            .Callback(() => Record("rebase"))
+            .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+        var (_, sp, run, node) = BuildContext(repoManager);
+        repoId = run.RepositoryId!.Value;
+
+        await foreach (var _ in new StartNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+        {
+        }
+
+        Assert.Equal(
+            [($"fetch {_baseRepo}", true), ("reset", true), ("add worktree", true), ("fetch /tmp/worktree", true), ("rebase", false)],
+            steps);
+        Assert.False(BaseRepoClone.IsTracked(repoId));
     }
 
     /// <summary>A repo manager that prepares a worktree at <c>/tmp/worktree</c> on the happy path.</summary>

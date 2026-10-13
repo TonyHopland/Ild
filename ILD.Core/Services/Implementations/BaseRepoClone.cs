@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using Microsoft.Extensions.Configuration;
@@ -14,21 +13,35 @@ internal static class BaseRepoClone
 {
     private const int DeleteAttempts = 3;
 
-    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> Locks = new();
+    private static readonly SharedEntries<Guid, SemaphoreSlim> Locks = new(() => new SemaphoreSlim(1, 1));
 
     /// <summary>
-    /// The lock every clone, fetch and reset of a repository's base clone made by
-    /// a run's Start node or for a chat is taken under, released by disposing it.
-    /// Without it a chat finding no base clone and a Start node cloning one would
-    /// clone into the same folder, and the loser's cleanup would delete the
-    /// winner's clone.
+    /// The repository's lock, released by disposing it. A run's Start node takes
+    /// it for everything it writes to the base clone's refs — the clone or fetch,
+    /// the reset, adding the run's worktree and fetching in it, which shares
+    /// those refs — and a chat for its clone or fetch of the base clone. Without
+    /// it a chat finding no base clone and a Start node cloning one would clone
+    /// into the same folder, and the loser's cleanup would delete the winner's
+    /// clone; two fetches would contend for the same refs, and one would fail.
+    /// The fetches of the PR node and of pull_branch do not take it.
     /// </summary>
     public static async Task<IDisposable> LockAsync(Guid repositoryId, CancellationToken ct)
     {
-        var gate = Locks.GetOrAdd(repositoryId, _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(ct);
-        return new Held(gate);
+        var gate = Locks.Enter(repositoryId);
+        try
+        {
+            await gate.WaitAsync(ct);
+        }
+        catch
+        {
+            Locks.Leave(repositoryId);
+            throw;
+        }
+        return new Held(repositoryId, gate);
     }
+
+    /// <summary>Whether anyone holds or waits for the repository's lock.</summary>
+    internal static bool IsTracked(Guid repositoryId) => Locks.Contains(repositoryId);
 
     /// <summary>
     /// Fetch the existing base clone, or make it. Call under <see cref="LockAsync"/>.
@@ -85,14 +98,16 @@ internal static class BaseRepoClone
         return false;
     }
 
-    private sealed class Held(SemaphoreSlim gate) : IDisposable
+    private sealed class Held(Guid repositoryId, SemaphoreSlim gate) : IDisposable
     {
         private int _released;
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _released, 1) == 0)
-                gate.Release();
+            if (Interlocked.Exchange(ref _released, 1) != 0)
+                return;
+            gate.Release();
+            Locks.Leave(repositoryId);
         }
     }
 }

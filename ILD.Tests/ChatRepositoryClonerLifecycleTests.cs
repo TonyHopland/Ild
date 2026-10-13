@@ -128,6 +128,29 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         Assert.Equal(ChatRepositoryCloneOutcome.BranchNotFound, refused.Outcome);
         Assert.Equal(ChatRepositoryCloneOutcome.Updated, updated.Outcome);
         Assert.False(ChatRepositoryCloner.IsTracked(chatId));
+        Assert.False(BaseRepoClone.IsTracked(repo.Id));
+    }
+
+    [Fact]
+    public async Task The_repository_lock_is_dropped_once_released_and_by_a_waiter_that_gives_up()
+    {
+        var repositoryId = Guid.NewGuid();
+        var held = await BaseRepoClone.LockAsync(repositoryId, Ct);
+        using var givesUp = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var waiter = BaseRepoClone.LockAsync(repositoryId, givesUp.Token);
+
+        Assert.False(waiter.IsCompleted);
+        await givesUp.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiter);
+        Assert.True(BaseRepoClone.IsTracked(repositoryId));
+
+        held.Dispose();
+        held.Dispose();
+
+        Assert.False(BaseRepoClone.IsTracked(repositoryId));
+        using (await BaseRepoClone.LockAsync(repositoryId, Ct))
+            Assert.True(BaseRepoClone.IsTracked(repositoryId));
+        Assert.False(BaseRepoClone.IsTracked(repositoryId));
     }
 
     // -- Finding the clone again -----------------------------------------------------

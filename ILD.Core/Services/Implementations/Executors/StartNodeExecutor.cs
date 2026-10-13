@@ -131,17 +131,18 @@ public sealed class StartNodeExecutor : INodeExecutor
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
         var baseBranch = RunBaseBranch.Resolve(run, repo);
 
-        bool baseOk;
-        string? basePath, baseError;
+        // The worktree shares the base clone's refs, so adding it and fetching in
+        // it are held under the repository's lock with the base clone's own work.
+        string path;
         using (await BaseRepoClone.LockAsync(repo.Id, ctx.CancellationToken))
         {
-            (baseOk, basePath, baseError) = await PrepareBaseRepoAsync(
+            var (baseOk, basePath, baseError) = await PrepareBaseRepoAsync(
                 ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
-        }
-        if (!baseOk) return (false, null, null, baseError);
+            if (!baseOk) return (false, null, null, baseError);
 
-        var path = await repoManager.CreateWorktreeAsync(basePath!, branch);
-        await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
+            path = await repoManager.CreateWorktreeAsync(basePath!, branch);
+            await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
+        }
         try
         {
             var rebase = await repoManager.RebaseAsync(path, $"origin/{baseBranch}", ctx.CancellationToken);

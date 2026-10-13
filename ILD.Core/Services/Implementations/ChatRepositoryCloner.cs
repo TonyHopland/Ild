@@ -43,13 +43,18 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     // no clone outlives the chat. An entry lives only while a clone call or a
     // deletion uses it. Static because the service is scoped while the work it
     // guards outlives the request that started it.
-    private static readonly Dictionary<Guid, ChatWork> Chats = new();
+    private static readonly SharedEntries<Guid, ChatWork> Chats = new(() => new ChatWork());
 
-    private sealed class ChatWork
+    private sealed class ChatWork : IDisposable
     {
         public SemaphoreSlim Gate { get; } = new(1, 1);
         public CancellationTokenSource Deleted { get; } = new();
-        public int Users;
+
+        public void Dispose()
+        {
+            Deleted.Dispose();
+            Gate.Dispose();
+        }
     }
 
     private readonly AppDbContext _db;
@@ -149,7 +154,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     /// </summary>
     public static async Task StopForDeletedChatAsync(Guid chatSessionId)
     {
-        var chat = Enter(chatSessionId);
+        var chat = Chats.Enter(chatSessionId);
         try
         {
             await chat.Deleted.CancelAsync();
@@ -158,50 +163,23 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         }
         finally
         {
-            Leave(chatSessionId, chat);
+            Chats.Leave(chatSessionId);
         }
     }
 
     /// <summary>Whether a clone call or a deletion of the chat holds its entry.</summary>
-    internal static bool IsTracked(Guid chatSessionId)
-    {
-        lock (Chats)
-            return Chats.ContainsKey(chatSessionId);
-    }
-
-    private static ChatWork Enter(Guid chatSessionId)
-    {
-        lock (Chats)
-        {
-            if (!Chats.TryGetValue(chatSessionId, out var chat))
-                Chats[chatSessionId] = chat = new ChatWork();
-            chat.Users++;
-            return chat;
-        }
-    }
-
-    private static void Leave(Guid chatSessionId, ChatWork chat)
-    {
-        lock (Chats)
-        {
-            if (--chat.Users > 0)
-                return;
-            Chats.Remove(chatSessionId);
-        }
-        chat.Deleted.Dispose();
-        chat.Gate.Dispose();
-    }
+    internal static bool IsTracked(Guid chatSessionId) => Chats.Contains(chatSessionId);
 
     private async Task<ChatRepositoryCloneResult> CloneOrUpdateAsync(Job job, CancellationToken shutdown)
     {
-        var chat = Enter(job.ChatSessionId);
+        var chat = Chats.Enter(job.ChatSessionId);
         try
         {
             return await CloneOrUpdateAsync(job, chat, shutdown);
         }
         finally
         {
-            Leave(job.ChatSessionId, chat);
+            Chats.Leave(job.ChatSessionId);
         }
     }
 
