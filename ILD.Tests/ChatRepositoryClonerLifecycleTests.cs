@@ -150,6 +150,31 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     }
 
     [Fact]
+    public async Task Copies_and_worktrees_of_the_clone_are_not_taken_for_it()
+    {
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var cloner = Cloner();
+        var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        var repos = Path.Combine(scratch, "repos");
+        Git(Path.Combine(repos, "widgets"), "worktree", "add", "-q", "-b", "bugfix", Path.Combine(repos, "aaa-bugfix"));
+
+        var withWorktree = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        repo.Name = "gadgets";
+        await _db.Context.SaveChangesAsync(Ct);
+        var renamed = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        repo.Name = "widgets";
+        await _db.Context.SaveChangesAsync(Ct);
+        CopyDirectory(Path.Combine(repos, "widgets"), Path.Combine(repos, "backup-widgets"));
+        var withCopy = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+
+        Assert.All([withWorktree, renamed, withCopy], r =>
+        {
+            Assert.Equal(ChatRepositoryCloneOutcome.Updated, r.Outcome);
+            Assert.Equal(cloned.Path, r.Path);
+        });
+    }
+
+    [Fact]
     public async Task Past_every_numbered_name_a_repository_gets_a_folder_named_after_its_id()
     {
         var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
@@ -187,11 +212,15 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
 
         var switched = await cloner.CloneAsync(chatId, repo.Id.ToString(), "feature", Ct);
         var back = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        PushCommit("main", "CHANGES.md");
+        var merged = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
 
         Assert.Equal(ChatRepositoryCloneOutcome.Updated, switched.Outcome);
         Assert.Equal("feature", switched.Branch);
         Assert.Equal(ChatRepositoryCloneOutcome.Updated, back.Outcome);
         Assert.Equal("main", back.Branch);
+        Assert.Equal(ChatRepositoryCloneOutcome.Updated, merged.Outcome);
+        Assert.True(merged.Changed);
         Assert.False(File.Exists(ran), "a hook in the agent's clone ran");
     }
 
@@ -276,6 +305,25 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         Git(work, "commit", "-q", "-am", "feature");
         Git(work, "push", "-q", "origin", "feature");
         return bare;
+    }
+
+    private void PushCommit(string branch, string file)
+    {
+        var work = Path.Combine(_dir, "remote-work");
+        Git(work, "checkout", "-q", branch);
+        File.WriteAllText(Path.Combine(work, file), file);
+        Git(work, "add", file);
+        Git(work, "commit", "-q", "-m", file);
+        Git(work, "push", "-q", "origin", branch);
+    }
+
+    private static void CopyDirectory(string from, string to)
+    {
+        foreach (var dir in Directory.EnumerateDirectories(from, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(to, Path.GetRelativePath(from, dir)));
+        Directory.CreateDirectory(to);
+        foreach (var file in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+            File.Copy(file, Path.Combine(to, Path.GetRelativePath(from, file)));
     }
 
     private static void Git(string cwd, params string[] args)

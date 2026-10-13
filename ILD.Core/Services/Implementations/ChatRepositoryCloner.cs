@@ -35,6 +35,9 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private static readonly string[] GitEnvironmentKeys =
         ["GIT_ASKPASS", "ILD_GIT_PASSWORD", "ILD_GIT_USERNAME", "GIT_DIR", "GIT_WORK_TREE"];
 
+    private static readonly string[] QuietGitOptions =
+        ["-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false"];
+
     // Per chat: one clone or update at a time, so two calls never pick the same
     // folder or interleave their git commands; and a stop its deletion fires, so
     // no clone outlives the chat. An entry lives only while a clone call or a
@@ -348,28 +351,48 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 
     /// <summary>
     /// The folder for the repository under <paramref name="reposDir"/>: the one
-    /// whose clone carries its id, whatever it is called (the repository may have
-    /// been renamed since), else the first free one of <c>name</c>, <c>name-2</c>,
-    /// …, and past those <c>name-&lt;repository id&gt;</c>, which no other
-    /// repository can take.
+    /// whose clone carries its id, looked for first under the names it would
+    /// have been given — <c>name</c>, <c>name-2</c>, …, and past those
+    /// <c>name-&lt;repository id&gt;</c>, which no other repository can take — and
+    /// then in every other folder, since the repository may have been renamed
+    /// since. Failing that, the first of those names that is free.
     /// </summary>
     private static async Task<(string Name, bool Exists)> FindFolderAsync(
         string reposDir, Guid repositoryId, string name, CancellationToken ct)
     {
-        foreach (var folder in (await AgentWritableFiles.ListDirectoriesAsync(reposDir, ct)).Order(StringComparer.Ordinal))
+        var candidates = Enumerable.Range(1, MaxFolderCandidates)
+            .Select(n => n == 1 ? name : $"{name}-{n}")
+            .Append($"{name}-{repositoryId:N}")
+            .ToList();
+        var others = (await AgentWritableFiles.ListDirectoriesAsync(reposDir, ct))
+            .Except(candidates, StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal);
+        foreach (var folder in candidates.Where(c => AgentWritableFiles.EntryExists(Path.Combine(reposDir, c))).Concat(others))
         {
-            var marker = await RunGitAsync(Path.Combine(reposDir, folder), reposDir, ["config", "--local", "--get", MarkerKey], ct);
-            if (marker.ExitCode == 0 && Guid.TryParse(marker.Stdout.Trim(), out var id) && id == repositoryId)
+            if (await IsCloneOfAsync(Path.Combine(reposDir, folder), reposDir, repositoryId, ct))
                 return (folder, true);
         }
 
-        var candidates = Enumerable.Range(1, MaxFolderCandidates)
-            .Select(n => n == 1 ? name : $"{name}-{n}")
-            .Append($"{name}-{repositoryId:N}");
         return candidates.FirstOrDefault(c => !AgentWritableFiles.EntryExists(Path.Combine(reposDir, c))) is { } free
             ? (free, false)
             : throw new CloneFailedException(
                 $"{ReposFolder}/{name}-{repositoryId:N} is taken by something that is not this repository's clone; move it away and call again.");
+    }
+
+    /// <summary>
+    /// Whether <paramref name="folder"/> is a clone carrying the repository's
+    /// marker in a repository of its own: a worktree the agent added to the clone
+    /// reads the same marker, but is not the clone.
+    /// </summary>
+    private static async Task<bool> IsCloneOfAsync(string folder, string reposDir, Guid repositoryId, CancellationToken ct)
+    {
+        var marker = await RunGitAsync(folder, reposDir, ["config", "--local", "--get", MarkerKey], ct);
+        if (marker.ExitCode != 0 || !Guid.TryParse(marker.Stdout.Trim(), out var id) || id != repositoryId)
+            return false;
+
+        var dirs = await RunGitAsync(folder, reposDir, ["rev-parse", "--git-dir", "--git-common-dir"], ct);
+        var lines = dirs.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        return dirs.ExitCode == 0 && lines.Length == 2 && lines[0] == lines[1];
     }
 
     /// <summary>
@@ -445,13 +468,15 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         return AgentIsolation.Route(psi, agentUser, agentGroup, agentHome);
     }
 
-    // Hooks in the clone are off: a failing post-checkout or post-merge hook
-    // would make a switch that has already happened look refused.
+    // Hooks in the clone are off, so a failing post-checkout or post-merge hook
+    // cannot make a switch that has already happened look refused; so are
+    // automatic gc and maintenance, which detach from git and would go on
+    // writing in the clone after it is killed, e.g. as the chat is deleted.
     private static async Task<GitResult> RunGitAsync(
         string folder, string ceilingDirectory, IReadOnlyList<string> arguments, CancellationToken ct)
     {
         using var process = Process.Start(BuildStartInfo(
-                ["-c", "core.hooksPath=/dev/null", "-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory))
+                [.. QuietGitOptions, "-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory))
             ?? throw new IOException("could not start git");
         process.StandardInput.Close();
         var stdout = process.StandardOutput.ReadToEndAsync(ct);
@@ -463,6 +488,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
+            await process.WaitForExitAsync(CancellationToken.None);
             throw;
         }
 
