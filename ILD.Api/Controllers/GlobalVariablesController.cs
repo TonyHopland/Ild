@@ -125,21 +125,11 @@ public class GlobalVariablesController : ControllerBase
     /// name: those whose latest version has a node config naming it.
     /// </summary>
     private async Task<ILookup<string, TemplateRef>> UsageAsync()
-    {
-        // One read of every live template: names are not unique, so paging on
-        // the name ordering could skip or repeat templates tied across a page edge.
-        var uses = new List<(string Name, TemplateRef Template)>();
-        foreach (var template in await _templates.GetAllAsync(take: int.MaxValue))
-        {
-            if (await _templates.GetLatestVersionAsync(template.Id) is not { } latest) continue;
-            var names = (await _templates.GetNodesForVersionAsync(latest.Id))
-                .SelectMany(n => PromptPlaceholderRegistry.GlobalVariableNames(n.Config))
-                .Select(GlobalVariable.Normalize)
-                .Distinct();
-            uses.AddRange(names.Select(n => (n, new TemplateRef(template.Id, template.Name))));
-        }
-        return uses.ToLookup(u => u.Name, u => u.Template, StringComparer.Ordinal);
-    }
+        => (await _templates.GetLatestNodeConfigsOfLiveTemplatesAsync())
+            .SelectMany(n => PromptPlaceholderRegistry.GlobalVariableNames(n.Config)
+                .Select(name => (Name: GlobalVariable.Normalize(name), Template: new TemplateRef(n.TemplateId, n.TemplateName))))
+            .Distinct()
+            .ToLookup(u => u.Name, u => u.Template, StringComparer.Ordinal);
 
     private const string Gone = "No such variable; it may have been deleted.";
 

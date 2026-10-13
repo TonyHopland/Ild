@@ -62,6 +62,20 @@ public class LoopTemplateStore : ILoopTemplateStore
     public async Task<IReadOnlyList<LoopNode>> GetNodesForVersionAsync(Guid versionId)
         => await _db.LoopNodes.Where(n => n.LoopTemplateVersionId == versionId).ToListAsync();
 
+    public async Task<IReadOnlyList<LatestNodeConfig>> GetLatestNodeConfigsOfLiveTemplatesAsync()
+        => await (
+                from t in _db.LoopTemplates
+                where !t.IsArchived
+                join v in _db.LoopTemplateVersions on t.Id equals v.LoopTemplateId
+                where v.VersionNumber == _db.LoopTemplateVersions
+                    .Where(o => o.LoopTemplateId == t.Id)
+                    .Max(o => o.VersionNumber)
+                join n in _db.LoopNodes on v.Id equals n.LoopTemplateVersionId
+                orderby t.Name, t.Id
+                select new LatestNodeConfig(t.Id, t.Name, n.Config))
+            .AsNoTracking()
+            .ToListAsync();
+
     public async Task<IReadOnlyList<LoopNodeEdge>> GetEdgesForVersionAsync(Guid versionId)
     {
         return await _db.LoopNodeEdges

@@ -65,22 +65,30 @@ public class LoopRunsController : ControllerBase
     /// <summary>
     /// The global variables still missing or empty, as they are now, for a run
     /// parked because its current node uses them; empty for every other run.
-    /// <paramref name="globals"/> reads them, at most once per request.
     /// </summary>
-    private async Task<IReadOnlyList<string>> MissingGlobalVariablesAsync(
-        ILD.Data.Entities.LoopRun run, Func<Task<IReadOnlyList<ILD.Data.Entities.GlobalVariable>>> globals)
+    private static async Task<IReadOnlyList<string>> MissingGlobalVariablesAsync(ILD.Data.Entities.LoopRun run, ParkReads reads)
     {
         if (run.HaltReason != HaltReason.GlobalVariableMissing || run.CurrentNodeId is not { } nodeId) return [];
-        var node = (await _templates.GetNodesForVersionAsync(run.LoopTemplateVersionId)).FirstOrDefault(n => n.Id == nodeId);
+        var node = (await reads.NodesAsync(run.LoopTemplateVersionId)).FirstOrDefault(n => n.Id == nodeId);
         if (node is null) return [];
         var names = NodePromptTemplates.GlobalVariableNames(node, run);
-        return names.Count == 0 ? [] : NodePromptTemplates.Missing(names, await globals());
+        return names.Count == 0 ? [] : NodePromptTemplates.Missing(names, await reads.GlobalsAsync());
     }
 
-    private Func<Task<IReadOnlyList<ILD.Data.Entities.GlobalVariable>>> GlobalsOnce()
+    /// <summary>
+    /// What one request reads for its parked runs, each at most once: a version's
+    /// nodes, shared by every run on that version, and the global variables.
+    /// Awaited one run at a time, so the request's context never runs two queries at once.
+    /// </summary>
+    private sealed class ParkReads(ILoopTemplateStore templates, IGlobalVariableStore globals)
     {
-        Task<IReadOnlyList<ILD.Data.Entities.GlobalVariable>>? read = null;
-        return () => read ??= _globals.GetAllAsync();
+        private readonly Dictionary<Guid, Task<IReadOnlyList<ILD.Data.Entities.LoopNode>>> _nodes = new();
+        private Task<IReadOnlyList<ILD.Data.Entities.GlobalVariable>>? _globals;
+
+        public Task<IReadOnlyList<ILD.Data.Entities.LoopNode>> NodesAsync(Guid versionId)
+            => _nodes.TryGetValue(versionId, out var read) ? read : _nodes[versionId] = templates.GetNodesForVersionAsync(versionId);
+
+        public Task<IReadOnlyList<ILD.Data.Entities.GlobalVariable>> GlobalsAsync() => _globals ??= globals.GetAllAsync();
     }
 
     [HttpGet]
@@ -90,10 +98,10 @@ public class LoopRunsController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
         var runs = await _loopRunStore.GetAllAsync(skip, take);
-        var globals = GlobalsOnce();
+        var reads = new ParkReads(_templates, _globals);
         var missingGlobals = new Dictionary<Guid, IReadOnlyList<string>>();
         foreach (var r in runs)
-            missingGlobals[r.Id] = await MissingGlobalVariablesAsync(r, globals);
+            missingGlobals[r.Id] = await MissingGlobalVariablesAsync(r, reads);
         var result = runs.Select(r =>
         {
             var totals = RunCostTotals.From(r.RunNodes);
@@ -143,7 +151,7 @@ public class LoopRunsController : ControllerBase
         var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
         var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
         var variables = await _loopRunStore.GetVariablesAsync(guid);
-        var missingGlobals = await MissingGlobalVariablesAsync(run, GlobalsOnce());
+        var missingGlobals = await MissingGlobalVariablesAsync(run, new ParkReads(_templates, _globals));
         var currentSessionIds = sessionBindings
             .Select(b => $"{b.AdapterName}\n{b.SessionId}")
             .ToHashSet(StringComparer.Ordinal);

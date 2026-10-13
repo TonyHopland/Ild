@@ -9,6 +9,9 @@ public record TemplateGraph(
     IReadOnlyList<LoopNode> Nodes,
     IReadOnlyList<LoopNodeEdge> Edges);
 
+/// <summary>One node config of the latest version of a template.</summary>
+public sealed record LatestNodeConfig(Guid TemplateId, string TemplateName, string? Config);
+
 public interface ILoopTemplateStore
 {
     Task<LoopTemplate?> GetByIdAsync(Guid id);
@@ -20,6 +23,12 @@ public interface ILoopTemplateStore
     Task<LoopTemplateVersion?> GetVersionAsync(Guid templateId, int versionNumber);
     Task<IReadOnlyList<LoopTemplateVersion>> GetVersionsAsync(Guid templateId);
     Task<IReadOnlyList<LoopNode>> GetNodesForVersionAsync(Guid versionId);
+
+    /// <summary>
+    /// Every node config of the latest version of each non-archived template, in
+    /// one query, ordered by template name then id.
+    /// </summary>
+    Task<IReadOnlyList<LatestNodeConfig>> GetLatestNodeConfigsOfLiveTemplatesAsync();
     Task<IReadOnlyList<LoopNodeEdge>> GetEdgesForVersionAsync(Guid versionId);
     Task<int> GetNextVersionNumberAsync(Guid templateId);
     Task CreateTemplateAsync(LoopTemplate template);
