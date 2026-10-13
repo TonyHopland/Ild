@@ -20,7 +20,7 @@ import LoopNodeComponent from "../../components/LoopNodeComponent";
 import LoopEdgeComponent from "../../components/LoopEdgeComponent";
 import { LoopEdgeInteractionContext } from "../../components/loopEdgeInteraction";
 import ErrorBanner from "../../components/ErrorBanner";
-import { loopTemplateService, aiProviderService } from "../../services/auth";
+import { loopTemplateService, aiProviderService, globalVariableService } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
 import { setOpenLoopProvider } from "../../utils/openLoopDocument";
 import { getCurrentChatSessionId, subscribeChatSessionId } from "../../services/chatSessionStore";
@@ -276,6 +276,7 @@ export default function LoopEditor() {
   const [versionHistory, setVersionHistory] = useState<LoopTemplateVersion[]>([]);
   const [readOnlyVersion, setReadOnlyVersion] = useState<number | null>(null);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
+  const [globalNames, setGlobalNames] = useState<string[]>([]);
   const [errorText, setErrorText] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   // Save-time review gate (ADR-0011): while the diff modal is open, holds the
@@ -351,6 +352,23 @@ export default function LoopEditor() {
         (error) => {
           if (active) setErrorText(loadErrorMessage(error, "Failed to load node outputs."));
         },
+      );
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Offered by the prompt fields; when they cannot be read the fields offer
+  // only the bare {{Global.}} and the editor carries on.
+  useEffect(() => {
+    let active = true;
+    Promise.resolve()
+      .then(() => globalVariableService.getAll())
+      .then(
+        (variables) => {
+          if (active && Array.isArray(variables)) setGlobalNames(variables.map((v) => v.name));
+        },
+        () => {},
       );
     return () => {
       active = false;
@@ -1779,6 +1797,7 @@ export default function LoopEditor() {
                       conditionOutput={conditionOutput}
                       aiProviders={aiProviders}
                       availableAiTools={availableAiTools}
+                      globalNames={globalNames}
                       sessionPlaceholderUsages={sessionPlaceholderUsages}
                       selectedPlaceholderUsage={selectedPlaceholderUsage}
                       onClose={handleCancelNodeSettings}

@@ -74,6 +74,8 @@ interface NodeSettingsModalProps {
   conditionOutput: string;
   aiProviders: AiProvider[];
   availableAiTools: AiToolDefinition[];
+  /** Existing global variables, offered by every prompt field. */
+  globalNames: string[];
   sessionPlaceholderUsages: SessionPlaceholderUsage[];
   selectedPlaceholderUsage?: SessionPlaceholderUsage;
   onClose: () => void;
@@ -622,10 +624,12 @@ const EMPTY_CONDITION_CASE: ConditionCase = {
 function ConditionCasesEditor({
   cases,
   problems,
+  globalNames,
   onChange,
 }: {
   cases: ConditionCase[];
   problems: (string | null)[];
+  globalNames: string[];
   onChange: (value: ConditionCase[]) => void;
 }) {
   const update = (index: number, patch: Partial<ConditionCase>) =>
@@ -672,6 +676,7 @@ function ConditionCasesEditor({
           {c.variant === "TextMatches" && (
             <>
               <PromptEditor
+                globalNames={globalNames}
                 id={`condition-case-subject-${index}`}
                 rows={2}
                 value={c.subject}
@@ -740,6 +745,7 @@ export function NodeSettingsModal({
   conditionOutput,
   aiProviders,
   availableAiTools,
+  globalNames,
   sessionPlaceholderUsages,
   selectedPlaceholderUsage,
   onClose,
@@ -887,6 +893,7 @@ export function NodeSettingsModal({
               <ConfigSection title="Prompt">
                 <div className="config-field">
                   <PromptEditor
+                    globalNames={globalNames}
                     id="ai-prompt"
                     rows={4}
                     value={aiPrompt}
@@ -1047,6 +1054,7 @@ export function NodeSettingsModal({
               <div className="config-field">
                 <label htmlFor="human-prompt">Human Prompt</label>
                 <PromptEditor
+                  globalNames={globalNames}
                   id="human-prompt"
                   rows={6}
                   value={humanPrompt}
@@ -1061,6 +1069,7 @@ export function NodeSettingsModal({
             <div className="config-field">
               <label htmlFor="prompt-node-prompt">Prompt</label>
               <PromptEditor
+                globalNames={globalNames}
                 id="prompt-node-prompt"
                 rows={6}
                 value={promptNodePrompt}
@@ -1074,6 +1083,7 @@ export function NodeSettingsModal({
               <div className="config-field">
                 <label htmlFor="pr-description-template">PR Description Template</label>
                 <PromptEditor
+                  globalNames={globalNames}
                   id="pr-description-template"
                   rows={4}
                   value={prDescriptionTemplate}
@@ -1104,6 +1114,7 @@ export function NodeSettingsModal({
               <ConditionCasesEditor
                 cases={conditionCases}
                 problems={problems.cases}
+                globalNames={globalNames}
                 onChange={onConditionCasesChange}
               />
 
@@ -1129,6 +1140,7 @@ export function NodeSettingsModal({
               <div className="config-field">
                 <label htmlFor="condition-output">Output</label>
                 <PromptEditor
+                  globalNames={globalNames}
                   id="condition-output"
                   rows={3}
                   value={conditionOutput}

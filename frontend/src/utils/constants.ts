@@ -31,6 +31,7 @@ export const ROUTES = {
   SETTINGS: "/settings",
   REPOSITORIES: "/repositories",
   AI_PROVIDERS: "/ai-providers",
+  GLOBAL_VARIABLES: "/global-variables",
 } as const;
 
 export const NAV_ITEMS = [
@@ -41,6 +42,7 @@ export const NAV_ITEMS = [
   { label: "Settings", path: ROUTES.SETTINGS },
   { label: "Repositories", path: ROUTES.REPOSITORIES },
   { label: "AI Providers", path: ROUTES.AI_PROVIDERS },
+  { label: "Global Variables", path: ROUTES.GLOBAL_VARIABLES },
 ] as const;
 
 export const DEFAULT_PAGE_SIZE = 20;

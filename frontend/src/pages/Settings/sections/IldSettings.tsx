@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { SchedulerSettingKeys } from "../../../services/auth";
+import { GlobalVariableSettingKeys, SchedulerSettingKeys } from "../../../services/auth";
 import { NumericSettingField, SettingRow, ToggleSettingField } from "../controls";
 import ChatTitlesSettings from "./ChatTitlesSettings";
 
@@ -111,6 +111,23 @@ export default function IldSettings() {
       </section>
 
       <ChatTitlesSettings />
+
+      <section className="settings-card">
+        <div className="settings-card-header">
+          <h3 className="settings-card-title">Global variables</h3>
+        </div>
+        <NumericSettingField
+          settingKey={GlobalVariableSettingKeys.MaxLength}
+          label="Longest global variable value"
+          min={1}
+          max={8192}
+          fallback={4000}
+          unit="characters"
+        >
+          The most characters a value on the Global Variables page may have. Lowering it leaves
+          longer values as they are until they are next edited.
+        </NumericSettingField>
+      </section>
 
       <section className="settings-card">
         <div className="settings-card-header">

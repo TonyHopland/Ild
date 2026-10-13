@@ -13,6 +13,7 @@ import {
   Repository,
   RepositoryInput,
   PackageFeed,
+  GlobalVariable,
   RemoteProvider,
   RemoteProviderTypeOption,
   ConnectionTestResult,
@@ -730,6 +731,25 @@ export const packageFeedService = {
   },
 };
 
+export const globalVariableService = {
+  getAll: async (): Promise<GlobalVariable[]> => {
+    return api.get<GlobalVariable[]>("/global-variables");
+  },
+
+  create: async (data: { name: string; value: string }): Promise<GlobalVariable> => {
+    return api.post<GlobalVariable>("/global-variables", data);
+  },
+
+  /** The name cannot change. */
+  update: async (id: string, value: string): Promise<GlobalVariable> => {
+    return api.put<GlobalVariable>(`/global-variables/${id}`, { value });
+  },
+
+  delete: async (id: string): Promise<void> => {
+    return api.delete<void>(`/global-variables/${id}`);
+  },
+};
+
 export const remoteProviderService = {
   getAll: async (opts?: { skip?: number; take?: number }): Promise<RemoteProvider[]> => {
     return api.get<RemoteProvider[]>(`/remoteproviders${pageQuery(opts)}`);
@@ -978,6 +998,11 @@ export const ChatTitleSettingKeys = {
 export const SessionSettingKeys = {
   IdleDays: "session.idleDays",
   MaxDays: "session.maxDays",
+} as const;
+
+/** The most characters a global variable's value may have. */
+export const GlobalVariableSettingKeys = {
+  MaxLength: "globalVariables.maxLength",
 } as const;
 
 export const settingsService = {

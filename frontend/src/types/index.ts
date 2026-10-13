@@ -513,6 +513,8 @@ export enum HaltReason {
   Throttled = "Throttled",
   /** The run executed the configured maximum AI steps with no human input. */
   MaxAiTraversals = "MaxAiTraversals",
+  /** The next node uses a global variable that does not exist or is empty. */
+  GlobalVariableMissing = "GlobalVariableMissing",
 }
 
 export enum LoopRunNodeStatus {
@@ -595,6 +597,8 @@ export interface LoopRun {
   isHalted?: boolean;
   /** Who parked the run, when `isHalted`; absent/null for a human's Halt. */
   haltReason?: HaltReason | string | null;
+  /** For a GlobalVariableMissing park, the ones still missing or empty now. */
+  missingGlobalVariables?: string[];
   retain?: boolean;
   worktreePath?: string | null;
   branchName?: string | null;
@@ -766,6 +770,16 @@ export interface PackageFeed {
   updatedAt: string;
   /** Instance-wide: NuGet in run processes will not find the Azure Artifacts credential provider. */
   credentialProviderMissing?: boolean;
+}
+
+/** An instance-wide value loop prompts read with `{{Global.<name>}}`. */
+export interface GlobalVariable {
+  id: string;
+  name: string;
+  value: string;
+  updatedAt: string;
+  /** The live loop templates whose latest version uses it. */
+  usedBy: { id: string; name: string }[];
 }
 
 export interface RemoteProvider {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import {
   HaltReason,
   LoopRun,
@@ -76,6 +77,15 @@ function isStepCapParked(run: LoopRun): boolean {
 }
 
 /**
+ * Whether the engine parked this run before a node whose prompt uses a global
+ * variable that is missing or empty. `missingGlobalVariables` is read from the
+ * values as they are now, so it shrinks as a person sets them.
+ */
+function isGlobalMissingParked(run: LoopRun): boolean {
+  return run.haltReason === HaltReason.GlobalVariableMissing;
+}
+
+/**
  * The node the provider interrupted. It carries the explanation of which Resume
  * the human is about to get (same agent session, or a cold restart of the node)
  * and the provider's own words, which is where the reset time is stated: ILD
@@ -125,6 +135,7 @@ export default function HaltSteerControls({
   const isHalted = !!onResumeSteer && isWaitingHuman && !!run.isHalted;
   const throttled = isHalted && isThrottleParked(run);
   const stepCapped = isHalted && isStepCapParked(run);
+  const globalMissing = isHalted && isGlobalMissingParked(run);
   const interruption = throttled ? interruptedNode(run) : null;
   // Abandon applies to any non-terminal run — actively running OR parked for
   // human feedback — so a run heading the wrong way can be dropped without
@@ -240,12 +251,35 @@ export default function HaltSteerControls({
           <div className="wiv2-feedback-title">
             {throttled && "Provider interrupted — resume when ready"}
             {stepCapped && "Enough AI steps — carry on?"}
-            {!throttled && !stepCapped && "Halted — steer & resume"}
+            {globalMissing && "Global variables missing — set them, then resume"}
+            {!throttled && !stepCapped && !globalMissing && "Halted — steer & resume"}
           </div>
           {stepCapped && (
             <div className="feedback-reason">
               The AI ran {run.aiTraversalCount ?? 0} steps without human input. Resume to let it
               carry on — with guidance if it is heading the wrong way — or abandon the run.
+            </div>
+          )}
+          {globalMissing && (
+            <div className="feedback-reason">
+              {run.missingGlobalVariables?.length ? (
+                <>
+                  The next step uses global variables that are missing or empty:{" "}
+                  {run.missingGlobalVariables.map((name, i) => (
+                    <span key={name}>
+                      {i > 0 && ", "}
+                      <code>{name}</code>
+                    </span>
+                  ))}
+                  . Set them on the <Link to="/global-variables">Global Variables page</Link>, then
+                  resume.
+                </>
+              ) : (
+                <>
+                  All are set now — resume to continue. They live on the{" "}
+                  <Link to="/global-variables">Global Variables page</Link>.
+                </>
+              )}
             </div>
           )}
           {throttled && (
