@@ -104,6 +104,7 @@ public class StartNodeExecutorTests : IDisposable
         // A stale base must never be turned into a worktree.
         mgr.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.False(BaseRepoClone.IsTracked(run.RepositoryId!.Value), "the failed Start node kept the repository's lock");
     }
 
     [Fact]

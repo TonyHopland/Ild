@@ -16,14 +16,16 @@ internal static class BaseRepoClone
     private static readonly SharedEntries<Guid, SemaphoreSlim> Locks = new(() => new SemaphoreSlim(1, 1));
 
     /// <summary>
-    /// The repository's lock, released by disposing it. A run's Start node takes
-    /// it for everything it writes to the base clone's refs — the clone or fetch,
-    /// the reset, adding the run's worktree and fetching in it, which shares
-    /// those refs — and a chat for its clone or fetch of the base clone. Without
-    /// it a chat finding no base clone and a Start node cloning one would clone
-    /// into the same folder, and the loser's cleanup would delete the winner's
-    /// clone; two fetches would contend for the same refs, and one would fail.
-    /// The fetches of the PR node and of pull_branch do not take it.
+    /// The repository's lock, released by disposing it. A run's Start node holds
+    /// it while it clones or fetches the base clone, resets it, adds the run's
+    /// worktree and fetches in that worktree, which shares the base clone's refs;
+    /// a chat holds it while it clones or fetches the base clone. Without it a
+    /// chat finding no base clone and a Start node cloning one would clone into
+    /// the same folder, and the loser's cleanup would delete the winner's clone,
+    /// and their fetches would contend for the same remote-tracking refs. Other
+    /// writers of the base clone do not take it: the Start node's rebase of the
+    /// run's own branch, the PR node's push and fetch, pull_branch, and the run
+    /// reclaimer.
     /// </summary>
     public static async Task<IDisposable> LockAsync(Guid repositoryId, CancellationToken ct)
     {
