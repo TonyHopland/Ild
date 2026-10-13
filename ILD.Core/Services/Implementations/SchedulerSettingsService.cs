@@ -75,4 +75,12 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         if (s != null && int.TryParse(s.Value, out var v) && v > 0) return v;
         return AppSettingKeys.DefaultMaxAiTraversals;
     }
+
+    public async Task<int> GetGlobalVariableMaxLengthAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.GlobalVariableMaxLength, ct);
+        if (s != null && int.TryParse(s.Value, out var v) && v >= 1 && v <= AppSettingKeys.MaxGlobalVariableMaxLength)
+            return v;
+        return AppSettingKeys.DefaultGlobalVariableMaxLength;
+    }
 }

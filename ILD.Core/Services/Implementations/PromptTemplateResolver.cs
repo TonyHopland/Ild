@@ -40,6 +40,12 @@ public sealed class PromptTemplateResolver : IPromptTemplateResolver
                 var name = key.Substring(PromptPlaceholderRegistry.VariablePrefix.Length);
                 return context.RunVariables != null && context.RunVariables.TryGetValue(name, out var val) ? val : "";
             }
+            if (PromptPlaceholderRegistry.TryGlobalName(key, out var global))
+            {
+                // The engine halts before a node whose globals are missing; one
+                // deleted after that check renders empty, like an unset loop variable.
+                return context.GlobalVariables != null && context.GlobalVariables.TryGetValue(global, out var val) ? val : "";
+            }
             return m.Value;
         });
     }

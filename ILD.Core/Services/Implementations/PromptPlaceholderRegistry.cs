@@ -63,13 +63,47 @@ public static class PromptPlaceholderRegistry
     public static bool IsValidVariableName(string name) => VariableNamePattern.IsMatch(name);
 
     /// <summary>
+    /// Prefix for instance-wide global variables: <c>{{Global.&lt;name&gt;}}</c>.
+    /// The name follows the loop-variable rule (<see cref="VariableNamePattern"/>),
+    /// but the two namespaces never read each other.
+    /// </summary>
+    public const string GlobalPrefix = "Global.";
+
+    /// <summary>
+    /// The global-variable names <paramref name="template"/> uses, distinct
+    /// ignoring case, in order of first appearance. Malformed names are not
+    /// placeholders, so they are not listed.
+    /// </summary>
+    public static IReadOnlyList<string> GlobalVariableNames(string? template)
+    {
+        if (string.IsNullOrEmpty(template)) return [];
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var names = new List<string>();
+        foreach (Match m in Pattern.Matches(template))
+        {
+            if (TryGlobalName(m.Groups[1].Value, out var name) && seen.Add(name))
+                names.Add(name);
+        }
+        return names;
+    }
+
+    /// <summary>True when <paramref name="key"/> is <c>Global.&lt;name&gt;</c> with a valid name.</summary>
+    public static bool TryGlobalName(string key, out string name)
+    {
+        name = key.StartsWith(GlobalPrefix, StringComparison.OrdinalIgnoreCase) ? key.Substring(GlobalPrefix.Length) : "";
+        return IsValidVariableName(name);
+    }
+
+    /// <summary>
     /// True for any name the resolver knows how to render — a fixed known name,
-    /// the <c>WorkTree.File:&lt;rel&gt;</c> prefix, or a <c>Var.&lt;name&gt;</c>
-    /// loop variable with a valid name.
+    /// the <c>WorkTree.File:&lt;rel&gt;</c> prefix, a <c>Var.&lt;name&gt;</c>
+    /// loop variable or a <c>Global.&lt;name&gt;</c> global variable with a valid name.
+    /// Whether such a global exists is not checked: that is the engine's halt.
     /// </summary>
     public static bool IsKnown(string name)
         => KnownNames.Contains(name)
            || name.StartsWith(WorkTreeFilePrefix, StringComparison.OrdinalIgnoreCase)
            || (name.StartsWith(VariablePrefix, StringComparison.OrdinalIgnoreCase)
-               && IsValidVariableName(name.Substring(VariablePrefix.Length)));
+               && IsValidVariableName(name.Substring(VariablePrefix.Length)))
+           || TryGlobalName(name, out _);
 }

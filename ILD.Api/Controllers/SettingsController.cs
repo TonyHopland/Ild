@@ -43,6 +43,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.ChatSmartTitles,
         AppSettingKeys.ChatTitleProviderTag,
         AppSettingKeys.ChatTitleMaxAttempts,
+        AppSettingKeys.GlobalVariableMaxLength,
     };
 
     public SettingsController(
@@ -110,6 +111,8 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.ChatTitleProviderTag] = AppSettingKeys.DefaultChatTitleProviderTag;
         if (!map.ContainsKey(AppSettingKeys.ChatTitleMaxAttempts))
             map[AppSettingKeys.ChatTitleMaxAttempts] = AppSettingKeys.DefaultChatTitleMaxAttempts.ToString();
+        if (!map.ContainsKey(AppSettingKeys.GlobalVariableMaxLength))
+            map[AppSettingKeys.GlobalVariableMaxLength] = AppSettingKeys.DefaultGlobalVariableMaxLength.ToString();
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
     }
 
@@ -188,6 +191,7 @@ public class SettingsController : ControllerBase
         AppSettingKeys.ChatSmartTitles => AppSettingKeys.DefaultChatSmartTitles.ToString().ToLowerInvariant(),
         AppSettingKeys.ChatTitleProviderTag => AppSettingKeys.DefaultChatTitleProviderTag,
         AppSettingKeys.ChatTitleMaxAttempts => AppSettingKeys.DefaultChatTitleMaxAttempts.ToString(),
+        AppSettingKeys.GlobalVariableMaxLength => AppSettingKeys.DefaultGlobalVariableMaxLength.ToString(),
         _ => string.Empty,
     };
 
@@ -300,6 +304,13 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var attempts) || attempts < 1 || attempts > AppSettingKeys.MaxChatTitleMaxAttempts)
                 {
                     error = $"chat.titleMaxAttempts must be an integer between 1 and {AppSettingKeys.MaxChatTitleMaxAttempts}";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.GlobalVariableMaxLength:
+                if (!int.TryParse(value, out var maxLength) || maxLength < 1 || maxLength > AppSettingKeys.MaxGlobalVariableMaxLength)
+                {
+                    error = $"globalVariables.maxLength must be an integer between 1 and {AppSettingKeys.MaxGlobalVariableMaxLength}";
                     return false;
                 }
                 break;

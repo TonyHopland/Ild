@@ -44,7 +44,7 @@ public class LoopRunsControllerTests
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object);
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
 
         var result = await controller.GetAll();
 
@@ -133,7 +133,7 @@ public class LoopRunsControllerTests
         => new(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
             new Mock<IAdapterSessionSnapshotStore>().Object,
             new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
-            reclaimer.Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object);
+            reclaimer.Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
 
     [Fact]
     public async Task GetEvents_includes_runNodeId_in_response()
@@ -177,7 +177,7 @@ public class LoopRunsControllerTests
             RunNodes = new List<LoopRunNode>(),
         });
 
-        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object);
+        var controller = new LoopRunsController(engine.Object, eventLogService.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
 
         var result = await controller.GetEvents(runId.ToString());
 
@@ -244,7 +244,7 @@ public class LoopRunsControllerTests
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
         var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object);
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
 
         var result = await controller.GetById(runId.ToString());
 
@@ -296,7 +296,7 @@ public class LoopRunsControllerTests
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
         var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object);
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
 
         var result = await controller.GetById(runId.ToString());
 
@@ -382,7 +382,7 @@ public class LoopRunsControllerTests
 
         var engine = new Mock<ILoopEngine>();
         var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object);
+        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
 
         var result = await controller.GetSessionPreview(runId.ToString(), "OpenCode", "ses_current");
 

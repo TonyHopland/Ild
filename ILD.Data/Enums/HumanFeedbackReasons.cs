@@ -36,4 +36,7 @@ public static class HumanFeedbackReasons
 
     /// <summary>The run hit the cap on AI nodes executed between human interactions.</summary>
     public const string MaxAiTraversalsReached = "Max AI Steps Reached";
+
+    /// <summary>The next node uses a global variable that does not exist or is empty.</summary>
+    public const string GlobalVariableMissing = "Global Variable Missing";
 }

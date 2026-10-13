@@ -25,6 +25,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<INetworkPolicyStore, Stores.NetworkPolicyStore>();
         services.AddScoped<INetworkForwardStore, Stores.NetworkForwardStore>();
         services.AddScoped<IPackageFeedStore, Stores.PackageFeedStore>();
+        services.AddScoped<IGlobalVariableStore, Stores.GlobalVariableStore>();
         return services;
     }
 }

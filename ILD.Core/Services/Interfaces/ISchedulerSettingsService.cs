@@ -119,6 +119,15 @@ public static class AppSettingKeys
     public const string ChatTitleMaxAttempts = "chat.titleMaxAttempts";
     public const int DefaultChatTitleMaxAttempts = 3;
     public const int MaxChatTitleMaxAttempts = 10;
+
+    /// <summary>
+    /// The most characters a global variable's value may have when it is
+    /// created or edited. Lowering it leaves existing values alone; the next
+    /// edit of one must fit. The ceiling is the column width.
+    /// </summary>
+    public const string GlobalVariableMaxLength = "globalVariables.maxLength";
+    public const int DefaultGlobalVariableMaxLength = 4000;
+    public const int MaxGlobalVariableMaxLength = 8192;
 }
 
 /// <summary>
@@ -155,4 +164,10 @@ public interface ISchedulerSettingsService
     /// never sweep.
     /// </summary>
     Task<int> GetNetworkLogRetentionDaysAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// The most characters a global variable's value may have, between 1 and
+    /// <see cref="AppSettingKeys.MaxGlobalVariableMaxLength"/>.
+    /// </summary>
+    Task<int> GetGlobalVariableMaxLengthAsync(CancellationToken ct = default);
 }

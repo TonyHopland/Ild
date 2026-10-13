@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
@@ -796,6 +797,7 @@ public sealed class LoopEngine : ILoopEngine
             if (node is null) { _logger.LogError("Node {Id} missing", run.CurrentNodeId); return; }
 
             if (await ParkIfAiBudgetSpentAsync(run, node, loopRunStore, sp) is ParkResult.Stop) return;
+            if (await ParkIfGlobalVariablesMissingAsync(run, node, loopRunStore, sp) is ParkResult.Stop) return;
 
             var park = await ExecuteSingleNodeAsync(run, node, sp, ct);
             if (park is ParkResult.Stop) return;
@@ -1308,6 +1310,36 @@ public sealed class LoopEngine : ILoopEngine
             HumanFeedbackReasons.MaxAiTraversalsReached,
             $"The AI ran {run.AiTraversalCount} steps without human input (limit {limit}). "
                 + "Continue, continue with guidance, or abandon the run.",
+            store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId: null);
+        return ParkResult.Stop;
+    }
+
+    /// <summary>
+    /// A node whose templates use a global variable that does not exist, or is
+    /// empty, parks the run for a human before it starts, rather than handing
+    /// the agent a prompt with a hole in it or failing the node. Like the AI
+    /// traversal cap it parks before the node starts, so Resume re-drives this
+    /// check against the values as they are then.
+    /// </summary>
+    private async Task<ParkResult> ParkIfGlobalVariablesMissingAsync(
+        LoopRun run, LoopNode node, ILoopRunStore store, IServiceProvider sp)
+    {
+        var names = NodePromptTemplates.GlobalVariableNames(node, run);
+        if (names.Count == 0) return ParkResult.Continue;
+        var missing = NodePromptTemplates.Missing(names, await sp.GetRequiredService<IGlobalVariableStore>().GetAllAsync());
+        if (missing.Count == 0) return ParkResult.Continue;
+
+        _logger.LogInformation(
+            "Run {RunId}: global variables {Names} used by {NodeLabel} are missing or empty; parked for a human",
+            run.Id, string.Join(", ", missing), node.Label);
+
+        // Parked before the node starts, as for the AI traversal cap: the session
+        // on the row belongs to a node that already finished.
+        run.CurrentAiSessionId = null;
+        await ParkForHumanAsync(run, node, HaltReason.GlobalVariableMissing,
+            HumanFeedbackReasons.GlobalVariableMissing,
+            $"Global variable(s) {string.Join(", ", missing)} used by \"{node.Label}\" are missing or empty. "
+                + "Set them on the Global Variables page (/global-variables), then resume.",
             store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId: null);
         return ParkResult.Stop;
     }
