@@ -29,7 +29,7 @@ public class PromptRenderingServiceTests
             _versionId = RunTimeline.SeedVersion(_db);
             Id = RunTimeline.SeedRun(_db, "WI-1", _versionId, LoopRunStatus.Running).Id;
             Renderer = new PromptRenderingService(new PromptTemplateResolver(), _db.EventLogs,
-                new RunConversationService(_db.EventLogs, _db.LoopRuns), _db.LoopRuns);
+                new RunConversationService(_db.EventLogs, _db.LoopRuns), _db.LoopRuns, _db.GlobalVariables);
         }
 
         /// <summary>One execution of a fresh node of <paramref name="type"/> completing with <paramref name="output"/>.</summary>
@@ -41,6 +41,27 @@ public class PromptRenderingServiceTests
         }
 
         public Task Event(EventType type, string data) => _events.AppendAsync(Id, type, data);
+
+        public Task SetLoopVariable(string name, string value) => _db.LoopRuns.SetVariableAsync(Id, name, value);
+
+        /// <summary>Creates or changes a global variable, as the Global Variables page does.</summary>
+        public void SetGlobal(string name, string value)
+        {
+            var db = _db.Context;
+            var existing = db.Set<GlobalVariable>().FirstOrDefault(g => g.NormalizedName == name.ToUpperInvariant());
+            if (existing is null)
+                db.Set<GlobalVariable>().Add(new GlobalVariable
+                {
+                    Id = Guid.NewGuid(),
+                    Name = name,
+                    NormalizedName = name.ToUpperInvariant(),
+                    Value = value,
+                    UpdatedAt = DateTime.UtcNow,
+                });
+            else
+                existing.Value = value;
+            db.SaveChanges();
+        }
 
         public Task<string> RenderAsync(string template) => Renderer.RenderAsync(template, Id, WorkItem, null);
 
@@ -107,5 +128,47 @@ public class PromptRenderingServiceTests
             "F:[{{Conversation.Full}}] A:[{{Conversation.AI}}] H:[{{Conversation.Human}}]");
 
         Assert.Equal("F:[] A:[] H:[]", result);
+    }
+
+    [Fact]
+    public async Task A_global_renders_its_value_as_it_is_at_each_render_whatever_the_case_of_the_name()
+    {
+        using var run = new Run();
+        run.SetGlobal("Rules", "be brief");
+
+        Assert.Equal("Rules: be brief / be brief", await run.RenderAsync("Rules: {{Global.Rules}} / {{ Global.rules }}"));
+
+        // Nothing is pinned per run: a later render sees the value as changed since.
+        run.SetGlobal("Rules", "be thorough");
+        Assert.Equal("Rules: be thorough", await run.RenderAsync("Rules: {{Global.RULES}}"));
+    }
+
+    [Fact]
+    public async Task Globals_and_loop_variables_never_read_each_other()
+    {
+        using var run = new Run();
+        run.SetGlobal("style", "global value");
+
+        Assert.Equal("[]", await run.RenderAsync("[{{Var.style}}]"));
+
+        await run.SetLoopVariable("style", "loop value");
+        Assert.Equal("global value|loop value", await run.RenderAsync("{{Global.style}}|{{Var.style}}"));
+    }
+
+    [Fact]
+    public async Task A_missing_global_renders_empty()
+    {
+        using var run = new Run();
+
+        Assert.Equal("[]", await run.RenderAsync("[{{Global.Nowhere}}]"));
+    }
+
+    [Fact]
+    public async Task Text_a_global_pulls_in_is_not_scanned_for_placeholders()
+    {
+        using var run = new Run();
+        run.SetGlobal("Rules", "Mention {{WorkItem.Title}} and {{Global.Rules}}");
+
+        Assert.Equal("Mention {{WorkItem.Title}} and {{Global.Rules}}", await run.RenderAsync("{{Global.Rules}}"));
     }
 }

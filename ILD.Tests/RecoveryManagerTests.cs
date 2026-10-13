@@ -359,6 +359,25 @@ public class RecoveryManagerTests
     }
 
     [Fact]
+    public async Task RecoverRunAsync_leaves_a_run_parked_for_a_missing_global_variable_alone()
+    {
+        // Only a person setting the variable can make this park go anywhere, so a
+        // restart resuming it would just park it again, or run on with a value
+        // nobody has looked at.
+        var (mgr, wiMgr, runStore, _, _, _, engine) = Build();
+        var runId = Guid.NewGuid();
+        runStore.Setup(s => s.GetByIdAsync(runId))
+            .ReturnsAsync(HaltedRun(runId, "wi-1", HaltReason.GlobalVariableMissing));
+
+        Assert.False(await mgr.RecoverRunAsync(runId));
+
+        engine.Verify(e => e.ResumeFromHaltAsync(It.IsAny<Guid>(), It.IsAny<string?>()), Times.Never);
+        engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
+        engine.Verify(e => e.CancelRunAsync(It.IsAny<Guid>()), Times.Never);
+        wiMgr.VerifyNoOtherCalls();
+    }
+
+    [Fact]
     public async Task RecoverRunAsync_honours_the_Cancel_policy_for_a_shutdown_halt()
     {
         // "The restart was a tidy one" is not grounds to overrule an operator's

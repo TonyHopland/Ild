@@ -81,7 +81,7 @@ public class AiTraversalCapAiNodeSeamTests
             services.AddSingleton<IPromptRenderingService>(sp => new PromptRenderingService(
                 new PromptTemplateResolver(), sp.GetRequiredService<IEventLogStore>(),
                 new RunConversationService(sp.GetRequiredService<IEventLogStore>(), sp.GetRequiredService<ILoopRunStore>()),
-                sp.GetRequiredService<ILoopRunStore>()));
+                sp.GetRequiredService<ILoopRunStore>(), sp.GetRequiredService<IGlobalVariableStore>()));
             if (concurrency is not null) services.AddSingleton(concurrency);
         });
     }
@@ -123,6 +123,49 @@ public class AiTraversalCapAiNodeSeamTests
         // The node's own prompt, rendered, with the human's note appended —
         // not the note on its own, and not into the earlier session.
         Assert.Equal("Work on WI title\n\nyou are going in circles", resumed.Prompt);
+        Assert.Null(resumed.SessionId);
+    }
+
+    /// <summary>
+    /// A park for a missing global variable also happens before the node starts,
+    /// so Resume must cold-start the node on its own prompt, rendered with the
+    /// value set since, rather than steer into the session of the step before.
+    /// </summary>
+    [Fact]
+    public async Task Resuming_a_missing_global_park_runs_the_node_from_its_prompt_with_the_value_set_since()
+    {
+        var adapter = new CapturingAdapter(reportSessionId: "sess-from-the-previous-step");
+        using var h = Harness(adapter);
+        h.AddNode("first", NodeType.AI);
+        h.AddNode("a", NodeType.AI);
+        h.AddEdge("first", "a", EdgeType.OnSuccess);
+        h.NodesById["first"].Config = "{\"prompt\":\"warm up\"}";
+        h.NodesById["a"].Config = "{\"prompt\":\"Follow {{Global.Rules}}\"}";
+        h.Db.Context.SaveChanges();
+        h.Registry.Register(new AINodeExecutor());
+
+        h.SeedRun("first");
+        await h.RunAsync();
+
+        Assert.Single(adapter.Calls);
+        var parked = h.ReloadRun();
+        Assert.Equal(HaltReason.GlobalVariableMissing, parked.HaltReason);
+        Assert.Null(parked.CurrentAiSessionId);
+
+        h.Db.Context.Set<GlobalVariable>().Add(new GlobalVariable
+        {
+            Id = Guid.NewGuid(),
+            Name = "rules",
+            NormalizedName = "RULES",
+            Value = "be brief",
+            UpdatedAt = DateTime.UtcNow,
+        });
+        h.Db.Context.SaveChanges();
+        await h.Engine.ResumeFromHaltAsync(h.RunId, "it is set now");
+        await h.WaitUntilIdleAsync();
+
+        var resumed = adapter.Calls[1];
+        Assert.Equal("Follow be brief\n\nit is set now", resumed.Prompt);
         Assert.Null(resumed.SessionId);
     }
 

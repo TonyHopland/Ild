@@ -85,6 +85,7 @@ public class ThrottledRunResumeSweeperTests
     [InlineData(HaltReason.Human)]
     [InlineData(HaltReason.Shutdown)]
     [InlineData(HaltReason.MaxAiTraversals)]
+    [InlineData(HaltReason.GlobalVariableMissing)]
     public async Task Never_resumes_a_park_somebody_else_owns(HaltReason reason)
     {
         using var db = new TestDb();

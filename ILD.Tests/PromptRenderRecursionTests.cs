@@ -99,7 +99,7 @@ public class PromptRenderRecursionTests
         services.AddSingleton(registry);
         services.AddSingleton<IPromptTemplateResolver>(new PromptTemplateResolver());
         services.AddSingleton<IPromptRenderingService>(sp => new PromptRenderingService(
-            sp.GetRequiredService<IPromptTemplateResolver>(), eventLog.Object, conversation.Object, runStore.Object));
+            sp.GetRequiredService<IPromptTemplateResolver>(), eventLog.Object, conversation.Object, runStore.Object, Mock.Of<IGlobalVariableStore>()));
         var sp = services.BuildServiceProvider();
 
         var node = new LoopNode

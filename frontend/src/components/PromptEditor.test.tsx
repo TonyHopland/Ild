@@ -37,7 +37,7 @@ describe("PromptEditor", () => {
     fireEvent.change(textarea, { target: { value: "{{" } });
 
     const listItems = screen.getAllByRole("listitem");
-    expect(listItems.length).toBe(12);
+    expect(listItems.length).toBe(13);
   });
 
   test("typing {{Conversation. filters to the three Conversation placeholders", () => {
@@ -127,7 +127,7 @@ describe("PromptEditor", () => {
     setCursor(textarea, 2);
     fireEvent.change(textarea, { target: { value: "{{" } });
 
-    expect(screen.getAllByRole("listitem").length).toBe(12);
+    expect(screen.getAllByRole("listitem").length).toBe(13);
 
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -155,7 +155,7 @@ describe("PromptEditor", () => {
     setCursor(textarea, 2);
     fireEvent.change(textarea, { target: { value: "{{" } });
 
-    expect(screen.getAllByRole("listitem").length).toBe(12);
+    expect(screen.getAllByRole("listitem").length).toBe(13);
 
     fireEvent.keyDown(textarea, { key: "Escape" });
 
@@ -184,10 +184,13 @@ describe("PromptEditor", () => {
     setCursor(textarea, 2);
     fireEvent.change(textarea, { target: { value: "{{" } });
 
+    const items = screen.getAllByRole("listitem");
+    const last = items[items.length - 1].textContent!.match(/\{\{[^}]*\}\}/)![0];
+
     fireEvent.keyDown(textarea, { key: "ArrowUp" });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(onChange).toHaveBeenCalledWith("{{Var.}}");
+    expect(onChange).toHaveBeenCalledWith(last);
   });
 
   test("clicking a suggestion inserts it", () => {
@@ -205,5 +208,47 @@ describe("PromptEditor", () => {
     fireEvent.mouseDown(eventLogItem!);
 
     expect(onChange).toHaveBeenCalledWith("{{EventLog.Summary}}");
+  });
+
+  test("typing {{Gl offers the global-variable placeholder", () => {
+    render(<PromptEditor value="" onChange={vi.fn()} />);
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    setCursor(textarea, 4);
+    fireEvent.change(textarea, { target: { value: "{{Gl" } });
+
+    const listItems = screen.getAllByRole("listitem");
+    expect(listItems.length).toBe(1);
+    expect(listItems[0].textContent).toContain("{{Global.}}");
+  });
+
+  test("offers one entry per existing global variable, filtered and inserted like the rest", () => {
+    const onChange = vi.fn();
+    render(<PromptEditor value="" onChange={onChange} globalNames={["review_rules", "writing"]} />);
+
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    setCursor(textarea, 2);
+    fireEvent.change(textarea, { target: { value: "{{" } });
+    const all = screen.getAllByRole("listitem").map((li) => li.textContent);
+    expect(all.length).toBe(15);
+    expect(all.some((t) => t?.includes("{{Global.review_rules}}"))).toBe(true);
+    expect(all.some((t) => t?.includes("{{Global.writing}}"))).toBe(true);
+
+    setCursor(textarea, 4);
+    fireEvent.change(textarea, { target: { value: "{{Gl" } });
+    const globals = screen.getAllByRole("listitem");
+    expect(globals.map((li) => li.textContent!.match(/\{\{[^}]*\}\}/)![0]).sort()).toEqual([
+      "{{Global.review_rules}}",
+      "{{Global.writing}}",
+      "{{Global.}}",
+    ]);
+
+    setCursor(textarea, 11);
+    fireEvent.change(textarea, { target: { value: "{{Global.re" } });
+    const narrowed = screen.getAllByRole("listitem");
+    expect(narrowed.length).toBe(1);
+    fireEvent.mouseDown(narrowed[0]);
+
+    expect(onChange).toHaveBeenLastCalledWith("{{Global.review_rules}}");
   });
 });

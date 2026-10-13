@@ -144,6 +144,79 @@ public class LoopRunsIntegrationTests
             .GetProperty("hasLocalGitState").GetBoolean());
     }
 
+    [Fact]
+    public async Task A_run_parked_for_missing_globals_names_those_still_missing_now()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var ct = TestContext.Current.CancellationToken;
+        Guid parkedId, humanHaltedId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"globals-{Guid.NewGuid():N}" };
+            var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
+            var node = new LoopNode
+            {
+                Id = Guid.NewGuid(),
+                LoopTemplateVersionId = version.Id,
+                NodeType = NodeType.AI,
+                Label = "Writer",
+                Config = "{\"prompt\":\"{{Global.Alpha}} {{Global.Beta}} {{Global.Gamma}}\"}",
+            };
+            db.LoopTemplates.Add(template);
+            db.LoopTemplateVersions.Add(version);
+            db.LoopNodes.Add(node);
+            LoopRun Parked(HaltReason reason) => new()
+            {
+                Id = Guid.NewGuid(),
+                WorkItemId = "wi-" + Guid.NewGuid().ToString("N")[..8],
+                LoopTemplateVersionId = version.Id,
+                Status = LoopRunStatus.WaitingHuman,
+                IsHalted = true,
+                HaltReason = reason,
+                CurrentNodeId = node.Id,
+                StartedAt = DateTime.UtcNow,
+            };
+            var parked = Parked(HaltReason.GlobalVariableMissing);
+            var humanHalted = Parked(HaltReason.Human);
+            db.LoopRuns.AddRange(parked, humanHalted);
+            db.SaveChanges();
+            (parkedId, humanHaltedId) = (parked.Id, humanHalted.Id);
+        }
+        Assert.Equal(HttpStatusCode.Created,
+            (await client.PostAsJsonAsync("/api/v1/global-variables", new { name = "beta", value = "set" }, ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created,
+            (await client.PostAsJsonAsync("/api/v1/global-variables", new { name = "Gamma", value = "" }, ct)).StatusCode);
+
+        async Task<(string? Reason, string[] Missing)> FromDetail(Guid id)
+        {
+            var run = await client.GetFromJsonAsync<JsonElement>($"/api/v1/loopruns/{id}", ct);
+            return (run.GetProperty("haltReason").GetString(), Names(run));
+        }
+        async Task<string[]> FromList(Guid id)
+        {
+            var runs = await client.GetFromJsonAsync<JsonElement[]>("/api/v1/loopruns", ct);
+            return Names(runs!.Single(r => r.GetProperty("id").GetGuid() == id));
+        }
+        static string[] Names(JsonElement run)
+            => run.GetProperty("missingGlobalVariables").EnumerateArray()
+                .Select(n => n.GetString()!.ToUpperInvariant()).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+
+        var (reason, missing) = await FromDetail(parkedId);
+        Assert.Equal("GlobalVariableMissing", reason);
+        Assert.Equal(new[] { "ALPHA", "GAMMA" }, missing);
+        Assert.Equal(new[] { "ALPHA", "GAMMA" }, await FromList(parkedId));
+        Assert.Empty((await FromDetail(humanHaltedId)).Missing);
+        Assert.Empty(await FromList(humanHaltedId));
+
+        Assert.Equal(HttpStatusCode.Created,
+            (await client.PostAsJsonAsync("/api/v1/global-variables", new { name = "alpha", value = "set" }, ct)).StatusCode);
+
+        Assert.Equal(new[] { "GAMMA" }, (await FromDetail(parkedId)).Missing);
+        Assert.Equal(new[] { "GAMMA" }, await FromList(parkedId));
+    }
+
     private static ApiFactory NewFactory(IRunReclaimer reclaimer)
         => new(configureServices: services => services.ReplaceSingleton(reclaimer));
 
