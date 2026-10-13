@@ -48,11 +48,13 @@ internal static class BaseRepoClone
 
     /// <summary>
     /// Fetch the existing base clone, or make it. Call under <see cref="LockAsync"/>.
-    /// A fresh clone that fails or is cancelled takes what it wrote with it — the
-    /// folder it created, or the <c>.git</c> it put in a folder that was already
-    /// there: the base clone is found by its <c>.git</c> folder, so a partial one
-    /// would be taken for a clone by every chat and every run's Start node after
-    /// it instead of being cloned again. A partial clone that cannot be removed is
+    /// A fresh clone that fails or is cancelled takes its folder with it when the
+    /// folder was missing or empty before: the base clone is found by its
+    /// <c>.git</c> folder, so a partial one would be taken for a clone by every
+    /// chat and every run's Start node after it, and checked-out files left
+    /// without one would make every later clone refuse the folder as not empty.
+    /// A folder that already held something is left alone: git refuses to clone
+    /// into it before writing anything. A partial clone that cannot be removed is
     /// logged, and named in the error of a failed clone.
     /// </summary>
     public static async Task<(bool Ok, string? Path, string? Error)> EnsureAsync(
@@ -66,18 +68,16 @@ internal static class BaseRepoClone
                 : (false, null, "git fetch origin failed");
         }
 
-        // Existing found no .git here, so whatever is under it after a failure is
-        // this clone's.
         var path = BaseRepoPath.Fallback(repo.Id, config);
-        var partial = Directory.Exists(path) ? Path.Combine(path, ".git") : path;
+        var ours = !Directory.Exists(path) || !Directory.EnumerateFileSystemEntries(path).Any();
         (bool Success, string? Error) clone;
         try
         {
             clone = await git.CloneAsync(repo.CloneUrl, path, ct, auth);
         }
-        catch (Exception)
+        catch (Exception) when (ours)
         {
-            await DeletePartialCloneAsync(partial, log);
+            await DeletePartialCloneAsync(path, log);
             throw;
         }
 
@@ -85,8 +85,8 @@ internal static class BaseRepoClone
             return (true, path, null);
 
         var error = $"git clone failed: {clone.Error?.Trim()}";
-        if (!await DeletePartialCloneAsync(partial, log))
-            error += $"; the partial clone at '{partial}' could not be removed";
+        if (ours && !await DeletePartialCloneAsync(path, log))
+            error += $"; the partial clone at '{path}' could not be removed";
         return (false, null, error);
     }
 

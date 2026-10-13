@@ -300,17 +300,23 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     }
 
     [Fact]
-    public async Task A_killed_clone_into_an_empty_folder_that_was_already_there_leaves_no_partial_clone()
+    public async Task A_killed_clone_into_an_empty_folder_that_was_already_there_leaves_nothing_and_the_next_clone_succeeds()
     {
-        var repo = new Repository { Id = Guid.NewGuid(), Name = "widgets", CloneUrl = "https://forge.example.test/team/widgets.git" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "widgets", CloneUrl = CreateRemote() };
         var target = BaseRepoPath.Fallback(repo.Id, Config);
         Directory.CreateDirectory(target);
+        var real = RealGit;
+        var attempts = 0;
         using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(Ct);
         var git = new Mock<IRepositoryManager>();
         git.Setup(g => g.CloneAsync(repo.CloneUrl, target, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
-            .Returns((string _, string path, CancellationToken _, GitAuthOptions? _) =>
+            .Returns((string url, string path, CancellationToken token, GitAuthOptions? _) =>
             {
+                if (++attempts > 1)
+                    return real.CloneAsync(url, path, token);
+                // Killed mid-checkout: git wrote its .git and some of the files.
                 Directory.CreateDirectory(Path.Combine(path, ".git", "objects"));
+                File.WriteAllText(Path.Combine(path, "README.md"), "half checked out");
                 shutdown.Cancel();
                 return Task.FromException<(bool, string?)>(new OperationCanceledException(shutdown.Token));
             });
@@ -318,8 +324,30 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, shutdown.Token));
 
-        Assert.False(Directory.Exists(Path.Combine(target, ".git")));
+        Assert.False(Directory.Exists(target), "the killed clone left files behind");
         Assert.Null(BaseRepoPath.Existing(repo, Config));
+
+        var next = await BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, Ct);
+
+        Assert.True(next.Ok, next.Error);
+        Assert.Equal("widgets", File.ReadAllText(Path.Combine(target, "README.md")));
+    }
+
+    [Fact]
+    public async Task A_failed_clone_leaves_a_folder_that_already_held_something_as_it_was()
+    {
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "widgets", CloneUrl = "https://forge.example.test/team/widgets.git" };
+        var target = BaseRepoPath.Fallback(repo.Id, Config);
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "NOTES.md"), "put here by hand");
+        var git = new Mock<IRepositoryManager>();
+        git.Setup(g => g.CloneAsync(repo.CloneUrl, target, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .ReturnsAsync((false, "fatal: destination path already exists and is not an empty directory."));
+
+        var result = await BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, Ct);
+
+        Assert.False(result.Ok);
+        Assert.Equal("put here by hand", File.ReadAllText(Path.Combine(target, "NOTES.md")));
     }
 
     // -- Setup -------------------------------------------------------------------------
