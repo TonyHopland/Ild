@@ -13,6 +13,7 @@ const { loopTemplateService, aiProviderService, globalVariableService } = vi.hoi
     validate: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    getNodeOutputs: vi.fn(),
   },
   aiProviderService: { getAll: vi.fn() },
   globalVariableService: { getAll: vi.fn() },
@@ -72,6 +73,7 @@ afterEach(() => {
 async function typeInAiPrompt(text: string) {
   loopTemplateService.getAll.mockResolvedValue([template]);
   loopTemplateService.validate.mockResolvedValue({ valid: true, errors: [] });
+  loopTemplateService.getNodeOutputs.mockResolvedValue({});
   aiProviderService.getAll.mockResolvedValue([]);
 
   render(
