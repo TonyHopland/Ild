@@ -48,6 +48,7 @@ public sealed class TestDb : IDisposable
     public INetworkPolicyStore Network { get; }
     public INetworkForwardStore NetworkForwards { get; }
     public IPackageFeedStore PackageFeeds { get; }
+    public IGlobalVariableStore GlobalVariables { get; }
 
     /// <summary>
     /// Fake WorkItemServer harness backing the remote-backed
@@ -82,6 +83,7 @@ public sealed class TestDb : IDisposable
         Network = new NetworkPolicyStore(Context);
         NetworkForwards = new NetworkForwardStore(Context);
         PackageFeeds = new PackageFeedStore(Context);
+        GlobalVariables = new GlobalVariableStore(Context);
         _ownsServer = server is null;
         Server = server ?? new FakeWorkItemServerHarness();
     }

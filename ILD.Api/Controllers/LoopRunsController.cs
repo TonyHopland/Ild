@@ -6,6 +6,7 @@ using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
+using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -24,6 +25,8 @@ public class LoopRunsController : ControllerBase
     private readonly IWorkItemManager _workItemManager;
     private readonly IPackageFeedResolver _packageFeeds;
     private readonly IRunConversationService _conversation;
+    private readonly ILoopTemplateStore _templates;
+    private readonly IGlobalVariableStore _globals;
 
     public LoopRunsController(
         ILoopEngine loopEngine,
@@ -34,7 +37,9 @@ public class LoopRunsController : ControllerBase
         IRunReclaimer runReclaimer,
         IWorkItemManager workItemManager,
         IPackageFeedResolver packageFeeds,
-        IRunConversationService conversation)
+        IRunConversationService conversation,
+        ILoopTemplateStore templates,
+        IGlobalVariableStore globals)
     {
         _loopEngine = loopEngine;
         _eventLogService = eventLogService;
@@ -45,6 +50,8 @@ public class LoopRunsController : ControllerBase
         _workItemManager = workItemManager;
         _packageFeeds = packageFeeds;
         _conversation = conversation;
+        _templates = templates;
+        _globals = globals;
     }
 
     /// <summary>
@@ -55,6 +62,35 @@ public class LoopRunsController : ControllerBase
     private static bool HasLocalGitState(ILD.Data.Entities.LoopRun run)
         => !string.IsNullOrEmpty(run.WorktreePath) || !string.IsNullOrEmpty(run.BranchName);
 
+    /// <summary>
+    /// The global variables still missing or empty, as they are now, for a run
+    /// parked because its current node uses them; empty for every other run.
+    /// </summary>
+    private static async Task<IReadOnlyList<string>> MissingGlobalVariablesAsync(ILD.Data.Entities.LoopRun run, ParkReads reads)
+    {
+        if (run.HaltReason != HaltReason.GlobalVariableMissing || run.CurrentNodeId is not { } nodeId) return [];
+        var node = (await reads.NodesAsync(run.LoopTemplateVersionId)).FirstOrDefault(n => n.Id == nodeId);
+        if (node is null) return [];
+        var names = NodePromptTemplates.GlobalVariableNames(node, run);
+        return names.Count == 0 ? [] : NodePromptTemplates.Missing(names, await reads.GlobalsAsync());
+    }
+
+    /// <summary>
+    /// What one request reads for its parked runs, each at most once: a version's
+    /// nodes, shared by every run on that version, and the global variables.
+    /// Awaited one run at a time, so the request's context never runs two queries at once.
+    /// </summary>
+    private sealed class ParkReads(ILoopTemplateStore templates, IGlobalVariableStore globals)
+    {
+        private readonly Dictionary<Guid, Task<IReadOnlyList<ILD.Data.Entities.LoopNode>>> _nodes = new();
+        private Task<IReadOnlyList<ILD.Data.Entities.GlobalVariable>>? _globals;
+
+        public Task<IReadOnlyList<ILD.Data.Entities.LoopNode>> NodesAsync(Guid versionId)
+            => _nodes.TryGetValue(versionId, out var read) ? read : _nodes[versionId] = templates.GetNodesForVersionAsync(versionId);
+
+        public Task<IReadOnlyList<ILD.Data.Entities.GlobalVariable>> GlobalsAsync() => _globals ??= globals.GetAllAsync();
+    }
+
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
@@ -62,6 +98,10 @@ public class LoopRunsController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
         var runs = await _loopRunStore.GetAllAsync(skip, take);
+        var reads = new ParkReads(_templates, _globals);
+        var missingGlobals = new Dictionary<Guid, IReadOnlyList<string>>();
+        foreach (var r in runs)
+            missingGlobals[r.Id] = await MissingGlobalVariablesAsync(r, reads);
         var result = runs.Select(r =>
         {
             var totals = RunCostTotals.From(r.RunNodes);
@@ -78,6 +118,7 @@ public class LoopRunsController : ControllerBase
                 // Who parked it, so the UI can say so instead of inferring it
                 // from a node's prose. Null means a human pressed Halt.
                 haltReason = r.HaltReason?.ToString(),
+                missingGlobalVariables = missingGlobals[r.Id],
                 retain = r.Retain,
                 hasLocalGitState = HasLocalGitState(r),
                 nodeExecutionCount = r.NodeExecutionCount,
@@ -110,6 +151,7 @@ public class LoopRunsController : ControllerBase
         var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
         var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
         var variables = await _loopRunStore.GetVariablesAsync(guid);
+        var missingGlobals = await MissingGlobalVariablesAsync(run, new ParkReads(_templates, _globals));
         var currentSessionIds = sessionBindings
             .Select(b => $"{b.AdapterName}\n{b.SessionId}")
             .ToHashSet(StringComparer.Ordinal);
@@ -126,6 +168,8 @@ public class LoopRunsController : ControllerBase
             isPaused = run.IsPaused,
             isHalted = run.IsHalted,
             haltReason = run.HaltReason?.ToString(),
+            // Read now, not at the park, so it drops each one a person has set since.
+            missingGlobalVariables = missingGlobals,
             retain = run.Retain,
             worktreePath = run.WorktreePath,
             branchName = run.BranchName,

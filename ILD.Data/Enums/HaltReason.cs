@@ -40,4 +40,12 @@ public enum HaltReason
     /// counter, so continuing buys another full budget.
     /// </summary>
     MaxAiTraversals = 3,
+
+    /// <summary>
+    /// The next node's prompt uses a global variable that does not exist or is
+    /// empty, and the engine parked the run before that node started. Nothing
+    /// auto-resumes it: only a person setting the variable can change the
+    /// outcome, and Resume checks again against the values as they are then.
+    /// </summary>
+    GlobalVariableMissing = 4,
 }

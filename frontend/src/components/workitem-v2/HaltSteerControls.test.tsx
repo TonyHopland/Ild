@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { MemoryRouter } from "react-router";
 import HaltSteerControls from "./HaltSteerControls";
 import {
   HaltReason,
@@ -170,6 +171,41 @@ describe("HaltSteerControls", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /resume/i }));
     expect(onResumeSteer).toHaveBeenCalledWith("you are looping");
+  });
+
+  test("names the missing global variables and links to their page when they parked the run", () => {
+    const onResumeSteer = vi.fn();
+    render(
+      <MemoryRouter>
+        <HaltSteerControls
+          run={run({
+            status: LoopRunStatus.WaitingHuman,
+            isHalted: true,
+            haltReason: HaltReason.GlobalVariableMissing,
+            missingGlobalVariables: ["review_rules", "writing"],
+            // The park comes before the node starts, so nothing was cut off.
+            nodes: [node({ status: LoopRunNodeStatus.Succeeded })],
+          })}
+          workItemStatus={WorkItemStatus.HumanFeedback}
+          onResumeSteer={onResumeSteer}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByText(/halted — steer & resume/i)).toBeNull();
+    expect(screen.queryByText(/provider interrupted/i)).toBeNull();
+    expect(screen.queryByText(/enough ai steps/i)).toBeNull();
+    expect(screen.getAllByText(/global variables? missing/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/review_rules/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/writing/).length).toBeGreaterThan(0);
+    const links = screen.getAllByRole("link");
+    expect(links.some((a) => a.getAttribute("href") === "/global-variables")).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText(/optional guidance/i), {
+      target: { value: "set them now" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /resume/i }));
+    expect(onResumeSteer).toHaveBeenCalledWith("set them now");
   });
 
   test("labels a shutdown park as a plain halt, not a provider interruption", () => {

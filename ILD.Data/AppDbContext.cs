@@ -44,6 +44,7 @@ public class AppDbContext : DbContext
     public DbSet<NetworkForwardEntry> NetworkForwardEntries => Set<NetworkForwardEntry>();
     public DbSet<PackageFeed> PackageFeeds => Set<PackageFeed>();
     public DbSet<RepositoryPackageFeed> RepositoryPackageFeeds => Set<RepositoryPackageFeed>();
+    public DbSet<GlobalVariable> GlobalVariables => Set<GlobalVariable>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -373,6 +374,13 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<RepositoryPackageFeed>(e =>
         {
             e.HasKey(s => new { s.RepositoryId, s.NormalizedName });
+        });
+
+        modelBuilder.Entity<GlobalVariable>(e =>
+        {
+            // Prompts look a global up by name ignoring case, so two names differing
+            // only in case would be one placeholder resolving to either.
+            e.HasIndex(g => g.NormalizedName).IsUnique();
         });
     }
 

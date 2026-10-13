@@ -47,6 +47,29 @@ describe("Ild settings", () => {
     });
   });
 
+  test("edits the global variable length limit within 1 to 8192, showing 4000 when unread", async () => {
+    vi.spyOn(authServices.settingsService, "get").mockRejectedValue(new Error("offline"));
+    const put = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockResolvedValue({ key: "globalVariables.maxLength", value: "2000" });
+
+    render(<IldSettings />);
+
+    const limit = (await screen.findByLabelText(/global variable/i)) as HTMLInputElement;
+    expect(limit.value).toBe("4000");
+
+    fireEvent.change(limit, { target: { value: "8193" } });
+    fireEvent.click(limit.parentElement!.querySelector("button")!);
+    await screen.findByText("Must be an integer between 1 and 8192.");
+    expect(put).not.toHaveBeenCalledWith("globalVariables.maxLength", "8193");
+
+    fireEvent.change(limit, { target: { value: "2000" } });
+    fireEvent.click(limit.parentElement!.querySelector("button")!);
+    await waitFor(() => {
+      expect(put).toHaveBeenCalledWith("globalVariables.maxLength", "2000");
+    });
+  });
+
   test("reads the scheduler pause and writes it back", async () => {
     vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
       key,

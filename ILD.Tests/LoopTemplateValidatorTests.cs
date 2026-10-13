@@ -94,6 +94,41 @@ public class LoopTemplateValidatorTests
         Assert.Contains(errs, e => e.Contains("Bogus.Session"));
     }
 
+    [Theory]
+    [InlineData("AI")]
+    [InlineData("Prompt")]
+    [InlineData("Human")]
+    public void A_well_formed_global_variable_placeholder_saves_without_the_variable_existing(string type)
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                Node("a", type, "Follow {{Global.review_rules}} and {{ Global.Style2 }}"),
+                Node("c", "Cleanup")
+            },
+            new() { Edge("s", "a"), Edge("a", "c") });
+
+        Assert.DoesNotContain(LoopTemplateValidator.Validate(g), e => e.Contains("Global"));
+    }
+
+    [Theory]
+    [InlineData("{{Global.bad-name}}", "Global.bad-name")]
+    [InlineData("{{Global.9lives}}", "Global.9lives")]
+    [InlineData("{{Global.}}", "Global.")]
+    public void A_global_variable_placeholder_with_an_invalid_name_is_unknown(string placeholder, string named)
+    {
+        var g = new LoopTemplateGraph(Guid.NewGuid(),
+            new() {
+                Node("s", "Start"),
+                Node("a", "AI", "Follow " + placeholder),
+                Node("c", "Cleanup")
+            },
+            new() { Edge("s", "a"), Edge("a", "c") });
+
+        var errs = LoopTemplateValidator.Validate(g);
+        Assert.Contains(errs, e => e.Contains(named));
+    }
+
     [Fact]
     public void Ai_node_with_use_session_and_no_placeholder_is_invalid()
     {
@@ -188,6 +223,7 @@ public class LoopTemplateValidatorTests
     [InlineData("t_{{Node.Input}}")]
     [InlineData("t_{{Bogus.Thing}}")]            // not known at all
     [InlineData("t_{{Var.9bad}}")]               // Var. prefix, illegal variable name
+    [InlineData("t_{{Global.rules}}")]           // a global variable is still not a loop variable
     public void Session_placeholder_rejects_placeholders_other_than_loop_variables(string placeholder)
     {
         var errs = LoopTemplateValidator.Validate(SessionGraph(placeholder));

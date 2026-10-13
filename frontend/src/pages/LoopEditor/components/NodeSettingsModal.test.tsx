@@ -41,6 +41,7 @@ function renderModal(overrides: Partial<Parameters<typeof NodeSettingsModal>[0]>
     conditionDefaultEdge: "false",
     conditionOutput: "{{Node.Input}}",
     aiProviders: [],
+    globalNames: [],
     availableAiTools: [],
     sessionPlaceholderUsages: [],
     selectedPlaceholderUsage: undefined,

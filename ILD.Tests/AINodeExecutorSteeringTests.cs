@@ -69,7 +69,7 @@ public class AINodeExecutorSteeringTests
         // path must be exercised with it present.
         services.AddSingleton<IPromptRenderingService>(new ILD.Core.Services.Implementations.PromptRenderingService(
             new ILD.Core.Services.Implementations.PromptTemplateResolver(), db.EventLogs,
-            new ILD.Core.Services.Implementations.RunConversationService(db.EventLogs, db.LoopRuns), db.LoopRuns));
+            new ILD.Core.Services.Implementations.RunConversationService(db.EventLogs, db.LoopRuns), db.LoopRuns, db.GlobalVariables));
         return (services.BuildServiceProvider(), adapter);
     }
 

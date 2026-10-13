@@ -10,6 +10,7 @@ public sealed class PromptRenderingService : IPromptRenderingService
     private readonly IEventLogStore _eventLog;
     private readonly IRunConversationService _conversation;
     private readonly ILoopRunStore _runs;
+    private readonly IGlobalVariableStore _globals;
     private readonly ILogger<PromptRenderingService>? _logger;
 
     public PromptRenderingService(
@@ -17,12 +18,14 @@ public sealed class PromptRenderingService : IPromptRenderingService
         IEventLogStore eventLog,
         IRunConversationService conversation,
         ILoopRunStore runs,
+        IGlobalVariableStore globals,
         ILogger<PromptRenderingService>? logger = null)
     {
         _resolver = resolver;
         _eventLog = eventLog;
         _conversation = conversation;
         _runs = runs;
+        _globals = globals;
         _logger = logger;
     }
 
@@ -68,6 +71,13 @@ public sealed class PromptRenderingService : IPromptRenderingService
         }
         catch { /* loop variables are best-effort, like the event log */ }
 
+        // Not best-effort: rendering a global as empty because the read failed
+        // would hand the node a prompt missing the rules it was written around.
+        IReadOnlyDictionary<string, string>? globals = null;
+        if (PromptPlaceholderRegistry.GlobalVariableNames(template).Count > 0)
+            globals = (await _globals.GetAllAsync())
+                .ToDictionary(g => g.Name, g => g.Value, StringComparer.OrdinalIgnoreCase);
+
         return _resolver.Render(template, new PromptContext(
             WorkItemTitle: workItem.Title,
             WorkItemDescription: workItem.Description,
@@ -77,7 +87,8 @@ public sealed class PromptRenderingService : IPromptRenderingService
             ConversationFull: conversationFull,
             ConversationAI: conversationAi,
             ConversationHuman: conversationHuman,
-            RunVariables: variables));
+            RunVariables: variables,
+            GlobalVariables: globals));
     }
 
     // Attribution for the Full and AI views: author plus source node, stable and

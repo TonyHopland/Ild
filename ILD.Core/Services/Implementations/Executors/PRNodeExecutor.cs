@@ -20,6 +20,14 @@ public sealed class PRNodeExecutor : INodeExecutor
 
     public NodeType NodeType => NodeType.PR;
 
+    /// <summary>
+    /// A template that uses global variables is written around their values, so
+    /// a render that could not read them fails the node rather than sending the
+    /// template's fallback; any other template keeps the fallback.
+    /// </summary>
+    private static bool UsesGlobals(string template)
+        => PromptPlaceholderRegistry.GlobalVariableNames(template).Count > 0;
+
     public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
     {
         var cfg = NodeConfig.Parse<NodeConfig.Pr>(ctx.Node.Config);
@@ -68,10 +76,17 @@ public sealed class PRNodeExecutor : INodeExecutor
 
         var rendering = sp.GetService<IPromptRenderingService>();
         string? renderedPrompt = cfg.Prompt;
+        string? renderError = null;
         if (!string.IsNullOrEmpty(cfg.Prompt) && rendering is not null)
         {
             try { renderedPrompt = await rendering.RenderAsync(cfg.Prompt, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
+            catch (Exception ex) when (UsesGlobals(cfg.Prompt)) { renderError = ex.Message; }
             catch { }
+        }
+        if (renderError is not null)
+        {
+            yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Could not render the PR prompt: {renderError}");
+            yield break;
         }
 
         yield return new NodeOutcome.NodeStarting(renderedPrompt);
@@ -129,7 +144,13 @@ public sealed class PRNodeExecutor : INodeExecutor
             if (!string.IsNullOrEmpty(cfg.PrDescriptionTemplate) && rendering is not null)
             {
                 try { body = await rendering.RenderAsync(cfg.PrDescriptionTemplate, ctx.Run.Id, wi, ctx.Run.PreviousNodeOutput); }
+                catch (Exception ex) when (UsesGlobals(cfg.PrDescriptionTemplate)) { renderError = ex.Message; }
                 catch { }
+            }
+            if (renderError is not null)
+            {
+                yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"Could not render the PR description: {renderError}");
+                yield break;
             }
             RemotePrResult? prResult = null;
             string? err = null;

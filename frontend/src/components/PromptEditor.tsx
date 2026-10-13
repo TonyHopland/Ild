@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import "./PromptEditor.css";
 
 const PLACEHOLDERS = [
@@ -42,6 +42,11 @@ const PLACEHOLDERS = [
     label: "Var.<name>",
     desc: "A loop variable read/written by AI nodes",
   },
+  {
+    key: "Global.",
+    label: "Global.<name>",
+    desc: "A global variable, set on the Global Variables page",
+  },
 ];
 
 interface PromptEditorProps {
@@ -49,9 +54,30 @@ interface PromptEditorProps {
   onChange: (value: string) => void;
   rows?: number;
   id?: string;
+  /** Existing global variables, each offered as its own placeholder. */
+  globalNames?: string[];
 }
 
-export default function PromptEditor({ value, onChange, rows = 3, id }: PromptEditorProps) {
+const NO_GLOBALS: string[] = [];
+
+export default function PromptEditor({
+  value,
+  onChange,
+  rows = 3,
+  id,
+  globalNames = NO_GLOBALS,
+}: PromptEditorProps) {
+  const placeholders = useMemo(
+    () => [
+      ...PLACEHOLDERS,
+      ...globalNames.map((name) => ({
+        key: `Global.${name}`,
+        label: `Global.${name}`,
+        desc: "Global variable",
+      })),
+    ],
+    [globalNames],
+  );
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [filteredItems, setFilteredItems] = useState<typeof PLACEHOLDERS>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -59,31 +85,34 @@ export default function PromptEditor({ value, onChange, rows = 3, id }: PromptEd
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
 
-  const checkTrigger = useCallback((text: string, cursorPos: number) => {
-    const beforeCursor = text.slice(0, cursorPos);
-    const match = beforeCursor.match(/{{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)?$/);
-    if (match) {
-      const openBraceIdx = match.index!;
-      const start = openBraceIdx;
-      const end = cursorPos;
-      const partial = (match[1] ?? "").trim();
+  const checkTrigger = useCallback(
+    (text: string, cursorPos: number) => {
+      const beforeCursor = text.slice(0, cursorPos);
+      const match = beforeCursor.match(/{{\s*([A-Za-z][A-Za-z0-9_.:/\\-]*)?$/);
+      if (match) {
+        const openBraceIdx = match.index!;
+        const start = openBraceIdx;
+        const end = cursorPos;
+        const partial = (match[1] ?? "").trim();
 
-      const filtered = partial
-        ? PLACEHOLDERS.filter((p) => p.key.toLowerCase().startsWith(partial.toLowerCase()))
-        : PLACEHOLDERS;
+        const filtered = partial
+          ? placeholders.filter((p) => p.key.toLowerCase().startsWith(partial.toLowerCase()))
+          : placeholders;
 
-      if (filtered.length > 0) {
-        setTriggerPos({ start, end });
-        setFilteredItems(filtered);
-        setSelectedIndex(0);
-        setShowSuggestions(true);
-        return;
+        if (filtered.length > 0) {
+          setTriggerPos({ start, end });
+          setFilteredItems(filtered);
+          setSelectedIndex(0);
+          setShowSuggestions(true);
+          return;
+        }
       }
-    }
-    setShowSuggestions(false);
-    setFilteredItems([]);
-    setTriggerPos(null);
-  }, []);
+      setShowSuggestions(false);
+      setFilteredItems([]);
+      setTriggerPos(null);
+    },
+    [placeholders],
+  );
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newText = e.target.value;
