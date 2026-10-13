@@ -1,24 +1,36 @@
 using System.Diagnostics;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// What becomes of clone work whose chat goes away, and of a fresh base clone
-/// whose partial folder cannot be removed.
+/// The chat's clone over its life: what becomes of clone work whose chat goes
+/// away, what the cloner keeps in memory per chat, how a clone is found again,
+/// and what an agent-installed hook can do to an update.
 /// </summary>
 public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("ild-clone-lifecycle-").FullName;
     private readonly TestDb _db = new();
+    private readonly ServiceProvider _services;
+
+    public ChatRepositoryClonerLifecycleTests()
+    {
+        _services = new ServiceCollection().AddScoped(_ => _db.OnOwnConnection()).BuildServiceProvider();
+    }
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         if (OperatingSystem.IsLinux())
         {
@@ -28,17 +40,25 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         try { Directory.Delete(_dir, recursive: true); } catch { /* best effort */ }
     }
 
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
     private IConfiguration Config => new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = Path.Combine(_dir, "data") })
         .Build();
 
+    private RepositoryManager RealGit => new(worktreesRoot: Path.Combine(_dir, "worktrees"));
+
+    private ChatRepositoryCloner Cloner(IRepositoryManager? git = null, IProviderStore? providers = null)
+        => new(_db.Context, _services.GetRequiredService<IServiceScopeFactory>(), providers ?? _db.Providers,
+            git ?? RealGit, Config, ShutdownState.NeverStopping);
+
+    // -- Chat deletion and per-chat memory ------------------------------------------
+
     [Fact]
     public async Task Deleting_the_chat_stops_its_clone_and_the_scratch_folder_stays_gone()
     {
-        var ct = TestContext.Current.CancellationToken;
-        var remote = CreateRemote();
-        var (chatId, scratch, repo) = await SeedScheduledChatAsync(remote);
-        var real = new RepositoryManager(worktreesRoot: Path.Combine(_dir, "worktrees"));
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var real = RealGit;
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var git = new Mock<IRepositoryManager>();
@@ -51,25 +71,131 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
             });
         git.Setup(g => g.RemoteBranchExistsAsync(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string path, string branch) => real.RemoteBranchExistsAsync(path, branch));
-        var cloner = new ChatRepositoryCloner(_db.Context, _db.Providers, git.Object, Config, ShutdownState.NeverStopping);
+        var cloner = Cloner(git.Object);
 
-        var call = cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, ct);
-        await entered.Task.WaitAsync(ct);
+        var call = cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        await entered.Task.WaitAsync(Ct);
 
-        // As ChatService deletes a chat: stop its clone work, then remove its scratch folder.
-        await ChatRepositoryCloner.StopForDeletedChatAsync(chatId).WaitAsync(ct);
-        Directory.Delete(scratch, recursive: true);
+        await DeleteChatAsync(chatId, scratch);
         released.TrySetResult();
         var result = await call;
 
         Assert.Equal(ChatRepositoryCloneOutcome.UnknownChat, result.Outcome);
         Assert.False(Directory.Exists(scratch), "the clone brought the deleted chat's scratch folder back");
-
-        var later = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, ct);
-
-        Assert.Equal(ChatRepositoryCloneOutcome.UnknownChat, later.Outcome);
-        Assert.False(Directory.Exists(scratch));
+        Assert.False(ChatRepositoryCloner.IsTracked(chatId), "the deleted chat's entry stayed in memory");
     }
+
+    [Fact]
+    public async Task A_call_that_checked_the_chat_just_before_it_was_deleted_is_refused_and_leaves_nothing_behind()
+    {
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var lookedUp = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var providers = new Mock<IProviderStore>();
+        providers.Setup(p => p.GetRepositoryByIdAsync(repo.Id)).Returns(async () =>
+        {
+            lookedUp.TrySetResult();
+            await deleted.Task;
+            return await _db.Providers.GetRepositoryByIdAsync(repo.Id);
+        });
+        providers.Setup(p => p.GetRemoteProviderByIdAsync(It.IsAny<Guid>()))
+            .Returns((Guid id) => _db.Providers.GetRemoteProviderByIdAsync(id));
+
+        // The call has found the chat and is between that check and the chat's lock
+        // while the chat is deleted, as ChatService deletes it.
+        var call = Cloner(providers: providers.Object).CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        await lookedUp.Task.WaitAsync(Ct);
+        await DeleteChatAsync(chatId, scratch);
+        deleted.TrySetResult();
+        var result = await call;
+
+        Assert.Equal(ChatRepositoryCloneOutcome.UnknownChat, result.Outcome);
+        Assert.False(Directory.Exists(scratch), "the clone brought the deleted chat's scratch folder back");
+        Assert.False(ChatRepositoryCloner.IsTracked(chatId));
+    }
+
+    [Fact]
+    public async Task Finished_calls_leave_nothing_of_the_chat_in_memory()
+    {
+        var (chatId, _, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var cloner = Cloner();
+
+        var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        var refused = await cloner.CloneAsync(chatId, repo.Id.ToString(), "no-such-branch", Ct);
+        var updated = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+
+        Assert.Equal(ChatRepositoryCloneOutcome.Cloned, cloned.Outcome);
+        Assert.Equal(ChatRepositoryCloneOutcome.BranchNotFound, refused.Outcome);
+        Assert.Equal(ChatRepositoryCloneOutcome.Updated, updated.Outcome);
+        Assert.False(ChatRepositoryCloner.IsTracked(chatId));
+    }
+
+    // -- Finding the clone again -----------------------------------------------------
+
+    [Fact]
+    public async Task A_renamed_repository_is_updated_in_the_folder_it_was_cloned_into()
+    {
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var cloner = Cloner();
+        var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        File.WriteAllText(Path.Combine(scratch, cloned.Path!, "NOTES.md"), "the agent's own work");
+
+        repo.Name = "gadgets";
+        await _db.Context.SaveChangesAsync(Ct);
+        var again = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+
+        Assert.Equal(ChatRepositoryCloneOutcome.Updated, again.Outcome);
+        Assert.Equal(cloned.Path, again.Path);
+        Assert.Equal(["widgets"], Directory.GetDirectories(Path.Combine(scratch, "repos")).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public async Task Past_every_numbered_name_a_repository_gets_a_folder_named_after_its_id()
+    {
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        Directory.CreateDirectory(Path.Combine(scratch, "repos", "widgets"));
+        for (var n = 2; n <= 50; n++)
+            Directory.CreateDirectory(Path.Combine(scratch, "repos", $"widgets-{n}"));
+        var cloner = Cloner();
+
+        var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        var again = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+
+        Assert.Equal(ChatRepositoryCloneOutcome.Cloned, cloned.Outcome);
+        Assert.Equal($"repos/widgets-{repo.Id:N}", cloned.Path);
+        Assert.Equal(ChatRepositoryCloneOutcome.Updated, again.Outcome);
+        Assert.Equal(cloned.Path, again.Path);
+    }
+
+    // -- Hooks -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_failing_hook_in_the_clone_neither_runs_nor_turns_a_switch_into_a_refusal()
+    {
+        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
+        var cloner = Cloner();
+        var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        var folder = Path.Combine(scratch, cloned.Path!);
+        var ran = Path.Combine(_dir, "hook-ran");
+        foreach (var hook in new[] { "post-checkout", "post-merge", "reference-transaction" })
+        {
+            var path = Path.Combine(folder, ".git", "hooks", hook);
+            File.WriteAllText(path, $"#!/bin/sh\ntouch '{ran}'\nexit 1\n");
+            if (OperatingSystem.IsLinux())
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        var switched = await cloner.CloneAsync(chatId, repo.Id.ToString(), "feature", Ct);
+        var back = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+
+        Assert.Equal(ChatRepositoryCloneOutcome.Updated, switched.Outcome);
+        Assert.Equal("feature", switched.Branch);
+        Assert.Equal(ChatRepositoryCloneOutcome.Updated, back.Outcome);
+        Assert.Equal("main", back.Branch);
+        Assert.False(File.Exists(ran), "a hook in the agent's clone ran");
+    }
+
+    // -- Base clone --------------------------------------------------------------------
 
     [Fact]
     public async Task A_failed_fresh_base_clone_whose_folder_cannot_be_removed_still_reports_the_failure()
@@ -89,11 +215,22 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
                 return Task.FromResult<(bool, string?)>((false, "fatal: the remote hung up unexpectedly"));
             });
 
-        var result = await BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, TestContext.Current.CancellationToken);
+        var result = await BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, Ct);
 
         Assert.False(result.Ok);
         Assert.Contains("the remote hung up", result.Error, StringComparison.Ordinal);
         Assert.Contains("could not be removed", result.Error, StringComparison.Ordinal);
+    }
+
+    // -- Setup -------------------------------------------------------------------------
+
+    /// <summary>As ChatService deletes a chat: the row, then its clone work, then its scratch folder.</summary>
+    private async Task DeleteChatAsync(Guid chatId, string scratch)
+    {
+        await using (var db = _db.OnOwnConnection())
+            await db.ChatSessions.Where(c => c.Id == chatId).ExecuteDeleteAsync(Ct);
+        await ChatRepositoryCloner.StopForDeletedChatAsync(chatId).WaitAsync(Ct);
+        Directory.Delete(scratch, recursive: true);
     }
 
     private async Task<(Guid ChatId, string Scratch, Repository Repo)> SeedScheduledChatAsync(string remote)
@@ -119,10 +256,11 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         };
         Directory.CreateDirectory(chat.ScratchPath);
         _db.Context.AddRange(provider, repo, schedule, chat);
-        await _db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        await _db.Context.SaveChangesAsync(Ct);
         return (chat.Id, chat.ScratchPath, repo);
     }
 
+    /// <summary>A local bare repository with <c>main</c> and <c>feature</c>.</summary>
     private string CreateRemote()
     {
         var bare = Path.Combine(_dir, "remote.git");
@@ -133,6 +271,10 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         Git(work, "add", "README.md");
         Git(work, "commit", "-q", "-m", "first");
         Git(work, "push", "-q", "origin", "main");
+        Git(work, "checkout", "-q", "-b", "feature");
+        File.WriteAllText(Path.Combine(work, "README.md"), "widgets on feature");
+        Git(work, "commit", "-q", "-am", "feature");
+        Git(work, "push", "-q", "origin", "feature");
         return bare;
     }
 

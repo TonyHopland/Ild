@@ -87,6 +87,18 @@ public static class AgentWritableFiles
     }
 
     /// <summary>
+    /// The names of the directories directly below <paramref name="directory"/>,
+    /// leaving out links and names starting with '.'; none when it is not there.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default)
+    {
+        const string script =
+            """for d in "$1"/*/; do d="${d%/}"; [ -d "$d" ] && [ ! -L "$d" ] && printf '%s\0' "${d##*/}"; done; exit 0""";
+        var result = await RunAsync(script, [directory], stdin: null, ct);
+        return result.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    /// <summary>
     /// Delete each of <paramref name="paths"/>, whatever it is. Never throws for
     /// what it finds there; returns whether every path is gone.
     /// </summary>

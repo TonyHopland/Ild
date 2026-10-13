@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using ILD.Core.Services.Interfaces;
@@ -8,6 +7,7 @@ using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -36,19 +36,21 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         ["GIT_ASKPASS", "ILD_GIT_PASSWORD", "ILD_GIT_USERNAME", "GIT_DIR", "GIT_WORK_TREE"];
 
     // Per chat: one clone or update at a time, so two calls never pick the same
-    // folder or interleave their git commands; and, once the chat is deleted, a
-    // stop that never lifts, so no clone outlives the chat or brings its scratch
-    // folder back. Static because the service is scoped while the work it guards
-    // outlives the request that started it.
-    private static readonly ConcurrentDictionary<Guid, ChatWork> Chats = new();
+    // folder or interleave their git commands; and a stop its deletion fires, so
+    // no clone outlives the chat. An entry lives only while a clone call or a
+    // deletion uses it. Static because the service is scoped while the work it
+    // guards outlives the request that started it.
+    private static readonly Dictionary<Guid, ChatWork> Chats = new();
 
     private sealed class ChatWork
     {
         public SemaphoreSlim Gate { get; } = new(1, 1);
         public CancellationTokenSource Deleted { get; } = new();
+        public int Users;
     }
 
     private readonly AppDbContext _db;
+    private readonly IServiceScopeFactory _scopes;
     private readonly IProviderStore _providers;
     private readonly IRepositoryManager _git;
     private readonly IConfiguration _config;
@@ -57,6 +59,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 
     public ChatRepositoryCloner(
         AppDbContext db,
+        IServiceScopeFactory scopes,
         IProviderStore providers,
         IRepositoryManager git,
         IConfiguration config,
@@ -64,6 +67,7 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         ILogger<ChatRepositoryCloner>? log = null)
     {
         _db = db;
+        _scopes = scopes;
         _providers = providers;
         _git = git;
         _config = config;
@@ -135,21 +139,71 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     };
 
     /// <summary>
-    /// Stop the deleted chat's clone work for good — git it runs is killed, and
-    /// every later call for the chat is refused — and wait until none runs. Call
-    /// after the chat's row is gone and before its scratch folder is removed.
+    /// Stop the deleted chat's clone work — git it runs is killed and calls
+    /// waiting for it are refused — and wait until none runs. Call after the
+    /// chat's row is gone and before its scratch folder is removed: a call that
+    /// starts later finds the row gone once it holds the chat's lock.
     /// </summary>
     public static async Task StopForDeletedChatAsync(Guid chatSessionId)
     {
-        var chat = Chats.GetOrAdd(chatSessionId, _ => new ChatWork());
-        await chat.Deleted.CancelAsync();
-        await chat.Gate.WaitAsync();
-        chat.Gate.Release();
+        var chat = Enter(chatSessionId);
+        try
+        {
+            await chat.Deleted.CancelAsync();
+            await chat.Gate.WaitAsync();
+            chat.Gate.Release();
+        }
+        finally
+        {
+            Leave(chatSessionId, chat);
+        }
+    }
+
+    /// <summary>Whether a clone call or a deletion of the chat holds its entry.</summary>
+    internal static bool IsTracked(Guid chatSessionId)
+    {
+        lock (Chats)
+            return Chats.ContainsKey(chatSessionId);
+    }
+
+    private static ChatWork Enter(Guid chatSessionId)
+    {
+        lock (Chats)
+        {
+            if (!Chats.TryGetValue(chatSessionId, out var chat))
+                Chats[chatSessionId] = chat = new ChatWork();
+            chat.Users++;
+            return chat;
+        }
+    }
+
+    private static void Leave(Guid chatSessionId, ChatWork chat)
+    {
+        lock (Chats)
+        {
+            if (--chat.Users > 0)
+                return;
+            Chats.Remove(chatSessionId);
+        }
+        chat.Deleted.Dispose();
+        chat.Gate.Dispose();
     }
 
     private async Task<ChatRepositoryCloneResult> CloneOrUpdateAsync(Job job, CancellationToken shutdown)
     {
-        var chat = Chats.GetOrAdd(job.ChatSessionId, _ => new ChatWork());
+        var chat = Enter(job.ChatSessionId);
+        try
+        {
+            return await CloneOrUpdateAsync(job, chat, shutdown);
+        }
+        finally
+        {
+            Leave(job.ChatSessionId, chat);
+        }
+    }
+
+    private async Task<ChatRepositoryCloneResult> CloneOrUpdateAsync(Job job, ChatWork chat, CancellationToken shutdown)
+    {
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(shutdown, chat.Deleted.Token);
         var ct = stop.Token;
         try
@@ -163,6 +217,11 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 
         try
         {
+            // The request checked the chat before this call held its lock; a chat
+            // deleted in between would otherwise get its scratch folder back.
+            if (!await ChatExistsAsync(job.ChatSessionId, ct))
+                return ChatDeleted();
+
             string basePath;
             using (await BaseRepoClone.LockAsync(job.Repo.Id, ct))
             {
@@ -193,6 +252,13 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         {
             chat.Gate.Release();
         }
+    }
+
+    private async Task<bool> ChatExistsAsync(Guid chatSessionId, CancellationToken ct)
+    {
+        await using var scope = _scopes.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<AppDbContext>()
+            .ChatSessions.AsNoTracking().AnyAsync(c => c.Id == chatSessionId, ct);
     }
 
     private static ChatRepositoryCloneResult ChatDeleted()
@@ -282,32 +348,28 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
 
     /// <summary>
     /// The folder for the repository under <paramref name="reposDir"/>: the one
-    /// whose clone carries its id, else the first free one of <c>name</c>,
-    /// <c>name-2</c>, … Every candidate is looked at, so a repository is found
-    /// again even after a lookalike's folder before it was deleted.
+    /// whose clone carries its id, whatever it is called (the repository may have
+    /// been renamed since), else the first free one of <c>name</c>, <c>name-2</c>,
+    /// …, and past those <c>name-&lt;repository id&gt;</c>, which no other
+    /// repository can take.
     /// </summary>
     private static async Task<(string Name, bool Exists)> FindFolderAsync(
         string reposDir, Guid repositoryId, string name, CancellationToken ct)
     {
-        string? free = null;
-        for (var n = 1; n <= MaxFolderCandidates; n++)
+        foreach (var folder in (await AgentWritableFiles.ListDirectoriesAsync(reposDir, ct)).Order(StringComparer.Ordinal))
         {
-            var candidate = n == 1 ? name : $"{name}-{n}";
-            var path = Path.Combine(reposDir, candidate);
-            if (!AgentWritableFiles.EntryExists(path))
-            {
-                free ??= candidate;
-                continue;
-            }
-
-            var marker = await RunGitAsync(path, reposDir, ["config", "--local", "--get", MarkerKey], ct);
+            var marker = await RunGitAsync(Path.Combine(reposDir, folder), reposDir, ["config", "--local", "--get", MarkerKey], ct);
             if (marker.ExitCode == 0 && Guid.TryParse(marker.Stdout.Trim(), out var id) && id == repositoryId)
-                return (candidate, true);
+                return (folder, true);
         }
 
-        return free is not null
+        var candidates = Enumerable.Range(1, MaxFolderCandidates)
+            .Select(n => n == 1 ? name : $"{name}-{n}")
+            .Append($"{name}-{repositoryId:N}");
+        return candidates.FirstOrDefault(c => !AgentWritableFiles.EntryExists(Path.Combine(reposDir, c))) is { } free
             ? (free, false)
-            : throw new CloneFailedException($"Every folder name for '{name}' under {ReposFolder}/ is taken ({MaxFolderCandidates}); delete the clones you no longer need and call again.");
+            : throw new CloneFailedException(
+                $"{ReposFolder}/{name}-{repositoryId:N} is taken by something that is not this repository's clone; move it away and call again.");
     }
 
     /// <summary>
@@ -383,11 +445,13 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         return AgentIsolation.Route(psi, agentUser, agentGroup, agentHome);
     }
 
+    // Hooks in the clone are off: a failing post-checkout or post-merge hook
+    // would make a switch that has already happened look refused.
     private static async Task<GitResult> RunGitAsync(
         string folder, string ceilingDirectory, IReadOnlyList<string> arguments, CancellationToken ct)
     {
         using var process = Process.Start(BuildStartInfo(
-                ["-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory))
+                ["-c", "core.hooksPath=/dev/null", "-C", folder, .. arguments], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome, ceilingDirectory))
             ?? throw new IOException("could not start git");
         process.StandardInput.Close();
         var stdout = process.StandardOutput.ReadToEndAsync(ct);

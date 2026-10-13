@@ -689,7 +689,8 @@ public sealed class ChatService : IChatService
         await _notifier.UnreadChangedAsync(session.UserId, session.Id);
 
         // A clone the chat's agent asked for would otherwise go on writing into the
-        // scratch folder below, or recreate it, after it is removed.
+        // scratch folder below, or recreate it, after it is removed. Only after the
+        // row is gone: a clone call starting later is refused by finding it gone.
         await ChatRepositoryCloner.StopForDeletedChatAsync(session.Id);
 
         // Best-effort scratch-dir removal: nothing chat-local should remain, but a
