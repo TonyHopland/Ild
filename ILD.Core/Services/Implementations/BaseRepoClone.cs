@@ -48,14 +48,15 @@ internal static class BaseRepoClone
 
     /// <summary>
     /// Fetch the existing base clone, or make it. Call under <see cref="LockAsync"/>.
-    /// A fresh clone that fails or is cancelled takes its folder with it when the
-    /// folder was missing or empty before: the base clone is found by its
-    /// <c>.git</c> folder, so a partial one would be taken for a clone by every
-    /// chat and every run's Start node after it, and checked-out files left
-    /// without one would make every later clone refuse the folder as not empty.
-    /// A folder that already held something is left alone: git refuses to clone
-    /// into it before writing anything. A partial clone that cannot be removed is
-    /// logged, and named in the error of a failed clone.
+    /// A fresh clone that fails or is cancelled takes its folder with it when
+    /// nothing was there before, or an empty directory: the base clone is found
+    /// by its <c>.git</c> folder, so a partial one would be taken for a clone by
+    /// every chat and every run's Start node after it, and checked-out files
+    /// left without one would make every later clone refuse the folder as not
+    /// empty. Anything else there — a folder that held something, a file, a
+    /// link — is left alone: git refuses to clone into it before writing
+    /// anything. A partial clone that cannot be removed is logged, and named in
+    /// the error of a failed clone.
     /// </summary>
     public static async Task<(bool Ok, string? Path, string? Error)> EnsureAsync(
         IRepositoryManager git, Repository repo, IConfiguration? config, GitAuthOptions? auth, CancellationToken ct,
@@ -69,7 +70,8 @@ internal static class BaseRepoClone
         }
 
         var path = BaseRepoPath.Fallback(repo.Id, config);
-        var ours = !Directory.Exists(path) || !Directory.EnumerateFileSystemEntries(path).Any();
+        // Looked at as the agent, which can write the repos folder (ADR-0014).
+        var ours = await AgentWritableFiles.IsMissingOrEmptyDirectoryAsync(path, ct);
         (bool Success, string? Error) clone;
         try
         {
@@ -102,7 +104,7 @@ internal static class BaseRepoClone
             if (attempt < DeleteAttempts)
                 await Task.Delay(DeleteRetryDelay * attempt, CancellationToken.None);
         }
-        log?.LogError("Could not remove the partial base clone at {Path}; remove it by hand, or it is taken for a clone", path);
+        log?.LogError("Could not remove the partial base clone at {Path}; remove it by hand, or the repository cannot be cloned there again", path);
         return false;
     }
 

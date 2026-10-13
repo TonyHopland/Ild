@@ -87,6 +87,17 @@ public static class AgentWritableFiles
     }
 
     /// <summary>
+    /// Whether nothing at all is at <paramref name="path"/>, or an empty directory
+    /// that is not a link. A link, a file or anything unreadable answers false.
+    /// </summary>
+    public static async Task<bool> IsMissingOrEmptyDirectoryAsync(string path, CancellationToken ct = default)
+    {
+        const string script =
+            """p="$1"; [ -L "$p" ] && exit 1; [ -e "$p" ] || exit 0; [ -d "$p" ] && [ -r "$p" ] || exit 1; [ -z "$(ls -A -- "$p")" ]""";
+        return (await RunAsync(script, [path], stdin: null, ct)).ExitCode == 0;
+    }
+
+    /// <summary>
     /// The names of the directories directly below <paramref name="directory"/>,
     /// leaving out links and names starting with '.'; none when it is not there.
     /// </summary>

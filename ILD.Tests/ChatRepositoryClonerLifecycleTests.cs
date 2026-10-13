@@ -333,8 +333,10 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         Assert.Equal("widgets", File.ReadAllText(Path.Combine(target, "README.md")));
     }
 
-    [Fact]
-    public async Task A_failed_clone_leaves_a_folder_that_already_held_something_as_it_was()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failed_or_killed_clone_leaves_a_folder_that_already_held_something_as_it_was(bool killed)
     {
         var repo = new Repository { Id = Guid.NewGuid(), Name = "widgets", CloneUrl = "https://forge.example.test/team/widgets.git" };
         var target = BaseRepoPath.Fallback(repo.Id, Config);
@@ -342,11 +344,15 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         File.WriteAllText(Path.Combine(target, "NOTES.md"), "put here by hand");
         var git = new Mock<IRepositoryManager>();
         git.Setup(g => g.CloneAsync(repo.CloneUrl, target, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
-            .ReturnsAsync((false, "fatal: destination path already exists and is not an empty directory."));
+            .Returns(() => killed
+                ? Task.FromException<(bool, string?)>(new OperationCanceledException())
+                : Task.FromResult<(bool, string?)>((false, "fatal: destination path already exists and is not an empty directory.")));
 
-        var result = await BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, Ct);
+        if (killed)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, Ct));
+        else
+            Assert.False((await BaseRepoClone.EnsureAsync(git.Object, repo, Config, auth: null, Ct)).Ok);
 
-        Assert.False(result.Ok);
         Assert.Equal("put here by hand", File.ReadAllText(Path.Combine(target, "NOTES.md")));
     }
 

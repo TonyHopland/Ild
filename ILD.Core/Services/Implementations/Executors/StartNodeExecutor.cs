@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.Executors;
 
@@ -174,7 +175,8 @@ public sealed class StartNodeExecutor : INodeExecutor
         LoopRun run, Repository repo, string baseBranch, GitAuthOptions? gitAuth)
     {
         var (ok, path, error) = await BaseRepoClone.EnsureAsync(
-            repoManager, repo, sp.GetService<IConfiguration>(), gitAuth, ctx.CancellationToken);
+            repoManager, repo, sp.GetService<IConfiguration>(), gitAuth, ctx.CancellationToken,
+            sp.GetService<ILogger<StartNodeExecutor>>());
         if (!ok)
             return (false, null, $"could not bring the base repo up to date ({error}) — refusing to start run without a current origin/{baseBranch}");
         var basePath = path!;
