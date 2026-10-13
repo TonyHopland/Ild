@@ -294,7 +294,11 @@ export default function HaltSteerControls({
             className="feedback-textarea"
             value={steerNote}
             onChange={(e) => setSteerNote(e.target.value)}
-            placeholder="Optional guidance for the resumed agent — leave blank to just continue…"
+            placeholder={
+              globalMissing
+                ? "Optional guidance — it is added to the run's conversation. Leave blank to just continue…"
+                : "Optional guidance for the resumed agent — leave blank to just continue…"
+            }
             rows={3}
           />
           <div className="feedback-actions">

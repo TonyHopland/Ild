@@ -93,6 +93,64 @@ public class PRNodeExecutorTests
         Assert.Equal("Please merge Title", waiting.Output);
     }
 
+    /// <summary>
+    /// A PR template written around global variables must not go out without
+    /// them: when rendering cannot read them the node fails, and nothing is
+    /// opened. A template without globals keeps the fallback it always had.
+    /// </summary>
+    [Theory]
+    [InlineData("""{"prompt":"Review with {{Global.rules}}"}""", true, true)]
+    [InlineData("""{"prompt":"Open it","prDescriptionTemplate":"Written per {{Global.rules}}"}""", false, true)]
+    [InlineData("""{"prompt":"Please merge {{WorkItem.Title}}"}""", true, false)]
+    [InlineData("""{"prompt":"Open it","prDescriptionTemplate":"About {{WorkItem.Title}}"}""", false, false)]
+    public async Task A_render_failure_fails_the_node_only_for_a_template_that_uses_globals(string config, bool hasPr, bool fails)
+    {
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
+
+        var rendering = new Mock<IPromptRenderingService>();
+        rendering.Setup(r => r.RenderAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<WorkItemView>(), It.IsAny<string?>()))
+            .ThrowsAsync(new InvalidOperationException("database unreachable"));
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(rendering.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        var sp = services.BuildServiceProvider();
+
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = config };
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", PrUrl = hasPr ? "https://example.com/o/r/pull/7" : null };
+
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new PRNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+
+        if (fails)
+        {
+            var fail = Assert.IsType<NodeOutcome.Fail>(outcomes.Last());
+            Assert.Equal(EdgeType.OnFailure, fail.Edge);
+            Assert.Contains("database unreachable", fail.Reason);
+            remote.Verify(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+        else
+        {
+            Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        }
+    }
+
     [Fact]
     public async Task When_no_prompt_template_parks_with_pr_url()
     {
