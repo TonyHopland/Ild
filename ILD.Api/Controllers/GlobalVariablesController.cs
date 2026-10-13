@@ -87,7 +87,7 @@ public class GlobalVariablesController : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateVariableRequest request, CancellationToken ct)
     {
         var variable = await _variables.GetAsync(id, ct);
-        if (variable is null) return NotFound();
+        if (variable is null) return NotFound(new { error = Gone });
         if (await ValueProblemAsync(request.Value, ct) is { } problem)
             return BadRequest(new { error = problem });
 
@@ -100,14 +100,14 @@ public class GlobalVariablesController : ControllerBase
         catch (DbUpdateConcurrencyException)
         {
             // Deleted between the read above and this save.
-            return NotFound();
+            return NotFound(new { error = Gone });
         }
         return Ok(View(variable, await UsageAsync()));
     }
 
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
-        => await _variables.DeleteAsync(id, ct) ? NoContent() : NotFound();
+        => await _variables.DeleteAsync(id, ct) ? NoContent() : NotFound(new { error = Gone });
 
     /// <summary>
     /// The limit is checked on every write, never on what is stored, so lowering
@@ -140,6 +140,8 @@ public class GlobalVariablesController : ControllerBase
         }
         return uses.ToLookup(u => u.Name, u => u.Template, StringComparer.Ordinal);
     }
+
+    private const string Gone = "No such variable; it may have been deleted.";
 
     private static string NameTaken(string name) => $"A variable named '{name}' already exists";
 

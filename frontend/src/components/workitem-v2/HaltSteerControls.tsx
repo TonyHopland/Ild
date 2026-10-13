@@ -276,8 +276,8 @@ export default function HaltSteerControls({
                 </>
               ) : (
                 <>
-                  All are set now — resume to continue. They live on the{" "}
-                  <Link to="/global-variables">Global Variables page</Link>.
+                  The next step uses global variables that were missing or empty. Set them on the{" "}
+                  <Link to="/global-variables">Global Variables page</Link>, then resume.
                 </>
               )}
             </div>

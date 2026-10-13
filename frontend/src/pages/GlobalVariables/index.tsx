@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
 import { ApiError, GlobalVariable } from "../../types";
 import {
   GlobalVariableSettingKeys,
@@ -7,6 +6,7 @@ import {
   settingsService,
 } from "../../services/auth";
 import VariableDialog from "./VariableDialog";
+import VariableRow from "./VariableRow";
 
 /** The setting's default, used while it is being read or when it cannot be. */
 const DEFAULT_LIMIT = 4000;
@@ -17,9 +17,6 @@ export default function GlobalVariables() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [dialog, setDialog] = useState<{ variable: GlobalVariable | null } | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
   // Only the latest read fills the list: a reload after a save must not be
   // overwritten by an earlier read that answers after it.
   const loadSeq = useRef(0);
@@ -58,20 +55,6 @@ export default function GlobalVariables() {
     };
   }, []);
 
-  const handleDelete = async (id: string) => {
-    setDeleting(id);
-    setDeleteError(null);
-    try {
-      await globalVariableService.delete(id);
-      setConfirmDelete(null);
-      await load();
-    } catch (error) {
-      setDeleteError((error as ApiError | Error).message);
-    } finally {
-      setDeleting(null);
-    }
-  };
-
   if (isLoading) {
     return (
       <div className="page-container">
@@ -102,76 +85,18 @@ export default function GlobalVariables() {
           </button>
         </div>
       )}
-      {deleteError && (
-        <div className="gv-error" role="alert">
-          {`Couldn't delete the variable: ${deleteError}`}
-        </div>
-      )}
 
       {variables.length === 0 && !loadError ? (
         <p className="gv-empty">No global variables yet.</p>
       ) : (
         <div className="gv-list">
           {variables.map((v) => (
-            <section key={v.id} className="gv-row" aria-label={v.name}>
-              <div className="gv-row-main">
-                <div className="gv-row-head">
-                  <code className="gv-name">{v.name}</code>
-                  <span className="gv-updated">
-                    Updated {new Date(v.updatedAt).toLocaleString()}
-                  </span>
-                </div>
-                <pre className="gv-value">{v.value === "" ? <em>(empty)</em> : v.value}</pre>
-                <div className="gv-used-by">
-                  {v.usedBy.length === 0 ? (
-                    "Not used by any loop template."
-                  ) : (
-                    <>
-                      Used by{" "}
-                      {v.usedBy.map((t, i) => (
-                        <span key={t.id}>
-                          {i > 0 && ", "}
-                          <Link to={`/loop-editor/${t.id}`}>{t.name}</Link>
-                        </span>
-                      ))}
-                    </>
-                  )}
-                </div>
-              </div>
-              <div className="gv-actions">
-                <button
-                  className="btn btn-secondary btn-small"
-                  onClick={() => setDialog({ variable: v })}
-                >
-                  Edit
-                </button>
-                {confirmDelete === v.id ? (
-                  <>
-                    <button
-                      className="btn btn-danger btn-small"
-                      disabled={deleting === v.id}
-                      onClick={() => void handleDelete(v.id)}
-                    >
-                      Confirm delete
-                    </button>
-                    <button
-                      className="btn btn-secondary btn-small"
-                      disabled={deleting === v.id}
-                      onClick={() => setConfirmDelete(null)}
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    className="btn btn-danger btn-small"
-                    onClick={() => setConfirmDelete(v.id)}
-                  >
-                    Delete
-                  </button>
-                )}
-              </div>
-            </section>
+            <VariableRow
+              key={v.id}
+              variable={v}
+              onEdit={() => setDialog({ variable: v })}
+              reload={load}
+            />
           ))}
         </div>
       )}
@@ -181,7 +106,7 @@ export default function GlobalVariables() {
           variable={dialog.variable}
           limit={limit}
           onClose={() => setDialog(null)}
-          onSaved={load}
+          reload={load}
         />
       )}
 

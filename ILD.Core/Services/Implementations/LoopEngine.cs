@@ -466,8 +466,11 @@ public sealed class LoopEngine : ILoopEngine
 
         var old = run.Status;
         // A non-null note (empty allowed) flags the AI node to continue the
-        // captured session; the executor consumes and clears it one-shot.
-        run.SteeringNote = note ?? string.Empty;
+        // captured session; the executor consumes and clears it one-shot. Only a
+        // missing-global park can sit before another kind of node, which has no
+        // agent to steer and would leave the note for a later AI node's prompt;
+        // there the note reaches the conversation alone.
+        run.SteeringNote = await ParkedBeforeANodeOtherThanAiAsync(run, sp) ? null : note ?? string.Empty;
         run.IsHalted = false;
         if (automatic)
         {
@@ -499,6 +502,13 @@ public sealed class LoopEngine : ILoopEngine
         await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
+    }
+
+    private static async Task<bool> ParkedBeforeANodeOtherThanAiAsync(LoopRun run, IServiceProvider sp)
+    {
+        if (run.HaltReason != HaltReason.GlobalVariableMissing || run.CurrentNodeId is not { } nodeId) return false;
+        var nodes = await sp.GetRequiredService<ILoopTemplateStore>().GetNodesForVersionAsync(run.LoopTemplateVersionId);
+        return nodes.FirstOrDefault(n => n.Id == nodeId)?.NodeType is { } type && type != NodeType.AI;
     }
 
     public async Task<LoopRunStatus?> GetRunStatusAsync(Guid runId)

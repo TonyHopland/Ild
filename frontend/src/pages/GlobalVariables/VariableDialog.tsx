@@ -8,14 +8,15 @@ interface VariableDialogProps {
   /** The most characters a value may have; the server refuses a longer one. */
   limit: number;
   onClose: () => void;
-  onSaved: () => Promise<void>;
+  /** Reads the list again; called after every save attempt, since a refused one may mean the list is stale. */
+  reload: () => Promise<void>;
 }
 
 /**
  * Creates a global variable or edits the value of one. Mounted per opening, so
  * every draft starts from the variable it was opened for.
  */
-export default function VariableDialog({ variable, limit, onClose, onSaved }: VariableDialogProps) {
+export default function VariableDialog({ variable, limit, onClose, reload }: VariableDialogProps) {
   const [name, setName] = useState(variable?.name ?? "");
   const [value, setValue] = useState(variable?.value ?? "");
   const [saving, setSaving] = useState(false);
@@ -38,10 +39,11 @@ export default function VariableDialog({ variable, limit, onClose, onSaved }: Va
     try {
       if (variable) await globalVariableService.update(variable.id, value);
       else await globalVariableService.create({ name, value });
-      await onSaved();
+      await reload();
       onClose();
     } catch (err) {
       setError((err as ApiError | Error).message);
+      await reload();
     } finally {
       setSaving(false);
     }
