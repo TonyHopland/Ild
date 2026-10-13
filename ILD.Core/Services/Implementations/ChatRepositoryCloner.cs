@@ -35,10 +35,18 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
     private static readonly string[] GitEnvironmentKeys =
         ["GIT_ASKPASS", "ILD_GIT_PASSWORD", "ILD_GIT_USERNAME", "GIT_DIR", "GIT_WORK_TREE"];
 
-    // One clone or update at a time per chat, so two calls never pick the same
-    // folder or interleave their git commands. Static because the service is
-    // scoped while the work it guards outlives the request that started it.
-    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> ChatLocks = new();
+    // Per chat: one clone or update at a time, so two calls never pick the same
+    // folder or interleave their git commands; and, once the chat is deleted, a
+    // stop that never lifts, so no clone outlives the chat or brings its scratch
+    // folder back. Static because the service is scoped while the work it guards
+    // outlives the request that started it.
+    private static readonly ConcurrentDictionary<Guid, ChatWork> Chats = new();
+
+    private sealed class ChatWork
+    {
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public CancellationTokenSource Deleted { get; } = new();
+    }
 
     private readonly AppDbContext _db;
     private readonly IProviderStore _providers;
@@ -126,21 +134,39 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
         _ => false,
     };
 
-    private async Task<ChatRepositoryCloneResult> CloneOrUpdateAsync(Job job, CancellationToken ct)
+    /// <summary>
+    /// Stop the deleted chat's clone work for good — git it runs is killed, and
+    /// every later call for the chat is refused — and wait until none runs. Call
+    /// after the chat's row is gone and before its scratch folder is removed.
+    /// </summary>
+    public static async Task StopForDeletedChatAsync(Guid chatSessionId)
     {
-        var chatLock = ChatLocks.GetOrAdd(job.ChatSessionId, _ => new SemaphoreSlim(1, 1));
-        await chatLock.WaitAsync(ct);
+        var chat = Chats.GetOrAdd(chatSessionId, _ => new ChatWork());
+        await chat.Deleted.CancelAsync();
+        await chat.Gate.WaitAsync();
+        chat.Gate.Release();
+    }
+
+    private async Task<ChatRepositoryCloneResult> CloneOrUpdateAsync(Job job, CancellationToken shutdown)
+    {
+        var chat = Chats.GetOrAdd(job.ChatSessionId, _ => new ChatWork());
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(shutdown, chat.Deleted.Token);
+        var ct = stop.Token;
         try
         {
-            // The chat may have been deleted, and its scratch folder with it, while
-            // this call waited; cloning now would bring the folder back for good.
-            if (!Directory.Exists(job.ScratchPath))
-                return Refused(ChatRepositoryCloneOutcome.UnknownChat, "The chat was deleted.");
+            await chat.Gate.WaitAsync(ct);
+        }
+        catch (OperationCanceledException) when (chat.Deleted.IsCancellationRequested)
+        {
+            return ChatDeleted();
+        }
 
+        try
+        {
             string basePath;
             using (await BaseRepoClone.LockAsync(job.Repo.Id, ct))
             {
-                var (ok, path, error) = await BaseRepoClone.EnsureAsync(_git, job.Repo, _config, job.Auth, ct);
+                var (ok, path, error) = await BaseRepoClone.EnsureAsync(_git, job.Repo, _config, job.Auth, ct, _log);
                 if (!ok)
                     return Refused(ChatRepositoryCloneOutcome.FetchFailed,
                         $"ILD could not fetch the repository '{job.Repo.Name}' from its remote: {error}");
@@ -159,11 +185,18 @@ public sealed class ChatRepositoryCloner : IChatRepositoryCloner
                 return Refused(ChatRepositoryCloneOutcome.CloneFailed, e.Message);
             }
         }
+        catch (OperationCanceledException) when (chat.Deleted.IsCancellationRequested)
+        {
+            return ChatDeleted();
+        }
         finally
         {
-            chatLock.Release();
+            chat.Gate.Release();
         }
     }
+
+    private static ChatRepositoryCloneResult ChatDeleted()
+        => Refused(ChatRepositoryCloneOutcome.UnknownChat, "The chat was deleted.");
 
     /// <summary>Clone into, or update, the chat's folder for the repository, as the agent.</summary>
     private static async Task<ChatRepositoryCloneResult> FillChatCloneAsync(Job job, string basePath, CancellationToken ct)

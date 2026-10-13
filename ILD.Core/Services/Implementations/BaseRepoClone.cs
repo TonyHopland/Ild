@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -34,10 +35,12 @@ internal static class BaseRepoClone
     /// A fresh clone that fails or is cancelled takes the folder it created with
     /// it: the base clone is found by its <c>.git</c> folder, so a partial one
     /// would be taken for a clone by every chat and every run's Start node after
-    /// it instead of being cloned again.
+    /// it instead of being cloned again. A partial clone that cannot be removed is
+    /// logged, and named in the error of a failed clone.
     /// </summary>
     public static async Task<(bool Ok, string? Path, string? Error)> EnsureAsync(
-        IRepositoryManager git, Repository repo, IConfiguration? config, GitAuthOptions? auth, CancellationToken ct)
+        IRepositoryManager git, Repository repo, IConfiguration? config, GitAuthOptions? auth, CancellationToken ct,
+        ILogger? log = null)
     {
         if (BaseRepoPath.Existing(repo, config) is { } existing)
         {
@@ -48,31 +51,38 @@ internal static class BaseRepoClone
 
         var path = BaseRepoPath.Fallback(repo.Id, config);
         var created = !Directory.Exists(path);
-        var cloned = false;
+        (bool Success, string? Error) clone;
         try
         {
-            var (success, error) = await git.CloneAsync(repo.CloneUrl, path, ct, auth);
-            cloned = success;
-            return success ? (true, path, null) : (false, null, $"git clone failed: {error?.Trim()}");
+            clone = await git.CloneAsync(repo.CloneUrl, path, ct, auth);
         }
-        finally
+        catch (Exception) when (created)
         {
-            if (!cloned && created)
-                await DeletePartialCloneAsync(path);
+            await DeletePartialCloneAsync(path, log);
+            throw;
         }
+
+        if (clone.Success)
+            return (true, path, null);
+
+        var error = $"git clone failed: {clone.Error?.Trim()}";
+        if (created && !await DeletePartialCloneAsync(path, log))
+            error += $"; the partial clone at '{path}' could not be removed";
+        return (false, null, error);
     }
 
     // The repos folder is shared with the agent uid (ADR-0014), so the partial
     // clone is deleted as the agent, never followed through a link it planted.
     // A killed git may still be writing as it dies, hence the second attempt.
-    private static async Task DeletePartialCloneAsync(string path)
+    private static async Task<bool> DeletePartialCloneAsync(string path, ILogger? log)
     {
         for (var attempt = 1; attempt <= DeleteAttempts; attempt++)
         {
             if (await AgentWritableFiles.DeleteAsync([path], CancellationToken.None))
-                return;
+                return true;
         }
-        throw new IOException($"Could not remove the partial clone at '{path}'.");
+        log?.LogError("Could not remove the partial base clone at {Path}; remove it by hand, or it is taken for a clone", path);
+        return false;
     }
 
     private sealed class Held(SemaphoreSlim gate) : IDisposable
