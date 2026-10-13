@@ -2,6 +2,7 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace ILD.Data.Stores;
 
@@ -11,6 +12,9 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
 
     public GlobalVariableProposalStore(AppDbContext db) { _db = db; }
 
+    /// <summary>Enough for a few suggestions from one source arriving at once; each round lets one through.</summary>
+    private const int MaxProposeAttempts = 3;
+
     public async Task<GlobalVariableProposal> ProposeAsync(GlobalVariableProposal proposal, CancellationToken ct = default)
     {
         proposal.NormalizedName = GlobalVariable.Normalize(proposal.Name);
@@ -19,7 +23,7 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
         var chatId = proposal.CreatedByChatSessionId;
 
         // A suggestion from the same source racing this one past the supersede
-        // step trips the pending index; the second attempt supersedes it instead.
+        // step trips the pending index; the next attempt supersedes it instead.
         for (var attempt = 1; ; attempt++)
         {
             await using var tx = await _db.Database.BeginTransactionAsync(ct);
@@ -46,7 +50,8 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
                 await tx.CommitAsync(ct);
                 return proposal;
             }
-            catch (DbUpdateException) when (attempt == 1)
+            catch (DbUpdateException ex) when (attempt < MaxProposeAttempts
+                && ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
             {
                 _db.Entry(proposal).State = EntityState.Detached;
             }

@@ -1688,21 +1688,24 @@ public class AgentController : ControllerBase
             return BadRequest(new { error = "A name is a letter followed by up to 127 letters, digits or underscores, e.g. review_rules." });
         if (request.Value is null)
             return BadRequest(new { error = "Suggest a value: the complete new text, which may be empty." });
-        if (string.IsNullOrWhiteSpace(request.Rationale))
+        // Checked as they will be stored: the save drops NUL characters.
+        var value = AppDbContext.WithoutNul(request.Value);
+        var rationale = AppDbContext.WithoutNul(request.Rationale ?? string.Empty).Trim();
+        if (rationale.Length == 0)
             return BadRequest(new { error = "Give a rationale: why the variable should say this." });
         var limit = await settings.GetGlobalVariableMaxLengthAsync(cancellationToken);
-        if (request.Value.Length > limit)
+        if (value.Length > limit)
             return BadRequest(new
             {
                 error = string.Create(CultureInfo.InvariantCulture,
-                    $"The value is {request.Value.Length:N0} / {limit:N0} characters; consolidate it and suggest it again."),
+                    $"The value is {value.Length:N0} / {limit:N0} characters; consolidate it and suggest it again."),
             });
 
         var proposal = await proposals.ProposeAsync(new GlobalVariableProposal
         {
             Name = name,
-            Value = request.Value,
-            Rationale = request.Rationale.Trim(),
+            Value = value,
+            Rationale = rationale,
             CreatedByLoopRunId = runId,
             CreatedByChatSessionId = chatSessionId,
             CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
