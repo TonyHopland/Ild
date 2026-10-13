@@ -6,15 +6,26 @@ interface ProposalDecisionProps {
   pending: boolean;
   approve: () => Promise<unknown>;
   reject: (reason: string | undefined) => Promise<unknown>;
-  /** Called once an approve or reject has settled, whatever its outcome, so the owner re-reads. */
-  onSettled: () => void;
+  /**
+   * Called once an approve or reject has settled, whatever its outcome, so the
+   * owner re-reads; with the server's reason when it was refused because the
+   * proposal had been decided or gone stale first.
+   */
+  onSettled: (refusal: string | null) => void;
 }
 
-/** A 409 means it was decided elsewhere first: the owner's re-read shows how, so it is no error. */
+/** A 409 means it was decided elsewhere first: the owner's re-read shows how, so it is no error here. */
 function failureMessage(err: unknown): string | null {
-  const status = (err as Partial<ApiError> | null)?.status;
-  if (status === 409) return null;
+  if (isRefusal(err)) return null;
   return (err as Partial<ApiError> | null)?.message || "The request failed.";
+}
+
+function isRefusal(err: unknown): boolean {
+  return (err as Partial<ApiError> | null)?.status === 409;
+}
+
+function refusalOf(err: unknown): string | null {
+  return isRefusal(err) ? (err as Partial<ApiError>).message || "It was already decided." : null;
 }
 
 /**
@@ -46,28 +57,32 @@ export default function ProposalDecision({
   const handleApprove = async () => {
     setApproveBusy(true);
     setApproveError(null);
+    let refusal: string | null = null;
     try {
       await approve();
     } catch (err) {
+      refusal = refusalOf(err);
       if (mountedRef.current) setApproveError(failureMessage(err));
     }
     if (!mountedRef.current) return;
     setApproveBusy(false);
-    onSettled();
+    onSettled(refusal);
   };
 
   const handleReject = async () => {
     setRejectBusy(true);
     setRejectError(null);
     const reason = reasonDraft.trim();
+    let refusal: string | null = null;
     try {
       await reject(reason || undefined);
     } catch (err) {
+      refusal = refusalOf(err);
       if (mountedRef.current) setRejectError(failureMessage(err));
     }
     if (!mountedRef.current) return;
     setRejectBusy(false);
-    onSettled();
+    onSettled(refusal);
   };
 
   return (

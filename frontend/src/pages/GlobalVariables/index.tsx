@@ -48,6 +48,9 @@ export default function GlobalVariables() {
   const [dialog, setDialog] = useState<{ variable: GlobalVariable | null } | null>(null);
   const [proposals, setProposals] = useState<GlobalVariableProposal[]>([]);
   const [proposalsError, setProposalsError] = useState<string | null>(null);
+  // Why the last decision made here was refused: its card leaves the list on the
+  // re-read, so the reason is shown on the page instead.
+  const [refusal, setRefusal] = useState<{ name: string; reason: string } | null>(null);
   // Only the latest read fills the lists: a reload after a save must not be
   // overwritten by an earlier read that answers after it.
   const loadSeq = useRef(0);
@@ -120,9 +123,11 @@ export default function GlobalVariables() {
     };
   }, []);
 
-  const newVariableProposals = proposals.filter(
-    (p) => !variables.some((v) => sameName(p.name, v.name)),
-  );
+  const listed = (p: GlobalVariableProposal) => variables.some((v) => sameName(p.name, v.name));
+  // Grouped by what the server said of each, never by the variables list alone,
+  // which may not have loaded.
+  const newVariableProposals = proposals.filter((p) => !p.variableExists && !listed(p));
+  const unlistedProposals = proposals.filter((p) => p.variableExists && !listed(p));
   const suggestionCards = (list: GlobalVariableProposal[]) =>
     list.length > 0 && (
       <div className="gv-suggestions">
@@ -130,7 +135,10 @@ export default function GlobalVariables() {
           <GlobalVariableProposalCard
             key={p.id}
             proposal={p}
-            onSettled={() => void load()}
+            onSettled={(reason) => {
+              setRefusal(reason === null ? null : { name: p.name, reason });
+              void load();
+            }}
             source={<SuggestionSource proposal={p} />}
           />
         ))}
@@ -168,6 +176,14 @@ export default function GlobalVariables() {
           </button>
         </div>
       )}
+      {refusal && (
+        <div className="gv-error" role="alert">
+          {`The suggestion for ${refusal.name} was not applied: ${refusal.reason}`}{" "}
+          <button className="btn btn-secondary btn-small" onClick={() => setRefusal(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
       {proposalsError && (
         <div className="gv-error" role="alert">
           {`Couldn't load the suggestions: ${proposalsError}`}{" "}
@@ -194,6 +210,13 @@ export default function GlobalVariables() {
         <section className="gv-new" aria-label="New variables">
           <h2 className="gv-new-title">New variables</h2>
           {suggestionCards(newVariableProposals)}
+        </section>
+      )}
+
+      {unlistedProposals.length > 0 && (
+        <section className="gv-new" aria-label="Suggestions for variables not listed">
+          <h2 className="gv-new-title">Suggestions for variables not listed above</h2>
+          {suggestionCards(unlistedProposals)}
         </section>
       )}
 

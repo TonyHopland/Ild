@@ -8,8 +8,11 @@ import "./GlobalVariableProposalCard.css";
 
 interface GlobalVariableProposalCardProps {
   proposal: GlobalVariableProposal;
-  /** Called once an approve or reject has settled, whatever its outcome, so the owner re-reads. */
-  onSettled: () => void;
+  /**
+   * Called once an approve or reject has settled, whatever its outcome, so the
+   * owner re-reads; with the server's reason when it was refused (gone stale, or decided first).
+   */
+  onSettled: (refusal: string | null) => void;
   /** Where the suggestion came from, as the owner shows it. */
   source?: ReactNode;
   /** Given while this card is the one a link points at: called with the card once it is shown. */
@@ -56,7 +59,13 @@ export default function GlobalVariableProposalCard({
 
       <p className="edit-proposal-rationale">{proposal.rationale}</p>
 
-      {!proposal.variableExists && <p className="gv-proposal-new">New variable</p>}
+      {!proposal.variableExists && (
+        <p className="gv-proposal-new">
+          {proposal.snapshotUpdatedAt === null
+            ? "New variable"
+            : "The variable was deleted after this was suggested"}
+        </p>
+      )}
       <DescriptionDiff before={proposal.currentValue ?? ""} after={proposal.value} />
 
       {proposal.status === "Rejected" && proposal.rejectionReason && (

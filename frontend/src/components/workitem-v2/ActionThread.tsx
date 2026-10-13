@@ -294,7 +294,12 @@ function RunThread({
           key={`gvproposal:${proposal.id}`}
           proposal={proposal}
           onSettled={suggestions.refresh}
-          reveal={proposal.id === revealGlobalProposalId ? revealFromTop : undefined}
+          // Revealed once the turns it follows are in place, so none lands above it afterwards.
+          reveal={
+            view.conversationRead && proposal.id === revealGlobalProposalId
+              ? revealFromTop
+              : undefined
+          }
         />
       ),
     })),
