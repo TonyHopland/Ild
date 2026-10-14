@@ -93,6 +93,10 @@ public class ExtraCliArgsTests
     [InlineData("opencode", "--model=x")]
     [InlineData("opencode", "-m x")]
     [InlineData("opencode", "-m=x")]
+    [InlineData("codex", "--model x")]
+    [InlineData("codex", "--model=x")]
+    [InlineData("codex", "-m x")]
+    [InlineData("Codex", "-m=x")]
     public void Validate_rejects_any_model_flag_and_points_to_the_model_field(string type, string raw)
     {
         var error = ExtraCliArgs.Validate(type, raw);
@@ -116,6 +120,11 @@ public class ExtraCliArgsTests
     [InlineData("pi", "--session-dir /x", "--session-dir")]
     [InlineData("pi", "--session-dir=/x", "--session-dir")]
     [InlineData("pi", "-e ext.ts", "-e")]
+    [InlineData("codex", "--json", "--json")]
+    [InlineData("codex", "--skip-git-repo-check", "--skip-git-repo-check")]
+    [InlineData("codex", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-approvals-and-sandbox")]
+    [InlineData("codex", "--add-dir /x", "--add-dir")]
+    [InlineData("CODEX", "--add-dir=/x", "--add-dir")]
     public void Validate_rejects_a_flag_ild_already_sets_for_that_adapter_and_names_it(string type, string raw, string flag)
     {
         var error = ExtraCliArgs.Validate(type, raw);
@@ -127,6 +136,7 @@ public class ExtraCliArgsTests
     [Theory]
     [InlineData("claude-code")]
     [InlineData("copilot")]
+    [InlineData("codex")]
     [InlineData("opencode")]
     [InlineData("pi")]
     public void Validate_rejects_a_bare_end_of_options_separator(string type)
@@ -152,6 +162,8 @@ public class ExtraCliArgsTests
     [InlineData("claude-code", "--fallback-model x")]
     [InlineData("claude-code", "--append-system-prompt \"be brief; $(x) | y\"")]
     [InlineData("copilot", "--effort high")]
+    [InlineData("codex", "-c model_reasoning_effort=\"high\"")]
+    [InlineData("codex", "--enable web_search")]
     [InlineData("opencode", "--variant high")]
     [InlineData("pi", "--models a,b")]
     [InlineData("pi", "--thinking high")]

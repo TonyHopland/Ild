@@ -128,9 +128,67 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
             error["data"]?["supported"]?.AsArray().Select(v => (string?)v).OrderBy(v => v, StringComparer.Ordinal));
     }
 
+    [Fact]
+    public async Task A_server_handed_a_settings_file_calls_the_api_the_file_names()
+    {
+        var ct = _cts.Token;
+        var file = Path.Combine(Path.GetTempPath(), $"ild-mcp-env-{Guid.NewGuid():N}.json");
+        File.WriteAllText(file, new JsonObject { ["ILD_API_URL"] = ApiUrl }.ToJsonString());
+        try
+        {
+            StartServer(psi =>
+            {
+                psi.Environment["ILD_API_URL"] = "http://127.0.0.1:9";
+                psi.Environment["ILD_MCP_ENV_FILE"] = file;
+            });
+
+            Assert.Equal(GuideBody, await InitializeAndReadGuideAsync(ct));
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    [Fact]
+    public async Task A_server_handed_an_unusable_settings_file_keeps_stdout_for_mcp_and_uses_its_environment()
+    {
+        var ct = _cts.Token;
+        var file = Path.Combine(Path.GetTempPath(), $"ild-mcp-env-{Guid.NewGuid():N}.json");
+        File.WriteAllText(file, "[1]");
+        try
+        {
+            StartServer(psi => psi.Environment["ILD_MCP_ENV_FILE"] = file);
+
+            Assert.Equal(GuideBody, await InitializeAndReadGuideAsync(ct));
+        }
+        finally
+        {
+            File.Delete(file);
+        }
+    }
+
+    private async Task<string?> InitializeAndReadGuideAsync(CancellationToken ct)
+    {
+        await RequestAsync("initialize", new JsonObject
+        {
+            ["protocolVersion"] = "2025-06-18",
+            ["capabilities"] = new JsonObject(),
+            ["clientInfo"] = new JsonObject { ["name"] = "ild-tests", ["version"] = "1.0.0" },
+        }, ct);
+        await SendAsync(new JsonObject { ["jsonrpc"] = "2.0", ["method"] = "notifications/initialized" }, ct);
+        var answer = await RequestAsync("tools/call", new JsonObject
+        {
+            ["name"] = "get_loop_authoring_guide",
+            ["arguments"] = new JsonObject(),
+        }, ct);
+        Assert.NotEqual(true, (bool?)answer["isError"]);
+        return (string?)Assert.Single(answer["content"]!.AsArray())!["text"];
+    }
+
     private string ApiUrl => $"http://127.0.0.1:{((IPEndPoint)_api.LocalEndpoint).Port}";
 
-    private void StartServer()
+    private void StartServer(Action<ProcessStartInfo>? configure = null)
     {
         var psi = new ProcessStartInfo("dotnet")
         {
@@ -147,6 +205,7 @@ public sealed class McpServerStdioCompatibilityTests : IDisposable
                 psi.Environment.Remove(name);
         }
         psi.Environment["ILD_API_URL"] = ApiUrl;
+        configure?.Invoke(psi);
 
         _server = Process.Start(psi) ?? throw new InvalidOperationException("could not start dotnet");
         _server.ErrorDataReceived += (_, e) =>

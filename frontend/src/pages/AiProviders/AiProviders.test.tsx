@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { AdapterModelSupport, ConfigFieldType } from "../../types";
@@ -13,6 +13,7 @@ const DECLARED_MODEL_SUPPORT: Record<string, AdapterModelSupport> = {
   pi: "Required",
   "claude-code": "Optional",
   copilot: "Optional",
+  codex: "Optional",
 };
 
 /** The `GET /AgentAdapters` payload for a set of provider types. */
@@ -1531,5 +1532,186 @@ describe("AI provider tags", () => {
     const escaped = message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     expect(await screen.findByText(new RegExp(escaped))).toBeTruthy();
     expect(screen.getByText("Edit Provider")).toBeTruthy();
+  });
+});
+
+describe("a Codex provider", () => {
+  test("signs in through its terminal, offers its MCP and CLI fields, and saves without a URL or key", async () => {
+    const extraArgsField = {
+      name: "extraArgs",
+      type: ConfigFieldType.Textarea,
+      label: "Extra CLI arguments",
+      required: false,
+      defaultValue: null,
+      description: "Optional. Split like a shell command line.",
+      options: null,
+    };
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        types: ["opencode", "pi", "claude-code", "copilot", "codex"],
+        schema: [...customMcpSchema, extraArgsField],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+    fireEvent.click(screen.getByText("+ New Provider"));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Codex" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "codex" } });
+
+    expect(screen.queryByLabelText("Base URL")).toBeFalsy();
+    expect(screen.queryByLabelText("API Key")).toBeFalsy();
+    const note = screen.getByText(
+      (_, element) =>
+        element?.className === "ap-cli-note" &&
+        (element.textContent ?? "").includes("Codex") &&
+        (element.textContent ?? "").includes("Sign in with Device Code"),
+    );
+    expect(note.textContent).toContain("Open terminal");
+    expect(note.textContent).not.toContain("GitHub Copilot");
+
+    fireEvent.change(screen.getByLabelText("Model (optional)"), { target: { value: "gpt-5.5" } });
+    fireEvent.change(await screen.findByLabelText("Custom MCP servers (JSON)"), {
+      target: { value: '{"docs":{"command":["npx","docs-mcp"]}}' },
+    });
+    fireEvent.change(screen.getByLabelText("Extra CLI arguments"), {
+      target: { value: '-c model_reasoning_effort="high"' },
+    });
+    fireEvent.click(screen.getByText("Create"));
+
+    await waitFor(() =>
+      expect(requests.some((r) => r.method === "POST" && r.url.includes("/aiproviders"))).toBe(
+        true,
+      ),
+    );
+    const body = requests.find((r) => r.method === "POST" && r.url.includes("/aiproviders"))!
+      .body as Record<string, unknown>;
+    expect(body.type).toBe("codex");
+    expect(body.baseUrl).toBe("");
+    expect(body.apiKey).toBe("");
+    expect(body.model).toBe("gpt-5.5");
+    expect(body.customMcpServersJson).toBe('{"docs":{"command":["npx","docs-mcp"]}}');
+    expect(body.extraArgs).toBe('-c model_reasoning_effort="high"');
+  });
+});
+
+describe("updating several coding agents at once", () => {
+  const agent = (
+    key: string,
+    displayName: string,
+    installedVersion: string | null,
+    latestVersion: string,
+  ) => ({
+    key,
+    displayName,
+    npmPackage: key,
+    installedVersion,
+    latestVersion,
+    updateAvailable: true,
+    error: null,
+  });
+  const done = (a: ReturnType<typeof agent>) => ({
+    ...a,
+    installedVersion: a.latestVersion,
+    updateAvailable: false,
+  });
+  const pi = agent("pi", "Pi", "0.80.1", "0.80.2");
+  const opencode = agent("opencode", "OpenCode", "1.17.8", "1.17.9");
+  const codex = agent("codex", "Codex", null, "0.162.1");
+
+  /** Every agent's update request stays open until the test settles it. */
+  function deferredUpdates() {
+    const pending = new Map<string, (status: number, json: unknown) => void>();
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const update = /managedagents\/([^/]+)\/update/.exec(url);
+      if (init?.method === "POST" && update) {
+        return new Promise((resolve) => {
+          pending.set(update[1], (status, json) =>
+            resolve({
+              ok: status < 400,
+              status,
+              text: () => Promise.resolve(JSON.stringify(json)),
+            }),
+          );
+        });
+      }
+      if (url.includes("managedagents")) return jsonResponse([pi, opencode, codex]);
+      if (url.includes("AgentAdapters")) return jsonResponse(adapterList(["opencode", "pi"]));
+      return jsonResponse([]);
+    });
+    const settle = async (key: string, status: number, json: unknown) => {
+      await act(async () => pending.get(key)!(status, json));
+    };
+    return { fetchMock, settle };
+  }
+
+  const row = (name: string) =>
+    screen.getByText(name, { selector: ".ap-agent-name" }).closest(".ap-agent-row") as HTMLElement;
+  const action = (name: string) => within(row(name)).getByRole("button") as HTMLButtonElement;
+
+  function expectBusy(name: string, label: string) {
+    expect(action(name).textContent).toBe(label);
+    expect(action(name).disabled).toBe(true);
+  }
+
+  test("each clicked agent stays busy until its own request settles, and a failure shows on its row only", async () => {
+    const { fetchMock, settle } = deferredUpdates();
+    renderPage(fetchMock as unknown as ReturnType<typeof mockFetch>);
+    await openAgentsPopover();
+
+    fireEvent.click(action("Pi"));
+    fireEvent.click(action("OpenCode"));
+    fireEvent.click(action("Codex"));
+
+    expectBusy("Pi", "Updating…");
+    expectBusy("OpenCode", "Updating…");
+    expectBusy("Codex", "Installing…");
+
+    await settle("pi", 200, done(pi));
+
+    expect(within(row("Pi")).getByText("Up to date")).toBeTruthy();
+    expectBusy("OpenCode", "Updating…");
+    expectBusy("Codex", "Installing…");
+
+    // Closing and reopening the popover keeps the updates still in flight.
+    const bell = screen.getByRole("button", { name: /Coding agents/i });
+    fireEvent.click(bell);
+    expect(screen.queryByText("OpenCode", { selector: ".ap-agent-name" })).toBeNull();
+    fireEvent.click(bell);
+    expectBusy("OpenCode", "Updating…");
+    expectBusy("Codex", "Installing…");
+
+    await settle("opencode", 502, { error: "npm install failed" });
+
+    expect(within(row("OpenCode")).getByText("npm install failed")).toBeTruthy();
+    expect(action("OpenCode").textContent).toBe("Update → 1.17.9");
+    expect(action("OpenCode").disabled).toBe(false);
+    expectBusy("Codex", "Installing…");
+    expect(within(row("Pi")).queryByText("npm install failed")).toBeNull();
+    expect(within(row("Codex")).queryByText("npm install failed")).toBeNull();
+
+    await settle("codex", 200, done(codex));
+
+    expect(within(row("Codex")).getByText("Up to date")).toBeTruthy();
+    expect(within(row("OpenCode")).getByText("npm install failed")).toBeTruthy();
+  });
+
+  test("an agent's own retry clears its error without touching another agent's", async () => {
+    const { fetchMock, settle } = deferredUpdates();
+    renderPage(fetchMock as unknown as ReturnType<typeof mockFetch>);
+    await openAgentsPopover();
+
+    fireEvent.click(action("Pi"));
+    fireEvent.click(action("OpenCode"));
+    await settle("pi", 502, { error: "pi registry down" });
+    await settle("opencode", 502, { error: "opencode registry down" });
+
+    fireEvent.click(action("Pi"));
+
+    expectBusy("Pi", "Updating…");
+    expect(within(row("Pi")).queryByText("pi registry down")).toBeNull();
+    expect(within(row("OpenCode")).getByText("opencode registry down")).toBeTruthy();
+    expect(action("OpenCode").disabled).toBe(false);
   });
 });

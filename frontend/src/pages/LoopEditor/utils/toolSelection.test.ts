@@ -22,25 +22,29 @@ const provider = (type: string, supportedTools: AiToolDefinition[]): AiProvider 
   createdAt: "2026-09-14T00:00:00Z",
 });
 
-const copilot = provider("copilot", [tool("ild")]);
 const opencode = provider("opencode", [tool("read"), tool("write"), tool("execute"), tool("ild")]);
 
-describe("resolveToolSelection for Copilot", () => {
+// Copilot and Codex: their only tool is "ild", so a saved list without it means ILD off.
+describe.each([
+  provider("copilot", [tool("ild")]),
+  provider("codex", [tool("ild")]),
+  provider(" Codex ", [tool("ild")]),
+])("resolveToolSelection for the ild-only provider $type", (ildOnly) => {
   test("a saved empty list keeps ILD unticked", () => {
-    expect(resolveToolSelection(copilot, [])).toEqual([]);
+    expect(resolveToolSelection(ildOnly, [])).toEqual([]);
   });
 
   test("a saved list with no ILD entry keeps ILD unticked", () => {
-    expect(resolveToolSelection(copilot, ["read"])).toEqual([]);
+    expect(resolveToolSelection(ildOnly, ["read"])).toEqual([]);
   });
 
   test("no saved list starts with ILD ticked", () => {
-    expect(resolveToolSelection(copilot, undefined)).toEqual(["ild"]);
-    expect(resolveToolSelection(copilot, null)).toEqual(["ild"]);
+    expect(resolveToolSelection(ildOnly, undefined)).toEqual(["ild"]);
+    expect(resolveToolSelection(ildOnly, null)).toEqual(["ild"]);
   });
 
   test("a saved ILD selection stays ticked", () => {
-    expect(resolveToolSelection(copilot, ["ild"])).toEqual(["ild"]);
+    expect(resolveToolSelection(ildOnly, ["ild"])).toEqual(["ild"]);
   });
 });
 

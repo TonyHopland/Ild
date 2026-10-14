@@ -28,6 +28,7 @@ public sealed class ManagedAgentCommandEnvironmentTests : IDisposable
     [Theory]
     [InlineData("claude-code")]
     [InlineData("copilot")]
+    [InlineData("codex")]
     [InlineData("opencode")]
     [InlineData("pi")]
     public async Task The_managed_install_under_the_supplied_data_path_is_launched(string type)
@@ -41,6 +42,7 @@ public sealed class ManagedAgentCommandEnvironmentTests : IDisposable
         {
             "claude-code" => new ClaudeCodeAdapter(environment: environment),
             "copilot" => new CopilotAdapter(environment: environment),
+            "codex" => new CodexAdapter(environment: environment),
             "opencode" => new OpenCodeAdapter(environment: environment),
             _ => new PiAdapter(environment: environment),
         };

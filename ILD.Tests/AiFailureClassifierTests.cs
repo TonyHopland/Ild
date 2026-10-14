@@ -151,6 +151,7 @@ public class AiFailureClassifierTests
         { "claude-code", new ClaudeCodeAdapter() },
         { "pi", new PiAdapter() },
         { "copilot", new CopilotAdapter() },
+        { "codex", new CodexAdapter() },
     };
 
     [Theory]

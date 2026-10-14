@@ -1,7 +1,10 @@
+using ILD.Api.Configuration;
 using ILD.Api.Controllers;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
 namespace ILD.Tests;
@@ -86,5 +89,23 @@ public class AgentAdaptersControllerTests
         Assert.Equal(AdapterModelSupport.Required, adapters.Single(a => a.Type == "pi").ModelSupport);
         Assert.Equal(AdapterModelSupport.Optional, adapters.Single(a => a.Type == "claude-code").ModelSupport);
         Assert.Equal(AdapterModelSupport.Unsupported, adapters.Single(a => a.Type == "mock").ModelSupport);
+    }
+    [Fact]
+    public void The_registered_adapters_offer_codex_with_an_optional_model_and_the_mcp_and_extra_argument_fields()
+    {
+        IServiceCollection services = new ServiceCollection();
+        services.AddLogging();
+        foreach (var descriptor in new ServiceCollection().AddIldServices().Where(d =>
+                     d.ServiceType == typeof(IAgentAdapter)
+                     || d.ServiceType == typeof(IAgentAdapterRegistry)
+                     || d.ServiceType == typeof(IProcessEnvironment)))
+            services.Add(descriptor);
+        using var provider = services.BuildServiceProvider();
+        var controller = new AgentAdaptersController(provider.GetRequiredService<IAgentAdapterRegistry>());
+
+        var listed = (AgentAdapterDescriptor[])Assert.IsType<OkObjectResult>(controller.GetSupportedProviderTypes()).Value!;
+        Assert.Equal(AdapterModelSupport.Optional, Assert.Single(listed, a => a.Type == "codex").ModelSupport);
+        var schema = (ConfigFieldDescriptor[])Assert.IsType<OkObjectResult>(controller.GetConfigSchema("Codex")).Value!;
+        Assert.Equal(["customMcpServersJson", "extraArgs"], schema.Select(f => f.Name).Order());
     }
 }
