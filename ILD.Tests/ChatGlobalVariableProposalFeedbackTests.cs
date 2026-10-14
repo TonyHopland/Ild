@@ -161,7 +161,8 @@ public sealed class ChatGlobalVariableProposalFeedbackTests : IDisposable
             Mock.Of<IChatNotifier>(),
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,
-            new ChatLoopScratchpad());
+            new ChatLoopScratchpad(),
+            new ChatCloneCoordinator());
 
     private sealed class RecordingChatAdapter : IAgentAdapter
     {

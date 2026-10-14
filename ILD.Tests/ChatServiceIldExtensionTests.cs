@@ -157,7 +157,8 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
             r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
         return new ChatService(
             _db.Context, _db.Providers, registry, Mock.Of<IChatNotifier>(),
-            new ChatOptions { ScratchRoot = _scratchRoot }, _db.LoopRuns, new ChatLoopScratchpad());
+            new ChatOptions { ScratchRoot = _scratchRoot }, _db.LoopRuns, new ChatLoopScratchpad(),
+            new ChatCloneCoordinator());
     }
 
     private async Task<Guid> StartChatAsync(ChatService svc)

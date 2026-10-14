@@ -43,6 +43,7 @@ public sealed class ChatService : IChatService
     private readonly ChatOptions _options;
     private readonly ILoopRunStore _runs;
     private readonly IChatLoopScratchpad _loopScratchpad;
+    private readonly ChatCloneCoordinator _chatClones;
     private readonly IWorkItemManager? _workItems;
     private readonly ILogger<ChatService> _log;
     private readonly IChatTitleScheduler? _titles;
@@ -56,6 +57,7 @@ public sealed class ChatService : IChatService
         ChatOptions options,
         ILoopRunStore runs,
         IChatLoopScratchpad loopScratchpad,
+        ChatCloneCoordinator chatClones,
         IWorkItemManager? workItems = null,
         ILogger<ChatService>? log = null,
         IChatTitleScheduler? titles = null,
@@ -68,6 +70,7 @@ public sealed class ChatService : IChatService
         _options = options;
         _runs = runs;
         _loopScratchpad = loopScratchpad;
+        _chatClones = chatClones;
         _workItems = workItems;
         _log = log ?? NullLogger<ChatService>.Instance;
         _titles = titles;
@@ -687,6 +690,11 @@ public sealed class ChatService : IChatService
 
         // An unread chat takes its dot with it, in every window of the owner's.
         await _notifier.UnreadChangedAsync(session.UserId, session.Id);
+
+        // A clone the chat's agent asked for would otherwise go on writing into the
+        // scratch folder below, or recreate it, after it is removed. Only after the
+        // row is gone: a clone call starting later is refused by finding it gone.
+        await _chatClones.StopForDeletedChatAsync(session.Id);
 
         // Best-effort scratch-dir removal: nothing chat-local should remain, but a
         // leftover directory must never fail the hard-delete. The agent writes the

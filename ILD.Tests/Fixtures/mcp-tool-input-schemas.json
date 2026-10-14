@@ -16,6 +16,26 @@
       "dependsOnWorkItemId"
     ]
   },
+  "clone_repository": {
+    "type": "object",
+    "properties": {
+      "repositoryId": {
+        "description": "Repository GUID (from list_repositories).",
+        "type": "string"
+      },
+      "branch": {
+        "description": "Branch to clone or switch to. Omit for the repository's default branch.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "repositoryId"
+    ]
+  },
   "close_pr_review_item": {
     "type": "object",
     "properties": {

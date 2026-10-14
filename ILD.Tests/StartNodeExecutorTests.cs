@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
@@ -103,6 +104,7 @@ public class StartNodeExecutorTests : IDisposable
         // A stale base must never be turned into a worktree.
         mgr.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
         mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.False(BaseRepoClone.IsTracked(run.RepositoryId!.Value), "the failed Start node kept the repository's lock");
     }
 
     [Fact]
@@ -161,6 +163,38 @@ public class StartNodeExecutorTests : IDisposable
         mgr.Verify(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()), Times.Once);
         mgr.Verify(m => m.FetchAsync(editedRepoPath, It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()), Times.Never);
         mgr.Verify(m => m.CreateWorktreeAsync(editedRepoPath, It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Everything_written_to_the_base_clones_refs_is_held_under_the_repositorys_lock_and_the_rebase_is_not()
+    {
+        var repoId = Guid.Empty;
+        var steps = new List<(string Step, bool Locked)>();
+        void Record(string step) => steps.Add((step, BaseRepoClone.IsTracked(repoId)));
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .Callback((string path, CancellationToken _, GitAuthOptions? _) => Record($"fetch {path}"))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.ResetHardAsync(_baseRepo, "origin/main", It.IsAny<CancellationToken>()))
+            .Callback(() => Record("reset"))
+            .ReturnsAsync(true);
+        repoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()))
+            .Callback(() => Record("add worktree"))
+            .ReturnsAsync("/tmp/worktree");
+        repoManager.Setup(m => m.RebaseAsync("/tmp/worktree", "origin/main", It.IsAny<CancellationToken>()))
+            .Callback(() => Record("rebase"))
+            .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+        var (_, sp, run, node) = BuildContext(repoManager);
+        repoId = run.RepositoryId!.Value;
+
+        await foreach (var _ in new StartNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+        {
+        }
+
+        Assert.Equal(
+            [($"fetch {_baseRepo}", true), ("reset", true), ("add worktree", true), ("fetch /tmp/worktree", true), ("rebase", false)],
+            steps);
+        Assert.False(BaseRepoClone.IsTracked(repoId));
     }
 
     /// <summary>A repo manager that prepares a worktree at <c>/tmp/worktree</c> on the happy path.</summary>
@@ -298,6 +332,44 @@ public class StartNodeExecutorTests : IDisposable
         Assert.Contains("no/such/branch", fail.Reason);
         mgr.Verify(m => m.ResetHardAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         mgr.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_fresh_base_clone_that_fails_or_is_killed_leaves_nothing_so_the_next_start_clones_again(bool killed)
+    {
+        var clones = 0;
+        var repoManager = new Mock<IRepositoryManager>();
+        repoManager.Setup(m => m.CloneAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+            .Returns((string _, string path, CancellationToken _, GitAuthOptions? _) =>
+            {
+                clones++;
+                Directory.CreateDirectory(Path.Combine(path, ".git", "objects"));
+                return killed
+                    ? Task.FromException<(bool, string?)>(new OperationCanceledException())
+                    : Task.FromResult<(bool, string?)>((false, "fatal: the remote hung up unexpectedly"));
+            });
+        var (_, sp, run, node) = BuildContext(repoManager, worktreesPath: string.Empty);
+        var target = BaseRepoPath.Fallback(run.RepositoryId!.Value, sp.GetRequiredService<IConfiguration>());
+
+        async Task StartAsync()
+        {
+            try
+            {
+                await foreach (var _ in new StartNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+                {
+                }
+            }
+            catch (OperationCanceledException) when (killed)
+            {
+            }
+        }
+
+        await StartAsync();
+        Assert.False(Directory.Exists(target), "the failed clone left a partial base clone behind");
+        await StartAsync();
+        Assert.Equal(2, clones);
     }
 
     [Fact]

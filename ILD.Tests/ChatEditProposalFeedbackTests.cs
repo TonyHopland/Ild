@@ -153,6 +153,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,
             new ChatLoopScratchpad(),
+            new ChatCloneCoordinator(),
             workItems: workItems);
 
     private async Task<AiProvider> SeedProviderAsync()

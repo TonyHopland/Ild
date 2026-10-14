@@ -87,6 +87,29 @@ public static class AgentWritableFiles
     }
 
     /// <summary>
+    /// Whether nothing at all is at <paramref name="path"/>, or an empty directory
+    /// that is not a link. A link, a file or anything unreadable answers false.
+    /// </summary>
+    public static async Task<bool> IsMissingOrEmptyDirectoryAsync(string path, CancellationToken ct = default)
+    {
+        const string script =
+            """p="$1"; [ -L "$p" ] && exit 1; [ -e "$p" ] || exit 0; [ -d "$p" ] && [ -r "$p" ] || exit 1; [ -z "$(ls -A -- "$p")" ]""";
+        return (await RunAsync(script, [path], stdin: null, ct)).ExitCode == 0;
+    }
+
+    /// <summary>
+    /// The names of the directories directly below <paramref name="directory"/>,
+    /// leaving out links and names starting with '.'; none when it is not there.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>> ListDirectoriesAsync(string directory, CancellationToken ct = default)
+    {
+        const string script =
+            """for d in "$1"/*/; do d="${d%/}"; [ -d "$d" ] && [ ! -L "$d" ] && printf '%s\0' "${d##*/}"; done; exit 0""";
+        var result = await RunAsync(script, [directory], stdin: null, ct);
+        return result.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    /// <summary>
     /// Delete each of <paramref name="paths"/>, whatever it is. Never throws for
     /// what it finds there; returns whether every path is gone.
     /// </summary>
@@ -156,27 +179,12 @@ public static class AgentWritableFiles
         return AgentIsolation.Route(psi, agentUser, agentGroup, agentHome);
     }
 
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
+    private static async Task<AgentProcessResult> RunAsync(
         string script, IReadOnlyList<string> arguments, string? stdin, CancellationToken ct)
     {
         using var process = Process.Start(BuildStartInfo(
                 script, arguments, AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
             ?? throw new IOException("could not start /bin/sh");
-        var stdout = process.StandardOutput.ReadToEndAsync(ct);
-        var stderr = process.StandardError.ReadToEndAsync(ct);
-        try
-        {
-            if (stdin is not null)
-                await process.StandardInput.WriteAsync(stdin.AsMemory(), ct);
-            process.StandardInput.Close();
-            await process.WaitForExitAsync(ct);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
-            throw;
-        }
-
-        return (process.ExitCode, await stdout, await stderr);
+        return await AgentProcess.RunAsync(process, stdin, ct);
     }
 }

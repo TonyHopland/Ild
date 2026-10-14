@@ -15,6 +15,7 @@ using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Api.Controllers;
@@ -46,6 +47,9 @@ namespace ILD.Api.Controllers;
 ///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>,
 ///  - pull commits pushed to their own run branch, which needs the
 ///    orchestrator's repository token the agent uid cannot reach (ADR-0014).
+///  - in a chat a schedule started, have the orchestrator clone or update a
+///    repository the schedule allows into the chat's scratch folder, with
+///    credentials that never reach the clone (ADR-0014).
 ///
 /// Crucially, this controller deliberately does NOT expose start,
 /// transition, link-pr, or human-feedback endpoints. Agents are not
@@ -355,6 +359,26 @@ public class AgentController : ControllerBase
 
         return PullBranchHttpResult.ToActionResult(
             await _workItems.PullBranchAsync(id, cancellationToken));
+    }
+
+    /// <summary>
+    /// Clone a repository into the calling scheduled chat's <c>repos/</c> folder,
+    /// or update the clone made there before, if the schedule allows it. The git
+    /// work outlives a cancelled request, so a caller that timed out calls again
+    /// and finds it done.
+    /// </summary>
+    [HttpPost("chat/repositories/{repositoryId}/clone")]
+    public async Task<IActionResult> CloneRepositoryIntoChat(
+        string repositoryId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] AgentChatRepositoryCloneRequest? request,
+        [FromServices] IChatRepositoryCloner cloner,
+        CancellationToken cancellationToken)
+    {
+        if (!TryResolveChatSessionId(out var chatSessionId))
+            return BadRequest(new { error = $"A chat-session id is required. Send it in the {ChatSessionIdHeader} header." });
+
+        return ChatRepositoryCloneHttpResult.ToActionResult(
+            await cloner.CloneAsync(chatSessionId, repositoryId, request?.Branch, cancellationToken));
     }
 
     // -- Worktree preview controls (ADR-0011) ----------------------------------

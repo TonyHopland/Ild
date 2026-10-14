@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.Executors;
 
@@ -131,12 +132,18 @@ public sealed class StartNodeExecutor : INodeExecutor
         var branch = run.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, run.Id);
         var baseBranch = RunBaseBranch.Resolve(run, repo);
 
-        var (baseOk, basePath, baseError) = await PrepareBaseRepoAsync(
-            ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
-        if (!baseOk) return (false, null, null, baseError);
+        // The worktree shares the base clone's refs, so adding it and fetching in
+        // it are held under the repository's lock with the base clone's own work.
+        string path;
+        using (await BaseRepoClone.LockAsync(repo.Id, ctx.CancellationToken))
+        {
+            var (baseOk, basePath, baseError) = await PrepareBaseRepoAsync(
+                ctx, sp, repoManager, run, repo, baseBranch, gitAuth);
+            if (!baseOk) return (false, null, null, baseError);
 
-        var path = await repoManager.CreateWorktreeAsync(basePath!, branch);
-        await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
+            path = await repoManager.CreateWorktreeAsync(basePath!, branch);
+            await repoManager.FetchAsync(path, ctx.CancellationToken, gitAuth);
+        }
         try
         {
             var rebase = await repoManager.RebaseAsync(path, $"origin/{baseBranch}", ctx.CancellationToken);
@@ -167,28 +174,12 @@ public sealed class StartNodeExecutor : INodeExecutor
         NodeExecutionContext ctx, IServiceProvider sp, IRepositoryManager repoManager,
         LoopRun run, Repository repo, string baseBranch, GitAuthOptions? gitAuth)
     {
-        var basePath = repo.WorktreesPath;
-        var cloned = false;
-        if (string.IsNullOrWhiteSpace(basePath) || !Directory.Exists(Path.Combine(basePath, ".git")))
-        {
-            basePath = BaseRepoPath.Fallback(repo.Id, sp.GetService<IConfiguration>());
-            Directory.CreateDirectory(Path.GetDirectoryName(basePath)!);
-            if (!Directory.Exists(Path.Combine(basePath, ".git")))
-            {
-                var result = await repoManager.CloneAsync(repo.CloneUrl, basePath, ctx.CancellationToken, gitAuth);
-                if (!result.Success) return (false, null, $"git clone failed: {result.Error}");
-                cloned = true;
-            }
-        }
-
-        // A clone we have just made already carries every remote ref; only a
-        // reused one can have gone stale behind us.
-        if (!cloned)
-        {
-            var fetchOk = await repoManager.FetchAsync(basePath, ctx.CancellationToken, gitAuth);
-            if (!fetchOk)
-                return (false, null, $"failed to fetch origin for base repo — refusing to start run from a stale origin/{baseBranch}");
-        }
+        var (ok, path, error) = await BaseRepoClone.EnsureAsync(
+            repoManager, repo, sp.GetService<IConfiguration>(), gitAuth, ctx.CancellationToken,
+            sp.GetService<ILogger<StartNodeExecutor>>());
+        if (!ok)
+            return (false, null, $"could not bring the base repo up to date ({error}) — refusing to start run without a current origin/{baseBranch}");
+        var basePath = path!;
 
         // A base the human typed can simply not be there. Say so once, plainly,
         // instead of letting it surface as a reset or rebase failure — and never
