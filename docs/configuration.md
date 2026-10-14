@@ -806,7 +806,8 @@ arguments and `env` from a short-lived file the agent can read but not change,
 adds the egress proxy variables for the provider (so an `npx` server downloads
 through the proxy; the server's own `env` wins on a conflict), and then becomes
 the server. The built-in `ild` server reads its URL and token from such a file
-too. Codex only accepts a server name made of letters, digits, `-` and `_`: a
+too; if it cannot start, the Codex run fails rather than going on without ILD's
+tools. Codex only accepts a server name made of letters, digits, `-` and `_`: a
 server named otherwise is skipped with a warning in the ILD log, and the run goes
 on without it.
 

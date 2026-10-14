@@ -169,10 +169,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         }
         finally
         {
-            foreach (var server in mcpServers)
-            {
-                try { File.Delete(server.ConfigFile); } catch { /* best effort */ }
-            }
+            DeleteConfigFiles(mcpServers);
         }
     }
 
@@ -270,50 +267,73 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         logger ??= NullLogger.Instance;
         environment ??= ProcessEnvironment.Current;
         var servers = new List<CodexMcpServer>();
-        var dll = IldMcpServer.ResolveServerDll(environment);
-
-        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, allowlist);
-        if (dll is not null
-            && enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
-            && IldMcpServer.TryWriteConfigFile(
-                "ild-codex-mcp", runContext.LoopRunId, IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
-                logger, environment) is { } settingsFile)
-            servers.Add(new("ild", settingsFile,
-                $"{{command=\"dotnet\",args=[{TomlString(dll)}],env={{ILD_MCP_ENV_FILE={TomlString(settingsFile)}}}}}"));
-
-        // The parser reserves the "ild" name, so these can never clobber it.
-        var customServers = CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson);
-        if (customServers.Count == 0)
-            return servers;
-
-        var proxyUrl = AgentIsolation.ResolveEgressProxyUrl(environment.Get(AgentIsolation.EgressProxyPortEnvVar), provider.Id);
-        foreach (var server in customServers)
+        try
         {
-            if (!ConfigKeyName.IsMatch(server.Name) || dll is null)
+            var dll = IldMcpServer.ResolveServerDll(environment);
+
+            // codex waits for a server before the first model request only when it is
+            // required, so without that a slow start leaves the turn without ILD's
+            // tools; a required server that cannot start fails the run, saying why.
+            // The call timeout sits above the server's own 100 s HTTP timeout, since
+            // codex's 60 s default would cut a long call, like a clone, short.
+            var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, allowlist);
+            if (dll is not null
+                && enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
+                && IldMcpServer.TryWriteConfigFile(
+                    "ild-codex-mcp", runContext.LoopRunId, IldMcpServer.BuildEnvironment(runContext, chatSessionId, environment),
+                    logger, environment) is { } settingsFile)
+                servers.Add(new("ild", settingsFile,
+                    $"{{command=\"dotnet\",args=[{TomlString(dll)}],env={{ILD_MCP_ENV_FILE={TomlString(settingsFile)}}},"
+                    + "required=true,startup_timeout_sec=30,tool_timeout_sec=120}"));
+
+            // The parser reserves the "ild" name, so these can never clobber it.
+            var customServers = CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson);
+            if (customServers.Count == 0)
+                return servers;
+
+            var proxyUrl = AgentIsolation.ResolveEgressProxyUrl(environment.Get(AgentIsolation.EgressProxyPortEnvVar), provider.Id);
+            foreach (var server in customServers)
             {
-                logger.LogWarning(
-                    "Codex runs without the custom MCP server {ServerName} of AI provider {ProviderName}: {Reason}",
-                    server.Name, provider.Name,
-                    dll is null
-                        ? "the ILD MCP server, which launches it, cannot be found."
-                        : "codex only takes a server name made of letters, digits, '-' and '_'.");
-                continue;
+                if (!ConfigKeyName.IsMatch(server.Name) || dll is null)
+                {
+                    logger.LogWarning(
+                        "Codex runs without the custom MCP server {ServerName} of AI provider {ProviderName}: {Reason}",
+                        server.Name, provider.Name,
+                        dll is null
+                            ? "the ILD MCP server, which launches it, cannot be found."
+                            : "codex only takes a server name made of letters, digits, '-' and '_'.");
+                    continue;
+                }
+
+                var launch = ClaudeCodeAdapter.BuildCustomMcpEntry(server);
+                var env = proxyUrl is null
+                    ? new Dictionary<string, string>()
+                    : new Dictionary<string, string>(AgentIsolation.EgressProxyEnvironment(proxyUrl));
+                foreach (var (name, value) in server.Env)
+                    env[name] = value;
+                launch["env"] = env;
+
+                if (IldMcpServer.TryWriteConfigFile("ild-codex-mcp-server", runContext.LoopRunId, launch, logger, environment) is { } launchFile)
+                    servers.Add(new(server.Name, launchFile,
+                        $"{{command=\"dotnet\",args=[{TomlString(dll)},\"--launch\",{TomlString(launchFile)}]}}"));
             }
 
-            var launch = ClaudeCodeAdapter.BuildCustomMcpEntry(server);
-            var env = proxyUrl is null
-                ? new Dictionary<string, string>()
-                : new Dictionary<string, string>(AgentIsolation.EgressProxyEnvironment(proxyUrl));
-            foreach (var (name, value) in server.Env)
-                env[name] = value;
-            launch["env"] = env;
-
-            if (IldMcpServer.TryWriteConfigFile("ild-codex-mcp-server", runContext.LoopRunId, launch, logger, environment) is { } launchFile)
-                servers.Add(new(server.Name, launchFile,
-                    $"{{command=\"dotnet\",args=[{TomlString(dll)},\"--launch\",{TomlString(launchFile)}]}}"));
+            return servers;
         }
+        catch
+        {
+            DeleteConfigFiles(servers);
+            throw;
+        }
+    }
 
-        return servers;
+    /// <summary>Delete the files <see cref="WriteMcpServers"/> wrote, best effort.</summary>
+    public static void DeleteConfigFiles(IEnumerable<CodexMcpServer> servers)
+    {
+        foreach (var server in servers)
+        {
+            try { File.Delete(server.ConfigFile); } catch { /* best effort */ }
+        }
     }
 
     /// <summary>A name codex accepts unquoted in <c>-c mcp_servers.&lt;name&gt;=…</c>.</summary>
@@ -467,7 +487,8 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     /// <summary>
     /// Run a session snapshot step. Snapshots let a later turn resume, but never
-    /// decide this one: a step that fails is logged and the turn goes on.
+    /// decide this one: a step that fails, or is cancelled, is logged and the turn
+    /// goes on. A cancelled turn still stops at codex's own wait, which kills it.
     /// </summary>
     private async Task TrySnapshotStepAsync(string step, string sessionId, Func<Task> run)
     {
@@ -475,7 +496,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         {
             await run();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not {Step} the codex session {SessionId}: {Reason}", step, sessionId, ex.Message);
         }

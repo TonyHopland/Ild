@@ -302,6 +302,7 @@ export default function AiProviders() {
           <button
             className="btn btn-primary btn-small"
             disabled={!agent.updateAvailable || updating}
+            aria-busy={updating}
             onClick={() => void handleUpdateAgent(agent)}
             title={title}
           >
