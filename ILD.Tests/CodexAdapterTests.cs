@@ -269,6 +269,7 @@ public sealed class CodexAdapterTests : IDisposable
     [Fact]
     public async Task Usage_sums_every_completed_turn_and_has_no_cost()
     {
+        // codex 0.162.1 reports the session's running total on each turn.completed.
         var script = WriteCodex(Lines(
             ThreadStarted("t-1"),
             TurnStarted,
@@ -276,7 +277,7 @@ public sealed class CodexAdapterTests : IDisposable
             TurnCompleted(1200, 300, cached: 1000, reasoning: 200),
             TurnStarted,
             AgentMessage("item_1", "Two."),
-            TurnCompleted(800, 50, cached: 700, reasoning: 10)));
+            TurnCompleted(2000, 350, cached: 1700, reasoning: 210)));
 
         var result = await Adapter().ExecuteAsync(Context(script));
 
@@ -284,6 +285,38 @@ public sealed class CodexAdapterTests : IDisposable
         Assert.NotNull(result.Usage);
         Assert.Equal(2000, result.Usage!.InputTokens);
         Assert.Equal(350, result.Usage.OutputTokens);
+        Assert.Null(result.Usage.CostUsd);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_resumed_session_reports_only_what_this_run_added_to_its_running_total(bool sameThread)
+    {
+        // As codex 0.162.1 does: the rollout's last token_count holds the session's
+        // total so far, and a resumed turn's turn.completed counts on from it. A
+        // thread codex could not resume is started anew and counts from zero.
+        const string sessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+        var rollout = Path.Combine(_home, ".codex", "sessions", "2026", "09", "01", $"rollout-2026-09-01T08-00-00-{sessionId}.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(rollout)!);
+        File.WriteAllLines(rollout,
+        [
+            Json(new { type = "session_meta", payload = new { id = sessionId } }),
+            TokenCount(100, 20),
+            Json(new { type = "response_item", payload = new { type = "message" } }),
+            TokenCount(250, 45),
+        ]);
+        var script = WriteCodex(Lines(
+            ThreadStarted(sameThread ? sessionId : "0199a213-81c0-7800-8aa1-0000000000ff"),
+            TurnStarted,
+            AgentMessage("item_0", "Again."),
+            TurnCompleted(sameThread ? 400 : 150, sameThread ? 60 : 15)));
+
+        var result = await Adapter().ExecuteAsync(Context(script) with { SessionId = sessionId });
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(150, result.Usage!.InputTokens);
+        Assert.Equal(15, result.Usage.OutputTokens);
         Assert.Null(result.Usage.CostUsd);
     }
 
@@ -739,6 +772,17 @@ public sealed class CodexAdapterTests : IDisposable
         {
             type = "turn.completed",
             usage = new { input_tokens = input, cached_input_tokens = cached, output_tokens = output, reasoning_output_tokens = reasoning },
+        });
+
+    private static string TokenCount(long input, long output)
+        => Json(new
+        {
+            type = "event_msg",
+            payload = new
+            {
+                type = "token_count",
+                info = new { total_token_usage = new { input_tokens = input, cached_input_tokens = 0, output_tokens = output, reasoning_output_tokens = 0, total_tokens = input + output } },
+            },
         });
 
     private static string Success(string text, string threadId = "0199a213-81c0-7800-8aa1-bbab2a035a53")

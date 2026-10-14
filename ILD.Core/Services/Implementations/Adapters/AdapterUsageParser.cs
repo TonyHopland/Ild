@@ -15,7 +15,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 ///   <item>pi: a per-message <c>usage</c> object (<c>input</c>/<c>output</c>,
 ///   <c>cacheRead</c>/<c>cacheWrite</c>, <c>cost.total</c>) on every assistant
 ///   message and compaction, read by <see cref="ParsePi"/>.</item>
-///   <item>codex: a <c>usage</c> object on every <c>turn.completed</c> event, read by <see cref="ParseCodex"/>.</item>
+///   <item>codex: the session's running total on every <c>turn.completed</c> event, read by <see cref="ParseCodex"/>.</item>
 /// </list>
 /// <see cref="Parse"/> is tolerant: it walks each JSON line and keeps the last usage
 /// object and cost it sees, so a cumulative final event wins over earlier
@@ -88,19 +88,49 @@ public static class AdapterUsageParser
     }
 
     /// <summary>
-    /// Sum the <c>usage</c> of every <c>turn.completed</c> event in a
-    /// <c>codex exec --json</c> stream. Its <c>cached_input_tokens</c> and
-    /// <c>reasoning_output_tokens</c> are parts of <c>input_tokens</c> and
-    /// <c>output_tokens</c>, so they are not added again. Codex reports no cost.
-    /// Returns <c>null</c> when no turn completed.
+    /// The usage of one <c>codex exec --json</c> run. Each <c>turn.completed</c>
+    /// carries the session's running total rather than the turn's own figures (a
+    /// resumed session counts on from where it stopped), so the run used the last
+    /// total minus <paramref name="sessionTotalBefore"/>, the total the session
+    /// had when the run started (see <see cref="ParseCodexSessionTotal"/>). Its
+    /// <c>cached_input_tokens</c> and <c>reasoning_output_tokens</c> are parts of
+    /// <c>input_tokens</c> and <c>output_tokens</c>, so they are not added again.
+    /// Codex reports no cost. Returns <c>null</c> when no turn completed.
     /// </summary>
-    public static TokenUsage? ParseCodex(string? rawStdout)
+    public static TokenUsage? ParseCodex(string? rawStdout, TokenUsage sessionTotalBefore)
     {
-        if (string.IsNullOrWhiteSpace(rawStdout)) return null;
+        if (LastCodexTotal(rawStdout, CodexTurnTotal) is not { } total) return null;
+        return new TokenUsage(
+            Math.Max(0, total.InputTokens - sessionTotalBefore.InputTokens),
+            Math.Max(0, total.OutputTokens - sessionTotalBefore.OutputTokens),
+            null);
+    }
 
-        long input = 0, output = 0;
-        var sawTurn = false;
-        foreach (var rawLine in rawStdout.Split('\n'))
+    /// <summary>
+    /// The running total a codex session had reached, read from its rollout file:
+    /// the <c>total_token_usage</c> of the last <c>token_count</c> event. A
+    /// rollout without one has used nothing yet.
+    /// </summary>
+    public static TokenUsage ParseCodexSessionTotal(string rolloutJsonl)
+        => LastCodexTotal(rolloutJsonl, CodexRolloutTotal) ?? new TokenUsage(0, 0, null);
+
+    private static JsonElement? CodexTurnTotal(JsonElement root)
+        => StringProperty(root, "type") == "turn.completed" ? ObjectProperty(root, "usage") : null;
+
+    private static JsonElement? CodexRolloutTotal(JsonElement root)
+        => StringProperty(root, "type") == "event_msg"
+           && ObjectProperty(root, "payload") is { } payload
+           && StringProperty(payload, "type") == "token_count"
+           && ObjectProperty(payload, "info") is { } info
+            ? ObjectProperty(info, "total_token_usage")
+            : null;
+
+    private static TokenUsage? LastCodexTotal(string? jsonl, Func<JsonElement, JsonElement?> totalOf)
+    {
+        if (string.IsNullOrWhiteSpace(jsonl)) return null;
+
+        TokenUsage? last = null;
+        foreach (var rawLine in jsonl.Split('\n'))
         {
             var line = rawLine.Trim();
             if (line.Length == 0) continue;
@@ -111,23 +141,18 @@ public static class AdapterUsageParser
 
             using (doc)
             {
-                var root = doc.RootElement;
-                if (root.ValueKind != JsonValueKind.Object
-                    || !root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String
-                    || type.GetString() != "turn.completed")
-                    continue;
-
-                sawTurn = true;
-                if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
-                {
-                    input += SumLongs(usage, "input_tokens");
-                    output += SumLongs(usage, "output_tokens");
-                }
+                if (doc.RootElement.ValueKind == JsonValueKind.Object && totalOf(doc.RootElement) is { } total)
+                    last = new TokenUsage(SumLongs(total, "input_tokens"), SumLongs(total, "output_tokens"), null);
             }
         }
-
-        return sawTurn ? new TokenUsage(input, output, null) : null;
+        return last;
     }
+
+    private static string? StringProperty(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+    private static JsonElement? ObjectProperty(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Object ? value : null;
 
     private static JsonElement? PiCountedUsage(JsonElement root)
     {

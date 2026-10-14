@@ -80,8 +80,9 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
             mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
-            var sessionsDirectory = ctx.ManageSession && IsSessionId(ctx.SessionId) ? SessionsDirectory() : null;
-            if (sessionsDirectory is not null)
+            var sessionsDirectory = SessionsDirectory();
+            var resumeId = IsSessionId(ctx.SessionId) ? ctx.SessionId : null;
+            if (ctx.ManageSession && ScopeFactory is not null && resumeId is not null && sessionsDirectory is not null)
             {
                 // Fork: seed a copy of the source session under the new id, so the
                 // restore below writes the copy and `resume` continues on it.
@@ -91,6 +92,11 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                 await TrySnapshotStepAsync("restore", ctx.SessionId!,
                     () => RestoreRolloutAsync(ctx, sessionsDirectory, ctx.SessionId!));
             }
+
+            // Null when the total cannot be read, so no usage is reported rather than a wrong one.
+            var sessionTotalBefore = resumeId is null
+                ? NoUsage
+                : await ReadSessionTotalAsync(sessionsDirectory, resumeId, ctx.Cancel);
 
             Process? proc;
             try
@@ -157,11 +163,16 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                     : "[codex] no assistant text response from model");
 
             var sessionId = stdout.ThreadId ?? ctx.SessionId;
-            if (ctx.ManageSession && IsSessionId(sessionId) && SessionsDirectory() is { } sessions)
-                await TrySnapshotStepAsync("store", sessionId!, () => PersistRolloutAsync(ctx, sessions, sessionId!));
+            if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(sessionId) && sessionsDirectory is not null)
+                await TrySnapshotStepAsync("store", sessionId!, () => PersistRolloutAsync(ctx, sessionsDirectory, sessionId!));
 
-            return NodeExecutionResult.Ok(
-                response, ctx.Prompt, sessionId, ctx.IncomingSessionId, AdapterUsageParser.ParseCodex(stdout.RawStdout));
+            // A thread codex could not resume was started anew, counting from zero.
+            var resumed = resumeId is not null && (stdout.ThreadId is null || stdout.ThreadId == resumeId);
+            var usage = !resumed ? AdapterUsageParser.ParseCodex(stdout.RawStdout, NoUsage)
+                : sessionTotalBefore is null ? null
+                : AdapterUsageParser.ParseCodex(stdout.RawStdout, sessionTotalBefore);
+
+            return NodeExecutionResult.Ok(response, ctx.Prompt, sessionId, ctx.IncomingSessionId, usage);
         }
         catch (Exception ex)
         {
@@ -448,7 +459,6 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     // isolation is the agent's (AgentIsolation.ResolveChildHome), not ours.
     private string? SessionsDirectory()
     {
-        if (ScopeFactory is null) return null;
         var home = AgentIsolation.ResolveChildHome(AgentIsolation.AgentUser, AgentIsolation.AgentHome)
             ?? EnvironmentVariables.Get("HOME");
         return string.IsNullOrEmpty(home) ? null : Path.Combine(home, ".codex", "sessions");
@@ -461,6 +471,31 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             .Select(file => file.Path)
             .Order(StringComparer.Ordinal)
             .LastOrDefault();
+
+    private static readonly TokenUsage NoUsage = new(0, 0, null);
+
+    /// <summary>
+    /// The running token total the session had reached before this run, which
+    /// codex counts on from (see <see cref="AdapterUsageParser.ParseCodex"/>):
+    /// zero when it has no rollout, since codex then starts a new thread, and
+    /// null when its rollout cannot be read.
+    /// </summary>
+    private async Task<TokenUsage?> ReadSessionTotalAsync(string? sessionsDirectory, string sessionId, CancellationToken ct)
+    {
+        if (sessionsDirectory is null) return null;
+        try
+        {
+            if (await FindRolloutAsync(sessionsDirectory, sessionId, ct) is not { } rollout) return NoUsage;
+            return await AgentWritableFiles.ReadFileAsync(rollout, ct) is { } content
+                ? AdapterUsageParser.ParseCodexSessionTotal(content)
+                : null;
+        }
+        catch (IOException ex)
+        {
+            _logger.LogWarning(ex, "Could not read the codex session {SessionId}, so its usage is not reported: {Reason}", sessionId, ex.Message);
+            return null;
+        }
+    }
 
     private async Task RestoreRolloutAsync(AgentExecutionContext ctx, string sessionsDirectory, string sessionId)
     {
