@@ -52,7 +52,8 @@ export default function AiProviders() {
   const [configSchema, setConfigSchema] = useState<ConfigFieldDescriptor[]>([]);
   const [configValues, setConfigValues] = useState<Record<string, ConfigValue>>({});
   const [agents, setAgents] = useState<ManagedAgentStatus[]>([]);
-  const [updatingAgent, setUpdatingAgent] = useState<string | null>(null);
+  // Keyed by agent key: each update owns its own entry, so several can run at once.
+  const [updatingAgents, setUpdatingAgents] = useState<Record<string, true>>({});
   const [agentErrors, setAgentErrors] = useState<Record<string, string>>({});
   const [bellOpen, setBellOpen] = useState(false);
 
@@ -114,7 +115,7 @@ export default function AiProviders() {
   };
 
   const handleUpdateAgent = async (agent: ManagedAgentStatus) => {
-    setUpdatingAgent(agent.key);
+    setUpdatingAgents((prev) => ({ ...prev, [agent.key]: true }));
     setAgentErrors((prev) => {
       const next = { ...prev };
       delete next[agent.key];
@@ -127,7 +128,11 @@ export default function AiProviders() {
       const message = (error as ApiError)?.message ?? "Update failed.";
       setAgentErrors((prev) => ({ ...prev, [agent.key]: message }));
     } finally {
-      setUpdatingAgent(null);
+      setUpdatingAgents((prev) => {
+        const next = { ...prev };
+        delete next[agent.key];
+        return next;
+      });
     }
   };
 
@@ -167,19 +172,22 @@ export default function AiProviders() {
     setConfigValues({});
   };
 
-  // Provider types whose auth is handled by the CLI itself (e.g. claude-code
-  // and copilot log in via the `/login` slash command inside their TUI and store
-  // creds under ~/.claude / ~/.copilot), so the BaseUrl / API key fields are not
+  // Provider types whose auth is handled by the CLI itself (claude-code and
+  // copilot log in via the `/login` slash command inside their TUI, codex through
+  // its ChatGPT sign-in, and they store creds under ~/.claude / ~/.copilot /
+  // ~/.codex), so the BaseUrl / API key fields are not
   // applicable. This says nothing about the model, which every adapter declares
   // for itself — a CLI-auth provider can still choose one.
   // Compared case-insensitively, the way the API resolves a provider type: it
   // accepts and stores "Claude-Code" verbatim but reaches the same adapter.
   const isCliAuthProvider = (t: string) =>
-    t.toLowerCase() === "claude-code" || t.toLowerCase() === "copilot";
+    ["claude-code", "copilot", "codex"].includes(t.toLowerCase());
 
   // Human-facing CLI name for a CLI-auth provider type, used in the login note.
   const cliAuthLabel = (t: string) =>
     t.toLowerCase() === "copilot" ? "GitHub Copilot" : "Claude Code";
+
+  const isCodex = (t: string) => t.toLowerCase() === "codex";
 
   // What the selected type's adapter says about a model, straight from the API.
   // Matched case-insensitively: the API accepts and stores a type verbatim but
@@ -222,7 +230,7 @@ export default function AiProviders() {
     };
 
     // Send each persisted value whenever the selected type exposes its field
-    // (Custom MCP servers: opencode, claude-code, copilot; Extra CLI arguments:
+    // (Custom MCP servers: opencode, claude-code, copilot, codex; Extra CLI arguments:
     // those and pi). An empty string clears it. The server folds it into
     // AiProvider.Config, preserving any other stored keys. A type without the
     // field sends nothing for it, so that part of its config is left untouched.
@@ -256,7 +264,7 @@ export default function AiProviders() {
   const updateCount = agents.filter(hasPendingUpdate).length;
 
   const renderAgentRow = (agent: ManagedAgentStatus) => {
-    const updating = updatingAgent === agent.key;
+    const updating = updatingAgents[agent.key] === true;
     const notInstalled = !isInstalled(agent);
     const label = updating
       ? notInstalled
@@ -347,7 +355,7 @@ export default function AiProviders() {
                       </span>
                     </div>
                     <p className="ap-popover-note">
-                      Pi, OpenCode, Claude Code and GitHub Copilot live on the persistent{" "}
+                      Pi, OpenCode, Claude Code, GitHub Copilot and Codex live on the persistent{" "}
                       <code>/data</code> volume and update on demand.
                     </p>
                     <div className="ap-agent-list">{agents.map(renderAgentRow)}</div>
@@ -478,7 +486,16 @@ export default function AiProviders() {
                   ))}
                 </select>
               </div>
-              {isCliAuthProvider(type) ? (
+              {isCodex(type) ? (
+                <div className="ap-cli-note">
+                  This provider type authenticates via the locally-installed Codex CLI. The first
+                  time you set it up, save the provider and then use <strong>Open terminal</strong>{" "}
+                  to launch Codex. Inside it, choose <strong>Sign in with Device Code</strong> and
+                  sign in with your ChatGPT account. Until you complete that one-time sign-in, this
+                  provider will not work. Base URL and API key are configured by the CLI itself and
+                  are not needed here.
+                </div>
+              ) : isCliAuthProvider(type) ? (
                 <div className="ap-cli-note">
                   This provider type authenticates via the locally-installed {cliAuthLabel(type)}{" "}
                   CLI. The first time you set it up, save the provider and then use{" "}

@@ -7,8 +7,13 @@ import { NumericSettingField, SettingRow, Switch, useToggleSetting } from "../co
 
 const SmartTitlesLabel = "Smart session titles";
 
-// Mirrors AiToolCatalog.SupportsNoTools: the backend never asks Copilot for a title.
-const cannotTitle = (provider: AiProvider) => provider.type.trim().toLowerCase() === "copilot";
+// Mirrors AiToolCatalog.SupportsNoTools: the backend never asks Copilot or Codex for a title.
+const NoTitleProviderTypes = new Map([
+  ["copilot", "Copilot"],
+  ["codex", "Codex"],
+]);
+const noTitleTypeName = (provider: AiProvider): string | undefined =>
+  NoTitleProviderTypes.get(provider.type.trim().toLowerCase());
 
 /** The smart chat titles switch and the provider tag its titles run on. */
 export default function ChatTitlesSettings() {
@@ -110,10 +115,10 @@ export default function ChatTitlesSettings() {
             disabled={off || !loaded}
             cannotRun="no title can be generated"
           />
-          {resolved && cannotTitle(resolved) && (
+          {resolved && noTitleTypeName(resolved) && (
             <span className="settings-error">
-              {resolved.name} is a Copilot provider, which cannot run without its tools, so it makes
-              no titles: chats keep the start of their first message.
+              {resolved.name} is a {noTitleTypeName(resolved)} provider, which cannot run without
+              its tools, so it makes no titles: chats keep the start of their first message.
             </span>
           )}
           {loadErrors.map((message) => (
