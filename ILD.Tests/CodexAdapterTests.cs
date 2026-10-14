@@ -40,7 +40,8 @@ public sealed class CodexAdapterTests : IDisposable
 
     public CodexAdapterTests()
     {
-        _readRoot = Directory.CreateDirectory(Path.Combine(_dir, "read-root")).FullName;
+        _readRoot = Directory.CreateDirectory(
+            Path.Combine(_dir, "read-root"), UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute).FullName;
         _home = Directory.CreateDirectory(Path.Combine(_dir, "home")).FullName;
         _worktree = Directory.CreateDirectory(Path.Combine(_dir, "wt")).FullName;
         _out = Path.Combine(_dir, "out");
