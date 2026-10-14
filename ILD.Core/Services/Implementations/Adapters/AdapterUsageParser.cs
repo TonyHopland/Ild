@@ -95,14 +95,19 @@ public static class AdapterUsageParser
     /// had when the run started (see <see cref="ParseCodexSessionTotal"/>). Its
     /// <c>cached_input_tokens</c> and <c>reasoning_output_tokens</c> are parts of
     /// <c>input_tokens</c> and <c>output_tokens</c>, so they are not added again.
-    /// Codex reports no cost. Returns <c>null</c> when no turn completed.
+    /// Codex reports no cost. Returns <c>null</c> when no turn reported its usage,
+    /// or when the total is below the session's earlier one: then codex did not
+    /// count on from it, and what this run used is unknown.
     /// </summary>
     public static TokenUsage? ParseCodex(string? rawStdout, TokenUsage sessionTotalBefore)
     {
-        if (LastCodexTotal(rawStdout, CodexTurnTotal) is not { } total) return null;
+        if (LastCodexTotal(rawStdout, CodexTurnTotal) is not { } total
+            || total.InputTokens < sessionTotalBefore.InputTokens
+            || total.OutputTokens < sessionTotalBefore.OutputTokens)
+            return null;
         return new TokenUsage(
-            Math.Max(0, total.InputTokens - sessionTotalBefore.InputTokens),
-            Math.Max(0, total.OutputTokens - sessionTotalBefore.OutputTokens),
+            total.InputTokens - sessionTotalBefore.InputTokens,
+            total.OutputTokens - sessionTotalBefore.OutputTokens,
             null);
     }
 

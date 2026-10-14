@@ -267,7 +267,7 @@ public sealed class CodexAdapterTests : IDisposable
     }
 
     [Fact]
-    public async Task Usage_sums_every_completed_turn_and_has_no_cost()
+    public async Task Usage_is_the_last_completed_turns_running_total_and_has_no_cost()
     {
         // codex 0.162.1 reports the session's running total on each turn.completed.
         var script = WriteCodex(Lines(
@@ -318,6 +318,21 @@ public sealed class CodexAdapterTests : IDisposable
         Assert.Equal(150, result.Usage!.InputTokens);
         Assert.Equal(15, result.Usage.OutputTokens);
         Assert.Null(result.Usage.CostUsd);
+    }
+
+    [Fact]
+    public async Task A_resumed_turn_whose_total_is_below_the_sessions_earlier_one_reports_no_usage()
+    {
+        const string sessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+        var rollout = Path.Combine(_home, ".codex", "sessions", "2026", "09", "01", $"rollout-2026-09-01T08-00-00-{sessionId}.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(rollout)!);
+        File.WriteAllLines(rollout, [TokenCount(250, 45)]);
+        var script = WriteCodex(Lines(ThreadStarted(sessionId), TurnStarted, AgentMessage("item_0", "Again."), TurnCompleted(150, 15)));
+
+        var result = await Adapter().ExecuteAsync(Context(script) with { SessionId = sessionId });
+
+        Assert.True(result.Success, result.Error);
+        Assert.Null(result.Usage);
     }
 
     [Fact]

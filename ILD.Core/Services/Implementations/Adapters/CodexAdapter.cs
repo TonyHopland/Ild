@@ -478,7 +478,8 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     /// The running token total the session had reached before this run, which
     /// codex counts on from (see <see cref="AdapterUsageParser.ParseCodex"/>):
     /// zero when it has no rollout, since codex then starts a new thread, and
-    /// null when its rollout cannot be read.
+    /// null when its rollout cannot be read. Like the snapshot steps, a failure or
+    /// a cancellation here never decides the turn.
     /// </summary>
     private async Task<TokenUsage?> ReadSessionTotalAsync(string? sessionsDirectory, string sessionId, CancellationToken ct)
     {
@@ -490,7 +491,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                 ? AdapterUsageParser.ParseCodexSessionTotal(content)
                 : null;
         }
-        catch (IOException ex)
+        catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not read the codex session {SessionId}, so its usage is not reported: {Reason}", sessionId, ex.Message);
             return null;
