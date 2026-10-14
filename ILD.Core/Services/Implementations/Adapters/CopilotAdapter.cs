@@ -279,15 +279,6 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
         return entry;
     }
 
-    /// <summary>
-    /// Remove the NUL (U+0000) character from captured CLI output. It is the one
-    /// character a PostgreSQL <c>text</c>/<c>varchar</c> column cannot store, so
-    /// it must never reach the node output/error the engine persists. Returns the
-    /// input unchanged when it holds no NUL (the common case).
-    /// </summary>
-    public static string StripNullChars(string value)
-        => value.IndexOf('\0') < 0 ? value : value.Replace("\0", string.Empty);
-
     private static async Task<string> ReadStreamAsync(
         StreamReader reader,
         Func<string, Task>? progressCallback,

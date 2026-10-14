@@ -15,6 +15,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 ///   <item>pi: a per-message <c>usage</c> object (<c>input</c>/<c>output</c>,
 ///   <c>cacheRead</c>/<c>cacheWrite</c>, <c>cost.total</c>) on every assistant
 ///   message and compaction, read by <see cref="ParsePi"/>.</item>
+///   <item>codex: a <c>usage</c> object on every <c>turn.completed</c> event, read by <see cref="ParseCodex"/>.</item>
 /// </list>
 /// <see cref="Parse"/> is tolerant: it walks each JSON line and keeps the last usage
 /// object and cost it sees, so a cumulative final event wins over earlier
@@ -84,6 +85,48 @@ public static class AdapterUsageParser
 
         if (input == 0 && output == 0) return null;
         return new TokenUsage(input, output, cost > 0 ? cost : null);
+    }
+
+    /// <summary>
+    /// Sum the <c>usage</c> of every <c>turn.completed</c> event in a
+    /// <c>codex exec --json</c> stream. Its <c>cached_input_tokens</c> and
+    /// <c>reasoning_output_tokens</c> are parts of <c>input_tokens</c> and
+    /// <c>output_tokens</c>, so they are not added again. Codex reports no cost.
+    /// Returns <c>null</c> when no turn completed.
+    /// </summary>
+    public static TokenUsage? ParseCodex(string? rawStdout)
+    {
+        if (string.IsNullOrWhiteSpace(rawStdout)) return null;
+
+        long input = 0, output = 0;
+        var sawTurn = false;
+        foreach (var rawLine in rawStdout.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0) continue;
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(line); }
+            catch (JsonException) { continue; }
+
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object
+                    || !root.TryGetProperty("type", out var type) || type.ValueKind != JsonValueKind.String
+                    || type.GetString() != "turn.completed")
+                    continue;
+
+                sawTurn = true;
+                if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
+                {
+                    input += SumLongs(usage, "input_tokens");
+                    output += SumLongs(usage, "output_tokens");
+                }
+            }
+        }
+
+        return sawTurn ? new TokenUsage(input, output, null) : null;
     }
 
     private static JsonElement? PiCountedUsage(JsonElement root)

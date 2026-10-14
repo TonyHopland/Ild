@@ -18,9 +18,12 @@ public static class ExtraCliArgs
     {
         ["claude-code"] = ClaudeCodeAdapter.ReservedCliFlags,
         ["copilot"] = CopilotAdapter.ReservedCliFlags,
+        ["codex"] = CodexAdapter.ReservedCliFlags,
         ["opencode"] = OpenCodeAdapter.ReservedCliFlags,
         ["pi"] = PiAdapter.ReservedCliFlags,
     };
+
+    private static readonly HashSet<string> ProviderTypesWithShortModelFlag = new(StringComparer.OrdinalIgnoreCase) { "opencode", "codex" };
 
     /// <summary>
     /// Split <paramref name="raw"/> into argv tokens. Whitespace separates tokens;
@@ -111,13 +114,13 @@ public static class ExtraCliArgs
         var (tokens, error) = Tokenize(raw);
         if (error is not null) return "Extra CLI arguments: " + error;
 
-        var isOpenCode = string.Equals(providerType, "opencode", StringComparison.OrdinalIgnoreCase);
+        var modelHasShortFlag = ProviderTypesWithShortModelFlag.Contains(providerType);
         var reserved = ReservedFlagsByProviderType.GetValueOrDefault(providerType) ?? [];
         foreach (var token in tokens)
         {
             if (token == "--")
                 return "Extra CLI arguments: a bare -- is not allowed, because it would move the prompt.";
-            if (IsFlag(token, "--model") || (isOpenCode && IsFlag(token, "-m")))
+            if (IsFlag(token, "--model") || (modelHasShortFlag && IsFlag(token, "-m")))
                 return "Extra CLI arguments: --model is not allowed here. Set the model with the Model field instead.";
             if (reserved.FirstOrDefault(flag => IsFlag(token, flag)) is { } owned)
                 return $"Extra CLI arguments: {owned} is not allowed, because ILD already sets it for this provider.";

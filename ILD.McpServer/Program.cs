@@ -1,38 +1,41 @@
-using System.Text;
 using ILD.McpServer;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-// MCP servers communicate over stdio. All informational logging MUST go to
-// stderr or it will corrupt the JSON-RPC framing on stdout.
-var builder = Host.CreateApplicationBuilder(args);
+if (args.Length > 0 && args[0] == McpServerLauncher.Flag)
+    return McpServerLauncher.Run(args);
 
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+await RunServerAsync(args);
+return 0;
 
-var apiUrl = Environment.GetEnvironmentVariable("ILD_API_URL")
-    ?? "http://localhost:5000";
-var apiToken = Environment.GetEnvironmentVariable("ILD_API_TOKEN") ?? "";
-var runId = Environment.GetEnvironmentVariable("ILD_LOOP_RUN_ID");
-var chatSessionId = Environment.GetEnvironmentVariable("ILD_CHAT_SESSION_ID");
-
-builder.Services.AddSingleton(new IldClientOptions(apiUrl, apiToken, runId, chatSessionId));
-builder.Services.AddHttpClient<IldClient>((sp, c) =>
+// Kept out of the top-level statements so that launcher mode never loads the host.
+static async Task RunServerAsync(string[] args)
 {
-    var opts = sp.GetRequiredService<IldClientOptions>();
-    c.BaseAddress = new Uri(opts.ApiUrl.TrimEnd('/') + "/");
-    if (!string.IsNullOrEmpty(opts.ApiToken))
-        c.DefaultRequestHeaders.Add("Authorization", "Bearer " + opts.ApiToken);
-    if (!string.IsNullOrEmpty(opts.LoopRunId))
-        c.DefaultRequestHeaders.Add("X-ILD-Run-Id", opts.LoopRunId);
-    if (!string.IsNullOrEmpty(opts.ChatSessionId))
-        c.DefaultRequestHeaders.Add("X-ILD-Chat-Session-Id", opts.ChatSessionId);
-});
+    // MCP servers communicate over stdio. All informational logging MUST go to
+    // stderr or it will corrupt the JSON-RPC framing on stdout.
+    var builder = Host.CreateApplicationBuilder(args);
 
-builder.Services
-    .AddMcpServer()
-    .WithStdioServerTransport()
-    .WithToolsFromAssembly();
+    builder.Logging.ClearProviders();
+    builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-await builder.Build().RunAsync();
+    builder.Services.AddSingleton(IldClientOptions.Resolve(Environment.GetEnvironmentVariable, Console.Error));
+    builder.Services.AddHttpClient<IldClient>((sp, c) =>
+    {
+        var opts = sp.GetRequiredService<IldClientOptions>();
+        c.BaseAddress = new Uri(opts.ApiUrl.TrimEnd('/') + "/");
+        if (!string.IsNullOrEmpty(opts.ApiToken))
+            c.DefaultRequestHeaders.Add("Authorization", "Bearer " + opts.ApiToken);
+        if (!string.IsNullOrEmpty(opts.LoopRunId))
+            c.DefaultRequestHeaders.Add("X-ILD-Run-Id", opts.LoopRunId);
+        if (!string.IsNullOrEmpty(opts.ChatSessionId))
+            c.DefaultRequestHeaders.Add("X-ILD-Chat-Session-Id", opts.ChatSessionId);
+    });
+
+    builder.Services
+        .AddMcpServer()
+        .WithStdioServerTransport()
+        .WithToolsFromAssembly();
+
+    await builder.Build().RunAsync();
+}

@@ -155,6 +155,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAgentAdapter, PiAdapter>();
         services.AddSingleton<IAgentAdapter, ClaudeCodeAdapter>();
         services.AddSingleton<IAgentAdapter, CopilotAdapter>();
+        services.AddSingleton<IAgentAdapter, CodexAdapter>();
 
         services.AddHttpClient();
 

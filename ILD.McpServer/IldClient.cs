@@ -4,7 +4,78 @@ using ModelContextProtocol;
 
 namespace ILD.McpServer;
 
-public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null);
+/// <summary>Where the server calls the ILD API, with which token, and for which run or chat.</summary>
+public sealed record IldClientOptions(string ApiUrl, string ApiToken, string? LoopRunId, string? ChatSessionId = null)
+{
+    /// <summary>Names a JSON object holding the settings, for an agent CLI that cannot set a server's environment.</summary>
+    public const string EnvFileVariable = "ILD_MCP_ENV_FILE";
+
+    private const string DefaultApiUrl = "http://localhost:5000";
+
+    /// <summary>
+    /// The settings from the JSON object <see cref="EnvFileVariable"/> names, or,
+    /// when it is unset or the file cannot be read as a JSON object, from the
+    /// environment variables of the same names. A file that cannot be used is
+    /// reported on <paramref name="log"/>, which must not be stdout: that carries
+    /// the MCP protocol.
+    /// </summary>
+    public static IldClientOptions Resolve(Func<string, string?> getEnvironmentVariable, TextWriter log)
+    {
+        var file = getEnvironmentVariable(EnvFileVariable);
+        if (!string.IsNullOrEmpty(file))
+        {
+            if (ReadSettingsFile(file, out var problem) is { } settings)
+                return FromSettings(name => settings.GetValueOrDefault(name));
+            log.WriteLine($"ild-mcp-server: ignoring {EnvFileVariable} {file}, which {problem}; using the environment.");
+        }
+
+        return FromSettings(getEnvironmentVariable);
+    }
+
+    private static IldClientOptions FromSettings(Func<string, string?> get)
+        => new(
+            get("ILD_API_URL") ?? DefaultApiUrl,
+            get("ILD_API_TOKEN") ?? "",
+            get("ILD_LOOP_RUN_ID"),
+            get("ILD_CHAT_SESSION_ID"));
+
+    private static Dictionary<string, string>? ReadSettingsFile(string path, out string problem)
+    {
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(File.ReadAllBytes(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            problem = "cannot be read";
+            return null;
+        }
+        catch (JsonException)
+        {
+            problem = "is not valid JSON";
+            return null;
+        }
+
+        using (document)
+        {
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                problem = "is not a JSON object";
+                return null;
+            }
+
+            problem = "";
+            var settings = new Dictionary<string, string>();
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                if (property.Value.ValueKind == JsonValueKind.String)
+                    settings[property.Name] = property.Value.GetString()!;
+            }
+            return settings;
+        }
+    }
+}
 
 /// <summary>
 /// Thin HTTP wrapper for the ILD agent-scoped API surface (`/api/v1/agent/...`).
