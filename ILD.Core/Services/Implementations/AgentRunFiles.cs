@@ -11,7 +11,8 @@ namespace ILD.Core.Services.Implementations;
 /// The files are:
 /// <list type="bullet">
 ///   <item>pi's ILD extension, <c>AgentReadRoot/ild-pi-ext/&lt;id&gt;/ild.ts</c>;</item>
-///   <item>the MCP configs handed to Copilot and Claude Code,
+///   <item>the MCP configs handed to Copilot and Claude Code, and the ILD MCP
+///   settings and custom-server launch files handed to Codex,
 ///   <c>AgentReadRoot/ild-mcp-config/*-&lt;id&gt;-*.json</c>, which a turn also
 ///   deletes when its CLI exits;</item>
 ///   <item>the package feed npm configs, <c>AgentReadRoot/ild-package-feeds/*.npmrc</c>,

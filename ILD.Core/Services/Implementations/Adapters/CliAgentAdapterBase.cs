@@ -10,7 +10,7 @@ namespace ILD.Core.Services.Implementations.Adapters;
 
 /// <summary>
 /// Shared scaffolding for CLI-backed <see cref="IAgentAdapter"/> implementations
-/// (claude-code, opencode, pi). These adapters all persist/restore managed
+/// (claude-code, opencode, pi, codex). These adapters all persist/restore managed
 /// sessions through the same snapshot store and parse JSON event streams the
 /// same way; this base owns those identical pieces so they live in exactly one
 /// place. The per-CLI parts — how the process is launched and how its output is
@@ -63,7 +63,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
 
     /// <summary>
     /// The generic "Custom MCP servers (JSON)" field shared by every MCP-capable
-    /// adapter (opencode, claude-code, copilot). Each such adapter surfaces it from
+    /// adapter (opencode, claude-code, copilot, codex). Each such adapter surfaces it from
     /// its own <see cref="ConfigSchema"/> so the value is persisted into
     /// <c>AiProvider.Config</c> and injected alongside the built-in <c>ild</c>
     /// server. Pi reaches only the built-in <c>ild</c> server, registered with its
