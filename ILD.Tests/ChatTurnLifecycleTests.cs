@@ -269,7 +269,8 @@ public sealed class ChatTurnLifecycleTests
             // soon as it finds no session row.
             new ChatOptions { ScratchRoot = Path.Combine(Path.GetTempPath(), "ild-chat-lifecycle-tests") },
             db.LoopRuns,
-            new ChatLoopScratchpad());
+            new ChatLoopScratchpad(),
+            new ChatCloneCoordinator());
         var runner = NewRunner(chat, notifier);
 
         await runner.SubmitAsync(Guid.NewGuid(), "hello");

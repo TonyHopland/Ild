@@ -127,6 +127,7 @@ public class ChatRepositoryCloneApiTests
         }
         Assert.Contains("Repo", Path.GetFileName(paths[0]), StringComparison.Ordinal);
         Assert.Contains("Repo", Path.GetFileName(paths[1]), StringComparison.Ordinal);
+        Assert.Equal($"repos/My-Repo-{ids[1]:N}", paths[1]);
 
         var again = await host.CloneAsync(chat, ids[1]);
 

@@ -179,27 +179,12 @@ public static class AgentWritableFiles
         return AgentIsolation.Route(psi, agentUser, agentGroup, agentHome);
     }
 
-    private static async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
+    private static async Task<AgentProcessResult> RunAsync(
         string script, IReadOnlyList<string> arguments, string? stdin, CancellationToken ct)
     {
         using var process = Process.Start(BuildStartInfo(
                 script, arguments, AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
             ?? throw new IOException("could not start /bin/sh");
-        var stdout = process.StandardOutput.ReadToEndAsync(ct);
-        var stderr = process.StandardError.ReadToEndAsync(ct);
-        try
-        {
-            if (stdin is not null)
-                await process.StandardInput.WriteAsync(stdin.AsMemory(), ct);
-            process.StandardInput.Close();
-            await process.WaitForExitAsync(ct);
-        }
-        catch (OperationCanceledException)
-        {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* already gone */ }
-            throw;
-        }
-
-        return (process.ExitCode, await stdout, await stderr);
+        return await AgentProcess.RunAsync(process, stdin, ct);
     }
 }

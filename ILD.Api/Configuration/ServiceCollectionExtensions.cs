@@ -109,6 +109,7 @@ public static class ServiceCollectionExtensions
         // or by Run now; one lock per schedule, shared by both.
         services.AddSingleton<ChatScheduleLocks>();
         services.AddScoped<ChatScheduleService>();
+        services.AddSingleton<ChatCloneCoordinator>();
         services.AddScoped<IChatRepositoryCloner, ChatRepositoryCloner>();
         services.AddSingleton<ChatScheduleScheduler>();
         services.AddHostedService(sp => sp.GetRequiredService<ChatScheduleScheduler>());

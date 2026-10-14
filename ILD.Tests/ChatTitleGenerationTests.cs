@@ -222,7 +222,8 @@ public sealed class ChatTitleGenerationTests : IDisposable
 
     private ChatService NewChatService(AppDbContext ctx)
         => new(ctx, new ProviderStore(ctx), new ScriptedRegistry(this), _notifier,
-            new ChatOptions { ScratchRoot = _scratchRoot }, new LoopRunStore(ctx), new ChatLoopScratchpad());
+            new ChatOptions { ScratchRoot = _scratchRoot }, new LoopRunStore(ctx), new ChatLoopScratchpad(),
+            new ChatCloneCoordinator());
 
     [Fact]
     public async Task The_first_exchange_is_summarised_on_the_tagged_provider_and_saved_as_an_auto_title()

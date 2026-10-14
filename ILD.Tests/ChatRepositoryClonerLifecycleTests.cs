@@ -4,6 +4,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -21,6 +22,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
 {
     private readonly string _dir = Directory.CreateTempSubdirectory("ild-clone-lifecycle-").FullName;
     private readonly TestDb _db = new();
+    private readonly ChatCloneCoordinator _chatClones = new();
     private readonly ServiceProvider _services;
 
     public ChatRepositoryClonerLifecycleTests()
@@ -49,7 +51,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     private RepositoryManager RealGit => new(worktreesRoot: Path.Combine(_dir, "worktrees"));
 
     private ChatRepositoryCloner Cloner(IRepositoryManager? git = null, IProviderStore? providers = null)
-        => new(_db.Context, _services.GetRequiredService<IServiceScopeFactory>(), providers ?? _db.Providers,
+        => new(_db.Context, _services.GetRequiredService<IServiceScopeFactory>(), _chatClones, providers ?? _db.Providers,
             git ?? RealGit, Config, ShutdownState.NeverStopping);
 
     // -- Chat deletion and per-chat memory ------------------------------------------
@@ -82,7 +84,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
 
         Assert.Equal(ChatRepositoryCloneOutcome.UnknownChat, result.Outcome);
         Assert.False(Directory.Exists(scratch), "the clone brought the deleted chat's scratch folder back");
-        Assert.False(ChatRepositoryCloner.IsTracked(chatId), "the deleted chat's entry stayed in memory");
+        Assert.False(_chatClones.IsTracked(chatId), "the deleted chat's entry stayed in memory");
     }
 
     [Fact]
@@ -111,7 +113,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
 
         Assert.Equal(ChatRepositoryCloneOutcome.UnknownChat, result.Outcome);
         Assert.False(Directory.Exists(scratch), "the clone brought the deleted chat's scratch folder back");
-        Assert.False(ChatRepositoryCloner.IsTracked(chatId));
+        Assert.False(_chatClones.IsTracked(chatId));
     }
 
     [Fact]
@@ -127,7 +129,7 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
         Assert.Equal(ChatRepositoryCloneOutcome.Cloned, cloned.Outcome);
         Assert.Equal(ChatRepositoryCloneOutcome.BranchNotFound, refused.Outcome);
         Assert.Equal(ChatRepositoryCloneOutcome.Updated, updated.Outcome);
-        Assert.False(ChatRepositoryCloner.IsTracked(chatId));
+        Assert.False(_chatClones.IsTracked(chatId));
         Assert.False(BaseRepoClone.IsTracked(repo.Id));
     }
 
@@ -198,21 +200,27 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
     }
 
     [Fact]
-    public async Task Past_every_numbered_name_a_repository_gets_a_folder_named_after_its_id()
+    public async Task A_second_repository_that_cleans_to_the_same_name_gets_a_folder_named_after_its_id()
     {
-        var (chatId, scratch, repo) = await SeedScheduledChatAsync(CreateRemote());
-        Directory.CreateDirectory(Path.Combine(scratch, "repos", "widgets"));
-        for (var n = 2; n <= 50; n++)
-            Directory.CreateDirectory(Path.Combine(scratch, "repos", $"widgets-{n}"));
+        var remote = CreateRemote();
+        var (chatId, _, repo) = await SeedScheduledChatAsync(remote);
+        var lookalike = new Repository
+        {
+            Id = Guid.NewGuid(), Name = "widgets!", RemoteProviderId = repo.RemoteProviderId, CloneUrl = remote, CreatedAt = DateTime.UtcNow,
+        };
+        _db.Context.Repositories.Add(lookalike);
+        await _db.Context.SaveChangesAsync(Ct);
         var cloner = Cloner();
 
-        var cloned = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
-        var again = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        var first = await cloner.CloneAsync(chatId, repo.Id.ToString(), branch: null, Ct);
+        var second = await cloner.CloneAsync(chatId, lookalike.Id.ToString(), branch: null, Ct);
+        var again = await cloner.CloneAsync(chatId, lookalike.Id.ToString(), branch: null, Ct);
 
-        Assert.Equal(ChatRepositoryCloneOutcome.Cloned, cloned.Outcome);
-        Assert.Equal($"repos/widgets-{repo.Id:N}", cloned.Path);
+        Assert.Equal("repos/widgets", first.Path);
+        Assert.Equal(ChatRepositoryCloneOutcome.Cloned, second.Outcome);
+        Assert.Equal($"repos/widgets-{lookalike.Id:N}", second.Path);
         Assert.Equal(ChatRepositoryCloneOutcome.Updated, again.Outcome);
-        Assert.Equal(cloned.Path, again.Path);
+        Assert.Equal(second.Path, again.Path);
     }
 
     // -- Branches --------------------------------------------------------------------
@@ -358,13 +366,18 @@ public sealed class ChatRepositoryClonerLifecycleTests : IDisposable
 
     // -- Setup -------------------------------------------------------------------------
 
-    /// <summary>As ChatService deletes a chat: the row, then its clone work, then its scratch folder.</summary>
+    /// <summary>
+    /// The chat's owner deletes it, through ChatService in a request of its own,
+    /// which stops the clone work through the same coordinator the cloner uses.
+    /// </summary>
     private async Task DeleteChatAsync(Guid chatId, string scratch)
     {
-        await using (var db = _db.OnOwnConnection())
-            await db.ChatSessions.Where(c => c.Id == chatId).ExecuteDeleteAsync(Ct);
-        await ChatRepositoryCloner.StopForDeletedChatAsync(chatId).WaitAsync(Ct);
-        Directory.Delete(scratch, recursive: true);
+        await using var db = _db.OnOwnConnection();
+        var chats = new ChatService(db, new ProviderStore(db), Mock.Of<IAgentAdapterRegistry>(), Mock.Of<IChatNotifier>(),
+            new ChatOptions { ScratchRoot = _dir }, new LoopRunStore(db), new ChatLoopScratchpad(), _chatClones);
+
+        Assert.True(await chats.DeleteAsync("scheduler", chatId, Ct).WaitAsync(Ct));
+        Assert.False(Directory.Exists(scratch));
     }
 
     private async Task<(Guid ChatId, string Scratch, Repository Repo)> SeedScheduledChatAsync(string remote)
