@@ -67,7 +67,9 @@ public static class AiToolCatalog
     private static bool EmptySelectionMeansNone(string? providerType)
         => NormalizeProviderType(providerType) is "copilot" or "codex";
 
-    // Copilot's and Codex's CLIs always run with their own tools: an empty --available-tools leaves all of Copilot's on.
+    // Copilot and Codex cannot run without their tools: Copilot's empty
+    // --available-tools leaves all of its tools on, and codex has no way to turn
+    // its tools off.
     public static bool SupportsNoTools(string? providerType)
         => NormalizeProviderType(providerType) is not ("copilot" or "codex");
 
