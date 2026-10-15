@@ -96,6 +96,7 @@ public class ExtraCliArgsTests
     [InlineData("codex", "--model x")]
     [InlineData("codex", "--model=x")]
     [InlineData("codex", "-m x")]
+    [InlineData("codex", "-mgpt-5")]
     [InlineData("Codex", "-m=x")]
     public void Validate_rejects_any_model_flag_and_points_to_the_model_field(string type, string raw)
     {
@@ -124,6 +125,17 @@ public class ExtraCliArgsTests
     [InlineData("codex", "--skip-git-repo-check", "--skip-git-repo-check")]
     [InlineData("codex", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-approvals-and-sandbox")]
     [InlineData("codex", "--add-dir /x", "--add-dir")]
+    [InlineData("codex", "-c model_reasoning_effort=\"high\"", "-c")]
+    [InlineData("codex", "-cmcp_servers.ild={command=\"x\"}", "-c")]
+    [InlineData("codex", "--config model=x", "--config")]
+    [InlineData("codex", "--config=model=x", "--config")]
+    [InlineData("codex", "-C /tmp", "-C")]
+    [InlineData("codex", "-C/tmp", "-C")]
+    [InlineData("codex", "--cd /tmp", "--cd")]
+    [InlineData("codex", "--cd=/tmp", "--cd")]
+    [InlineData("codex", "-s read-only", "-s")]
+    [InlineData("codex", "-sread-only", "-s")]
+    [InlineData("codex", "--sandbox=read-only", "--sandbox")]
     [InlineData("CODEX", "--add-dir=/x", "--add-dir")]
     public void Validate_rejects_a_flag_ild_already_sets_for_that_adapter_and_names_it(string type, string raw, string flag)
     {
@@ -162,7 +174,6 @@ public class ExtraCliArgsTests
     [InlineData("claude-code", "--fallback-model x")]
     [InlineData("claude-code", "--append-system-prompt \"be brief; $(x) | y\"")]
     [InlineData("copilot", "--effort high")]
-    [InlineData("codex", "-c model_reasoning_effort=\"high\"")]
     [InlineData("codex", "--enable web_search")]
     [InlineData("opencode", "--variant high")]
     [InlineData("pi", "--models a,b")]

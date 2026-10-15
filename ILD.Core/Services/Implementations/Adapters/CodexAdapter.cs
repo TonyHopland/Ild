@@ -184,9 +184,15 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         }
     }
 
-    /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
+    /// <summary>
+    /// The flags <see cref="BuildRunProcessStartInfo"/> sets, and those that would
+    /// undo what it sets, which a provider's extra CLI arguments may not carry: a
+    /// config override could replace <c>mcp_servers.ild</c>, <c>--cd</c> moves codex
+    /// out of the worktree, and <c>--sandbox</c> contradicts the sandbox bypass.
+    /// </summary>
     internal static readonly string[] ReservedCliFlags =
-        ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--add-dir"];
+        ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--add-dir",
+         "-c", "--config", "-C", "--cd", "-s", "--sandbox"];
 
     /// <summary>
     /// <c>codex exec</c> with ILD's options, then the provider's extra arguments,

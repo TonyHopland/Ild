@@ -144,6 +144,10 @@ public static class ExtraCliArgs
         return tokens;
     }
 
+    // A single-letter flag also takes its value attached (-mgpt-5, -C/tmp), as the
+    // agents' option parsers allow, so its prefix is the flag too.
     private static bool IsFlag(string token, string flag)
-        => token == flag || token.StartsWith(flag + "=", StringComparison.Ordinal);
+        => token == flag
+           || token.StartsWith(flag + "=", StringComparison.Ordinal)
+           || (flag.Length == 2 && flag[0] == '-' && flag[1] != '-' && token.StartsWith(flag, StringComparison.Ordinal));
 }

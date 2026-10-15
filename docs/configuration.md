@@ -838,7 +838,10 @@ backslash makes the next character literal. Nothing is expanded, so `$HOME`,
 Saving is refused, with a message naming the problem, when the value has an
 unbalanced quote, a bare `--`, the model flag (`--model`, `--model=…`, and `-m`
 for OpenCode and Codex — set the model with the **Model** field instead), or any other flag
-ILD already sets for that CLI (for example `--print` or `--resume` for Claude Code).
+ILD already sets for that CLI (for example `--print` or `--resume` for Claude Code). A one-letter flag counts with its value attached
+too (`-mgpt-5`). Codex also refuses `-c`/`--config`, `-C`/`--cd` and
+`-s`/`--sandbox`: they could replace ILD's MCP settings, move Codex out of the
+worktree, or contradict how ILD runs it.
 
 The arguments are added, after ILD's own flags and before the prompt, to every
 launch of the agent: loop AI nodes and chat turns. The provider's terminal on the
