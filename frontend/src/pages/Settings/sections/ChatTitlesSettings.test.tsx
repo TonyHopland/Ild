@@ -179,6 +179,36 @@ describe("Chat titles card", () => {
   });
 });
 
+describe("Chat titles card with a Codex provider", () => {
+  test("a Codex provider the tag lands on is said to make no titles, in its own words", async () => {
+    switchedOn();
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([
+      main as unknown as AiProvider,
+      {
+        id: "Cx",
+        name: "Cx",
+        type: " Codex ",
+        isDefault: false,
+        tags: ["Fast"],
+      } as unknown as AiProvider,
+    ]);
+
+    render(<ChatTitlesSettings />);
+
+    await screen.findByText("Runs on Cx");
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "SPAN" &&
+          (element.textContent ?? "").startsWith(
+            "Cx is a Codex provider, which cannot run without its tools, so it makes no titles:",
+          ),
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/is a Copilot provider/)).toBeNull();
+  });
+});
+
 describe("Smart session titles switch", () => {
   const toggle = () =>
     screen.getByRole("checkbox", { name: /smart session titles/i }) as HTMLInputElement;

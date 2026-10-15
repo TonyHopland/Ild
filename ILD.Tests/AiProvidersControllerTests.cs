@@ -27,7 +27,7 @@ public class AiProvidersControllerTests : IDisposable
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_conn).Options;
         _db = new AppDbContext(options);
         _db.Database.EnsureCreated();
-        _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi", "claude-code", "copilot"]);
+        _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi", "claude-code", "copilot", "codex"]);
         _registry.Setup(r => r.GetModelSupport(It.IsAny<string>()))
             .Returns((string type) => DeclaredModelSupport.For(type));
     }
@@ -300,6 +300,37 @@ public class AiProvidersControllerTests : IDisposable
         });
 
         Assert.Equal("sonnet", (await _db.AiProviders.FindAsync([id], TestContext.Current.CancellationToken))!.Model);
+    }
+
+    [Theory]
+    [InlineData("codex", "")]
+    [InlineData("Codex", "gpt-5.5")]
+    public async Task A_codex_provider_is_saved_without_url_key_or_model_and_keeps_a_model_and_its_mcp_servers(string type, string model)
+    {
+        const string servers = """{ "docs": { "command": ["npx", "docs-mcp"] } }""";
+        var controller = CreateController();
+
+        var created = Assert.IsType<CreatedAtActionResult>(await controller.Create(new AiProviderDto
+        {
+            Name = "codex",
+            Type = type,
+            BaseUrl = string.Empty,
+            ApiKey = string.Empty,
+            Model = model,
+            CustomMcpServersJson = servers,
+        }));
+        var id = (Guid)created.Value!.GetType().GetProperty("id")!.GetValue(created.Value)!;
+        Assert.IsType<OkObjectResult>(await controller.Update(id.ToString(), new AiProviderDto
+        {
+            Name = "codex renamed",
+            Type = type,
+            BaseUrl = string.Empty,
+            Model = model,
+        }));
+
+        var stored = (await _db.AiProviders.FindAsync([id], TestContext.Current.CancellationToken))!;
+        Assert.Equal(model, stored.Model);
+        Assert.Equal(servers, System.Text.Json.Nodes.JsonNode.Parse(stored.Config!)!["customMcpServersJson"]!.GetValue<string>());
     }
 
     [Fact]

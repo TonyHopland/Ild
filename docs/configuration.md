@@ -546,7 +546,7 @@ passes to the CLI are kept. The same denylist governs what a Worktree Preview's
 processes inherit — see
 [What a preview process runs as](#what-a-preview-process-runs-as).
 
-The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot) are **not** baked into the image.
+The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot, Codex) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume and are updated there
 without rebuilding the image. `WITH_NODE` must be on, since those installs and
 version checks use Node/npm. The agent a configured AI provider needs is
@@ -741,15 +741,15 @@ the config lives on the provider, not in a target repo.
 
 ### Custom MCP servers (JSON)
 
-The **OpenCode**, **Claude Code** and **GitHub Copilot** adapters expose a `customMcpServersJson`
+The **OpenCode**, **Claude Code**, **GitHub Copilot** and **Codex** adapters expose a `customMcpServersJson`
 field that attaches arbitrary [MCP](https://modelcontextprotocol.io) servers to
 the agent, on top of the built-in `ild` server. This lets you create provider
 variants that differ only by the tools they carry — e.g. a plain **OpenCode**
 provider and an **OpenCode w/chrome** provider whose agents can drive a headless
 browser for debugging and screenshots.
 
-Set it on the **AI Providers** page: create or edit an OpenCode, Claude Code or
-GitHub Copilot provider and fill in the **Custom MCP servers (JSON)** field. The value is stored
+Set it on the **AI Providers** page: create or edit an OpenCode, Claude Code,
+GitHub Copilot or Codex provider and fill in the **Custom MCP servers (JSON)** field. The value is stored
 on the provider (`AiProvider.Config`) and applies to every run that uses it. It
 is _not_ a per-loop-node setting — the Loop Editor's node settings do not carry
 provider config.
@@ -797,6 +797,20 @@ empty list, or one like `["read"]` whose keys Copilot does not honour — turns 
 off rather than falling back to the defaults, so Copilot loop steps and chats
 saved before Copilot had an ILD box stay without ILD until you tick it.
 
+**Codex** takes each server as a `-c mcp_servers.<name>=…` override for that run
+only, and its **ILD** tool box works exactly like Copilot's. Codex hands an MCP
+server only a few variables of its own environment and would show a server's
+arguments in its process list, so ILD keeps both out of it: each custom server
+is started through a small ILD launcher that reads the server's command,
+arguments and `env` from a short-lived file the agent can read but not change,
+adds the egress proxy variables for the provider (so an `npx` server downloads
+through the proxy; the server's own `env` wins on a conflict), and then becomes
+the server. The built-in `ild` server reads its URL and token from such a file
+too; if it cannot start, the Codex run fails rather than going on without ILD's
+tools. Codex only accepts a server name made of letters, digits, `-` and `_`: a
+server named otherwise is skipped with a warning in the ILD log, and the run goes
+on without it.
+
 The **Pi** adapter reaches the built-in `ild` server through Pi's own MCP
 support: a generated, read-only extension registers the server for the run, and
 the node's tools appear to Pi as `mcp__ild__<tool>`. Pi does not attach custom
@@ -808,7 +822,7 @@ MCP servers and does not expose this field.
 
 ### Extra CLI arguments
 
-Every agent provider (**Claude Code**, **GitHub Copilot**, **OpenCode** and **Pi**)
+Every agent provider (**Claude Code**, **GitHub Copilot**, **Codex**, **OpenCode** and **Pi**)
 has an **Extra CLI arguments** field (`extraArgs`) for flags ILD itself doesn't
 pass, such as `--effort high` for Claude Code. Combined with tags, this lets two
 providers run the same CLI differently — e.g. one tagged `Fast` with no extra
@@ -823,8 +837,14 @@ backslash makes the next character literal. Nothing is expanded, so `$HOME`,
 
 Saving is refused, with a message naming the problem, when the value has an
 unbalanced quote, a bare `--`, the model flag (`--model`, `--model=…`, and `-m`
-for OpenCode — set the model with the **Model** field instead), or any other flag
-ILD already sets for that CLI (for example `--print` or `--resume` for Claude Code).
+for OpenCode and Codex — set the model with the **Model** field instead), or any
+other flag ILD already sets for that CLI (for example `--print` or `--resume` for
+Claude Code). Codex also refuses `-C`/`--cd`, which would move it out of the
+worktree, and `-s`/`--sandbox`, which contradicts how ILD runs it. Its config
+overrides `-c`/`--config` are allowed, e.g. `-c model_reasoning_effort=high`,
+except for the keys ILD sets itself: `mcp_servers`, `sandbox_mode`,
+`sandbox_workspace_write`, `approval_policy` and `profiles`. For Codex a
+one-letter flag counts with its value attached too (`-mgpt-5`).
 
 The arguments are added, after ILD's own flags and before the prompt, to every
 launch of the agent: loop AI nodes and chat turns. The provider's terminal on the

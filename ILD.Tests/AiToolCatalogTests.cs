@@ -150,40 +150,60 @@ public class AiToolCatalogTests
         Assert.Single(result);
     }
 
-    [Fact]
-    public void GetSupportedToolsForProviderType_offers_copilot_only_ild_on_by_default()
+    /// <summary>Copilot and Codex: their only tool is ild, so an explicit list without it turns ILD off.</summary>
+    public static TheoryData<string> IldOnlyProviderTypes => new() { "copilot", "codex", " Codex " };
+
+    [Theory]
+    [MemberData(nameof(IldOnlyProviderTypes))]
+    public void GetSupportedToolsForProviderType_offers_the_ild_only_agents_only_ild_on_by_default(string providerType)
     {
-        var tool = Assert.Single(AiToolCatalog.GetSupportedToolsForProviderType("copilot"));
+        var tool = Assert.Single(AiToolCatalog.GetSupportedToolsForProviderType(providerType));
 
         Assert.Equal(AiToolCatalog.Ild, tool.Key);
         Assert.True(tool.DefaultEnabled);
-        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.GetDefaultToolKeysForProviderType("copilot"));
+        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.GetDefaultToolKeysForProviderType(providerType));
     }
 
-    [Fact]
-    public void NormalizeSelectedToolKeys_for_copilot_treats_an_omitted_selection_as_ild_on()
+    [Theory]
+    [MemberData(nameof(IldOnlyProviderTypes))]
+    public void NormalizeSelectedToolKeys_for_the_ild_only_agents_treats_an_omitted_selection_as_ild_on(string providerType)
     {
-        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys("copilot", null));
+        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys(providerType, null));
     }
 
-    [Fact]
-    public void NormalizeSelectedToolKeys_for_copilot_treats_an_explicit_empty_selection_as_ild_off()
+    [Theory]
+    [MemberData(nameof(IldOnlyProviderTypes))]
+    public void NormalizeSelectedToolKeys_for_the_ild_only_agents_treats_an_explicit_empty_selection_as_ild_off(string providerType)
     {
-        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys("copilot", Array.Empty<string>()));
+        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys(providerType, Array.Empty<string>()));
     }
 
-    [Fact]
-    public void NormalizeSelectedToolKeys_for_copilot_treats_a_fully_filtered_selection_as_ild_off()
+    [Theory]
+    [MemberData(nameof(IldOnlyProviderTypes))]
+    public void NormalizeSelectedToolKeys_for_the_ild_only_agents_treats_a_fully_filtered_selection_as_ild_off(string providerType)
     {
-        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys("copilot", new[] { "read" }));
-        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys("copilot", new[] { "read", "write", "execute" }));
+        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys(providerType, new[] { "read" }));
+        Assert.Empty(AiToolCatalog.NormalizeSelectedToolKeys(providerType, new[] { "read", "write", "execute" }));
     }
 
-    [Fact]
-    public void NormalizeSelectedToolKeys_for_copilot_keeps_ild_and_drops_unsupported_keys()
+    [Theory]
+    [MemberData(nameof(IldOnlyProviderTypes))]
+    public void NormalizeSelectedToolKeys_for_the_ild_only_agents_keeps_ild_and_drops_unsupported_keys(string providerType)
     {
-        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys("copilot", new[] { "ild" }));
-        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys("copilot", new[] { "ild", "read" }));
+        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys(providerType, new[] { "ild" }));
+        Assert.Equal(new[] { AiToolCatalog.Ild }, AiToolCatalog.NormalizeSelectedToolKeys(providerType, new[] { "ild", "read" }));
+    }
+
+    [Theory]
+    [InlineData("copilot", false)]
+    [InlineData("codex", false)]
+    [InlineData("CODEX", false)]
+    [InlineData("claude-code", true)]
+    [InlineData("opencode", true)]
+    [InlineData("pi", true)]
+    public void Only_agents_whose_tools_can_be_turned_off_support_a_call_with_no_tools(string providerType, bool supported)
+    {
+        Assert.Equal(supported, AiToolCatalog.SupportsNoTools(providerType));
     }
 
     [Theory]

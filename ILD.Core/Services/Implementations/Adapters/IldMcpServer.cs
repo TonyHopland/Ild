@@ -8,7 +8,8 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// Shared locator and environment builder for the ILD MCP server that CLI
 /// agents are wired to. Each adapter formats this into its own CLI-specific
 /// config shape (Claude: <c>{command, args, env}</c>; opencode:
-/// <c>{type, command, environment}</c>), but the DLL path and the environment
+/// <c>{type, command, environment}</c>; codex: a file named by <c>ILD_MCP_ENV_FILE</c>
+/// holding the environment), but the DLL path and the environment
 /// variables are identical across adapters and live here so the two never drift.
 /// </summary>
 public static class IldMcpServer

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Codex can be added as an AI provider, signed in with ChatGPT from its terminal, with its own custom MCP servers.**
+
 - **A scheduled chat can have ILD clone or update the repositories its schedule allows into its own folder, private ones included, without ever seeing their credentials.**
 
 - **Global variables hold text every loop prompt can use, and a run waits for you when one it needs is missing.**
@@ -48,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Back up both databases before upgrading; this release cannot be rolled back.**
 
 ### Fixed
+
+- **Several coding agents can be updated at once, and each shows it is updating until its own update finishes.**
 
 - **An open work item catches up after the device sleeps or goes offline, and feedback sent after the run has moved on says it was not delivered.**
 

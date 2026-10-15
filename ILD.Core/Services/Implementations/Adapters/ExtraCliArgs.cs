@@ -18,9 +18,37 @@ public static class ExtraCliArgs
     {
         ["claude-code"] = ClaudeCodeAdapter.ReservedCliFlags,
         ["copilot"] = CopilotAdapter.ReservedCliFlags,
+        ["codex"] = CodexAdapter.ReservedCliFlags,
         ["opencode"] = OpenCodeAdapter.ReservedCliFlags,
         ["pi"] = PiAdapter.ReservedCliFlags,
     };
+
+    private static readonly Dictionary<string, Dictionary<string, string>> ReservedFlagReasonsByProviderType = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["codex"] = CodexAdapter.ReservedCliFlagReasons,
+    };
+
+    // codex's -c/--config key=value overrides any config key. These first dotted
+    // segments are what ILD sets itself (a profile could set any of them), with
+    // what they set.
+    private static readonly Dictionary<string, Dictionary<string, string>> RefusedConfigKeysByProviderType = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["codex"] = new(StringComparer.Ordinal)
+        {
+            ["mcp_servers"] = "Codex's MCP servers",
+            ["sandbox_mode"] = "Codex's sandbox",
+            ["sandbox_workspace_write"] = "Codex's sandbox",
+            ["approval_policy"] = "Codex's approvals",
+            ["profiles"] = "Codex's profiles",
+        },
+    };
+
+    private static readonly HashSet<string> ProviderTypesWithShortModelFlag = new(StringComparer.OrdinalIgnoreCase) { "opencode", "codex" };
+
+    // codex takes a one-letter flag's value attached (-mgpt-5, -C/tmp). Only there is
+    // a token's prefix checked: the other CLIs have free-text options whose values
+    // may well start with "-p" or "-e".
+    private static readonly HashSet<string> ProviderTypesWithAttachedShortValues = new(StringComparer.OrdinalIgnoreCase) { "codex" };
 
     /// <summary>
     /// Split <paramref name="raw"/> into argv tokens. Whitespace separates tokens;
@@ -103,25 +131,55 @@ public static class ExtraCliArgs
     /// <summary>
     /// The save-time check for a provider of <paramref name="providerType"/>: the
     /// value must split, and may not contain a bare <c>--</c> (it would move the
-    /// prompt), the model flag (the Model field owns it) or a flag ILD already sets
-    /// for that adapter. Returns the message to show, or null when the value is fine.
+    /// prompt), the model flag (the Model field owns it), a flag ILD already sets
+    /// for that adapter or would be undone by, or (for codex) a config override of a
+    /// key ILD sets. Returns the message to show, or null when the value is fine.
     /// </summary>
     public static string? Validate(string providerType, string? raw)
     {
         var (tokens, error) = Tokenize(raw);
         if (error is not null) return "Extra CLI arguments: " + error;
 
-        var isOpenCode = string.Equals(providerType, "opencode", StringComparison.OrdinalIgnoreCase);
+        var modelHasShortFlag = ProviderTypesWithShortModelFlag.Contains(providerType);
+        var attached = ProviderTypesWithAttachedShortValues.Contains(providerType);
         var reserved = ReservedFlagsByProviderType.GetValueOrDefault(providerType) ?? [];
-        foreach (var token in tokens)
+        var reasons = ReservedFlagReasonsByProviderType.GetValueOrDefault(providerType);
+        var refusedConfigKeys = RefusedConfigKeysByProviderType.GetValueOrDefault(providerType);
+        for (var i = 0; i < tokens.Count; i++)
         {
+            var token = tokens[i];
             if (token == "--")
                 return "Extra CLI arguments: a bare -- is not allowed, because it would move the prompt.";
-            if (IsFlag(token, "--model") || (isOpenCode && IsFlag(token, "-m")))
+            if (refusedConfigKeys is not null && ConfigOverride(tokens, ref i) is var (configFlag, value))
+            {
+                if (value is null)
+                    return $"Extra CLI arguments: {configFlag} is not allowed without a key=value after it.";
+                var key = value.Split('=')[0].Trim();
+                if (refusedConfigKeys.TryGetValue(key.Split('.')[0], out var setByIld))
+                    return $"Extra CLI arguments: {configFlag} {key} is not allowed, because ILD sets {setByIld} itself.";
+                continue;
+            }
+            if (IsFlag(token, "--model", attached) || (modelHasShortFlag && IsFlag(token, "-m", attached)))
                 return "Extra CLI arguments: --model is not allowed here. Set the model with the Model field instead.";
-            if (reserved.FirstOrDefault(flag => IsFlag(token, flag)) is { } owned)
-                return $"Extra CLI arguments: {owned} is not allowed, because ILD already sets it for this provider.";
+            if (reserved.FirstOrDefault(flag => IsFlag(token, flag, attached)) is { } owned)
+                return $"Extra CLI arguments: {owned} is not allowed, because {reasons?.GetValueOrDefault(owned) ?? "ILD already sets it for this provider"}.";
         }
+        return null;
+    }
+
+    // The flag and value of a codex config override at tokens[i], in each form codex
+    // takes: "-c v" and "--config v" (i moves past v), "--config=v", "-cv" and "-c=v".
+    // The value is null when nothing follows, or a flag does, which codex will not
+    // take as a value either. Null when tokens[i] is not an override.
+    private static (string Flag, string? Value)? ConfigOverride(IReadOnlyList<string> tokens, ref int i)
+    {
+        var token = tokens[i];
+        if (token is "-c" or "--config")
+            return (token, i + 1 < tokens.Count && !tokens[i + 1].StartsWith('-') ? tokens[++i] : null);
+        if (token.StartsWith("--config=", StringComparison.Ordinal))
+            return ("--config", token["--config=".Length..]);
+        if (token.StartsWith("-c", StringComparison.Ordinal) && token.Length > 2)
+            return ("-c", token[2] == '=' ? token[3..] : token[2..]);
         return null;
     }
 
@@ -141,6 +199,9 @@ public static class ExtraCliArgs
         return tokens;
     }
 
-    private static bool IsFlag(string token, string flag)
-        => token == flag || token.StartsWith(flag + "=", StringComparison.Ordinal);
+    private static bool IsFlag(string token, string flag, bool attachedShortValues)
+        => token == flag
+           || token.StartsWith(flag + "=", StringComparison.Ordinal)
+           || (attachedShortValues && flag.Length == 2 && flag[0] == '-' && flag[1] != '-'
+               && token.StartsWith(flag, StringComparison.Ordinal));
 }

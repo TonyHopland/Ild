@@ -4,7 +4,7 @@ import type { AiProvider } from "../../../types";
  * The tool keys an AI node starts with, given its saved `toolAllowlist`.
  * Mirrors the backend's `AiToolCatalog.NormalizeSelectedToolKeys`: unsupported
  * keys are dropped and an empty result means the provider defaults — except for
- * Copilot, whose only tool is "ild", where a saved list without it means ILD off.
+ * Copilot and Codex, whose only tool is "ild", where a saved list without it means ILD off.
  */
 export function resolveToolSelection(
   provider: AiProvider | null,
@@ -28,8 +28,8 @@ export function resolveToolSelection(
     : [];
 
   if (explicitTools.length > 0) return explicitTools;
-  const isCopilot = provider?.type?.trim().toLowerCase() === "copilot";
-  if (isCopilot && Array.isArray(configuredTools)) return explicitTools;
+  const isIldOnly = ["copilot", "codex"].includes(provider?.type?.trim().toLowerCase() ?? "");
+  if (isIldOnly && Array.isArray(configuredTools)) return explicitTools;
 
   return supportedTools.filter((tool) => tool.defaultEnabled).map((tool) => tool.key);
 }

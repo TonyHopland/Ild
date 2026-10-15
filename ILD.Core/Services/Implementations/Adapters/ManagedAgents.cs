@@ -22,8 +22,8 @@ public sealed record ManagedAgent(
     string Command);
 
 /// <summary>
-/// The set of coding agents ILD manages via npm. Pi, OpenCode, Claude Code and
-/// GitHub Copilot are each installed from an npm package so a single update
+/// The set of coding agents ILD manages via npm. Pi, OpenCode, Claude Code,
+/// GitHub Copilot and Codex are each installed from an npm package so a single update
 /// mechanism (no <c>curl</c> dependency) covers all of them. They are not baked
 /// into the image: installs land on <c>/data</c> and are launched from there, so
 /// a fresh deployment installs them once from the AI Provider page.
@@ -42,7 +42,10 @@ public static class ManagedAgentCatalog
     public static readonly ManagedAgent Copilot =
         new("copilot", "GitHub Copilot", "@github/copilot", "copilot", "copilot");
 
-    public static readonly IReadOnlyList<ManagedAgent> All = [Pi, OpenCode, ClaudeCode, Copilot];
+    public static readonly ManagedAgent Codex =
+        new("codex", "Codex", "@openai/codex", "codex", "codex");
+
+    public static readonly IReadOnlyList<ManagedAgent> All = [Pi, OpenCode, ClaudeCode, Copilot, Codex];
 
     /// <summary>Look up a managed agent by its <see cref="ManagedAgent.Key"/> (case-insensitive); null when unknown.</summary>
     public static ManagedAgent? Find(string? key)

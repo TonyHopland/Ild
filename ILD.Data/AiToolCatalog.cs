@@ -20,13 +20,13 @@ public static class AiToolCatalog
         IldTool,
     ];
 
-    private static readonly IReadOnlyList<AiToolDefinition> CopilotTools = [IldTool];
+    private static readonly IReadOnlyList<AiToolDefinition> IldOnlyTools = [IldTool];
 
     public static IReadOnlyList<AiToolDefinition> GetSupportedToolsForProviderType(string? providerType)
         => NormalizeProviderType(providerType) switch
         {
             "opencode" or "pi" or "claude-code" => DefaultTools,
-            "copilot" => CopilotTools,
+            "copilot" or "codex" => IldOnlyTools,
             _ => Array.Empty<AiToolDefinition>(),
         };
 
@@ -59,17 +59,19 @@ public static class AiToolCatalog
     }
 
     /// <summary>
-    /// Copilot's only tool is <c>ild</c>, so an explicit selection without it is
-    /// the one way to turn ILD off. Every other provider keeps treating an empty
+    /// Copilot's and Codex's only tool is <c>ild</c>, so an explicit selection without it
+    /// is the one way to turn ILD off. Every other provider keeps treating an empty
     /// or fully-filtered selection as its defaults, which is what their saved
     /// loop steps and chats were stored under.
     /// </summary>
     private static bool EmptySelectionMeansNone(string? providerType)
-        => NormalizeProviderType(providerType) is "copilot";
+        => NormalizeProviderType(providerType) is "copilot" or "codex";
 
-    // Copilot's CLI cannot turn its tools off: an empty --available-tools leaves them all on.
+    // Copilot and Codex cannot run without their tools: Copilot's empty
+    // --available-tools leaves all of its tools on, and codex has no way to turn
+    // its tools off.
     public static bool SupportsNoTools(string? providerType)
-        => NormalizeProviderType(providerType) is not "copilot";
+        => NormalizeProviderType(providerType) is not ("copilot" or "codex");
 
     private static string? NormalizeProviderType(string? providerType)
         => providerType?.Trim().ToLowerInvariant();
