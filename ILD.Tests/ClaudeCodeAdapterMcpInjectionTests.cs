@@ -155,7 +155,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
             Args: new[] { "--isolated" },
             Env: new Dictionary<string, string> { ["FOO"] = "bar" });
 
-        var entry = ClaudeCodeAdapter.BuildCustomMcpEntry(server);
+        var entry = CustomMcpServers.BuildCustomMcpEntry(server);
 
         // Claude wants a command string plus a separate args array; the remaining
         // command tokens are prepended to the explicit args.
@@ -174,7 +174,7 @@ public class ClaudeCodeAdapterMcpInjectionTests : IDisposable
             Args: Array.Empty<string>(),
             Env: new Dictionary<string, string>());
 
-        var entry = ClaudeCodeAdapter.BuildCustomMcpEntry(server);
+        var entry = CustomMcpServers.BuildCustomMcpEntry(server);
 
         Assert.Equal("run", entry["command"]);
         Assert.False(entry.ContainsKey("args"));

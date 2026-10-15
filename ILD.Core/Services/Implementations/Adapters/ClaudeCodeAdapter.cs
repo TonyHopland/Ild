@@ -288,33 +288,6 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     }
 
     /// <summary>
-    /// Format a normalized <see cref="CustomMcpServer"/> as a Claude Code
-    /// <c>mcpServers.&lt;name&gt;</c> entry:
-    /// <c>{ "command": "npx", "args": [argv…], "env": {…} }</c>. Claude expects
-    /// a command string plus a separate args array, so the server's first command
-    /// token becomes <c>command</c> and the rest are prepended to its args.
-    /// <c>args</c>/<c>env</c> are omitted when empty.
-    /// </summary>
-    public static Dictionary<string, object?> BuildCustomMcpEntry(CustomMcpServer server)
-    {
-        var args = new List<string>(server.Command.Skip(1));
-        args.AddRange(server.Args);
-
-        var entry = new Dictionary<string, object?>
-        {
-            ["command"] = server.Command[0],
-        };
-
-        if (args.Count > 0)
-            entry["args"] = args.ToArray();
-
-        if (server.Env.Count > 0)
-            entry["env"] = server.Env.ToDictionary(kv => kv.Key, kv => (object?)kv.Value);
-
-        return entry;
-    }
-
-    /// <summary>
     /// Write the MCP config, which carries the ILD API token, to a JSON file (see
     /// <see cref="IldMcpServer.TryWriteConfigFile"/>) the caller can pass to
     /// <c>claude --mcp-config</c>. Merges the built-in <c>ild</c> server (only
@@ -345,7 +318,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         // Provider-scoped custom MCP servers. The parser reserves the "ild" name,
         // so these can never clobber the entry above.
         foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
-            servers[server.Name] = BuildCustomMcpEntry(server);
+            servers[server.Name] = CustomMcpServers.BuildCustomMcpEntry(server);
 
         return servers.Count == 0
             ? null

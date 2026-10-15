@@ -46,6 +46,31 @@ public static class CustomMcpServers
     /// </summary>
     private const string ReservedIldName = "ild";
 
+    /// <summary>
+    /// Format a server as the <c>{ "command": "npx", "args": [argv…], "env": {…} }</c>
+    /// entry Claude Code and Copilot take in their MCP config, and codex's launch
+    /// file holds. The server's first command token becomes <c>command</c> and
+    /// the rest are prepended to its args. <c>args</c>/<c>env</c> are omitted when empty.
+    /// </summary>
+    public static Dictionary<string, object?> BuildCustomMcpEntry(CustomMcpServer server)
+    {
+        var args = new List<string>(server.Command.Skip(1));
+        args.AddRange(server.Args);
+
+        var entry = new Dictionary<string, object?>
+        {
+            ["command"] = server.Command[0],
+        };
+
+        if (args.Count > 0)
+            entry["args"] = args.ToArray();
+
+        if (server.Env.Count > 0)
+            entry["env"] = server.Env.ToDictionary(kv => kv.Key, kv => (object?)kv.Value);
+
+        return entry;
+    }
+
     /// <summary>Parse the raw custom-MCP JSON into normalized servers. Never throws.</summary>
     public static IReadOnlyList<CustomMcpServer> Parse(string? json)
     {

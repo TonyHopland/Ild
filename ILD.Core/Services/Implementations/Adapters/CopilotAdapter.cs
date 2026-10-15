@@ -263,7 +263,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
         // The parser reserves the "ild" name, so these can never clobber it.
         foreach (var server in CustomMcpServers.Parse(AiProviderConfig.Parse(provider.Config).CustomMcpServersJson))
-            servers[server.Name] = WithCopilotKeys(ClaudeCodeAdapter.BuildCustomMcpEntry(server));
+            servers[server.Name] = WithCopilotKeys(CustomMcpServers.BuildCustomMcpEntry(server));
 
         return servers.Count == 0
             ? null

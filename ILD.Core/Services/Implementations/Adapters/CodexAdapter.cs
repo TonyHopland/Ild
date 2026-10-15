@@ -316,7 +316,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                     continue;
                 }
 
-                var launch = ClaudeCodeAdapter.BuildCustomMcpEntry(server);
+                var launch = CustomMcpServers.BuildCustomMcpEntry(server);
                 var env = proxyUrl is null
                     ? new Dictionary<string, string>()
                     : new Dictionary<string, string>(AgentIsolation.EgressProxyEnvironment(proxyUrl));
