@@ -9,7 +9,11 @@ const tool = (key: string): AiToolDefinition => ({
   defaultEnabled: true,
 });
 
-const provider = (type: string, supportedTools: AiToolDefinition[]): AiProvider => ({
+const provider = (
+  type: string,
+  supportedTools: AiToolDefinition[],
+  declared: Partial<AiProvider> = {},
+): AiProvider => ({
   id: `${type}-1`,
   name: type,
   type,
@@ -20,15 +24,19 @@ const provider = (type: string, supportedTools: AiToolDefinition[]): AiProvider 
   parallelism: 1,
   supportedTools,
   createdAt: "2026-09-14T00:00:00Z",
+  ...declared,
 });
 
 const opencode = provider("opencode", [tool("read"), tool("write"), tool("execute"), tool("ild")]);
 
+// What the backend reports for a provider whose adapter treats an empty selection as none.
+const ildOnlyTraits = { emptyToolSelectionMeansNone: true };
+
 // Copilot and Codex: their only tool is "ild", so a saved list without it means ILD off.
 describe.each([
-  provider("copilot", [tool("ild")]),
-  provider("codex", [tool("ild")]),
-  provider(" Codex ", [tool("ild")]),
+  provider("copilot", [tool("ild")], ildOnlyTraits),
+  provider("codex", [tool("ild")], ildOnlyTraits),
+  provider(" Codex ", [tool("ild")], ildOnlyTraits),
 ])("resolveToolSelection for the ild-only provider $type", (ildOnly) => {
   test("a saved empty list keeps ILD unticked", () => {
     expect(resolveToolSelection(ildOnly, [])).toEqual([]);
@@ -63,5 +71,25 @@ describe("resolveToolSelection for the other providers", () => {
 
   test("no provider means no tools", () => {
     expect(resolveToolSelection(null, ["read"])).toEqual([]);
+  });
+});
+
+describe("resolveToolSelection follows what the backend reports, not the provider type", () => {
+  test("any provider reported as treating an empty selection as none keeps it off", () => {
+    const newCli = provider("some-new-cli", [tool("ild")], { emptyToolSelectionMeansNone: true });
+    expect(resolveToolSelection(newCli, [])).toEqual([]);
+    expect(resolveToolSelection(newCli, ["read"])).toEqual([]);
+    expect(resolveToolSelection(newCli, undefined)).toEqual(["ild"]);
+  });
+
+  test("a provider not reported that way falls back to its defaults, whatever its type", () => {
+    const unflagged = provider("copilot", [tool("ild")]);
+    expect(resolveToolSelection(unflagged, [])).toEqual(["ild"]);
+    expect(
+      resolveToolSelection(
+        provider("codex", [tool("ild")], { emptyToolSelectionMeansNone: false }),
+        ["read"],
+      ),
+    ).toEqual(["ild"]);
   });
 });

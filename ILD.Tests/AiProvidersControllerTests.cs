@@ -30,6 +30,8 @@ public class AiProvidersControllerTests : IDisposable
         _registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["opencode", "pi", "claude-code", "copilot", "codex"]);
         _registry.Setup(r => r.GetModelSupport(It.IsAny<string>()))
             .Returns((string type) => DeclaredModelSupport.For(type));
+        _registry.Setup(r => r.GetTraits(It.IsAny<string?>()))
+            .Returns((string? type) => DeclaredTraits.For(type));
     }
 
     public void Dispose()
@@ -152,6 +154,41 @@ public class AiProvidersControllerTests : IDisposable
         Assert.Contains("\"Key\":\"write\"", json);
         Assert.Contains("\"Key\":\"execute\"", json);
         Assert.Contains("\"Key\":\"ild\"", json);
+    }
+
+    [Fact]
+    public async Task Every_provider_response_carries_what_its_type_declares_about_tools_and_its_display_name()
+    {
+        foreach (var (name, type) in new[] { ("Gh", "copilot"), ("Pi", "pi"), ("Other", "OpenAI") })
+            _db.AiProviders.Add(new AiProvider { Id = Guid.NewGuid(), Name = name, Type = type, BaseUrl = "https://x", Model = "m" });
+        await _db.SaveChangesAsync(TestContext.Current.CancellationToken);
+        var controller = CreateController();
+
+        var listed = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(
+                Assert.IsType<OkObjectResult>(await controller.GetAll()).Value))!.AsArray()
+            .ToDictionary(p => p!["name"]!.GetValue<string>(), p => p!);
+        var created = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(
+            Assert.IsType<CreatedAtActionResult>(await controller.Create(new AiProviderDto
+            {
+                Name = "Cx",
+                Type = "Codex",
+                BaseUrl = string.Empty,
+                Model = string.Empty,
+            })).Value))!;
+
+        foreach (var (provider, displayName, emptyMeansNone, noTools, tools) in new[]
+                 {
+                     (listed["Gh"], "Copilot", true, false, new[] { "ild" }),
+                     (created, "Codex", true, false, new[] { "ild" }),
+                     (listed["Pi"], "Pi", false, true, new[] { "read", "write", "execute", "ild" }),
+                     (listed["Other"], "", false, true, Array.Empty<string>()),
+                 })
+        {
+            Assert.Equal(displayName, provider["typeDisplayName"]!.GetValue<string>());
+            Assert.Equal(emptyMeansNone, provider["emptyToolSelectionMeansNone"]!.GetValue<bool>());
+            Assert.Equal(noTools, provider["supportsNoTools"]!.GetValue<bool>());
+            Assert.Equal(tools, provider["supportedTools"]!.AsArray().Select(t => t!["Key"]!.GetValue<string>()));
+        }
     }
 
     [Fact]

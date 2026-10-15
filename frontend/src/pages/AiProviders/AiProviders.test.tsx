@@ -16,11 +16,40 @@ const DECLARED_MODEL_SUPPORT: Record<string, AdapterModelSupport> = {
   codex: "Optional",
 };
 
+// How each CLI-auth adapter's CLI signs in, mirroring the real backend's
+// declared traits; the BYO-endpoint types declare none.
+const DECLARED_CLI_AUTH: Record<string, { cliName: string; signInStep: string }> = {
+  "claude-code": {
+    cliName: "Claude Code",
+    signInStep:
+      "run the `/login` slash command to sign in (with an active Claude Code subscription)",
+  },
+  copilot: {
+    cliName: "GitHub Copilot",
+    signInStep:
+      "run the `/login` slash command to sign in (with an active GitHub Copilot subscription)",
+  },
+  codex: {
+    cliName: "Codex",
+    signInStep: "choose **Sign in with Device Code** and sign in with your ChatGPT account",
+  },
+};
+
+const DECLARED_DISPLAY_NAME: Record<string, string> = {
+  opencode: "OpenCode",
+  pi: "Pi",
+  "claude-code": "Claude Code",
+  copilot: "Copilot",
+  codex: "Codex",
+};
+
 /** The `GET /AgentAdapters` payload for a set of provider types. */
 function adapterList(types: string[]) {
   return types.map((type) => ({
     type,
     modelSupport: DECLARED_MODEL_SUPPORT[type] ?? "Unsupported",
+    displayName: DECLARED_DISPLAY_NAME[type] ?? type,
+    cliAuth: DECLARED_CLI_AUTH[type] ?? null,
   }));
 }
 
@@ -49,6 +78,7 @@ const customMcpSchema = [
 function routingFetch(options: {
   providers?: unknown[];
   types?: string[];
+  adapters?: unknown[];
   schema?: unknown[];
   agents?: unknown[];
   onWrite?: (url: string, init: RequestInit) => unknown;
@@ -58,6 +88,7 @@ function routingFetch(options: {
   const {
     providers = [],
     types = [],
+    adapters,
     schema = [],
     agents = [],
     onWrite,
@@ -75,7 +106,8 @@ function routingFetch(options: {
     });
 
     if (method === "GET" && url.includes("config-schema")) return ok(schema);
-    if (method === "GET" && url.includes("AgentAdapters")) return ok(adapterList(types));
+    if (method === "GET" && url.includes("AgentAdapters"))
+      return ok(adapters ?? adapterList(types));
     if (method === "GET" && url.includes("managedagents")) return ok(agents);
     if (method === "GET" && url.includes("aiproviders")) return ok(providers);
     if (method === "POST" || method === "PUT") return ok(onWrite?.(url, init!) ?? {}, writeStatus);
@@ -383,6 +415,7 @@ describe("AI Providers page", () => {
     expect(screen.getByLabelText("Model (optional)")).toBeTruthy();
     expect(screen.getByText(/Leave blank to use the CLI/)).toBeTruthy();
     expect(screen.getByText("/login")).toBeTruthy();
+    expect(screen.getByText("/login").tagName).toBe("CODE");
     // The note is Copilot-specific rather than the Claude Code wording.
     const note = screen.getByText(
       (_, element) =>
@@ -1570,6 +1603,7 @@ describe("a Codex provider", () => {
     );
     expect(note.textContent).toContain("Open terminal");
     expect(note.textContent).not.toContain("GitHub Copilot");
+    expect(within(note).getByText("Sign in with Device Code").tagName).toBe("STRONG");
 
     fireEvent.change(screen.getByLabelText("Model (optional)"), { target: { value: "gpt-5.5" } });
     fireEvent.change(await screen.findByLabelText("Custom MCP servers (JSON)"), {
@@ -1593,6 +1627,98 @@ describe("a Codex provider", () => {
     expect(body.model).toBe("gpt-5.5");
     expect(body.customMcpServersJson).toBe('{"docs":{"command":["npx","docs-mcp"]}}');
     expect(body.extraArgs).toBe('-c model_reasoning_effort="high"');
+  });
+});
+
+describe("a provider type whose adapter says its CLI signs in", () => {
+  test("hides the fields the CLI owns and shows the CLI's own sign-in step, whatever the type", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Acme",
+        type: "acme-cli",
+        baseUrl: "http://stale.local",
+        apiKey: "",
+        model: "",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        adapters: [
+          {
+            type: "ACME-CLI",
+            modelSupport: "Optional",
+            displayName: "Acme",
+            cliAuth: { cliName: "Acme CLI", signInStep: "run `/auth` and pick **Device login**" },
+          },
+        ],
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("AI Providers")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Edit")).toBeTruthy());
+    // The list row offers no API Key line once the adapter says its CLI signs in.
+    await waitFor(() => expect(screen.queryByText("API Key")).toBeFalsy());
+
+    fireEvent.click(screen.getByText("Edit"));
+    await waitFor(() => expect(screen.getByText("Edit Provider")).toBeTruthy());
+
+    expect(screen.queryByLabelText("Base URL")).toBeFalsy();
+    expect(screen.queryByLabelText("API Key")).toBeFalsy();
+    const note = screen.getByText(
+      (_, element) =>
+        element?.className === "ap-cli-note" && (element.textContent ?? "").includes("Acme CLI"),
+    );
+    expect(within(note).getByText("/auth").tagName).toBe("CODE");
+    expect(within(note).getByText("Device login").tagName).toBe("STRONG");
+    expect(note.textContent).not.toContain("`");
+    expect(note.textContent).not.toContain("**");
+    expect(note.querySelector("p")).toBeNull();
+
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Provider")).toBeFalsy());
+    const putReq = requests.find((r) => r.method === "PUT" && r.url.includes("/aiproviders/ai-1"));
+    expect((putReq!.body as { baseUrl?: string }).baseUrl).toBe("");
+  });
+
+  test("a type whose adapter declares no CLI sign-in keeps its Base URL and API key", async () => {
+    const providers = [
+      {
+        id: "ai-1",
+        name: "Copilot-ish",
+        type: "copilot",
+        baseUrl: "http://kept.local",
+        apiKey: "",
+        model: "",
+        isDefault: true,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ];
+    const requests: Array<{ url: string; method: string; body: unknown }> = [];
+    renderRouted(
+      routingFetch({
+        providers,
+        adapters: [
+          { type: "copilot", modelSupport: "Optional", displayName: "Copilot", cliAuth: null },
+        ],
+        onWrite: () => providers[0],
+        requests,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("Edit")).toBeTruthy());
+    fireEvent.click(screen.getByText("Edit"));
+    await waitFor(() => expect(screen.getByText("Edit Provider")).toBeTruthy());
+
+    expect(screen.getByLabelText("Base URL")).toBeTruthy();
+    expect(screen.getByLabelText("API Key")).toBeTruthy();
+    expect(document.querySelector(".ap-cli-note")).toBeNull();
   });
 });
 
