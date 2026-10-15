@@ -202,13 +202,24 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     /// <summary>
     /// The flags <see cref="BuildRunProcessStartInfo"/> sets, and those that would
-    /// undo what it sets, which a provider's extra CLI arguments may not carry: a
-    /// config override could replace <c>mcp_servers.ild</c>, <c>--cd</c> moves codex
-    /// out of the worktree, and <c>--sandbox</c> contradicts the sandbox bypass.
+    /// undo what it sets, which a provider's extra CLI arguments may not carry:
+    /// <c>--cd</c> moves codex out of the worktree, and <c>--sandbox</c> contradicts
+    /// the sandbox bypass. <c>-c</c>/<c>--config</c> is allowed, e.g.
+    /// <c>-c model_reasoning_effort=high</c>, except for the config keys ILD sets
+    /// itself (see <see cref="ExtraCliArgs.Validate"/>).
     /// </summary>
     internal static readonly string[] ReservedCliFlags =
         ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--add-dir",
-         "-c", "--config", "-C", "--cd", "-s", "--sandbox"];
+         "-C", "--cd", "-s", "--sandbox"];
+
+    /// <summary>Why each <see cref="ReservedCliFlags"/> entry that ILD does not set itself is refused.</summary>
+    internal static readonly Dictionary<string, string> ReservedCliFlagReasons = new(StringComparer.Ordinal)
+    {
+        ["-C"] = "it would move Codex out of the worktree",
+        ["--cd"] = "it would move Codex out of the worktree",
+        ["-s"] = "it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox)",
+        ["--sandbox"] = "it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox)",
+    };
 
     /// <summary>
     /// <c>codex exec</c> with ILD's options, then the provider's extra arguments,

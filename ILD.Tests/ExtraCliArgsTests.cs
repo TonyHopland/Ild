@@ -125,10 +125,6 @@ public class ExtraCliArgsTests
     [InlineData("codex", "--skip-git-repo-check", "--skip-git-repo-check")]
     [InlineData("codex", "--dangerously-bypass-approvals-and-sandbox", "--dangerously-bypass-approvals-and-sandbox")]
     [InlineData("codex", "--add-dir /x", "--add-dir")]
-    [InlineData("codex", "-c model_reasoning_effort=\"high\"", "-c")]
-    [InlineData("codex", "-cmcp_servers.ild={command=\"x\"}", "-c")]
-    [InlineData("codex", "--config model=x", "--config")]
-    [InlineData("codex", "--config=model=x", "--config")]
     [InlineData("codex", "-C /tmp", "-C")]
     [InlineData("codex", "-C/tmp", "-C")]
     [InlineData("codex", "--cd /tmp", "--cd")]
@@ -143,6 +139,70 @@ public class ExtraCliArgsTests
 
         Assert.NotNull(error);
         Assert.Contains(flag, error);
+    }
+
+    [Theory]
+    [InlineData("codex", "--json", "--json is not allowed, because ILD already sets it for this provider.")]
+    [InlineData("codex", "-C /tmp", "-C is not allowed, because it would move Codex out of the worktree.")]
+    [InlineData("codex", "--cd=/tmp", "--cd is not allowed, because it would move Codex out of the worktree.")]
+    [InlineData("codex", "-s read-only", "-s is not allowed, because it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox).")]
+    [InlineData("codex", "--sandbox read-only", "--sandbox is not allowed, because it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox).")]
+    public void Validate_says_why_a_codex_flag_is_refused(string type, string raw, string message)
+    {
+        Assert.Equal("Extra CLI arguments: " + message, ExtraCliArgs.Validate(type, raw));
+    }
+
+    /// <summary>Each key ILD sets, in each form codex takes a config override, with the flag the message names.</summary>
+    public static TheoryData<string, string, string> RefusedCodexConfigOverrides()
+    {
+        var data = new TheoryData<string, string, string>();
+        foreach (var (key, setting) in new[]
+                 {
+                     ("mcp_servers.ild", "MCP servers"),
+                     ("sandbox_mode", "sandbox"),
+                     ("sandbox_workspace_write.network_access", "sandbox"),
+                     ("approval_policy", "approvals"),
+                     ("profiles.fast.model", "profiles"),
+                 })
+        {
+            data.Add($"-c {key}=x", $"-c {key}", setting);
+            data.Add($"--config {key}=x", $"--config {key}", setting);
+            data.Add($"--config={key}=x", $"--config {key}", setting);
+            data.Add($"-c{key}=x", $"-c {key}", setting);
+            data.Add($"-c=\" {key} =x\"", $"-c {key}", setting);
+        }
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(RefusedCodexConfigOverrides))]
+    public void Validate_refuses_a_codex_config_override_of_what_ild_sets_itself(string raw, string named, string setting)
+    {
+        Assert.Equal(
+            $"Extra CLI arguments: {named} is not allowed, because ILD sets Codex's {setting} itself.",
+            ExtraCliArgs.Validate("codex", "--enable web_search " + raw));
+    }
+
+    [Theory]
+    [InlineData("-c", "-c")]
+    [InlineData("--enable web_search --config", "--config")]
+    [InlineData("-c --json", "-c")]
+    [InlineData("--config -C/tmp", "--config")]
+    public void Validate_refuses_a_codex_config_flag_with_no_value(string raw, string flag)
+    {
+        Assert.Equal(
+            $"Extra CLI arguments: {flag} is not allowed without a key=value after it.",
+            ExtraCliArgs.Validate("codex", raw));
+    }
+
+    [Theory]
+    [InlineData("claude-code")]
+    [InlineData("copilot")]
+    [InlineData("opencode")]
+    [InlineData("pi")]
+    public void Validate_leaves_config_like_flags_of_other_providers_alone(string type)
+    {
+        Assert.Null(ExtraCliArgs.Validate(type, "-c mcp_servers.ild=x --config sandbox_mode=read-only"));
     }
 
     [Theory]
@@ -177,6 +237,13 @@ public class ExtraCliArgsTests
     [InlineData("opencode", "--variant \"-sharp\"")]
     [InlineData("copilot", "--effort high")]
     [InlineData("codex", "--enable web_search")]
+    [InlineData("codex", "-c model_reasoning_effort=high")]
+    [InlineData("codex", "-c model_reasoning_effort=\"high\"")]
+    [InlineData("codex", "--config model_reasoning_effort=high")]
+    [InlineData("codex", "--config=model_verbosity=low")]
+    [InlineData("codex", "-cmodel_reasoning_effort=high")]
+    [InlineData("codex", "-c=model_reasoning_effort=high")]
+    [InlineData("codex", "-c mcp_servers_note=x")]
     [InlineData("opencode", "--variant high")]
     [InlineData("pi", "--models a,b")]
     [InlineData("pi", "--thinking high")]
