@@ -81,28 +81,35 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             var sessionsDirectory = SessionsDirectory();
-            var resumeId = IsSessionId(ctx.SessionId) ? ctx.SessionId : null;
-            if (ctx.ManageSession && ScopeFactory is not null && resumeId is not null && sessionsDirectory is not null)
+            if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId) && sessionsDirectory is not null)
             {
                 // Fork: seed a copy of the source session under the new id, so the
-                // restore below writes the copy and `resume` continues on it.
+                // restore below writes the copy and `resume` continues on it. A
+                // fork that fails fails the node, as for every adapter; a source
+                // with no snapshot leaves nothing to resume, so a new thread starts.
                 if (!string.IsNullOrWhiteSpace(ctx.ForkFromSessionId))
-                    await TrySnapshotStepAsync("fork", ctx.SessionId!,
-                        () => ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, ctx.SessionId!, ctx.Cancel));
+                {
+                    try
+                    {
+                        await ForkSessionSnapshotAsync(ctx.RunContext.LoopRunId, ctx.ForkFromSessionId!, ctx.SessionId!, ctx.Cancel);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        return NodeExecutionResult.Fail(
+                            $"[codex-error] could not fork the codex session {ctx.ForkFromSessionId} into {ctx.SessionId}: {ex.Message}");
+                    }
+                }
                 await TrySnapshotStepAsync("restore", ctx.SessionId!,
                     () => RestoreRolloutAsync(ctx, sessionsDirectory, ctx.SessionId!));
             }
 
-            // Null when the total cannot be read, so no usage is reported rather than a wrong one.
-            var sessionTotalBefore = resumeId is null
-                ? NoUsage
-                : await ReadSessionTotalAsync(sessionsDirectory, resumeId, ctx.Cancel);
+            var resumeId = await ResumableSessionAsync(ctx.SessionId, sessionsDirectory, ctx.Cancel);
 
             Process? proc;
             try
             {
                 proc = StartAgentProcess(
-                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, ctx.SessionId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
+                    BuildRunProcessStartInfo(binaryPath, worktreePath, ctx.Prompt, resumeId, ctx.AdditionalAllowedDirectories, ctx.Provider.Model, mcpServers, ExtraCliArgs.ForLaunch(ctx.Provider, _logger)),
                     ctx.Provider.Id, ctx.Environment);
             }
             catch (Exception ex) when (ex is InvalidOperationException or IOException)
@@ -162,15 +169,23 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                     ? $"[codex] no assistant text response. stderr: {stderr.Trim()}"
                     : "[codex] no assistant text response from model");
 
-            var sessionId = stdout.ThreadId ?? ctx.SessionId;
-            if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(sessionId) && sessionsDirectory is not null)
-                await TrySnapshotStepAsync("store", sessionId!, () => PersistRolloutAsync(ctx, sessionsDirectory, sessionId!));
-
-            // A thread codex could not resume was started anew, counting from zero.
+            var sessionId = stdout.ThreadId ?? resumeId;
+            var store = ctx.ManageSession && ScopeFactory is not null;
             var resumed = resumeId is not null && (stdout.ThreadId is null || stdout.ThreadId == resumeId);
+
+            // One read of the rollout serves both the snapshot and, for a resumed
+            // thread, the total it had before this turn (null when unreadable).
+            var rollout = (store || resumed) && IsSessionId(sessionId) && sessionsDirectory is not null
+                ? await TryReadRolloutAsync(sessionsDirectory, sessionId!, ctx.Cancel)
+                : null;
+            if (store && rollout is { Length: > 0 })
+                await TrySnapshotStepAsync("store", sessionId!, () => UpsertSnapshotAsync(ctx, sessionId!, rollout, ctx.Cancel));
+
+            // A new thread counts from zero; a resumed one counts on from its earlier total.
             var usage = !resumed ? AdapterUsageParser.ParseCodex(stdout.RawStdout, NoUsage)
-                : sessionTotalBefore is null ? null
-                : AdapterUsageParser.ParseCodex(stdout.RawStdout, sessionTotalBefore);
+                : AdapterUsageParser.ParseCodexTotalBeforeLastTurn(rollout) is { } totalBefore
+                    ? AdapterUsageParser.ParseCodex(stdout.RawStdout, totalBefore)
+                    : null;
 
             return NodeExecutionResult.Ok(response, ctx.Prompt, sessionId, ctx.IncomingSessionId, usage);
         }
@@ -481,25 +496,39 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     private static readonly TokenUsage NoUsage = new(0, 0, null);
 
     /// <summary>
-    /// The running token total the session had reached before this run, which
-    /// codex counts on from (see <see cref="AdapterUsageParser.ParseCodex"/>):
-    /// zero when it has no rollout, since codex then starts a new thread, and
-    /// null when its rollout cannot be read. Like the snapshot steps, a failure or
-    /// a cancellation here never decides the turn.
+    /// <paramref name="sessionId"/> when codex has a rollout to resume it from;
+    /// otherwise null, with a warning, so the run starts a new thread rather than
+    /// handing codex an id it does not know.
     /// </summary>
-    private async Task<TokenUsage?> ReadSessionTotalAsync(string? sessionsDirectory, string sessionId, CancellationToken ct)
+    private async Task<string?> ResumableSessionAsync(string? sessionId, string? sessionsDirectory, CancellationToken ct)
     {
-        if (sessionsDirectory is null) return null;
+        if (string.IsNullOrWhiteSpace(sessionId)) return null;
         try
         {
-            if (await FindRolloutAsync(sessionsDirectory, sessionId, ct) is not { } rollout) return NoUsage;
-            return await AgentWritableFiles.ReadFileAsync(rollout, ct) is { } content
-                ? AdapterUsageParser.ParseCodexSessionTotal(content)
+            if (IsSessionId(sessionId) && sessionsDirectory is not null
+                && await FindRolloutAsync(sessionsDirectory, sessionId, ct) is not null)
+                return sessionId;
+            _logger.LogWarning("Codex has no session {SessionId} to resume, so it starts a new one.", sessionId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not look for the codex session {SessionId}, so it starts a new one: {Reason}", sessionId, ex.Message);
+        }
+        return null;
+    }
+
+    /// <summary>The rollout of <paramref name="sessionId"/>, or null when there is none or it cannot be read (logged).</summary>
+    private async Task<string?> TryReadRolloutAsync(string sessionsDirectory, string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            return await FindRolloutAsync(sessionsDirectory, sessionId, ct) is { } path
+                ? await AgentWritableFiles.ReadFileAsync(path, ct)
                 : null;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not read the codex session {SessionId}, so its usage is not reported: {Reason}", sessionId, ex.Message);
+            _logger.LogWarning(ex, "Could not read the codex session {SessionId}: {Reason}", sessionId, ex.Message);
             return null;
         }
     }
@@ -520,17 +549,12 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             snapshot.SessionJson, ctx.Cancel);
     }
 
-    private async Task PersistRolloutAsync(AgentExecutionContext ctx, string sessionsDirectory, string sessionId)
-    {
-        if (await FindRolloutAsync(sessionsDirectory, sessionId, ctx.Cancel) is not { } rollout) return;
-        if (await AgentWritableFiles.ReadFileAsync(rollout, ctx.Cancel) is not { Length: > 0 } content) return;
-        await UpsertSnapshotAsync(ctx, sessionId, content, ctx.Cancel);
-    }
-
     /// <summary>
-    /// Run a session snapshot step. Snapshots let a later turn resume, but never
-    /// decide this one: a step that fails, or is cancelled, is logged and the turn
-    /// goes on. A cancelled turn still stops at codex's own wait, which kills it.
+    /// Run a session snapshot step that must not decide the turn: restoring, where
+    /// a missing rollout then starts a new thread, and storing a finished turn,
+    /// whose output failing would throw away. A step that fails, or is cancelled,
+    /// is logged and the turn goes on; a cancelled turn still stops at codex's own
+    /// wait, which kills it.
     /// </summary>
     private async Task TrySnapshotStepAsync(string step, string sessionId, Func<Task> run)
     {

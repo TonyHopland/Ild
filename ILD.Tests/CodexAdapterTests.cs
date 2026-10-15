@@ -103,6 +103,7 @@ public sealed class CodexAdapterTests : IDisposable
     [Fact]
     public async Task A_session_to_continue_is_resumed_after_the_same_exec_options()
     {
+        SeedRollout("0199a213-81c0-7800-8aa1-bbab2a035a53", Json(new { type = "session_meta" }));
         var script = WriteCodex(Success("ok", threadId: "0199a213-81c0-7800-8aa1-bbab2a035a53"));
 
         var result = await Adapter().ExecuteAsync(
@@ -297,20 +298,19 @@ public sealed class CodexAdapterTests : IDisposable
         // total so far, and a resumed turn's turn.completed counts on from it. A
         // thread codex could not resume is started anew and counts from zero.
         const string sessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
-        var rollout = Path.Combine(_home, ".codex", "sessions", "2026", "09", "01", $"rollout-2026-09-01T08-00-00-{sessionId}.jsonl");
-        Directory.CreateDirectory(Path.GetDirectoryName(rollout)!);
-        File.WriteAllLines(rollout,
-        [
+        var rollout = SeedRollout(sessionId,
             Json(new { type = "session_meta", payload = new { id = sessionId } }),
+            TaskStarted,
             TokenCount(100, 20),
             Json(new { type = "response_item", payload = new { type = "message" } }),
-            TokenCount(250, 45),
-        ]);
+            TaskStarted,
+            TokenCount(250, 45));
         var script = WriteCodex(Lines(
-            ThreadStarted(sameThread ? sessionId : "0199a213-81c0-7800-8aa1-0000000000ff"),
-            TurnStarted,
-            AgentMessage("item_0", "Again."),
-            TurnCompleted(sameThread ? 400 : 150, sameThread ? 60 : 15)));
+                ThreadStarted(sameThread ? sessionId : "0199a213-81c0-7800-8aa1-0000000000ff"),
+                TurnStarted,
+                AgentMessage("item_0", "Again."),
+                TurnCompleted(sameThread ? 400 : 150, sameThread ? 60 : 15)),
+            appendRollout: sameThread ? (rollout, Lines(TaskStarted, TokenCount(400, 60))) : null);
 
         var result = await Adapter().ExecuteAsync(Context(script) with { SessionId = sessionId });
 
@@ -324,10 +324,10 @@ public sealed class CodexAdapterTests : IDisposable
     public async Task A_resumed_turn_whose_total_is_below_the_sessions_earlier_one_reports_no_usage()
     {
         const string sessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
-        var rollout = Path.Combine(_home, ".codex", "sessions", "2026", "09", "01", $"rollout-2026-09-01T08-00-00-{sessionId}.jsonl");
-        Directory.CreateDirectory(Path.GetDirectoryName(rollout)!);
-        File.WriteAllLines(rollout, [TokenCount(250, 45)]);
-        var script = WriteCodex(Lines(ThreadStarted(sessionId), TurnStarted, AgentMessage("item_0", "Again."), TurnCompleted(150, 15)));
+        var rollout = SeedRollout(sessionId, TaskStarted, TokenCount(250, 45));
+        var script = WriteCodex(
+            Lines(ThreadStarted(sessionId), TurnStarted, AgentMessage("item_0", "Again."), TurnCompleted(150, 15)),
+            appendRollout: (rollout, Lines(TaskStarted, TokenCount(150, 15))));
 
         var result = await Adapter().ExecuteAsync(Context(script) with { SessionId = sessionId });
 
@@ -610,12 +610,72 @@ public sealed class CodexAdapterTests : IDisposable
         var result = await Adapter(new FakeSnapshotStore { Broken = true }).ExecuteAsync(Context(script) with
         {
             SessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53",
-            ForkFromSessionId = "0199a213-81c0-7800-8aa1-000000000009",
             ManageSession = true,
         });
 
         Assert.True(result.Success, result.Error);
         Assert.Equal("ok", result.Output);
+    }
+
+    [Fact]
+    public async Task A_fork_the_snapshot_store_cannot_make_fails_the_node_and_launches_nothing()
+    {
+        var script = WriteCodex(Success("ok", threadId: "0199a213-81c0-7800-8aa1-000000000002"));
+
+        var result = await Adapter(new FakeSnapshotStore { Broken = true }).ExecuteAsync(Context(script) with
+        {
+            SessionId = "0199a213-81c0-7800-8aa1-000000000002",
+            ForkFromSessionId = "0199a213-81c0-7800-8aa1-000000000001",
+            ManageSession = true,
+        });
+
+        Assert.False(result.Success);
+        Assert.StartsWith("[codex-error]", result.Error);
+        Assert.Contains("fork", result.Error);
+        Assert.False(File.Exists(Path.Combine(_out, "argv")), "codex was launched");
+        Assert.Empty(ConfigFilesLeft());
+    }
+
+    [Fact]
+    public async Task A_fork_whose_source_has_no_snapshot_starts_a_new_thread()
+    {
+        const string fork = "0199a213-81c0-7800-8aa1-000000000002";
+        const string fresh = "0199a213-81c0-7800-8aa1-0000000000aa";
+        var script = WriteCodex(Success("ok", threadId: fresh));
+
+        var result = await Adapter(new FakeSnapshotStore()).ExecuteAsync(Context(script) with
+        {
+            SessionId = fork,
+            ForkFromSessionId = "0199a213-81c0-7800-8aa1-000000000001",
+            ManageSession = true,
+        });
+
+        Assert.True(result.Success, result.Error);
+        Assert.DoesNotContain("resume", Argv());
+        Assert.Equal(fresh, result.SessionId);
+        Assert.Contains(_logger.Warnings, w => w.Contains(fork));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_session_with_no_rollout_and_no_snapshot_starts_a_new_thread_instead_of_resuming(bool managed)
+    {
+        const string sessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+        const string fresh = "0199a213-81c0-7800-8aa1-0000000000bb";
+        var script = WriteCodex(Success("ok", threadId: fresh));
+
+        var result = await Adapter(managed ? new FakeSnapshotStore() : null).ExecuteAsync(Context(script) with
+        {
+            SessionId = sessionId,
+            ManageSession = managed,
+        });
+
+        Assert.True(result.Success, result.Error);
+        Assert.DoesNotContain("resume", Argv());
+        Assert.DoesNotContain(sessionId, Argv());
+        Assert.Equal(fresh, result.SessionId);
+        Assert.Contains(_logger.Warnings, w => w.Contains(sessionId));
     }
 
     // ---- helpers ----
@@ -671,7 +731,7 @@ public sealed class CodexAdapterTests : IDisposable
     /// </summary>
     private string WriteCodex(
         string stdout, int exitCode = 0, string stderr = "", string? stderrPrintf = null, bool hang = false,
-        (string RelativePath, string Content)? writeRollout = null)
+        (string RelativePath, string Content)? writeRollout = null, (string Path, string Content)? appendRollout = null)
     {
         Directory.CreateDirectory(_out);
         var configDir = Path.Combine(_readRoot, "ild-mcp-config");
@@ -700,6 +760,8 @@ public sealed class CodexAdapterTests : IDisposable
                 $"mkdir -p '{Path.GetDirectoryName(target)}'\n" +
                 $"cat > '{target}' <<'ROLLOUT'\n{rollout.Content}ROLLOUT\n";
         }
+        if (appendRollout is { } append)
+            body += $"cat >> '{append.Path}' <<'ROLLOUT'\n{append.Content}\nROLLOUT\n";
         body += $"cat <<'EVENTS'\n{stdout}\nEVENTS\n";
         if (stderr.Length > 0)
             body += $"printf '%s' '{stderr}' >&2\n";
@@ -709,6 +771,15 @@ public sealed class CodexAdapterTests : IDisposable
         File.WriteAllText(script, body);
         File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         return script;
+    }
+
+    /// <summary>A rollout for <paramref name="sessionId"/> under codex's sessions directory, as an earlier run left it.</summary>
+    private string SeedRollout(string sessionId, params string[] lines)
+    {
+        var rollout = Path.Combine(_home, ".codex", "sessions", "2026", "09", "01", $"rollout-2026-09-01T08-00-00-{sessionId}.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(rollout)!);
+        File.WriteAllLines(rollout, lines);
+        return rollout;
     }
 
     private string[] Argv()
@@ -788,6 +859,8 @@ public sealed class CodexAdapterTests : IDisposable
             type = "turn.completed",
             usage = new { input_tokens = input, cached_input_tokens = cached, output_tokens = output, reasoning_output_tokens = reasoning },
         });
+
+    private static readonly string TaskStarted = Json(new { type = "event_msg", payload = new { type = "task_started" } });
 
     private static string TokenCount(long input, long output)
         => Json(new
