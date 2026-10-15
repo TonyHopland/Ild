@@ -59,7 +59,7 @@ The product should let a developer:
 - All providers are CLI-backed: the adapter spawns the provider's CLI inside the worktree and reads structured output.
 - The adapter, not the node executor, owns the provider-specific execution lifecycle.
 - Prompt templates remain single-field per AI node and support ILD placeholder expansion.
-- Session-aware adapters may persist and restore session snapshots across node visits. `copilot` is an exception: its headless mode surfaces no resumable session id, so it runs single-turn (no persist/restore).
+- Session-aware adapters may persist and restore session snapshots across node visits. `copilot` is an exception: its headless mode surfaces no resumable session id, so it runs single-turn (no persist/restore). A `codex` step continuing a session Codex has no transcript for starts a new session instead, with a warning in the log; a fork whose session snapshot cannot be copied fails the step.
 - Agent-facing work-item tools are exposed through ILD's local MCP server integration, and the per-node tool allowlist (read/write/execute/ild) gates each adapter. `copilot` and `codex` are exceptions: GitHub's CLI requires `--allow-all-tools` for programmatic use, and Codex runs headlessly with approvals and its own sandbox bypassed (the agent uid and the egress proxy are its sandbox), so these providers always run their built-in tools unrestricted, and only the `ild` key applies to them, turning the ILD MCP server on or off. For them an omitted allowlist means ILD on, and an explicit empty list, or one without `ild`, means ILD off; for the other providers an empty list means their defaults.
 
 ### Human Review and PR Flow
