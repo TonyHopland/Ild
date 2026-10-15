@@ -185,9 +185,24 @@ export default function AiProviders() {
 
   // Human-facing CLI name for a CLI-auth provider type, used in the login note.
   const cliAuthLabel = (t: string) =>
-    t.toLowerCase() === "copilot" ? "GitHub Copilot" : "Claude Code";
+    t.toLowerCase() === "copilot"
+      ? "GitHub Copilot"
+      : t.toLowerCase() === "codex"
+        ? "Codex"
+        : "Claude Code";
 
-  const isCodex = (t: string) => t.toLowerCase() === "codex";
+  // What to do inside the CLI to sign in, for the login note.
+  const cliSignIn = (t: string) =>
+    t.toLowerCase() === "codex" ? (
+      <>
+        choose <strong>Sign in with Device Code</strong> and sign in with your ChatGPT account
+      </>
+    ) : (
+      <>
+        run the <code>/login</code> slash command to sign in (with an active {cliAuthLabel(t)}{" "}
+        subscription)
+      </>
+    );
 
   // What the selected type's adapter says about a model, straight from the API.
   // Matched case-insensitively: the API accepts and stores a type verbatim but
@@ -487,24 +502,14 @@ export default function AiProviders() {
                   ))}
                 </select>
               </div>
-              {isCodex(type) ? (
-                <div className="ap-cli-note">
-                  This provider type authenticates via the locally-installed Codex CLI. The first
-                  time you set it up, save the provider and then use <strong>Open terminal</strong>{" "}
-                  to launch Codex. Inside it, choose <strong>Sign in with Device Code</strong> and
-                  sign in with your ChatGPT account. Until you complete that one-time sign-in, this
-                  provider will not work. Base URL and API key are configured by the CLI itself and
-                  are not needed here.
-                </div>
-              ) : isCliAuthProvider(type) ? (
+              {isCliAuthProvider(type) ? (
                 <div className="ap-cli-note">
                   This provider type authenticates via the locally-installed {cliAuthLabel(type)}{" "}
                   CLI. The first time you set it up, save the provider and then use{" "}
-                  <strong>Open terminal</strong> to launch the {cliAuthLabel(type)} TUI. Inside it,
-                  run the <code>/login</code> slash command to sign in (with an active{" "}
-                  {cliAuthLabel(type)} subscription). Until you complete that one-time login, this
-                  provider will not work. Base URL and API key are configured by the CLI itself and
-                  are not needed here.
+                  <strong>Open terminal</strong> to launch the {cliAuthLabel(type)} TUI. Inside it,{" "}
+                  {cliSignIn(type)}. Until you complete that one-time login, this provider will not
+                  work. Base URL and API key are configured by the CLI itself and are not needed
+                  here.
                 </div>
               ) : (
                 <div className="form-group">
