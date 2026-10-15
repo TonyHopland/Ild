@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-15
+
 ### Added
 
 - **Codex can be added as an AI provider, signed in with ChatGPT from its terminal, with its own custom MCP servers.**
