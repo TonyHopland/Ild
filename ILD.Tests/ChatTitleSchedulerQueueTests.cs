@@ -34,6 +34,7 @@ public sealed class ChatTitleSchedulerQueueTests : IDisposable
         public string[] SupportedProviderTypes => ["claude-code"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -54,6 +55,7 @@ public sealed class ChatTitleSchedulerQueueTests : IDisposable
         public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => new Adapter(owner);
         public string[] GetAllSupportedProviderTypes() => ["claude-code"];
         public AdapterModelSupport GetModelSupport(string providerType) => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits GetTraits(string? providerType) => DeclaredTraits.For(providerType);
     }
 
     private async Task<ServiceProvider> SeedAsync()

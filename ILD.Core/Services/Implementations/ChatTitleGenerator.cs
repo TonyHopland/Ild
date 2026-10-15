@@ -80,7 +80,7 @@ public sealed class ChatTitleGenerator
             _log.LogWarning("Chat {ChatSessionId} keeps its title: {Error}", chatSessionId, providerError);
             return;
         }
-        if (!AiToolCatalog.SupportsNoTools(provider.Type))
+        if (!_registry.GetTraits(provider.Type).SupportsNoTools)
         {
             _log.LogWarning(
                 "Chat {ChatSessionId} keeps its title: provider {Provider} ({ProviderType}) cannot run a call without tools",
@@ -141,7 +141,7 @@ public sealed class ChatTitleGenerator
                 ExecutionCount: 0,
                 Cancel: ct,
                 // The adapters ignore this under NoTools: the call gets no tools at all.
-                ToolAllowlist: AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, [AiToolCatalog.Read]),
+                ToolAllowlist: AiToolCatalog.NormalizeSelectedToolKeys(_registry.GetTraits(provider.Type), [AiToolCatalog.Read]),
                 ManageSession: false,
                 NoTools: true));
         }

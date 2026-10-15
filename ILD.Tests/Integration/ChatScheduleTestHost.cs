@@ -394,6 +394,7 @@ internal sealed class ScriptedChatAdapter : IAgentAdapter
     public string[] SupportedProviderTypes => ["claude-code", "opencode", "pi", "copilot"];
     public ConfigFieldDescriptor[] ConfigSchema => [];
     public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+    public AgentAdapterTraits Traits => AgentAdapterTraits.None;
 
     public async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
     {
@@ -475,6 +476,7 @@ internal sealed class ScriptedAdapterRegistry(ScriptedChatAdapter adapter) : IAg
     public string[] GetAllSupportedProviderTypes() => ["opencode", "pi", "claude-code", "copilot"];
 
     public AdapterModelSupport GetModelSupport(string providerType) => DeclaredModelSupport.For(providerType);
+    public AgentAdapterTraits GetTraits(string? providerType) => DeclaredTraits.For(providerType);
 }
 
 /// <summary>

@@ -14,4 +14,12 @@ public interface IAgentAdapterRegistry
     /// unregistered type, so a caller never has to special-case one.
     /// </summary>
     AdapterModelSupport GetModelSupport(string providerType);
+
+    /// <summary>
+    /// What the adapter backing <paramref name="providerType"/> declares about its
+    /// type, matched ignoring case and surrounding whitespace.
+    /// <see cref="AgentAdapterTraits.None"/> for a null, blank or unregistered type,
+    /// so a caller never has to special-case one.
+    /// </summary>
+    AgentAdapterTraits GetTraits(string? providerType);
 }

@@ -97,6 +97,8 @@ describe("Chat titles card", () => {
         id: "Gh",
         name: "Gh",
         type: "copilot",
+        supportsNoTools: false,
+        typeDisplayName: "Copilot",
         isDefault: true,
         tags: [],
       } as unknown as AiProvider,
@@ -163,6 +165,8 @@ describe("Chat titles card", () => {
         id: "Gh",
         name: "Gh",
         type: "copilot",
+        supportsNoTools: false,
+        typeDisplayName: "Copilot",
         isDefault: false,
         tags: ["Fast"],
       } as unknown as AiProvider,
@@ -188,6 +192,8 @@ describe("Chat titles card with a Codex provider", () => {
         id: "Cx",
         name: "Cx",
         type: " Codex ",
+        supportsNoTools: false,
+        typeDisplayName: "Codex",
         isDefault: false,
         tags: ["Fast"],
       } as unknown as AiProvider,
@@ -206,6 +212,50 @@ describe("Chat titles card with a Codex provider", () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/is a Copilot provider/)).toBeNull();
+  });
+});
+
+describe("Chat titles card reads what the backend reports about the provider", () => {
+  test("any provider reported as unable to run without tools is said to make no titles, by its type's name", async () => {
+    switchedOn();
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([
+      main as unknown as AiProvider,
+      {
+        id: "Ac",
+        name: "Ac",
+        type: "acme-cli",
+        supportsNoTools: false,
+        typeDisplayName: "Acme",
+        isDefault: false,
+        tags: ["Fast"],
+      } as unknown as AiProvider,
+    ]);
+
+    render(<ChatTitlesSettings />);
+
+    await screen.findByText("Runs on Ac");
+    expect(
+      screen.getByText(/Ac is a Acme provider, which cannot run without its tools/),
+    ).toBeTruthy();
+  });
+
+  test("a provider that does not report whether it can run without tools gets no note", async () => {
+    switchedOn();
+    vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([
+      main as unknown as AiProvider,
+      {
+        id: "Gh",
+        name: "Gh",
+        type: "copilot",
+        isDefault: false,
+        tags: ["Fast"],
+      } as unknown as AiProvider,
+    ]);
+
+    render(<ChatTitlesSettings />);
+
+    await screen.findByText("Runs on Gh");
+    expect(screen.queryByText(/cannot run without its tools/)).toBeNull();
   });
 });
 

@@ -891,6 +891,14 @@ export interface AiProvider {
   /** Labels AI nodes name to run on this provider; each is held by at most one provider. */
   tags?: string[];
   supportedTools?: AiToolDefinition[];
+  /**
+   * What the provider's type declares, from its adapter: whether a saved tool
+   * selection left empty means "no tools" rather than the defaults, whether it
+   * can run a call with no tools at all, and its name in user-facing text.
+   */
+  emptyToolSelectionMeansNone?: boolean;
+  supportsNoTools?: boolean;
+  typeDisplayName?: string;
   createdAt: string;
 }
 
@@ -902,9 +910,22 @@ export interface AiProvider {
  */
 export type AdapterModelSupport = "Unsupported" | "Optional" | "Required";
 
+/**
+ * How a provider type's CLI signs itself in, for a type with no Base URL or API
+ * key. `signInStep` is a Markdown fragment using only `code` and **bold**.
+ */
+export interface CliAuth {
+  cliName: string;
+  signInStep: string;
+}
+
 export interface AgentAdapterDescriptor {
   type: string;
   modelSupport: AdapterModelSupport;
+  /** The type's name in user-facing text. */
+  displayName: string;
+  /** Null for a type that connects with a Base URL and API key. */
+  cliAuth: CliAuth | null;
 }
 
 export interface AiToolDefinition {

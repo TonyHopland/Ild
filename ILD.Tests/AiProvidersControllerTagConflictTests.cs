@@ -24,6 +24,8 @@ public class AiProvidersControllerTagConflictTests
         registry.Setup(r => r.GetAllSupportedProviderTypes()).Returns(["claude-code"]);
         registry.Setup(r => r.GetModelSupport(It.IsAny<string>()))
             .Returns((string type) => DeclaredModelSupport.For(type));
+        registry.Setup(r => r.GetTraits(It.IsAny<string?>()))
+            .Returns((string? type) => DeclaredTraits.For(type));
         return new AiProvidersController(
             registry.Object,
             db.Context,

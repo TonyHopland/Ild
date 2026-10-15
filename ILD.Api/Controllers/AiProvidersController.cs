@@ -40,21 +40,14 @@ public class AiProvidersController : ControllerBase
     }
 
     /// <summary>
-    /// Provider types whose authentication is handled by the CLI itself
-    /// (e.g. <c>claude-code</c> uses the Max-subscription session stored in
-    /// <c>~/.claude</c>, <c>copilot</c> uses the GitHub Copilot session
-    /// stored in <c>~/.copilot</c>, and <c>codex</c> the ChatGPT sign-in stored in
-    /// <c>~/.codex</c>). For these we do not require BaseUrl or
-    /// ApiKey on the AiProvider record. Whether a Model is required is a
-    /// separate question, answered by the adapter's declared
-    /// <see cref="AdapterModelSupport"/>.
+    /// A type whose CLI handles its own sign-in (<see cref="AgentAdapterTraits.CliAuth"/>,
+    /// e.g. a session the CLI stores under its home directory) needs no BaseUrl or
+    /// ApiKey on the AiProvider record. Whether a Model is required is a separate
+    /// question, answered by the adapter's declared <see cref="AdapterModelSupport"/>.
     /// </summary>
-    private static readonly HashSet<string> CliAuthProviderTypes =
-        new(StringComparer.OrdinalIgnoreCase) { "claude-code", "copilot", "codex" };
-
     private string? ValidateConnectionFields(AiProviderDto request)
     {
-        if (!CliAuthProviderTypes.Contains(request.Type))
+        if (_adapterRegistry.GetTraits(request.Type).CliAuth is null)
         {
             if (string.IsNullOrWhiteSpace(request.BaseUrl))
                 return "BaseUrl is required for this provider type.";
@@ -186,30 +179,39 @@ public class AiProvidersController : ControllerBase
         return null;
     }
 
-    private static object ToResponse(AiProvider p) => new
+    private object ToResponse(AiProvider p)
     {
-        id = p.Id,
-        name = p.Name,
-        type = p.Type,
-        baseUrl = p.BaseUrl,
-        model = p.Model,
-        isDefault = p.IsDefault,
-        parallelism = p.Parallelism,
-        apiKey = string.IsNullOrEmpty(p.ApiKey) ? null : "***",
-        hasApiKey = !string.IsNullOrEmpty(p.ApiKey),
-        hasConfig = !string.IsNullOrEmpty(p.Config),
-        // The config blob is never returned whole — it can embed a secret (e.g.
-        // a Pi provider's apiKey, read by PiAdapter). Surface only the non-secret,
-        // user-editable Custom MCP servers and Extra CLI arguments values so the AI
-        // Providers form can seed and round-trip them without leaking the rest of
-        // the blob.
-        customMcpServersJson = AiProviderConfig.Parse(p.Config).CustomMcpServersJson,
-        extraArgs = AiProviderConfig.Parse(p.Config).ExtraArgs,
-        tags = p.Tags.Select(t => t.Name).Order(StringComparer.OrdinalIgnoreCase).ToList(),
-        supportedTools = AiToolCatalog.GetSupportedToolsForProviderType(p.Type),
-        createdAt = p.CreatedAt,
-        updatedAt = p.UpdatedAt,
-    };
+        var traits = _adapterRegistry.GetTraits(p.Type);
+        return new
+        {
+            id = p.Id,
+            name = p.Name,
+            type = p.Type,
+            baseUrl = p.BaseUrl,
+            model = p.Model,
+            isDefault = p.IsDefault,
+            parallelism = p.Parallelism,
+            apiKey = string.IsNullOrEmpty(p.ApiKey) ? null : "***",
+            hasApiKey = !string.IsNullOrEmpty(p.ApiKey),
+            hasConfig = !string.IsNullOrEmpty(p.Config),
+            // The config blob is never returned whole — it can embed a secret (e.g.
+            // a Pi provider's apiKey, read by PiAdapter). Surface only the non-secret,
+            // user-editable Custom MCP servers and Extra CLI arguments values so the AI
+            // Providers form can seed and round-trip them without leaking the rest of
+            // the blob.
+            customMcpServersJson = AiProviderConfig.Parse(p.Config).CustomMcpServersJson,
+            extraArgs = AiProviderConfig.Parse(p.Config).ExtraArgs,
+            tags = p.Tags.Select(t => t.Name).Order(StringComparer.OrdinalIgnoreCase).ToList(),
+            // What the type declares about tools, so the loop editor and the chat
+            // titles card read the same answer as the backend.
+            supportedTools = traits.SupportedTools,
+            emptyToolSelectionMeansNone = traits.EmptyToolSelectionMeansNone,
+            supportsNoTools = traits.SupportsNoTools,
+            typeDisplayName = traits.DisplayName,
+            createdAt = p.CreatedAt,
+            updatedAt = p.UpdatedAt,
+        };
+    }
 
     [HttpGet]
     public async Task<IActionResult> GetAll([FromQuery] int skip = 0, [FromQuery] int take = 100)
@@ -242,7 +244,7 @@ public class AiProvidersController : ControllerBase
         if (tagsError is not null)
             return BadRequest(new { error = tagsError });
         var config = ApplyManagedConfigFields(request.Config, request);
-        if (ExtraCliArgs.Validate(request.Type, AiProviderConfig.Parse(config).ExtraArgs) is { } extraArgsError)
+        if (ExtraCliArgs.Validate(_adapterRegistry.GetTraits(request.Type).ExtraCliArgs, AiProviderConfig.Parse(config).ExtraArgs) is { } extraArgsError)
             return BadRequest(new { error = extraArgsError });
 
         var p = new AiProvider
@@ -314,7 +316,7 @@ public class AiProvidersController : ControllerBase
         // embedded apiKey) survive an edit. The UI-managed fields are then folded in
         // on top, and the result is checked before the tracked provider is changed.
         var config = ApplyManagedConfigFields(request.Config ?? p.Config, request);
-        if (ExtraCliArgs.Validate(request.Type, AiProviderConfig.Parse(config).ExtraArgs) is { } extraArgsError)
+        if (ExtraCliArgs.Validate(_adapterRegistry.GetTraits(request.Type).ExtraCliArgs, AiProviderConfig.Parse(config).ExtraArgs) is { } extraArgsError)
             return BadRequest(new { error = extraArgsError });
         p.Name = request.Name;
         p.Type = request.Type;

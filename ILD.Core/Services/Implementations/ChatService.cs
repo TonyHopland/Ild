@@ -174,7 +174,7 @@ public sealed class ChatService : IChatService
         // Fail fast if no adapter handles the provider type.
         _ = _registry.ResolveForProvider(provider);
 
-        var normalizedTools = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, tools);
+        var normalizedTools = AiToolCatalog.NormalizeSelectedToolKeys(_registry.GetTraits(provider.Type), tools);
 
         var id = Guid.NewGuid();
         var scratchPath = Path.GetFullPath(Path.Combine(_options.ScratchRoot, id.ToString("N")));

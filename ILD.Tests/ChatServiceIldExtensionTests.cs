@@ -154,7 +154,7 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
     private ChatService NewService(IAgentAdapter adapter)
     {
         var registry = Mock.Of<IAgentAdapterRegistry>(r =>
-            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
+            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter)).WithDeclaredTraits();
         return new ChatService(
             _db.Context, _db.Providers, registry, Mock.Of<IChatNotifier>(),
             new ChatOptions { ScratchRoot = _scratchRoot }, _db.LoopRuns, new ChatLoopScratchpad(),

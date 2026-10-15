@@ -100,7 +100,7 @@ public class ExtraCliArgsTests
     [InlineData("Codex", "-m=x")]
     public void Validate_rejects_any_model_flag_and_points_to_the_model_field(string type, string raw)
     {
-        var error = ExtraCliArgs.Validate(type, raw);
+        var error = ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw);
 
         Assert.NotNull(error);
         Assert.Contains("--model", error);
@@ -135,7 +135,7 @@ public class ExtraCliArgsTests
     [InlineData("CODEX", "--add-dir=/x", "--add-dir")]
     public void Validate_rejects_a_flag_ild_already_sets_for_that_adapter_and_names_it(string type, string raw, string flag)
     {
-        var error = ExtraCliArgs.Validate(type, raw);
+        var error = ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw);
 
         Assert.NotNull(error);
         Assert.Contains(flag, error);
@@ -149,7 +149,7 @@ public class ExtraCliArgsTests
     [InlineData("codex", "--sandbox read-only", "--sandbox is not allowed, because it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox).")]
     public void Validate_says_why_a_codex_flag_is_refused(string type, string raw, string message)
     {
-        Assert.Equal("Extra CLI arguments: " + message, ExtraCliArgs.Validate(type, raw));
+        Assert.Equal("Extra CLI arguments: " + message, ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw));
     }
 
     /// <summary>Each key ILD sets, in each form codex takes a config override, with the flag the message names.</summary>
@@ -180,7 +180,7 @@ public class ExtraCliArgsTests
     {
         Assert.Equal(
             $"Extra CLI arguments: {named} is not allowed, because ILD sets Codex's {setting} itself.",
-            ExtraCliArgs.Validate("codex", "--enable web_search " + raw));
+            ExtraCliArgs.Validate(DeclaredTraits.For("codex").ExtraCliArgs, "--enable web_search " + raw));
     }
 
     [Theory]
@@ -192,7 +192,7 @@ public class ExtraCliArgsTests
     {
         Assert.Equal(
             $"Extra CLI arguments: {flag} is not allowed without a key=value after it.",
-            ExtraCliArgs.Validate("codex", raw));
+            ExtraCliArgs.Validate(DeclaredTraits.For("codex").ExtraCliArgs, raw));
     }
 
     [Theory]
@@ -202,7 +202,7 @@ public class ExtraCliArgsTests
     [InlineData("pi")]
     public void Validate_leaves_config_like_flags_of_other_providers_alone(string type)
     {
-        Assert.Null(ExtraCliArgs.Validate(type, "-c mcp_servers.ild=x --config sandbox_mode=read-only"));
+        Assert.Null(ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, "-c mcp_servers.ild=x --config sandbox_mode=read-only"));
     }
 
     [Theory]
@@ -213,7 +213,7 @@ public class ExtraCliArgsTests
     [InlineData("pi")]
     public void Validate_rejects_a_bare_end_of_options_separator(string type)
     {
-        var error = ExtraCliArgs.Validate(type, "--effort high -- extra");
+        var error = ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, "--effort high -- extra");
 
         Assert.NotNull(error);
         Assert.Contains("--", error);
@@ -224,7 +224,7 @@ public class ExtraCliArgsTests
     [InlineData("pi", "--thinking high\\")]
     public void Validate_rejects_a_value_that_does_not_split(string type, string raw)
     {
-        Assert.False(string.IsNullOrWhiteSpace(ExtraCliArgs.Validate(type, raw)));
+        Assert.False(string.IsNullOrWhiteSpace(ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw)));
     }
 
     [Theory]
@@ -247,8 +247,28 @@ public class ExtraCliArgsTests
     [InlineData("opencode", "--variant high")]
     [InlineData("pi", "--models a,b")]
     [InlineData("pi", "--thinking high")]
+    // -m is the model flag only where the CLI makes it one, and a one-letter
+    // reserved flag is only matched as a prefix where the CLI takes attached values.
+    [InlineData("claude-code", "-m x")]
+    [InlineData("copilot", "-m x")]
+    [InlineData("pi", "-m x")]
+    [InlineData("copilot", "--effort -pro")]
+    [InlineData("pi", "--thinking -extra")]
     public void Validate_accepts_flags_ild_does_not_own(string type, string? raw)
     {
-        Assert.Null(ExtraCliArgs.Validate(type, raw));
+        Assert.Null(ExtraCliArgs.Validate(DeclaredTraits.For(type).ExtraCliArgs, raw));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("unknown")]
+    public void Validate_for_a_type_with_no_adapter_refuses_only_what_every_provider_refuses(string? type)
+    {
+        var rules = DeclaredTraits.For(type).ExtraCliArgs;
+
+        Assert.Null(ExtraCliArgs.Validate(rules, "-m x -p -s s -C/tmp --json -c mcp_servers.ild=x"));
+        Assert.NotNull(ExtraCliArgs.Validate(rules, "--model x"));
+        Assert.NotNull(ExtraCliArgs.Validate(rules, "--effort high -- extra"));
     }
 }

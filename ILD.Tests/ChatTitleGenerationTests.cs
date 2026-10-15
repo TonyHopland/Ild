@@ -57,6 +57,7 @@ public sealed class ChatTitleGenerationTests : IDisposable
         public string[] SupportedProviderTypes => ["claude-code", "copilot"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -74,6 +75,7 @@ public sealed class ChatTitleGenerationTests : IDisposable
 
         public string[] GetAllSupportedProviderTypes() => ["claude-code", "copilot"];
         public AdapterModelSupport GetModelSupport(string providerType) => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits GetTraits(string? providerType) => DeclaredTraits.For(providerType);
     }
 
     private sealed class RecordingNotifier : IChatNotifier

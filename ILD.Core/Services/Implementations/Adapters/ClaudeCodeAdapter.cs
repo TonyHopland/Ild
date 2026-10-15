@@ -45,6 +45,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     public override string[] SupportedProviderTypes => ["claude-code"];
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
+    public override AgentAdapterTraits Traits => TypeTraits;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -173,6 +174,20 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     internal static readonly string[] ReservedCliFlags =
         ["--print", "-p", "--output-format", "--verbose", "--tools", "--strict-mcp-config", "--no-session-persistence",
          "--add-dir", "--permission-mode", "--mcp-config", "--resume", "-r"];
+
+    /// <summary>
+    /// Claude Code signs in through its own <c>/login</c> and offers every workspace
+    /// tool. Declared after <see cref="ReservedCliFlags"/>, which it reads.
+    /// </summary>
+    internal static readonly AgentAdapterTraits TypeTraits = new()
+    {
+        DisplayName = "Claude Code",
+        CliAuth = new("Claude Code", "run the `/login` slash command to sign in (with an active Claude Code subscription)"),
+        SupportedTools = AiToolCatalog.DefaultTools,
+        EmptyToolSelectionMeansNone = false,
+        SupportsNoTools = true,
+        ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
+    };
 
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
@@ -307,7 +322,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     {
         var servers = new Dictionary<string, object?>();
 
-        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, toolAllowlist);
+        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, toolAllowlist);
         if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase))
         {
             var entry = BuildIldMcpEntry(runContext, chatSessionId, environment);

@@ -20,6 +20,7 @@ public class AgentAdaptersControllerTests
             new("model", ConfigFieldType.Text, "Model", true, "gpt-4", null),
         };
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("ok"));
     }
@@ -62,6 +63,7 @@ public class AgentAdaptersControllerTests
             .Returns(adapters.Select(a => a.Type).ToArray());
         foreach (var (type, support) in adapters)
             registry.Setup(r => r.GetModelSupport(type)).Returns(support);
+        registry.Setup(r => r.GetTraits(It.IsAny<string?>())).Returns(AgentAdapterTraits.None);
 
         var result = new AgentAdaptersController(registry.Object).GetSupportedProviderTypes();
 
@@ -93,6 +95,17 @@ public class AgentAdaptersControllerTests
     [Fact]
     public void The_registered_adapters_offer_codex_with_an_optional_model_and_the_mcp_and_extra_argument_fields()
     {
+        using var provider = RegisteredAdapters();
+        var controller = new AgentAdaptersController(provider.GetRequiredService<IAgentAdapterRegistry>());
+
+        var listed = (AgentAdapterDescriptor[])Assert.IsType<OkObjectResult>(controller.GetSupportedProviderTypes()).Value!;
+        Assert.Equal(AdapterModelSupport.Optional, Assert.Single(listed, a => a.Type == "codex").ModelSupport);
+        var schema = (ConfigFieldDescriptor[])Assert.IsType<OkObjectResult>(controller.GetConfigSchema("Codex")).Value!;
+        Assert.Equal(["customMcpServersJson", "extraArgs"], schema.Select(f => f.Name).Order());
+    }
+
+    private static ServiceProvider RegisteredAdapters()
+    {
         IServiceCollection services = new ServiceCollection();
         services.AddLogging();
         foreach (var descriptor in new ServiceCollection().AddIldServices().Where(d =>
@@ -100,12 +113,41 @@ public class AgentAdaptersControllerTests
                      || d.ServiceType == typeof(IAgentAdapterRegistry)
                      || d.ServiceType == typeof(IProcessEnvironment)))
             services.Add(descriptor);
-        using var provider = services.BuildServiceProvider();
-        var controller = new AgentAdaptersController(provider.GetRequiredService<IAgentAdapterRegistry>());
+        return services.BuildServiceProvider();
+    }
 
-        var listed = (AgentAdapterDescriptor[])Assert.IsType<OkObjectResult>(controller.GetSupportedProviderTypes()).Value!;
-        Assert.Equal(AdapterModelSupport.Optional, Assert.Single(listed, a => a.Type == "codex").ModelSupport);
-        var schema = (ConfigFieldDescriptor[])Assert.IsType<OkObjectResult>(controller.GetConfigSchema("Codex")).Value!;
-        Assert.Equal(["customMcpServersJson", "extraArgs"], schema.Select(f => f.Name).Order());
+    [Fact]
+    public void The_registered_adapters_list_each_type_with_its_display_name_and_how_its_cli_signs_in()
+    {
+        using var provider = RegisteredAdapters();
+
+        var listed = ((AgentAdapterDescriptor[])Assert.IsType<OkObjectResult>(
+                new AgentAdaptersController(provider.GetRequiredService<IAgentAdapterRegistry>()).GetSupportedProviderTypes()).Value!)
+            .ToDictionary(a => a.Type);
+
+        Assert.Equal("OpenCode", listed["opencode"].DisplayName);
+        Assert.Equal("Pi", listed["pi"].DisplayName);
+        Assert.Equal("Claude Code", listed["claude-code"].DisplayName);
+        Assert.Equal("Copilot", listed["copilot"].DisplayName);
+        Assert.Equal("Codex", listed["codex"].DisplayName);
+
+        // The BYO-endpoint types sign in with a Base URL and API key, not through a CLI.
+        Assert.Null(listed["opencode"].CliAuth);
+        Assert.Null(listed["pi"].CliAuth);
+
+        var claude = listed["claude-code"].CliAuth!;
+        Assert.Equal("Claude Code", claude.CliName);
+        Assert.Contains("`/login`", claude.SignInStep);
+        Assert.Contains("Claude Code subscription", claude.SignInStep);
+
+        var copilot = listed["copilot"].CliAuth!;
+        Assert.Equal("GitHub Copilot", copilot.CliName);
+        Assert.Contains("`/login`", copilot.SignInStep);
+
+        var codex = listed["codex"].CliAuth!;
+        Assert.Equal("Codex", codex.CliName);
+        Assert.Contains("**Sign in with Device Code**", codex.SignInStep);
+        Assert.Contains("ChatGPT account", codex.SignInStep);
+        Assert.DoesNotContain("/login", codex.SignInStep);
     }
 }

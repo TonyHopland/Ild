@@ -19,6 +19,7 @@ public class AgentAdapterConfigSchemaTests
             new("region", ConfigFieldType.Select, "Region", false, "us-east-1", "Deployment region", new[] { "us-east-1", "eu-west-1" }),
         };
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
             => Task.FromResult(NodeExecutionResult.Ok("ok"));
     }

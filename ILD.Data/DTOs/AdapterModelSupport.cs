@@ -21,6 +21,8 @@ public enum AdapterModelSupport
 
 /// <summary>
 /// One registered provider type as the AI Providers form sees it, before any
-/// provider of that type exists.
+/// provider of that type exists. <paramref name="CliAuth"/> is null for a type
+/// that connects with a Base URL and API key.
 /// </summary>
-public record AgentAdapterDescriptor(string Type, AdapterModelSupport ModelSupport);
+public record AgentAdapterDescriptor(
+    string Type, AdapterModelSupport ModelSupport, string DisplayName, CliAuthTraits? CliAuth);

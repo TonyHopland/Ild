@@ -18,15 +18,19 @@ public class AgentAdaptersController : ControllerBase
 
     /// <summary>
     /// Every registered provider type with what its adapter declares about a
-    /// model selector, so the AI Providers form can offer the Model field — and
-    /// mark it required or optional — for a type no provider has been created
-    /// for yet.
+    /// model selector and how its CLI signs in, so the AI Providers form can offer
+    /// the Model field — and mark it required or optional — and the login note for
+    /// a type no provider has been created for yet.
     /// </summary>
     [HttpGet]
     public IActionResult GetSupportedProviderTypes()
     {
         var adapters = _registry.GetAllSupportedProviderTypes()
-            .Select(type => new AgentAdapterDescriptor(type, _registry.GetModelSupport(type)))
+            .Select(type =>
+            {
+                var traits = _registry.GetTraits(type);
+                return new AgentAdapterDescriptor(type, _registry.GetModelSupport(type), traits.DisplayName, traits.CliAuth);
+            })
             .ToArray();
         return Ok(adapters);
     }

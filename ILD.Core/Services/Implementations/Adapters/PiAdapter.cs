@@ -33,6 +33,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
     public override string[] SupportedProviderTypes => ["pi"];
     public override ConfigFieldDescriptor[] ConfigSchema => [ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
+    public override AgentAdapterTraits Traits => TypeTraits;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -173,6 +174,19 @@ public sealed class PiAdapter : CliAgentAdapterBase
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
     internal static readonly string[] ReservedCliFlags =
         ["--mode", "--session-dir", "--no-tools", "-nt", "--tools", "-t", "--no-extensions", "-ne", "--extension", "-e", "--provider", "--api-key", "--session"];
+
+    /// <summary>
+    /// Pi connects with a Base URL and API key and offers every workspace tool.
+    /// Declared after <see cref="ReservedCliFlags"/>, which it reads.
+    /// </summary>
+    internal static readonly AgentAdapterTraits TypeTraits = new()
+    {
+        DisplayName = "Pi",
+        SupportedTools = AiToolCatalog.DefaultTools,
+        EmptyToolSelectionMeansNone = false,
+        SupportsNoTools = true,
+        ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
+    };
 
     // The prompt is not an argument here — pi reads its turn from stdin (see
     // the StandardInput write in ExecuteAsync), so the extra arguments go last.
@@ -588,7 +602,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         var model = config.Model ?? provider.Model;
         var api = config.Api ?? "openai-completions";
         var hasAbsoluteBaseUrl = Uri.TryCreate(provider.BaseUrl, UriKind.Absolute, out _);
-        var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
+        var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, selectedToolKeys);
         var ildServer = enabledToolKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
             ? ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment)
             : null;
