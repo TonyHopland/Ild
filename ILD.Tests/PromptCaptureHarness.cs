@@ -146,6 +146,7 @@ internal sealed class RecordingAdapter(IAgentAdapter inner) : IAgentAdapter
     public string[] SupportedProviderTypes => inner.SupportedProviderTypes;
     public ConfigFieldDescriptor[] ConfigSchema => inner.ConfigSchema;
     public AdapterModelSupport ModelSupport => inner.ModelSupport;
+    public AgentAdapterTraits Traits => inner.Traits;
 
     public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
     {

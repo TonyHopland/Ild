@@ -1,4 +1,5 @@
 using System.Text;
+using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using Microsoft.Extensions.Logging;
 
@@ -14,42 +15,6 @@ public sealed record ExtraCliArgsTokens(IReadOnlyList<string> Tokens, string? Er
 /// </summary>
 public static class ExtraCliArgs
 {
-    private static readonly Dictionary<string, string[]> ReservedFlagsByProviderType = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["claude-code"] = ClaudeCodeAdapter.ReservedCliFlags,
-        ["copilot"] = CopilotAdapter.ReservedCliFlags,
-        ["codex"] = CodexAdapter.ReservedCliFlags,
-        ["opencode"] = OpenCodeAdapter.ReservedCliFlags,
-        ["pi"] = PiAdapter.ReservedCliFlags,
-    };
-
-    private static readonly Dictionary<string, Dictionary<string, string>> ReservedFlagReasonsByProviderType = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["codex"] = CodexAdapter.ReservedCliFlagReasons,
-    };
-
-    // codex's -c/--config key=value overrides any config key. These first dotted
-    // segments are what ILD sets itself (a profile could set any of them), with
-    // what they set.
-    private static readonly Dictionary<string, Dictionary<string, string>> RefusedConfigKeysByProviderType = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["codex"] = new(StringComparer.Ordinal)
-        {
-            ["mcp_servers"] = "Codex's MCP servers",
-            ["sandbox_mode"] = "Codex's sandbox",
-            ["sandbox_workspace_write"] = "Codex's sandbox",
-            ["approval_policy"] = "Codex's approvals",
-            ["profiles"] = "Codex's profiles",
-        },
-    };
-
-    private static readonly HashSet<string> ProviderTypesWithShortModelFlag = new(StringComparer.OrdinalIgnoreCase) { "opencode", "codex" };
-
-    // codex takes a one-letter flag's value attached (-mgpt-5, -C/tmp). Only there is
-    // a token's prefix checked: the other CLIs have free-text options whose values
-    // may well start with "-p" or "-e".
-    private static readonly HashSet<string> ProviderTypesWithAttachedShortValues = new(StringComparer.OrdinalIgnoreCase) { "codex" };
-
     /// <summary>
     /// Split <paramref name="raw"/> into argv tokens. Whitespace separates tokens;
     /// <c>'…'</c> is taken literally; <c>"…"</c> groups words; a backslash outside
@@ -129,28 +94,24 @@ public static class ExtraCliArgs
                 : "\"" + token.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""));
 
     /// <summary>
-    /// The save-time check for a provider of <paramref name="providerType"/>: the
-    /// value must split, and may not contain a bare <c>--</c> (it would move the
+    /// The save-time check for a provider whose type declares <paramref name="rules"/>:
+    /// the value must split, and may not contain a bare <c>--</c> (it would move the
     /// prompt), the model flag (the Model field owns it), a flag ILD already sets
-    /// for that adapter or would be undone by, or (for codex) a config override of a
-    /// key ILD sets. Returns the message to show, or null when the value is fine.
+    /// for that adapter or would be undone by, or a config override of a key ILD
+    /// sets. Returns the message to show, or null when the value is fine.
     /// </summary>
-    public static string? Validate(string providerType, string? raw)
+    public static string? Validate(ExtraCliArgsRules rules, string? raw)
     {
         var (tokens, error) = Tokenize(raw);
         if (error is not null) return "Extra CLI arguments: " + error;
 
-        var modelHasShortFlag = ProviderTypesWithShortModelFlag.Contains(providerType);
-        var attached = ProviderTypesWithAttachedShortValues.Contains(providerType);
-        var reserved = ReservedFlagsByProviderType.GetValueOrDefault(providerType) ?? [];
-        var reasons = ReservedFlagReasonsByProviderType.GetValueOrDefault(providerType);
-        var refusedConfigKeys = RefusedConfigKeysByProviderType.GetValueOrDefault(providerType);
+        var attached = rules.AttachedShortValues;
         for (var i = 0; i < tokens.Count; i++)
         {
             var token = tokens[i];
             if (token == "--")
                 return "Extra CLI arguments: a bare -- is not allowed, because it would move the prompt.";
-            if (refusedConfigKeys is not null && ConfigOverride(tokens, ref i) is var (configFlag, value))
+            if (rules.RefusedConfigKeys is { } refusedConfigKeys && ConfigOverride(tokens, ref i) is var (configFlag, value))
             {
                 if (value is null)
                     return $"Extra CLI arguments: {configFlag} is not allowed without a key=value after it.";
@@ -159,10 +120,10 @@ public static class ExtraCliArgs
                     return $"Extra CLI arguments: {configFlag} {key} is not allowed, because ILD sets {setByIld} itself.";
                 continue;
             }
-            if (IsFlag(token, "--model", attached) || (modelHasShortFlag && IsFlag(token, "-m", attached)))
+            if (IsFlag(token, "--model", attached) || (rules.ModelHasShortFlag && IsFlag(token, "-m", attached)))
                 return "Extra CLI arguments: --model is not allowed here. Set the model with the Model field instead.";
-            if (reserved.FirstOrDefault(flag => IsFlag(token, flag, attached)) is { } owned)
-                return $"Extra CLI arguments: {owned} is not allowed, because {reasons?.GetValueOrDefault(owned) ?? "ILD already sets it for this provider"}.";
+            if (rules.ReservedFlags.FirstOrDefault(flag => IsFlag(token, flag, attached)) is { } owned)
+                return $"Extra CLI arguments: {owned} is not allowed, because {rules.ReservedFlagReasons?.GetValueOrDefault(owned) ?? "ILD already sets it for this provider"}.";
         }
         return null;
     }

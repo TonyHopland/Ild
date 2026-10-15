@@ -8,5 +8,9 @@ public interface IAgentAdapter
     string[] SupportedProviderTypes { get; }
     ConfigFieldDescriptor[] ConfigSchema { get; }
     AdapterModelSupport ModelSupport { get; }
+
+    /// <summary>What this adapter declares about its provider type; see <see cref="AgentAdapterTraits"/>.</summary>
+    AgentAdapterTraits Traits { get; }
+
     Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context);
 }

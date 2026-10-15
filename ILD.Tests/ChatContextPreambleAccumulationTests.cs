@@ -686,6 +686,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
         public string[] SupportedProviderTypes => ["fake"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -707,7 +708,7 @@ public sealed class ChatContextPreambleAccumulationTests : IDisposable
             _db.Context,
             _db.Providers,
             Mock.Of<IAgentAdapterRegistry>(r =>
-                r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter)),
+                r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter)).WithDeclaredTraits(),
             new NullChatNotifier(),
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,

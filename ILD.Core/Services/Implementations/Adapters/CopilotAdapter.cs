@@ -66,10 +66,11 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
 
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
+    public override AgentAdapterTraits Traits => TypeTraits;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
-        // See AiToolCatalog.SupportsNoTools: launching anyway would hand a caller
+        // See TypeTraits.SupportsNoTools: launching anyway would hand a caller
         // that asked for no tools every tool the CLI has.
         if (ctx.NoTools)
             return NodeExecutionResult.Fail(
@@ -167,6 +168,22 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     internal static readonly string[] ReservedCliFlags =
         ["--allow-all-tools", "--no-color", "--add-dir", "--additional-mcp-config", "--prompt", "-p"];
 
+    /// <summary>
+    /// Copilot signs in through its own <c>/login</c> and its only tool is <c>ild</c>:
+    /// an empty <c>--available-tools</c> leaves all of its tools on, so it takes no
+    /// tool-less call, and an explicit selection without <c>ild</c> is how ILD is
+    /// turned off. Declared after <see cref="ReservedCliFlags"/>, which it reads.
+    /// </summary>
+    internal static readonly AgentAdapterTraits TypeTraits = new()
+    {
+        DisplayName = "Copilot",
+        CliAuth = new("GitHub Copilot", "run the `/login` slash command to sign in (with an active GitHub Copilot subscription)"),
+        SupportedTools = AiToolCatalog.IldOnlyTools,
+        EmptyToolSelectionMeansNone = true,
+        SupportsNoTools = false,
+        ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags },
+    };
+
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
@@ -256,7 +273,7 @@ public sealed class CopilotAdapter : CliAgentAdapterBase
     {
         var servers = new Dictionary<string, object?>();
 
-        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, allowlist);
+        var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, allowlist);
         if (enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
             && ClaudeCodeAdapter.BuildIldMcpEntry(runContext, chatSessionId, environment) is { } ild)
             servers["ild"] = WithCopilotKeys(ild);

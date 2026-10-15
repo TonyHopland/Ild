@@ -47,6 +47,7 @@ public sealed class ChatServiceTests : IDisposable
         public string[] SupportedProviderTypes => ["fake"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -161,7 +162,7 @@ public sealed class ChatServiceTests : IDisposable
 
     private static IAgentAdapterRegistry RegistryFor(IAgentAdapter adapter)
         => Mock.Of<IAgentAdapterRegistry>(r =>
-            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter));
+            r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter)).WithDeclaredTraits();
 
     private async Task<AiProvider> SeedProviderAsync(string type = "claude-code", string? config = null)
     {
@@ -1301,7 +1302,7 @@ public sealed class ChatServiceTests : IDisposable
         });
         Func<IAgentAdapter> noAdapter = () => throw new InvalidOperationException("no adapter");
         var registry = turn == NothingToRecord.NoAdapter
-            ? Mock.Of<IAgentAdapterRegistry>(r => r.ResolveForProvider(It.IsAny<AiProvider>()) == noAdapter)
+            ? Mock.Of<IAgentAdapterRegistry>(r => r.ResolveForProvider(It.IsAny<AiProvider>()) == noAdapter).WithDeclaredTraits()
             : RegistryFor(adapter);
         var svc = new ChatService(_db.Context, _db.Providers, registry, _notifier, Options, _db.LoopRuns, _loopScratchpad, _chatClones);
         var chat = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);

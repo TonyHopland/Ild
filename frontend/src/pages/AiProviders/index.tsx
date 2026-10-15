@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
+import Markdown from "react-markdown";
 import {
   AdapterModelSupport,
   AgentAdapterDescriptor,
   AiProvider,
+  CliAuth,
   ManagedAgentStatus,
   ApiError,
   ConfigFieldDescriptor,
@@ -172,46 +174,23 @@ export default function AiProviders() {
     setConfigValues({});
   };
 
-  // Provider types whose auth is handled by the CLI itself (claude-code and
-  // copilot log in via the `/login` slash command inside their TUI, codex through
-  // its ChatGPT sign-in, and they store creds under ~/.claude / ~/.copilot /
-  // ~/.codex), so the BaseUrl / API key fields are not
-  // applicable. This says nothing about the model, which every adapter declares
-  // for itself — a CLI-auth provider can still choose one.
-  // Compared case-insensitively, the way the API resolves a provider type: it
-  // accepts and stores "Claude-Code" verbatim but reaches the same adapter.
-  const isCliAuthProvider = (t: string) =>
-    ["claude-code", "copilot", "codex"].includes(t.toLowerCase());
-
-  // Human-facing CLI name for a CLI-auth provider type, used in the login note.
-  const cliAuthLabel = (t: string) =>
-    t.toLowerCase() === "copilot"
-      ? "GitHub Copilot"
-      : t.toLowerCase() === "codex"
-        ? "Codex"
-        : "Claude Code";
-
-  // What to do inside the CLI to sign in, for the login note.
-  const cliSignIn = (t: string) =>
-    t.toLowerCase() === "codex" ? (
-      <>
-        choose <strong>Sign in with Device Code</strong> and sign in with your ChatGPT account
-      </>
-    ) : (
-      <>
-        run the <code>/login</code> slash command to sign in (with an active {cliAuthLabel(t)}{" "}
-        subscription)
-      </>
-    );
-
-  // What the selected type's adapter says about a model, straight from the API.
+  // The adapter registered for a provider type, straight from the API.
   // Matched case-insensitively: the API accepts and stores a type verbatim but
   // resolves its adapter ignoring case, so "Claude-Code" is the same provider
-  // type as "claude-code". Undefined means no adapter declared anything — an
-  // unregistered type, or a list that failed to load.
-  const modelSupport: AdapterModelSupport | undefined = adapters.find(
-    (a) => a.type.toLowerCase() === type.toLowerCase(),
-  )?.modelSupport;
+  // type as "claude-code". Undefined for an unregistered type, or a list that
+  // has not loaded or failed to load.
+  const adapterFor = (t: string) => adapters.find((a) => a.type.toLowerCase() === t.toLowerCase());
+
+  // How the type's CLI signs itself in, when it does: such a type has no Base
+  // URL / API key fields. This says nothing about the model, which every
+  // adapter declares for itself — a CLI-auth provider can still choose one.
+  // Null when no adapter declares a CLI sign-in for the type.
+  const cliAuthFor = (t: string): CliAuth | null => adapterFor(t)?.cliAuth ?? null;
+  const cliAuth = cliAuthFor(type);
+
+  // What the selected type's adapter says about a model. Undefined means no
+  // adapter declared anything.
+  const modelSupport: AdapterModelSupport | undefined = adapterFor(type)?.modelSupport;
   const supportsModel = modelSupport === "Required" || modelSupport === "Optional";
 
   // A tag has one holder, so saving one another provider holds takes it from them.
@@ -230,7 +209,6 @@ export default function AiProviders() {
   };
 
   const handleSave = async () => {
-    const cliAuth = isCliAuthProvider(type);
     const data: Partial<AiProvider> = {
       name,
       type,
@@ -438,7 +416,7 @@ export default function AiProviders() {
                   <span className="ap-value">{provider.model}</span>
                 </div>
               )}
-              {!isCliAuthProvider(provider.type) && (
+              {!cliAuthFor(provider.type) && (
                 <div className="ap-field">
                   <span className="ap-label">API Key</span>
                   <span className="ap-value ap-masked">
@@ -502,14 +480,16 @@ export default function AiProviders() {
                   ))}
                 </select>
               </div>
-              {isCliAuthProvider(type) ? (
+              {cliAuth ? (
                 <div className="ap-cli-note">
-                  This provider type authenticates via the locally-installed {cliAuthLabel(type)}{" "}
-                  CLI. The first time you set it up, save the provider and then use{" "}
-                  <strong>Open terminal</strong> to launch the {cliAuthLabel(type)} TUI. Inside it,{" "}
-                  {cliSignIn(type)}. Until you complete that one-time login, this provider will not
-                  work. Base URL and API key are configured by the CLI itself and are not needed
-                  here.
+                  This provider type authenticates via the locally-installed {cliAuth.cliName} CLI.
+                  The first time you set it up, save the provider and then use{" "}
+                  <strong>Open terminal</strong> to launch the {cliAuth.cliName} TUI. Inside it,{" "}
+                  <Markdown allowedElements={["code", "strong"]} unwrapDisallowed>
+                    {cliAuth.signInStep}
+                  </Markdown>
+                  . Until you complete that one-time login, this provider will not work. Base URL
+                  and API key are configured by the CLI itself and are not needed here.
                 </div>
               ) : (
                 <div className="form-group">
@@ -541,7 +521,7 @@ export default function AiProviders() {
                   )}
                 </div>
               )}
-              {!isCliAuthProvider(type) && (
+              {!cliAuth && (
                 <div className="form-group">
                   <label htmlFor="apApiKey">API Key</label>
                   <input

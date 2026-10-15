@@ -62,6 +62,14 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     public virtual AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
 
     /// <summary>
+    /// What makes the UI, the providers API, Extra CLI arguments validation and
+    /// tool handling treat this adapter's provider type correctly: how its CLI
+    /// signs in, which tools it offers, whether it can run without them, and
+    /// which CLI flags ILD owns. Abstract so a new adapter cannot leave them out.
+    /// </summary>
+    public abstract AgentAdapterTraits Traits { get; }
+
+    /// <summary>
     /// The generic "Custom MCP servers (JSON)" field shared by every MCP-capable
     /// adapter (opencode, claude-code, copilot, codex). Each such adapter surfaces it from
     /// its own <see cref="ConfigSchema"/> so the value is persisted into

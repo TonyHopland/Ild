@@ -157,7 +157,7 @@ public sealed class ChatGlobalVariableProposalFeedbackTests : IDisposable
             db,
             _db.Providers,
             Mock.Of<IAgentAdapterRegistry>(r =>
-                r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter)),
+                r.ResolveForProvider(It.IsAny<AiProvider>()) == (Func<IAgentAdapter>)(() => adapter)).WithDeclaredTraits(),
             Mock.Of<IChatNotifier>(),
             new ChatOptions { ScratchRoot = _scratchRoot },
             _db.LoopRuns,
@@ -179,6 +179,7 @@ public sealed class ChatGlobalVariableProposalFeedbackTests : IDisposable
         public string[] SupportedProviderTypes => ["fake"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {

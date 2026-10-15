@@ -86,6 +86,7 @@ public class TemplateFieldRenderSiteTests
         public string[] SupportedProviderTypes => ["stub"];
         public ConfigFieldDescriptor[] ConfigSchema => [];
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {

@@ -33,6 +33,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     public override string[] SupportedProviderTypes => ["opencode"];
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Required;
+    public override AgentAdapterTraits Traits => TypeTraits;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
@@ -418,6 +419,20 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     /// <summary>The flags <see cref="BuildRunProcessStartInfo"/> sets, which a provider's extra CLI arguments may not repeat.</summary>
     internal static readonly string[] ReservedCliFlags = ["--dir", "--format", "--session", "-s"];
 
+    /// <summary>
+    /// OpenCode connects with a Base URL and API key, offers every workspace tool,
+    /// and takes <c>-m</c> as its model flag. Declared after
+    /// <see cref="ReservedCliFlags"/>, which it reads.
+    /// </summary>
+    internal static readonly AgentAdapterTraits TypeTraits = new()
+    {
+        DisplayName = "OpenCode",
+        SupportedTools = AiToolCatalog.DefaultTools,
+        EmptyToolSelectionMeansNone = false,
+        SupportsNoTools = true,
+        ExtraCliArgs = ExtraCliArgsRules.None with { ReservedFlags = ReservedCliFlags, ModelHasShortFlag = true },
+    };
+
     public static ProcessStartInfo BuildRunProcessStartInfo(
         string binaryPath,
         string worktreePath,
@@ -705,7 +720,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
     {
         var providerId = SanitizeProviderId(provider.Name);
         var modelId = provider.Model;
-        var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, selectedToolKeys);
+        var enabledToolKeys = noTools ? [] : AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, selectedToolKeys);
         var enabled = new HashSet<string>(enabledToolKeys, StringComparer.OrdinalIgnoreCase);
 
         var baseUrl = provider.BaseUrl.TrimEnd('/');

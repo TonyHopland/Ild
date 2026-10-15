@@ -12,6 +12,7 @@ public class AgentAdapterRegistry : IAgentAdapterRegistry
     // saved as "COPILOT" still reaches the Copilot adapter.
     private readonly Dictionary<string, Type> _adapterTypes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AdapterModelSupport> _modelSupport = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AgentAdapterTraits> _traits = new(StringComparer.OrdinalIgnoreCase);
 
     public AgentAdapterRegistry(IServiceProvider sp, IEnumerable<IAgentAdapter> adapters)
     {
@@ -23,6 +24,7 @@ public class AgentAdapterRegistry : IAgentAdapterRegistry
             {
                 _adapterTypes[type] = adapterType;
                 _modelSupport[type] = adapter.ModelSupport;
+                _traits[type] = adapter.Traits;
             }
         }
     }
@@ -46,5 +48,12 @@ public class AgentAdapterRegistry : IAgentAdapterRegistry
         return string.IsNullOrWhiteSpace(providerType)
             ? AdapterModelSupport.Unsupported
             : _modelSupport.GetValueOrDefault(providerType, AdapterModelSupport.Unsupported);
+    }
+
+    public AgentAdapterTraits GetTraits(string? providerType)
+    {
+        return string.IsNullOrWhiteSpace(providerType)
+            ? AgentAdapterTraits.None
+            : _traits.GetValueOrDefault(providerType.Trim(), AgentAdapterTraits.None);
     }
 }

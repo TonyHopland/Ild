@@ -24,6 +24,7 @@ public class AINodeExecutorSteeringTests
         public string[] SupportedProviderTypes => ["claude-code"];
         public ConfigFieldDescriptor[] ConfigSchema => Array.Empty<ConfigFieldDescriptor>();
         public AdapterModelSupport ModelSupport => AdapterModelSupport.Unsupported;
+        public AgentAdapterTraits Traits => AgentAdapterTraits.None;
 
         public Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context)
         {
@@ -39,6 +40,7 @@ public class AINodeExecutorSteeringTests
         public Func<IAgentAdapter> ResolveForProvider(AiProvider provider) => () => _adapter;
         public string[] GetAllSupportedProviderTypes() => ["claude-code"];
         public AdapterModelSupport GetModelSupport(string providerType) => _adapter.ModelSupport;
+        public AgentAdapterTraits GetTraits(string? providerType) => _adapter.Traits;
     }
 
     private static (IServiceProvider sp, CapturingAdapter adapter) BuildServices(TestDb db, string workItemTitle = "")

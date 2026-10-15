@@ -58,10 +58,11 @@ public sealed class CodexAdapter : CliAgentAdapterBase
 
     public override ConfigFieldDescriptor[] ConfigSchema => [CustomMcpServersField, ExtraArgsField];
     public override AdapterModelSupport ModelSupport => AdapterModelSupport.Optional;
+    public override AgentAdapterTraits Traits => TypeTraits;
 
     public override async Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext ctx)
     {
-        // See AiToolCatalog.SupportsNoTools: launching anyway would hand a caller
+        // See TypeTraits.SupportsNoTools: launching anyway would hand a caller
         // that asked for no tools every tool the CLI has.
         if (ctx.NoTools)
             return NodeExecutionResult.Fail(
@@ -206,7 +207,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     /// <c>--cd</c> moves codex out of the worktree, and <c>--sandbox</c> contradicts
     /// the sandbox bypass. <c>-c</c>/<c>--config</c> is allowed, e.g.
     /// <c>-c model_reasoning_effort=high</c>, except for the config keys ILD sets
-    /// itself (see <see cref="ExtraCliArgs.Validate"/>).
+    /// itself (see <see cref="TypeTraits"/>).
     /// </summary>
     internal static readonly string[] ReservedCliFlags =
         ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--add-dir",
@@ -219,6 +220,39 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         ["--cd"] = "it would move Codex out of the worktree",
         ["-s"] = "it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox)",
         ["--sandbox"] = "it contradicts how ILD runs Codex (sandbox bypassed; the agent user is the sandbox)",
+    };
+
+    /// <summary>
+    /// Codex signs in through its own ChatGPT sign-in and its only tool is <c>ild</c>:
+    /// it has no way to turn its own tools off, so it takes no tool-less call, and an
+    /// explicit selection without <c>ild</c> is how ILD is turned off. Its
+    /// <c>-c</c>/<c>--config key=value</c> overrides any config key; the refused
+    /// first dotted segments are what ILD sets itself (a profile could set any of
+    /// them), with what they set. Declared after <see cref="ReservedCliFlags"/>,
+    /// which it reads.
+    /// </summary>
+    internal static readonly AgentAdapterTraits TypeTraits = new()
+    {
+        DisplayName = "Codex",
+        CliAuth = new("Codex", "choose **Sign in with Device Code** and sign in with your ChatGPT account"),
+        SupportedTools = AiToolCatalog.IldOnlyTools,
+        EmptyToolSelectionMeansNone = true,
+        SupportsNoTools = false,
+        ExtraCliArgs = new()
+        {
+            ReservedFlags = ReservedCliFlags,
+            ReservedFlagReasons = ReservedCliFlagReasons,
+            RefusedConfigKeys = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["mcp_servers"] = "Codex's MCP servers",
+                ["sandbox_mode"] = "Codex's sandbox",
+                ["sandbox_workspace_write"] = "Codex's sandbox",
+                ["approval_policy"] = "Codex's approvals",
+                ["profiles"] = "Codex's profiles",
+            },
+            ModelHasShortFlag = true,
+            AttachedShortValues = true,
+        },
     };
 
     /// <summary>
@@ -320,7 +354,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             // tools; a required server that cannot start fails the run, saying why.
             // The call timeout sits above the server's own 100 s HTTP timeout, since
             // codex's 60 s default would cut a long call, like a clone, short.
-            var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(provider.Type, allowlist);
+            var enabledKeys = AiToolCatalog.NormalizeSelectedToolKeys(TypeTraits, allowlist);
             if (dll is not null
                 && enabledKeys.Contains(AiToolCatalog.Ild, StringComparer.OrdinalIgnoreCase)
                 && IldMcpServer.TryWriteConfigFile(

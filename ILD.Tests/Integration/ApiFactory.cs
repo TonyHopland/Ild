@@ -195,8 +195,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
             => ["opencode", "pi", "claude-code"];
 
         // Mirrors what the real adapters declare, so the providers API validates
-        // a model the same way here as it does in the app.
+        // a model, connection fields and extra arguments the same way here as it
+        // does in the app.
         public AdapterModelSupport GetModelSupport(string providerType)
             => DeclaredModelSupport.For(providerType);
+
+        public AgentAdapterTraits GetTraits(string? providerType)
+            => DeclaredTraits.For(providerType);
     }
 }
