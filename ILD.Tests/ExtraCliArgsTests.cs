@@ -173,6 +173,8 @@ public class ExtraCliArgsTests
     [InlineData("claude-code", "--effort high")]
     [InlineData("claude-code", "--fallback-model x")]
     [InlineData("claude-code", "--append-system-prompt \"be brief; $(x) | y\"")]
+    [InlineData("claude-code", "--append-system-prompt \"-p means print\"")]
+    [InlineData("opencode", "--variant \"-sharp\"")]
     [InlineData("copilot", "--effort high")]
     [InlineData("codex", "--enable web_search")]
     [InlineData("opencode", "--variant high")]

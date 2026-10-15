@@ -81,7 +81,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             mcpServers = WriteMcpServers(ctx.Provider, ctx.RunContext, ctx.ToolAllowlist, ctx.ChatSessionId, _logger, EnvironmentVariables);
 
             var sessionsDirectory = SessionsDirectory();
-            if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId) && sessionsDirectory is not null)
+            if (ctx.ManageSession && ScopeFactory is not null && IsSessionId(ctx.SessionId))
             {
                 // Fork: seed a copy of the source session under the new id, so the
                 // restore below writes the copy and `resume` continues on it. A
@@ -99,8 +99,9 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                             $"[codex-error] could not fork the codex session {ctx.ForkFromSessionId} into {ctx.SessionId}: {ex.Message}");
                     }
                 }
-                await TrySnapshotStepAsync("restore", ctx.SessionId!,
-                    () => RestoreRolloutAsync(ctx, sessionsDirectory, ctx.SessionId!));
+                if (sessionsDirectory is not null)
+                    await TrySnapshotStepAsync("restore", ctx.SessionId!,
+                        () => RestoreRolloutAsync(ctx, sessionsDirectory, ctx.SessionId!));
             }
 
             var resumeId = await ResumableSessionAsync(ctx.SessionId, sessionsDirectory, ctx.Cancel);
@@ -503,10 +504,14 @@ public sealed class CodexAdapter : CliAgentAdapterBase
     private async Task<string?> ResumableSessionAsync(string? sessionId, string? sessionsDirectory, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(sessionId)) return null;
+        if (sessionsDirectory is null)
+        {
+            _logger.LogWarning("Codex cannot look for the session {SessionId} without a HOME, so it starts a new one.", sessionId);
+            return null;
+        }
         try
         {
-            if (IsSessionId(sessionId) && sessionsDirectory is not null
-                && await FindRolloutAsync(sessionsDirectory, sessionId, ct) is not null)
+            if (IsSessionId(sessionId) && await FindRolloutAsync(sessionsDirectory, sessionId, ct) is not null)
                 return sessionId;
             _logger.LogWarning("Codex has no session {SessionId} to resume, so it starts a new one.", sessionId);
         }

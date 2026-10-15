@@ -101,7 +101,27 @@ public static class AdapterUsageParser
     /// </summary>
     public static TokenUsage? ParseCodex(string? rawStdout, TokenUsage sessionTotalBefore)
     {
-        if (LastCodexTotal(rawStdout, CodexTurnTotal) is not { } total
+        TokenUsage? total = null;
+        foreach (var rawLine in (rawStdout ?? "").Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0) continue;
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(line); }
+            catch (JsonException) { continue; }
+
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object
+                    && StringProperty(root, "type") == "turn.completed"
+                    && ObjectProperty(root, "usage") is { } usage)
+                    total = new TokenUsage(SumLongs(usage, "input_tokens"), SumLongs(usage, "output_tokens"), null);
+            }
+        }
+
+        if (total is null
             || total.InputTokens < sessionTotalBefore.InputTokens
             || total.OutputTokens < sessionTotalBefore.OutputTokens)
             return null;
@@ -154,32 +174,6 @@ public static class AdapterUsageParser
             }
         }
         return beforeLastTurn;
-    }
-
-    private static JsonElement? CodexTurnTotal(JsonElement root)
-        => StringProperty(root, "type") == "turn.completed" ? ObjectProperty(root, "usage") : null;
-
-    private static TokenUsage? LastCodexTotal(string? jsonl, Func<JsonElement, JsonElement?> totalOf)
-    {
-        if (string.IsNullOrWhiteSpace(jsonl)) return null;
-
-        TokenUsage? last = null;
-        foreach (var rawLine in jsonl.Split('\n'))
-        {
-            var line = rawLine.Trim();
-            if (line.Length == 0) continue;
-
-            JsonDocument doc;
-            try { doc = JsonDocument.Parse(line); }
-            catch (JsonException) { continue; }
-
-            using (doc)
-            {
-                if (doc.RootElement.ValueKind == JsonValueKind.Object && totalOf(doc.RootElement) is { } total)
-                    last = new TokenUsage(SumLongs(total, "input_tokens"), SumLongs(total, "output_tokens"), null);
-            }
-        }
-        return last;
     }
 
     private static string? StringProperty(JsonElement element, string name)

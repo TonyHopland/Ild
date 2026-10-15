@@ -25,6 +25,11 @@ public static class ExtraCliArgs
 
     private static readonly HashSet<string> ProviderTypesWithShortModelFlag = new(StringComparer.OrdinalIgnoreCase) { "opencode", "codex" };
 
+    // codex takes a one-letter flag's value attached (-mgpt-5, -C/tmp). Only there is
+    // a token's prefix checked: the other CLIs have free-text options whose values
+    // may well start with "-p" or "-e".
+    private static readonly HashSet<string> ProviderTypesWithAttachedShortValues = new(StringComparer.OrdinalIgnoreCase) { "codex" };
+
     /// <summary>
     /// Split <paramref name="raw"/> into argv tokens. Whitespace separates tokens;
     /// <c>'…'</c> is taken literally; <c>"…"</c> groups words; a backslash outside
@@ -115,14 +120,15 @@ public static class ExtraCliArgs
         if (error is not null) return "Extra CLI arguments: " + error;
 
         var modelHasShortFlag = ProviderTypesWithShortModelFlag.Contains(providerType);
+        var attached = ProviderTypesWithAttachedShortValues.Contains(providerType);
         var reserved = ReservedFlagsByProviderType.GetValueOrDefault(providerType) ?? [];
         foreach (var token in tokens)
         {
             if (token == "--")
                 return "Extra CLI arguments: a bare -- is not allowed, because it would move the prompt.";
-            if (IsFlag(token, "--model") || (modelHasShortFlag && IsFlag(token, "-m")))
+            if (IsFlag(token, "--model", attached) || (modelHasShortFlag && IsFlag(token, "-m", attached)))
                 return "Extra CLI arguments: --model is not allowed here. Set the model with the Model field instead.";
-            if (reserved.FirstOrDefault(flag => IsFlag(token, flag)) is { } owned)
+            if (reserved.FirstOrDefault(flag => IsFlag(token, flag, attached)) is { } owned)
                 return $"Extra CLI arguments: {owned} is not allowed, because ILD already sets it for this provider.";
         }
         return null;
@@ -144,10 +150,9 @@ public static class ExtraCliArgs
         return tokens;
     }
 
-    // A single-letter flag also takes its value attached (-mgpt-5, -C/tmp), as the
-    // agents' option parsers allow, so its prefix is the flag too.
-    private static bool IsFlag(string token, string flag)
+    private static bool IsFlag(string token, string flag, bool attachedShortValues)
         => token == flag
            || token.StartsWith(flag + "=", StringComparison.Ordinal)
-           || (flag.Length == 2 && flag[0] == '-' && flag[1] != '-' && token.StartsWith(flag, StringComparison.Ordinal));
+           || (attachedShortValues && flag.Length == 2 && flag[0] == '-' && flag[1] != '-'
+               && token.StartsWith(flag, StringComparison.Ordinal));
 }
