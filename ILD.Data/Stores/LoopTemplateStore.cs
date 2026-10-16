@@ -205,7 +205,8 @@ public class LoopTemplateStore : ILoopTemplateStore
     /// <summary>
     /// The save lost to another version. A proposal's own Save makes the proposal
     /// Stale, in a statement of its own after the rollback: Postgres aborts a
-    /// transaction once an insert in it has failed, so nothing more can run in it.
+    /// transaction once an insert in it has failed (short of EF's savepoint), and
+    /// the save's template write must be undone anyway.
     /// </summary>
     private async Task<LoopTemplateVersionSave> StaleAfterConflictAsync(LoopTemplateVersionWrite write)
     {
