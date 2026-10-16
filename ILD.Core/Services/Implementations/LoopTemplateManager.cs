@@ -56,20 +56,6 @@ public class LoopTemplateManager : ILoopTemplateManager
     public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100, bool includeArchived = false)
         => await _store.GetAllAsync(skip, take, includeArchived);
 
-    public async Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy? recoveryPolicy = null)
-    {
-        var policy = recoveryPolicy
-            ?? (await _store.GetByIdAsync(templateId))?.RecoveryPolicy
-            ?? throw new InvalidOperationException($"Template {templateId} not found");
-        var saved = await SaveNewVersionAsync(templateId, name, description, graph, policy);
-        return saved.Outcome switch
-        {
-            LoopTemplateVersionSaveOutcome.Saved => templateId,
-            LoopTemplateVersionSaveOutcome.TemplateNotFound => throw new InvalidOperationException($"Template {templateId} not found"),
-            _ => throw new InvalidOperationException($"Template {templateId} was saved by someone else at the same time; save again."),
-        };
-    }
-
     public Task<LoopTemplateVersionSave> SaveNewVersionAsync(
         Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy, Guid? fromProposalId = null)
     {

@@ -127,7 +127,7 @@ public class LoopTemplateStore : ILoopTemplateStore
         // version read below is the one they committed.
         template.Name = write.Name;
         template.Description = write.Description;
-        if (write.RecoveryPolicy is { } policy) template.RecoveryPolicy = policy;
+        template.RecoveryPolicy = write.RecoveryPolicy;
         template.UpdatedAt = DateTime.UtcNow;
         try
         {

@@ -13,7 +13,6 @@ public interface ILoopTemplateManager
     Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100, bool includeArchived = false);
     Task ArchiveLoopTemplateAsync(Guid templateId);
     Task UnarchiveLoopTemplateAsync(Guid templateId);
-    Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy? recoveryPolicy = null);
 
     /// <summary>
     /// A Loop Editor save: the next version of the template, and the name,

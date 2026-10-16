@@ -23,7 +23,7 @@ public sealed record LoopTemplateVersionWrite(
     Guid TemplateId,
     string Name,
     string Description,
-    RecoveryPolicy? RecoveryPolicy,
+    RecoveryPolicy RecoveryPolicy,
     LoopTemplateVersion Version,
     IReadOnlyList<LoopNode> Nodes,
     IReadOnlyList<LoopNodeEdge> Edges,
