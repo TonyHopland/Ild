@@ -14,7 +14,7 @@ public class AdapterUsageParserTests
             "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"usage\":{\"input_tokens\":10,\"output_tokens\":2}}}",
             "{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"s1\",\"total_cost_usd\":0.0123,\"usage\":{\"input_tokens\":100,\"cache_read_input_tokens\":50,\"cache_creation_input_tokens\":5,\"output_tokens\":40}}");
 
-        var usage = AdapterUsageParser.Parse(stdout);
+        var usage = AdapterUsageParser.ParseClaude(stdout, 0m);
 
         Assert.NotNull(usage);
         // input = 100 + 50 + 5 (cache fields fold into input); result event wins
@@ -22,22 +22,6 @@ public class AdapterUsageParserTests
         Assert.Equal(155, usage!.InputTokens);
         Assert.Equal(40, usage.OutputTokens);
         Assert.Equal(0.0123m, usage.CostUsd);
-    }
-
-    [Fact]
-    public void Parses_opencode_tokens_and_cost()
-    {
-        // opencode --format json: assistant/step events carry a `tokens` object
-        // (with a nested cache) and a `cost`.
-        var stdout =
-            "{\"type\":\"step_finish\",\"cost\":0.5,\"tokens\":{\"input\":200,\"output\":80,\"cache\":{\"read\":20,\"write\":10}}}";
-
-        var usage = AdapterUsageParser.Parse(stdout);
-
-        Assert.NotNull(usage);
-        Assert.Equal(230, usage!.InputTokens); // 200 + 20 + 10
-        Assert.Equal(80, usage.OutputTokens);
-        Assert.Equal(0.5m, usage.CostUsd);
     }
 
     // Shapes from @earendil-works/pi-coding-agent 1.0.4 docs/json.md and
@@ -132,32 +116,48 @@ public class AdapterUsageParserTests
             "not json at all",
             "{\"type\":\"result\",\"subtype\":\"success\"}");
 
-        Assert.Null(AdapterUsageParser.Parse(stdout));
+        Assert.Null(AdapterUsageParser.ParseClaude(stdout, 0m));
     }
 
     [Fact]
     public void Returns_null_for_empty_input()
     {
-        Assert.Null(AdapterUsageParser.Parse(null));
-        Assert.Null(AdapterUsageParser.Parse(""));
-        Assert.Null(AdapterUsageParser.Parse("   "));
+        Assert.Null(AdapterUsageParser.ParseClaude(null, 0m));
+        Assert.Null(AdapterUsageParser.ParseClaude("", 0m));
+        Assert.Null(AdapterUsageParser.ParseClaude("   ", 0m));
     }
 
     [Fact]
     public void Last_usage_event_wins_for_cumulative_streams()
     {
-        // Edge case: multiple usage objects across the stream — the last one
+        // Edge case: multiple result events across the stream — the last one
         // (the cumulative final event) must win, not the sum of all.
         var stdout = string.Join('\n',
-            "{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}",
-            "{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}",
-            "{\"usage\":{\"input_tokens\":500,\"output_tokens\":250}}");
+            "{\"type\":\"result\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}",
+            "{\"type\":\"result\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}",
+            "{\"type\":\"result\",\"usage\":{\"input_tokens\":500,\"output_tokens\":250}}");
 
-        var usage = AdapterUsageParser.Parse(stdout);
+        var usage = AdapterUsageParser.ParseClaude(stdout, 0m);
 
         Assert.NotNull(usage);
         Assert.Equal(500, usage!.InputTokens);
         Assert.Equal(250, usage.OutputTokens);
+    }
+
+    [Fact]
+    public void Claude_cost_comes_only_from_the_results_total_never_from_a_cost_elsewhere_in_the_stream()
+    {
+        var stdout = string.Join('\n',
+            "{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":{\"cost\":9.5,\"costUSD\":7.25}}]}}",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"cost\":4.5}}",
+            "{\"type\":\"result\",\"subtype\":\"success\",\"costUSD\":3.25,\"modelUsage\":{\"m\":{\"costUSD\":2.5}},\"usage\":{\"input_tokens\":100,\"output_tokens\":40}}");
+
+        var usage = AdapterUsageParser.ParseClaude(stdout, 0m);
+
+        Assert.NotNull(usage);
+        Assert.Equal(100, usage!.InputTokens);
+        Assert.Equal(40, usage.OutputTokens);
+        Assert.Null(usage.CostUsd);
     }
 
     // Claude Code 2.1.x appends one cost-state line per invocation to the session

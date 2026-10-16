@@ -159,11 +159,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
                 await TryPersistSessionJsonlAsync(ctx, effectiveSessionId!, worktreePath);
 
             // Claude answering on another session than the one asked for started a new one.
-            if (stdout.SessionId is not null && stdout.SessionId != ctx.SessionId)
-                sessionCostBefore = 0m;
+            var costBeforeThisRun = stdout.SessionId is null || stdout.SessionId == ctx.SessionId ? sessionCostBefore : 0m;
 
             return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.ParseClaude(stdout.RawStdout, sessionCostBefore))
+                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.ParseClaude(stdout.RawStdout, costBeforeThisRun))
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
