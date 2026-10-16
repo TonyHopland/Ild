@@ -81,6 +81,11 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             if (ctx.ManageSession && !string.IsNullOrWhiteSpace(ctx.SessionId))
                 await TryRestoreSessionJsonlAsync(ctx, ctx.SessionId!, worktreePath);
 
+            // Read after the fork and restore, as it is what `--resume` restores from.
+            var sessionCostBefore = string.IsNullOrWhiteSpace(ctx.SessionId)
+                ? 0m
+                : await ReadSessionCostBeforeAsync(ctx.SessionId!, worktreePath, ctx.Cancel);
+
             Process? proc;
             try
             {
@@ -153,8 +158,12 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             if (process.ExitCode == 0 && ctx.ManageSession && !string.IsNullOrWhiteSpace(effectiveSessionId))
                 await TryPersistSessionJsonlAsync(ctx, effectiveSessionId!, worktreePath);
 
+            // Claude answering on another session than the one asked for started a new one.
+            if (stdout.SessionId is not null && stdout.SessionId != ctx.SessionId)
+                sessionCostBefore = 0m;
+
             return process.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout.RawStdout))
+                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.ParseClaude(stdout.RawStdout, sessionCostBefore))
                 : NodeExecutionResult.Fail($"exit={process.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
@@ -514,6 +523,23 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             await AgentWritableFiles.WriteFileAsync(path, jsonl, ctx.Cancel);
         }
         catch (IOException) { }
+    }
+
+    /// <summary>The cost the session's transcript says it reached, or zero when there is none or it cannot be read (logged).</summary>
+    private async Task<decimal> ReadSessionCostBeforeAsync(string sessionId, string worktreePath, CancellationToken ct)
+    {
+        var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
+        if (path is null) return 0m;
+
+        try
+        {
+            return AdapterUsageParser.ParseClaudeSessionCostBefore(await AgentWritableFiles.ReadFileAsync(path, ct), sessionId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not read the cost of Claude session {SessionId}, so its total is recorded as it is: {Reason}", sessionId, ex.Message);
+            return 0m;
+        }
     }
 
     private async Task TryPersistSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)

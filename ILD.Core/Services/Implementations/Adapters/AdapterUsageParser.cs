@@ -9,9 +9,10 @@ namespace ILD.Core.Services.Implementations.Adapters;
 /// <list type="bullet">
 ///   <item>claude-code: a terminal <c>result</c> event with a <c>usage</c>
 ///   object (<c>input_tokens</c>/<c>output_tokens</c>, plus cache token fields)
-///   and <c>total_cost_usd</c>.</item>
-///   <item>opencode: assistant/step events with a <c>tokens</c> object
-///   (<c>input</c>/<c>output</c>, plus a nested <c>cache</c>) and a <c>cost</c>.</item>
+///   and <c>total_cost_usd</c>, the session's running total, read by <see cref="ParseClaude"/>.</item>
+///   <item>opencode: a <c>step_finish</c> event per model call with a <c>tokens</c>
+///   object (<c>input</c>/<c>output</c>, plus a nested <c>cache</c>) and a <c>cost</c>,
+///   read by <see cref="ParseOpenCode"/>.</item>
 ///   <item>pi: a per-message <c>usage</c> object (<c>input</c>/<c>output</c>,
 ///   <c>cacheRead</c>/<c>cacheWrite</c>, <c>cost.total</c>) on every assistant
 ///   message and compaction, read by <see cref="ParsePi"/>.</item>
@@ -45,6 +46,99 @@ public static class AdapterUsageParser
 
         var cost = state.TotalCostUsd ?? state.GenericCost;
         return new TokenUsage(state.InputTokens, state.OutputTokens, cost);
+    }
+
+    /// <summary>
+    /// The usage of one <c>claude --output-format stream-json</c> run. Its tokens are
+    /// the run's own, but <c>total_cost_usd</c> is the session's running total: on
+    /// <c>--resume</c> Claude restores the cost it recorded in the transcript (see
+    /// <see cref="ParseClaudeSessionCostBefore"/>) and counts on from it, so the run
+    /// cost that total minus <paramref name="sessionCostBefore"/>. When the total is
+    /// below the earlier one Claude did not count on from it, so the tokens are kept
+    /// and the cost is unknown.
+    /// </summary>
+    public static TokenUsage? ParseClaude(string? rawStdout, decimal sessionCostBefore)
+    {
+        var usage = Parse(rawStdout);
+        if (usage?.CostUsd is not { } total) return usage;
+        return usage with { CostUsd = total >= sessionCostBefore ? total - sessionCostBefore : null };
+    }
+
+    /// <summary>
+    /// The cost a Claude session had reached, read from its transcript before a run
+    /// resumes it: the <c>totalCostUSD</c> of the last valid <c>cost-state</c> line
+    /// of <paramref name="sessionId"/>, which Claude appends after every run and
+    /// restores on <c>--resume</c>. Zero when there is none, as Claude then restores
+    /// nothing; so should Claude change this ledger, its totals are recorded as they are.
+    /// </summary>
+    public static decimal ParseClaudeSessionCostBefore(string? transcriptJsonl, string sessionId)
+    {
+        var before = 0m;
+        foreach (var rawLine in (transcriptJsonl ?? "").Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0) continue;
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(line); }
+            catch (JsonException) { continue; }
+
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object
+                    && StringProperty(root, "type") == "cost-state"
+                    && StringProperty(root, "sessionId") == sessionId
+                    && root.TryGetProperty("totalCostUSD", out var total)
+                    && TryGetDecimal(total, out var cost)
+                    && cost >= 0)
+                    before = cost;
+            }
+        }
+        return before;
+    }
+
+    /// <summary>
+    /// Sum the usage of every <c>step_finish</c> in an <c>opencode run --format json</c>
+    /// stream. Each step is one model call and reports only that call's tokens and
+    /// cost, so a turn of several steps used their sum. The cost is null when no
+    /// step reported one.
+    /// </summary>
+    public static TokenUsage? ParseOpenCode(string? rawStdout)
+    {
+        long input = 0, output = 0;
+        decimal? cost = null;
+        foreach (var rawLine in (rawStdout ?? "").Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length == 0) continue;
+
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(line); }
+            catch (JsonException) { continue; }
+
+            using (doc)
+            {
+                var root = doc.RootElement;
+                if (root.ValueKind != JsonValueKind.Object
+                    || StringProperty(root, "type") != "step_finish"
+                    || ObjectProperty(root, "part") is not { } part)
+                    continue;
+
+                if (ObjectProperty(part, "tokens") is { } tokens)
+                {
+                    input += SumLongs(tokens, "input");
+                    if (ObjectProperty(tokens, "cache") is { } cache)
+                        input += SumLongs(cache, "read", "write");
+                    output += SumLongs(tokens, "output");
+                }
+                if (part.TryGetProperty("cost", out var stepCost) && TryGetDecimal(stepCost, out var callCost))
+                    cost = (cost ?? 0m) + callCost;
+            }
+        }
+
+        if (input == 0 && output == 0 && cost is null) return null;
+        return new TokenUsage(input, output, cost);
     }
 
     /// <summary>
