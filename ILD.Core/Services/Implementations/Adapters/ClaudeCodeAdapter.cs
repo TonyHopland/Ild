@@ -158,7 +158,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
             if (process.ExitCode == 0 && ctx.ManageSession && !string.IsNullOrWhiteSpace(effectiveSessionId))
                 await TryPersistSessionJsonlAsync(ctx, effectiveSessionId!, worktreePath);
 
-            // Claude answering on another session than the one asked for started a new one.
+            // The earlier total only counts when Claude answered on the session it was asked to resume.
             var costBeforeThisRun = stdout.SessionId is null || stdout.SessionId == ctx.SessionId ? sessionCostBefore : 0m;
 
             return process.ExitCode == 0

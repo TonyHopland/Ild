@@ -64,7 +64,6 @@ public static class AdapterUsageParser
     public static decimal ParseClaudeSessionCostBefore(string? transcriptJsonl, string sessionId)
     {
         var before = 0m;
-        // A transcript is mostly conversation, which need not be parsed.
         ForEachJsonObject(transcriptJsonl, root =>
         {
             if (StringProperty(root, "type") == "cost-state"
