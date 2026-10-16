@@ -46,6 +46,7 @@ public class AppDbContext : DbContext
     public DbSet<RepositoryPackageFeed> RepositoryPackageFeeds => Set<RepositoryPackageFeed>();
     public DbSet<GlobalVariable> GlobalVariables => Set<GlobalVariable>();
     public DbSet<GlobalVariableProposal> GlobalVariableProposals => Set<GlobalVariableProposal>();
+    public DbSet<LoopTemplateProposal> LoopTemplateProposals => Set<LoopTemplateProposal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -396,6 +397,22 @@ public class AppDbContext : DbContext
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
             e.HasIndex(p => new { p.CreatedByChatSessionId, p.NormalizedName }, "IX_GlobalVariableProposals_ChatSession_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
+        });
+
+        modelBuilder.Entity<LoopTemplateProposal>(e =>
+        {
+            e.HasIndex(p => p.LoopTemplateId);
+            e.HasIndex(p => p.CreatedByLoopRunId);
+            e.HasIndex(p => p.CreatedByChatSessionId);
+            // One pending proposal per source per template, enforced where the
+            // race is: two proposals that both pass the supersede step must not
+            // both stay pending. The filter is LoopTemplateProposalStatus.Pending (0).
+            e.HasIndex(p => new { p.CreatedByLoopRunId, p.LoopTemplateId }, "IX_LoopTemplateProposals_LoopRun_Pending")
+                .IsUnique()
+                .HasFilter("\"Status\" = 0");
+            e.HasIndex(p => new { p.CreatedByChatSessionId, p.LoopTemplateId }, "IX_LoopTemplateProposals_ChatSession_Pending")
                 .IsUnique()
                 .HasFilter("\"Status\" = 0");
         });

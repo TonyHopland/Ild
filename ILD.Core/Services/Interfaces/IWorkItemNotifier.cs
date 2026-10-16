@@ -35,6 +35,13 @@ public interface IWorkItemNotifier
     /// Action tabs and the menu badge re-read them. A hint only: listeners re-fetch.
     /// </summary>
     Task GlobalVariableProposalsChangedAsync(string name);
+
+    /// <summary>
+    /// Signals that a loop template's proposals changed — one was made, saved,
+    /// rejected or went stale — so the Loop Editor, the work items' Action tabs
+    /// and the template list's counts re-read them. A hint only: listeners re-fetch.
+    /// </summary>
+    Task LoopTemplateProposalsChangedAsync(Guid templateId);
 }
 
 public sealed class NoopWorkItemNotifier : IWorkItemNotifier
@@ -47,4 +54,5 @@ public sealed class NoopWorkItemNotifier : IWorkItemNotifier
     public Task RunProgressedAsync(string workItemId) => Task.CompletedTask;
     public Task WorkItemEditProposalsChangedAsync(string workItemId) => Task.CompletedTask;
     public Task GlobalVariableProposalsChangedAsync(string name) => Task.CompletedTask;
+    public Task LoopTemplateProposalsChangedAsync(Guid templateId) => Task.CompletedTask;
 }

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Data;
@@ -34,7 +35,13 @@ public class LoopTemplateManager : ILoopTemplateManager
         };
         await _store.CreateTemplateAsync(template);
 
-        await AddVersionFromGraph(template.Id, 1, graph);
+        var (version, nodes, edges) = BuildVersion(graph);
+        version.LoopTemplateId = template.Id;
+        version.VersionNumber = 1;
+        await _store.CreateVersionAsync(version);
+        await _store.CreateNodesAsync(nodes);
+        if (edges.Count > 0)
+            await _store.CreateEdgesAsync(edges);
         await _store.SaveChangesAsync();
 
         return template.Id;
@@ -51,25 +58,93 @@ public class LoopTemplateManager : ILoopTemplateManager
 
     public async Task<Guid> UpdateLoopTemplateAsync(Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy? recoveryPolicy = null)
     {
+        var policy = recoveryPolicy
+            ?? (await _store.GetByIdAsync(templateId))?.RecoveryPolicy
+            ?? throw new InvalidOperationException($"Template {templateId} not found");
+        var saved = await SaveNewVersionAsync(templateId, name, description, graph, policy);
+        return saved.Outcome switch
+        {
+            LoopTemplateVersionSaveOutcome.Saved => templateId,
+            LoopTemplateVersionSaveOutcome.TemplateNotFound => throw new InvalidOperationException($"Template {templateId} not found"),
+            _ => throw new InvalidOperationException($"Template {templateId} was saved by someone else at the same time; save again."),
+        };
+    }
+
+    public Task<LoopTemplateVersionSave> SaveNewVersionAsync(
+        Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy, Guid? fromProposalId = null)
+    {
         NormalizeOutputs(graph);
         var errors = LoopTemplateValidator.Validate(graph);
         if (errors.Count > 0)
             throw new InvalidOperationException("Invalid loop template graph: " + string.Join("; ", errors));
+        return AddVersionAsync(templateId, name, description, recoveryPolicy, graph, fromProposalId, requireProposal: false);
+    }
 
-        var template = await _store.GetByIdAsync(templateId)
-            ?? throw new InvalidOperationException($"Template {templateId} not found");
+    public async Task<LoopTemplateVersionSave> SaveProposalAsync(LoopTemplateProposal proposal)
+    {
+        var checkedDocument = CheckProposedDocument(proposal.Document);
+        if (checkedDocument.Request is not { } request)
+            throw new InvalidOperationException("The proposed loop no longer passes a save's checks: "
+                + string.Join("; ", checkedDocument.ValidationErrors.Prepend(checkedDocument.Error).OfType<string>()));
+        return await AddVersionAsync(
+            proposal.LoopTemplateId,
+            request.Name,
+            request.Description,
+            request.RecoveryPolicy,
+            new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges),
+            proposal.Id,
+            requireProposal: true);
+    }
 
-        template.Name = name;
-        template.Description = description;
-        if (recoveryPolicy.HasValue) template.RecoveryPolicy = recoveryPolicy.Value;
-        template.UpdatedAt = DateTime.UtcNow;
-        await _store.UpdateTemplateAsync(template);
+    public ProposedLoopDocument CheckProposedDocument(string document)
+    {
+        JsonObject? root;
+        try
+        {
+            root = JsonNode.Parse(document) as JsonObject;
+        }
+        catch (JsonException ex)
+        {
+            return Refused($"The document is not valid JSON: {ex.Message}");
+        }
+        if (root is null)
+            return Refused($"The document must be a JSON object: the whole {LoopDocumentUpgrader.V2} document get_loop_template returns.");
+        if (!root.ContainsKey("$schema"))
+            return Refused($"The document has no $schema. Send the whole {LoopDocumentUpgrader.V2} document get_loop_template returns, with your changes.");
+        LoopDocumentUpgrader.TryUpgrade(root);
+        if (TextOf(root["$schema"]) != LoopDocumentUpgrader.V2)
+            return Refused($"$schema must be \"{LoopDocumentUpgrader.V2}\" (a {LoopDocumentUpgrader.V1} document is upgraded to it).");
+        if (!Enum.TryParse<RecoveryPolicy>(TextOf(root["recoveryPolicy"]), ignoreCase: true, out var policy) || !Enum.IsDefined(policy))
+            return Refused($"recoveryPolicy must be one of {string.Join(", ", Enum.GetNames<RecoveryPolicy>())}.");
 
-        var nextVersion = await _store.GetNextVersionNumberAsync(templateId);
-        await AddVersionFromGraph(templateId, nextVersion, graph);
-        await _store.SaveChangesAsync();
+        LoopGraphShape? shape;
+        try
+        {
+            shape = root.Deserialize<LoopGraphShape>(DocumentOptions);
+        }
+        catch (JsonException ex)
+        {
+            return Refused($"The document's nodes or edges are not in the {LoopDocumentUpgrader.V2} shape: {ex.Message}");
+        }
 
-        return templateId;
+        var request = new LoopTemplateCreateRequest
+        {
+            Name = TextOf(root["name"]) ?? string.Empty,
+            Description = TextOf(root["description"]) ?? string.Empty,
+            RecoveryPolicy = policy,
+            Nodes = shape?.Nodes ?? new(),
+            Edges = shape?.Edges ?? new(),
+        };
+        var refused = new List<ValidationResult>();
+        if (!Validator.TryValidateObject(request, new ValidationContext(request), refused, validateAllProperties: true))
+            return Refused(string.Join(" ", refused.Select(r => r.ErrorMessage)));
+
+        var graph = new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges);
+        NormalizeOutputs(graph);
+        var errors = LoopTemplateValidator.Validate(graph);
+        return errors.Count > 0
+            ? new ProposedLoopDocument(null, null, null, errors)
+            : new ProposedLoopDocument(request, DocumentOf(request.Name, request.Description, policy, graph), null, []);
     }
 
     public async Task<Guid> CloneLoopTemplateAsync(Guid sourceTemplateId, string newName)
@@ -113,11 +188,11 @@ public class LoopTemplateManager : ILoopTemplateManager
         return Task.FromResult((errors.Count == 0, errors));
     }
 
-    public async Task DeleteLoopTemplateAsync(Guid templateId)
+    public async Task<StaledLoopTemplateProposals> DeleteLoopTemplateAsync(Guid templateId)
     {
         var template = await _store.GetByIdAsync(templateId);
-        if (template == null) return;
-        await _store.DeleteTemplateAsync(template);
+        if (template == null) return StaledLoopTemplateProposals.None;
+        return await _store.DeleteTemplateAsync(template);
     }
 
     public async Task ArchiveLoopTemplateAsync(Guid templateId)
@@ -150,15 +225,44 @@ public class LoopTemplateManager : ILoopTemplateManager
         }
     }
 
-    private async Task AddVersionFromGraph(Guid templateId, int versionNumber, LoopTemplateGraph graph)
+    private Task<LoopTemplateVersionSave> AddVersionAsync(
+        Guid templateId, string name, string description, RecoveryPolicy recoveryPolicy, LoopTemplateGraph graph,
+        Guid? fromProposalId, bool requireProposal)
     {
-        var version = new LoopTemplateVersion
-        {
-            Id = Guid.NewGuid(),
-            LoopTemplateId = templateId,
-            VersionNumber = versionNumber,
-        };
-        await _store.CreateVersionAsync(version);
+        var (version, nodes, edges) = BuildVersion(graph);
+        return _store.AddVersionAsync(
+            new LoopTemplateVersionWrite(
+                templateId, name, description, recoveryPolicy, version, nodes, edges,
+                DocumentOf(name, description, recoveryPolicy, graph))
+            {
+                FromProposalId = fromProposalId,
+                RequireProposal = requireProposal,
+            });
+    }
+
+    private static ProposedLoopDocument Refused(string error) => new(null, null, error, []);
+
+    /// <summary>A loop as the <c>ild-loop-template/v2</c> document get_loop_template returns.</summary>
+    private static string DocumentOf(string name, string description, RecoveryPolicy recoveryPolicy, LoopTemplateGraph graph)
+        => JsonSerializer.Serialize(
+            new LoopTemplateDocument(LoopDocumentUpgrader.V2, name, description, recoveryPolicy.ToString(), graph.Nodes, graph.Edges),
+            DocumentOptions);
+
+    private static string? TextOf(JsonNode? node)
+        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private static readonly JsonSerializerOptions DocumentOptions = new(JsonSerializerDefaults.Web);
+
+    private sealed class LoopGraphShape
+    {
+        public List<LoopNodeDto>? Nodes { get; set; }
+        public List<LoopNodeEdgeDto>? Edges { get; set; }
+    }
+
+    /// <summary>A version of <paramref name="graph"/> ready to insert, but for its template and number.</summary>
+    private static (LoopTemplateVersion Version, List<LoopNode> Nodes, List<LoopNodeEdge> Edges) BuildVersion(LoopTemplateGraph graph)
+    {
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid() };
 
         var idMap = new Dictionary<string, Guid>();
 
@@ -177,8 +281,6 @@ public class LoopTemplateManager : ILoopTemplateManager
             };
         }).ToList();
 
-        await _store.CreateNodesAsync(nodes);
-
         var edges = graph.Edges.Select(e =>
         {
             if (!idMap.TryGetValue(e.SourceNodeId, out var srcId)) return null;
@@ -196,8 +298,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             };
         }).Where(e => e != null).Cast<LoopNodeEdge>().ToList();
 
-        if (edges.Count > 0)
-            await _store.CreateEdgesAsync(edges);
+        return (version, nodes, edges);
     }
 
     private async Task<LoopTemplateGraph> BuildGraphFromVersion(LoopTemplateVersion v)

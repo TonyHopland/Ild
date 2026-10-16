@@ -27,6 +27,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPackageFeedStore, Stores.PackageFeedStore>();
         services.AddScoped<IGlobalVariableStore, Stores.GlobalVariableStore>();
         services.AddScoped<IGlobalVariableProposalStore, Stores.GlobalVariableProposalStore>();
+        services.AddScoped<ILoopTemplateProposalStore, Stores.LoopTemplateProposalStore>();
         return services;
     }
 }

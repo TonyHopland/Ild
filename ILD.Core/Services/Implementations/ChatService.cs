@@ -287,14 +287,17 @@ public sealed class ChatService : IChatService
         var (contextPreamble, additionalAllowedDirectories) =
             await BuildChatContextAsync(openWorkItemId, loopEditor, tools);
 
-        // Decisions on this chat's edit proposals and global variable suggestions
-        // ride the prompt until a turn that reached the agent acknowledges them below.
+        // Decisions on this chat's edit proposals, global variable suggestions and
+        // loop template proposals ride the prompt until a turn that reached the
+        // agent acknowledges them below.
         var decidedProposals = await ReadUndeliveredProposalDecisionsAsync(chatSessionId, ct);
         var decidedSuggestions = await ReadUndeliveredSuggestionDecisionsAsync(chatSessionId, ct);
+        var decidedLoopProposals = await ReadUndeliveredLoopTemplateDecisionsAsync(chatSessionId, ct);
         var promptForAgent = string.Join("\n\n", new[]
         {
             FormatProposalDecisions(decidedProposals),
             FormatSuggestionDecisions(decidedSuggestions),
+            FormatLoopTemplateDecisions(decidedLoopProposals),
             contextPreamble,
             userMessage,
         }.Where(part => part is not null));
@@ -379,6 +382,8 @@ public sealed class ChatService : IChatService
             await MarkProposalDecisionsDeliveredAsync(decidedProposals);
         if (decidedSuggestions.Count > 0 && boundThisTurn is not null)
             await MarkSuggestionDecisionsDeliveredAsync(decidedSuggestions);
+        if (decidedLoopProposals.Count > 0 && boundThisTurn is not null)
+            await MarkLoopTemplateDecisionsDeliveredAsync(decidedLoopProposals);
 
         // An interrupted turn's usage still counts: the provider billed what it ran.
         (TokenUsage, string)? spent = result is { Success: true, Usage: { HasData: true } usage } ? (usage, provider.Name) : null;
@@ -647,6 +652,59 @@ public sealed class ChatService : IChatService
         }
         return string.Join("\n", lines);
     }
+
+    /// <summary>
+    /// The loop template proposals of this chat a human saved or rejected that it
+    /// has not been told about. Stale and Superseded are no human's decision: a
+    /// proposal can go stale long after the chat ended, and must not bring it back.
+    /// </summary>
+    private Task<List<DecidedLoopTemplateProposal>> ReadUndeliveredLoopTemplateDecisionsAsync(Guid chatSessionId, CancellationToken ct)
+        => (from p in _db.LoopTemplateProposals.AsNoTracking()
+            where p.CreatedByChatSessionId == chatSessionId
+                && p.DecisionDeliveredAt == null
+                && (p.Status == LoopTemplateProposalStatus.Applied || p.Status == LoopTemplateProposalStatus.Rejected)
+            join t in _db.LoopTemplates.AsNoTracking() on p.LoopTemplateId equals t.Id into templates
+            from t in templates.DefaultIfEmpty()
+            orderby p.DecidedAt
+            select new DecidedLoopTemplateProposal(
+                p.Id, t != null ? t.Name : null, p.Status, p.EditedBeforeSave, p.AppliedVersion, p.RejectionReason))
+            .ToListAsync(ct);
+
+    private async Task MarkLoopTemplateDecisionsDeliveredAsync(IReadOnlyList<DecidedLoopTemplateProposal> delivered)
+    {
+        var ids = delivered.Select(p => p.Id).ToList();
+        var now = DateTime.UtcNow;
+        await _db.LoopTemplateProposals
+            .Where(p => ids.Contains(p.Id) && p.DecisionDeliveredAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.DecisionDeliveredAt, now), CancellationToken.None);
+    }
+
+    private static string? FormatLoopTemplateDecisions(IReadOnlyList<DecidedLoopTemplateProposal> decided)
+    {
+        if (decided.Count == 0) return null;
+        var lines = new List<string>
+        {
+            "[Loop template proposal decisions]",
+            "A human decided these loop template changes you proposed in this chat since you last heard:",
+        };
+        foreach (var p in decided)
+        {
+            var outcome = p.Status switch
+            {
+                LoopTemplateProposalStatus.Applied when p.EditedBeforeSave =>
+                    $"Applied as version {p.AppliedVersion}, after the human edited it in the Loop Editor; read it with get_loop_template to see what was saved.",
+                LoopTemplateProposalStatus.Applied => $"Applied as version {p.AppliedVersion}, exactly as you proposed it.",
+                _ => p.RejectionReason is { } reason
+                    ? $"Rejected. Reason: {OneLine(reason)}"
+                    : "Rejected, with no reason given.",
+            };
+            lines.Add($"- Proposal {p.Id} for {p.TemplateName ?? "a template since deleted"}: {outcome}");
+        }
+        return string.Join("\n", lines);
+    }
+
+    private sealed record DecidedLoopTemplateProposal(
+        Guid Id, string? TemplateName, LoopTemplateProposalStatus Status, bool EditedBeforeSave, int? AppliedVersion, string? RejectionReason);
 
     /// <summary>A reason on one line, so each decision stays one line of the notice.</summary>
     private static string OneLine(string text)

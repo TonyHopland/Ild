@@ -5,6 +5,7 @@ using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ILD.Api.Controllers;
@@ -14,10 +15,14 @@ namespace ILD.Api.Controllers;
 public class LoopTemplatesController : ControllerBase
 {
     private readonly ILoopTemplateManager _loopTemplateManager;
+    private readonly IWorkItemNotifier _notifier;
+    private readonly IChatNotifier _chatNotifier;
 
-    public LoopTemplatesController(ILoopTemplateManager loopTemplateManager)
+    public LoopTemplatesController(ILoopTemplateManager loopTemplateManager, IWorkItemNotifier notifier, IChatNotifier chatNotifier)
     {
         _loopTemplateManager = loopTemplateManager;
+        _notifier = notifier;
+        _chatNotifier = chatNotifier;
     }
 
     private async Task<object> ToFlatAsync(LoopTemplate t)
@@ -89,26 +94,39 @@ public class LoopTemplatesController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Saves the next version. Naming the Loop Template Proposal the loop was
+    /// reviewed from applies that proposal when it still can (ADR-0028); either
+    /// way the template's other pending proposals go stale.
+    /// </summary>
     [HttpPut("{id}")]
-    public async Task<IActionResult> Update(string id, [FromBody] LoopTemplateCreateRequest request)
+    public async Task<IActionResult> Update(string id, [FromBody] LoopTemplateUpdateRequest request)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
+        LoopTemplateVersionSave saved;
         try
         {
             var graph = new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges);
-            var newId = await _loopTemplateManager.UpdateLoopTemplateAsync(
+            saved = await _loopTemplateManager.SaveNewVersionAsync(
                 guid,
                 request.Name,
                 request.Description,
                 graph,
-                request.RecoveryPolicy);
-            return Ok(new { id = newId });
+                request.RecoveryPolicy,
+                request.FromProposalId);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
+        await LoopTemplateProposalsController.HintAsync(_notifier, _chatNotifier, guid, saved.ProposalsChanged, saved.ChangedChatSessionIds);
+        return saved.Outcome switch
+        {
+            LoopTemplateVersionSaveOutcome.Saved => Ok(new { id = guid, version = saved.VersionNumber, proposalApplied = saved.ProposalApplied }),
+            LoopTemplateVersionSaveOutcome.TemplateNotFound => BadRequest(new { error = $"Template {guid} not found" }),
+            _ => Conflict(new { error = "Someone else saved this template at the same moment; save again." }),
+        };
     }
 
     [HttpPost("{id}/clone")]
@@ -210,7 +228,8 @@ public class LoopTemplatesController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-        await _loopTemplateManager.DeleteLoopTemplateAsync(guid);
+        var staled = await _loopTemplateManager.DeleteLoopTemplateAsync(guid);
+        await LoopTemplateProposalsController.HintAsync(_notifier, _chatNotifier, guid, staled.Count, staled.ChatSessionIds);
         return NoContent();
     }
 }
