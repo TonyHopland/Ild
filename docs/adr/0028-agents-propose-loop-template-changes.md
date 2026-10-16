@@ -1,0 +1,21 @@
+# ADR-0028: Loop templates are human-owned; agents propose whole-document changes against the latest version
+
+A saved **Loop Template** decides what every later run of it does, so an agent that could save one would change how all those runs behave with nobody asked. Agents (loop runs and chat sessions) therefore never save a template. They read one with `get_loop_template` and **propose** a change with `propose_loop_template_change`; the proposal, a **Loop Template Proposal**, saves nothing until a human acts on it, and only the human surface can. The weekly retro chat still never edits a template itself ([ADR-0026](./0026-scheduled-jobs-are-chats-that-only-check.md)), but where it used to describe a fix in prose it can now propose one. This follows [ADR-0022](./0022-agent-edits-are-human-approved-proposals.md) and [ADR-0027](./0027-agents-suggest-global-variable-changes.md), with these differences.
+
+- **A proposal is a whole `ild-loop-template/v2` document,** the shape `get_loop_template` returns; there is no patch format. It is checked when it is made exactly as a Loop Editor save is checked (a v1 document is upgraded first), and every error comes back at once, so the agent fixes it in the same turn.
+- **It is made against the latest version and stays actionable only while that is the latest.** The proposal records its base version; one made against any other version is refused, naming the latest. As soon as any new version of the template is saved, by a proposal or by a person in the Loop Editor, every pending proposal for it goes **Stale** in the same transaction, and so does deleting the template. A Stale proposal is closed: it cannot be saved, rejected or reviewed, and the agent proposes again against the latest version. Rebasing a proposal onto a newer version is not offered.
+- **A human decides in one of three ways.** **Save** writes the document as the next version, with the template's name, description and recovery policy, in one compare-and-set on the base version: every version-creating save takes the template's row first and the database's unique (template, version number) index is the final guard, so a save that lost the race writes nothing and its proposal goes Stale. **Reject** keeps an optional reason. **Review** opens the document in the Loop Editor as the unsaved working copy, where the person and the chat's loop tools can change it; saving it there is an ordinary save that names the proposal, which is then **Applied**, marked as edited when what was saved differs from what was proposed (layout and edge ids aside). If the proposal went Stale meanwhile, that save is an ordinary save and the proposal stays Stale.
+- **Proposals live on the ILD instance** ([ADR-0025](./0025-workitem-server-contract-is-tracker-mappable.md)) and only reference the template, run or chat they belong to. Deleting the run, its work item or the chat leaves a pending proposal decidable in the Loop Editor.
+
+## Considered options
+
+- **Let agents save templates directly.** Rejected: one agent's conclusion would silently become every run's behaviour.
+- **Patch proposals.** Rejected: what is saved would differ from what the human reviewed, and two patches could each look harmless and combine into something nobody approved.
+- **Keep a stale proposal decidable, or rebase it.** Rejected: saving it would silently undo whatever the newer version changed, and a rebase is a merge nobody reviewed. Proposing again against the latest version is cheap for an agent.
+- **Version checks on every Loop Editor save.** Not done: an editor save still takes the last write, as before; only a proposal's own Save compares versions.
+
+## Consequences
+
+- One source holds at most one pending proposal per template: a newer one from the same run or chat supersedes its earlier one, and the database enforces it. A superseded proposal was never decided, so it is never announced.
+- A chat learns Applied and Rejected decisions on its next user turn. Going Stale is no human's decision and can happen long after the chat ended, so it is never announced to the chat and never starts a turn; it shows only on the proposal's card and in `list_loop_template_proposals`, which is also how a loop run reads its outcomes.
+- Proposing a new template, or deleting one, is not possible.

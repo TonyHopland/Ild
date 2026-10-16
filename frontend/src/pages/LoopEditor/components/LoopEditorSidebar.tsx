@@ -1,3 +1,5 @@
+import LoopTemplateProposalCard from "../../../components/LoopTemplateProposalCard";
+import { useLoopTemplateProposals } from "../../../hooks/useLoopTemplateProposals";
 import type { LoopTemplate } from "../../../types";
 import type { LoopTemplateVersion } from "../types";
 
@@ -12,6 +14,8 @@ interface LoopEditorSidebarProps {
   showArchived: boolean;
   templates: LoopTemplate[];
   selectedTemplateId: string | null;
+  /** Pending Loop Template Proposals per template id; a template with none is absent. */
+  pendingProposalCounts: Record<string, number>;
   cloningTemplateId: string | null;
   cloneName: string;
   showVersionHistory: boolean;
@@ -44,6 +48,7 @@ export function LoopEditorSidebar({
   showArchived,
   templates,
   selectedTemplateId,
+  pendingProposalCounts,
   cloningTemplateId,
   cloneName,
   showVersionHistory,
@@ -117,6 +122,10 @@ export function LoopEditorSidebar({
         {saveSuccess && <span className="save-success">Saved!</span>}
       </div>
 
+      {selectedTemplateId && !isNewTemplate && (
+        <PendingProposals key={selectedTemplateId} templateId={selectedTemplateId} />
+      )}
+
       <div className="loop-list">
         {!showVersionHistory ? (
           <>
@@ -139,6 +148,15 @@ export function LoopEditorSidebar({
                 <div className="loop-list-item-name">
                   {template.name}
                   {template.isArchived && <span className="archived-badge">Archived</span>}
+                  {(pendingProposalCounts[template.id] ?? 0) > 0 && (
+                    <span
+                      className="proposal-count-badge"
+                      title="Pending proposals"
+                      aria-label={`${pendingProposalCounts[template.id]} pending proposals`}
+                    >
+                      {pendingProposalCounts[template.id]}
+                    </span>
+                  )}
                 </div>
                 <div className="loop-list-item-meta">
                   v{template.version} &middot; {template.nodes.length} nodes
@@ -225,5 +243,24 @@ export function LoopEditorSidebar({
         )}
       </div>
     </aside>
+  );
+}
+
+/** The open template's pending proposals, each with where it came from. */
+function PendingProposals({ templateId }: { templateId: string }) {
+  const { proposals, refresh } = useLoopTemplateProposals({ templateId });
+  if (!proposals || proposals.length === 0) return null;
+  return (
+    <section className="loop-proposals" aria-label="Pending proposals">
+      <h3 className="loop-proposals-title">Pending proposals</h3>
+      {proposals.map((proposal) => (
+        <LoopTemplateProposalCard
+          key={proposal.id}
+          proposal={proposal}
+          onSettled={refresh}
+          showSource
+        />
+      ))}
+    </section>
   );
 }

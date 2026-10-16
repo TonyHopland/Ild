@@ -2,8 +2,9 @@ import type { ChatMessage, RunConversationMessage } from "../types";
 import { compareCreatedAt } from "../utils/createdAt";
 
 /**
- * What placing a card needs. Work item edit proposals and global variable
- * suggestions both carry it, so a thread places both kinds in one order.
+ * What placing a card needs. Work item edit proposals, global variable
+ * suggestions and loop template proposals all carry it, so a thread places
+ * every kind in one order.
  */
 export interface PlacedProposal {
   id: string;

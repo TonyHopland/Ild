@@ -16,6 +16,8 @@ import {
   GlobalVariable,
   GlobalVariableProposal,
   GlobalVariableProposalStatus,
+  LoopTemplateProposal,
+  LoopTemplateProposalStatus,
   RemoteProvider,
   RemoteProviderTypeOption,
   ConnectionTestResult,
@@ -533,8 +535,18 @@ export const loopTemplateService = {
     return api.post<LoopTemplate>("/looptemplates", data);
   },
 
-  update: async (id: string, data: Partial<LoopTemplate>): Promise<LoopTemplate> => {
-    return api.put<LoopTemplate>(`/looptemplates/${id}`, data);
+  /**
+   * Saves the next version. Naming the proposal the loop was reviewed from marks
+   * it Applied when it still can be; `proposalApplied` says whether it was.
+   */
+  update: async (
+    id: string,
+    data: Partial<LoopTemplate> & { fromProposalId?: string | null },
+  ): Promise<{ id: string; version: number; proposalApplied: boolean }> => {
+    return api.put<{ id: string; version: number; proposalApplied: boolean }>(
+      `/looptemplates/${id}`,
+      data,
+    );
   },
 
   delete: async (id: string): Promise<void> => {
@@ -784,6 +796,51 @@ export const globalVariableService = {
   rejectProposal: async (proposalId: string, reason?: string): Promise<GlobalVariableProposal> => {
     return api.post<GlobalVariableProposal>(
       `/global-variables/proposals/${proposalId}/reject`,
+      reason ? { reason } : {},
+    );
+  },
+};
+
+export const loopTemplateProposalService = {
+  /** Newest first. */
+  list: async (filter: {
+    status?: LoopTemplateProposalStatus;
+    templateId?: string;
+    workItemId?: string;
+    chatSessionId?: string;
+  }): Promise<LoopTemplateProposal[]> => {
+    const params = new URLSearchParams();
+    if (filter.status) params.set("status", filter.status);
+    if (filter.templateId) params.set("templateId", filter.templateId);
+    if (filter.workItemId) params.set("workItemId", filter.workItemId);
+    if (filter.chatSessionId) params.set("chatSessionId", filter.chatSessionId);
+    const query = params.toString();
+    return api.get<LoopTemplateProposal[]>(`/loop-template-proposals${query ? `?${query}` : ""}`);
+  },
+
+  /** With the whole proposed document. */
+  get: async (proposalId: string): Promise<LoopTemplateProposal> => {
+    return api.get<LoopTemplateProposal>(`/loop-template-proposals/${proposalId}`);
+  },
+
+  /** Pending proposals per template id; a template with none is absent. */
+  pendingCounts: async (): Promise<Record<string, number>> => {
+    return api.get<Record<string, number>>("/loop-template-proposals/pending-counts");
+  },
+
+  /** Saves the proposed document exactly as it was proposed, as the next version. */
+  save: async (
+    proposalId: string,
+  ): Promise<{ proposal: LoopTemplateProposal; version: number }> => {
+    return api.post<{ proposal: LoopTemplateProposal; version: number }>(
+      `/loop-template-proposals/${proposalId}/save`,
+      {},
+    );
+  },
+
+  reject: async (proposalId: string, reason?: string): Promise<LoopTemplateProposal> => {
+    return api.post<LoopTemplateProposal>(
+      `/loop-template-proposals/${proposalId}/reject`,
       reason ? { reason } : {},
     );
   },

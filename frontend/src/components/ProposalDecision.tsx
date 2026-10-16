@@ -1,17 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApiError } from "../types";
 
 interface ProposalDecisionProps {
   /** Only a pending proposal offers a decision; an error from one already made stays shown. */
   pending: boolean;
-  approve: () => Promise<unknown>;
+  /** Without it there is no approve button, only Reject. */
+  approve?: () => Promise<unknown>;
   reject: (reason: string | undefined) => Promise<unknown>;
   /**
    * Called once an approve or reject has settled, whatever its outcome, so the
    * owner re-reads; with the server's reason when it was refused because the
-   * proposal had been decided or gone stale first.
+   * proposal had been decided or gone stale first, and whether the decision landed.
    */
-  onSettled: (refusal: string | null) => void;
+  onSettled: (refusal: string | null, decided: boolean) => void;
+  /** What the approve button says. */
+  approveLabel?: string;
+  /** More actions for a pending proposal, after Approve and Reject. */
+  extraActions?: ReactNode;
 }
 
 /** A 409 means it was decided elsewhere first: the owner's re-read shows how, so it is no error here. */
@@ -29,7 +34,7 @@ function refusalOf(err: unknown): string | null {
 }
 
 /**
- * Approve, and Reject with an optional reason, for a proposal a human decides.
+ * Approve (when given), and Reject with an optional reason, for a proposal a human decides.
  * The busy flags, the reason being typed and the errors are this card's own.
  */
 export default function ProposalDecision({
@@ -37,6 +42,8 @@ export default function ProposalDecision({
   approve,
   reject,
   onSettled,
+  approveLabel = "Approve",
+  extraActions,
 }: ProposalDecisionProps) {
   const [approveBusy, setApproveBusy] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
@@ -54,19 +61,21 @@ export default function ProposalDecision({
     };
   }, []);
 
-  const handleApprove = async () => {
+  const handleApprove = async (approve: () => Promise<unknown>) => {
     setApproveBusy(true);
     setApproveError(null);
     let refusal: string | null = null;
+    let decided = false;
     try {
       await approve();
+      decided = true;
     } catch (err) {
       refusal = refusalOf(err);
       if (mountedRef.current) setApproveError(failureMessage(err));
     }
     if (!mountedRef.current) return;
     setApproveBusy(false);
-    onSettled(refusal);
+    onSettled(refusal, decided);
   };
 
   const handleReject = async () => {
@@ -74,29 +83,33 @@ export default function ProposalDecision({
     setRejectError(null);
     const reason = reasonDraft.trim();
     let refusal: string | null = null;
+    let decided = false;
     try {
       await reject(reason || undefined);
+      decided = true;
     } catch (err) {
       refusal = refusalOf(err);
       if (mountedRef.current) setRejectError(failureMessage(err));
     }
     if (!mountedRef.current) return;
     setRejectBusy(false);
-    onSettled(refusal);
+    onSettled(refusal, decided);
   };
 
   return (
     <>
       {pending && (
         <div className="edit-proposal-actions">
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={() => void handleApprove()}
-            disabled={decisionBusy}
-          >
-            Approve
-          </button>
+          {approve && (
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void handleApprove(approve)}
+              disabled={decisionBusy}
+            >
+              {approveLabel}
+            </button>
+          )}
           {!rejectOpen && (
             <button
               type="button"
@@ -107,6 +120,7 @@ export default function ProposalDecision({
               Reject
             </button>
           )}
+          {extraActions}
         </div>
       )}
       {pending && rejectOpen && (

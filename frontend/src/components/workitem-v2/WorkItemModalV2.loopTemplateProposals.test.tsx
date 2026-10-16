@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, cleanup, act, waitFor, within } from "@testing-library/react";
+import { render, cleanup, act, waitFor, within, fireEvent, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import {
@@ -226,6 +226,8 @@ describe("loop template proposals in the Action tab", () => {
     const expected = ["Planned it.", "Proposed at step one", "Coded it.", "Proposed at step two"];
     expect(documentOrder(expected)).toEqual(expected);
     expect(action().textContent).toContain("Release Loop");
+    // A finished item opens on Overview; its proposals are decided on the Action tab.
+    fireEvent.click(screen.getByRole("tab", { name: /^Action/ }));
     expect(within(action()).getAllByRole("button", { name: "Save" })).toHaveLength(2);
   });
 

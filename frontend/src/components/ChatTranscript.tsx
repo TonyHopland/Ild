@@ -1,18 +1,20 @@
 import type { ReactNode } from "react";
 import EditProposalCard from "./EditProposalCard";
 import GlobalVariableProposalCard from "./GlobalVariableProposalCard";
+import LoopTemplateProposalCard from "./LoopTemplateProposalCard";
 import MarkdownRenderer from "./MarkdownRenderer";
 import { placeChatProposals } from "./editProposalPlacement";
 import { useEditProposals } from "../hooks/useEditProposals";
 import { useGlobalVariableProposals } from "../hooks/useGlobalVariableProposals";
+import { useLoopTemplateProposals } from "../hooks/useLoopTemplateProposals";
 import type { ChatMessage } from "../types";
 
 const revealCard = (card: HTMLElement) => card.scrollIntoView?.({ block: "center" });
 
 /**
- * One chat's transcript with the edit proposals and global variable suggestions
- * it made, each after the reply of the turn that made it, then the reply still
- * streaming. Render it keyed by the chat's id.
+ * One chat's transcript with the edit proposals, global variable suggestions and
+ * loop template proposals it made, each after the reply of the turn that made it,
+ * then the reply still streaming. Render it keyed by the chat's id.
  *
  * Everything is one keyed list, so a card that moves to a new slot (its reply
  * landing) is moved rather than remounted, and keeps a decision in progress.
@@ -31,6 +33,7 @@ export default function ChatTranscript({
 }) {
   const { proposals, refresh } = useEditProposals({ chatSessionId });
   const suggestions = useGlobalVariableProposals({ chatSessionId });
+  const loopProposals = useLoopTemplateProposals({ chatSessionId });
   const { head, afterMessage, tail } = placeChatProposals(messages, [
     ...(proposals ?? []).map((proposal) => ({
       ...proposal,
@@ -46,6 +49,16 @@ export default function ChatTranscript({
           proposal={proposal}
           onSettled={suggestions.refresh}
           reveal={proposal.id === revealGlobalProposalId ? revealCard : undefined}
+        />
+      ),
+    })),
+    ...(loopProposals.proposals ?? []).map((proposal) => ({
+      ...proposal,
+      card: (
+        <LoopTemplateProposalCard
+          key={`ltproposal:${proposal.id}`}
+          proposal={proposal}
+          onSettled={loopProposals.refresh}
         />
       ),
     })),
