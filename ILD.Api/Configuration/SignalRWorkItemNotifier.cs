@@ -45,6 +45,10 @@ public class SignalRWorkItemNotifier : IWorkItemNotifier
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("GlobalVariableProposalsChanged", new GlobalVariableProposalsChangedPayload(name));
 
+    public Task LoopTemplateProposalsChangedAsync(Guid templateId)
+        => _hub.Clients.Group(WorkItemGroup)
+            .SendAsync("LoopTemplateProposalsChanged", new LoopTemplateProposalsChangedPayload(templateId));
+
     public Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent)
         => _hub.Clients.Group(WorkItemGroup)
             .SendAsync("SchedulerStateChanged", new SchedulerStateChangedPayload(isPaused, maxConcurrent));

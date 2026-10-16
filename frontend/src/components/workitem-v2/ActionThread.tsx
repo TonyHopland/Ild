@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { TurnVariableChange, WorkItem } from "../../types";
 import { useEditProposals } from "../../hooks/useEditProposals";
 import { useGlobalVariableProposals } from "../../hooks/useGlobalVariableProposals";
+import { useLoopTemplateProposals } from "../../hooks/useLoopTemplateProposals";
 import { workItemService } from "../../services/auth";
 import EditProposalCard from "../EditProposalCard";
 import GlobalVariableProposalCard from "../GlobalVariableProposalCard";
+import LoopTemplateProposalCard from "../LoopTemplateProposalCard";
 import { placeActionProposals } from "../editProposalPlacement";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
@@ -239,6 +241,7 @@ function RunThread({
   const turnVariables = useTurnVariables(workItem.id, messages.length);
   const { proposals, refresh } = useEditProposals({ requestedByWorkItemId: workItem.id });
   const suggestions = useGlobalVariableProposals({ workItemId: workItem.id });
+  const loopProposals = useLoopTemplateProposals({ workItemId: workItem.id });
   const threadRef = useRef<HTMLDivElement | null>(null);
   const pinnedToBottom = useRef(true);
   const savedScrollTop = useRef(0);
@@ -300,6 +303,16 @@ function RunThread({
               ? revealFromTop
               : undefined
           }
+        />
+      ),
+    })),
+    ...(loopProposals.proposals ?? []).map((proposal) => ({
+      ...proposal,
+      card: (
+        <LoopTemplateProposalCard
+          key={`ltproposal:${proposal.id}`}
+          proposal={proposal}
+          onSettled={loopProposals.refresh}
         />
       ),
     })),

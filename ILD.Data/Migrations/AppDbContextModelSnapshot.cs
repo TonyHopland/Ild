@@ -1144,6 +1144,80 @@ namespace ILD.Data.Migrations
                     b.ToTable("LoopTemplates");
                 });
 
+            modelBuilder.Entity("ILD.Data.Entities.LoopTemplateProposal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("AppliedVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("BaseVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("ChatReplySequence")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByChatSessionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByLoopRunId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CreatedByRunNodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("DecisionDeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Document")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("EditedBeforeSave")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("LoopTemplateId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Rationale")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByChatSessionId");
+
+                    b.HasIndex("CreatedByLoopRunId");
+
+                    b.HasIndex("LoopTemplateId");
+
+                    b.HasIndex(new[] { "CreatedByChatSessionId", "LoopTemplateId" }, "IX_LoopTemplateProposals_ChatSession_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.HasIndex(new[] { "CreatedByLoopRunId", "LoopTemplateId" }, "IX_LoopTemplateProposals_LoopRun_Pending")
+                        .IsUnique()
+                        .HasFilter("\"Status\" = 0");
+
+                    b.ToTable("LoopTemplateProposals");
+                });
+
             modelBuilder.Entity("ILD.Data.Entities.LoopTemplateVersion", b =>
                 {
                     b.Property<Guid>("Id")

@@ -363,7 +363,8 @@ function ScheduleForm({
               onChange={(e) => set({ prompt: e.target.value })}
             />
             <span className="form-hint">
-              A scheduled chat only checks: it files a work item for anything that needs changing.
+              A scheduled chat only checks: it files a work item for anything that needs changing,
+              or proposes a loop template change for you to save or reject.
             </span>
           </div>
           <AiProviderTagField

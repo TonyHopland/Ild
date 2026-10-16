@@ -501,6 +501,10 @@
       }
     }
   },
+  "list_loop_template_proposals": {
+    "type": "object",
+    "properties": {}
+  },
   "list_loop_templates": {
     "type": "object",
     "properties": {
@@ -658,6 +662,33 @@
     "required": [
       "name",
       "value",
+      "rationale"
+    ]
+  },
+  "propose_loop_template_change": {
+    "type": "object",
+    "properties": {
+      "nameOrId": {
+        "description": "Loop template GUID, or its exact name (case-insensitive; archived templates included), as get_loop_template takes it.",
+        "type": "string"
+      },
+      "baseVersion": {
+        "description": "The version get_loop_template returned with the document; must be the template's latest version.",
+        "type": "integer"
+      },
+      "document": {
+        "description": "The complete proposed ild-loop-template/v2 document, as JSON text.",
+        "type": "string"
+      },
+      "rationale": {
+        "description": "Why the loop should change this way (up to 2000 chars), shown to the human deciding.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "nameOrId",
+      "baseVersion",
+      "document",
       "rationale"
     ]
   },

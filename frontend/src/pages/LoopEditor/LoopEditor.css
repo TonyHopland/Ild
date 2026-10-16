@@ -1559,3 +1559,109 @@
   color: #ffa198;
   border-radius: 2px;
 }
+
+.loop-editor-workspace-reviewing {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.loop-editor-workspace-reviewing .node-palette {
+  grid-row: 1 / span 2;
+}
+
+.loop-editor-workspace-reviewing .loop-canvas-container {
+  grid-column: 2;
+}
+
+.proposal-review-banner {
+  grid-column: 2;
+  max-height: 16rem;
+  overflow: auto;
+  background: #22223a;
+  border: 1px solid #3a3a5c;
+  border-left: 3px solid #d97706;
+  border-radius: 0.375rem;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8rem;
+  color: #e0e0e0;
+}
+
+.proposal-review-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  font-weight: 600;
+}
+
+.proposal-review-source {
+  font-weight: 400;
+  color: #a0a0b0;
+}
+
+.proposal-review-source a {
+  color: #a5b4fc;
+}
+
+.proposal-review-closed {
+  margin: 0 0 0.5rem;
+  color: #fbbf24;
+}
+
+.proposal-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+
+.proposal-review-actions > .btn {
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 900px) {
+  .loop-editor-workspace-reviewing {
+    grid-template-rows: none;
+  }
+
+  .loop-editor-workspace-reviewing .node-palette,
+  .loop-editor-workspace-reviewing .loop-canvas-container,
+  .proposal-review-banner {
+    grid-row: auto;
+    grid-column: auto;
+  }
+}
+
+.proposal-count-badge {
+  margin-left: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: #d97706;
+  color: #1a1a2e;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.proposal-count-badge-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.loop-proposals {
+  max-height: 40%;
+  overflow: auto;
+  flex: 0 0 auto;
+}
+
+.loop-proposals-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #a0a0b0;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}

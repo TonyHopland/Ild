@@ -1,3 +1,6 @@
+import LoopTemplateProposalCard from "../../../components/LoopTemplateProposalCard";
+import { useLoopTemplateProposals } from "../../../hooks/useLoopTemplateProposals";
+import type { SignalRConnection } from "../../../hooks/useSignalR";
 import type { LoopTemplate } from "../../../types";
 import type { LoopTemplateVersion } from "../types";
 
@@ -12,6 +15,14 @@ interface LoopEditorSidebarProps {
   showArchived: boolean;
   templates: LoopTemplate[];
   selectedTemplateId: string | null;
+  /** Pending Loop Template Proposals per template id; a template with none is absent. */
+  pendingProposalCounts: Record<string, number>;
+  /** The page's work-item hub connection, which the proposal list listens on. */
+  board: SignalRConnection;
+  /** The proposal open for review, which the banner decides rather than the list. */
+  reviewedProposalId: string | null;
+  /** A listed proposal of the template was saved or rejected. */
+  onListedProposalDecided: (templateId: string) => void;
   cloningTemplateId: string | null;
   cloneName: string;
   showVersionHistory: boolean;
@@ -44,6 +55,10 @@ export function LoopEditorSidebar({
   showArchived,
   templates,
   selectedTemplateId,
+  pendingProposalCounts,
+  board,
+  reviewedProposalId,
+  onListedProposalDecided,
   cloningTemplateId,
   cloneName,
   showVersionHistory,
@@ -117,6 +132,16 @@ export function LoopEditorSidebar({
         {saveSuccess && <span className="save-success">Saved!</span>}
       </div>
 
+      {selectedTemplateId && !isNewTemplate && (
+        <PendingProposals
+          key={selectedTemplateId}
+          templateId={selectedTemplateId}
+          board={board}
+          reviewedProposalId={reviewedProposalId}
+          onDecided={() => onListedProposalDecided(selectedTemplateId)}
+        />
+      )}
+
       <div className="loop-list">
         {!showVersionHistory ? (
           <>
@@ -139,6 +164,12 @@ export function LoopEditorSidebar({
                 <div className="loop-list-item-name">
                   {template.name}
                   {template.isArchived && <span className="archived-badge">Archived</span>}
+                  {(pendingProposalCounts[template.id] ?? 0) > 0 && (
+                    <span className="proposal-count-badge" title="Pending proposals">
+                      {pendingProposalCounts[template.id]}
+                      <span className="proposal-count-badge-label"> pending proposals</span>
+                    </span>
+                  )}
                 </div>
                 <div className="loop-list-item-meta">
                   v{template.version} &middot; {template.nodes.length} nodes
@@ -225,5 +256,41 @@ export function LoopEditorSidebar({
         )}
       </div>
     </aside>
+  );
+}
+
+/**
+ * The open template's pending proposals, each with where it came from; the one
+ * under review is on the banner instead.
+ */
+function PendingProposals({
+  templateId,
+  board,
+  reviewedProposalId,
+  onDecided,
+}: {
+  templateId: string;
+  board: SignalRConnection;
+  reviewedProposalId: string | null;
+  onDecided: () => void;
+}) {
+  const { proposals, refresh } = useLoopTemplateProposals({ templateId }, board);
+  const listed = (proposals ?? []).filter((proposal) => proposal.id !== reviewedProposalId);
+  if (listed.length === 0) return null;
+  return (
+    <section className="loop-proposals" aria-label="Pending proposals">
+      <h3 className="loop-proposals-title">Pending proposals</h3>
+      {listed.map((proposal) => (
+        <LoopTemplateProposalCard
+          key={proposal.id}
+          proposal={proposal}
+          onSettled={(_refusal, decided) => {
+            refresh();
+            if (decided) onDecided();
+          }}
+          showSource
+        />
+      ))}
+    </section>
   );
 }

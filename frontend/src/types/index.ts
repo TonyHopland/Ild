@@ -824,6 +824,82 @@ export interface GlobalVariableProposal {
   };
 }
 
+export type LoopTemplateProposalStatus =
+  | "Pending"
+  | "Applied"
+  | "Rejected"
+  | "Stale"
+  | "Superseded";
+
+export interface LoopTemplateProposalNodeRef {
+  id: string;
+  label: string;
+  type: string;
+}
+
+export interface LoopTemplateProposalEdgeRef {
+  sourceLabel: string;
+  targetLabel: string;
+  edgeType: string;
+  name: string | null;
+}
+
+/** What a proposal changes in its base version: nodes by id, edges by their ends, type and name. */
+export interface LoopTemplateChanges {
+  nameChanged: boolean;
+  descriptionChanged: boolean;
+  recoveryPolicyChanged: boolean;
+  nodesAdded: LoopTemplateProposalNodeRef[];
+  nodesRemoved: LoopTemplateProposalNodeRef[];
+  /** `fields` names what differs: "type", "label" or "config.<key>". */
+  nodesChanged: (LoopTemplateProposalNodeRef & { fields: string[] })[];
+  edgesAdded: LoopTemplateProposalEdgeRef[];
+  edgesRemoved: LoopTemplateProposalEdgeRef[];
+}
+
+/**
+ * An agent's proposed whole new document for a saved loop template, made against
+ * `baseVersion`, which was its latest version then. Only a human saves or rejects
+ * it; once the template has a newer version it is Stale and closed.
+ */
+export interface LoopTemplateProposal {
+  id: string;
+  templateId: string;
+  /** Null once the template was deleted. */
+  templateName: string | null;
+  templateExists: boolean;
+  baseVersion: number;
+  latestVersion: number | null;
+  rationale: string;
+  status: LoopTemplateProposalStatus;
+  /** An Applied proposal was saved after edits in the Loop Editor. */
+  editedBeforeSave: boolean;
+  appliedVersion: number | null;
+  rejectionReason: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  createdByLoopRunId: string | null;
+  /** The loop run step that was running when it was made; places its card in the Action tab. */
+  createdByRunNodeId: string | null;
+  createdByChatSessionId: string | null;
+  /** The sequence of the chat reply its card follows. */
+  chatReplySequence: number | null;
+  /**
+   * Where it came from while that still exists: a run (with its work item) or a
+   * chat; "deleted" once it does not. A chat is linkable only for its owner.
+   */
+  source: {
+    kind: "run" | "chat" | "deleted";
+    workItemId: string | null;
+    chatSessionId: string | null;
+    linkable: boolean;
+  };
+  /** Against the base version; null once that version no longer exists. */
+  changes: LoopTemplateChanges | null;
+  /** The whole proposed ild-loop-template/v2 document; only when read one by one. */
+  document?: string | null;
+}
+
 export interface RemoteProvider {
   id: string;
   name: string;
@@ -1039,6 +1115,14 @@ export interface GlobalVariableProposalsChangedPayload {
 }
 
 export interface ChatGlobalVariableProposalsChangedPayload {
+  chatSessionId: string;
+}
+
+export interface LoopTemplateProposalsChangedPayload {
+  templateId: string;
+}
+
+export interface ChatLoopTemplateProposalsChangedPayload {
   chatSessionId: string;
 }
 

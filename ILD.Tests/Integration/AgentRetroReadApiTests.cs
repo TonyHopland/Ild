@@ -7,6 +7,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests.Integration;
@@ -234,7 +235,8 @@ public class AgentRetroReadApiTests
         {
             var templates = scope.ServiceProvider.GetRequiredService<ILoopTemplateManager>();
             templateId = await templates.CreateLoopTemplateAsync(name, "first", Graph("Review the code."), RecoveryPolicy.NeedsReview);
-            await templates.UpdateLoopTemplateAsync(templateId, name, "second", Graph("Review the code twice."));
+            Assert.Equal(LoopTemplateVersionSaveOutcome.Saved,
+                (await templates.SaveNewVersionAsync(templateId, name, "second", Graph("Review the code twice."), RecoveryPolicy.NeedsReview)).Outcome);
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             db.LoopTemplates.Single(t => t.Id == templateId).Description = null;
             await db.SaveChangesAsync(Ct);

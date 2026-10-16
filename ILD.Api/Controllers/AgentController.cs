@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using ILD.Api.Authentication;
+using ILD.Api.Configuration;
 using ILD.Api.Contracts;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.PackageFeeds;
@@ -42,6 +43,10 @@ namespace ILD.Api.Controllers;
 ///    Global Variable Proposal, ADR-0027), and read back what became of the
 ///    caller's own suggestions. Only a human decides a suggestion, on the
 ///    human-only <c>GlobalVariablesController</c>,
+///  - propose a whole new document for a saved loop template, against its
+///    latest version (a Loop Template Proposal, ADR-0028), and read back what
+///    became of the caller's own proposals. Only a human saves or rejects one,
+///    on the human-only <c>LoopTemplateProposalsController</c>,
 ///  - read and write per-run loop variables (scoped by the X-ILD-Run-Id
 ///    header) so one node can hand off state to a later node — the values
 ///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>,
@@ -823,30 +828,11 @@ public class AgentController : ControllerBase
         if (version < 1)
             return BadRequest(new { error = "version must be 1 or greater." });
 
-        var key = nameOrId.Trim();
         // One snapshot: a save writes the template's name and policy with its new version, so separate reads could mix them.
         await using var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead);
-        // An id wins; a value that only looks like one may still be a template's name.
-        var template = Guid.TryParse(key, out var templateId)
-            ? await _db.LoopTemplates.AsNoTracking().SingleOrDefaultAsync(t => t.Id == templateId)
-            : null;
+        var (template, notFound) = await FindLoopTemplateAsync(nameOrId);
         if (template == null)
-        {
-            // Matched in memory: SQL case folding differs between SQLite and Postgres.
-            var named = (await _db.LoopTemplates.AsNoTracking().ToListAsync())
-                .Where(t => string.Equals(t.Name.Trim(), key, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-            if (named.Count > 1)
-                return Conflict(new
-                {
-                    error = $"{named.Count} loop templates are named '{key}'; pass the id of the one you mean.",
-                    candidates = named.OrderBy(t => t.IsArchived).ThenBy(t => t.Name, StringComparer.Ordinal)
-                        .Select(t => new { id = t.Id, name = t.Name, isArchived = t.IsArchived }),
-                });
-            template = named.SingleOrDefault();
-        }
-        if (template == null)
-            return NotFound(new { error = $"Loop template not found: {key}" });
+            return notFound!;
 
         var versions = (await _templates.GetVersionsAsync(template.Id)).ToList();
         var latest = versions.MaxBy(v => v.VersionNumber);
@@ -874,6 +860,38 @@ public class AgentController : ControllerBase
             isArchived = template.IsArchived,
             document = LoopTemplateDocument.From(template, graph),
         });
+    }
+
+    /// <summary>
+    /// The template <paramref name="nameOrId"/> names: its id, or else its exact
+    /// name (case and surrounding whitespace ignored, archived templates
+    /// included). Unknown is 404; a name more than one template has is 409 with
+    /// the candidates.
+    /// </summary>
+    private async Task<(LoopTemplate? Template, IActionResult? Error)> FindLoopTemplateAsync(string nameOrId)
+    {
+        var key = nameOrId.Trim();
+        // An id wins; a value that only looks like one may still be a template's name.
+        var template = Guid.TryParse(key, out var templateId)
+            ? await _db.LoopTemplates.AsNoTracking().SingleOrDefaultAsync(t => t.Id == templateId)
+            : null;
+        if (template != null)
+            return (template, null);
+
+        // Matched in memory: SQL case folding differs between SQLite and Postgres.
+        var named = (await _db.LoopTemplates.AsNoTracking().ToListAsync())
+            .Where(t => string.Equals(t.Name.Trim(), key, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (named.Count > 1)
+            return (null, Conflict(new
+            {
+                error = $"{named.Count} loop templates are named '{key}'; pass the id of the one you mean.",
+                candidates = named.OrderBy(t => t.IsArchived).ThenBy(t => t.Name, StringComparer.Ordinal)
+                    .Select(t => new { id = t.Id, name = t.Name, isArchived = t.IsArchived }),
+            }));
+        return named.Count == 1
+            ? (named[0], null)
+            : (null, NotFound(new { error = $"Loop template not found: {key}" }));
     }
 
     /// <summary>
@@ -1769,6 +1787,122 @@ public class AgentController : ControllerBase
             value = e.Proposal.Value,
             rationale = e.Proposal.Rationale,
             status = e.Proposal.Status.ToString(),
+            rejectionReason = e.Proposal.RejectionReason,
+            createdAt = e.Proposal.CreatedAt,
+            decidedAt = e.Proposal.DecidedAt,
+        }));
+    }
+
+    // -- Loop Template Proposals (ADR-0028) ----------------------------------
+    //
+    // Agents propose a whole new document for a saved template against its latest
+    // version. Saving and rejecting are human-only and live on
+    // LoopTemplateProposalsController; saving from review is a LoopTemplatesController save.
+
+    [HttpPost("loop-templates/proposals")]
+    public async Task<IActionResult> ProposeLoopTemplateChange(
+        [FromBody] AgentLoopTemplateProposalRequest request,
+        [FromServices] ILoopTemplateProposalStore proposals,
+        CancellationToken cancellationToken)
+    {
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
+        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        if (sessionError is not null)
+            return sessionError;
+
+        if (string.IsNullOrWhiteSpace(request.NameOrId))
+            return BadRequest(new { error = "nameOrId is required: the loop template's id or name, as get_loop_template takes it." });
+        if (request.BaseVersion is not { } baseVersion || baseVersion < 1)
+            return BadRequest(new { error = "baseVersion is required: the version get_loop_template returned with the document, 1 or greater." });
+        if (string.IsNullOrWhiteSpace(request.Document))
+            return BadRequest(new { error = "document is required: the complete ild-loop-template/v2 document, as JSON text." });
+        if (request.Document.Length > MaxLoopDocumentChars)
+            return BadRequest(new { error = $"document is too large ({request.Document.Length} chars); the limit is {MaxLoopDocumentChars}." });
+        // Checked as it will be stored: the save drops NUL characters.
+        var rationale = AppDbContext.WithoutNul(request.Rationale ?? string.Empty).Trim();
+        if (rationale.Length == 0)
+            return BadRequest(new { error = "Give a rationale: why the loop should change this way." });
+        if (rationale.Length > LoopTemplateProposal.MaxRationaleLength)
+            return BadRequest(new { error = $"The rationale is {rationale.Length} characters; keep it to {LoopTemplateProposal.MaxRationaleLength}." });
+
+        var proposed = _templates.CheckProposedDocument(request.Document);
+        if (proposed.Error is { } documentError)
+            return BadRequest(new { error = documentError });
+        if (proposed.ValidationErrors.Count > 0)
+            return BadRequest(new
+            {
+                error = "A save would refuse this loop. Fix every error listed and propose again.",
+                validationErrors = proposed.ValidationErrors,
+            });
+
+        var (template, notFound) = await FindLoopTemplateAsync(request.NameOrId);
+        if (template == null)
+            return notFound!;
+
+        var result = await proposals.ProposeAsync(new LoopTemplateProposal
+        {
+            LoopTemplateId = template.Id,
+            BaseVersion = baseVersion,
+            Document = proposed.Document!,
+            Rationale = rationale,
+            CreatedByLoopRunId = runId,
+            CreatedByChatSessionId = chatSessionId,
+            CreatedByRunNodeId = runId is null ? null : await _runs.GetRunningNodeIdAsync(runId.Value),
+            ChatReplySequence = chatSessionId is null ? null : await ResolveChatReplySequenceAsync(chatSessionId.Value),
+        }, cancellationToken);
+
+        switch (result.Outcome)
+        {
+            case LoopTemplateProposeOutcome.TemplateNotFound:
+                return NotFound(new { error = $"Loop template not found: {request.NameOrId.Trim()}" });
+            case LoopTemplateProposeOutcome.NotLatest:
+                return Conflict(new
+                {
+                    error = $"Version {baseVersion} is not the latest version of loop template '{template.Name}'; the latest is version {result.LatestVersion}. "
+                        + "Read it with get_loop_template, make your change to that document and propose again.",
+                    latestVersion = result.LatestVersion,
+                });
+        }
+
+        var proposal = result.Proposal!;
+        await LoopTemplateProposalHints.SendAsync(
+            _notifier, _chatNotifier, proposal.LoopTemplateId, 1, chatSessionId is { } chat ? [chat] : []);
+        return CreatedAtAction(nameof(ListLoopTemplateProposals), null, new
+        {
+            id = proposal.Id,
+            templateId = proposal.LoopTemplateId,
+            baseVersion = proposal.BaseVersion,
+            status = proposal.Status.ToString(),
+        });
+    }
+
+    /// <summary>
+    /// What became of the calling run's or chat's own proposals — how a loop run
+    /// learns a decision, having no next chat turn to carry it.
+    /// </summary>
+    [HttpGet("loop-templates/proposals")]
+    public async Task<IActionResult> ListLoopTemplateProposals(
+        [FromServices] ILoopTemplateProposalStore proposals, CancellationToken cancellationToken)
+    {
+        var (runId, chatSessionId, sessionError) = await ResolveProposingSessionAsync();
+        if (sessionError is not null)
+            return sessionError;
+
+        var own = await proposals.ListAsync(
+            new LoopTemplateProposalQuery(CreatedByLoopRunId: runId, CreatedByChatSessionId: chatSessionId),
+            cancellationToken);
+        return Ok(own.Select(e => new
+        {
+            id = e.Proposal.Id,
+            templateId = e.Proposal.LoopTemplateId,
+            templateName = e.Template?.Name,
+            baseVersion = e.Proposal.BaseVersion,
+            rationale = e.Proposal.Rationale,
+            status = e.Proposal.Status.ToString(),
+            editedBeforeSave = e.Proposal.EditedBeforeSave,
+            appliedVersion = e.Proposal.AppliedVersion,
             rejectionReason = e.Proposal.RejectionReason,
             createdAt = e.Proposal.CreatedAt,
             decidedAt = e.Proposal.DecidedAt,

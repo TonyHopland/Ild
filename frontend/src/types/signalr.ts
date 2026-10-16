@@ -36,6 +36,8 @@ import type {
   ChatEditProposalsChangedPayload,
   GlobalVariableProposalsChangedPayload,
   ChatGlobalVariableProposalsChangedPayload,
+  LoopTemplateProposalsChangedPayload,
+  ChatLoopTemplateProposalsChangedPayload,
   ChatUnreadChangedPayload,
   ChatTitleChangedPayload,
   ChatActivityChangedPayload,
@@ -71,6 +73,8 @@ export interface SignalREventPayloads {
   ChatEditProposalsChanged: ChatEditProposalsChangedPayload;
   GlobalVariableProposalsChanged: GlobalVariableProposalsChangedPayload;
   ChatGlobalVariableProposalsChanged: ChatGlobalVariableProposalsChangedPayload;
+  LoopTemplateProposalsChanged: LoopTemplateProposalsChangedPayload;
+  ChatLoopTemplateProposalsChanged: ChatLoopTemplateProposalsChangedPayload;
   ChatUnreadChanged: ChatUnreadChangedPayload;
   ChatTitleChanged: ChatTitleChangedPayload;
   ChatActivityChanged: ChatActivityChangedPayload;

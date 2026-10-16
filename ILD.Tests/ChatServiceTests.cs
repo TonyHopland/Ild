@@ -107,6 +107,7 @@ public sealed class ChatServiceTests : IDisposable
 
         public Task EditProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
         public Task GlobalVariableProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
+        public Task LoopTemplateProposalsChangedAsync(Guid chatSessionId) => Task.CompletedTask;
 
         // Each unread hint with how many replies had been announced when it went out,
         // so a test can tell a hint sent after the reply from one sent before it.

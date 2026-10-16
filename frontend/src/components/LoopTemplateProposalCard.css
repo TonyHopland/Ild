@@ -1,0 +1,44 @@
+.edit-proposal-card--applied {
+  border-left-color: #059669;
+}
+
+.edit-proposal-status--applied {
+  background: #1a2d2a;
+  color: #34d399;
+}
+
+.lt-changes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.lt-change-kind {
+  display: inline-block;
+  min-width: 4.2rem;
+  font-size: 0.675rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.lt-change--added .lt-change-kind {
+  color: #56d364;
+}
+
+.lt-change--removed .lt-change-kind {
+  color: #f87171;
+}
+
+.lt-change--changed .lt-change-kind {
+  color: #fbbf24;
+}
+
+.lt-changes-none {
+  margin: 0;
+  color: #a0a0b0;
+  font-style: italic;
+}
