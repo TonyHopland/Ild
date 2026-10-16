@@ -52,8 +52,8 @@ public static class AdapterUsageParser
     /// The usage of one <c>claude --output-format stream-json</c> run. Its tokens are
     /// the run's own, but <c>total_cost_usd</c> is the session's running total: on
     /// <c>--resume</c> Claude restores the cost it recorded in the transcript (see
-    /// <see cref="ParseClaudeSessionCostBefore"/>) and counts on from it, so the run
-    /// cost that total minus <paramref name="sessionCostBefore"/>. When the total is
+    /// <see cref="ParseClaudeSessionCostBefore"/>) and counts on from it, so what the run
+    /// cost is that total minus <paramref name="sessionCostBefore"/>. When the total is
     /// below the earlier one Claude did not count on from it, so the tokens are kept
     /// and the cost is unknown.
     /// </summary>
@@ -76,8 +76,9 @@ public static class AdapterUsageParser
         var before = 0m;
         foreach (var rawLine in (transcriptJsonl ?? "").Split('\n'))
         {
+            // A transcript is mostly conversation, which need not be parsed.
             var line = rawLine.Trim();
-            if (line.Length == 0) continue;
+            if (!line.Contains("cost-state", StringComparison.Ordinal)) continue;
 
             JsonDocument doc;
             try { doc = JsonDocument.Parse(line); }
