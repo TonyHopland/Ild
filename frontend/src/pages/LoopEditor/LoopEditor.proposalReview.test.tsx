@@ -489,3 +489,40 @@ describe("pending proposals in the template list", () => {
     expect(row("Dev Loop").textContent).not.toContain("5");
   });
 });
+
+describe("saving a listed proposal", () => {
+  test("the open template then shows the version the proposal became, so a later save builds on it", async () => {
+    server.listed = [proposalView()];
+    const answer = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        const path = new URL(input, "http://localhost").pathname;
+        if ((init?.method ?? "GET").toUpperCase() === "POST" && path.endsWith("/lp-1/save")) {
+          server.templates = [
+            {
+              ...devLoop,
+              version: 4,
+              nodes: proposedDocument.nodes,
+              edges: proposedDocument.edges,
+            },
+          ] as (typeof devLoop)[];
+          server.listed = [];
+          server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 } as never;
+          return reply(200, { proposal: server.proposal, version: 4 });
+        }
+        return answer(input, init);
+      }),
+    );
+    renderEditor("/loop-editor/tpl-1");
+    await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
+    const listed = (await screen.findByText(RATIONALE)).closest(
+      ".edit-proposal-card",
+    ) as HTMLElement;
+
+    fireEvent.click(within(listed).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(onCanvas("Run Linter")).toBe(true));
+    expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+  });
+});

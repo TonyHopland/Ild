@@ -16,6 +16,10 @@ interface LoopEditorSidebarProps {
   selectedTemplateId: string | null;
   /** Pending Loop Template Proposals per template id; a template with none is absent. */
   pendingProposalCounts: Record<string, number>;
+  /** The proposal open for review, which the banner decides rather than the list. */
+  reviewedProposalId: string | null;
+  /** A listed proposal of the template was saved or rejected. */
+  onListedProposalDecided: (templateId: string) => void;
   cloningTemplateId: string | null;
   cloneName: string;
   showVersionHistory: boolean;
@@ -49,6 +53,8 @@ export function LoopEditorSidebar({
   templates,
   selectedTemplateId,
   pendingProposalCounts,
+  reviewedProposalId,
+  onListedProposalDecided,
   cloningTemplateId,
   cloneName,
   showVersionHistory,
@@ -123,7 +129,12 @@ export function LoopEditorSidebar({
       </div>
 
       {selectedTemplateId && !isNewTemplate && (
-        <PendingProposals key={selectedTemplateId} templateId={selectedTemplateId} />
+        <PendingProposals
+          key={selectedTemplateId}
+          templateId={selectedTemplateId}
+          reviewedProposalId={reviewedProposalId}
+          onDecided={() => onListedProposalDecided(selectedTemplateId)}
+        />
       )}
 
       <div className="loop-list">
@@ -149,12 +160,9 @@ export function LoopEditorSidebar({
                   {template.name}
                   {template.isArchived && <span className="archived-badge">Archived</span>}
                   {(pendingProposalCounts[template.id] ?? 0) > 0 && (
-                    <span
-                      className="proposal-count-badge"
-                      title="Pending proposals"
-                      aria-label={`${pendingProposalCounts[template.id]} pending proposals`}
-                    >
+                    <span className="proposal-count-badge" title="Pending proposals">
                       {pendingProposalCounts[template.id]}
+                      <span className="proposal-count-badge-label"> pending proposals</span>
                     </span>
                   )}
                 </div>
@@ -246,18 +254,33 @@ export function LoopEditorSidebar({
   );
 }
 
-/** The open template's pending proposals, each with where it came from. */
-function PendingProposals({ templateId }: { templateId: string }) {
+/**
+ * The open template's pending proposals, each with where it came from; the one
+ * under review is on the banner instead.
+ */
+function PendingProposals({
+  templateId,
+  reviewedProposalId,
+  onDecided,
+}: {
+  templateId: string;
+  reviewedProposalId: string | null;
+  onDecided: () => void;
+}) {
   const { proposals, refresh } = useLoopTemplateProposals({ templateId });
-  if (!proposals || proposals.length === 0) return null;
+  const listed = (proposals ?? []).filter((proposal) => proposal.id !== reviewedProposalId);
+  if (listed.length === 0) return null;
   return (
     <section className="loop-proposals" aria-label="Pending proposals">
       <h3 className="loop-proposals-title">Pending proposals</h3>
-      {proposals.map((proposal) => (
+      {listed.map((proposal) => (
         <LoopTemplateProposalCard
           key={proposal.id}
           proposal={proposal}
-          onSettled={refresh}
+          onSettled={(_refusal, decided) => {
+            refresh();
+            if (decided) onDecided();
+          }}
           showSource
         />
       ))}

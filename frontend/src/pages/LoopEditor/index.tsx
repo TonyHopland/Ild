@@ -927,19 +927,49 @@ export default function LoopEditor() {
     })();
   }, []);
 
-  const discardReview = useCallback(() => {
+  // Back to the saved version as it is now, which may be newer than the one the
+  // review was opened on.
+  const discardReview = useCallback(async () => {
     const current = reviewRef.current;
     if (!current) return;
+    await loadTemplates();
+    if (reviewRef.current !== current) return;
     const saved = templatesRef.current.find((template) => template.id === current.templateId);
     if (saved) selectTemplate(saved);
     else closeReview();
-  }, [selectTemplate, closeReview]);
+  }, [loadTemplates, selectTemplate, closeReview]);
+
+  // A proposal saved from the template list is a new version of that template:
+  // show it, unless the canvas holds work of its own, which is then told it is
+  // behind rather than replaced.
+  const handleListedProposalDecided = useCallback(
+    async (templateId: string) => {
+      const known = templatesRef.current.find((template) => template.id === templateId)?.version;
+      await loadTemplates();
+      const open = selectedTemplateRef.current;
+      const latest = templatesRef.current.find((template) => template.id === templateId);
+      if (!open || open.id !== templateId || !latest || latest.version === known) return;
+      if (!reviewRef.current && !isCanvasDirty()) selectTemplate(latest);
+      else
+        setErrorText(
+          `Version ${latest.version} of this template was just saved from a proposal. The loop open here does not include it, and saving it replaces version ${latest.version}.`,
+        );
+    },
+    [loadTemplates, isCanvasDirty, selectTemplate],
+  );
 
   const selectedTemplateId = selectedTemplate?.id ?? null;
   // The request in the URL is taken once the template it names is open, and then
   // dropped from the URL, so following the same link again asks again.
   useEffect(() => {
-    if (!requestedProposalId || !routeTemplateId || selectedTemplateId !== routeTemplateId) return;
+    if (!requestedProposalId || !routeTemplateId) return;
+    // An old version open read-only is left for the latest, which a review edits.
+    if (readOnlyVersion !== null) {
+      const latest = templatesRef.current.find((template) => template.id === routeTemplateId);
+      if (latest) selectTemplate(latest);
+      return;
+    }
+    if (selectedTemplateId !== routeTemplateId) return;
     const templateId = routeTemplateId;
     const request = ++reviewRequestRef.current;
     void navigate(`/loop-editor/${templateId}`, { replace: true });
@@ -966,6 +996,8 @@ export default function LoopEditor() {
     requestedProposalId,
     routeTemplateId,
     selectedTemplateId,
+    readOnlyVersion,
+    selectTemplate,
     navigate,
     isCanvasDirty,
     openReview,
@@ -1245,7 +1277,7 @@ export default function LoopEditor() {
   // the viewport.
   const canvasKey = isNewTemplate
     ? "new"
-    : `${selectedTemplate?.id ?? "none"}:${readOnlyVersion ?? "latest"}:${review?.proposal.id ?? "saved"}`;
+    : `${selectedTemplate?.id ?? "none"}:${readOnlyVersion ?? `v${selectedTemplate?.version}`}:${review?.proposal.id ?? "saved"}`;
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {
@@ -1863,6 +1895,8 @@ export default function LoopEditor() {
             templates={templates}
             selectedTemplateId={selectedTemplate?.id ?? null}
             pendingProposalCounts={pendingProposalCounts}
+            reviewedProposalId={reviewShown ? review.proposal.id : null}
+            onListedProposalDecided={(templateId) => void handleListedProposalDecided(templateId)}
             cloningTemplateId={cloningTemplateId}
             cloneName={cloneName}
             showVersionHistory={showVersionHistory}
@@ -1929,8 +1963,8 @@ export default function LoopEditor() {
             <ProposalReviewBanner
               key={review.proposal.id}
               proposal={review.proposal}
-              onDiscard={discardReview}
-              onRejected={discardReview}
+              onDiscard={() => void discardReview()}
+              onRejected={() => void discardReview()}
               onRefused={() => refreshReview()}
             />
           )}

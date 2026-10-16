@@ -45,9 +45,8 @@ export default function ProposalReviewBanner({
       {!pending && (
         <p className="proposal-review-closed" role="status">
           {proposal.status === "Stale"
-            ? "This proposal is Stale: the template was saved after it was made, so it can no longer be applied."
-            : `This proposal is no longer pending (${proposal.status}).`}{" "}
-          Saving now saves your copy as an ordinary new version.
+            ? `This proposal is Stale: the template was saved after it was made${proposal.latestVersion ? ` (it is now version ${proposal.latestVersion})` : ""}, so it can no longer be applied. Saving now saves your copy as a new version in place of that one, and anything it changed is lost.`
+            : `This proposal is no longer pending (${proposal.status}). Saving now saves your copy as an ordinary new version.`}
         </p>
       )}
       <LoopTemplateChangeList changes={proposal.changes} />

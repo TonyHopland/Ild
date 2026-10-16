@@ -60,9 +60,10 @@ interface LoopTemplateProposalCardProps {
   proposal: LoopTemplateProposal;
   /**
    * Called once a save or reject has settled, whatever its outcome, so the owner
-   * re-reads; with the server's reason when it was refused (gone stale, or decided first).
+   * re-reads; with the server's reason when it was refused (gone stale, or decided first),
+   * and whether the decision landed.
    */
-  onSettled: (refusal: string | null) => void;
+  onSettled: (refusal: string | null, decided: boolean) => void;
   /** Show where it came from: for cards shown away from the run or chat that made it. */
   showSource?: boolean;
 }
