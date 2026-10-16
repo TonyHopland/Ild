@@ -469,7 +469,7 @@ public sealed class ChatScheduleService
         return string.Join("\n",
             "[Scheduled job]",
             $"This turn was started by the schedule \"{schedule.Name}\", not by a person, and nothing is open in the UI.",
-            "A scheduled job only checks: it changes no code, and files a work item for anything that needs changing.",
+            "A scheduled job only checks: it changes no code and no loop template. It files a work item for anything that needs changing, or proposes a loop template change with propose_loop_template_change for a person to save or reject.",
             $"This firing: {When(firedAt, zone)}",
             $"Previous firing: {(previous is { } at ? When(at, zone) : "none")}",
             $"Repositories it may use: {repositories}");

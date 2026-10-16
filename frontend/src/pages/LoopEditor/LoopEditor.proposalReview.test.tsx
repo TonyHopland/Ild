@@ -180,12 +180,7 @@ beforeEach(() => {
         ) as (typeof devLoop)[];
         if (applied)
           server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 } as never;
-        return reply(200, {
-          id,
-          version: 4,
-          proposalApplied: applied,
-          proposal: applied ? server.proposal : null,
-        });
+        return reply(200, { id, version: 4, proposalApplied: applied });
       }
       if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
         return reply(200, server.counts);
@@ -525,4 +520,42 @@ describe("saving a listed proposal", () => {
     await waitFor(() => expect(onCanvas("Run Linter")).toBe(true));
     expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
   });
+});
+
+describe("leaving a review while its proposal is re-read", () => {
+  test.each(["Discard", "Reject"])(
+    "%s goes back to the saved version even when a hint re-reads the proposal meanwhile",
+    async (action) => {
+      await openReview();
+      const answer = globalThis.fetch;
+      let held = false;
+      let release: () => void = () => {};
+      const templatesRead = new Promise<void>((resolve) => (release = resolve));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string, init?: RequestInit) => {
+          const path = new URL(input, "http://localhost").pathname;
+          if (!held && (init?.method ?? "GET") === "GET" && path === "/api/v1/looptemplates") {
+            held = true;
+            await templatesRead;
+          }
+          return answer(input, init);
+        }),
+      );
+
+      fireEvent.click(within(banner()!).getByRole("button", { name: action }));
+      const confirm = screen.queryByRole("button", { name: /confirm/i });
+      if (confirm) fireEvent.click(confirm);
+      await waitFor(() => expect(held).toBe(true));
+
+      if (action === "Discard") server.proposal = { ...server.proposal, status: "Stale" };
+      emit("LoopTemplateProposalsChanged", { templateId: "tpl-1" });
+      await waitFor(() => expect(banner()?.textContent ?? "").toMatch(/no longer pending|stale/i));
+      await act(async () => release());
+
+      await waitFor(() => expect(onCanvas("Run Linter")).toBe(false));
+      expect(onCanvas("Initialize")).toBe(true);
+      expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+    },
+  );
 });

@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using System.Text.Json;
 using ILD.Api.Authentication;
+using ILD.Api.Configuration;
 using ILD.Api.Contracts;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.PackageFeeds;
@@ -1866,7 +1867,7 @@ public class AgentController : ControllerBase
         }
 
         var proposal = result.Proposal!;
-        await LoopTemplateProposalsController.HintAsync(
+        await LoopTemplateProposalHints.SendAsync(
             _notifier, _chatNotifier, proposal.LoopTemplateId, 1, chatSessionId is { } chat ? [chat] : []);
         return CreatedAtAction(nameof(ListLoopTemplateProposals), null, new
         {

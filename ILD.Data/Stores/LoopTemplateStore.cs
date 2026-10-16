@@ -145,31 +145,34 @@ public class LoopTemplateStore : ILoopTemplateStore
         var proposal = write.FromProposalId is { } proposalId
             ? await _db.LoopTemplateProposals.AsNoTracking().FirstOrDefaultAsync(p => p.Id == proposalId, ct)
             : null;
-        var applies = proposal is { Status: LoopTemplateProposalStatus.Pending }
-            && proposal.LoopTemplateId == template.Id
-            && proposal.BaseVersion == latest;
+        var pendingOfTemplate = proposal is { Status: LoopTemplateProposalStatus.Pending }
+            && proposal.LoopTemplateId == template.Id;
+        var applies = pendingOfTemplate && proposal!.BaseVersion == latest;
+        var basedOnOlderVersion = pendingOfTemplate && !applies;
         if (write.RequireProposal && !applies)
         {
             await RollBackAsync(tx, template, write);
-            return proposal is { Status: LoopTemplateProposalStatus.Pending } && proposal.LoopTemplateId == template.Id
+            return basedOnOlderVersion
                 ? await StaleAfterConflictAsync(write)
                 : Unsaved(LoopTemplateVersionSaveOutcome.ProposalNotPending);
         }
 
-        write.Version.LoopTemplateId = template.Id;
-        write.Version.VersionNumber = latest + 1;
-        _db.LoopTemplateVersions.Add(write.Version);
-        try
+        // One statement that writes nothing when another save took this number
+        // after the read above: the (template, number) unique index decides, and
+        // any other failure is an error like any other.
+        var number = latest + 1;
+        var inserted = await _db.Database.ExecuteSqlAsync($"""
+            INSERT INTO "LoopTemplateVersions" ("Id", "LoopTemplateId", "VersionNumber", "CreatedAt")
+            VALUES ({write.Version.Id}, {template.Id}, {number}, {DateTime.UtcNow})
+            ON CONFLICT ("LoopTemplateId", "VersionNumber") DO NOTHING
+            """, ct);
+        if (inserted == 0)
         {
-            await _db.SaveChangesAsync(ct);
-        }
-        catch (DbUpdateException)
-        {
-            // A version row can only trip the (template, number) unique index:
-            // another save took this number after the read above.
             await RollBackAsync(tx, template, write);
             return await StaleAfterConflictAsync(write);
         }
+        write.Version.LoopTemplateId = template.Id;
+        write.Version.VersionNumber = number;
         _db.LoopNodes.AddRange(write.Nodes);
         _db.LoopNodeEdges.AddRange(write.Edges);
         await _db.SaveChangesAsync(ct);
@@ -202,8 +205,7 @@ public class LoopTemplateStore : ILoopTemplateStore
 
     /// <summary>
     /// The save lost to another version. A proposal's own Save makes the proposal
-    /// Stale, in a statement of its own after the rollback (Postgres refuses any
-    /// statement in a transaction a failed insert aborted).
+    /// Stale, in a statement of its own once the save's writes are rolled back.
     /// </summary>
     private async Task<LoopTemplateVersionSave> StaleAfterConflictAsync(LoopTemplateVersionWrite write)
     {

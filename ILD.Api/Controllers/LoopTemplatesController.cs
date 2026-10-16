@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ILD.Api.Configuration;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -120,12 +122,13 @@ public class LoopTemplatesController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-        await LoopTemplateProposalsController.HintAsync(_notifier, _chatNotifier, guid, saved.ProposalsChanged, saved.ChangedChatSessionIds);
+        await LoopTemplateProposalHints.SendAsync(_notifier, _chatNotifier, guid, saved.ProposalsChanged, saved.ChangedChatSessionIds);
         return saved.Outcome switch
         {
             LoopTemplateVersionSaveOutcome.Saved => Ok(new { id = guid, version = saved.VersionNumber, proposalApplied = saved.ProposalApplied }),
             LoopTemplateVersionSaveOutcome.TemplateNotFound => BadRequest(new { error = $"Template {guid} not found" }),
-            _ => Conflict(new { error = "Someone else saved this template at the same moment; save again." }),
+            LoopTemplateVersionSaveOutcome.Conflict => Conflict(new { error = "Someone else saved this template at the same moment; save again." }),
+            _ => throw new UnreachableException($"A save that requires no proposal ended as {saved.Outcome}."),
         };
     }
 
@@ -229,7 +232,7 @@ public class LoopTemplatesController : ControllerBase
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
         var staled = await _loopTemplateManager.DeleteLoopTemplateAsync(guid);
-        await LoopTemplateProposalsController.HintAsync(_notifier, _chatNotifier, guid, staled.Count, staled.ChatSessionIds);
+        await LoopTemplateProposalHints.SendAsync(_notifier, _chatNotifier, guid, staled.Count, staled.ChatSessionIds);
         return NoContent();
     }
 }

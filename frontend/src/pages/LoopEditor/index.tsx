@@ -28,6 +28,7 @@ import {
   loopTemplateProposalService,
 } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
+import type { TypedSignalRMessage } from "../../types/signalr";
 import { usePendingLoopTemplateProposalCounts } from "../../hooks/usePendingLoopTemplateProposalCounts";
 import { setOpenLoopProvider } from "../../utils/openLoopDocument";
 import { getCurrentChatSessionId, subscribeChatSessionId } from "../../services/chatSessionStore";
@@ -88,7 +89,6 @@ import {
   type LoopTemplateExport,
   type LoopTemplateProposal,
   type ChatLoopUpdatePayload,
-  type LoopTemplateProposalsChangedPayload,
   EdgeType,
   NodeType,
   RecoveryPolicy,
@@ -268,7 +268,9 @@ export default function LoopEditor() {
   // (which overwrite selectedTemplate) still show up as a pending delta at Save.
   const lastSavedExportRef = useRef<string>("");
   // The canvas export as last loaded (a template, a version, a reviewed proposal)
-  // or saved; a canvas that no longer matches it holds unsaved changes.
+  // or saved; a canvas that no longer matches it holds unsaved changes. Kept apart
+  // from lastSavedExportRef, the save diff's baseline, because a reviewed
+  // proposal is loaded but not saved: it is clean here and still a change there.
   const cleanExportRef = useRef<string>("");
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
@@ -933,7 +935,7 @@ export default function LoopEditor() {
     const current = reviewRef.current;
     if (!current) return;
     await loadTemplates();
-    if (reviewRef.current !== current) return;
+    if (reviewRef.current?.proposal.id !== current.proposal.id) return;
     const saved = templatesRef.current.find((template) => template.id === current.templateId);
     if (saved) selectTemplate(saved);
     else closeReview();
@@ -1043,7 +1045,7 @@ export default function LoopEditor() {
   }, [boardConnectionState, refreshReview]);
 
   useEffect(() => {
-    const onChanged = (msg: { payload: LoopTemplateProposalsChangedPayload }) => {
+    const onChanged = (msg: TypedSignalRMessage<"LoopTemplateProposalsChanged">) => {
       if (msg.payload.templateId === reviewRef.current?.templateId) refreshReview();
     };
     onBoard("LoopTemplateProposalsChanged", onChanged);

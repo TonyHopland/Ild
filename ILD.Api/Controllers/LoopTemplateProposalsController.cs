@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using ILD.Api.Configuration;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Enums;
@@ -97,7 +99,7 @@ public class LoopTemplateProposalsController : ControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-        await HintAsync(_notifier, _chatNotifier, entry.Proposal.LoopTemplateId, saved.ProposalsChanged, saved.ChangedChatSessionIds);
+        await LoopTemplateProposalHints.SendAsync(_notifier, _chatNotifier, entry.Proposal.LoopTemplateId, saved.ProposalsChanged, saved.ChangedChatSessionIds);
 
         var after = await _proposals.GetAsync(proposalId, ct);
         if (after is null)
@@ -110,7 +112,9 @@ public class LoopTemplateProposalsController : ControllerBase
                 error = "The template has a newer version than the one this proposal was made against, so nothing was saved. The proposal is now stale.",
                 proposal = View(after, withDocument: false),
             }),
-            _ => AlreadyDecided(after),
+            LoopTemplateVersionSaveOutcome.ProposalNotPending => AlreadyDecided(after),
+            LoopTemplateVersionSaveOutcome.TemplateNotFound => NotFound(new { error = "The loop template this proposal was made for no longer exists." }),
+            _ => throw new UnreachableException($"Unhandled save outcome {saved.Outcome}."),
         };
     }
 
@@ -122,7 +126,7 @@ public class LoopTemplateProposalsController : ControllerBase
             return NotFound(new { error = NoSuchProposal });
         if (result.Outcome != LoopTemplateProposalDecisionOutcome.Rejected)
             return AlreadyDecided(entry);
-        await HintAsync(_notifier, _chatNotifier, entry.Proposal.LoopTemplateId, 1, result.ChangedChatSessionIds);
+        await LoopTemplateProposalHints.SendAsync(_notifier, _chatNotifier, entry.Proposal.LoopTemplateId, 1, result.ChangedChatSessionIds);
         return Ok(View(entry, withDocument: false));
     }
 
@@ -134,19 +138,6 @@ public class LoopTemplateProposalsController : ControllerBase
             error = $"This proposal was already decided ({entry.Proposal.Status}).",
             proposal = View(entry, withDocument: false),
         });
-
-    /// <summary>
-    /// Hints only, sent once the change has landed and only when a proposal
-    /// changed: the board hears the template, each chat its own proposals.
-    /// </summary>
-    internal static async Task HintAsync(
-        IWorkItemNotifier notifier, IChatNotifier chatNotifier, Guid templateId, int changed, IEnumerable<Guid> chatSessionIds)
-    {
-        if (changed == 0) return;
-        await notifier.LoopTemplateProposalsChangedAsync(templateId);
-        foreach (var chat in chatSessionIds.Distinct())
-            await chatNotifier.LoopTemplateProposalsChangedAsync(chat);
-    }
 
     /// <summary>
     /// A proposal as a person reviews it: against its base version, with the
