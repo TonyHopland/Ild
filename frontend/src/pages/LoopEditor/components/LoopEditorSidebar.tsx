@@ -1,5 +1,6 @@
 import LoopTemplateProposalCard from "../../../components/LoopTemplateProposalCard";
 import { useLoopTemplateProposals } from "../../../hooks/useLoopTemplateProposals";
+import type { SignalRConnection } from "../../../hooks/useSignalR";
 import type { LoopTemplate } from "../../../types";
 import type { LoopTemplateVersion } from "../types";
 
@@ -16,6 +17,8 @@ interface LoopEditorSidebarProps {
   selectedTemplateId: string | null;
   /** Pending Loop Template Proposals per template id; a template with none is absent. */
   pendingProposalCounts: Record<string, number>;
+  /** The page's work-item hub connection, which the proposal list listens on. */
+  board: SignalRConnection;
   /** The proposal open for review, which the banner decides rather than the list. */
   reviewedProposalId: string | null;
   /** A listed proposal of the template was saved or rejected. */
@@ -53,6 +56,7 @@ export function LoopEditorSidebar({
   templates,
   selectedTemplateId,
   pendingProposalCounts,
+  board,
   reviewedProposalId,
   onListedProposalDecided,
   cloningTemplateId,
@@ -132,6 +136,7 @@ export function LoopEditorSidebar({
         <PendingProposals
           key={selectedTemplateId}
           templateId={selectedTemplateId}
+          board={board}
           reviewedProposalId={reviewedProposalId}
           onDecided={() => onListedProposalDecided(selectedTemplateId)}
         />
@@ -260,14 +265,16 @@ export function LoopEditorSidebar({
  */
 function PendingProposals({
   templateId,
+  board,
   reviewedProposalId,
   onDecided,
 }: {
   templateId: string;
+  board: SignalRConnection;
   reviewedProposalId: string | null;
   onDecided: () => void;
 }) {
-  const { proposals, refresh } = useLoopTemplateProposals({ templateId });
+  const { proposals, refresh } = useLoopTemplateProposals({ templateId }, board);
   const listed = (proposals ?? []).filter((proposal) => proposal.id !== reviewedProposalId);
   if (listed.length === 0) return null;
   return (

@@ -44,7 +44,7 @@ function fakeHub(state: ConnectionState): FakeHub {
 
 function useHubs(hubs: Record<string, FakeHub>) {
   vi.spyOn(signalRHook, "useSignalR").mockImplementation(
-    (hubUrl?: string) => hubs[hubUrl ?? "/hubs/work-item"].api,
+    (hubUrl?: string | null) => hubs[hubUrl ?? "/hubs/work-item"].api,
   );
 }
 

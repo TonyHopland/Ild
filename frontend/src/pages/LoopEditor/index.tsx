@@ -345,7 +345,10 @@ export default function LoopEditor() {
   const reviewRefreshRef = useRef(0);
   const [searchParams] = useSearchParams();
   const requestedProposalId = searchParams.get("proposal");
-  const pendingProposalCounts = usePendingLoopTemplateProposalCounts();
+  // The page's one work-item hub connection: the proposal counts, the open
+  // template's proposal list and the review all listen on it.
+  const board = useSignalR("/hubs/work-item");
+  const pendingProposalCounts = usePendingLoopTemplateProposalCounts(board);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [showArchived, setShowArchived] = useState(false);
   const [originalNodeConfig, setOriginalNodeConfig] = useState<NodeSettingsSnapshot | null>(null);
@@ -1022,7 +1025,7 @@ export default function LoopEditor() {
     on: onBoard,
     off: offBoard,
     invoke: invokeBoard,
-  } = useSignalR("/hubs/work-item");
+  } = board;
   // Read through a ref: joining again is for a (re)connect, not a new function.
   const invokeBoardRef = useRef(invokeBoard);
   invokeBoardRef.current = invokeBoard;
@@ -1897,6 +1900,7 @@ export default function LoopEditor() {
             templates={templates}
             selectedTemplateId={selectedTemplate?.id ?? null}
             pendingProposalCounts={pendingProposalCounts}
+            board={board}
             reviewedProposalId={reviewShown ? review.proposal.id : null}
             onListedProposalDecided={(templateId) => void handleListedProposalDecided(templateId)}
             cloningTemplateId={cloningTemplateId}

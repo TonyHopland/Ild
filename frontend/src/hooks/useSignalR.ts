@@ -15,7 +15,11 @@ const reconnectPolicy: signalR.IRetryPolicy = {
   nextRetryDelayInMilliseconds: ({ previousRetryCount }) => retryDelay(previousRetryCount),
 };
 
-export function useSignalR(hubUrl = "/hubs/work-item") {
+/** One hub connection as a component sees it; hooks that listen on one can be handed it. */
+export type SignalRConnection = ReturnType<typeof useSignalR>;
+
+/** `hubUrl` null opens no connection, for a caller handed one it shares instead. */
+export function useSignalR(hubUrl: string | null = "/hubs/work-item") {
   const [connectionState, setConnectionState] = useState<
     "disconnected" | "connecting" | "connected" | "reconnecting"
   >("disconnected");
@@ -63,7 +67,7 @@ export function useSignalR(hubUrl = "/hubs/work-item") {
   }, []);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || !hubUrl) return;
 
     const connection = new signalR.HubConnectionBuilder()
       .withUrl(hubUrl, {

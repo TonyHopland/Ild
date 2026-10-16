@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSignalR } from "./useSignalR";
+import { useSignalR, type SignalRConnection } from "./useSignalR";
 import { loopTemplateProposalService } from "../services/auth";
 import type { LoopTemplateProposal } from "../types";
 import type { TypedSignalRMessage } from "../types/signalr";
@@ -25,14 +25,17 @@ function modeOf(target: LoopTemplateProposalsTarget) {
  * made, or those pending for one template, kept current by snapshot reads: on
  * every (re)connect once the hub group is joined, on a hint for this target, and
  * on {@link refresh}. Any proposal hint reaches a work item, since it does not
- * say which run made it.
+ * say which run made it. `hub` is a connection to the hub the target is hinted
+ * on that the caller already holds; without it the hook opens its own.
  */
-export function useLoopTemplateProposals(target: LoopTemplateProposalsTarget) {
+export function useLoopTemplateProposals(
+  target: LoopTemplateProposalsTarget,
+  hub?: SignalRConnection,
+) {
   const [mode, id] = modeOf(target);
   const targetKey = `${mode}:${id}`;
-  const { connectionState, on, off, invoke } = useSignalR(
-    mode === "chat" ? "/hubs/chat" : "/hubs/work-item",
-  );
+  const own = useSignalR(hub ? null : mode === "chat" ? "/hubs/chat" : "/hubs/work-item");
+  const { connectionState, on, off, invoke } = hub ?? own;
 
   // Read through a ref: joining again is for a (re)connect or a new target, not a new function.
   const invokeRef = useRef(invoke);

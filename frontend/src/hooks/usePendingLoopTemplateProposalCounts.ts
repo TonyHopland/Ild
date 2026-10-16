@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSignalR } from "./useSignalR";
+import { useSignalR, type SignalRConnection } from "./useSignalR";
 import { loopTemplateProposalService } from "../services/auth";
 
 const NONE: Record<string, number> = {};
@@ -8,9 +8,14 @@ const NONE: Record<string, number> = {};
  * How many loop template proposals wait for a human, per template id, read on
  * every (re)connect once the hub group is joined and on every proposal hint.
  * Only the latest read counts; one that fails shows no counts rather than old ones.
+ * `hub` is a work-item hub connection the caller already holds; without it the
+ * hook opens its own.
  */
-export function usePendingLoopTemplateProposalCounts(): Record<string, number> {
-  const { connectionState, on, off, invoke } = useSignalR("/hubs/work-item");
+export function usePendingLoopTemplateProposalCounts(
+  hub?: SignalRConnection,
+): Record<string, number> {
+  const own = useSignalR(hub ? null : "/hubs/work-item");
+  const { connectionState, on, off, invoke } = hub ?? own;
   // Read through a ref: joining again is for a (re)connect, not a new function.
   const invokeRef = useRef(invoke);
   invokeRef.current = invoke;
