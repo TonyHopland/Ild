@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -636,6 +637,81 @@ public class ClaudeCodeAdapterTests
 
         using var doc = System.Text.Json.JsonDocument.Parse(wrapped);
         Assert.Equal(2, doc.RootElement.GetProperty("events").GetArrayLength());
+    }
+
+    private const string CostSessionId = "sess-cost";
+
+    // A real Claude Code 2.1.x transcript line: one per invocation, restored (last
+    // wins) on --resume, which makes the result's total_cost_usd a running total.
+    private static string CostState(string sessionId, string total)
+        => $"{{\"type\":\"cost-state\",\"sessionId\":\"{sessionId}\",\"totalCostUSD\":{total},\"totalAPIDuration\":11774,\"modelUsage\":{{}}}}";
+
+    [Theory]
+    [InlineData("resumed", CostSessionId, CostSessionId, "3.56", 0, "0.06")]
+    [InlineData("no-transcript", CostSessionId, CostSessionId, "3.56", 0, "3.56")]
+    [InlineData("planted-link", CostSessionId, CostSessionId, "3.56", 0, "3.56")]
+    [InlineData("resumed", null, CostSessionId, "3.56", 0, "3.56")]
+    [InlineData("resumed", CostSessionId, "sess-other", "3.56", 0, "3.56")]
+    [InlineData("resumed", CostSessionId, CostSessionId, "3.00", 0, null)]
+    [InlineData("resumed", CostSessionId, CostSessionId, "3.56", 1, null)]
+    public async Task ExecuteAsync_records_what_the_invocation_cost_against_the_sessions_restored_total(
+        string transcript, string? requestedSessionId, string streamSessionId, string streamTotal, int exitCode, string? expectedCost)
+    {
+        var home = Directory.CreateTempSubdirectory("ild-claude-cost-home-").FullName;
+        var worktreeDir = CreateWorktree();
+        var environment = new TestProcessEnvironment { { "HOME", home } };
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            $"echo '{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"{streamSessionId}\"}}'\n" +
+            $"echo '{{\"type\":\"assistant\",\"session_id\":\"{streamSessionId}\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"b\"}}]}}}}'\n" +
+            $"echo '{{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"{streamSessionId}\",\"is_error\":false,\"result\":\"b\",\"total_cost_usd\":{streamTotal},\"usage\":{{\"input_tokens\":100,\"cache_creation_input_tokens\":5,\"cache_read_input_tokens\":50,\"output_tokens\":40}}}}'\n" +
+            $"exit {exitCode}\n");
+        MakeExecutable(scriptPath);
+
+        var sessionPath = ClaudeCodeAdapter.GetSessionFilePath(
+            worktreeDir, CostSessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, environment)!;
+        Directory.CreateDirectory(Path.GetDirectoryName(sessionPath)!);
+        var ledger = string.Join('\n',
+            "{\"type\":\"user\",\"sessionId\":\"sess-cost\",\"message\":{\"role\":\"user\",\"content\":\"go\"}}",
+            CostState(CostSessionId, "2.00"),
+            CostState(CostSessionId, "3.50")) + "\n";
+        switch (transcript)
+        {
+            case "resumed":
+                File.WriteAllText(sessionPath, ledger);
+                break;
+            case "planted-link":
+                var target = Path.Combine(home, "elsewhere.jsonl");
+                File.WriteAllText(target, ledger);
+                File.CreateSymbolicLink(sessionPath, target);
+                break;
+        }
+
+        try
+        {
+            var adapter = new ClaudeCodeAdapter(environment: environment);
+            var result = await adapter.ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, worktreePath: worktreeDir, sessionId: requestedSessionId));
+
+            if (exitCode != 0)
+            {
+                Assert.False(result.Success);
+                Assert.Null(result.Usage);
+                return;
+            }
+
+            Assert.True(result.Success, result.Error);
+            Assert.NotNull(result.Usage);
+            Assert.Equal(155, result.Usage!.InputTokens);
+            Assert.Equal(40, result.Usage.OutputTokens);
+            Assert.Equal(expectedCost is null ? null : decimal.Parse(expectedCost, System.Globalization.CultureInfo.InvariantCulture), result.Usage.CostUsd);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+            Directory.Delete(home, true);
+        }
     }
 
     [Fact]

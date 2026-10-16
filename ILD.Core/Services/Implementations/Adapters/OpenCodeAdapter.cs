@@ -256,7 +256,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
                 return NodeExecutionResult.Fail(response);
 
             return p.ExitCode == 0
-                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.Parse(stdout))
+                ? NodeExecutionResult.Ok(response, ctx.Prompt, effectiveSessionId, ctx.IncomingSessionId, AdapterUsageParser.ParseOpenCode(stdout))
                 : NodeExecutionResult.Fail($"exit={p.ExitCode} stderr={stderr}", response);
         }
         catch (Exception ex)
