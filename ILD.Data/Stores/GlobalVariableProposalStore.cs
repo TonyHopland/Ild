@@ -2,7 +2,6 @@ using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 
 namespace ILD.Data.Stores;
 
@@ -50,8 +49,7 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
                 await tx.CommitAsync(ct);
                 return proposal;
             }
-            catch (DbUpdateException ex) when (attempt < MaxProposeAttempts
-                && ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+            catch (DbUpdateException ex) when (attempt < MaxProposeAttempts && DbErrors.IsUniqueViolation(ex))
             {
                 _db.Entry(proposal).State = EntityState.Detached;
             }
