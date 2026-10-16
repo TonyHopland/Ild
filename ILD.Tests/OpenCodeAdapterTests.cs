@@ -1559,6 +1559,40 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_records_the_summed_usage_of_every_step_in_the_turn()
+    {
+        // Shape of opencode 1.19.1 run --format json: each step_finish part carries
+        // that one model call's tokens and cost.
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-steps-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "emit.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"step_start\",\"timestamp\":1,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_1\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\"}}'\n" +
+            "echo '{\"type\":\"step_finish\",\"timestamp\":2,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_2\",\"messageID\":\"msg_1\",\"sessionID\":\"ses_x\",\"reason\":\"tool-calls\",\"cost\":0.006135,\"tokens\":{\"total\":7871,\"input\":6023,\"output\":56,\"reasoning\":0,\"cache\":{\"read\":1792,\"write\":0}}}}'\n" +
+            "echo '{\"type\":\"step_start\",\"timestamp\":3,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-start\",\"id\":\"prt_3\",\"messageID\":\"msg_2\",\"sessionID\":\"ses_x\"}}'\n" +
+            "echo '{\"type\":\"text\",\"timestamp\":4,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"text\",\"text\":\"final answer\",\"messageID\":\"msg_2\",\"sessionID\":\"ses_x\"}}'\n" +
+            "echo '{\"type\":\"step_finish\",\"timestamp\":5,\"sessionID\":\"ses_x\",\"part\":{\"type\":\"step-finish\",\"id\":\"prt_4\",\"messageID\":\"msg_2\",\"sessionID\":\"ses_x\",\"reason\":\"stop\",\"cost\":0.006171,\"tokens\":{\"total\":7949,\"input\":6143,\"output\":14,\"reasoning\":0,\"cache\":{\"read\":1792,\"write\":0}}}}'\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var result = await new OpenCodeAdapter().ExecuteAsync(
+                BuildContext(binaryPath: scriptPath, prompt: "ignored", worktreePath: worktreeDir, executionCount: 1));
+
+            Assert.True(result.Success, result.Error);
+            Assert.NotNull(result.Usage);
+            Assert.Equal(15750, result.Usage!.InputTokens);
+            Assert.Equal(70, result.Usage.OutputTokens);
+            Assert.Equal(0.012306m, result.Usage.CostUsd);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
     public async Task ExecuteAsync_does_not_dump_raw_ndjson_when_no_text_event_present()
     {
         // Regression: when opencode emits only boundary events (step_start /

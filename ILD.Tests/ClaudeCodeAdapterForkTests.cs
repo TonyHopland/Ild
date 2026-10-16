@@ -65,6 +65,55 @@ public class ClaudeCodeAdapterForkTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_records_only_the_forks_own_cost_when_the_copy_carries_the_parents_cost_state()
+    {
+        var home = Directory.CreateTempSubdirectory("ild-claude-fork-cost-home-").FullName;
+        var worktreeDir = Directory.CreateTempSubdirectory("ild-claude-fork-cost-").FullName;
+        var scriptPath = Path.Combine(worktreeDir, "fake-claude.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "echo '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"fork-dest\"}'\n" +
+            "echo '{\"type\":\"assistant\",\"session_id\":\"fork-dest\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"ok\"}]}}'\n" +
+            "echo '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"fork-dest\",\"is_error\":false,\"result\":\"ok\",\"total_cost_usd\":1.25,\"usage\":{\"input_tokens\":10,\"output_tokens\":4}}'\n");
+        File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        var sourceJson = ClaudeCodeAdapter.WrapJsonl(
+            "source-sess",
+            "{\"type\":\"user\",\"sessionId\":\"source-sess\",\"message\":{\"role\":\"user\",\"content\":\"go\"}}\n" +
+            "{\"type\":\"cost-state\",\"sessionId\":\"source-sess\",\"totalCostUSD\":1.00,\"totalAPIDuration\":11774,\"modelUsage\":{}}\n");
+
+        var environment = new TestProcessEnvironment { { "HOME", home } };
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "ClaudeCode", "source-sess", sourceJson);
+
+            var adapter = new ClaudeCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>(), environment: environment);
+            var ctx = BuildContext(
+                binaryPath: scriptPath,
+                worktreePath: worktreeDir,
+                runId: runId,
+                sessionId: "fork-dest",
+                manageSession: true) with { ForkFromSessionId = "source-sess" };
+
+            var result = await adapter.ExecuteAsync(ctx);
+
+            Assert.True(result.Success, result.Error);
+            Assert.NotNull(result.Usage);
+            Assert.Equal(0.25m, result.Usage!.CostUsd);
+            Assert.Equal(10, result.Usage.InputTokens);
+            Assert.Equal(4, result.Usage.OutputTokens);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+            Directory.Delete(home, true);
+        }
+    }
+
     private static AgentExecutionContext BuildContext(
         string binaryPath,
         string worktreePath,
