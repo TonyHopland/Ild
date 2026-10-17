@@ -18,9 +18,10 @@ namespace ILD.Core.Services.Implementations;
 /// Chats are merged the same way, from <c>ChatUsage</c> and the
 /// <c>ChatAnalyticsBucket</c> archive of deleted chats: they add tokens and cost
 /// to the totals, providers and series, and have rows of their own instead of
-/// templates. Filtering (date range, provider) and rollup (template, provider,
-/// time series) happen in memory over the small contribution sets, which keeps the
-/// queries provider-agnostic (SQLite in tests, Postgres in production).
+/// templates. The stored rows are filtered (date range, provider, template) and
+/// chat usage summed per day in the database. A live run's provider is derived
+/// from its nodes, so live runs are filtered by provider, and every source rolled
+/// up (template, provider, time series), in memory.
 /// </summary>
 public sealed class RunAnalyticsService : IRunAnalyticsService
 {
@@ -33,17 +34,23 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
 
     public async Task<RunAnalyticsOverview> GetOverviewAsync(AnalyticsQuery query, CancellationToken cancellationToken = default)
     {
+        var filter = StoredRowFilter.Of(query);
         // One snapshot for every read: a run or chat deleted between the live and the
         // archive reads would otherwise be counted in both.
-        var contributions = new List<RunContribution>();
-        var chatContributions = new List<ChatContribution>();
+        List<RunContribution> live;
+        List<RunContribution> archived;
+        List<ChatContribution> filteredChats;
+        List<string> storedProviders;
         Dictionary<Guid, string> schedules;
         await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
         {
-            contributions.AddRange((await BuildLiveContributionsAsync(cancellationToken)).Select(r => r.Contribution));
-            contributions.AddRange(await LoadArchivedContributionsAsync(cancellationToken));
-            chatContributions.AddRange(await BuildLiveChatContributionsAsync(cancellationToken));
-            chatContributions.AddRange(await LoadArchivedChatContributionsAsync(cancellationToken));
+            live = (await BuildLiveContributionsAsync(_db.LoopRuns, cancellationToken)).Select(r => r.Contribution).ToList();
+            archived = await LoadArchivedContributionsAsync(filter, templateId: null, cancellationToken);
+            filteredChats = await LoadChatContributionsAsync(filter, cancellationToken);
+            storedProviders = await _db.LoopRunAnalyticsBuckets.Select(b => b.AiProvider)
+                .Union(_db.ChatUsages.Select(u => u.AiProvider))
+                .Union(_db.ChatAnalyticsBuckets.Select(b => b.AiProvider))
+                .ToListAsync(cancellationToken);
             schedules = await _db.ChatSchedules
                 .Select(s => new { s.Id, s.Name })
                 .ToDictionaryAsync(s => s.Id, s => s.Name, cancellationToken);
@@ -52,15 +59,14 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
 
         // Provider list for the filter control is the full (unfiltered) set so a
         // provider stays selectable even after its only runs fall outside the range.
-        var availableProviders = contributions
+        var availableProviders = live
             .Select(c => c.AiProvider)
-            .Concat(chatContributions.Select(c => c.AiProvider))
+            .Concat(storedProviders)
             .Distinct()
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var filtered = contributions.Where(c => Matches(c.BucketDate, c.AiProvider, query)).ToList();
-        var filteredChats = chatContributions.Where(c => Matches(c.BucketDate, c.AiProvider, query)).ToList();
+        var filtered = live.Where(c => Matches(c.BucketDate, c.AiProvider, query)).Concat(archived).ToList();
         var spend = filtered
             .Select(c => new Spend(
                 c.BucketDate, c.AiProvider, c.Metrics.RunCount,
@@ -118,8 +124,11 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
     public async Task<IReadOnlyList<TemplateAnalyticsDetail>> GetTemplateAnalyticsAsync(
         AnalyticsQuery query, Guid? templateId, CancellationToken cancellationToken = default)
     {
-        bool Includes(RunContribution c)
-            => Matches(c.BucketDate, c.AiProvider, query) && (templateId is null || c.TemplateId == templateId);
+        var filter = StoredRowFilter.Of(query);
+        var runs = _db.LoopRuns.Where(r =>
+            (filter.Start == null || (r.StartedAt ?? r.CreatedAt) >= filter.Start)
+            && (filter.End == null || (r.StartedAt ?? r.CreatedAt) < filter.End)
+            && (templateId == null || r.LoopTemplateVersion.LoopTemplateId == templateId));
 
         List<LiveRun> liveRuns;
         List<RunContribution> archived;
@@ -128,8 +137,10 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         // One snapshot, as in GetOverviewAsync: a run deleted between the reads would otherwise count twice.
         await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
         {
-            liveRuns = (await BuildLiveContributionsAsync(cancellationToken)).Where(r => Includes(r.Contribution)).ToList();
-            archived = (await LoadArchivedContributionsAsync(cancellationToken)).Where(Includes).ToList();
+            liveRuns = (await BuildLiveContributionsAsync(runs, cancellationToken))
+                .Where(r => Matches(r.Contribution.BucketDate, r.Contribution.AiProvider, query))
+                .ToList();
+            archived = await LoadArchivedContributionsAsync(filter, templateId, cancellationToken);
             var runIds = liveRuns.Select(r => r.RunId).ToList();
             visits = await _db.LoopRunNodes
                 .Where(n => runIds.Contains(n.LoopRunId))
@@ -196,9 +207,11 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .ThenByDescending(t => t.TotalRuns)
             .ToList();
 
-    private async Task<List<LiveRun>> BuildLiveContributionsAsync(CancellationToken ct)
+    /// <summary>The contributions of <paramref name="runs"/>, reading the nodes and feedback of those runs only.</summary>
+    private async Task<List<LiveRun>> BuildLiveContributionsAsync(IQueryable<LoopRun> runs, CancellationToken ct)
     {
-        var runs = await _db.LoopRuns
+        var runIds = runs.Select(r => r.Id);
+        var runRows = await runs
             .Select(r => new
             {
                 r.Id,
@@ -211,6 +224,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .ToListAsync(ct);
 
         var nodes = await _db.LoopRunNodes
+            .Where(n => runIds.Contains(n.LoopRunId))
             .Select(n => new
             {
                 n.LoopRunId,
@@ -230,6 +244,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
 
         var feedback = await _db.EventLogs
             .Where(e => e.LoopRunId != null
+                && runIds.Contains(e.LoopRunId.Value)
                 && (e.EventType == EventType.HumanFeedbackRequested
                     || e.EventType == EventType.HumanFeedbackReceived))
             .Select(e => new { RunId = e.LoopRunId!.Value, e.EventType, e.Id, e.Timestamp })
@@ -238,8 +253,8 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         var nodesByRun = nodes.ToLookup(n => n.LoopRunId);
         var feedbackByRun = feedback.ToLookup(f => f.RunId);
 
-        var result = new List<LiveRun>(runs.Count);
-        foreach (var run in runs)
+        var result = new List<LiveRun>(runRows.Count);
+        foreach (var run in runRows)
         {
             var nodeFacts = nodesByRun[run.Id]
                 .Select(n => new NodeFact(
@@ -258,9 +273,15 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         return result;
     }
 
-    private async Task<List<RunContribution>> LoadArchivedContributionsAsync(CancellationToken ct)
+    private async Task<List<RunContribution>> LoadArchivedContributionsAsync(
+        StoredRowFilter filter, Guid? templateId, CancellationToken ct)
     {
-        var buckets = await _db.LoopRunAnalyticsBuckets.ToListAsync(ct);
+        var buckets = await _db.LoopRunAnalyticsBuckets
+            .Where(b => (filter.Start == null || b.BucketDate >= filter.Start)
+                && (filter.End == null || b.BucketDate < filter.End)
+                && (filter.Provider == null || b.AiProvider.ToLower() == filter.Provider)
+                && (templateId == null || b.LoopTemplateId == templateId))
+            .ToListAsync(ct);
         return buckets.Select(b => new RunContribution(
             b.BucketDate, b.LoopTemplateId, b.TemplateName, b.AiProvider,
             new AnalyticsMetrics
@@ -281,30 +302,23 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             })).ToList();
     }
 
-    private async Task<List<ChatContribution>> BuildLiveChatContributionsAsync(CancellationToken ct)
+    /// <summary>
+    /// Chat spend in the query's range and provider: the usage of live chats summed
+    /// per day as an archive bucket would hold it, then the deleted chats' buckets.
+    /// </summary>
+    private async Task<List<ChatContribution>> LoadChatContributionsAsync(StoredRowFilter filter, CancellationToken ct)
     {
-        var usages = await _db.ChatUsages
-            .Select(u => new
-            {
-                u.CreatedAt,
-                u.ScheduleId,
-                u.ScheduleName,
-                u.AiProvider,
-                u.Kind,
-                u.InputTokens,
-                u.OutputTokens,
-                u.CostUsd,
-            })
+        var live = await ChatUsageLedger.SumPerDay(_db.ChatUsages
+                .Where(u => (filter.Start == null || u.CreatedAt >= filter.Start)
+                    && (filter.End == null || u.CreatedAt < filter.End)
+                    && (filter.Provider == null || u.AiProvider.ToLower() == filter.Provider)))
             .ToListAsync(ct);
-        return usages.Select(u => new ChatContribution(
-            u.CreatedAt.Date, u.CreatedAt, u.ScheduleId, u.ScheduleName, u.AiProvider,
-            u.Kind == ChatUsageKind.Turn ? 1 : 0, u.InputTokens, u.OutputTokens, u.CostUsd ?? 0m)).ToList();
-    }
-
-    private async Task<List<ChatContribution>> LoadArchivedChatContributionsAsync(CancellationToken ct)
-    {
-        var buckets = await _db.ChatAnalyticsBuckets.ToListAsync(ct);
-        return buckets.Select(b => new ChatContribution(
+        var archived = await _db.ChatAnalyticsBuckets
+            .Where(b => (filter.Start == null || b.BucketDate >= filter.Start)
+                && (filter.End == null || b.BucketDate < filter.End)
+                && (filter.Provider == null || b.AiProvider.ToLower() == filter.Provider))
+            .ToListAsync(ct);
+        return live.Concat(archived).Select(b => new ChatContribution(
             b.BucketDate, b.LastRecordedAt,
             b.ScheduleId,
             b.ScheduleName,
@@ -329,6 +343,22 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         return total;
     }
 
+    /// <summary>
+    /// The query's filters as stored rows are matched in the database: the days as
+    /// UTC instants with the end exclusive, null where the range is open, and the
+    /// provider lower-cased. UTC, because Postgres refuses any other kind of
+    /// DateTime for its timestamptz columns.
+    /// </summary>
+    private sealed record StoredRowFilter(DateTime? Start, DateTime? End, string? Provider)
+    {
+        public static StoredRowFilter Of(AnalyticsQuery query) => new(
+            query.From?.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            query.To is DateOnly to && to < DateOnly.MaxValue
+                ? to.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)
+                : null,
+            string.IsNullOrEmpty(query.Provider) ? null : query.Provider.ToLowerInvariant());
+    }
+
     /// <summary>A still-existing run's contribution, with the run and the version it ran.</summary>
     private sealed record LiveRun(Guid RunId, Guid VersionId, RunContribution Contribution);
 
@@ -337,8 +367,8 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
     private sealed record TemplateNode(Guid Id, Guid TemplateId, string Label, NodeType NodeType, int VersionNumber);
 
     /// <summary>
-    /// What chats spent on one day for one (schedule, provider): a single call while
-    /// its chat lives, or a deleted chats' archive bucket. <see cref="RecordedAt"/>
+    /// What chats spent on one day for one (schedule, provider): the calls of chats
+    /// that still exist, or a deleted chats' archive bucket. <see cref="RecordedAt"/>
     /// orders the names recorded for a schedule.
     /// </summary>
     private sealed record ChatContribution(
