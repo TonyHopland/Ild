@@ -17,6 +17,8 @@ interface ProposalDecisionProps {
   approveLabel?: string;
   /** More actions for a pending proposal, after Approve and Reject. */
   extraActions?: ReactNode;
+  /** Actions shown whether or not it is pending, before Approve and Reject. */
+  leadingActions?: ReactNode;
 }
 
 /** A 409 means it was decided elsewhere first: the owner's re-read shows how, so it is no error here. */
@@ -44,6 +46,7 @@ export default function ProposalDecision({
   onSettled,
   approveLabel = "Approve",
   extraActions,
+  leadingActions,
 }: ProposalDecisionProps) {
   const [approveBusy, setApproveBusy] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
@@ -98,9 +101,10 @@ export default function ProposalDecision({
 
   return (
     <>
-      {pending && (
+      {(pending || leadingActions) && (
         <div className="edit-proposal-actions">
-          {approve && (
+          {leadingActions}
+          {pending && approve && (
             <button
               type="button"
               className="btn btn-primary btn-sm"
@@ -110,7 +114,7 @@ export default function ProposalDecision({
               {approveLabel}
             </button>
           )}
-          {!rejectOpen && (
+          {pending && !rejectOpen && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -120,7 +124,7 @@ export default function ProposalDecision({
               Reject
             </button>
           )}
-          {extraActions}
+          {pending && extraActions}
         </div>
       )}
       {pending && rejectOpen && (

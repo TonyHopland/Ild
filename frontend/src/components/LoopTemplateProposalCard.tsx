@@ -4,8 +4,7 @@ import { ROUTES } from "../utils/constants";
 import LoopTemplateChangeList from "./LoopTemplateChangeList";
 import ProposalDecision from "./ProposalDecision";
 import type { LoopTemplateProposal } from "../types";
-import "./EditProposalCard.css";
-import "./GlobalVariableProposalCard.css";
+import "./ProposalCard.css";
 import "./LoopTemplateProposalCard.css";
 
 /** Where the Loop Editor opens a proposal as its unsaved working copy. */
@@ -83,7 +82,7 @@ export default function LoopTemplateProposalCard({
   const pending = proposal.status === "Pending";
 
   return (
-    <div className={`edit-proposal-card edit-proposal-card--${status}`}>
+    <div className={`proposal-card edit-proposal-card edit-proposal-card--${status}`}>
       <div className="edit-proposal-header">
         <span className="edit-proposal-heading">
           Proposed change to loop template{" "}
@@ -102,7 +101,7 @@ export default function LoopTemplateProposalCard({
       <Outcome proposal={proposal} />
 
       {showSource && (
-        <div className="gv-proposal-source">
+        <div className="proposal-source">
           <LoopTemplateProposalSource proposal={proposal} />
         </div>
       )}

@@ -3,7 +3,7 @@ import { LoopTemplateProposalSource } from "../../../components/LoopTemplateProp
 import ProposalDecision from "../../../components/ProposalDecision";
 import { loopTemplateProposalService } from "../../../services/auth";
 import type { LoopTemplateProposal } from "../../../types";
-import "../../../components/EditProposalCard.css";
+import "../../../components/ProposalCard.css";
 import "../../../components/LoopTemplateProposalCard.css";
 
 interface ProposalReviewBannerProps {
@@ -31,7 +31,7 @@ export default function ProposalReviewBanner({
 }: ProposalReviewBannerProps) {
   const pending = proposal.status === "Pending";
   return (
-    <section className="proposal-review-banner" aria-label="Proposal under review">
+    <section className="proposal-card proposal-review-banner" aria-label="Proposal under review">
       <div className="proposal-review-header">
         <span>
           Reviewing a proposed change, made against version {proposal.baseVersion}. It is not saved
@@ -51,11 +51,13 @@ export default function ProposalReviewBanner({
       )}
       <LoopTemplateChangeList changes={proposal.changes} />
       <div className="proposal-review-actions">
-        <button type="button" className="btn btn-secondary btn-sm" onClick={onDiscard}>
-          Discard
-        </button>
         <ProposalDecision
           pending={pending}
+          leadingActions={
+            <button type="button" className="btn btn-secondary btn-sm" onClick={onDiscard}>
+              Discard
+            </button>
+          }
           reject={(reason) => loopTemplateProposalService.reject(proposal.id, reason)}
           onSettled={(refusal, decided) => {
             if (decided) onRejected();

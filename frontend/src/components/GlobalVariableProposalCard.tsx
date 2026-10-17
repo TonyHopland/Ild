@@ -3,6 +3,7 @@ import { globalVariableService } from "../services/auth";
 import { DescriptionDiff } from "./EditProposalCard";
 import ProposalDecision from "./ProposalDecision";
 import type { GlobalVariableProposal } from "../types";
+import "./ProposalCard.css";
 import "./EditProposalCard.css";
 import "./GlobalVariableProposalCard.css";
 
@@ -47,7 +48,7 @@ export default function GlobalVariableProposalCard({
   }, [reveal]);
 
   return (
-    <div ref={cardRef} className={`edit-proposal-card edit-proposal-card--${status}`}>
+    <div ref={cardRef} className={`proposal-card edit-proposal-card edit-proposal-card--${status}`}>
       <div className="edit-proposal-header">
         <span className="edit-proposal-heading">
           Suggested change to <code>{proposal.name}</code>
@@ -72,7 +73,7 @@ export default function GlobalVariableProposalCard({
         <p className="edit-proposal-reason">Reason: {proposal.rejectionReason}</p>
       )}
 
-      {source && <div className="gv-proposal-source">{source}</div>}
+      {source && <div className="proposal-source">{source}</div>}
 
       <ProposalDecision
         pending={proposal.status === "Pending"}

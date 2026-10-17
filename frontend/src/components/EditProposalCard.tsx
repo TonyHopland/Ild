@@ -3,6 +3,7 @@ import { workItemService } from "../services/auth";
 import { computeLineDiff } from "../utils/jsonDiff";
 import ProposalDecision from "./ProposalDecision";
 import type { EditProposalDependency, WorkItemEditProposal } from "../types";
+import "./ProposalCard.css";
 import "./EditProposalCard.css";
 
 interface EditProposalCardProps {
@@ -96,7 +97,9 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
   const addedDependencies = proposed.addDependencies ?? [];
   const removedDependencies = proposed.removeDependencies ?? [];
   return (
-    <div className={`edit-proposal-card edit-proposal-card--${proposal.status.toLowerCase()}`}>
+    <div
+      className={`proposal-card edit-proposal-card edit-proposal-card--${proposal.status.toLowerCase()}`}
+    >
       <div className="edit-proposal-header">
         <span className="edit-proposal-heading">Proposed edit to #{proposal.workItemId}</span>
         <span
