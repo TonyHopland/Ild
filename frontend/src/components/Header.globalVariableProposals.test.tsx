@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, within, waitFor, act } from "@testing-library/react";
+import { render, screen, cleanup, within, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../hooks/useAuth";
 import * as signalRHook from "../hooks/useSignalR";
 import Header from "./Header";
+import { fakeHub, reply, stubFetch } from "../test-support";
 
 afterEach(() => {
   cleanup();
@@ -11,42 +12,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type HubHandler = (msg: { payload: unknown }) => void;
-
 function mockHub() {
-  const handlers: Record<string, Set<HubHandler>> = {};
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: (event: string, handler: HubHandler) => {
-      (handlers[event] ??= new Set()).add(handler);
-    },
-    off: (event: string, handler: HubHandler) => {
-      handlers[event]?.delete(handler);
-    },
-    invoke: vi.fn(() => Promise.resolve()),
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-  return (event: string, payload: unknown) =>
-    act(async () => {
-      for (const h of Array.from(handlers[event] ?? [])) h({ payload });
-    });
+  const hub = fakeHub();
+  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
+  return hub.emit;
 }
 
 /** Serves the pending-suggestion count the server holds now; every other request fails. */
 function stubCount(server: { count: number | null }) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string) => {
-      const path = new URL(input, "http://localhost").pathname;
-      const ok =
-        path === "/api/v1/global-variables/proposals/pending-count" && server.count !== null;
-      const body = ok ? { count: server.count } : { error: "not stubbed" };
-      return {
-        ok,
-        status: ok ? 200 : 404,
-        statusText: "",
-        text: () => Promise.resolve(JSON.stringify(body)),
-      } as Response;
-    }),
+  stubFetch((call) =>
+    call.path === "/api/v1/global-variables/proposals/pending-count" && server.count !== null
+      ? reply(200, { count: server.count })
+      : reply(404, { error: "not stubbed" }),
   );
 }
 

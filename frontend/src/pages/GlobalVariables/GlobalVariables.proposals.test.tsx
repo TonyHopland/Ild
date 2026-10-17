@@ -1,21 +1,23 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, waitFor, fireEvent, cleanup, within, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import * as signalRHook from "../../hooks/useSignalR";
 import GlobalVariables from "./index";
+import {
+  fakeHub,
+  makeGlobalVariableProposal,
+  reply,
+  stubFetch,
+  type Call,
+} from "../../test-support";
+import type { GlobalVariableProposal } from "../../types";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-interface Call {
-  method: string;
-  path: string;
-  search: string;
-}
 
 const rules = {
   id: "g-1",
@@ -37,37 +39,27 @@ function suggestion(
   id: string,
   name: string,
   rationale: string,
-  source: {
-    kind: string;
-    workItemId?: string | null;
-    chatSessionId?: string | null;
-    linkable?: boolean;
-  },
-  overrides: Record<string, unknown> = {},
+  source: Pick<GlobalVariableProposal["source"], "kind"> &
+    Partial<GlobalVariableProposal["source"]>,
+  overrides: Partial<GlobalVariableProposal> = {},
 ) {
   const existing = [rules, writing].find((v) => v.name.toLowerCase() === name.toLowerCase());
-  return {
+  return makeGlobalVariableProposal({
     id,
     name,
     value: `Suggested text from ${id}.`,
     rationale,
-    status: "Pending",
-    rejectionReason: null,
     createdAt: "2026-10-03T10:00:00Z",
-    decidedAt: null,
     snapshotUpdatedAt: existing?.updatedAt ?? null,
     currentValue: existing?.value ?? null,
     variableExists: !!existing,
     createdByLoopRunId: source.kind === "chat" ? null : "run-1",
     createdByRunNodeId: null,
     createdByChatSessionId: source.kind === "chat" ? (source.chatSessionId ?? null) : null,
-    chatReplySequence: null,
     source: { workItemId: null, chatSessionId: null, linkable: false, ...source },
     ...overrides,
-  };
+  });
 }
-
-type Reply = { status: number; body?: unknown };
 
 /**
  * Answers the page's requests by method and path from `server`, which a test
@@ -76,69 +68,34 @@ type Reply = { status: number; body?: unknown };
  */
 function stubApi(
   server: { variables: unknown[]; proposals: { status: string }[] },
-  write: (call: Call) => Reply = () => ({ status: 404, body: { error: "not stubbed" } }),
+  write: (call: Call) => Response = () => reply(404, { error: "not stubbed" }),
 ) {
-  const calls: Call[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string, init?: RequestInit) => {
-      const url = new URL(input, "http://localhost");
-      const method = (init?.method ?? "GET").toUpperCase();
-      calls.push({ method, path: url.pathname, search: url.search });
-      let reply: Reply = { status: 404, body: { error: "not stubbed" } };
-      if (method === "GET" && url.pathname === "/api/v1/global-variables") {
-        reply = { status: 200, body: server.variables };
-      } else if (method === "GET" && url.pathname === "/api/v1/global-variables/proposals") {
-        const status = url.searchParams.get("status");
-        reply = {
-          status: 200,
-          body: server.proposals.filter((p) => !status || p.status === status),
-        };
-      } else if (
-        method === "GET" &&
-        url.pathname === "/api/v1/global-variables/proposals/pending-count"
-      ) {
-        reply = {
-          status: 200,
-          body: { count: server.proposals.filter((p) => p.status === "Pending").length },
-        };
-      } else if (
-        method === "GET" &&
-        url.pathname === "/api/v1/settings/globalVariables.maxLength"
-      ) {
-        reply = { status: 200, body: { key: "globalVariables.maxLength", value: "4000" } };
-      } else if (method !== "GET") {
-        reply = write({ method, path: url.pathname, search: url.search });
-      }
-      return {
-        ok: reply.status < 400,
-        status: reply.status,
-        statusText: "",
-        text: () => Promise.resolve(reply.body === undefined ? "" : JSON.stringify(reply.body)),
-      } as Response;
-    }),
-  );
-  return calls;
+  return stubFetch((call) => {
+    const { method, path, query } = call;
+    if (method === "GET" && path === "/api/v1/global-variables")
+      return reply(200, server.variables);
+    if (method === "GET" && path === "/api/v1/global-variables/proposals") {
+      const status = query.get("status");
+      return reply(
+        200,
+        server.proposals.filter((p) => !status || p.status === status),
+      );
+    }
+    if (method === "GET" && path === "/api/v1/global-variables/proposals/pending-count")
+      return reply(200, {
+        count: server.proposals.filter((p) => p.status === "Pending").length,
+      });
+    if (method === "GET" && path === "/api/v1/settings/globalVariables.maxLength")
+      return reply(200, { key: "globalVariables.maxLength", value: "4000" });
+    if (method !== "GET") return write(call);
+    return reply(404, { error: "not stubbed" });
+  });
 }
 
-type HubHandler = (msg: { payload: unknown }) => void;
-
 function mockHub() {
-  const handlers: Record<string, Set<HubHandler>> = {};
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: (event: string, handler: HubHandler) => {
-      (handlers[event] ??= new Set()).add(handler);
-    },
-    off: (event: string, handler: HubHandler) => {
-      handlers[event]?.delete(handler);
-    },
-    invoke: vi.fn(() => Promise.resolve()),
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-  return (event: string, payload: unknown) =>
-    act(async () => {
-      for (const h of Array.from(handlers[event] ?? [])) h({ payload });
-    });
+  const hub = fakeHub();
+  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
+  return hub.emit;
 }
 
 function renderPage() {
@@ -264,8 +221,8 @@ describe("suggestions on the Global Variables page", () => {
       server.variables = [{ ...rules, value: "Suggested text from gp-run." }];
       server.proposals = [{ ...server.proposals[0], status: "Approved" }];
       return call.path.endsWith("/approve")
-        ? { status: 200, body: { proposal: server.proposals[0], variable: server.variables[0] } }
-        : { status: 404 };
+        ? reply(200, { proposal: server.proposals[0], variable: server.variables[0] })
+        : reply(404);
     });
     renderPage();
     const card = await cardOf("From the loop run.");

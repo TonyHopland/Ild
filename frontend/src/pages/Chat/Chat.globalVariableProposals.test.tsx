@@ -1,46 +1,37 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
+import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import type { AiProvider, ChatMessage, ChatSession, User, WorkItemEditProposal } from "../../types";
 
-const { handlers, invoke, chatService, aiProviderService, workItemService, authService } =
-  vi.hoisted(() => ({
-    handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
-    invoke: vi.fn((..._args: unknown[]) => Promise.resolve()),
-    chatService: {
-      listHistory: vi.fn(),
-      getById: vi.fn(),
-      start: vi.fn(),
-      sendMessage: vi.fn(),
-      interrupt: vi.fn(),
-      deleteOne: vi.fn(),
-      deleteAll: vi.fn(),
-      searchChats: vi.fn(() => Promise.resolve([] as string[])),
-      markRead: vi.fn(() => Promise.resolve()),
-      rename: vi.fn(() => Promise.resolve()),
-      setFavorite: vi.fn(() => Promise.resolve()),
-    },
-    aiProviderService: { getAll: vi.fn() },
-    workItemService: { listEditProposalsFor: vi.fn() },
-    authService: {
-      getUser: vi.fn(),
-      getToken: vi.fn(() => "test-token"),
-      getMe: vi.fn(),
-      clearAuth: vi.fn(),
-      logout: vi.fn(() => Promise.resolve()),
-      onTokenChange: vi.fn(() => () => {}),
-    },
-  }));
+const { chatService, aiProviderService, workItemService, authService } = vi.hoisted(() => ({
+  chatService: {
+    listHistory: vi.fn(),
+    getById: vi.fn(),
+    start: vi.fn(),
+    sendMessage: vi.fn(),
+    interrupt: vi.fn(),
+    deleteOne: vi.fn(),
+    deleteAll: vi.fn(),
+    searchChats: vi.fn(() => Promise.resolve([] as string[])),
+    markRead: vi.fn(() => Promise.resolve()),
+    rename: vi.fn(() => Promise.resolve()),
+    setFavorite: vi.fn(() => Promise.resolve()),
+  },
+  aiProviderService: { getAll: vi.fn() },
+  workItemService: { listEditProposalsFor: vi.fn() },
+  authService: {
+    getUser: vi.fn(),
+    getToken: vi.fn(() => "test-token"),
+    getMe: vi.fn(),
+    clearAuth: vi.fn(),
+    logout: vi.fn(() => Promise.resolve()),
+    onTokenChange: vi.fn(() => () => {}),
+  },
+}));
 
-vi.mock("../../hooks/useSignalR", () => {
-  const on = (event: string, handler: (msg: { payload: unknown }) => void) => {
-    (handlers[event] ??= new Set()).add(handler);
-  };
-  const off = (event: string, handler: (msg: { payload: unknown }) => void) => {
-    handlers[event]?.delete(handler);
-  };
-  return { useSignalR: () => ({ connectionState: "connected", on, off, invoke }) };
-});
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
 
 vi.mock("../../services/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../services/auth")>()),
@@ -54,6 +45,13 @@ vi.mock("../../utils/openLoopDocument", () => ({ getOpenLoopDocument: vi.fn(() =
 import { ChatInboxProvider } from "../../components/ChatInbox";
 import { AuthContext } from "../../hooks/useAuth";
 import ChatPage from ".";
+import {
+  documentOrder,
+  makeGlobalVariableProposal,
+  reply,
+  signalRHub,
+  stubFetch,
+} from "../../test-support";
 
 const user: User = { id: "1", username: "test", createdAt: "" };
 
@@ -100,24 +98,19 @@ let suggested = 0;
 
 /** A suggestion made by chat s1 after the reply with sequence `anchor`, told apart by its rationale. */
 function suggestion(rationale: string, anchor: number | null, createdAt: string) {
-  return {
+  return makeGlobalVariableProposal({
     id: `gp-${++suggested}`,
-    name: "review_rules",
     value: `Suggested text number ${suggested}`,
     rationale,
-    status: "Pending",
-    rejectionReason: null,
     createdAt,
-    decidedAt: null,
     snapshotUpdatedAt: "2026-09-01T00:00:00Z",
     currentValue: "Keep reviews short.",
-    variableExists: true,
     createdByLoopRunId: null,
     createdByRunNodeId: null,
     createdByChatSessionId: "s1",
     chatReplySequence: anchor,
     source: { kind: "chat", workItemId: null, chatSessionId: "s1", linkable: true },
-  };
+  });
 }
 
 function editProposal(title: string, anchor: number, createdAt: string): WorkItemEditProposal {
@@ -164,26 +157,16 @@ beforeEach(() => {
   workItemService.listEditProposalsFor.mockResolvedValue([]);
   authService.getUser.mockReturnValue(user);
   authService.getMe.mockResolvedValue(user);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string) => {
-      const url = new URL(input, "http://localhost");
-      if (url.pathname !== "/api/v1/global-variables/proposals") throw new Error("offline");
-      askedFor.push(url.searchParams.get("chatSessionId"));
-      const body = url.searchParams.get("chatSessionId") === "s1" ? served : [];
-      return {
-        ok: true,
-        status: 200,
-        statusText: "",
-        text: () => Promise.resolve(JSON.stringify(body)),
-      } as Response;
-    }),
-  );
+  stubFetch((call) => {
+    if (call.path !== "/api/v1/global-variables/proposals") throw new Error("offline");
+    askedFor.push(call.query.get("chatSessionId"));
+    return reply(200, call.query.get("chatSessionId") === "s1" ? served : []);
+  });
 });
 
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  for (const k of Object.keys(signalRHub.handlers)) delete signalRHub.handlers[k];
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();
@@ -209,22 +192,6 @@ function renderChat(path: string) {
       </AuthContext.Provider>
     </MemoryRouter>,
   );
-}
-
-function emit(event: string, payload: unknown) {
-  return act(async () => {
-    for (const handler of Array.from(handlers[event] ?? [])) handler({ payload });
-  });
-}
-
-/** The labels, in the order their elements appear in the document. */
-function documentOrder(labels: string[]): string[] {
-  return labels
-    .map((l) => [l, screen.getByText(l, { exact: false })] as const)
-    .sort(([, a], [, b]) =>
-      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-    )
-    .map(([l]) => l);
 }
 
 describe("global variable suggestions in a chat", () => {
@@ -256,8 +223,8 @@ describe("global variable suggestions in a chat", () => {
     expect(documentOrder(expected)).toEqual(expected);
 
     served = [...served, suggestion("Made just now", 3, "2026-09-26T10:40:00Z")];
-    await emit("ChatGlobalVariableProposalsChanged", { chatSessionId: "s1-other" });
-    await emit("ChatGlobalVariableProposalsChanged", { chatSessionId: "s1" });
+    await signalRHub.emit("ChatGlobalVariableProposalsChanged", { chatSessionId: "s1-other" });
+    await signalRHub.emit("ChatGlobalVariableProposalsChanged", { chatSessionId: "s1" });
 
     await screen.findByText("Made just now", { exact: false });
   });

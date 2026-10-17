@@ -9,24 +9,19 @@ import { setCurrentChatSessionId } from "../../services/chatSessionStore";
 // real services; fetch answers as the server does, so the requests it sends —
 // above all the save naming the proposal — are what is checked. The hub handlers
 // are captured so a test can push a hint or a chat's loop edit.
-const { handlers } = vi.hoisted(() => ({
-  handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
-}));
-
-vi.mock("../../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: "connected",
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      (handlers[event] ??= new Set()).add(handler);
-    },
-    off: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event]?.delete(handler);
-    },
-    invoke: vi.fn(() => Promise.resolve()),
-  }),
-}));
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
 
 import LoopEditor from "./index";
+import {
+  makeLoopTemplateProposal,
+  reply,
+  signalRHub,
+  stubFetch,
+  type Call,
+} from "../../test-support";
+import type { LoopTemplateProposal } from "../../types";
 
 const devLoop = {
   id: "tpl-1",
@@ -91,21 +86,10 @@ const proposedDocument = {
 
 const RATIONALE = "Lint before tidying up.";
 
-function proposalView(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "lp-1",
-    templateId: "tpl-1",
+function proposalView(overrides: Partial<LoopTemplateProposal> = {}): LoopTemplateProposal {
+  return makeLoopTemplateProposal({
     templateName: "Dev Loop",
-    templateExists: true,
-    baseVersion: 3,
-    latestVersion: 3,
     rationale: RATIONALE,
-    status: "Pending",
-    editedBeforeSave: false,
-    appliedVersion: null,
-    rejectionReason: null,
-    createdAt: "2026-10-01T10:00:00Z",
-    decidedAt: null,
     createdByLoopRunId: null,
     createdByRunNodeId: null,
     createdByChatSessionId: "chat-9",
@@ -128,87 +112,62 @@ function proposalView(overrides: Record<string, unknown> = {}) {
       ],
     },
     ...overrides,
-  };
-}
-
-interface Call {
-  method: string;
-  path: string;
-  query: URLSearchParams;
-  body: Record<string, unknown> | undefined;
+  });
 }
 
 /** What the fake server holds; a test changes it between steps. */
 let server: {
   templates: (typeof devLoop)[];
-  proposal: ReturnType<typeof proposalView>;
+  proposal: LoopTemplateProposal;
   /** What GET /loop-template-proposals lists, before its filters. */
-  listed: ReturnType<typeof proposalView>[];
+  listed: LoopTemplateProposal[];
   counts: Record<string, number>;
 };
 let calls: Call[] = [];
 
-function reply(status: number, body: unknown) {
-  return {
-    ok: status < 400,
-    status,
-    statusText: "",
-    text: () => Promise.resolve(body === undefined ? "" : JSON.stringify(body)),
-  } as Response;
-}
-
 beforeEach(() => {
   server = { templates: [devLoop], proposal: proposalView(), listed: [], counts: {} };
-  calls = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string, init?: RequestInit) => {
-      const url = new URL(input, "http://localhost");
-      const method = (init?.method ?? "GET").toUpperCase();
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-      calls.push({ method, path: url.pathname, query: url.searchParams, body });
-      const path = url.pathname;
-      if (method === "GET" && path === "/api/v1/looptemplates") return reply(200, server.templates);
-      if (method === "GET" && path === "/api/v1/looptemplates/node-outputs") return reply(200, {});
-      if (method === "POST" && path === "/api/v1/looptemplates/validate")
-        return reply(200, { valid: true, errors: [] });
-      if (method === "PUT" && path.startsWith("/api/v1/looptemplates/")) {
-        const id = path.split("/").pop()!;
-        const applied = body?.fromProposalId === "lp-1" && server.proposal.status === "Pending";
-        server.templates = server.templates.map((t) =>
-          t.id === id ? { ...t, ...(body as object), version: t.version + 1, id: t.id } : t,
-        ) as (typeof devLoop)[];
-        if (applied)
-          server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 } as never;
-        return reply(200, { id, version: 4, proposalApplied: applied });
-      }
-      if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
-        return reply(200, server.counts);
-      if (method === "GET" && path === "/api/v1/loop-template-proposals/lp-1")
-        return reply(200, server.proposal);
-      if (method === "GET" && path === "/api/v1/loop-template-proposals") {
-        const status = url.searchParams.get("status");
-        const templateId = url.searchParams.get("templateId");
-        return reply(
-          200,
-          server.listed.filter(
-            (p) => (!status || p.status === status) && (!templateId || p.templateId === templateId),
-          ),
-        );
-      }
-      if (method === "POST" && path === "/api/v1/loop-template-proposals/lp-1/reject") {
-        server.proposal = { ...server.proposal, status: "Rejected" };
-        return reply(200, server.proposal);
-      }
-      if (method === "GET") return reply(200, []);
-      return reply(404, { error: "not stubbed" });
-    }),
-  );
+  calls = stubFetch(({ method, path, query, body }) => {
+    if (method === "GET" && path === "/api/v1/looptemplates") return reply(200, server.templates);
+    if (method === "GET" && path === "/api/v1/looptemplates/node-outputs") return reply(200, {});
+    if (method === "POST" && path === "/api/v1/looptemplates/validate")
+      return reply(200, { valid: true, errors: [] });
+    if (method === "PUT" && path.startsWith("/api/v1/looptemplates/")) {
+      const id = path.split("/").pop()!;
+      const applied = body?.fromProposalId === "lp-1" && server.proposal.status === "Pending";
+      server.templates = server.templates.map((t) =>
+        t.id === id ? { ...t, ...(body as object), version: t.version + 1, id: t.id } : t,
+      ) as (typeof devLoop)[];
+      if (applied)
+        server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 } as never;
+      return reply(200, { id, version: 4, proposalApplied: applied });
+    }
+    if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
+      return reply(200, server.counts);
+    if (method === "GET" && path === "/api/v1/loop-template-proposals/lp-1")
+      return reply(200, server.proposal);
+    if (method === "GET" && path === "/api/v1/loop-template-proposals") {
+      const status = query.get("status");
+      const templateId = query.get("templateId");
+      return reply(
+        200,
+        server.listed.filter(
+          (p) => (!status || p.status === status) && (!templateId || p.templateId === templateId),
+        ),
+      );
+    }
+    if (method === "POST" && path === "/api/v1/loop-template-proposals/lp-1/reject") {
+      server.proposal = { ...server.proposal, status: "Rejected" };
+      return reply(200, server.proposal);
+    }
+    if (method === "GET") return reply(200, []);
+    return reply(404, { error: "not stubbed" });
+  });
 });
 
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  for (const k of Object.keys(signalRHub.handlers)) delete signalRHub.handlers[k];
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   setCurrentChatSessionId(null);
@@ -237,9 +196,7 @@ function renderEditor(path: string) {
 }
 
 function emit(event: string, payload: unknown) {
-  act(() => {
-    for (const handler of Array.from(handlers[event] ?? [])) handler({ payload });
-  });
+  act(() => signalRHub.dispatch(event, payload));
 }
 
 function pushLoopUpdate(chatSessionId: string, document: object) {
