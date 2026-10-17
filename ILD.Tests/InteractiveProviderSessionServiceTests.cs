@@ -184,6 +184,7 @@ public class InteractiveProviderSessionServiceTests
         }
         while (result.MessageType != WebSocketMessageType.Close);
 
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
         await runTask;
         return (Encoding.UTF8.GetString(received.ToArray()), result.CloseStatus);
     }

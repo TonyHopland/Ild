@@ -65,8 +65,7 @@ public class PtyWebSocketBridgeTests
         Assert.All(end.Types, t => Assert.Equal(WebSocketMessageType.Binary, t));
         Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
 
-        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
-        await run.WaitAsync(cts.Token);
+        await CloseLikeABrowserAsync(client, server, run, cts.Token);
     }
 
     [Fact]
@@ -98,8 +97,7 @@ public class PtyWebSocketBridgeTests
         Assert.Contains("Failed to start", received.Text);
         Assert.Equal(WebSocketCloseStatus.InternalServerError, client.CloseStatus);
 
-        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
-        await run.WaitAsync(cts.Token);
+        await CloseLikeABrowserAsync(client, server, run, cts.Token);
     }
 
     [Fact]
@@ -143,8 +141,7 @@ public class PtyWebSocketBridgeTests
             Assert.Contains("exited with code 3", output.Text + rest.Text);
             Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
 
-            await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
-            await run.WaitAsync(cts.Token);
+            await CloseLikeABrowserAsync(client, server, run, cts.Token);
         }
         finally
         {
@@ -191,8 +188,7 @@ public class PtyWebSocketBridgeTests
         Assert.True(exitWait.Disposed, "the wait that the exit ended still holds its timer");
         Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
 
-        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
-        await run.WaitAsync(cts.Token);
+        await CloseLikeABrowserAsync(client, server, run, cts.Token);
     }
 
     [Fact]
@@ -222,8 +218,7 @@ public class PtyWebSocketBridgeTests
         Assert.DoesNotContain("exited with code", output.Text + rest.Text);
         Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
 
-        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
-        await run.WaitAsync(cts.Token);
+        await CloseLikeABrowserAsync(client, server, run, cts.Token);
     }
 
     [Fact]
@@ -276,8 +271,39 @@ public class PtyWebSocketBridgeTests
         Assert.Contains("[ild] The CLI exited with code 3.", output.Text);
         Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
 
-        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
-        await run.WaitAsync(cts.Token);
+        await CloseLikeABrowserAsync(client, server, run, cts.Token);
+    }
+
+    [Fact]
+    public async Task A_client_that_never_answers_the_close_is_let_go_once_the_bound_runs_out()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n");
+        pty.ExitUnseen(0);
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        await ReadUntilCloseAsync(client, cts.Token);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        // The client never sends its close reply. Only the bounds running out end the
+        // session: without the last one this runs out of armed timers and the guard
+        // cancels it.
+        while (!run.IsCompleted)
+        {
+            var fired = clock.FireNextAsync(cts.Token);
+            await Task.WhenAny(fired, run);
+            if (!run.IsCompleted) await fired;
+        }
+        await run;
+
+        Assert.Equal(WebSocketState.CloseReceived, client.State);
     }
 
     /// <summary>
@@ -541,6 +567,20 @@ public class PtyWebSocketBridgeTests
             types.Add(result.MessageType);
             text.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
         }
+    }
+
+    /// <summary>
+    /// Answers the bridge's close and lets the session end, then drops the server side
+    /// as a web server does once the request ends. The client's close waits up to 1s
+    /// for the server to drop the connection after the handshake, so it is awaited
+    /// only after that.
+    /// </summary>
+    private static async Task CloseLikeABrowserAsync(WebSocket client, WebSocket server, Task run, CancellationToken ct)
+    {
+        var closing = client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", ct);
+        await run.WaitAsync(ct);
+        server.Dispose();
+        await closing;
     }
 
     private static async Task<(WebSocket Server, WebSocket Client)> ConnectedPairAsync(CancellationToken ct)
