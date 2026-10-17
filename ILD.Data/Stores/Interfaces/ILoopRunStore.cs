@@ -195,6 +195,15 @@ public interface ILoopRunStore
     Task SetHumanFeedbackReasonAsync(Guid runId, string? reason);
 
     /// <summary>
+    /// Clear the run's <c>WorktreePath</c> and <c>BranchName</c> once the state
+    /// they name is gone, touching only those columns (and UpdatedAt): a reclaim
+    /// takes seconds, and a pin or status another writer committed meanwhile must
+    /// not be written back over. A copy of the run this store already tracks is
+    /// brought in step. False when there is no such run.
+    /// </summary>
+    Task<bool> ClearLocalGitStateAsync(Guid runId);
+
+    /// <summary>
     /// Run <paramref name="body"/> in one transaction holding the run's row
     /// lock, the lock event appends and human answers take, so what it reads
     /// cannot change under it before it commits. False, with nothing run, when

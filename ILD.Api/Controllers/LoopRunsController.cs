@@ -360,6 +360,7 @@ public class LoopRunsController : ControllerBase
         {
             RunCleanupOutcome.NotFinished => BadRequest(new { error = "Cannot clean up a run that has not finished. Let it finish, or cancel it first." }),
             RunCleanupOutcome.ReclaimFailed => Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was left untouched. Retry, or check server logs." }),
+            RunCleanupOutcome.RunGone => NotFound(),
             _ => NoContent(),
         };
     }

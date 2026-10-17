@@ -57,7 +57,8 @@ internal sealed class DiskUsageScan
     /// add the more specific ones first.
     /// </summary>
     public void Add(string path, UsageTally own, UsageTally shared)
-        => _roots.Add(new Root(Path.GetFullPath(path), own, shared));
+        // Without the trailing separator: statx follows a link named "link/".
+        => _roots.Add(new Root(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)), own, shared));
 
     public void Run(CancellationToken cancellationToken)
     {

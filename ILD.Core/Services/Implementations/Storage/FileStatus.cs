@@ -25,7 +25,6 @@ internal static class FileStatus
 {
     public const int ENOENT = 2;
     private const int EIO = 5;
-    private const int ENOSYS = 38;
 
     private const int AT_FDCWD = -100;
     private const int AT_SYMLINK_NOFOLLOW = 0x100;
@@ -66,7 +65,9 @@ internal static class FileStatus
         if (!OperatingSystem.IsLinux()) return false;
         try
         {
-            return TryGet("/", out _) != ENOSYS;
+            // Any failure, not only ENOSYS: a sandbox may refuse statx with EPERM,
+            // and every figure would then read as an unreadable 0.
+            return TryGet("/", out _) == 0;
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {

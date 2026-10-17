@@ -10,6 +10,7 @@ public enum RunCleanupOutcome
     Cleaned,
     NotFinished,
     ReclaimFailed,
+    RunGone,
 }
 
 /// <summary>
@@ -35,9 +36,10 @@ public static class RunCleanup
         // The row now outlives the git state it names, so the pointers go with
         // it: a surviving BranchName would keep claiming a branch that is free,
         // and a surviving WorktreePath would name a directory that is gone.
+        if (!await runs.ClearLocalGitStateAsync(run.Id))
+            return RunCleanupOutcome.RunGone;
         run.WorktreePath = null;
         run.BranchName = null;
-        await runs.UpdateRunAsync(run);
         return RunCleanupOutcome.Cleaned;
     }
 }

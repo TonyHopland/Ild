@@ -126,7 +126,7 @@ public sealed class StorageService : IStorageService
             var run = await _runs.GetByIdAsync(runId);
             if (run is null)
             {
-                results.Add(new(runId, WorktreeCleanupOutcome.Skipped, null, "The run does not exist."));
+                results.Add(new(runId, WorktreeCleanupOutcome.Skipped, null, RunNotFound));
                 continue;
             }
 
@@ -141,6 +141,9 @@ public sealed class StorageService : IStorageService
                 continue;
             }
 
+            // Reading the work item tracks all its runs in this scope, so a run read
+            // before it, in this pass or an earlier one, holds values from back then.
+            await _runs.ReloadAsync(run);
             var reason = RunIneligibility(run, await _runs.GetActiveWorkItemIdsAsync()) ?? WorkItemIneligibility(workItem);
             if (reason is not null)
             {
@@ -150,9 +153,13 @@ public sealed class StorageService : IStorageService
 
             var (bytes, _) = Freed([run.WorktreePath!], CancellationToken.None);
             actedOnAny = true;
-            results.Add(await RunCleanup.CleanUpAsync(run, _reclaimer, _runs) == RunCleanupOutcome.Cleaned
-                ? new(runId, WorktreeCleanupOutcome.Cleaned, bytes, null)
-                : new(runId, WorktreeCleanupOutcome.Failed, null, "Could not verify the worktree and branch were removed; the run was left as it was."));
+            results.Add(await RunCleanup.CleanUpAsync(run, _reclaimer, _runs) switch
+            {
+                RunCleanupOutcome.Cleaned => new(runId, WorktreeCleanupOutcome.Cleaned, bytes, null),
+                RunCleanupOutcome.ReclaimFailed => new(runId, WorktreeCleanupOutcome.Failed, null, "Could not verify the worktree and branch were removed; the run was left as it was."),
+                RunCleanupOutcome.RunGone => new(runId, WorktreeCleanupOutcome.Skipped, null, RunNotFound),
+                _ => new(runId, WorktreeCleanupOutcome.Skipped, null, NotFinished),
+            });
         }
 
         var totalBytes = FileStatus.IsSupported
@@ -161,12 +168,15 @@ public sealed class StorageService : IStorageService
         return new WorktreeCleanupResult(results, totalBytes);
     }
 
+    private const string RunNotFound = "The run does not exist.";
+    private const string NotFinished = "The run has not finished.";
+
     private static string? RunIneligibility(LoopRun run, IReadOnlyCollection<string> activeWorkItemIds)
     {
         if (string.IsNullOrEmpty(run.WorktreePath))
             return "The run has no worktree.";
         if (run.Status is not (LoopRunStatus.Completed or LoopRunStatus.Failed or LoopRunStatus.Cancelled))
-            return "The run has not finished.";
+            return NotFinished;
         if (run.Retain)
             return "The run is pinned.";
         if (activeWorkItemIds.Contains(run.WorkItemId, StringComparer.Ordinal))
