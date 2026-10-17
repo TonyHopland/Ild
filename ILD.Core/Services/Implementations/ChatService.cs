@@ -719,29 +719,22 @@ public sealed class ChatService : IChatService
     }
 
     public async Task<IReadOnlyList<Guid>> ListInactiveAsync(DateTime cutoff, CancellationToken ct = default)
-    {
-        var sessions = await _db.ChatSessions.AsNoTracking()
-            .Where(c => !c.IsFavorite)
-            .Select(c => new
-            {
-                c.Id,
-                c.CreatedAt,
-                LastMessageAt = _db.ChatMessages.Where(m => m.ChatSessionId == c.Id).Max(m => (DateTime?)m.CreatedAt),
-            })
-            .ToListAsync(ct);
-        // Compared here rather than in SQL: a CreatedAt the column default wrote is
-        // in SQLite's own text form, which does not order against the form EF writes.
-        return sessions.Where(c => (c.LastMessageAt ?? c.CreatedAt) < cutoff).Select(c => c.Id).ToList();
-    }
+        => await Inactive(cutoff).AsNoTracking().Select(c => c.Id).ToListAsync(ct);
 
     public async Task<bool> DeleteIfInactiveAsync(Guid sessionId, DateTime cutoff, CancellationToken ct = default)
     {
-        var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == sessionId, ct);
-        if (session is null || session.IsFavorite) return false;
-        var lastMessageAt = await _db.ChatMessages.Where(m => m.ChatSessionId == sessionId).MaxAsync(m => (DateTime?)m.CreatedAt, ct);
-        if ((lastMessageAt ?? session.CreatedAt) >= cutoff) return false;
+        var session = await Inactive(cutoff).FirstOrDefaultAsync(c => c.Id == sessionId, ct);
+        if (session is null) return false;
         return await DeleteSessionAsync(session, ct, unlessStarred: true);
     }
+
+    /// <summary>
+    /// Every user's chats that are not starred and whose newest message, or with
+    /// none their creation, is before <paramref name="cutoff"/>.
+    /// </summary>
+    private IQueryable<ChatSession> Inactive(DateTime cutoff)
+        => _db.ChatSessions.Where(c => !c.IsFavorite
+            && (_db.ChatMessages.Where(m => m.ChatSessionId == c.Id).Max(m => (DateTime?)m.CreatedAt) ?? c.CreatedAt) < cutoff);
 
     /// <summary>
     /// The one hard-delete, for every caller. Returns whether the row was deleted:
