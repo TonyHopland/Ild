@@ -113,7 +113,11 @@ public static class PtyWebSocketBridge
                 // that can lag well behind. Bounded only against an event that never
                 // comes; a client that leaves meanwhile ends the wait.
                 if (reportExit && !childExited.IsCompleted && ptyToSocket is { IsCompletedSuccessfully: true, Result: true })
-                    await Task.WhenAny(childExited, socketToPty, Task.Delay(ExitEventWait, clock, cancellationToken));
+                {
+                    using var exitWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    await Task.WhenAny(childExited, socketToPty, Task.Delay(ExitEventWait, clock, exitWait.Token));
+                    exitWait.Cancel();
+                }
 
                 if (reportExit && childExited.IsCompleted && exitCode is { } code)
                     await SendExclusivelyAsync(

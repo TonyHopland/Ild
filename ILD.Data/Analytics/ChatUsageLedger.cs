@@ -6,6 +6,24 @@ using Microsoft.EntityFrameworkCore;
 namespace ILD.Data.Analytics;
 
 /// <summary>
+/// What chat calls added up to on one UTC day for one (schedule, provider), as
+/// the archive keeps it: named by the newest call, a null cost counted as none,
+/// title calls in the figures but not in the turns.
+/// </summary>
+public sealed record ChatUsageDayTotals
+{
+    public required DateTime BucketDate { get; init; }
+    public required Guid? ScheduleId { get; init; }
+    public required string? ScheduleName { get; init; }
+    public required DateTime LastRecordedAt { get; init; }
+    public required string AiProvider { get; init; }
+    public required int TurnCount { get; init; }
+    public required long TotalInputTokens { get; init; }
+    public required long TotalOutputTokens { get; init; }
+    public required decimal TotalCostUsd { get; init; }
+}
+
+/// <summary>
 /// Writes what chats cost. Every figure is counted from exactly one place: its
 /// <see cref="ChatUsage"/> row, until a chat delete moves that row into a
 /// <see cref="ChatAnalyticsBucket"/> in the same commit as the delete. Nothing
@@ -91,25 +109,32 @@ public static class ChatUsageLedger
             .ToListAsync(ct);
         if (ids.Count == 0) return;
 
-        foreach (var bucket in await SumPerDay(db.ChatUsages.Where(u => ids.Contains(u.Id))).ToListAsync(ct))
+        foreach (var day in await SumPerDay(db.ChatUsages.Where(u => ids.Contains(u.Id))).ToListAsync(ct))
         {
-            bucket.Id = Guid.NewGuid();
-            db.ChatAnalyticsBuckets.Add(bucket);
+            db.ChatAnalyticsBuckets.Add(new ChatAnalyticsBucket
+            {
+                Id = Guid.NewGuid(),
+                BucketDate = day.BucketDate,
+                ScheduleId = day.ScheduleId,
+                ScheduleName = day.ScheduleName,
+                LastRecordedAt = day.LastRecordedAt,
+                AiProvider = day.AiProvider,
+                TurnCount = day.TurnCount,
+                TotalInputTokens = day.TotalInputTokens,
+                TotalOutputTokens = day.TotalOutputTokens,
+                TotalCostUsd = day.TotalCostUsd,
+            });
         }
 
         var tracked = db.ChatUsages.Local.ToDictionary(u => u.Id);
         db.ChatUsages.RemoveRange(ids.Select(id => tracked.GetValueOrDefault(id) ?? new ChatUsage { Id = id }));
     }
 
-    /// <summary>
-    /// <paramref name="usages"/> summed in the database per UTC day, schedule and
-    /// provider, as the archive keeps them: named by the newest call, a null cost
-    /// counted as none, title calls in the figures but not in the turns. Without ids.
-    /// </summary>
-    public static IQueryable<ChatAnalyticsBucket> SumPerDay(IQueryable<ChatUsage> usages)
+    /// <summary><paramref name="usages"/> summed in the database per UTC day, schedule and provider.</summary>
+    public static IQueryable<ChatUsageDayTotals> SumPerDay(IQueryable<ChatUsage> usages)
         => usages
             .GroupBy(u => new { Day = u.CreatedAt.Date, u.ScheduleId, u.AiProvider })
-            .Select(g => new ChatAnalyticsBucket
+            .Select(g => new ChatUsageDayTotals
             {
                 BucketDate = g.Key.Day,
                 ScheduleId = g.Key.ScheduleId,

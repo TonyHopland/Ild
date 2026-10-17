@@ -183,11 +183,12 @@ public class PtyWebSocketBridgeTests
         // The output has ended; the bounded drain wait runs out with no exit seen yet.
         await clock.FireNextAsync(cts.Token);
         // Whatever the bridge arms next is what it waits on now; the exit arrives during it.
-        await clock.NextArmedAsync(cts.Token);
+        var exitWait = await clock.NextArmedAsync(cts.Token);
         pty.Exit(3);
         var rest = await ReadUntilCloseAsync(client, cts.Token);
 
         Assert.Contains("[ild] The CLI exited with code 3.", output.Text + rest.Text);
+        Assert.True(exitWait.Disposed, "the wait that the exit ended still holds its timer");
         Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
 
         await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
@@ -353,23 +354,20 @@ public class PtyWebSocketBridgeTests
     {
         private readonly Lock _gate = new();
         private readonly Queue<SteppedTimer> _armed = new();
+        private readonly List<SteppedTimer> _armedInOrder = new();
         private TaskCompletionSource _anyArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _seen;
         private int _consumed;
 
-        /// <summary>Completes once a timer this method has not reported yet is armed.</summary>
-        public async Task NextArmedAsync(CancellationToken ct)
+        /// <summary>Completes with the next armed timer this method has not reported yet.</summary>
+        public async Task<SteppedTimer> NextArmedAsync(CancellationToken ct)
         {
             while (true)
             {
                 Task wait;
                 lock (_gate)
                 {
-                    if (_seen > _consumed)
-                    {
-                        _consumed++;
-                        return;
-                    }
+                    if (_armedInOrder.Count > _consumed)
+                        return _armedInOrder[_consumed++];
                     wait = _anyArmed.Task;
                 }
                 await wait.WaitAsync(ct);
@@ -387,7 +385,7 @@ public class PtyWebSocketBridgeTests
                     while (_armed.TryDequeue(out var timer))
                     {
                         if (timer.Disposed) continue;
-                        if (_consumed < _seen) _consumed++;
+                        if (_consumed < _armedInOrder.Count) _consumed++;
                         timer.Fire();
                         return;
                     }
@@ -410,14 +408,14 @@ public class PtyWebSocketBridgeTests
             lock (_gate)
             {
                 _armed.Enqueue(timer);
-                _seen++;
+                _armedInOrder.Add(timer);
                 armed = _anyArmed;
                 _anyArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
             }
             armed.TrySetResult();
         }
 
-        private sealed class SteppedTimer(SteppedTimeProvider clock, TimerCallback callback, object? state) : ITimer
+        public sealed class SteppedTimer(SteppedTimeProvider clock, TimerCallback callback, object? state) : ITimer
         {
             public volatile bool Disposed;
 

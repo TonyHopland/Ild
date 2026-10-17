@@ -1,10 +1,12 @@
 using System.Data;
+using System.Linq.Expressions;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace ILD.Core.Services.Implementations;
 
@@ -44,7 +46,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         Dictionary<Guid, string> schedules;
         await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
         {
-            live = (await BuildLiveContributionsAsync(_db.LoopRuns, cancellationToken)).Select(r => r.Contribution).ToList();
+            live = (await BuildLiveContributionsAsync(runs: null, cancellationToken)).Select(r => r.Contribution).ToList();
             archived = await LoadArchivedContributionsAsync(filter, templateId: null, cancellationToken);
             filteredChats = await LoadChatContributionsAsync(filter, cancellationToken);
             storedProviders = await _db.LoopRunAnalyticsBuckets.Select(b => b.AiProvider)
@@ -66,7 +68,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var filtered = live.Where(c => Matches(c.BucketDate, c.AiProvider, query)).Concat(archived).ToList();
+        var filtered = live.Where(c => filter.Matches(c.BucketDate, c.AiProvider)).Concat(archived).ToList();
         var spend = filtered
             .Select(c => new Spend(
                 c.BucketDate, c.AiProvider, c.Metrics.RunCount,
@@ -125,10 +127,9 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         AnalyticsQuery query, Guid? templateId, CancellationToken cancellationToken = default)
     {
         var filter = StoredRowFilter.Of(query);
-        var runs = _db.LoopRuns.Where(r =>
-            (filter.Start == null || (r.StartedAt ?? r.CreatedAt) >= filter.Start)
-            && (filter.End == null || (r.StartedAt ?? r.CreatedAt) < filter.End)
-            && (templateId == null || r.LoopTemplateVersion.LoopTemplateId == templateId));
+        var runs = filter.InRange(_db.LoopRuns, r => r.StartedAt ?? r.CreatedAt);
+        if (templateId is not null)
+            runs = runs.Where(r => r.LoopTemplateVersion.LoopTemplateId == templateId);
 
         List<LiveRun> liveRuns;
         List<RunContribution> archived;
@@ -138,7 +139,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
         await using (var snapshot = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken))
         {
             liveRuns = (await BuildLiveContributionsAsync(runs, cancellationToken))
-                .Where(r => Matches(r.Contribution.BucketDate, r.Contribution.AiProvider, query))
+                .Where(r => filter.Matches(r.Contribution.BucketDate, r.Contribution.AiProvider))
                 .ToList();
             archived = await LoadArchivedContributionsAsync(filter, templateId, cancellationToken);
             var runIds = liveRuns.Select(r => r.RunId).ToList();
@@ -207,11 +208,22 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .ThenByDescending(t => t.TotalRuns)
             .ToList();
 
-    /// <summary>The contributions of <paramref name="runs"/>, reading the nodes and feedback of those runs only.</summary>
-    private async Task<List<LiveRun>> BuildLiveContributionsAsync(IQueryable<LoopRun> runs, CancellationToken ct)
+    /// <summary>
+    /// The contributions of <paramref name="runs"/>, reading the nodes and feedback
+    /// of those runs only; of every run when null.
+    /// </summary>
+    private async Task<List<LiveRun>> BuildLiveContributionsAsync(IQueryable<LoopRun>? runs, CancellationToken ct)
     {
-        var runIds = runs.Select(r => r.Id);
-        var runRows = await runs
+        IQueryable<LoopRunNode> nodeRows = _db.LoopRunNodes;
+        IQueryable<EventLog> eventRows = _db.EventLogs;
+        if (runs is not null)
+        {
+            var runIds = runs.Select(r => r.Id);
+            nodeRows = nodeRows.Where(n => runIds.Contains(n.LoopRunId));
+            eventRows = eventRows.Where(e => runIds.Contains(e.LoopRunId!.Value));
+        }
+
+        var runRows = await (runs ?? _db.LoopRuns)
             .Select(r => new
             {
                 r.Id,
@@ -223,8 +235,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             })
             .ToListAsync(ct);
 
-        var nodes = await _db.LoopRunNodes
-            .Where(n => runIds.Contains(n.LoopRunId))
+        var nodes = await nodeRows
             .Select(n => new
             {
                 n.LoopRunId,
@@ -242,9 +253,8 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             .Select(e => new { e.Id, e.EdgeType, e.Name })
             .ToDictionaryAsync(e => e.Id, e => new EdgeInfo(e.EdgeType, e.Name), ct);
 
-        var feedback = await _db.EventLogs
+        var feedback = await eventRows
             .Where(e => e.LoopRunId != null
-                && runIds.Contains(e.LoopRunId.Value)
                 && (e.EventType == EventType.HumanFeedbackRequested
                     || e.EventType == EventType.HumanFeedbackReceived))
             .Select(e => new { RunId = e.LoopRunId!.Value, e.EventType, e.Id, e.Timestamp })
@@ -276,12 +286,10 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
     private async Task<List<RunContribution>> LoadArchivedContributionsAsync(
         StoredRowFilter filter, Guid? templateId, CancellationToken ct)
     {
-        var buckets = await _db.LoopRunAnalyticsBuckets
-            .Where(b => (filter.Start == null || b.BucketDate >= filter.Start)
-                && (filter.End == null || b.BucketDate < filter.End)
-                && (filter.Provider == null || b.AiProvider.ToLower() == filter.Provider)
-                && (templateId == null || b.LoopTemplateId == templateId))
-            .ToListAsync(ct);
+        var rows = filter.Apply(_db.LoopRunAnalyticsBuckets, b => b.BucketDate, b => b.AiProvider);
+        if (templateId is not null)
+            rows = rows.Where(b => b.LoopTemplateId == templateId);
+        var buckets = await rows.ToListAsync(ct);
         return buckets.Select(b => new RunContribution(
             b.BucketDate, b.LoopTemplateId, b.TemplateName, b.AiProvider,
             new AnalyticsMetrics
@@ -308,32 +316,18 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
     /// </summary>
     private async Task<List<ChatContribution>> LoadChatContributionsAsync(StoredRowFilter filter, CancellationToken ct)
     {
-        var live = await ChatUsageLedger.SumPerDay(_db.ChatUsages
-                .Where(u => (filter.Start == null || u.CreatedAt >= filter.Start)
-                    && (filter.End == null || u.CreatedAt < filter.End)
-                    && (filter.Provider == null || u.AiProvider.ToLower() == filter.Provider)))
+        var live = await ChatUsageLedger.SumPerDay(filter.Apply(_db.ChatUsages, u => u.CreatedAt, u => u.AiProvider))
             .ToListAsync(ct);
-        var archived = await _db.ChatAnalyticsBuckets
-            .Where(b => (filter.Start == null || b.BucketDate >= filter.Start)
-                && (filter.End == null || b.BucketDate < filter.End)
-                && (filter.Provider == null || b.AiProvider.ToLower() == filter.Provider))
+        var archived = await filter.Apply(_db.ChatAnalyticsBuckets, b => b.BucketDate, b => b.AiProvider)
             .ToListAsync(ct);
-        return live.Concat(archived).Select(b => new ChatContribution(
-            b.BucketDate, b.LastRecordedAt,
-            b.ScheduleId,
-            b.ScheduleName,
-            b.AiProvider, b.TurnCount, b.TotalInputTokens, b.TotalOutputTokens, b.TotalCostUsd)).ToList();
-    }
-
-    private static bool Matches(DateTime bucketDate, string aiProvider, AnalyticsQuery query)
-    {
-        var day = DateOnly.FromDateTime(bucketDate);
-        if (query.From is DateOnly from && day < from) return false;
-        if (query.To is DateOnly to && day > to) return false;
-        if (!string.IsNullOrEmpty(query.Provider)
-            && !string.Equals(aiProvider, query.Provider, StringComparison.OrdinalIgnoreCase))
-            return false;
-        return true;
+        return live
+            .Select(d => new ChatContribution(
+                d.BucketDate, d.LastRecordedAt, d.ScheduleId, d.ScheduleName,
+                d.AiProvider, d.TurnCount, d.TotalInputTokens, d.TotalOutputTokens, d.TotalCostUsd))
+            .Concat(archived.Select(b => new ChatContribution(
+                b.BucketDate, b.LastRecordedAt, b.ScheduleId, b.ScheduleName,
+                b.AiProvider, b.TurnCount, b.TotalInputTokens, b.TotalOutputTokens, b.TotalCostUsd)))
+            .ToList();
     }
 
     private static AnalyticsMetrics Sum(IEnumerable<AnalyticsMetrics> metrics)
@@ -344,10 +338,11 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
     }
 
     /// <summary>
-    /// The query's filters as stored rows are matched in the database: the days as
-    /// UTC instants with the end exclusive, null where the range is open, and the
-    /// provider lower-cased. UTC, because Postgres refuses any other kind of
-    /// DateTime for its timestamptz columns.
+    /// The query's date range and provider, one definition for the database and
+    /// for memory: the days as UTC instants with the end exclusive, null where the
+    /// range is open, and the provider lower-cased as Postgres's <c>lower()</c>
+    /// folds it. UTC, because Postgres refuses any other kind of DateTime for its
+    /// timestamptz columns.
     /// </summary>
     private sealed record StoredRowFilter(DateTime? Start, DateTime? End, string? Provider)
     {
@@ -357,6 +352,34 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
                 ? to.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)
                 : null,
             string.IsNullOrEmpty(query.Provider) ? null : query.Provider.ToLowerInvariant());
+
+        /// <summary>The <paramref name="rows"/> whose <paramref name="date"/> is in the range, tested in the database.</summary>
+        public IQueryable<T> InRange<T>(IQueryable<T> rows, Expression<Func<T, DateTime>> date)
+        {
+            if (Start is DateTime start) rows = rows.Where(Test(date, d => d >= start));
+            if (End is DateTime end) rows = rows.Where(Test(date, d => d < end));
+            return rows;
+        }
+
+        /// <summary>The <paramref name="rows"/> in the range and of the provider, tested in the database.</summary>
+        public IQueryable<T> Apply<T>(
+            IQueryable<T> rows, Expression<Func<T, DateTime>> date, Expression<Func<T, string>> provider)
+        {
+            rows = InRange(rows, date);
+            if (Provider is string lowered) rows = rows.Where(Test(provider, p => p.ToLower() == lowered));
+            return rows;
+        }
+
+        /// <summary>The test <see cref="Apply"/> makes, for a row already in memory.</summary>
+        public bool Matches(DateTime date, string provider)
+            => (Start is not DateTime start || date >= start)
+                && (End is not DateTime end || date < end)
+                && (Provider is null || provider.ToLowerInvariant() == Provider);
+
+        private static Expression<Func<T, bool>> Test<T, TValue>(
+            Expression<Func<T, TValue>> column, Expression<Func<TValue, bool>> test)
+            => Expression.Lambda<Func<T, bool>>(
+                ReplacingExpressionVisitor.Replace(test.Parameters[0], column.Body, test.Body), column.Parameters);
     }
 
     /// <summary>A still-existing run's contribution, with the run and the version it ran.</summary>
