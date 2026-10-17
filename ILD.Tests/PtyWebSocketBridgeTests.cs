@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Text;
 using ILD.Api.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -154,6 +155,208 @@ public class PtyWebSocketBridgeTests
                     try { System.Diagnostics.Process.GetProcessById(pid).Kill(); } catch (ArgumentException) { }
                 }
                 File.Delete(pidFile);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The child closes its side of the PTY (EOF) and exits, but Porta.Pty's watcher
+    /// thread reports the exit only after the output drain's bound has passed.
+    /// </summary>
+    [Fact]
+    public async Task The_exit_code_is_reported_when_the_exit_event_comes_after_the_output_has_ended()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n");
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            reportExit: true, timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        var output = await ReadUntilAsync(client, "boom", cts.Token);
+        // The output has ended; the bounded drain wait runs out with no exit seen yet.
+        await clock.FireNextAsync(cts.Token);
+        // Whatever the bridge arms next is what it waits on now; the exit arrives during it.
+        await clock.NextArmedAsync(cts.Token);
+        pty.Exit(3);
+        var rest = await ReadUntilCloseAsync(client, cts.Token);
+
+        Assert.Contains("[ild] The CLI exited with code 3.", output.Text + rest.Text);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        await run.WaitAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task A_session_whose_exit_event_never_comes_still_closes_normally_without_an_exit_line()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n");
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            reportExit: true, timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        var output = await ReadUntilAsync(client, "boom", cts.Token);
+        // Every bound the bridge sets runs out, one after the other, until it closes.
+        var closing = ReadUntilCloseAsync(client, cts.Token);
+        while (!closing.IsCompleted)
+        {
+            var fired = clock.FireNextAsync(cts.Token);
+            await Task.WhenAny(fired, closing);
+        }
+        var rest = await closing;
+
+        Assert.DoesNotContain("exited with code", output.Text + rest.Text);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        await run.WaitAsync(cts.Token);
+    }
+
+    /// <summary>
+    /// A PTY child that has written <c>output</c> and closed its side: the reader gives
+    /// that, then EOF. Its exit is reported only when the test calls <see cref="Exit"/>,
+    /// the way Porta.Pty 2.2.2 does it: <c>ProcessExited</c> is raised from its own
+    /// waitpid thread with the exit code in <see cref="PtyExitedEventArgs"/>, apart from
+    /// the reader reaching EOF.
+    /// </summary>
+    private sealed class ScriptedPty(string output) : IPtyConnection
+    {
+        public static readonly PtyOptions Options = new()
+        {
+            Name = "ild-bridge-test",
+            Cols = 80,
+            Rows = 24,
+            Cwd = Path.GetTempPath(),
+            App = "/bin/false",
+            CommandLine = Array.Empty<string>(),
+            Environment = new Dictionary<string, string>(),
+        };
+
+        private int _exitCode;
+
+        public Stream ReaderStream { get; } = new MemoryStream(Encoding.UTF8.GetBytes(output), writable: false);
+        public Stream WriterStream { get; } = Stream.Null;
+        public bool SupportsCancellableRead => false;
+        public int Pid => 4242;
+        public int ExitCode => _exitCode;
+        public event EventHandler<PtyExitedEventArgs>? ProcessExited;
+
+        public void Exit(int code)
+        {
+            _exitCode = code;
+            // Porta.Pty constructs these itself; its constructor is internal.
+            var args = (PtyExitedEventArgs)Activator.CreateInstance(
+                typeof(PtyExitedEventArgs), BindingFlags.Instance | BindingFlags.NonPublic, null, [code], null)!;
+            ProcessExited?.Invoke(this, args);
+        }
+
+        public void Kill() { }
+        public void Resize(int cols, int rows) { }
+        public bool WaitForExit(int milliseconds) => false;
+        public void Dispose() { }
+    }
+
+    /// <summary>
+    /// A clock whose timers fire only when the test fires them, one at a time and in
+    /// the order they were armed.
+    /// </summary>
+    private sealed class SteppedTimeProvider : TimeProvider
+    {
+        private readonly Lock _gate = new();
+        private readonly Queue<SteppedTimer> _armed = new();
+        private TaskCompletionSource _anyArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _seen;
+        private int _consumed;
+
+        /// <summary>Completes once a timer this method has not reported yet is armed.</summary>
+        public async Task NextArmedAsync(CancellationToken ct)
+        {
+            while (true)
+            {
+                Task wait;
+                lock (_gate)
+                {
+                    if (_seen > _consumed)
+                    {
+                        _consumed++;
+                        return;
+                    }
+                    wait = _anyArmed.Task;
+                }
+                await wait.WaitAsync(ct);
+            }
+        }
+
+        /// <summary>Waits for the oldest armed timer that has not fired, and fires it.</summary>
+        public async Task FireNextAsync(CancellationToken ct)
+        {
+            while (true)
+            {
+                Task wait;
+                lock (_gate)
+                {
+                    while (_armed.TryDequeue(out var timer))
+                    {
+                        if (timer.Disposed) continue;
+                        if (_consumed < _seen) _consumed++;
+                        timer.Fire();
+                        return;
+                    }
+                    wait = _anyArmed.Task;
+                }
+                await wait.WaitAsync(ct);
+            }
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new SteppedTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+
+        private void Arm(SteppedTimer timer)
+        {
+            TaskCompletionSource armed;
+            lock (_gate)
+            {
+                _armed.Enqueue(timer);
+                _seen++;
+                armed = _anyArmed;
+                _anyArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            armed.TrySetResult();
+        }
+
+        private sealed class SteppedTimer(SteppedTimeProvider clock, TimerCallback callback, object? state) : ITimer
+        {
+            public volatile bool Disposed;
+
+            public void Fire() => ThreadPool.QueueUserWorkItem(_ => { if (!Disposed) callback(state); });
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                if (dueTime != Timeout.InfiniteTimeSpan) clock.Arm(this);
+                return true;
+            }
+
+            public void Dispose() => Disposed = true;
+
+            public ValueTask DisposeAsync()
+            {
+                Disposed = true;
+                return ValueTask.CompletedTask;
             }
         }
     }

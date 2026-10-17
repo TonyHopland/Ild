@@ -307,6 +307,68 @@ public class AgentRetroReadApiTests
     }
 
     [Fact]
+    public async Task GetLoopTemplate_matches_a_name_ignoring_case_beyond_ascii_and_any_surrounding_whitespace()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        Guid umlaut, accented;
+        Guid[] twins;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var templates = scope.ServiceProvider.GetRequiredService<ILoopTemplateManager>();
+            umlaut = await templates.CreateLoopTemplateAsync("umlaut", "", Graph("U."));
+            accented = await templates.CreateLoopTemplateAsync("accented", "", Graph("A."));
+            twins = new[]
+            {
+                await templates.CreateLoopTemplateAsync("twin-a", "", Graph("A.")),
+                await templates.CreateLoopTemplateAsync("twin-b", "", Graph("B.")),
+                await templates.CreateLoopTemplateAsync("twin-c", "", Graph("C.")),
+            };
+            await templates.ArchiveLoopTemplateAsync(twins[1]);
+            // Stored names as an older save or a hand edit may have left them.
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            db.LoopTemplates.Single(t => t.Id == umlaut).Name = " \t\u00A0Ärger loop\u2003";
+            db.LoopTemplates.Single(t => t.Id == accented).Name = "Élan";
+            db.LoopTemplates.Single(t => t.Id == twins[0]).Name = "Twin";
+            db.LoopTemplates.Single(t => t.Id == twins[1]).Name = "twin";
+            db.LoopTemplates.Single(t => t.Id == twins[2]).Name = " TWIN";
+            await db.SaveChangesAsync(Ct);
+        }
+
+        async Task<HttpResponseMessage> LookUp(string key)
+            => await client.GetAsync($"/api/v1/agent/loop-templates/document?nameOrId={Uri.EscapeDataString(key)}", Ct);
+
+        foreach (var (key, expected) in new[]
+        {
+            ("\u00A0 ärger LOOP\t", umlaut),
+            ("ÄRGER LOOP", umlaut),
+            ("élan", accented),
+        })
+        {
+            var response = await LookUp(key);
+            var body = await response.Content.ReadAsStringAsync(Ct);
+            Assert.True(response.StatusCode == HttpStatusCode.OK, $"'{key}' -> {(int)response.StatusCode}: {body}");
+            Assert.Equal(expected, JsonDocument.Parse(body).RootElement.GetProperty("templateId").GetGuid());
+        }
+
+        // Names that differ only in case are one name: the caller must pick by id.
+        var ambiguous = await LookUp("\ttWiN ");
+        Assert.Equal(HttpStatusCode.Conflict, ambiguous.StatusCode);
+        var conflict = await ReadJsonAsync(ambiguous);
+        Assert.Equal("3 loop templates are named 'tWiN'; pass the id of the one you mean.", conflict.GetProperty("error").GetString());
+        // Live before archived, then by name in ordinal order.
+        Assert.Equal(
+            new (Guid, string, bool)[] { (twins[2], " TWIN", false), (twins[0], "Twin", false), (twins[1], "twin", true) },
+            conflict.GetProperty("candidates").EnumerateArray()
+                .Select(c => (c.GetProperty("id").GetGuid(), c.GetProperty("name").GetString()!, c.GetProperty("isArchived").GetBoolean())));
+
+        var unknown = await LookUp("  Ärger  ");
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        Assert.Equal("Loop template not found: Ärger", (await ReadJsonAsync(unknown)).GetProperty("error").GetString());
+    }
+
+    [Fact]
     public async Task GetLoopTemplate_document_is_accepted_unchanged_by_update_current_loop()
     {
         await using var factory = new ApiFactory();
