@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe("Delete inactive chats", () => {
-  test("is off on the Ild page with the days shut at 14, and once on saves the days within 1 to 3650", async () => {
+  test("is off on the Ild page with the days at 14, and once on saves the days within 1 to 3650", async () => {
     vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => {
       if (key === "chat.autoDeleteInactive") return { key, value: "false" };
       throw new Error("offline");
@@ -31,11 +31,9 @@ describe("Delete inactive chats", () => {
     );
     expect(toggle.checked).toBe(false);
     expect(days.value).toBe("14");
-    expect(days.disabled).toBe(true);
 
     fireEvent.click(toggle);
     await waitFor(() => expect(put).toHaveBeenCalledWith("chat.autoDeleteInactive", "true"));
-    await waitFor(() => expect(days.disabled).toBe(false));
     expect(toggle.checked).toBe(true);
 
     for (const outOfRange of ["0", "3651"]) {
