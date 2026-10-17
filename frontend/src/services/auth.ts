@@ -1090,6 +1090,12 @@ export const ChatTitleSettingKeys = {
   TitleMaxAttempts: "chat.titleMaxAttempts",
 } as const;
 
+export const ChatRetentionSettingKeys = {
+  /** Whether unstarred chats with no new message for the days below are deleted. */
+  AutoDeleteInactive: "chat.autoDeleteInactive",
+  AutoDeleteInactiveDays: "chat.autoDeleteInactiveDays",
+} as const;
+
 /** How long a sign-in survives. `0` disables that limit. */
 export const SessionSettingKeys = {
   IdleDays: "session.idleDays",

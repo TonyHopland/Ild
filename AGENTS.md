@@ -94,6 +94,22 @@ dotnet ef database update --project <project-with-dbcontext>
 
 Manually editing migration files is error-prone and will cause schema drift. The migration files are generated artifacts, not source of truth.
 
+## Databases: PostgreSQL in production, SQLite only in tests
+
+ILD runs on PostgreSQL only. Every deployment and every migration targets it.
+The test suite runs on in-memory SQLite instead, on purpose: it needs no
+Docker or database server, so the same `dotnet test` works in CI, on a
+developer machine and in the ILD verification gate (which has no Docker), and
+it keeps the suite fast. Moving the tests to PostgreSQL has been considered
+and rejected for those reasons; do not propose it.
+
+Production code must not be shaped around SQLite. When a query does not work
+on SQLite, first prove it with a failing test, then fix it on the test side
+(the test model, the test connection, the test data). Only if that is
+impossible may production code work around it, with a one-line comment naming
+SQLite and the test that needs it. A SQLite quirk is never a production data
+problem: do not add migrations, data rewrites or schema changes to fix it.
+
 ## Code style
 
 Code is the explanation. No comments narrating what a change does or why.

@@ -8,6 +8,7 @@ using ILD.Data.Enums;
 using ILD.Data.Stores;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -929,22 +930,50 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteAllForUserAsync_removes_every_chat_the_user_owns_and_no_others()
+    public async Task An_inactive_chat_starred_after_the_sweeps_check_is_kept()
     {
         var provider = await SeedProviderAsync();
-        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var a1 = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-        var a2 = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-        var a1Scratch = _db.Context.ChatSessions.Single(c => c.Id == a1.Id).ScratchPath;
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("x"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi", CancellationToken.None);
+        // Opened up front: a context cannot first open the connection while the sweep's read is still on it.
+        using var starring = _db.Fresh();
+        Assert.Equal(1, await starring.ChatSessions.CountAsync(TestContext.Current.CancellationToken));
+        var starAfterCheck = new StarAfterLastMessageRead(starring, started.Id);
+        using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(starAfterCheck).Options);
+        var sweep = new ChatService(deleting, _db.Providers, Mock.Of<IAgentAdapterRegistry>(), _notifier, Options,
+            _db.LoopRuns, _loopScratchpad, _chatClones);
 
-        var removed = await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken);
+        Assert.False(await sweep.DeleteIfInactiveAsync(started.Id, DateTime.UtcNow.AddDays(1), TestContext.Current.CancellationToken));
 
-        Assert.Equal(2, removed);
-        Assert.False(Directory.Exists(a1Scratch), "scratch directories should be removed");
-        Assert.DoesNotContain(_db.Context.ChatSessions, c => c.Id == a1.Id || c.Id == a2.Id);
-        // Bob's chat is untouched.
-        Assert.Contains(_db.Context.ChatSessions, c => c.Id == bobs.Id);
+        Assert.True(starAfterCheck.Starred);
+        using var ctx = _db.Fresh();
+        var kept = Assert.Single(ctx.ChatSessions.AsNoTracking());
+        Assert.True(kept.IsFavorite);
+        Assert.NotEmpty(ctx.ChatMessages.AsNoTracking());
+    }
+
+    // Stars the chat once the sweep has read its newest message, the last thing it
+    // checks before deleting: starring does not wait for the chat's turn gate.
+    private sealed class StarAfterLastMessageRead(AppDbContext starring, Guid chatId) : DbCommandInterceptor
+    {
+        public bool Starred { get; private set; }
+
+        public override async ValueTask<System.Data.Common.DbDataReader> ReaderExecutedAsync(
+            System.Data.Common.DbCommand command,
+            CommandExecutedEventData eventData,
+            System.Data.Common.DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!Starred && command.CommandText.Contains("MAX(") && command.CommandText.Contains("\"ChatMessages\""))
+            {
+                Starred = true;
+                await starring.ChatSessions.Where(c => c.Id == chatId)
+                    .ExecuteUpdateAsync(u => u.SetProperty(c => c.IsFavorite, true), CancellationToken.None);
+            }
+            return result;
+        }
     }
 
     private static async Task<bool> HasUnreadAsync(ChatService svc, string userId, Guid chatSessionId)
@@ -1072,7 +1101,8 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Equal(new[] { ("alice", one.Id) }, _notifier.UnreadChanged.Select(u => (u.UserId, u.ChatSessionId)));
 
         _notifier.UnreadChanged.Clear();
-        Assert.Equal(2, await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", two.Id, TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", three.Id, TestContext.Current.CancellationToken));
         Assert.Equal(
             new[] { ("alice", two.Id), ("alice", three.Id) }.OrderBy(u => u.Item2),
             _notifier.UnreadChanged.Select(u => (u.UserId, u.ChatSessionId)).OrderBy(u => u.ChatSessionId));
@@ -1369,10 +1399,8 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Equal(before.Chats.OrderBy(c => c.ScheduleId), after.Chats.OrderBy(c => c.ScheduleId));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Deleting_chats_keeps_their_figures_in_analytics_counted_once(bool deleteAll)
+    [Fact]
+    public async Task Deleting_chats_keeps_their_figures_in_analytics_counted_once()
     {
         var provider = await SeedProviderAsync();
         var turnUsage = new Queue<TokenUsage>([
@@ -1416,16 +1444,9 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Equal(1000 + 1000, before[0].TotalInputTokens);
         Assert.Equal(new ChatAnalytics(null, null, 4, 1600, 160, 1.30m), Assert.Single(before[0].Chats, c => c.ScheduleId == null));
 
-        if (deleteAll)
-        {
-            Assert.Equal(3, await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken));
-        }
-        else
-        {
-            Assert.True(await svc.DeleteAsync("alice", first.Id, TestContext.Current.CancellationToken));
-            Assert.True(await svc.DeleteAsync("alice", second.Id, TestContext.Current.CancellationToken));
-            Assert.True(await svc.DeleteAsync("alice", scheduled.Id, TestContext.Current.CancellationToken));
-        }
+        Assert.True(await svc.DeleteAsync("alice", first.Id, TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", second.Id, TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", scheduled.Id, TestContext.Current.CancellationToken));
         Assert.Equal([bobs.Id], _db.Fresh().ChatSessions.AsNoTracking().Select(c => c.Id).ToList());
 
         for (var i = 0; i < queries.Length; i++)
@@ -1441,7 +1462,7 @@ public sealed class ChatServiceTests : IDisposable
         }
 
         // The rest of the day's usage is still counted live, and archived like the others once deleted.
-        Assert.Equal(1, await svc.DeleteAllForUserAsync("bob", TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("bob", bobs.Id, TestContext.Current.CancellationToken));
         var final = await AnalyticsAsync();
         Assert.Equal(before[0].TotalInputTokens, final.TotalInputTokens);
         Assert.Equal(before[0].TotalCostUsd, final.TotalCostUsd);
@@ -1479,11 +1500,14 @@ public sealed class ChatServiceTests : IDisposable
             InterceptionResult<int> result,
             CancellationToken cancellationToken = default)
         {
-            var deleted = eventData.Context!.ChangeTracker.Entries<ChatSession>().FirstOrDefault(e => e.State == EntityState.Deleted);
-            if (!Recorded && deleted is not null)
+            // The save that archives the chat's usage: the delete has read it and not committed.
+            var archived = eventData.Context!.ChangeTracker.Entries<ChatUsage>().FirstOrDefault(e => e.State == EntityState.Deleted);
+            if (!Recorded && archived is not null)
             {
                 using var other = context();
-                await ChatUsageLedger.RecordTitleAsync(other, deleted.Entity.Id, new TokenUsage(40, 6, 0.002m), "p1", CancellationToken.None);
+                // The delete's transaction holds the one shared connection; the title call writes inside it.
+                other.Database.UseTransaction(eventData.Context.Database.CurrentTransaction?.GetDbTransaction());
+                await ChatUsageLedger.RecordTitleAsync(other, archived.Entity.ChatSessionId, new TokenUsage(40, 6, 0.002m), "p1", CancellationToken.None);
                 Recorded = true;
             }
             return result;

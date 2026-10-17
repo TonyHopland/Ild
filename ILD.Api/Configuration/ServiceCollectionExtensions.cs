@@ -70,6 +70,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRunConversationService, RunConversationService>();
         services.AddHostedService<WorktreeRetentionSweeper>();
         services.AddHostedService<NetworkLogRetentionSweeper>();
+        services.AddHostedService<ChatInactivitySweeper>();
         services.AddHostedService<StuckRunWatchdog>();
         services.AddHostedService<ThrottledRunResumeSweeper>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();

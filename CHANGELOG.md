@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Agents can propose a change to a loop template, which a person saves, rejects or reviews in the Loop Editor first.**
 
+- **Chats with no new message for a set number of days can be deleted automatically, starred chats excepted; off by default.**
+
 ### Fixed
 
 - **AI cost is no longer over-counted for resumed Claude Code sessions, or under-counted for opencode turns of several steps.** Costs recorded before this version may be too high for resumed Claude Code sessions.

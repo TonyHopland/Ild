@@ -69,6 +69,23 @@ public sealed class SchedulerSettingsService : ISchedulerSettingsService
         return AppSettingKeys.DefaultNetworkLogRetentionDays;
     }
 
+    public async Task<bool> GetChatAutoDeleteInactiveAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.ChatAutoDeleteInactive, ct);
+        if (s != null && bool.TryParse(s.Value, out var v)) return v;
+        return AppSettingKeys.DefaultChatAutoDeleteInactive;
+    }
+
+    public async Task<int> GetChatAutoDeleteInactiveDaysAsync(CancellationToken ct = default)
+    {
+        var s = await _store.GetByKeyAsync(AppSettingKeys.ChatAutoDeleteInactiveDays, ct);
+        // Held to the ceiling rather than the default, as the network log window is:
+        // a window nobody can have meant is no reason to start deleting sooner.
+        if (s != null && int.TryParse(s.Value, out var v) && v >= 1)
+            return Math.Min(v, AppSettingKeys.MaxChatAutoDeleteInactiveDays);
+        return AppSettingKeys.DefaultChatAutoDeleteInactiveDays;
+    }
+
     public async Task<int> GetMaxAiTraversalsAsync(CancellationToken ct = default)
     {
         var s = await _store.GetByKeyAsync(AppSettingKeys.MaxAiTraversals, ct);

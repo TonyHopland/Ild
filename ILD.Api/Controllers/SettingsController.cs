@@ -43,6 +43,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.ChatSmartTitles,
         AppSettingKeys.ChatTitleProviderTag,
         AppSettingKeys.ChatTitleMaxAttempts,
+        AppSettingKeys.ChatAutoDeleteInactive,
+        AppSettingKeys.ChatAutoDeleteInactiveDays,
         AppSettingKeys.GlobalVariableMaxLength,
     };
 
@@ -111,6 +113,10 @@ public class SettingsController : ControllerBase
             map[AppSettingKeys.ChatTitleProviderTag] = AppSettingKeys.DefaultChatTitleProviderTag;
         if (!map.ContainsKey(AppSettingKeys.ChatTitleMaxAttempts))
             map[AppSettingKeys.ChatTitleMaxAttempts] = AppSettingKeys.DefaultChatTitleMaxAttempts.ToString();
+        if (!map.ContainsKey(AppSettingKeys.ChatAutoDeleteInactive))
+            map[AppSettingKeys.ChatAutoDeleteInactive] = AppSettingKeys.DefaultChatAutoDeleteInactive.ToString().ToLowerInvariant();
+        if (!map.ContainsKey(AppSettingKeys.ChatAutoDeleteInactiveDays))
+            map[AppSettingKeys.ChatAutoDeleteInactiveDays] = AppSettingKeys.DefaultChatAutoDeleteInactiveDays.ToString();
         if (!map.ContainsKey(AppSettingKeys.GlobalVariableMaxLength))
             map[AppSettingKeys.GlobalVariableMaxLength] = AppSettingKeys.DefaultGlobalVariableMaxLength.ToString();
         return Ok(map.Select(kv => new { key = kv.Key, value = kv.Value }));
@@ -191,6 +197,8 @@ public class SettingsController : ControllerBase
         AppSettingKeys.ChatSmartTitles => AppSettingKeys.DefaultChatSmartTitles.ToString().ToLowerInvariant(),
         AppSettingKeys.ChatTitleProviderTag => AppSettingKeys.DefaultChatTitleProviderTag,
         AppSettingKeys.ChatTitleMaxAttempts => AppSettingKeys.DefaultChatTitleMaxAttempts.ToString(),
+        AppSettingKeys.ChatAutoDeleteInactive => AppSettingKeys.DefaultChatAutoDeleteInactive.ToString().ToLowerInvariant(),
+        AppSettingKeys.ChatAutoDeleteInactiveDays => AppSettingKeys.DefaultChatAutoDeleteInactiveDays.ToString(),
         AppSettingKeys.GlobalVariableMaxLength => AppSettingKeys.DefaultGlobalVariableMaxLength.ToString(),
         _ => string.Empty,
     };
@@ -304,6 +312,21 @@ public class SettingsController : ControllerBase
                 if (!int.TryParse(value, out var attempts) || attempts < 1 || attempts > AppSettingKeys.MaxChatTitleMaxAttempts)
                 {
                     error = $"chat.titleMaxAttempts must be an integer between 1 and {AppSettingKeys.MaxChatTitleMaxAttempts}";
+                    return false;
+                }
+                break;
+            case AppSettingKeys.ChatAutoDeleteInactive:
+                if (!bool.TryParse(value, out var autoDelete))
+                {
+                    error = "chat.autoDeleteInactive must be 'true' or 'false'";
+                    return false;
+                }
+                canonical = autoDelete ? "true" : "false";
+                break;
+            case AppSettingKeys.ChatAutoDeleteInactiveDays:
+                if (!int.TryParse(value, out var inactiveDays) || inactiveDays < 1 || inactiveDays > AppSettingKeys.MaxChatAutoDeleteInactiveDays)
+                {
+                    error = $"chat.autoDeleteInactiveDays must be an integer between 1 and {AppSettingKeys.MaxChatAutoDeleteInactiveDays}";
                     return false;
                 }
                 break;

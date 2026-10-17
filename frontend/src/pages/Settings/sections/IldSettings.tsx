@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { GlobalVariableSettingKeys, SchedulerSettingKeys } from "../../../services/auth";
 import { NumericSettingField, SettingRow, ToggleSettingField } from "../controls";
+import ChatRetentionSettings from "./ChatRetentionSettings";
 import ChatTitlesSettings from "./ChatTitlesSettings";
 
 /**
@@ -111,6 +112,8 @@ export default function IldSettings() {
       </section>
 
       <ChatTitlesSettings />
+
+      <ChatRetentionSettings />
 
       <section className="settings-card">
         <div className="settings-card-header">

@@ -68,6 +68,8 @@ vp test --run     # one-shot test run
 
 The test suite covers loop execution, recovery, polling, repository management, auth, provider adapters, metrics, schema validation, and frontend page/component behavior.
 
+The backend tests run on in-memory SQLite and need no database; production uses PostgreSQL only (see AGENTS.md).
+
 ## Database migrations
 
 Never hand-write or edit EF Core migration files — they are generated artifacts. Scaffold from model changes with the EF Core CLI:

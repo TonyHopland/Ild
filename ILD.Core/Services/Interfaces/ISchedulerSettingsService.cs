@@ -120,6 +120,19 @@ public static class AppSettingKeys
     public const int DefaultChatTitleMaxAttempts = 3;
     public const int MaxChatTitleMaxAttempts = 10;
 
+    /// <summary>Whether unstarred chats with no new message for <see cref="ChatAutoDeleteInactiveDays"/> are deleted; off by default.</summary>
+    public const string ChatAutoDeleteInactive = "chat.autoDeleteInactive";
+    public const bool DefaultChatAutoDeleteInactive = false;
+
+    /// <summary>
+    /// Days since a chat's newest message (or, with none, its creation) after which
+    /// it counts as inactive. <see cref="MaxChatAutoDeleteInactiveDays"/> is the
+    /// ceiling both the write path and the read path hold the value to.
+    /// </summary>
+    public const string ChatAutoDeleteInactiveDays = "chat.autoDeleteInactiveDays";
+    public const int DefaultChatAutoDeleteInactiveDays = 14;
+    public const int MaxChatAutoDeleteInactiveDays = 3650;
+
     /// <summary>
     /// The most characters a global variable's value may have when it is
     /// created or edited. Lowering it leaves existing values alone; the next
@@ -164,6 +177,15 @@ public interface ISchedulerSettingsService
     /// never sweep.
     /// </summary>
     Task<int> GetNetworkLogRetentionDaysAsync(CancellationToken ct = default);
+
+    /// <summary>Whether inactive, unstarred chats are deleted automatically.</summary>
+    Task<bool> GetChatAutoDeleteInactiveAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Days without a new message after which a chat counts as inactive, between 1
+    /// and <see cref="AppSettingKeys.MaxChatAutoDeleteInactiveDays"/>.
+    /// </summary>
+    Task<int> GetChatAutoDeleteInactiveDaysAsync(CancellationToken ct = default);
 
     /// <summary>
     /// The most characters a global variable's value may have, between 1 and
