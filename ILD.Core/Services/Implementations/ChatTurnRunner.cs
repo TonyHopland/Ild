@@ -258,6 +258,21 @@ public sealed class ChatTurnRunner : IChatTurnRunner
         }
     }
 
+    public async Task<bool> TryDeleteIfIdleAsync(Guid chatSessionId, Func<Task<bool>> delete)
+    {
+        var gate = TryEnter(chatSessionId);
+        if (gate is null) return false;
+        try
+        {
+            if (_turns.ContainsKey(chatSessionId)) return false;
+            return await delete().ConfigureAwait(false);
+        }
+        finally
+        {
+            Leave(chatSessionId, gate);
+        }
+    }
+
     // One read of one value, and the only way this answer is exposed — the GET a
     // bubble uses on load, on resume and on reconnect all come through here. A turn
     // on its way in or on its way out is still this chat's turn — one has yet to be

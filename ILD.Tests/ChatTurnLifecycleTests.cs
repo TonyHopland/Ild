@@ -183,6 +183,12 @@ public sealed class ChatTurnLifecycleTests
 
         public Task<int> DeleteAllForUserAsync(string userId, CancellationToken ct = default)
             => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<Guid>> ListInactiveAsync(DateTime cutoff, CancellationToken ct = default)
+            => throw new NotSupportedException();
+
+        public Task<bool> DeleteIfInactiveAsync(Guid sessionId, DateTime cutoff, CancellationToken ct = default)
+            => throw new NotSupportedException();
     }
 
     // Built through the container so the test does not pin the constructor's

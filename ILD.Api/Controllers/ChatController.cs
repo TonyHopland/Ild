@@ -11,8 +11,8 @@ namespace ILD.Api.Controllers;
 /// endpoints start chats, list/resume retained history, submit messages (which
 /// interrupt any in-flight turn rather than queueing), cancel an in-flight turn
 /// on its own, record how far a chat has been read, rename, star and search
-/// chats, and delete chats (one or all). A chat is never deleted automatically — only by an
-/// explicit delete.
+/// chats, and delete chats (one or all). Besides an explicit delete, a chat goes only by the
+/// opt-in inactivity setting, which spares starred chats (<c>ChatInactivitySweeper</c>).
 /// </summary>
 [ApiController]
 [Route("api/v1/chat")]

@@ -58,4 +58,13 @@ public interface IChatTurnRunner
     /// no session and does nothing, so it cannot recreate what the delete removed.
     /// </summary>
     Task DeleteAsync(Guid chatSessionId, Func<Task> delete);
+
+    /// <summary>
+    /// Run <paramref name="delete"/> only if the chat is idle: no turn in flight and
+    /// no send, stop or delete under way. A busy chat is never waited on or
+    /// interrupted; the answer is false at once. The delete runs under the chat's
+    /// gate, so whatever it re-checks cannot be changed by a send until it returns;
+    /// its answer is passed back, and an exception from it is rethrown.
+    /// </summary>
+    Task<bool> TryDeleteIfIdleAsync(Guid chatSessionId, Func<Task<bool>> delete);
 }

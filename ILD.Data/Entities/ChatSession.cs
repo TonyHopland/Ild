@@ -11,8 +11,10 @@ namespace ILD.Data.Entities;
 /// store (widened to key on either a LoopRun or a ChatSession). It is durable —
 /// the session row, its bound adapter session, its <see cref="ChatMessage"/>
 /// transcript, and its scratch directory survive process restarts. A user retains
-/// many chats as browsable history (ADR-0013); a chat is reclaimed only when the
-/// user explicitly deletes it (per-chat or "delete all"), never automatically.
+/// many chats as browsable history (ADR-0013); a chat is reclaimed when the user
+/// explicitly deletes it (per-chat or "delete all"), or, only if the opt-in
+/// inactivity setting is on, once it has had no new message for that many days
+/// and is not starred.
 /// </summary>
 public class ChatSession : IHasUpdatedAt
 {

@@ -730,6 +730,32 @@ public sealed class ChatService : IChatService
         return sessions.Count;
     }
 
+    public async Task<IReadOnlyList<Guid>> ListInactiveAsync(DateTime cutoff, CancellationToken ct = default)
+    {
+        var sessions = await _db.ChatSessions.AsNoTracking()
+            .Where(c => !c.IsFavorite)
+            .Select(c => new
+            {
+                c.Id,
+                c.CreatedAt,
+                LastMessageAt = _db.ChatMessages.Where(m => m.ChatSessionId == c.Id).Max(m => (DateTime?)m.CreatedAt),
+            })
+            .ToListAsync(ct);
+        // Compared here rather than in SQL: a CreatedAt the column default wrote is
+        // in SQLite's own text form, which does not order against the form EF writes.
+        return sessions.Where(c => (c.LastMessageAt ?? c.CreatedAt) < cutoff).Select(c => c.Id).ToList();
+    }
+
+    public async Task<bool> DeleteIfInactiveAsync(Guid sessionId, DateTime cutoff, CancellationToken ct = default)
+    {
+        var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == sessionId, ct);
+        if (session is null || session.IsFavorite) return false;
+        var lastMessageAt = await _db.ChatMessages.Where(m => m.ChatSessionId == sessionId).MaxAsync(m => (DateTime?)m.CreatedAt, ct);
+        if ((lastMessageAt ?? session.CreatedAt) >= cutoff) return false;
+        await DeleteSessionAsync(session, ct);
+        return true;
+    }
+
     private async Task DeleteSessionAsync(ChatSession session, CancellationToken ct)
     {
         // The pi extension holds the ILD API token and nothing can find it once the
