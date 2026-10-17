@@ -31,7 +31,7 @@ function Size({ bytes, incomplete }: { bytes: number | null; incomplete: boolean
       {incomplete && (
         <span
           className="storage-incomplete"
-          title="Some of it could not be read, so the real figure may be higher."
+          title="Some of it could not be read or was not measured, so the real figure may be higher."
         >
           {" "}
           (incomplete)

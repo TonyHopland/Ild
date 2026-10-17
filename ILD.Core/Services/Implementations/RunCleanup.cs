@@ -22,14 +22,15 @@ public enum RunCleanupOutcome
 public static class RunCleanup
 {
     /// <summary>
-    /// Whether the run is done with its worktree: not Running, and not parked
-    /// WaitingHuman, whose resume re-enters at CurrentNodeId without passing
-    /// through Start, so nothing would re-create what a cleanup destroys. A
-    /// finished run's ↻ Retry would — or fails cleanly on a node that needs a
-    /// worktree.
+    /// Whether the run is done with its worktree: Completed, Failed or
+    /// Cancelled. Not a parked WaitingHuman run, whose resume re-enters at
+    /// CurrentNodeId without passing through Start, so nothing would re-create
+    /// what a cleanup destroys; a finished run's ↻ Retry would — or fails cleanly
+    /// on a node that needs a worktree. Listed rather than excluded, so a status
+    /// added later is never cleaned up until it is put here.
     /// </summary>
     public static bool IsFinished(LoopRun run)
-        => run.Status is not (LoopRunStatus.Running or LoopRunStatus.WaitingHuman);
+        => run.Status is LoopRunStatus.Completed or LoopRunStatus.Failed or LoopRunStatus.Cancelled;
 
     public static async Task<RunCleanupOutcome> CleanUpAsync(LoopRun run, IRunReclaimer reclaimer, ILoopRunStore runs)
     {

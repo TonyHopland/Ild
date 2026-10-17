@@ -213,7 +213,7 @@ public sealed class StorageService : IStorageService
 
     /// <summary>A path the host sets at startup (Program); there is no default to fall back on here.</summary>
     private static string HostPath(IConfiguration config, string key)
-        => config[key] is { Length: > 0 } path ? path : throw new InvalidOperationException($"{key} is not set.");
+        => config[key] is { } path && !string.IsNullOrWhiteSpace(path) ? path : throw new InvalidOperationException($"{key} is not set.");
 
     private static string? AgentReadRoot()
     {
