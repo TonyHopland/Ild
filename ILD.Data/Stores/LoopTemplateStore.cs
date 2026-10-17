@@ -225,13 +225,10 @@ public class LoopTemplateStore : ILoopTemplateStore
 
     /// <summary>Mark the proposal Applied as the version just inserted, only while it is still pending.</summary>
     private async Task<bool> ApplyAsync(LoopTemplateProposal proposal, LoopTemplateVersionWrite write, DateTime now, CancellationToken ct)
-        => await _db.LoopTemplateProposals
-            .Where(p => p.Id == proposal.Id && p.Status == LoopTemplateProposalStatus.Pending)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.Status, LoopTemplateProposalStatus.Applied)
+        => await LoopTemplateProposalStore.Proposals(_db).DecideAsync(
+            proposal.Id, LoopTemplateProposalStatus.Applied, null, now, ct, s => s
                 .SetProperty(p => p.EditedBeforeSave, !LoopTemplateChanges.Equivalent(proposal.Document, write.Document))
-                .SetProperty(p => p.AppliedVersion, write.Version.VersionNumber)
-                .SetProperty(p => p.DecidedAt, now), ct) == 1;
+                .SetProperty(p => p.AppliedVersion, write.Version.VersionNumber)) == 1;
 
     /// <summary>Make every other pending proposal of the template stale, and commit the save.</summary>
     private async Task<LoopTemplateVersionSave> CommitAsync(

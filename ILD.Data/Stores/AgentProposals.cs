@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using ILD.Data.Entities;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace ILD.Data.Stores;
 
@@ -106,16 +107,22 @@ internal sealed class AgentProposals<TProposal, TStatus>
 
     /// <summary>
     /// Move a proposal out of Pending, compared against Pending so that exactly
-    /// one decision ever lands on it. Returns the rows written.
+    /// one decision ever lands on it. <paramref name="alsoSet"/> writes what
+    /// else that kind of decision records. Returns the rows written.
     /// </summary>
-    public Task<int> DecideAsync(Guid id, TStatus to, string? rejectionReason, DateTime now, CancellationToken ct)
+    public Task<int> DecideAsync(
+        Guid id, TStatus to, string? rejectionReason, DateTime now, CancellationToken ct,
+        Action<UpdateSettersBuilder<TProposal>>? alsoSet = null)
         => _table
             .Where(p => p.Id == id)
             .Where(_isPending)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.Status, to)
-                .SetProperty(p => p.RejectionReason, rejectionReason)
-                .SetProperty(p => p.DecidedAt, now), ct);
+            .ExecuteUpdateAsync(s =>
+            {
+                s.SetProperty(p => p.Status, to)
+                    .SetProperty(p => p.RejectionReason, rejectionReason)
+                    .SetProperty(p => p.DecidedAt, now);
+                alsoSet?.Invoke(s);
+            }, ct);
 
     /// <summary>Reject a pending proposal, keeping the human's reason when they gave one. Returns the rows written.</summary>
     public Task<int> RejectAsync(Guid id, string? reason, CancellationToken ct)
