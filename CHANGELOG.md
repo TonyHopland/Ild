@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **AI cost is no longer over-counted for resumed Claude Code sessions, or under-counted for opencode turns of several steps.** Costs recorded before this version may be too high for resumed Claude Code sessions.
 
+- **The AI provider terminal no longer sometimes leaves out the exit code of a CLI that exits at once.**
+
 ## [0.17.0] - 2026-10-15
 
 ### Added

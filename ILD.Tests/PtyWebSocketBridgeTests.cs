@@ -223,6 +223,37 @@ public class PtyWebSocketBridgeTests
         await run.WaitAsync(cts.Token);
     }
 
+    [Fact]
+    public async Task The_exit_code_is_reported_when_the_child_exited_before_the_bridge_was_listening()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n");
+        pty.ExitUnseen(3);
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            reportExit: true, timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        var closing = ReadUntilCloseAsync(client, cts.Token);
+        while (!closing.IsCompleted)
+        {
+            var fired = clock.FireNextAsync(cts.Token);
+            await Task.WhenAny(fired, closing);
+        }
+        var output = await closing;
+
+        Assert.Contains("boom", output.Text);
+        Assert.Contains("[ild] The CLI exited with code 3.", output.Text);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        await run.WaitAsync(cts.Token);
+    }
+
     /// <summary>
     /// A PTY child that has written <c>output</c> and closed its side: the reader gives
     /// that, then EOF. Its exit is reported only when the test calls <see cref="Exit"/>,
@@ -244,6 +275,7 @@ public class PtyWebSocketBridgeTests
         };
 
         private int _exitCode;
+        private volatile bool _exited;
 
         public Stream ReaderStream { get; } = new MemoryStream(Encoding.UTF8.GetBytes(output), writable: false);
         public Stream WriterStream { get; } = Stream.Null;
@@ -254,16 +286,26 @@ public class PtyWebSocketBridgeTests
 
         public void Exit(int code)
         {
-            _exitCode = code;
+            ExitUnseen(code);
             // Porta.Pty constructs these itself; its constructor is internal.
             var args = (PtyExitedEventArgs)Activator.CreateInstance(
                 typeof(PtyExitedEventArgs), BindingFlags.Instance | BindingFlags.NonPublic, null, [code], null)!;
             ProcessExited?.Invoke(this, args);
         }
 
+        /// <summary>
+        /// The child exits while nobody is subscribed yet: Porta.Pty raises
+        /// <c>ProcessExited</c> to no one, and only <see cref="WaitForExit"/> tells.
+        /// </summary>
+        public void ExitUnseen(int code)
+        {
+            _exitCode = code;
+            _exited = true;
+        }
+
         public void Kill() { }
         public void Resize(int cols, int rows) { }
-        public bool WaitForExit(int milliseconds) => false;
+        public bool WaitForExit(int milliseconds) => _exited;
         public void Dispose() { }
     }
 
