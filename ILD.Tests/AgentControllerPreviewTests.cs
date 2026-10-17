@@ -181,6 +181,51 @@ public class AgentControllerPreviewTests
     }
 
     [Fact]
+    public async Task Preview_starts_carry_the_volume_scope_of_the_runs_repository_or_none_without_one()
+    {
+        using var db = new TestDb();
+        var id = Guid.NewGuid().ToString();
+        var provider = new ILD.Data.Entities.RemoteProvider { Id = Guid.NewGuid(), Name = "p", Type = "Forgejo", Url = "https://e" };
+        db.Context.RemoteProviders.Add(provider);
+        var runRepoId = Guid.NewGuid();
+        var editedRepoId = Guid.NewGuid();
+        db.Context.Repositories.Add(new ILD.Data.Entities.Repository
+        {
+            Id = runRepoId, Name = "r", CloneUrl = "https://e/r.git", RemoteProviderId = provider.Id, KeepPreviewData = true,
+        });
+        db.Context.Repositories.Add(new ILD.Data.Entities.Repository
+        {
+            Id = editedRepoId, Name = "b", CloneUrl = "https://e/b.git", RemoteProviderId = provider.Id, KeepPreviewData = false,
+        });
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+
+        var captured = new List<WorktreePreviewStartOptions?>();
+        var preview = new Mock<IWorktreePreviewService>();
+        preview.Setup(p => p.StartAsync(WorktreePath, It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, WorktreePreviewStartOptions?, CancellationToken>((_, o, _) => captured.Add(o))
+            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
+        preview.Setup(p => p.StartServiceAsync(WorktreePath, "web", It.IsAny<WorktreePreviewStartOptions?>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, WorktreePreviewStartOptions?, CancellationToken>((_, _, o, _) => captured.Add(o))
+            .ReturnsAsync(new WorktreePreviewResponse { State = "running", WorktreePath = WorktreePath });
+        var withRepository = BuildController(
+            new WorkItemView { Id = id, Title = "Agent title", WorktreePath = WorktreePath, RepositoryId = editedRepoId, RunRepositoryId = runRepoId },
+            preview, new Mock<IWorkItemNotifier>(), db);
+        var withoutRepository = BuildController(
+            new WorkItemView { Id = id, Title = "Agent title", WorktreePath = WorktreePath },
+            preview, new Mock<IWorkItemNotifier>(), db);
+
+        Assert.IsType<OkObjectResult>(await withRepository.StartPreview(id, new WorktreePreviewStartRequest()));
+        Assert.IsType<OkObjectResult>(await withRepository.StartPreviewService(id, "web", new WorktreePreviewStartRequest()));
+        Assert.IsType<OkObjectResult>(await withoutRepository.StartPreview(id, new WorktreePreviewStartRequest()));
+
+        var expected = new PreviewVolumeScope(runRepoId, true, id, "Agent title");
+        Assert.Equal(3, captured.Count);
+        Assert.Equal(expected, captured[0]!.Volumes);
+        Assert.Equal(expected, captured[1]!.Volumes);
+        Assert.Null(captured[2]!.Volumes);
+    }
+
+    [Fact]
     public async Task StartPreview_for_item_without_worktree_does_not_broadcast()
     {
         using var db = new TestDb();

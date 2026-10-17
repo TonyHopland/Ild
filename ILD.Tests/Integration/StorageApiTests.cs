@@ -537,7 +537,7 @@ public class StorageOverviewTests
         using var doc = JsonDocument.Parse(body);
         var categories = doc.RootElement.GetProperty("categories").EnumerateArray().ToList();
         Assert.Equal(
-            new[] { "agent-installs", "chat-sessions", "other", "repository-clones", "temp", "worktrees" },
+            new[] { "agent-installs", "chat-sessions", "other", "preview-data", "repository-clones", "temp", "worktrees" },
             categories.Select(c => c.GetProperty("key").GetString()).OrderBy(k => k, StringComparer.Ordinal));
         Assert.All(categories, c => Assert.False(string.IsNullOrWhiteSpace(c.GetProperty("label").GetString())));
         // Temp is shared with every other test running now, so only the data root is quiet enough to pin.
@@ -583,6 +583,46 @@ public class StorageOverviewTests
 
         var everythingInData = categories.Where(c => c.GetProperty("key").GetString() != "temp").Sum(Bytes);
         Assert.Equal(DiskUsage(data), everythingInData);
+    }
+
+    [Fact]
+    public async Task Preview_data_is_its_own_category_with_an_entry_per_repository_folder_and_orphans_marked()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var root = Path.Combine(WorktreesRoot(factory), ".preview-volumes");
+        var kept = await SeedRepositoryAsync(factory, "kept-repo");
+        var off = await SeedRepositoryAsync(factory, "off-repo");
+        await PreviewDataApiTests.SetKeepAsync(factory, kept, keep: true);
+        var deleted = Guid.NewGuid();
+        WriteFile(Path.Combine(root, kept.ToString("D"), "data", "a.bin"), 1 * MiB);
+        WriteFile(Path.Combine(root, off.ToString("D"), "data", "b.bin"), 512 * KiB);
+        WriteFile(Path.Combine(root, deleted.ToString("D"), "cache", "c.bin"), 256 * KiB);
+        WriteFile(Path.Combine(root, "stray", "d.bin"), 128 * KiB);
+
+        using var doc = JsonDocument.Parse(await client.GetStringAsync("/api/v1/storage", TestContext.Current.CancellationToken));
+
+        var data = Category(doc, "preview-data");
+        Assert.Equal("Preview data", data.GetProperty("label").GetString());
+        var keptEntry = RepositoryEntry(data, kept);
+        Assert.Equal("kept-repo", keptEntry.GetProperty("label").GetString());
+        Assert.Equal("kept-repo", keptEntry.GetProperty("repositoryName").GetString());
+        AssertAbout(1 * MiB, Bytes(keptEntry));
+        var offEntry = RepositoryEntry(data, off);
+        var offLabel = offEntry.GetProperty("label").GetString()!;
+        Assert.Contains("off-repo", offLabel);
+        Assert.NotEqual("off-repo", offLabel);
+        Assert.Contains("off", offLabel.Replace("off-repo", ""), StringComparison.OrdinalIgnoreCase);
+        AssertAbout(512 * KiB, Bytes(offEntry));
+        var orphan = RepositoryEntry(data, deleted);
+        Assert.Equal(JsonValueKind.Null, orphan.GetProperty("repositoryName").ValueKind);
+        AssertAbout(256 * KiB, Bytes(orphan));
+        var unowned = Entry(data, "unowned");
+        Assert.Equal(JsonValueKind.Null, unowned.GetProperty("repositoryId").ValueKind);
+        AssertAbout(128 * KiB, Bytes(unowned));
+        Assert.Equal(Bytes(data), Entries(data).Sum(Bytes));
+
+        Assert.True(Bytes(Entry(Category(doc, "worktrees"), "unowned")) < Slack, "preview data was also counted as unowned worktrees");
     }
 
     [Fact]

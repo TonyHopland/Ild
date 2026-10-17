@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, act, within } from "@testing-library/react";
 import StorageSettings from "./StorageSettings";
 import * as services from "../../../services/auth";
 
@@ -364,5 +364,129 @@ describe("StorageSettings worktree cleanup", () => {
     expect(document.body.textContent).toBe("");
     expect(spies.cleanUpWorktrees).not.toHaveBeenCalled();
     expect(consoleError).not.toHaveBeenCalled();
+  });
+});
+
+const KEPT_REPO = "33333333-3333-3333-3333-333333333333";
+const DELETED_REPO = "44444444-4444-4444-4444-444444444444";
+
+function overviewWithPreviewData() {
+  const base = overview(false);
+  return {
+    categories: [
+      ...base.categories,
+      {
+        key: "preview-data",
+        label: "Preview data",
+        bytes: 3 * MB,
+        incomplete: false,
+        entries: [
+          {
+            key: KEPT_REPO,
+            label: "gamma-app",
+            repositoryId: KEPT_REPO,
+            repositoryName: "gamma-app",
+            bytes: 2 * MB,
+            incomplete: false,
+          },
+          {
+            key: DELETED_REPO,
+            label: "Repository no longer exists",
+            repositoryId: DELETED_REPO,
+            repositoryName: null,
+            bytes: 1 * MB,
+            incomplete: false,
+          },
+          {
+            key: "unowned",
+            label: "Not a repository's preview data",
+            repositoryId: null,
+            repositoryName: null,
+            bytes: 0,
+            incomplete: false,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** The DELETE goes through the real storage service; everything else is spied. */
+function stubDeleteFetch(response: { status: number; body: unknown }) {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: response.status < 400,
+    status: response.status,
+    text: () => Promise.resolve(JSON.stringify(response.body)),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function deleteCalls(fetchMock: ReturnType<typeof vi.fn>) {
+  return fetchMock.mock.calls.filter(
+    (c: unknown[]) => (c[1] as { method?: string } | undefined)?.method === "DELETE",
+  );
+}
+
+const entryRow = (label: string) => screen.getByText(label).closest("li") as HTMLElement;
+
+async function renderWithPreviewData() {
+  const spies = spyServices();
+  spies.getOverview.mockResolvedValue(overviewWithPreviewData() as never);
+  render(<StorageSettings />);
+  await screen.findByText("gamma-app");
+  return spies;
+}
+
+describe("StorageSettings preview data", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("each repository's preview data has a Delete that asks first, deletes that folder and measures again", async () => {
+    const fetchMock = stubDeleteFetch({ status: 200, body: {} });
+    const spies = await renderWithPreviewData();
+
+    // Only the preview-data entries that name a repository can be deleted.
+    expect(screen.getAllByRole("button", { name: /delete/i })).toHaveLength(2);
+    expect(
+      within(entryRow("Not a repository's preview data")).queryByRole("button", { name: /delete/i }),
+    ).toBeNull();
+
+    fireEvent.click(within(entryRow("gamma-app")).getByRole("button", { name: /delete/i }));
+    expect(deleteCalls(fetchMock)).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
+
+    await waitFor(() => expect(deleteCalls(fetchMock)).toHaveLength(1));
+    expect(deleteCalls(fetchMock)[0][0]).toMatch(new RegExp(`/storage/preview-data/${KEPT_REPO}$`));
+    await waitFor(() => expect(spies.getOverview).toHaveBeenCalledTimes(2));
+  });
+
+  test("the folder of a deleted repository can be deleted too", async () => {
+    const fetchMock = stubDeleteFetch({ status: 200, body: {} });
+    await renderWithPreviewData();
+
+    fireEvent.click(
+      within(entryRow("Repository no longer exists")).getByRole("button", { name: /delete/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
+
+    await waitFor(() => expect(deleteCalls(fetchMock)).toHaveLength(1));
+    expect(deleteCalls(fetchMock)[0][0]).toMatch(new RegExp(`/storage/preview-data/${DELETED_REPO}$`));
+  });
+
+  test("a refused delete shows the reason", async () => {
+    const refusal =
+      "A preview is already running for work item 305 (Title). Stop it before resetting the preview data.";
+    stubDeleteFetch({ status: 409, body: { error: refusal } });
+    await renderWithPreviewData();
+
+    fireEvent.click(within(entryRow("gamma-app")).getByRole("button", { name: /delete/i }));
+    fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
+
+    await waitFor(() =>
+      expect(screen.getAllByRole("alert").some((a) => a.textContent?.includes(refusal))).toBe(true),
+    );
   });
 });

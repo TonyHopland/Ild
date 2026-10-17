@@ -106,6 +106,48 @@ public class RepositoriesIntegrationTests
         Assert.Equal(env, await ReadStoredPreviewEnvAsync(factory, id));
     }
 
+    [Fact]
+    public async Task Keep_preview_data_is_off_by_default_settable_and_kept_by_a_PUT_that_leaves_it_out()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var providerId = await SeedProviderAsync(factory);
+        var ct = TestContext.Current.CancellationToken;
+        async Task<bool> Keep(HttpResponseMessage response)
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            return (await response.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("keepPreviewData").GetBoolean();
+        }
+
+        var created = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId), ct);
+        var createdBody = await created.Content.ReadFromJsonAsync<JsonElement>(ct);
+        var id = createdBody.GetProperty("id").GetString()!;
+        Assert.False(createdBody.GetProperty("keepPreviewData").GetBoolean());
+
+        Assert.True(await Keep(await client.PutAsJsonAsync($"/api/v1/repositories/{id}", new
+        {
+            name = "my-repo", cloneUrl = "https://git.example.com/my-repo.git", defaultBranch = "main",
+            remoteProviderId = providerId, defaultIntakeStatus = "Backlog", keepPreviewData = true,
+        }, ct)));
+        Assert.True(await Keep(await client.GetAsync($"/api/v1/repositories/{id}", ct)));
+        var listed = await client.GetFromJsonAsync<JsonElement>("/api/v1/repositories", ct);
+        Assert.True(listed.EnumerateArray().Single(r => r.GetProperty("id").GetString() == id).GetProperty("keepPreviewData").GetBoolean());
+
+        Assert.True(await Keep(await client.PutAsJsonAsync($"/api/v1/repositories/{id}", NewRepoPayload(providerId), ct)));
+        Assert.False(await Keep(await client.PutAsJsonAsync($"/api/v1/repositories/{id}", new
+        {
+            name = "my-repo", cloneUrl = "https://git.example.com/my-repo.git", defaultBranch = "main",
+            remoteProviderId = providerId, defaultIntakeStatus = "Backlog", keepPreviewData = false,
+        }, ct)));
+
+        var createdOn = await client.PostAsJsonAsync("/api/v1/repositories", new
+        {
+            name = "kept-repo", cloneUrl = "https://git.example.com/kept-repo.git", defaultBranch = "main",
+            remoteProviderId = providerId, defaultIntakeStatus = "Backlog", keepPreviewData = true,
+        }, ct);
+        Assert.True((await createdOn.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("keepPreviewData").GetBoolean());
+    }
+
     // The agent service token authenticates fine — it just is not a user, and every
     // endpoint outside /api/v1/agent demands the user role. These tests pin that.
     private static HttpClient CreateAgentClient(ApiFactory factory)

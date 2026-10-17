@@ -1083,3 +1083,149 @@ describe("Repositories page — Test button", () => {
     await waitFor(() => expect(screen.queryByText("Reached branch main.")).toBeNull());
   });
 });
+
+/** The page's list/update/create/.env calls, plus the preview-data reset, answered from `state`. */
+function previewDataFetch(
+  state: { repos: Record<string, unknown>[] },
+  onReset: (id: string) => Promise<FakeResponse> = () => Promise.resolve(reply({})),
+) {
+  return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    const reset = /\/repositories\/([^/]+)\/preview-data\/reset$/.exec(url);
+    if (reset && method === "POST") return onReset(reset[1]);
+    if (/\/repositories\/[^/]+\/preview-env$/.test(url))
+      return Promise.resolve(reply({ previewEnv: null }));
+    const one = /\/repositories\/([^/?]+)$/.exec(url);
+    if (one && method === "PUT") {
+      const sent = JSON.parse(String(init?.body));
+      state.repos = state.repos.map((r) => (r.id === one[1] ? { ...r, ...sent, id: r.id } : r));
+      return Promise.resolve(reply(state.repos.find((r) => r.id === one[1])));
+    }
+    if (/\/repositories$/.test(url) && method === "POST") {
+      const created = { ...repo("repo-new", "new-repo"), ...JSON.parse(String(init?.body)) };
+      state.repos = [...state.repos, created];
+      return Promise.resolve(reply(created, 201));
+    }
+    if (url.includes("/remoteproviders")) return Promise.resolve(reply(testProviders));
+    if (url.includes("/repositories")) return Promise.resolve(reply(state.repos));
+    return Promise.resolve(reply(null, 404));
+  });
+}
+
+const keepCheckbox = () =>
+  screen.getByLabelText("Keep preview data between runs") as HTMLInputElement;
+
+function sentBodies(fetchMock: ReturnType<typeof vi.fn>, method: string) {
+  return fetchMock.mock.calls
+    .filter((c: unknown[]) => (c[1] as { method?: string } | undefined)?.method === method)
+    .map((c: unknown[]) => ({
+      url: c[0] as string,
+      body: (c[1] as { body?: string }).body ? JSON.parse((c[1] as { body: string }).body) : null,
+    }));
+}
+
+function resetRequests(fetchMock: ReturnType<typeof vi.fn>) {
+  return sentBodies(fetchMock, "POST").filter((c) => c.url.includes("/preview-data/reset"));
+}
+
+describe("Repositories page — preview data", () => {
+  test("the edit form shows the stored Keep preview data setting and saves a change to it", async () => {
+    const state = {
+      repos: [
+        { ...repo("repo-1", "alpha-app"), keepPreviewData: true },
+        { ...repo("repo-2", "beta-app"), keepPreviewData: false },
+      ],
+    };
+    const fetchMock = previewDataFetch(state);
+    renderPage(fetchMock);
+    await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
+
+    fireEvent.click(within(repoRow("alpha-app")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Repository");
+    expect(keepCheckbox().checked).toBe(true);
+
+    fireEvent.click(keepCheckbox());
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Repository")).toBeNull());
+
+    const put = sentBodies(fetchMock, "PUT").find((c) => c.url.endsWith("/repositories/repo-1"));
+    expect(put?.body.keepPreviewData).toBe(false);
+
+    fireEvent.click(within(repoRow("beta-app")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Repository");
+    expect(keepCheckbox().checked).toBe(false);
+  });
+
+  test("the create form starts with Keep preview data off, offers no reset, and sends the setting", async () => {
+    const fetchMock = previewDataFetch({ repos: [] });
+    renderPage(fetchMock);
+    await waitFor(() => expect(screen.getByText("+ Add repository")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("+ Add repository"));
+    await screen.findByText("New Repository");
+    expect(keepCheckbox().checked).toBe(false);
+    expect(screen.queryByRole("button", { name: "Reset preview data" })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "new-repo" } });
+    fireEvent.change(screen.getByLabelText("Clone URL"), {
+      target: { value: "https://git.example.com/new-repo.git" },
+    });
+    fireEvent.change(screen.getByLabelText("Remote Provider"), { target: { value: "prov-1" } });
+    fireEvent.click(keepCheckbox());
+    fireEvent.click(screen.getByText("Create"));
+    await waitFor(() => expect(screen.queryByText("New Repository")).toBeNull());
+
+    const post = sentBodies(fetchMock, "POST").find((c) => /\/repositories$/.test(c.url));
+    expect(post?.body.keepPreviewData).toBe(true);
+  });
+
+  test("Reset preview data says it wipes every work item's preview data and resets only once confirmed", async () => {
+    const state = { repos: [{ ...repo("repo-1", "alpha-app"), keepPreviewData: true }] };
+    const fetchMock = previewDataFetch(state);
+    renderPage(fetchMock);
+    await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
+
+    fireEvent.click(within(repoRow("alpha-app")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Repository");
+    fireEvent.click(screen.getByRole("button", { name: "Reset preview data" }));
+
+    expect(
+      screen.getByText(/wipes the preview data for every work item in alpha-app/i),
+    ).toBeTruthy();
+    expect(resetRequests(fetchMock)).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /^confirm/i }));
+
+    await waitFor(() => expect(resetRequests(fetchMock)).toHaveLength(1));
+    expect(resetRequests(fetchMock)[0].url).toMatch(/\/repositories\/repo-1\/preview-data\/reset$/);
+  });
+
+  test("a refused reset shows the reason in the form, and not in another repository's", async () => {
+    const refusal =
+      "A preview is already running for work item 305 (Title). Stop it before resetting the preview data.";
+    const state = {
+      repos: [
+        { ...repo("repo-1", "alpha-app"), keepPreviewData: true },
+        { ...repo("repo-2", "beta-app"), keepPreviewData: true },
+      ],
+    };
+    const fetchMock = previewDataFetch(state, () => Promise.resolve(reply({ error: refusal }, 409)));
+    renderPage(fetchMock);
+    await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
+
+    fireEvent.click(within(repoRow("alpha-app")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Repository");
+    fireEvent.click(screen.getByRole("button", { name: "Reset preview data" }));
+    fireEvent.click(screen.getByRole("button", { name: /^confirm/i }));
+
+    await waitFor(() =>
+      expect(screen.getAllByRole("alert").some((a) => a.textContent?.includes(refusal))).toBe(true),
+    );
+
+    fireEvent.click(screen.getByText("×"));
+    await waitFor(() => expect(screen.queryByText("Edit Repository")).toBeNull());
+    fireEvent.click(within(repoRow("beta-app")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Repository");
+    expect(screen.queryByText(refusal)).toBeNull();
+  });
+});
