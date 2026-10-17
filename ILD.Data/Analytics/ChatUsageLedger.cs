@@ -83,28 +83,42 @@ public static class ChatUsageLedger
     /// </summary>
     public static async Task ArchiveAsync(AppDbContext db, Guid chatSessionId, CancellationToken ct)
     {
-        // Summed in memory: SQLite cannot sum decimals in SQL.
-        var usages = await db.ChatUsages
+        // The rows are fixed first, so a call recorded meanwhile is neither summed
+        // nor removed: it stays live, counted once.
+        var ids = await db.ChatUsages
             .Where(u => u.ChatSessionId == chatSessionId)
+            .Select(u => u.Id)
             .ToListAsync(ct);
+        if (ids.Count == 0) return;
 
-        foreach (var group in usages.GroupBy(u => (Day: u.CreatedAt.Date, u.ScheduleId, u.AiProvider)))
+        foreach (var bucket in await SumPerDay(db.ChatUsages.Where(u => ids.Contains(u.Id))).ToListAsync(ct))
         {
-            var newest = group.MaxBy(u => u.CreatedAt)!;
-            db.ChatAnalyticsBuckets.Add(new ChatAnalyticsBucket
-            {
-                Id = Guid.NewGuid(),
-                BucketDate = group.Key.Day,
-                ScheduleId = group.Key.ScheduleId,
-                ScheduleName = newest.ScheduleName,
-                LastRecordedAt = newest.CreatedAt,
-                AiProvider = group.Key.AiProvider,
-                TurnCount = group.Count(u => u.Kind == ChatUsageKind.Turn),
-                TotalInputTokens = group.Sum(u => u.InputTokens),
-                TotalOutputTokens = group.Sum(u => u.OutputTokens),
-                TotalCostUsd = group.Sum(u => u.CostUsd ?? 0m),
-            });
+            bucket.Id = Guid.NewGuid();
+            db.ChatAnalyticsBuckets.Add(bucket);
         }
-        db.ChatUsages.RemoveRange(usages);
+
+        var tracked = db.ChatUsages.Local.ToDictionary(u => u.Id);
+        db.ChatUsages.RemoveRange(ids.Select(id => tracked.GetValueOrDefault(id) ?? new ChatUsage { Id = id }));
     }
+
+    /// <summary>
+    /// <paramref name="usages"/> summed in the database per UTC day, schedule and
+    /// provider, as the archive keeps them: named by the newest call, a null cost
+    /// counted as none, title calls in the figures but not in the turns. Without ids.
+    /// </summary>
+    public static IQueryable<ChatAnalyticsBucket> SumPerDay(IQueryable<ChatUsage> usages)
+        => usages
+            .GroupBy(u => new { Day = u.CreatedAt.Date, u.ScheduleId, u.AiProvider })
+            .Select(g => new ChatAnalyticsBucket
+            {
+                BucketDate = g.Key.Day,
+                ScheduleId = g.Key.ScheduleId,
+                ScheduleName = g.OrderByDescending(u => u.CreatedAt).Select(u => u.ScheduleName).First(),
+                LastRecordedAt = g.Max(u => u.CreatedAt),
+                AiProvider = g.Key.AiProvider,
+                TurnCount = g.Count(u => u.Kind == ChatUsageKind.Turn),
+                TotalInputTokens = g.Sum(u => u.InputTokens),
+                TotalOutputTokens = g.Sum(u => u.OutputTokens),
+                TotalCostUsd = g.Sum(u => u.CostUsd ?? 0m),
+            });
 }
