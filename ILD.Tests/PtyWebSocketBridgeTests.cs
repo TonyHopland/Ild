@@ -280,6 +280,38 @@ public class PtyWebSocketBridgeTests
         await run.WaitAsync(cts.Token);
     }
 
+    [Fact]
+    public async Task A_client_that_never_answers_the_close_is_let_go_once_the_bound_runs_out()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n");
+        pty.ExitUnseen(0);
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        await ReadUntilCloseAsync(client, cts.Token);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        // The client never sends its close reply. Only the bounds running out end the
+        // session: without the last one this runs out of armed timers and the guard
+        // cancels it.
+        while (!run.IsCompleted)
+        {
+            var fired = clock.FireNextAsync(cts.Token);
+            await Task.WhenAny(fired, run);
+            if (!run.IsCompleted) await fired;
+        }
+        await run;
+
+        Assert.Equal(WebSocketState.CloseReceived, client.State);
+    }
+
     /// <summary>
     /// A PTY child that has written <c>output</c> and closed its side: the reader gives
     /// that, then EOF, or with <c>endsInEio</c> the EIO a read gives on Linux. Its exit is reported only when the test calls <see cref="Exit"/>,
