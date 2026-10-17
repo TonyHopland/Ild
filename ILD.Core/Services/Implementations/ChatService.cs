@@ -752,11 +752,16 @@ public sealed class ChatService : IChatService
         if (session is null || session.IsFavorite) return false;
         var lastMessageAt = await _db.ChatMessages.Where(m => m.ChatSessionId == sessionId).MaxAsync(m => (DateTime?)m.CreatedAt, ct);
         if ((lastMessageAt ?? session.CreatedAt) >= cutoff) return false;
-        await DeleteSessionAsync(session, ct);
-        return true;
+        return await DeleteSessionAsync(session, ct, unlessStarred: true);
     }
 
-    private async Task DeleteSessionAsync(ChatSession session, CancellationToken ct)
+    /// <summary>
+    /// The one hard-delete. With <paramref name="unlessStarred"/> the row goes only if
+    /// it is still unstarred when it is deleted, since starring does not take the
+    /// chat's turn gate; a chat starred meanwhile is kept, without its pi files,
+    /// as after a failed delete. Returns whether the chat was deleted.
+    /// </summary>
+    private async Task<bool> DeleteSessionAsync(ChatSession session, CancellationToken ct, bool unlessStarred = false)
     {
         // The pi extension holds the ILD API token and nothing can find it once the
         // row is gone, so it goes first: a failure throws and keeps the chat, and
@@ -767,10 +772,25 @@ public sealed class ChatService : IChatService
         // Messages and adapter snapshots cascade-delete via their FKs; the usage
         // moves into the analytics archive in the same commit; the loop scratchpad
         // is in-memory only, so drop its entry explicitly.
-        _loopScratchpad.Clear(session.Id);
-        await ChatUsageLedger.ArchiveAsync(_db, session.Id, ct);
-        _db.ChatSessions.Remove(session);
-        await _db.SaveChangesAsync(ct);
+        if (unlessStarred)
+        {
+            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+            await ChatUsageLedger.ArchiveAsync(_db, session.Id, ct);
+            await _db.SaveChangesAsync(ct);
+            var removed = await _db.ChatSessions
+                .Where(c => c.Id == session.Id && !c.IsFavorite)
+                .ExecuteDeleteAsync(ct);
+            if (removed == 0) return false;
+            await transaction.CommitAsync(ct);
+            _loopScratchpad.Clear(session.Id);
+        }
+        else
+        {
+            _loopScratchpad.Clear(session.Id);
+            await ChatUsageLedger.ArchiveAsync(_db, session.Id, ct);
+            _db.ChatSessions.Remove(session);
+            await _db.SaveChangesAsync(ct);
+        }
 
         // An unread chat takes its dot with it, in every window of the owner's.
         await _notifier.UnreadChangedAsync(session.UserId, session.Id);
@@ -790,6 +810,7 @@ public sealed class ChatService : IChatService
                 await AgentWritableFiles.DeleteAsync([session.ScratchPath], CancellationToken.None);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { }
+        return true;
     }
 
     private async Task FinalizeAssistantAsync(

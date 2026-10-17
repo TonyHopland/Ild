@@ -947,6 +947,53 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Contains(_db.Context.ChatSessions, c => c.Id == bobs.Id);
     }
 
+    [Fact]
+    public async Task An_inactive_chat_starred_after_the_sweeps_check_is_kept()
+    {
+        var provider = await SeedProviderAsync();
+        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("x"))));
+        var started = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
+        await svc.ExecuteTurnAsync(started.Id, Guid.NewGuid(), "hi", CancellationToken.None);
+        // Opened up front: a context cannot first open the connection while the sweep's read is still on it.
+        using var starring = _db.Fresh();
+        Assert.Equal(1, await starring.ChatSessions.CountAsync(TestContext.Current.CancellationToken));
+        var starAfterCheck = new StarAfterLastMessageRead(starring, started.Id);
+        using var deleting = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(_db.Context.Database.GetDbConnection()).AddInterceptors(starAfterCheck).Options);
+        var sweep = new ChatService(deleting, _db.Providers, Mock.Of<IAgentAdapterRegistry>(), _notifier, Options,
+            _db.LoopRuns, _loopScratchpad, _chatClones);
+
+        Assert.False(await sweep.DeleteIfInactiveAsync(started.Id, DateTime.UtcNow.AddDays(1), TestContext.Current.CancellationToken));
+
+        Assert.True(starAfterCheck.Starred);
+        using var ctx = _db.Fresh();
+        var kept = Assert.Single(ctx.ChatSessions.AsNoTracking());
+        Assert.True(kept.IsFavorite);
+        Assert.NotEmpty(ctx.ChatMessages.AsNoTracking());
+    }
+
+    // Stars the chat once the sweep has read its newest message, the last thing it
+    // checks before deleting: starring does not wait for the chat's turn gate.
+    private sealed class StarAfterLastMessageRead(AppDbContext starring, Guid chatId) : DbCommandInterceptor
+    {
+        public bool Starred { get; private set; }
+
+        public override async ValueTask<System.Data.Common.DbDataReader> ReaderExecutedAsync(
+            System.Data.Common.DbCommand command,
+            CommandExecutedEventData eventData,
+            System.Data.Common.DbDataReader result,
+            CancellationToken cancellationToken = default)
+        {
+            if (!Starred && command.CommandText.Contains("MAX(") && command.CommandText.Contains("\"ChatMessages\""))
+            {
+                Starred = true;
+                await starring.ChatSessions.Where(c => c.Id == chatId)
+                    .ExecuteUpdateAsync(u => u.SetProperty(c => c.IsFavorite, true), CancellationToken.None);
+            }
+            return result;
+        }
+    }
+
     private static async Task<bool> HasUnreadAsync(ChatService svc, string userId, Guid chatSessionId)
         => (await svc.ListForUserAsync(userId, TestContext.Current.CancellationToken))
             .Single(c => c.Id == chatSessionId).HasUnread;

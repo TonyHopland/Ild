@@ -51,6 +51,10 @@ public sealed class ChatInactivitySweeper : BackgroundService
             {
                 await SweepOnceAsync(stoppingToken);
             }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                return;
+            }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Inactive chat sweep failed");
@@ -83,10 +87,12 @@ public sealed class ChatInactivitySweeper : BackgroundService
             var chats = scope.ServiceProvider.GetRequiredService<IChatService>();
             try
             {
-                if (await _runner.TryDeleteIfIdleAsync(chatId, () => chats.DeleteIfInactiveAsync(chatId, cutoff, ct)))
+                // Not cancelled by shutdown once begun: stopping halfway would leave
+                // the chat without its pi files for no reason.
+                if (await _runner.TryDeleteIfIdleAsync(chatId, () => chats.DeleteIfInactiveAsync(chatId, cutoff, CancellationToken.None)))
                     deleted++;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            catch (Exception ex)
             {
                 _log.LogWarning(ex, "Could not delete inactive chat {ChatSessionId}; it is kept and retried on the next sweep", chatId);
             }

@@ -2,8 +2,8 @@ namespace ILD.Core.Services.Implementations;
 
 /// <summary>
 /// Configuration for the standalone chat feature: where per-session scratch
-/// directories live. Chats are retained until the user deletes them (ADR-0013) —
-/// there is no inactivity sweeper.
+/// directories live. Chats are retained until the user deletes them (ADR-0013),
+/// or, if the opt-in setting is on, <see cref="ChatInactivitySweeper"/> finds them inactive.
 /// </summary>
 public sealed class ChatOptions
 {
