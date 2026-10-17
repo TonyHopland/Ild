@@ -718,18 +718,6 @@ public sealed class ChatService : IChatService
         return await DeleteSessionAsync(session, ct);
     }
 
-    public async Task<int> DeleteAllForUserAsync(string userId, CancellationToken ct = default)
-    {
-        var sessions = await _db.ChatSessions.Where(c => c.UserId == userId).ToListAsync(ct);
-        var removed = 0;
-        foreach (var session in sessions)
-        {
-            if (ct.IsCancellationRequested) break;
-            if (await DeleteSessionAsync(session, ct)) removed++;
-        }
-        return removed;
-    }
-
     public async Task<IReadOnlyList<Guid>> ListInactiveAsync(DateTime cutoff, CancellationToken ct = default)
     {
         var sessions = await _db.ChatSessions.AsNoTracking()

@@ -70,7 +70,7 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
     }
 
     [Fact]
-    public async Task Read_only_folders_the_agent_planted_never_block_deleting_all_chats()
+    public async Task Read_only_folders_the_agent_planted_never_block_deleting_chats()
     {
         var svc = NewService();
         var first = await StartChatAsync(svc);
@@ -80,7 +80,8 @@ public sealed class ChatServiceIldExtensionTests : IDisposable
         LockFolderIn(firstFiles.AgentDir);
         LockFolderIn(secondFiles.SessionDir);
 
-        Assert.Equal(2, await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", first, TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", second, TestContext.Current.CancellationToken));
 
         Assert.Empty(_db.Context.ChatSessions);
         Assert.False(Directory.Exists(firstFiles.AgentDir));

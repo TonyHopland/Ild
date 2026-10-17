@@ -930,25 +930,6 @@ public sealed class ChatServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteAllForUserAsync_removes_every_chat_the_user_owns_and_no_others()
-    {
-        var provider = await SeedProviderAsync();
-        var svc = NewService(new FakeAdapter(_ => Task.FromResult(NodeExecutionResult.Ok("ok"))));
-        var a1 = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-        var a2 = await svc.StartAsync("alice", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-        var bobs = await svc.StartAsync("bob", provider.Id, new[] { "ild" }, TestContext.Current.CancellationToken);
-        var a1Scratch = _db.Context.ChatSessions.Single(c => c.Id == a1.Id).ScratchPath;
-
-        var removed = await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, removed);
-        Assert.False(Directory.Exists(a1Scratch), "scratch directories should be removed");
-        Assert.DoesNotContain(_db.Context.ChatSessions, c => c.Id == a1.Id || c.Id == a2.Id);
-        // Bob's chat is untouched.
-        Assert.Contains(_db.Context.ChatSessions, c => c.Id == bobs.Id);
-    }
-
-    [Fact]
     public async Task An_inactive_chat_starred_after_the_sweeps_check_is_kept()
     {
         var provider = await SeedProviderAsync();
@@ -1120,7 +1101,8 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Equal(new[] { ("alice", one.Id) }, _notifier.UnreadChanged.Select(u => (u.UserId, u.ChatSessionId)));
 
         _notifier.UnreadChanged.Clear();
-        Assert.Equal(2, await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", two.Id, TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", three.Id, TestContext.Current.CancellationToken));
         Assert.Equal(
             new[] { ("alice", two.Id), ("alice", three.Id) }.OrderBy(u => u.Item2),
             _notifier.UnreadChanged.Select(u => (u.UserId, u.ChatSessionId)).OrderBy(u => u.ChatSessionId));
@@ -1417,10 +1399,8 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Equal(before.Chats.OrderBy(c => c.ScheduleId), after.Chats.OrderBy(c => c.ScheduleId));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Deleting_chats_keeps_their_figures_in_analytics_counted_once(bool deleteAll)
+    [Fact]
+    public async Task Deleting_chats_keeps_their_figures_in_analytics_counted_once()
     {
         var provider = await SeedProviderAsync();
         var turnUsage = new Queue<TokenUsage>([
@@ -1464,16 +1444,9 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Equal(1000 + 1000, before[0].TotalInputTokens);
         Assert.Equal(new ChatAnalytics(null, null, 4, 1600, 160, 1.30m), Assert.Single(before[0].Chats, c => c.ScheduleId == null));
 
-        if (deleteAll)
-        {
-            Assert.Equal(3, await svc.DeleteAllForUserAsync("alice", TestContext.Current.CancellationToken));
-        }
-        else
-        {
-            Assert.True(await svc.DeleteAsync("alice", first.Id, TestContext.Current.CancellationToken));
-            Assert.True(await svc.DeleteAsync("alice", second.Id, TestContext.Current.CancellationToken));
-            Assert.True(await svc.DeleteAsync("alice", scheduled.Id, TestContext.Current.CancellationToken));
-        }
+        Assert.True(await svc.DeleteAsync("alice", first.Id, TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", second.Id, TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("alice", scheduled.Id, TestContext.Current.CancellationToken));
         Assert.Equal([bobs.Id], _db.Fresh().ChatSessions.AsNoTracking().Select(c => c.Id).ToList());
 
         for (var i = 0; i < queries.Length; i++)
@@ -1489,7 +1462,7 @@ public sealed class ChatServiceTests : IDisposable
         }
 
         // The rest of the day's usage is still counted live, and archived like the others once deleted.
-        Assert.Equal(1, await svc.DeleteAllForUserAsync("bob", TestContext.Current.CancellationToken));
+        Assert.True(await svc.DeleteAsync("bob", bobs.Id, TestContext.Current.CancellationToken));
         var final = await AnalyticsAsync();
         Assert.Equal(before[0].TotalInputTokens, final.TotalInputTokens);
         Assert.Equal(before[0].TotalCostUsd, final.TotalCostUsd);

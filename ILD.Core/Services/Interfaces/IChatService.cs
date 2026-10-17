@@ -102,13 +102,6 @@ public interface IChatService
     Task<bool> DeleteAsync(string userId, Guid sessionId, CancellationToken ct = default);
 
     /// <summary>
-    /// Hard-delete every chat the user owns (the "delete all" action). Returns the
-    /// count removed. Throws like <see cref="DeleteAsync"/>, keeping the chat that
-    /// failed and any not yet reached.
-    /// </summary>
-    Task<int> DeleteAllForUserAsync(string userId, CancellationToken ct = default);
-
-    /// <summary>
     /// Every user's unstarred chats whose last activity — the newest message of
     /// either role, or with none the chat's creation — is before
     /// <paramref name="cutoff"/>. Renaming, starring or reading a chat is not activity.
