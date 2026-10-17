@@ -1113,6 +1113,24 @@ describe("Taskboard filter", () => {
     });
   });
 
+  test("each card names the repository its item is on", async () => {
+    mockSignalR();
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([
+      makeRepo({ id: "repo-1", name: "Repo One" }),
+      makeRepo({ id: "repo-2", name: "Repo Two" }),
+    ]);
+    mockTaskboardServer(items);
+
+    renderTaskboard();
+
+    const card = (title: string) =>
+      screen.getByText(title).closest(".work-item-card") as HTMLElement;
+    await waitFor(() => {
+      expect(within(card("Add login page")).getByText("Repo One")).toBeTruthy();
+      expect(within(card("Fix logout bug")).getByText("Repo Two")).toBeTruthy();
+    });
+  });
+
   test("marks filter chips that name a loop template, leaving free-form chips plain", async () => {
     mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
