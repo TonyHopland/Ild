@@ -8,6 +8,7 @@ using ILD.Data.Enums;
 using ILD.Data.Stores;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -1526,11 +1527,14 @@ public sealed class ChatServiceTests : IDisposable
             InterceptionResult<int> result,
             CancellationToken cancellationToken = default)
         {
-            var deleted = eventData.Context!.ChangeTracker.Entries<ChatSession>().FirstOrDefault(e => e.State == EntityState.Deleted);
-            if (!Recorded && deleted is not null)
+            // The save that archives the chat's usage: the delete has read it and not committed.
+            var archived = eventData.Context!.ChangeTracker.Entries<ChatUsage>().FirstOrDefault(e => e.State == EntityState.Deleted);
+            if (!Recorded && archived is not null)
             {
                 using var other = context();
-                await ChatUsageLedger.RecordTitleAsync(other, deleted.Entity.Id, new TokenUsage(40, 6, 0.002m), "p1", CancellationToken.None);
+                // The delete's transaction holds the one shared connection; the title call writes inside it.
+                other.Database.UseTransaction(eventData.Context.Database.CurrentTransaction?.GetDbTransaction());
+                await ChatUsageLedger.RecordTitleAsync(other, archived.Entity.ChatSessionId, new TokenUsage(40, 6, 0.002m), "p1", CancellationToken.None);
                 Recorded = true;
             }
             return result;

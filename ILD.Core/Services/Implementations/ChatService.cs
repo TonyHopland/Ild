@@ -715,19 +715,19 @@ public sealed class ChatService : IChatService
         // Scope by userId so a delete can only ever touch the caller's own chat.
         var session = await _db.ChatSessions.FirstOrDefaultAsync(c => c.Id == sessionId && c.UserId == userId, ct);
         if (session is null) return false;
-        await DeleteSessionAsync(session, ct);
-        return true;
+        return await DeleteSessionAsync(session, ct);
     }
 
     public async Task<int> DeleteAllForUserAsync(string userId, CancellationToken ct = default)
     {
         var sessions = await _db.ChatSessions.Where(c => c.UserId == userId).ToListAsync(ct);
+        var removed = 0;
         foreach (var session in sessions)
         {
             if (ct.IsCancellationRequested) break;
-            await DeleteSessionAsync(session, ct);
+            if (await DeleteSessionAsync(session, ct)) removed++;
         }
-        return sessions.Count;
+        return removed;
     }
 
     public async Task<IReadOnlyList<Guid>> ListInactiveAsync(DateTime cutoff, CancellationToken ct = default)
@@ -756,10 +756,11 @@ public sealed class ChatService : IChatService
     }
 
     /// <summary>
-    /// The one hard-delete. With <paramref name="unlessStarred"/> the row goes only if
-    /// it is still unstarred when it is deleted, since starring does not take the
-    /// chat's turn gate; a chat starred meanwhile is kept, without its pi files,
-    /// as after a failed delete. Returns whether the chat was deleted.
+    /// The one hard-delete, for every caller. Returns whether the row was deleted:
+    /// false when it was already gone, or, with <paramref name="unlessStarred"/>, when
+    /// the chat is starred by the time it is deleted — starring does not take the
+    /// chat's turn gate. A chat kept that way has lost its pi files, as after a
+    /// failed delete.
     /// </summary>
     private async Task<bool> DeleteSessionAsync(ChatSession session, CancellationToken ct, bool unlessStarred = false)
     {
@@ -769,28 +770,20 @@ public sealed class ChatService : IChatService
         // is cleared too, but never holds the delete up.
         await AgentRunFiles.DeleteAsync(session.Id, ct);
 
-        // Messages and adapter snapshots cascade-delete via their FKs; the usage
-        // moves into the analytics archive in the same commit; the loop scratchpad
-        // is in-memory only, so drop its entry explicitly.
-        if (unlessStarred)
+        // Messages and adapter snapshots cascade-delete and schedule firings unlink
+        // via their FKs; the usage moves into the analytics archive in the same
+        // commit; the loop scratchpad is in-memory only, so drop its entry explicitly.
+        await using (var transaction = await _db.Database.BeginTransactionAsync(ct))
         {
-            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
             await ChatUsageLedger.ArchiveAsync(_db, session.Id, ct);
             await _db.SaveChangesAsync(ct);
             var removed = await _db.ChatSessions
-                .Where(c => c.Id == session.Id && !c.IsFavorite)
+                .Where(c => c.Id == session.Id && (!unlessStarred || !c.IsFavorite))
                 .ExecuteDeleteAsync(ct);
             if (removed == 0) return false;
             await transaction.CommitAsync(ct);
-            _loopScratchpad.Clear(session.Id);
         }
-        else
-        {
-            _loopScratchpad.Clear(session.Id);
-            await ChatUsageLedger.ArchiveAsync(_db, session.Id, ct);
-            _db.ChatSessions.Remove(session);
-            await _db.SaveChangesAsync(ct);
-        }
+        _loopScratchpad.Clear(session.Id);
 
         // An unread chat takes its dot with it, in every window of the owner's.
         await _notifier.UnreadChangedAsync(session.UserId, session.Id);

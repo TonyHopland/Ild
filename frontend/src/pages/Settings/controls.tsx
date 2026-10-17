@@ -161,7 +161,12 @@ export function ToggleSettingField({ settingKey, label, children }: ToggleSettin
       help={
         <>
           {children}
-          {error && <span className="settings-error"> {error}</span>}
+          {error && (
+            <span className="settings-error" role="alert">
+              {" "}
+              {error}
+            </span>
+          )}
         </>
       }
     >

@@ -1,41 +1,21 @@
 import { ChatRetentionSettingKeys } from "../../../services/auth";
-import { NumericSettingField, SettingRow, Switch, useToggleSetting } from "../controls";
-
-const AutoDeleteLabel = "Delete inactive chats";
+import { NumericSettingField, ToggleSettingField } from "../controls";
 
 /** The switch that deletes chats nobody has written in for a while, and how long that is. */
 export default function ChatRetentionSettings() {
-  const autoDelete = useToggleSetting(ChatRetentionSettingKeys.AutoDeleteInactive);
-
   return (
     <section className="settings-card">
       <div className="settings-card-header">
         <h3 className="settings-card-title">Chat history</h3>
       </div>
-      <SettingRow
-        label={AutoDeleteLabel}
-        help={
-          <>
-            Delete every chat, of every user, that has had no new message for the number of days
-            below. A deleted chat cannot be brought back. Starred chats are kept until their star is
-            removed. Turning this on also deletes the chats that are already inactive, within the
-            hour.
-            {autoDelete.error && (
-              <span className="settings-error" role="alert">
-                {" "}
-                {autoDelete.error}
-              </span>
-            )}
-          </>
-        }
+      <ToggleSettingField
+        settingKey={ChatRetentionSettingKeys.AutoDeleteInactive}
+        label="Delete inactive chats"
       >
-        <Switch
-          checked={autoDelete.checked}
-          onChange={(v) => void autoDelete.save(v)}
-          label={AutoDeleteLabel}
-          disabled={autoDelete.saving}
-        />
-      </SettingRow>
+        Delete every chat, of every user, that has had no new message for the number of days below.
+        A deleted chat cannot be brought back. Starred chats are kept until their star is removed.
+        Turning this on also deletes the chats that are already inactive, within the hour.
+      </ToggleSettingField>
       <NumericSettingField
         settingKey={ChatRetentionSettingKeys.AutoDeleteInactiveDays}
         label="Delete chats inactive for"
