@@ -1194,8 +1194,9 @@ export const workItemServerService = {
 };
 
 export const storageService = {
-  getOverview: async (): Promise<StorageOverview> => {
-    return api.get<StorageOverview>("/storage");
+  /** Measuring walks the disk, so a caller that loses interest should abort it. */
+  getOverview: async (signal?: AbortSignal): Promise<StorageOverview> => {
+    return api.get<StorageOverview>("/storage", signal);
   },
   getCleanupCandidates: async (): Promise<WorktreeCleanupCandidates> => {
     return api.get<WorktreeCleanupCandidates>("/storage/worktree-cleanup");

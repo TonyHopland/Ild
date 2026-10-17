@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { storageService } from "../../../services/auth";
 import type {
   ApiError,
@@ -70,20 +70,40 @@ export default function StorageSettings() {
   const mounted = useRef(true);
   // Only the latest measurement may land: an earlier one finishing last would show older figures.
   const latestMeasurement = useRef(0);
+  // A measurement walks the server's disk; one nobody will read is aborted, which cancels the walk.
+  const measurementAbort = useRef<AbortController | null>(null);
+  const confirmPanel = useRef<HTMLDivElement>(null);
+  const cleanupButton = useRef<HTMLButtonElement>(null);
+  // Set when the control that had focus goes away, so it lands back on the cleanup button.
+  const returnFocus = useRef(false);
+  const listHeading = useId();
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      measurementAbort.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (cleanup.kind === "confirming") {
+      confirmPanel.current?.focus();
+    } else if (returnFocus.current && cleanupButton.current) {
+      returnFocus.current = false;
+      cleanupButton.current.focus();
+    }
+  }, [cleanup.kind]);
 
   const measure = useCallback(async () => {
     const request = ++latestMeasurement.current;
     const current = () => mounted.current && request === latestMeasurement.current;
+    measurementAbort.current?.abort();
+    const abort = new AbortController();
+    measurementAbort.current = abort;
     setOverview((previous) => ({ ...previous, loading: true, error: null }));
     try {
-      const data = await storageService.getOverview();
+      const data = await storageService.getOverview(abort.signal);
       if (current()) setOverview({ data, loading: false, error: null });
     } catch (error) {
       if (current())
@@ -122,8 +142,10 @@ export default function StorageSettings() {
     setCleanup({ kind: "cleaning", candidates, totalBytes });
     try {
       const result = await storageService.cleanUpWorktrees(candidates.map((c) => c.runId));
+      returnFocus.current = true;
       if (mounted.current) setCleanup({ kind: "done", candidates, result });
     } catch (error) {
+      returnFocus.current = true;
       if (mounted.current)
         setCleanup({
           kind: "error",
@@ -133,8 +155,7 @@ export default function StorageSettings() {
     if (mounted.current) void measure();
   };
 
-  const busy =
-    overview.loading || cleanup.kind === "loadingCandidates" || cleanup.kind === "cleaning";
+  const cleanupBusy = cleanup.kind === "loadingCandidates" || cleanup.kind === "cleaning";
 
   return (
     <>
@@ -153,12 +174,16 @@ export default function StorageSettings() {
             type="button"
             className="btn btn-secondary"
             onClick={() => void measure()}
-            disabled={busy}
+            disabled={overview.loading || cleanupBusy}
           >
             Refresh
           </button>
         </div>
-        {overview.loading && <p className="settings-card-note">Measuring...</p>}
+        {overview.loading && (
+          <p className="settings-card-note" role="status">
+            Measuring...
+          </p>
+        )}
         {overview.error && (
           <div className="settings-error" role="alert">
             Could not measure storage: {overview.error}
@@ -203,8 +228,14 @@ export default function StorageSettings() {
         </p>
 
         {cleanup.kind === "confirming" || cleanup.kind === "cleaning" ? (
-          <div className="storage-cleanup-confirm">
-            <p>These worktrees will be removed:</p>
+          <div
+            className="storage-cleanup-confirm"
+            ref={confirmPanel}
+            tabIndex={-1}
+            role="group"
+            aria-labelledby={listHeading}
+          >
+            <p id={listHeading}>These worktrees will be removed:</p>
             <ul className="storage-entries">
               {cleanup.candidates.map((candidate) => (
                 <li key={candidate.runId}>
@@ -231,15 +262,18 @@ export default function StorageSettings() {
                 type="button"
                 className="btn btn-danger"
                 onClick={() => void confirm(cleanup.candidates, cleanup.totalBytes)}
-                disabled={busy}
+                disabled={cleanupBusy}
               >
                 Confirm cleanup
               </button>
               <button
                 type="button"
                 className="btn btn-secondary"
-                onClick={() => setCleanup({ kind: "idle" })}
-                disabled={busy}
+                onClick={() => {
+                  returnFocus.current = true;
+                  setCleanup({ kind: "idle" });
+                }}
+                disabled={cleanupBusy}
               >
                 Cancel
               </button>
@@ -261,8 +295,9 @@ export default function StorageSettings() {
             <button
               type="button"
               className="btn btn-primary"
+              ref={cleanupButton}
               onClick={() => void listCandidates()}
-              disabled={busy}
+              disabled={cleanupBusy}
             >
               Clean up worktrees of Done work items
             </button>
