@@ -12,6 +12,11 @@ export interface ProposalReview {
   proposal: LoopTemplateProposal;
 }
 
+/** The proposal under review when a save was asked for; null when none was. */
+export interface SavedFrom {
+  proposalId: string | null;
+}
+
 interface ProposalReviewOptions {
   /** The page's work-item hub connection; the review joins and listens on it. */
   board: SignalRConnection;
@@ -67,7 +72,9 @@ export function useProposalReview({
   const reviewRequestRef = useRef(0);
   const reviewRefreshRef = useRef(0);
 
-  const closeReview = useCallback(() => {
+  // Given `savedFrom`, only the review of the proposal a save was made from ends.
+  const closeReview = useCallback((savedFrom?: SavedFrom) => {
+    if (savedFrom && reviewRef.current?.proposal.id !== savedFrom.proposalId) return;
     reviewRequestRef.current++;
     setReview(null);
     setReplaceConfirm(null);

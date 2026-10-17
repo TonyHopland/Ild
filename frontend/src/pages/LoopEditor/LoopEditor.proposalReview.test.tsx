@@ -516,3 +516,40 @@ describe("leaving a review while its proposal is re-read", () => {
     },
   );
 });
+
+describe("a review opened while a save is in flight", () => {
+  test("stays open when that save, made from no review, finishes", async () => {
+    server.listed = [proposalView()];
+    renderEditor("/loop-editor/tpl-1");
+    await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
+    const answer = globalThis.fetch;
+    let held = false;
+    let release: () => void = () => {};
+    const saveAnswered = new Promise<void>((resolve) => (release = resolve));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: RequestInit) => {
+        if ((init?.method ?? "GET").toUpperCase() === "PUT") {
+          held = true;
+          await saveAnswered;
+        }
+        return answer(input, init);
+      }),
+    );
+    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
+    await waitFor(() => expect(held).toBe(true));
+
+    const listed = (await screen.findByText(RATIONALE)).closest(
+      ".edit-proposal-card",
+    ) as HTMLElement;
+    fireEvent.click(reviewControl(listed));
+    await waitFor(() => expect(banner()).not.toBeNull());
+    await act(async () => release());
+
+    await screen.findByText("Saved!");
+    expect(calls.find((c) => c.method === "PUT")?.body?.fromProposalId ?? null).toBeNull();
+    expect(banner()).not.toBeNull();
+    expect(onCanvas("Run Linter")).toBe(true);
+  });
+});

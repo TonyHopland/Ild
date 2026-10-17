@@ -92,7 +92,7 @@ import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
 import ProposalReviewBanner from "./components/ProposalReviewBanner";
 import SaveDiffModal from "./components/SaveDiffModal";
-import { useProposalReview } from "./useProposalReview";
+import { useProposalReview, type SavedFrom } from "./useProposalReview";
 import type {
   ImportFeedbackItem,
   LoopTemplateVersion,
@@ -487,13 +487,14 @@ export default function LoopEditor() {
   // Read through a ref: the review is set up further down, after the effect that
   // opens the route's template, so that its `?proposal=` request follows that
   // effect's canvas replacement when both run in one commit.
-  const closeReviewRef = useRef(() => {});
+  const closeReviewRef = useRef<(savedFrom?: SavedFrom) => void>(() => {});
 
-  // Every replacement of the canvas ends the proposal review that is open.
-  const replaceCanvas = useCallback((saved: string, clean: string) => {
+  // Every replacement of the canvas ends the proposal review that is open; a
+  // save, only the review it was made from, since another can open while it runs.
+  const replaceCanvas = useCallback((saved: string, clean: string, savedFrom?: SavedFrom) => {
     lastSavedExportRef.current = saved;
     cleanExportRef.current = clean;
-    closeReviewRef.current();
+    closeReviewRef.current(savedFrom);
   }, []);
 
   const selectTemplate = useCallback(
@@ -578,7 +579,7 @@ export default function LoopEditor() {
     const before = lastSavedExportRef.current;
     const frozenNodes = nodesToLoopNodes(nodesRef.current);
     const frozenEdges = edgesToLoopNodeEdges(edgesRef.current);
-    const reviewing = proposalReview.review;
+    const reviewing = review;
     setSaveDiff({
       before,
       after,
@@ -644,10 +645,10 @@ export default function LoopEditor() {
       // The document we just persisted becomes the new diff baseline — it is
       // exactly the snapshot the modal reviewed (pending.after === serialized
       // pending.snapshot). Refresh here (never in applyLoopDocument) so a later
-      // re-save diffs against what is now in the DB.
-      // Saved from review: the proposal is Applied, or the save was an ordinary
-      // one if it had gone stale. Either way the review is over.
-      replaceCanvas(pending.after, pending.after);
+      // re-save diffs against what is now in the DB. Saved from review: the
+      // proposal is Applied, or the save was an ordinary one if it had gone
+      // stale. Either way that review is over.
+      replaceCanvas(pending.after, pending.after, { proposalId: pending.fromProposalId });
 
       setSaveSuccess(true);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
