@@ -38,8 +38,6 @@ public static class RunCleanup
         // and a surviving WorktreePath would name a directory that is gone.
         if (!await runs.ClearLocalGitStateAsync(run.Id))
             return RunCleanupOutcome.RunGone;
-        run.WorktreePath = null;
-        run.BranchName = null;
         return RunCleanupOutcome.Cleaned;
     }
 }
