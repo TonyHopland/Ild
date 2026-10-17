@@ -99,6 +99,17 @@ The two behave differently when changed. `session.idleDays` is re-evaluated on e
 
 The credentials themselves stay environment variables (`ILD_PASSWORD`, `ILD_USERNAME`) because they are secrets.
 
+## Chat history
+
+Chats are kept until someone deletes them, unless inactive chats are set to be deleted under **Settings → Ild → Chat history**. Like the other settings there it applies to every user and needs no restart.
+
+| Setting                       | Default | Meaning                                                        |
+| ----------------------------- | ------- | -------------------------------------------------------------- |
+| `chat.autoDeleteInactive`     | `false` | Delete chats that have had no new message for the days below   |
+| `chat.autoDeleteInactiveDays` | `14`    | Days without a new message after which a chat counts inactive |
+
+The days run from 1 to 3650. A chat's last activity is its newest message, from either side, or its creation if it has none; renaming, starring or reading it does not count. Starred chats are never deleted this way, and an unstarred chat past the window goes on the next sweep. A background sweep runs every hour and reads both settings on every pass, so turning the switch on deletes the chats that are already inactive within the hour. A chat with a turn still running is skipped until it is idle. The deletion is the same as deleting the chat by hand and cannot be undone; a schedule that continues its chat starts a new one on its next firing.
+
 ## Graceful shutdown
 
 When ILD is asked to stop — `docker compose stop`, a Kubernetes rollout, a

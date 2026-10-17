@@ -13,3 +13,19 @@ Two parts of this shift were deliberate trade-offs.
 - **No inactivity deletion.** The `ChatSessionRetentionSweeper` and the `IdleRetentionPeriod`/`SweepInterval` options are removed; chat scratch dirs and rows persist until the user deletes them. Per-chat delete and delete-all reuse the existing hard-delete (cascades messages + adapter snapshots, removes the scratch dir).
 - **Deletes are scoped by user.** `GetById`/`Delete` take both the chat id and the user id so one user can never resume or delete another's chat; the API authorizes every per-chat action this way.
 - **"Back" is not "End".** Leaving a conversation returns to the list and retains the chat; it makes no server call beyond what each turn already persists.
+
+## Amendment: opt-in deletion of inactive chats
+
+Inactivity deletion is back, but only for those who ask for it. The
+`chat.autoDeleteInactive` app setting is **off** by default, so a chat is still
+kept until someone deletes it unless an operator turns it on. While it is on,
+`ChatInactivitySweeper` deletes every chat, of every user, that is not a favorite
+and has had no new message for `chat.autoDeleteInactiveDays` (default 14), or,
+with no messages, has existed that long. Only a message is activity: a rename, a
+star or a read marker does not keep a chat. A favorite is spared for as long as it
+is starred; unstarring it adds no grace period, so an old one goes on the next
+sweep. The delete is the same hard-delete as the per-chat one, run under the
+chat's turn gate only when no turn is in flight, so a busy chat is skipped rather
+than interrupted, and one that was written to or starred after it was picked is
+kept. The "deletes are scoped by user" consequence still holds for every request
+a user makes; the sweeper is the one system caller that is not.
