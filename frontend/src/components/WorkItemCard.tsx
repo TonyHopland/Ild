@@ -10,6 +10,7 @@ interface WorkItemCardProps {
   onMove?: (workItem: WorkItem, direction: "prev" | "next") => void;
   /** Loop template names, used to mark tags that resolve to a loop. */
   loopTemplateNames?: string[];
+  repositoryName?: string;
 }
 
 const REASON_STYLES: Record<string, { bg: string; color: string; border: string }> = {
@@ -24,6 +25,7 @@ export default function WorkItemCard({
   onClick,
   onMove,
   loopTemplateNames = [],
+  repositoryName,
 }: WorkItemCardProps) {
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const handleDragStart = (e: React.DragEvent) => {
@@ -101,7 +103,14 @@ export default function WorkItemCard({
       {workItem.isPreviewRunning && (
         <span className="qa-active-dot" aria-label="QA preview is active" />
       )}
-      <div className="work-item-id">#{workItem.id}</div>
+      <div className="work-item-id">
+        <span>#{workItem.id}</span>
+        {repositoryName && (
+          <span className="work-item-repository" title={`Repository: ${repositoryName}`}>
+            {repositoryName}
+          </span>
+        )}
+      </div>
       <h4 className="work-item-title">{workItem.title}</h4>
       {reasonStyle && workItem.humanFeedbackReason && (
         <div
@@ -192,10 +201,23 @@ export default function WorkItemCard({
         }
 
         .work-item-id {
+          display: flex;
+          align-items: baseline;
+          gap: 0.5rem;
+          min-width: 0;
+          padding-right: 1rem;
           font-size: 0.7rem;
           color: #7f849c;
           margin-bottom: 0.35rem;
           letter-spacing: 0.04em;
+        }
+
+        .work-item-repository {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: #a0a0b0;
         }
 
         .human-feedback-badge {

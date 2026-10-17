@@ -22,6 +22,8 @@ interface TaskboardColumnProps {
   loadingMore?: boolean;
   // Loop template names, forwarded to each card so loop tags are highlighted.
   loopTemplateNames?: string[];
+  // Repository names by id, so each card can show which repository it is on.
+  repositoryNames?: ReadonlyMap<string, string>;
 }
 
 export default function TaskboardColumn({
@@ -37,6 +39,7 @@ export default function TaskboardColumn({
   onLoadMore,
   loadingMore = false,
   loopTemplateNames,
+  repositoryNames,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
   const hasMore = onLoadMore !== undefined && workItems.length < total;
@@ -104,6 +107,7 @@ export default function TaskboardColumn({
             onClick={onWorkItemClick}
             onMove={onMoveWorkItem}
             loopTemplateNames={loopTemplateNames}
+            repositoryName={repositoryNames?.get(item.repositoryId)}
           />
         ))}
         {hasMore && (

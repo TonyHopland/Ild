@@ -35,6 +35,19 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
 }
 
 describe("WorkItemCard", () => {
+  test("shows the repository name beside the id", () => {
+    render(<WorkItemCard workItem={makeItem({ id: "42" })} repositoryName="example-repo" />);
+
+    const idLine = screen.getByText("#42").parentElement!;
+    expect(idLine.textContent).toContain("example-repo");
+  });
+
+  test("shows no repository when its name is unknown", () => {
+    const { container } = render(<WorkItemCard workItem={makeItem()} />);
+
+    expect(container.querySelector(".work-item-repository")).toBeNull();
+  });
+
   test("shows the current step and elapsed time for a running item", () => {
     const base = new Date("2026-06-14T12:00:00Z").getTime();
     vi.useFakeTimers();

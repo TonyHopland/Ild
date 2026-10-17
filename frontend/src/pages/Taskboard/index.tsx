@@ -362,6 +362,7 @@ export default function Taskboard() {
   };
 
   const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
+  const repositoryNames = new Map(repositories.map((repo) => [repo.id, repo.name]));
   // A selected tag keeps its chip after its last use is gone, so it can still be unselected.
   const tagChips = [
     ...tagOptions,
@@ -484,6 +485,7 @@ export default function Taskboard() {
               onMoveWorkItem={handleMoveWorkItem}
               onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
               loopTemplateNames={loopTemplateNames}
+              repositoryNames={repositoryNames}
               onLoadMore={() => loadMore(status.value as WorkItemStatus)}
               loadingMore={column.loadingMore}
             />
