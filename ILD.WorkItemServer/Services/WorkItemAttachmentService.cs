@@ -122,8 +122,8 @@ public sealed class WorkItemAttachmentService : IWorkItemAttachmentService
         // The total is a read-then-write, so two uploads to the same work item
         // could each see room for themselves and together go over it. They are
         // serialised by claiming the owning row first: Postgres holds that row for
-        // the transaction, SQLite takes its write lock, and the loser re-reads a
-        // total that now includes the winner's files.
+        // the transaction, and the loser, let through once the winner commits,
+        // re-reads a total that now includes the winner's files.
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         // Claiming nothing means the work item was deleted while this upload was
         // being read; its files would fail the foreign key a moment later.

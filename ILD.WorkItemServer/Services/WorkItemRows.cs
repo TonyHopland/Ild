@@ -18,8 +18,10 @@ internal static class WorkItemRows
     /// Take the work item's row for the rest of the transaction, so a
     /// read-then-write against its children cannot interleave with another one
     /// for the same item. Written as an update to the row's own value: it
-    /// changes nothing, and it is the one lock both Postgres and SQLite take.
-    /// Returns 0 when the item is gone.
+    /// changes nothing, and Postgres holds the row for any update (FOR NO KEY
+    /// UPDATE) until the transaction ends, while inserts that only reference the
+    /// row through a foreign key still go ahead. Returns 0 when the item is gone,
+    /// in the same round trip.
     /// </summary>
     public static Task<int> ClaimAsync(WorkItemServerDbContext db, int workItemKey, CancellationToken ct)
         => db.WorkItems
