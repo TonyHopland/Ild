@@ -163,14 +163,16 @@ public class PtyWebSocketBridgeTests
     /// The child closes its side of the PTY (EOF) and exits, but Porta.Pty's watcher
     /// thread reports the exit only after the output drain's bound has passed.
     /// </summary>
-    [Fact]
-    public async Task The_exit_code_is_reported_when_the_exit_event_comes_after_the_output_has_ended()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_exit_code_is_reported_when_the_exit_event_comes_after_the_output_has_ended(bool endsInEio)
     {
         using var cts = new CancellationTokenSource(Guard);
         var (server, client) = await ConnectedPairAsync(cts.Token);
         using var serverSocket = server;
         using var clientSocket = client;
-        var pty = new ScriptedPty("boom\r\n");
+        var pty = new ScriptedPty("boom\r\n", endsInEio);
         var clock = new SteppedTimeProvider();
 
         var run = PtyWebSocketBridge.RunAsync(
@@ -224,6 +226,29 @@ public class PtyWebSocketBridgeTests
     }
 
     [Fact]
+    public async Task A_client_that_leaves_while_the_exit_event_is_awaited_is_not_kept_waiting()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n", endsInEio: true);
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            reportExit: true, timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        await ReadUntilAsync(client, "boom", cts.Token);
+        await clock.FireNextAsync(cts.Token);
+        await clock.NextArmedAsync(cts.Token);
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+
+        // No timer fires from here on: the bridge ends because the client left.
+        await run.WaitAsync(cts.Token);
+    }
+
+    [Fact]
     public async Task The_exit_code_is_reported_when_the_child_exited_before_the_bridge_was_listening()
     {
         using var cts = new CancellationTokenSource(Guard);
@@ -256,12 +281,12 @@ public class PtyWebSocketBridgeTests
 
     /// <summary>
     /// A PTY child that has written <c>output</c> and closed its side: the reader gives
-    /// that, then EOF. Its exit is reported only when the test calls <see cref="Exit"/>,
+    /// that, then EOF, or with <c>endsInEio</c> the EIO a read gives on Linux. Its exit is reported only when the test calls <see cref="Exit"/>,
     /// the way Porta.Pty 2.2.2 does it: <c>ProcessExited</c> is raised from its own
     /// waitpid thread with the exit code in <see cref="PtyExitedEventArgs"/>, apart from
     /// the reader reaching EOF.
     /// </summary>
-    private sealed class ScriptedPty(string output) : IPtyConnection
+    private sealed class ScriptedPty(string output, bool endsInEio = false) : IPtyConnection
     {
         public static readonly PtyOptions Options = new()
         {
@@ -277,7 +302,9 @@ public class PtyWebSocketBridgeTests
         private int _exitCode;
         private volatile bool _exited;
 
-        public Stream ReaderStream { get; } = new MemoryStream(Encoding.UTF8.GetBytes(output), writable: false);
+        public Stream ReaderStream { get; } = endsInEio
+            ? new EioAtEndStream(Encoding.UTF8.GetBytes(output))
+            : new MemoryStream(Encoding.UTF8.GetBytes(output), writable: false);
         public Stream WriterStream { get; } = Stream.Null;
         public bool SupportsCancellableRead => false;
         public int Pid => 4242;
@@ -307,6 +334,15 @@ public class PtyWebSocketBridgeTests
         public void Resize(int cols, int rows) { }
         public bool WaitForExit(int milliseconds) => _exited;
         public void Dispose() { }
+
+        private sealed class EioAtEndStream(byte[] output) : MemoryStream(output, writable: false)
+        {
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                var read = await base.ReadAsync(buffer, cancellationToken);
+                return read > 0 ? read : throw new IOException("Input/output error");
+            }
+        }
     }
 
     /// <summary>

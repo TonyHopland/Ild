@@ -108,11 +108,12 @@ public static class PtyWebSocketBridge
                 }
                 catch { }
 
-                // EOF means the child closed its side of the PTY, so its exit is due,
-                // but Porta.Pty reports it from a separate waitpid thread that can
-                // lag well behind. Bounded only against an event that never comes.
+                // The output ending means the child closed its side of the PTY, so its
+                // exit is due, but Porta.Pty reports it from a separate waitpid thread
+                // that can lag well behind. Bounded only against an event that never
+                // comes; a client that leaves meanwhile ends the wait.
                 if (reportExit && !childExited.IsCompleted && ptyToSocket is { IsCompletedSuccessfully: true, Result: true })
-                    await Task.WhenAny(childExited, Task.Delay(ExitEventWait, clock, cancellationToken));
+                    await Task.WhenAny(childExited, socketToPty, Task.Delay(ExitEventWait, clock, cancellationToken));
 
                 if (reportExit && childExited.IsCompleted && exitCode is { } code)
                     await SendExclusivelyAsync(
@@ -203,7 +204,7 @@ public static class PtyWebSocketBridge
         finally { sendLock.Release(); }
     }
 
-    /// <returns>Whether the pump ended because the PTY output reached EOF.</returns>
+    /// <returns>Whether the pump ended because the PTY output came to its end.</returns>
     private static async Task<bool> PumpPtyToSocketAsync(
         IPtyConnection pty, WebSocket socket, SemaphoreSlim sendLock, CancellationToken requestCt)
     {
@@ -218,10 +219,12 @@ public static class PtyWebSocketBridge
                     read = await pty.ReaderStream.ReadAsync(buffer.AsMemory(0, ReadBufferSize), requestCt);
                 }
                 catch (OperationCanceledException) { break; }
-                catch (IOException) { break; }
+                // The end of the output on Linux: once the child side is closed, a
+                // read of the PTY fails with EIO instead of returning 0.
+                catch (IOException) { return true; }
                 // EOF: the child exited and its output is drained. On Unix the
-                // reader doesn't observe a token, so this EOF (not ptyExited) is
-                // the real signal that ends the pump.
+                // reader doesn't observe a token, so the end of the output (not
+                // ptyExited) is the real signal that ends the pump.
                 if (read <= 0) return true;
 
                 try
