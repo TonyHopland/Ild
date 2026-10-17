@@ -1,0 +1,130 @@
+using System.Text.Json.Nodes;
+using ILD.Core.Services.Implementations;
+using ILD.Data.Stores.Interfaces;
+using Moq;
+
+namespace ILD.Tests;
+
+/// <summary>
+/// What a proposed loop document is told when it fails a save's checks: the
+/// document-level refusals word for word, the graph rules as validation errors,
+/// and a valid one back as the request and document a save of it would use.
+/// </summary>
+public class LoopTemplateProposedDocumentTests
+{
+    private static readonly LoopTemplateManager Manager = new(Mock.Of<ILoopTemplateStore>());
+
+    private const string Graph =
+        """
+        "nodes":[
+          {"id":"s","type":"Start","label":"Start","config":{}},
+          {"id":"a","type":"Cmd","label":"build","config":{"command":"echo hi"}},
+          {"id":"c","type":"Cleanup","label":"Cleanup","config":{}}],
+        "edges":[
+          {"id":"e1","sourceNodeId":"s","targetNodeId":"a","edgeType":"OnSuccess"},
+          {"id":"e2","sourceNodeId":"a","targetNodeId":"c","edgeType":"OnSuccess"}]
+        """;
+
+    public static TheoryData<string, string> Refusals => new()
+    {
+        {
+            "{ not json",
+            "The document is not valid JSON: 'n' is an invalid start of a property name. Expected a '\"'. LineNumber: 0 | BytePositionInLine: 2."
+        },
+        {
+            "[1,2]",
+            "The document must be a JSON object: the whole ild-loop-template/v2 document get_loop_template returns."
+        },
+        {
+            "null",
+            "The document must be a JSON object: the whole ild-loop-template/v2 document get_loop_template returns."
+        },
+        {
+            """{"name":"x","nodes":[],"edges":[]}""",
+            "The document has no $schema. Send the whole ild-loop-template/v2 document get_loop_template returns, with your changes."
+        },
+        {
+            """{"$schema":"ild-loop-template/v9","name":"x","recoveryPolicy":"AutoResume","nodes":[],"edges":[]}""",
+            "$schema must be \"ild-loop-template/v2\" (a ild-loop-template/v1 document is upgraded to it)."
+        },
+        {
+            """{"$schema":2,"name":"x","recoveryPolicy":"AutoResume","nodes":[],"edges":[]}""",
+            "$schema must be \"ild-loop-template/v2\" (a ild-loop-template/v1 document is upgraded to it)."
+        },
+        {
+            """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"Sometimes","nodes":[],"edges":[]}""",
+            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel."
+        },
+        {
+            """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"99","nodes":[],"edges":[]}""",
+            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel."
+        },
+        {
+            """{"$schema":"ild-loop-template/v2","name":"x","nodes":[],"edges":[]}""",
+            "recoveryPolicy must be one of AutoResume, NeedsReview, Cancel."
+        },
+        {
+            """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"AutoResume","nodes":"all of them","edges":[]}""",
+            "The document's nodes or edges are not in the ild-loop-template/v2 shape: The JSON value could not be converted to System.Collections.Generic.List`1[ILD.Data.DTOs.LoopNodeDto]. Path: $.nodes | LineNumber: 0 | BytePositionInLine: 96."
+        },
+        {
+            """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"AutoResume","nodes":[],"edges":[{"sourceNodeId":5}]}""",
+            "The document's nodes or edges are not in the ild-loop-template/v2 shape: The JSON value could not be converted to System.String. Path: $.edges[0].sourceNodeId | LineNumber: 0 | BytePositionInLine: 112."
+        },
+        {
+            $$"""{"$schema":"ild-loop-template/v2","name":"","recoveryPolicy":"AutoResume",{{Graph}}}""",
+            "The Name field is required."
+        },
+        {
+            $$"""{"$schema":"ild-loop-template/v2","name":7,"recoveryPolicy":"AutoResume",{{Graph}}}""",
+            "The Name field is required."
+        },
+    };
+
+    [Theory]
+    [MemberData(nameof(Refusals))]
+    public void A_document_a_save_cannot_read_is_refused_with_what_is_wrong(string document, string error)
+    {
+        var result = Manager.CheckProposedDocument(document);
+
+        Assert.Equal(error, result.Error);
+        Assert.Null(result.Request);
+        Assert.Null(result.Document);
+        Assert.Empty(result.ValidationErrors);
+    }
+
+    [Fact]
+    public void A_graph_that_breaks_the_save_rules_comes_back_as_validation_errors()
+    {
+        var result = Manager.CheckProposedDocument(
+            """{"$schema":"ild-loop-template/v2","name":"x","recoveryPolicy":"AutoResume","nodes":[],"edges":[]}""");
+
+        Assert.Null(result.Error);
+        Assert.Null(result.Request);
+        Assert.Null(result.Document);
+        Assert.NotEmpty(result.ValidationErrors);
+    }
+
+    [Theory]
+    [InlineData("ild-loop-template/v2", "needsreview")]
+    [InlineData("ild-loop-template/v1", "NeedsReview")]
+    public void A_valid_document_comes_back_as_the_request_and_v2_document_a_save_would_use(string schema, string policy)
+    {
+        var result = Manager.CheckProposedDocument(
+            $$"""{"$schema":"{{schema}}","name":"Dev Loop","description":"Builds it","recoveryPolicy":"{{policy}}",{{Graph}}}""");
+
+        Assert.Null(result.Error);
+        Assert.Empty(result.ValidationErrors);
+        var request = Assert.IsType<ILD.Data.DTOs.LoopTemplateCreateRequest>(result.Request);
+        Assert.Equal("Dev Loop", request.Name);
+        Assert.Equal("Builds it", request.Description);
+        Assert.Equal(ILD.Data.Enums.RecoveryPolicy.NeedsReview, request.RecoveryPolicy);
+        Assert.Equal(["s", "a", "c"], request.Nodes.Select(n => n.Id));
+        Assert.Equal(["e1", "e2"], request.Edges.Select(e => e.Id));
+        var stored = JsonNode.Parse(result.Document!)!.AsObject();
+        Assert.Equal("ild-loop-template/v2", (string?)stored["$schema"]);
+        Assert.Equal("Dev Loop", (string?)stored["name"]);
+        Assert.Equal("NeedsReview", (string?)stored["recoveryPolicy"]);
+        Assert.Equal(3, stored["nodes"]!.AsArray().Count);
+    }
+}
