@@ -110,6 +110,12 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200);
 
     /// <summary>
+    /// Every run that still names a worktree, in any state, untracked: what
+    /// Settings &gt; Storage measures and picks cleanup candidates from.
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetRunsWithWorktreeAsync();
+
+    /// <summary>
     /// Runs parked at a PR node awaiting merge: <c>WaitingHuman</c> with a
     /// <c>PrUrl</c> set and <c>HumanFeedbackReason</c> =
     /// <see cref="ILD.Data.Enums.HumanFeedbackReasons.PrAwaitingMerge"/>. Backs

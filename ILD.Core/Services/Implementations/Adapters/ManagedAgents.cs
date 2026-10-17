@@ -63,9 +63,12 @@ public static class ManagedAgentCatalog
 /// </summary>
 public static class ManagedAgentInstall
 {
+    /// <summary>Directory under the data root holding every agent's installs.</summary>
+    public const string InstallsDirectory = "agents";
+
     /// <summary>Root directory holding every managed-agent install for an agent.</summary>
     public static string AgentRoot(string dataRoot, ManagedAgent agent)
-        => Path.Combine(dataRoot, "agents", agent.Key);
+        => Path.Combine(dataRoot, InstallsDirectory, agent.Key);
 
     /// <summary>Directory under which each versioned npm install lives.</summary>
     public static string VersionsRoot(string dataRoot, ManagedAgent agent)

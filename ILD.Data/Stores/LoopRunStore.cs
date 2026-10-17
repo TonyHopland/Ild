@@ -158,6 +158,11 @@ public class LoopRunStore : ILoopRunStore
             .Take(take)
             .ToListAsync();
 
+    public async Task<IReadOnlyList<LoopRun>> GetRunsWithWorktreeAsync()
+        => await _db.LoopRuns.AsNoTracking()
+            .Where(r => r.WorktreePath != null && r.WorktreePath != "")
+            .ToListAsync();
+
     public async Task<IReadOnlyList<LoopRun>> GetPrAwaitingMergeRunsAsync()
         => await _db.LoopRuns
             .Where(r => r.Status == LoopRunStatus.WaitingHuman
