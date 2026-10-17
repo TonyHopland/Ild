@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Taskboard cards show the name of the repository their work item is on.**
 
+- **Settings has a Storage page showing how much disk ILD uses, and a button that removes the worktrees of Done work items.**
+
 ### Fixed
 
 - **AI cost is no longer over-counted for resumed Claude Code sessions, or under-counted for opencode turns of several steps.** Costs recorded before this version may be too high for resumed Claude Code sessions.
