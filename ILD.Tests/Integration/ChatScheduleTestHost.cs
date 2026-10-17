@@ -62,7 +62,7 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<AppDbContext>>();
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(connectionString,
-                sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)));
+                sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)).WithPostgresSemantics());
 
             LeaveOutScheduleLoop(services);
             services.ReplaceSingleton<TimeProvider>(Clock);

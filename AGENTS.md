@@ -110,6 +110,12 @@ impossible may production code work around it, with a one-line comment naming
 SQLite and the test that needs it. A SQLite quirk is never a production data
 problem: do not add migrations, data rewrites or schema changes to fix it.
 
+Test-side fixes that make SQLite behave like Postgres for every test context
+live in `ILD.Tests/SqlitePostgresSemantics.cs` (unique and primary key
+violations reported as Postgres reports them, a Unicode `lower()`); the
+central test factories (`TestDb`, `ApiFactory`, `ChatScheduleTestHost`) apply
+them.
+
 ## Code style
 
 Code is the explanation. No comments narrating what a change does or why.

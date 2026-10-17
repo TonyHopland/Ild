@@ -6,6 +6,24 @@ using Microsoft.EntityFrameworkCore;
 namespace ILD.Data.Analytics;
 
 /// <summary>
+/// What chat calls added up to on one UTC day for one (schedule, provider), as
+/// the archive keeps it: named by the newest call, a null cost counted as none,
+/// title calls in the figures but not in the turns.
+/// </summary>
+public sealed record ChatUsageDayTotals
+{
+    public required DateTime BucketDate { get; init; }
+    public required Guid? ScheduleId { get; init; }
+    public required string? ScheduleName { get; init; }
+    public required DateTime LastRecordedAt { get; init; }
+    public required string AiProvider { get; init; }
+    public required int TurnCount { get; init; }
+    public required long TotalInputTokens { get; init; }
+    public required long TotalOutputTokens { get; init; }
+    public required decimal TotalCostUsd { get; init; }
+}
+
+/// <summary>
 /// Writes what chats cost. Every figure is counted from exactly one place: its
 /// <see cref="ChatUsage"/> row, until a chat delete moves that row into a
 /// <see cref="ChatAnalyticsBucket"/> in the same commit as the delete. Nothing
@@ -83,28 +101,49 @@ public static class ChatUsageLedger
     /// </summary>
     public static async Task ArchiveAsync(AppDbContext db, Guid chatSessionId, CancellationToken ct)
     {
-        // Summed in memory: SQLite cannot sum decimals in SQL.
-        var usages = await db.ChatUsages
+        // The rows are fixed first, so a call recorded meanwhile is neither summed
+        // nor removed: it stays live, counted once.
+        var ids = await db.ChatUsages
             .Where(u => u.ChatSessionId == chatSessionId)
+            .Select(u => u.Id)
             .ToListAsync(ct);
+        if (ids.Count == 0) return;
 
-        foreach (var group in usages.GroupBy(u => (Day: u.CreatedAt.Date, u.ScheduleId, u.AiProvider)))
+        foreach (var day in await SumPerDay(db.ChatUsages.Where(u => ids.Contains(u.Id))).ToListAsync(ct))
         {
-            var newest = group.MaxBy(u => u.CreatedAt)!;
             db.ChatAnalyticsBuckets.Add(new ChatAnalyticsBucket
             {
                 Id = Guid.NewGuid(),
-                BucketDate = group.Key.Day,
-                ScheduleId = group.Key.ScheduleId,
-                ScheduleName = newest.ScheduleName,
-                LastRecordedAt = newest.CreatedAt,
-                AiProvider = group.Key.AiProvider,
-                TurnCount = group.Count(u => u.Kind == ChatUsageKind.Turn),
-                TotalInputTokens = group.Sum(u => u.InputTokens),
-                TotalOutputTokens = group.Sum(u => u.OutputTokens),
-                TotalCostUsd = group.Sum(u => u.CostUsd ?? 0m),
+                BucketDate = day.BucketDate,
+                ScheduleId = day.ScheduleId,
+                ScheduleName = day.ScheduleName,
+                LastRecordedAt = day.LastRecordedAt,
+                AiProvider = day.AiProvider,
+                TurnCount = day.TurnCount,
+                TotalInputTokens = day.TotalInputTokens,
+                TotalOutputTokens = day.TotalOutputTokens,
+                TotalCostUsd = day.TotalCostUsd,
             });
         }
-        db.ChatUsages.RemoveRange(usages);
+
+        var tracked = db.ChatUsages.Local.ToDictionary(u => u.Id);
+        db.ChatUsages.RemoveRange(ids.Select(id => tracked.GetValueOrDefault(id) ?? new ChatUsage { Id = id }));
     }
+
+    /// <summary><paramref name="usages"/> summed in the database per UTC day, schedule and provider.</summary>
+    public static IQueryable<ChatUsageDayTotals> SumPerDay(IQueryable<ChatUsage> usages)
+        => usages
+            .GroupBy(u => new { Day = u.CreatedAt.Date, u.ScheduleId, u.AiProvider })
+            .Select(g => new ChatUsageDayTotals
+            {
+                BucketDate = g.Key.Day,
+                ScheduleId = g.Key.ScheduleId,
+                ScheduleName = g.OrderByDescending(u => u.CreatedAt).Select(u => u.ScheduleName).First(),
+                LastRecordedAt = g.Max(u => u.CreatedAt),
+                AiProvider = g.Key.AiProvider,
+                TurnCount = g.Count(u => u.Kind == ChatUsageKind.Turn),
+                TotalInputTokens = g.Sum(u => u.InputTokens),
+                TotalOutputTokens = g.Sum(u => u.OutputTokens),
+                TotalCostUsd = g.Sum(u => u.CostUsd ?? 0m),
+            });
 }

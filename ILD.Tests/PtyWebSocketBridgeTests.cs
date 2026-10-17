@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
+using System.Reflection;
 using System.Text;
 using ILD.Api.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -154,6 +155,288 @@ public class PtyWebSocketBridgeTests
                     try { System.Diagnostics.Process.GetProcessById(pid).Kill(); } catch (ArgumentException) { }
                 }
                 File.Delete(pidFile);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The child closes its side of the PTY (EOF) and exits, but Porta.Pty's watcher
+    /// thread reports the exit only after the output drain's bound has passed.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_exit_code_is_reported_when_the_exit_event_comes_after_the_output_has_ended(bool endsInEio)
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n", endsInEio);
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            reportExit: true, timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        var output = await ReadUntilAsync(client, "boom", cts.Token);
+        // The output has ended; the bounded drain wait runs out with no exit seen yet.
+        await clock.FireNextAsync(cts.Token);
+        // Whatever the bridge arms next is what it waits on now; the exit arrives during it.
+        var exitWait = await clock.NextArmedAsync(cts.Token);
+        pty.Exit(3);
+        var rest = await ReadUntilCloseAsync(client, cts.Token);
+
+        Assert.Contains("[ild] The CLI exited with code 3.", output.Text + rest.Text);
+        Assert.True(exitWait.Disposed, "the wait that the exit ended still holds its timer");
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        await run.WaitAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task A_session_whose_exit_event_never_comes_still_closes_normally_without_an_exit_line()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n");
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            reportExit: true, timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        var output = await ReadUntilAsync(client, "boom", cts.Token);
+        // Every bound the bridge sets runs out, one after the other, until it closes.
+        var closing = ReadUntilCloseAsync(client, cts.Token);
+        while (!closing.IsCompleted)
+        {
+            var fired = clock.FireNextAsync(cts.Token);
+            await Task.WhenAny(fired, closing);
+        }
+        var rest = await closing;
+
+        Assert.DoesNotContain("exited with code", output.Text + rest.Text);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        await run.WaitAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task A_client_that_leaves_while_the_exit_event_is_awaited_is_not_kept_waiting()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n", endsInEio: true);
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            reportExit: true, timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        await ReadUntilAsync(client, "boom", cts.Token);
+        await clock.FireNextAsync(cts.Token);
+        await clock.NextArmedAsync(cts.Token);
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+
+        // No timer fires from here on: the bridge ends because the client left.
+        await run.WaitAsync(cts.Token);
+    }
+
+    [Fact]
+    public async Task The_exit_code_is_reported_when_the_child_exited_before_the_bridge_was_listening()
+    {
+        using var cts = new CancellationTokenSource(Guard);
+        var (server, client) = await ConnectedPairAsync(cts.Token);
+        using var serverSocket = server;
+        using var clientSocket = client;
+        var pty = new ScriptedPty("boom\r\n");
+        pty.ExitUnseen(3);
+        var clock = new SteppedTimeProvider();
+
+        var run = PtyWebSocketBridge.RunAsync(
+            server, ScriptedPty.Options, NullLogger.Instance, cts.Token,
+            reportExit: true, timeProvider: clock, spawn: (_, _) => Task.FromResult<IPtyConnection>(pty));
+
+        var closing = ReadUntilCloseAsync(client, cts.Token);
+        while (!closing.IsCompleted)
+        {
+            var fired = clock.FireNextAsync(cts.Token);
+            await Task.WhenAny(fired, closing);
+        }
+        var output = await closing;
+
+        Assert.Contains("boom", output.Text);
+        Assert.Contains("[ild] The CLI exited with code 3.", output.Text);
+        Assert.Equal(WebSocketCloseStatus.NormalClosure, client.CloseStatus);
+
+        await client.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "bye", cts.Token);
+        await run.WaitAsync(cts.Token);
+    }
+
+    /// <summary>
+    /// A PTY child that has written <c>output</c> and closed its side: the reader gives
+    /// that, then EOF, or with <c>endsInEio</c> the EIO a read gives on Linux. Its exit is reported only when the test calls <see cref="Exit"/>,
+    /// the way Porta.Pty 2.2.2 does it: <c>ProcessExited</c> is raised from its own
+    /// waitpid thread with the exit code in <see cref="PtyExitedEventArgs"/>, apart from
+    /// the reader reaching EOF.
+    /// </summary>
+    private sealed class ScriptedPty(string output, bool endsInEio = false) : IPtyConnection
+    {
+        public static readonly PtyOptions Options = new()
+        {
+            Name = "ild-bridge-test",
+            Cols = 80,
+            Rows = 24,
+            Cwd = Path.GetTempPath(),
+            App = "/bin/false",
+            CommandLine = Array.Empty<string>(),
+            Environment = new Dictionary<string, string>(),
+        };
+
+        private int _exitCode;
+        private volatile bool _exited;
+
+        public Stream ReaderStream { get; } = endsInEio
+            ? new EioAtEndStream(Encoding.UTF8.GetBytes(output))
+            : new MemoryStream(Encoding.UTF8.GetBytes(output), writable: false);
+        public Stream WriterStream { get; } = Stream.Null;
+        public bool SupportsCancellableRead => false;
+        public int Pid => 4242;
+        public int ExitCode => _exitCode;
+        public event EventHandler<PtyExitedEventArgs>? ProcessExited;
+
+        public void Exit(int code)
+        {
+            ExitUnseen(code);
+            // Porta.Pty constructs these itself; its constructor is internal.
+            var args = (PtyExitedEventArgs)Activator.CreateInstance(
+                typeof(PtyExitedEventArgs), BindingFlags.Instance | BindingFlags.NonPublic, null, [code], null)!;
+            ProcessExited?.Invoke(this, args);
+        }
+
+        /// <summary>
+        /// The child exits while nobody is subscribed yet: Porta.Pty raises
+        /// <c>ProcessExited</c> to no one, and only <see cref="WaitForExit"/> tells.
+        /// </summary>
+        public void ExitUnseen(int code)
+        {
+            _exitCode = code;
+            _exited = true;
+        }
+
+        public void Kill() { }
+        public void Resize(int cols, int rows) { }
+        public bool WaitForExit(int milliseconds) => _exited;
+        public void Dispose() { }
+
+        private sealed class EioAtEndStream(byte[] output) : MemoryStream(output, writable: false)
+        {
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                var read = await base.ReadAsync(buffer, cancellationToken);
+                return read > 0 ? read : throw new IOException("Input/output error");
+            }
+        }
+    }
+
+    /// <summary>
+    /// A clock whose timers fire only when the test fires them, one at a time and in
+    /// the order they were armed.
+    /// </summary>
+    private sealed class SteppedTimeProvider : TimeProvider
+    {
+        private readonly Lock _gate = new();
+        private readonly Queue<SteppedTimer> _armed = new();
+        private readonly List<SteppedTimer> _armedInOrder = new();
+        private readonly HashSet<SteppedTimer> _reported = new();
+        private TaskCompletionSource _anyArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Completes with the oldest armed timer that has neither been reported here nor fired.</summary>
+        public async Task<SteppedTimer> NextArmedAsync(CancellationToken ct)
+        {
+            while (true)
+            {
+                Task wait;
+                lock (_gate)
+                {
+                    var next = _armedInOrder.FirstOrDefault(t => !_reported.Contains(t));
+                    if (next is not null)
+                    {
+                        _reported.Add(next);
+                        return next;
+                    }
+                    wait = _anyArmed.Task;
+                }
+                await wait.WaitAsync(ct);
+            }
+        }
+
+        /// <summary>Waits for the oldest armed timer that has not fired, and fires it.</summary>
+        public async Task FireNextAsync(CancellationToken ct)
+        {
+            while (true)
+            {
+                Task wait;
+                lock (_gate)
+                {
+                    while (_armed.TryDequeue(out var timer))
+                    {
+                        if (timer.Disposed) continue;
+                        _reported.Add(timer);
+                        timer.Fire();
+                        return;
+                    }
+                    wait = _anyArmed.Task;
+                }
+                await wait.WaitAsync(ct);
+            }
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new SteppedTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+
+        private void Arm(SteppedTimer timer)
+        {
+            TaskCompletionSource armed;
+            lock (_gate)
+            {
+                _armed.Enqueue(timer);
+                _armedInOrder.Add(timer);
+                armed = _anyArmed;
+                _anyArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            armed.TrySetResult();
+        }
+
+        public sealed class SteppedTimer(SteppedTimeProvider clock, TimerCallback callback, object? state) : ITimer
+        {
+            public volatile bool Disposed;
+
+            public void Fire() => ThreadPool.QueueUserWorkItem(_ => { if (!Disposed) callback(state); });
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                if (dueTime != Timeout.InfiniteTimeSpan) clock.Arm(this);
+                return true;
+            }
+
+            public void Dispose() => Disposed = true;
+
+            public ValueTask DisposeAsync()
+            {
+                Disposed = true;
+                return ValueTask.CompletedTask;
             }
         }
     }

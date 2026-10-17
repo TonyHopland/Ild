@@ -82,6 +82,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             _connection = SqliteSchemaTemplate<AppDbContext>.OpenCopy(options => new AppDbContext(options));
         }
+        SqlitePostgresSemantics.AddUnicodeLower(_connection);
         _dataRoot = Path.Combine(Path.GetTempPath(), "ild-int-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dataRoot);
         Environment.SetEnvironmentVariable("ILD_DATA_PATH", null);
@@ -116,7 +117,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             services.AddDataStores();
             services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection,
-                sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)));
+                sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)).WithPostgresSemantics());
 
             services.RemoveHostedService<ILD.Core.Services.Remote.RemoteWorkItemStartupReconciler>();
             services.RemoveHostedService<ILD.Core.Services.Remote.WorkItemScheduler>();

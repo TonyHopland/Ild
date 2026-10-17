@@ -1,8 +1,11 @@
+using System.Data.Common;
 using ILD.Core.Services.Implementations;
 using ILD.Data.Analytics;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace ILD.Tests;
 
@@ -392,6 +395,257 @@ public class RunAnalyticsServiceTests
         Assert.Equal(new ChatAnalytics(schedule.Id, "New", 2, 30, 3, 0.03m), Assert.Single(overview.Chats));
     }
 
+    [Fact]
+    public async Task The_date_range_includes_all_of_its_first_and_last_day_in_every_source()
+    {
+        using var db = new TestDb();
+        var template = AddTemplate(db, "coder");
+        var version = AddVersion(db, template.Id);
+        var aiNode = AddNode(db, version.Id, NodeType.AI);
+        var from = new DateOnly(2026, 6, 10);
+        var to = new DateOnly(2026, 6, 12);
+        var fromStart = from.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var afterTo = to.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        // The last moment before the range, its first, its last, and the first after it.
+        var moments = new[] { fromStart.AddMilliseconds(-1), fromStart, afterTo.AddMilliseconds(-1), afterTo };
+        var days = moments.Select(m => m.Date).ToArray();
+
+        // Each row's input tokens are a bit of its own, so the totals say which rows were counted.
+        for (var i = 0; i < 4; i++)
+        {
+            var chat = AddChat(db);
+            AddChatUsage(db, chat.Id, ChatUsageKind.Turn, "claude", 1L << i, 0, 0m, moments[i]);
+            AddChatBucket(db, days[i], "claude", 1L << (4 + i));
+            AddRunBucket(db, days[i], template.Id, "coder", "claude", 1L << (8 + i));
+            var run = AddRun(db, version.Id, LoopRunStatus.Completed, moments[i]);
+            AddRunNode(db, run.Id, aiNode.Id, moments[i], moments[i].AddSeconds(1), incomingEdgeId: null,
+                input: 1L << (12 + i), output: 0, cost: 0m, aiProvider: "claude");
+        }
+        // Runs that never started are dated by their creation.
+        AddRun(db, version.Id, LoopRunStatus.Running, startedAt: null, createdAt: fromStart.AddDays(1).AddHours(12));
+        AddRun(db, version.Id, LoopRunStatus.Running, startedAt: null, createdAt: afterTo);
+        db.Context.SaveChanges();
+
+        var ranged = new AnalyticsQuery(From: from, To: to);
+        const long inRange = (2 | 4) | ((2 | 4) << 4) | ((2 | 4) << 8) | ((2 | 4) << 12);
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(ranged, TestContext.Current.CancellationToken);
+        Assert.Equal(inRange, overview.TotalInputTokens);
+        Assert.Equal(5, overview.TotalRuns); // 2 archived, 2 started live, 1 never started
+        var row = Assert.Single(overview.Templates);
+        Assert.Equal(5, row.TotalRuns);
+        Assert.Equal(inRange & ~0xFFL, row.TotalInputTokens);
+        Assert.Equal(new ChatAnalytics(null, null, 4, inRange & 0xFF, 0, 0m), Assert.Single(overview.Chats));
+        Assert.Equal(
+            new[] { from, from.AddDays(1), to },
+            overview.Series.Select(p => p.PeriodStart));
+        Assert.Equal(new[] { RunAnalyticsAggregator.NoProvider, "claude" }.Order(StringComparer.OrdinalIgnoreCase), overview.AvailableProviders);
+
+        var detail = Assert.Single(await new RunAnalyticsService(db.Fresh())
+            .GetTemplateAnalyticsAsync(ranged, template.Id, TestContext.Current.CancellationToken));
+        Assert.Equal(5, detail.Totals.TotalRuns);
+        Assert.Equal(inRange & ~0xFFL, detail.Totals.TotalInputTokens);
+        Assert.Equal(3, detail.RunsWithNodeDetail);
+        Assert.Equal(2, Assert.Single(detail.Nodes).Executions);
+
+        // The widest range there is counts everything, and does not overflow its end.
+        var everything = new AnalyticsQuery(From: DateOnly.MinValue, To: DateOnly.MaxValue);
+        var all = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(everything, TestContext.Current.CancellationToken);
+        Assert.Equal(0xFFFF, all.TotalInputTokens);
+        Assert.Equal(10, all.TotalRuns);
+        var allDetail = Assert.Single(await new RunAnalyticsService(db.Fresh())
+            .GetTemplateAnalyticsAsync(everything, null, TestContext.Current.CancellationToken));
+        Assert.Equal(10, allDetail.Totals.TotalRuns);
+        Assert.Equal(6, allDetail.RunsWithNodeDetail);
+        Assert.Equal(4, Assert.Single(allDetail.Nodes).Executions);
+    }
+
+    [Fact]
+    public async Task The_provider_filter_ignores_case_including_non_ascii_letters_in_every_source()
+    {
+        using var db = new TestDb();
+        var template = AddTemplate(db, "coder");
+        var version = AddVersion(db, template.Id);
+        var aiNode = AddNode(db, version.Id, NodeType.AI);
+        var day = new DateTime(2026, 6, 1, 9, 0, 0, DateTimeKind.Utc);
+
+        foreach (var (provider, shift) in new[] { ("Ölama", 0), ("other", 1) })
+        {
+            var chat = AddChat(db);
+            AddChatUsage(db, chat.Id, ChatUsageKind.Turn, provider, 1L << shift, 0, 0.01m, day);
+            AddChatBucket(db, day.Date, provider, 1L << (2 + shift));
+            AddRunBucket(db, day.Date, template.Id, "coder", provider, 1L << (4 + shift));
+            var run = AddRun(db, version.Id, LoopRunStatus.Completed, day);
+            AddRunNode(db, run.Id, aiNode.Id, day, day.AddSeconds(1), incomingEdgeId: null,
+                input: 1L << (6 + shift), output: 0, cost: 0m, aiProvider: provider);
+        }
+        db.Context.SaveChanges();
+
+        var query = new AnalyticsQuery(Provider: "öLAMA");
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(query, TestContext.Current.CancellationToken);
+        Assert.Equal(1 + 4 + 16 + 64, overview.TotalInputTokens);
+        Assert.Equal(2, overview.TotalRuns);
+        Assert.Equal(0.01m, overview.TotalCostUsd);
+        Assert.Equal("Ölama", Assert.Single(overview.Providers).Provider);
+        Assert.Equal(1 + 4, Assert.Single(overview.Chats).TotalInputTokens);
+        Assert.Equal(new[] { "other", "Ölama" }, overview.AvailableProviders);
+
+        var detail = Assert.Single(await new RunAnalyticsService(db.Fresh())
+            .GetTemplateAnalyticsAsync(query, template.Id, TestContext.Current.CancellationToken));
+        Assert.Equal(2, detail.Totals.TotalRuns);
+        Assert.Equal(16 + 64, detail.Totals.TotalInputTokens);
+        Assert.Equal(1, detail.RunsWithNodeDetail);
+    }
+
+    [Fact]
+    public async Task Several_chat_calls_on_one_day_are_split_by_schedule_and_provider_and_named_by_the_newest_call()
+    {
+        using var db = new TestDb();
+        var day = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var alpha = AddSchedule(db, "Alpha now");
+        var alphaChat = AddChat(db, alpha.Id);
+        var betaId = Guid.NewGuid(); // deleted: only its usage names it
+        var betaChat = AddChat(db);
+        var plain = AddChat(db);
+
+        // Not in time order, so the newest call is neither the first nor the last row.
+        AddChatUsage(db, betaChat.Id, ChatUsageKind.Turn, "claude", 10, 1, 0.1m, day.AddHours(15), betaId, "Beta new");
+        AddChatUsage(db, alphaChat.Id, ChatUsageKind.Turn, "claude", 40, 4, 0.4m, day.AddHours(11), alpha.Id, "Alpha");
+        AddChatUsage(db, betaChat.Id, ChatUsageKind.Turn, "claude", 20, 2, null, day.AddHours(9), betaId, "Beta old");
+        AddChatUsage(db, plain.Id, ChatUsageKind.Title, "haiku", 6, 1, 0.006m, day.AddHours(13));
+        AddChatUsage(db, betaChat.Id, ChatUsageKind.Title, "haiku", 3, 1, 0.003m, day.AddHours(8), betaId, "Beta old");
+        AddChatUsage(db, alphaChat.Id, ChatUsageKind.Turn, "claude", 30, 3, 0.3m, day.AddHours(10), alpha.Id, "Alpha");
+        AddChatUsage(db, plain.Id, ChatUsageKind.Turn, "claude", 50, 5, null, day.AddHours(12));
+        db.Context.SaveChanges();
+
+        var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(new AnalyticsQuery(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            new[]
+            {
+                new ChatAnalytics(alpha.Id, "Alpha now", 2, 70, 7, 0.7m),
+                new ChatAnalytics(betaId, "Beta new", 2, 33, 4, 0.103m),
+                new ChatAnalytics(null, null, 1, 56, 6, 0.006m),
+            },
+            overview.Chats);
+        Assert.Equal(
+            new[]
+            {
+                new ProviderAnalytics("claude", 0, 150, 15, 0.8m),
+                new ProviderAnalytics("haiku", 0, 9, 2, 0.009m),
+            },
+            overview.Providers);
+        Assert.Equal(new[] { new AnalyticsSeriesPoint(DateOnly.FromDateTime(day), 0, 159, 17, 0.809m) }, overview.Series);
+        Assert.Equal((0, 159L, 17L, 0.809m),
+            (overview.TotalRuns, overview.TotalInputTokens, overview.TotalOutputTokens, overview.TotalCostUsd));
+        Assert.Empty(overview.Templates);
+    }
+
+    [Fact]
+    public async Task An_empty_database_reports_zeros_and_empty_lists()
+    {
+        using var db = new TestDb();
+        foreach (var query in new[]
+        {
+            new AnalyticsQuery(),
+            new AnalyticsQuery(From: new DateOnly(2026, 6, 1), To: new DateOnly(2026, 6, 30), Provider: "claude", Granularity: AnalyticsGranularity.Week),
+        })
+        {
+            var overview = await new RunAnalyticsService(db.Fresh()).GetOverviewAsync(query, TestContext.Current.CancellationToken);
+            Assert.Equal((0, 0L, 0L, 0m),
+                (overview.TotalRuns, overview.TotalInputTokens, overview.TotalOutputTokens, overview.TotalCostUsd));
+            Assert.Empty(overview.Templates);
+            Assert.Empty(overview.Chats);
+            Assert.Empty(overview.Providers);
+            Assert.Empty(overview.Series);
+            Assert.Empty(overview.AvailableProviders);
+            Assert.Equal(query.Granularity, overview.Granularity);
+
+            Assert.Empty(await new RunAnalyticsService(db.Fresh())
+                .GetTemplateAnalyticsAsync(query, null, TestContext.Current.CancellationToken));
+        }
+    }
+
+    /// <summary>
+    /// Postgres refuses a DateTime of unspecified kind for its timestamptz columns,
+    /// which SQLite accepts, so the kind of each date bound is checked where it is sent.
+    /// </summary>
+    [Fact]
+    public async Task Date_bounds_are_filtered_in_the_database_and_sent_as_utc()
+    {
+        using var db = new TestDb();
+        var parameters = new ParameterCapture();
+        var query = new AnalyticsQuery(From: new DateOnly(2026, 6, 1), To: new DateOnly(2026, 6, 30), Provider: "claude");
+
+        foreach (var templateAnalytics in new[] { false, true })
+        {
+            parameters.Values.Clear();
+            await using var context = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+                .UseSqlite(db.Context.Database.GetDbConnection())
+                .AddInterceptors(parameters)
+                .Options);
+            var service = new RunAnalyticsService(context);
+            if (templateAnalytics)
+                await service.GetTemplateAnalyticsAsync(query, null, TestContext.Current.CancellationToken);
+            else
+                await service.GetOverviewAsync(query, TestContext.Current.CancellationToken);
+
+            Assert.Contains(parameters.Values, v => v is DateTime or DateOnly);
+            Assert.All(parameters.Values.OfType<DateTime>(), v => Assert.Equal(DateTimeKind.Utc, v.Kind));
+        }
+    }
+
+    /// <summary>Records the value of every parameter the queries send.</summary>
+    private sealed class ParameterCapture : DbCommandInterceptor
+    {
+        public List<object?> Values { get; } = new();
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Values.AddRange(command.Parameters.Cast<DbParameter>().Select(p => p.Value));
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override ValueTask<InterceptionResult<object>> ScalarExecutingAsync(
+            DbCommand command, CommandEventData eventData,
+            InterceptionResult<object> result,
+            CancellationToken cancellationToken = default)
+        {
+            Values.AddRange(command.Parameters.Cast<DbParameter>().Select(p => p.Value));
+            return base.ScalarExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
+    private static void AddChatBucket(TestDb db, DateTime day, string provider, long input)
+    {
+        db.Context.ChatAnalyticsBuckets.Add(new ChatAnalyticsBucket
+        {
+            Id = Guid.NewGuid(),
+            BucketDate = day,
+            AiProvider = provider,
+            LastRecordedAt = day,
+            TurnCount = 1,
+            TotalInputTokens = input,
+        });
+    }
+
+    private static void AddRunBucket(TestDb db, DateTime day, Guid templateId, string templateName, string provider, long input)
+    {
+        db.Context.LoopRunAnalyticsBuckets.Add(new LoopRunAnalyticsBucket
+        {
+            Id = Guid.NewGuid(),
+            BucketDate = day,
+            LoopTemplateId = templateId,
+            TemplateName = templateName,
+            AiProvider = provider,
+            RunCount = 1,
+            CompletedRuns = 1,
+            TotalInputTokens = input,
+        });
+    }
+
     private static ChatSchedule AddSchedule(TestDb db, string name)
     {
         var schedule = new ChatSchedule
@@ -470,7 +724,7 @@ public class RunAnalyticsServiceTests
         return edge;
     }
 
-    private static LoopRun AddRun(TestDb db, Guid versionId, LoopRunStatus status, DateTime startedAt)
+    private static LoopRun AddRun(TestDb db, Guid versionId, LoopRunStatus status, DateTime? startedAt, DateTime? createdAt = null)
     {
         var run = new LoopRun
         {
@@ -481,6 +735,7 @@ public class RunAnalyticsServiceTests
             StartedAt = startedAt,
             RecoveryPolicy = RecoveryPolicy.AutoResume,
         };
+        if (createdAt is { } created) run.CreatedAt = created;
         db.Context.LoopRuns.Add(run);
         return run;
     }

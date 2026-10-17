@@ -73,6 +73,7 @@ public sealed class TestDb : IDisposable
     public TestDb(FakeWorkItemServerHarness? server = null)
     {
         _connection = SqliteSchemaTemplate<AppDbContext>.OpenCopy(options => new AppDbContext(options), _connectionString);
+        SqlitePostgresSemantics.AddUnicodeLower(_connection);
         Context = Fresh();
         LoopRuns = new LoopRunStore(Context);
         LoopTemplates = new LoopTemplateStore(Context);
@@ -92,6 +93,7 @@ public sealed class TestDb : IDisposable
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlite(_connection)
+            .WithPostgresSemantics()
             .Options;
         return new AppDbContext(options);
     }
@@ -102,7 +104,7 @@ public sealed class TestDb : IDisposable
     /// instance, whichever of these are still open.
     /// </summary>
     public AppDbContext OnOwnConnection()
-        => new(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connectionString).Options);
+        => new(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connectionString).WithPostgresSemantics().Options);
 
     public void Dispose()
     {

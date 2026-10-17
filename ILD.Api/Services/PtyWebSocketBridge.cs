@@ -22,6 +22,7 @@ namespace ILD.Api.Services;
 public static class PtyWebSocketBridge
 {
     private const int ReadBufferSize = 8 * 1024;
+    private static readonly TimeSpan ExitEventWait = TimeSpan.FromSeconds(10);
 
     /// <param name="reportExit">
     /// When the child ends on its own, follow its output with a line giving its exit
@@ -29,13 +30,15 @@ public static class PtyWebSocketBridge
     /// leaves something to read.
     /// </param>
     /// <param name="timeProvider">Clock for the bounded teardown waits; <see cref="TimeProvider.System"/> when null.</param>
+    /// <param name="spawn">Starts the child; <see cref="PtyProvider.SpawnAsync"/> when null.</param>
     public static async Task RunAsync(
         WebSocket socket,
         PtyOptions options,
         ILogger logger,
         CancellationToken cancellationToken,
         bool reportExit = false,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        Func<PtyOptions, CancellationToken, Task<IPtyConnection>>? spawn = null)
     {
         var clock = timeProvider ?? TimeProvider.System;
         IPtyConnection? pty = null;
@@ -43,7 +46,7 @@ public static class PtyWebSocketBridge
         {
             try
             {
-                pty = await PtyProvider.SpawnAsync(options, cancellationToken);
+                pty = await (spawn ?? PtyProvider.SpawnAsync)(options, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -68,6 +71,14 @@ public static class PtyWebSocketBridge
                 exitCode = e.ExitCode;
                 try { ptyExited.Cancel(); } catch { }
             };
+            // Porta.Pty raises ProcessExited once, from a watcher thread started at
+            // spawn, so a child that exits at once can be gone before the handler
+            // above is attached. Its exit code is set before WaitForExit reports it.
+            if (pty.WaitForExit(0))
+            {
+                exitCode = pty.ExitCode;
+                ptyExited.Cancel();
+            }
 
             // A WebSocket takes one send at a time, and the output pump can still be
             // sending when a notice or the close frame goes out, so every send on
@@ -96,6 +107,17 @@ public static class PtyWebSocketBridge
                         Task.Delay(TimeSpan.FromSeconds(3), clock, cancellationToken));
                 }
                 catch { }
+
+                // The output ending means the child closed its side of the PTY, so its
+                // exit is due, but Porta.Pty reports it from a separate waitpid thread
+                // that can lag well behind. Bounded only against an event that never
+                // comes; a client that leaves meanwhile ends the wait.
+                if (reportExit && !childExited.IsCompleted && ptyToSocket is { IsCompletedSuccessfully: true, Result: true })
+                {
+                    using var exitWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    await Task.WhenAny(childExited, socketToPty, Task.Delay(ExitEventWait, clock, exitWait.Token));
+                    exitWait.Cancel();
+                }
 
                 if (reportExit && childExited.IsCompleted && exitCode is { } code)
                     await SendExclusivelyAsync(
@@ -186,7 +208,8 @@ public static class PtyWebSocketBridge
         finally { sendLock.Release(); }
     }
 
-    private static async Task PumpPtyToSocketAsync(
+    /// <returns>Whether the pump ended because the PTY output came to its end.</returns>
+    private static async Task<bool> PumpPtyToSocketAsync(
         IPtyConnection pty, WebSocket socket, SemaphoreSlim sendLock, CancellationToken requestCt)
     {
         var buffer = ArrayPool<byte>.Shared.Rent(ReadBufferSize);
@@ -200,11 +223,13 @@ public static class PtyWebSocketBridge
                     read = await pty.ReaderStream.ReadAsync(buffer.AsMemory(0, ReadBufferSize), requestCt);
                 }
                 catch (OperationCanceledException) { break; }
-                catch (IOException) { break; }
+                // The end of the output on Linux: once the child side is closed, a
+                // read of the PTY fails with EIO instead of returning 0.
+                catch (IOException) { return true; }
                 // EOF: the child exited and its output is drained. On Unix the
-                // reader doesn't observe a token, so this EOF (not ptyExited) is
-                // the real signal that ends the pump.
-                if (read <= 0) break;
+                // reader doesn't observe a token, so the end of the output (not
+                // ptyExited) is the real signal that ends the pump.
+                if (read <= 0) return true;
 
                 try
                 {
@@ -231,6 +256,7 @@ public static class PtyWebSocketBridge
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
+        return false;
     }
 
     private static async Task PumpSocketToPtyAsync(WebSocket socket, IPtyConnection pty, CancellationToken ct)

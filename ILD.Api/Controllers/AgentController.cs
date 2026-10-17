@@ -74,6 +74,10 @@ public class AgentController : ControllerBase
     // a few KB; this stops a rogue agent from shoving megabytes over the chat hub.
     private const int MaxLoopDocumentChars = 1_000_000;
 
+    /// <summary>What <see cref="string.Trim()"/> trims, spelled out: SQL's own trim takes spaces only.</summary>
+    private static readonly char[] Whitespace = Enumerable.Range(char.MinValue, char.MaxValue + 1)
+        .Select(c => (char)c).Where(char.IsWhiteSpace).ToArray();
+
     private readonly IWorkItemManager _workItems;
     private readonly ILoopTemplateManager _templates;
     private readonly ILoopRunStore _runs;
@@ -878,10 +882,10 @@ public class AgentController : ControllerBase
         if (template != null)
             return (template, null);
 
-        // Matched in memory: SQL case folding differs between SQLite and Postgres.
-        var named = (await _db.LoopTemplates.AsNoTracking().ToListAsync())
-            .Where(t => string.Equals(t.Name.Trim(), key, StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        var lowered = key.ToLowerInvariant();
+        var named = await _db.LoopTemplates.AsNoTracking()
+            .Where(t => t.Name.Trim(Whitespace).ToLower() == lowered)
+            .ToListAsync();
         if (named.Count > 1)
             return (null, Conflict(new
             {
