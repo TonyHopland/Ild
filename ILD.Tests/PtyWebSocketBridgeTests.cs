@@ -355,10 +355,10 @@ public class PtyWebSocketBridgeTests
         private readonly Lock _gate = new();
         private readonly Queue<SteppedTimer> _armed = new();
         private readonly List<SteppedTimer> _armedInOrder = new();
+        private readonly HashSet<SteppedTimer> _reported = new();
         private TaskCompletionSource _anyArmed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _consumed;
 
-        /// <summary>Completes with the next armed timer this method has not reported yet.</summary>
+        /// <summary>Completes with the oldest armed timer that has neither been reported here nor fired.</summary>
         public async Task<SteppedTimer> NextArmedAsync(CancellationToken ct)
         {
             while (true)
@@ -366,8 +366,12 @@ public class PtyWebSocketBridgeTests
                 Task wait;
                 lock (_gate)
                 {
-                    if (_armedInOrder.Count > _consumed)
-                        return _armedInOrder[_consumed++];
+                    var next = _armedInOrder.FirstOrDefault(t => !_reported.Contains(t));
+                    if (next is not null)
+                    {
+                        _reported.Add(next);
+                        return next;
+                    }
                     wait = _anyArmed.Task;
                 }
                 await wait.WaitAsync(ct);
@@ -385,7 +389,7 @@ public class PtyWebSocketBridgeTests
                     while (_armed.TryDequeue(out var timer))
                     {
                         if (timer.Disposed) continue;
-                        if (_consumed < _armedInOrder.Count) _consumed++;
+                        _reported.Add(timer);
                         timer.Fire();
                         return;
                     }

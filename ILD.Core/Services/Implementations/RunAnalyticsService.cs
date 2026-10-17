@@ -370,7 +370,7 @@ public sealed class RunAnalyticsService : IRunAnalyticsService
             return rows;
         }
 
-        /// <summary>The test <see cref="Apply"/> makes, for a row already in memory.</summary>
+        /// <summary>The same test as <see cref="Apply"/>, for a row in memory.</summary>
         public bool Matches(DateTime date, string provider)
             => (Start is not DateTime start || date >= start)
                 && (End is not DateTime end || date < end)
