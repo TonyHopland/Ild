@@ -17,10 +17,10 @@ namespace ILD.Tests;
 /// <item><see cref="PiAdapterAgentDirectoryTests"/> swaps pi's shared, fixed-name
 /// scratch directories for links, which every pi turn in the process goes
 /// through.</item>
-/// <item><see cref="Integration.StorageOverviewTests"/> sets <c>ILD_DATA_PATH</c>
-/// while its host builds, which any host built beside it would take as its data
-/// root too, and points the agent scratch root at a directory of its own, which
-/// every scratch directory the process creates would then land in.</item>
+/// <item><see cref="Integration.StorageOverviewTests"/> points the agent scratch
+/// root (<c>ILD_AGENT_SCRATCH_ROOT</c>) at a directory of its own, which every
+/// scratch directory the process creates would then land in, and
+/// <see cref="Integration.StorageOverviewNotMeasuredTests"/> clears it.</item>
 /// <item><see cref="SessionTokenHasherTests"/> and <see cref="AuthServicePepperTests"/>
 /// set the static session-token pepper, which every host and every
 /// <see cref="ILD.Core.Services.Implementations.AuthService"/> hashes tokens

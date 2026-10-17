@@ -1,4 +1,5 @@
 using ILD.Core.Services.Interfaces;
+using ILD.Core.Services.Remote;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 
@@ -27,7 +28,7 @@ public class StorageController : ControllerBase
         {
             return Ok(await _storage.GetCleanupCandidatesAsync(HttpContext.RequestAborted));
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (WorkItemServerUnreachable.Is(ex))
         {
             return StatusCode(503, new { error = "WorkItemServer unreachable: whether the work items are Done could not be checked. Retry later.", detail = ex.Message });
         }
@@ -56,7 +57,7 @@ public class StorageController : ControllerBase
         {
             return Ok(await _storage.CleanUpWorktreesAsync(runIds));
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex) when (WorkItemServerUnreachable.Is(ex))
         {
             return StatusCode(503, new { error = "WorkItemServer unreachable: no worktree was cleaned up. Retry later.", detail = ex.Message });
         }

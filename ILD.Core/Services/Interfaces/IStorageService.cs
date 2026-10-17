@@ -13,15 +13,16 @@ public interface IStorageService
     /// <summary>
     /// Every run whose worktree the cleanup would remove: finished, not pinned,
     /// its work item Done on the WorkItem Server, and no run of that work item
-    /// active. Throws <see cref="HttpRequestException"/> when the server cannot be reached.
+    /// active. Throws when the server cannot be reached (see <see cref="Remote.WorkItemServerUnreachable"/>).
     /// </summary>
     Task<WorktreeCleanupCandidates> GetCleanupCandidatesAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Run Cleanup for each of <paramref name="runIds"/> still a candidate when
     /// its turn comes, re-read just before acting; nothing else is touched.
-    /// Throws <see cref="HttpRequestException"/> when the WorkItem Server cannot
-    /// be reached before any run was acted on.
+    /// Throws when the WorkItem Server cannot be reached (see
+    /// <see cref="Remote.WorkItemServerUnreachable"/>) before any run was acted on;
+    /// after that, the runs left are reported Skipped.
     /// </summary>
     Task<WorktreeCleanupResult> CleanUpWorktreesAsync(IReadOnlyCollection<Guid> runIds);
 }

@@ -17,18 +17,53 @@ namespace ILD.Tests.Integration;
 /// <summary>
 /// The world changing while a confirmed cleanup works through its runs, each
 /// reclaim taking seconds: what was already cleaned is reported as cleaned, and
-/// nothing written meanwhile is lost or ignored.
+/// nothing written meanwhile is lost or ignored. A WorkItem server that times
+/// out counts as unreachable, as one that refuses the call does.
 /// </summary>
 [SupportedOSPlatform("linux")]
 public class StorageCleanupMidBatchTests
 {
+    /// <summary>What the WorkItem client throws when the server is unreachable: refused, or past HttpClient.Timeout.</summary>
+    public static TheoryData<string> Outages => ["refused", "timeout"];
+
+    private static Exception Outage(string kind) => kind == "timeout"
+        ? new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 100 seconds elapsing.", new TimeoutException())
+        : new HttpRequestException("Connection refused (workitem-server:8081)");
+
+    // A refused call from the start is StorageApiTests' outage test.
     [Fact]
-    public async Task An_outage_after_a_run_was_cleaned_skips_the_rest_and_still_reports_the_cleaned_one()
+    public async Task With_the_server_timing_out_from_the_start_both_cleanup_endpoints_answer_503_and_change_nothing()
+    {
+        var server = new Mock<IWorkItemServerClient>();
+        server.Setup(c => c.GetAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(Outage("timeout"));
+        var reclaimer = new Mock<IRunReclaimer>();
+        await using var factory = new ApiFactory(configureServices: services =>
+        {
+            services.ReplaceSingleton(server.Object);
+            services.ReplaceSingleton(reclaimer.Object);
+        });
+        var client = await factory.CreateAuthenticatedClientAsync();
+        using var scratch = new TempDir();
+        var run = await SeedRunAsync(factory, "wi-a", LoopRunStatus.Completed, Path.Combine(scratch.Path, "a"), repositoryId: null);
+
+        var list = await client.GetAsync("/api/v1/storage/worktree-cleanup", TestContext.Current.CancellationToken);
+        var confirm = await client.PostAsJsonAsync("/api/v1/storage/worktree-cleanup",
+            new { runIds = new[] { run } }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, list.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, confirm.StatusCode);
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>()), Times.Never);
+    }
+
+    [Theory]
+    [MemberData(nameof(Outages))]
+    public async Task An_outage_after_a_run_was_cleaned_skips_the_rest_and_still_reports_the_cleaned_one(string kind)
     {
         var server = new Mock<IWorkItemServerClient>();
         server.SetupSequence(c => c.GetAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemoteWorkItem { Id = "wi-a", Title = "Item", Status = RemoteWorkItemStatus.Done })
-            .ThrowsAsync(new HttpRequestException("Connection refused (workitem-server:8081)"));
+            .ThrowsAsync(Outage(kind));
         var reclaimer = new Mock<IRunReclaimer>();
         reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(true);
         await using var factory = new ApiFactory(configureServices: services =>

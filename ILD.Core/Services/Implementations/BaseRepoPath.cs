@@ -19,11 +19,13 @@ internal static class BaseRepoPath
     /// the path whether or not anything is there yet.
     /// </summary>
     public static string Fallback(Guid repositoryId, IConfiguration? config)
+        => Path.Combine(StoreRoot(config), repositoryId.ToString("N"));
+
+    /// <summary>The directory every fallback clone lives under, one per repository id.</summary>
+    public static string StoreRoot(IConfiguration? config)
     {
         var dataPath = config?["App:DataPath"];
-        return Path.GetFullPath(Path.Combine(
-            string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath,
-            "repos", repositoryId.ToString("N")));
+        return Path.GetFullPath(Path.Combine(string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath, "repos"));
     }
 
     /// <summary>

@@ -5,6 +5,7 @@ import type {
   StorageOverview,
   WorktreeCleanupCandidate,
   WorktreeCleanupResult,
+  WorktreeCleanupRunResult,
 } from "../../../types";
 import { formatBytes } from "../../../utils/attachments";
 
@@ -315,7 +316,8 @@ function CleanupSummary({
   candidates: WorktreeCleanupCandidate[];
   result: WorktreeCleanupResult;
 }) {
-  const count = (outcome: string) => result.results.filter((r) => r.outcome === outcome).length;
+  const count = (outcome: WorktreeCleanupRunResult["outcome"]) =>
+    result.results.filter((r) => r.outcome === outcome).length;
   const titles = new Map(candidates.map((c) => [c.runId, c.workItemTitle]));
   const notCleaned = result.results.filter((r) => r.outcome !== "Cleaned");
 

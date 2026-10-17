@@ -461,14 +461,8 @@ public class StorageApiTests
 /// attributed. Sizes are checked against real files on disk — allocated blocks,
 /// hard links, sparse files and links — with <c>du</c>, which counts each inode
 /// once and never follows a link, as the oracle for the whole data root.
-///
-/// <para>
-/// Each host gets a data root of its own through <c>ILD_DATA_PATH</c>, which the
-/// API reads while it builds — the factory's <c>Storage:DataRoot</c> arrives too
-/// late for that read, so every other host shares one data root, which a byte
-/// count cannot. The variable is process-wide, and so is the scratch root one,
-/// hence the collection.
-/// </para>
+/// The agent scratch root is set through a process-wide variable, hence the
+/// collection.
 /// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
 [SupportedOSPlatform("linux")]
@@ -477,11 +471,10 @@ public class StorageOverviewTests
     [Fact]
     public async Task The_overview_counts_each_file_once_by_its_allocated_size_and_attributes_worktrees_through_their_runs()
     {
-        using var dataRoot = new TempDir();
-        await using var factory = FactoryOn(dataRoot.Path);
+        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var data = DataRoot(factory);
-        Assert.Equal(dataRoot.Path, data);
+        Assert.Equal(factory.DataRoot, data);
         var worktrees = WorktreesRoot(factory);
         using var outside = new TempDir();
 
@@ -595,8 +588,7 @@ public class StorageOverviewTests
     [Fact]
     public async Task An_unreadable_directory_marks_its_entry_incomplete_and_the_overview_still_answers()
     {
-        using var dataRoot = new TempDir();
-        await using var factory = FactoryOn(dataRoot.Path);
+        await using var factory = new ApiFactory();
         var client = await factory.CreateAuthenticatedClientAsync();
         var alpha = await SeedRepositoryAsync(factory, "alpha");
         var a1 = Path.Combine(WorktreesRoot(factory), "a1");
@@ -637,8 +629,7 @@ public class StorageOverviewTests
         Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, scratch);
         try
         {
-            using var dataRoot = new TempDir();
-            await using var factory = FactoryOn(dataRoot.Path);
+            await using var factory = new ApiFactory();
             var client = await factory.CreateAuthenticatedClientAsync();
 
             using var doc = JsonDocument.Parse(await client.GetStringAsync("/api/v1/storage", TestContext.Current.CancellationToken));
@@ -653,15 +644,5 @@ public class StorageOverviewTests
         {
             Environment.SetEnvironmentVariable(AgentIsolation.ScratchRootEnvVar, previous);
         }
-    }
-
-    private static ApiFactory FactoryOn(string dataRoot)
-    {
-        var factory = new ApiFactory();
-        var previous = Environment.GetEnvironmentVariable("ILD_DATA_PATH");
-        Environment.SetEnvironmentVariable("ILD_DATA_PATH", dataRoot);
-        try { _ = factory.Services; }
-        finally { Environment.SetEnvironmentVariable("ILD_DATA_PATH", previous); }
-        return factory;
     }
 }

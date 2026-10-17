@@ -2,7 +2,6 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
-using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.Configuration;
 
@@ -32,10 +31,8 @@ public sealed class StorageService : IStorageService
         _workItems = workItems;
         _reclaimer = reclaimer;
         _config = config;
-        _dataRoot = Path.GetFullPath(config["App:DataPath"] is { Length: > 0 } data ? data : "data");
-        _worktreesRoot = Path.GetFullPath(config["App:WorktreesPath"] is { Length: > 0 } worktrees
-            ? worktrees
-            : Path.Combine(_dataRoot, "worktrees"));
+        _dataRoot = Path.GetFullPath(HostPath(config, "App:DataPath"));
+        _worktreesRoot = Path.GetFullPath(HostPath(config, "App:WorktreesPath"));
         _chatRoot = Path.GetFullPath(chatOptions.ScratchRoot);
     }
 
@@ -59,7 +56,7 @@ public sealed class StorageService : IStorageService
         foreach (var repository in repositories.Values)
             if (BaseRepoPath.Existing(repository, _config) is { } clone)
                 scan.Add(clone, RepositoryEntry(clones, repository.Id, repositories), clones.Shared);
-        var reposStore = Path.Combine(_dataRoot, "repos");
+        var reposStore = BaseRepoPath.StoreRoot(_config);
         var notAClone = clones.Entry("unowned", "Not a repository's clone");
         foreach (var directory in Subdirectories(reposStore, notAClone))
             if (Guid.TryParseExact(Path.GetFileName(directory), "N", out var repositoryId))
@@ -135,7 +132,7 @@ public sealed class StorageService : IStorageService
             {
                 workItem = await _workItems.GetWorkItemAsync(run.WorkItemId);
             }
-            catch (HttpRequestException) when (actedOnAny)
+            catch (Exception ex) when (actedOnAny && WorkItemServerUnreachable.Is(ex))
             {
                 results.Add(new(runId, WorktreeCleanupOutcome.Skipped, null, "The WorkItem Server could not be reached."));
                 continue;
@@ -175,7 +172,7 @@ public sealed class StorageService : IStorageService
     {
         if (string.IsNullOrEmpty(run.WorktreePath))
             return "The run has no worktree.";
-        if (run.Status is not (LoopRunStatus.Completed or LoopRunStatus.Failed or LoopRunStatus.Cancelled))
+        if (!RunCleanup.IsFinished(run))
             return NotFinished;
         if (run.Retain)
             return "The run is pinned.";
@@ -213,6 +210,10 @@ public sealed class StorageService : IStorageService
         var name = repositories.GetValueOrDefault(id)?.Name;
         return category.Entry(id.ToString(), name ?? "Repository no longer exists", id, name);
     }
+
+    /// <summary>A path the host sets at startup (Program); there is no default to fall back on here.</summary>
+    private static string HostPath(IConfiguration config, string key)
+        => config[key] is { Length: > 0 } path ? path : throw new InvalidOperationException($"{key} is not set.");
 
     private static string? AgentReadRoot()
     {
@@ -272,8 +273,10 @@ public sealed class StorageService : IStorageService
             if (measured && Shared.Bytes > 0)
                 entries.Add(new StorageEntry("shared", "Shared with other entries (hard links)", null, null, Shared.Bytes, Shared.Incomplete));
 
+            // The sum of what was measured; an entry that was not makes it incomplete, not smaller.
             var bytes = measured ? entries.Sum(e => e.Bytes ?? 0) : (long?)null;
-            return new StorageCategory(key, label, bytes, entries.Any(e => e.Incomplete), hasBreakdown ? entries : []);
+            var incomplete = entries.Any(e => e.Incomplete) || (measured && entries.Any(e => e.Bytes is null));
+            return new StorageCategory(key, label, bytes, incomplete, hasBreakdown ? entries : []);
         }
     }
 }
