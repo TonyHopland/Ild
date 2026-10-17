@@ -12,7 +12,7 @@ namespace ILD.Data.Entities;
 /// The template and the source run or chat are only referenced, never owned:
 /// deleting the source leaves the proposal to be decided in the Loop Editor.
 /// </summary>
-public class LoopTemplateProposal
+public class LoopTemplateProposal : IAgentProposal<LoopTemplateProposalStatus>
 {
     public const int MaxRationaleLength = 2000;
 

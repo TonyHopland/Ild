@@ -86,7 +86,7 @@ public class GlobalVariablesController : ControllerBase
             Value = request.Value!,
             UpdatedAt = DateTime.UtcNow,
         };
-        StaledGlobalVariableProposals staled;
+        StaledProposals staled;
         try
         {
             staled = await _variables.AddAsync(variable, ct);
@@ -110,7 +110,7 @@ public class GlobalVariablesController : ControllerBase
 
         variable.Value = request.Value!;
         variable.UpdatedAt = DateTime.UtcNow;
-        StaledGlobalVariableProposals staled;
+        StaledProposals staled;
         try
         {
             staled = await _variables.UpdateAsync(variable, ct);

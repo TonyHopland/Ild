@@ -90,7 +90,7 @@ public class LoopTemplateProposalsController : ControllerBase
         if (entry.Proposal.Status != LoopTemplateProposalStatus.Pending)
             return AlreadyDecided(entry);
 
-        LoopTemplateVersionSave saved;
+        LoopTemplateSaveResult saved;
         try
         {
             saved = await _templates.SaveProposalAsync(entry.Proposal);
@@ -106,14 +106,14 @@ public class LoopTemplateProposalsController : ControllerBase
             return NotFound(new { error = NoSuchProposal });
         return saved.Outcome switch
         {
-            LoopTemplateVersionSaveOutcome.Saved => Ok(new { proposal = View(after, withDocument: false), version = saved.VersionNumber }),
-            LoopTemplateVersionSaveOutcome.Conflict => Conflict(new
+            LoopTemplateSaveOutcome.Saved => Ok(new { proposal = View(after, withDocument: false), version = saved.VersionNumber }),
+            LoopTemplateSaveOutcome.Conflict => Conflict(new
             {
                 error = "The template has a newer version than the one this proposal was made against, so nothing was saved. The proposal is now stale.",
                 proposal = View(after, withDocument: false),
             }),
-            LoopTemplateVersionSaveOutcome.ProposalNotPending => AlreadyDecided(after),
-            LoopTemplateVersionSaveOutcome.TemplateNotFound => NotFound(new { error = "The loop template this proposal was made for no longer exists." }),
+            LoopTemplateSaveOutcome.ProposalNotPending => AlreadyDecided(after),
+            LoopTemplateSaveOutcome.TemplateNotFound => NotFound(new { error = "The loop template this proposal was made for no longer exists." }),
             _ => throw new UnreachableException($"Unhandled save outcome {saved.Outcome}."),
         };
     }

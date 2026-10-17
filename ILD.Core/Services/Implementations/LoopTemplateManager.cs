@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Data;
@@ -56,30 +57,29 @@ public class LoopTemplateManager : ILoopTemplateManager
     public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100, bool includeArchived = false)
         => await _store.GetAllAsync(skip, take, includeArchived);
 
-    public Task<LoopTemplateVersionSave> SaveNewVersionAsync(
+    public async Task<LoopTemplateSaveResult> SaveNewVersionAsync(
         Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy, Guid? fromProposalId = null)
     {
         NormalizeOutputs(graph);
         var errors = LoopTemplateValidator.Validate(graph);
         if (errors.Count > 0)
             throw new InvalidOperationException("Invalid loop template graph: " + string.Join("; ", errors));
-        return AddVersionAsync(templateId, name, description, recoveryPolicy, graph, fromProposalId, requireProposal: false);
+        return ResultOf(await _store.AddVersionAsync(WriteOf(templateId, name, description, recoveryPolicy, graph), fromProposalId));
     }
 
-    public async Task<LoopTemplateVersionSave> SaveProposalAsync(LoopTemplateProposal proposal)
+    public async Task<LoopTemplateSaveResult> SaveProposalAsync(LoopTemplateProposal proposal)
     {
         var checkedDocument = CheckProposedDocument(proposal.Document);
         if (checkedDocument.Request is not { } request)
             throw new InvalidOperationException("The proposed loop no longer passes a save's checks: "
                 + string.Join("; ", checkedDocument.ValidationErrors.Prepend(checkedDocument.Error).OfType<string>()));
-        return await AddVersionAsync(
+        var write = WriteOf(
             proposal.LoopTemplateId,
             request.Name,
             request.Description,
             request.RecoveryPolicy,
-            new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges),
-            proposal.Id,
-            requireProposal: true);
+            new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges));
+        return ResultOf(await _store.SaveProposalAsync(write, proposal.Id));
     }
 
     public ProposedLoopDocument CheckProposedDocument(string document)
@@ -98,15 +98,15 @@ public class LoopTemplateManager : ILoopTemplateManager
         if (!root.ContainsKey("$schema"))
             return Refused($"The document has no $schema. Send the whole {LoopDocumentUpgrader.V2} document get_loop_template returns, with your changes.");
         LoopDocumentUpgrader.TryUpgrade(root);
-        if (TextOf(root["$schema"]) != LoopDocumentUpgrader.V2)
+        if (JsonText.Of(root["$schema"]) != LoopDocumentUpgrader.V2)
             return Refused($"$schema must be \"{LoopDocumentUpgrader.V2}\" (a {LoopDocumentUpgrader.V1} document is upgraded to it).");
-        if (!Enum.TryParse<RecoveryPolicy>(TextOf(root["recoveryPolicy"]), ignoreCase: true, out var policy) || !Enum.IsDefined(policy))
+        if (!Enum.TryParse<RecoveryPolicy>(JsonText.Of(root["recoveryPolicy"]), ignoreCase: true, out var policy) || !Enum.IsDefined(policy))
             return Refused($"recoveryPolicy must be one of {string.Join(", ", Enum.GetNames<RecoveryPolicy>())}.");
 
-        LoopGraphShape? shape;
+        LoopTemplateGraph parsed;
         try
         {
-            shape = root.Deserialize<LoopGraphShape>(DocumentOptions);
+            parsed = LoopDocumentEditor.ReadGraph(root);
         }
         catch (JsonException ex)
         {
@@ -115,11 +115,11 @@ public class LoopTemplateManager : ILoopTemplateManager
 
         var request = new LoopTemplateCreateRequest
         {
-            Name = TextOf(root["name"]) ?? string.Empty,
-            Description = TextOf(root["description"]) ?? string.Empty,
+            Name = JsonText.Of(root["name"]) ?? string.Empty,
+            Description = JsonText.Of(root["description"]) ?? string.Empty,
             RecoveryPolicy = policy,
-            Nodes = shape?.Nodes ?? new(),
-            Edges = shape?.Edges ?? new(),
+            Nodes = parsed.Nodes,
+            Edges = parsed.Edges,
         };
         var refused = new List<ValidationResult>();
         if (!Validator.TryValidateObject(request, new ValidationContext(request), refused, validateAllProperties: true))
@@ -174,11 +174,12 @@ public class LoopTemplateManager : ILoopTemplateManager
         return Task.FromResult((errors.Count == 0, errors));
     }
 
-    public async Task<StaledLoopTemplateProposals> DeleteLoopTemplateAsync(Guid templateId)
+    public async Task<LoopTemplateDeletion> DeleteLoopTemplateAsync(Guid templateId)
     {
         var template = await _store.GetByIdAsync(templateId);
-        if (template == null) return StaledLoopTemplateProposals.None;
-        return await _store.DeleteTemplateAsync(template);
+        if (template == null) return LoopTemplateDeletion.None;
+        var staled = await _store.DeleteTemplateAsync(template);
+        return new(staled.Count, staled.ChatSessionIds);
     }
 
     public async Task ArchiveLoopTemplateAsync(Guid templateId)
@@ -211,20 +212,29 @@ public class LoopTemplateManager : ILoopTemplateManager
         }
     }
 
-    private Task<LoopTemplateVersionSave> AddVersionAsync(
-        Guid templateId, string name, string description, RecoveryPolicy recoveryPolicy, LoopTemplateGraph graph,
-        Guid? fromProposalId, bool requireProposal)
+    private static LoopTemplateVersionWrite WriteOf(
+        Guid templateId, string name, string description, RecoveryPolicy recoveryPolicy, LoopTemplateGraph graph)
     {
         var (version, nodes, edges) = BuildVersion(graph);
-        return _store.AddVersionAsync(
-            new LoopTemplateVersionWrite(
-                templateId, name, description, recoveryPolicy, version, nodes, edges,
-                DocumentOf(name, description, recoveryPolicy, graph))
-            {
-                FromProposalId = fromProposalId,
-                RequireProposal = requireProposal,
-            });
+        return new LoopTemplateVersionWrite(
+            templateId, name, description, recoveryPolicy, version, nodes, edges,
+            DocumentOf(name, description, recoveryPolicy, graph));
     }
+
+    private static LoopTemplateSaveResult ResultOf(LoopTemplateVersionSave save)
+        => new(
+            save.Outcome switch
+            {
+                LoopTemplateVersionSaveOutcome.Saved => LoopTemplateSaveOutcome.Saved,
+                LoopTemplateVersionSaveOutcome.TemplateNotFound => LoopTemplateSaveOutcome.TemplateNotFound,
+                LoopTemplateVersionSaveOutcome.Conflict => LoopTemplateSaveOutcome.Conflict,
+                LoopTemplateVersionSaveOutcome.ProposalNotPending => LoopTemplateSaveOutcome.ProposalNotPending,
+                _ => throw new UnreachableException($"Unhandled save outcome {save.Outcome}."),
+            },
+            save.VersionNumber,
+            save.ProposalApplied,
+            save.ProposalsChanged,
+            save.ChangedChatSessionIds);
 
     private static ProposedLoopDocument Refused(string error) => new(null, null, error, []);
 
@@ -234,16 +244,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             new LoopTemplateDocument(LoopDocumentUpgrader.V2, name, description, recoveryPolicy.ToString(), graph.Nodes, graph.Edges),
             DocumentOptions);
 
-    private static string? TextOf(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
-
     private static readonly JsonSerializerOptions DocumentOptions = new(JsonSerializerDefaults.Web);
-
-    private sealed class LoopGraphShape
-    {
-        public List<LoopNodeDto>? Nodes { get; set; }
-        public List<LoopNodeEdgeDto>? Edges { get; set; }
-    }
 
     /// <summary>A version of <paramref name="graph"/> ready to insert, but for its template and number.</summary>
     private static (LoopTemplateVersion Version, List<LoopNode> Nodes, List<LoopNodeEdge> Edges) BuildVersion(LoopTemplateGraph graph)

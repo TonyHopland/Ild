@@ -235,7 +235,7 @@ public class AgentRetroReadApiTests
         {
             var templates = scope.ServiceProvider.GetRequiredService<ILoopTemplateManager>();
             templateId = await templates.CreateLoopTemplateAsync(name, "first", Graph("Review the code."), RecoveryPolicy.NeedsReview);
-            Assert.Equal(LoopTemplateVersionSaveOutcome.Saved,
+            Assert.Equal(LoopTemplateSaveOutcome.Saved,
                 (await templates.SaveNewVersionAsync(templateId, name, "second", Graph("Review the code twice."), RecoveryPolicy.NeedsReview)).Outcome);
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             db.LoopTemplates.Single(t => t.Id == templateId).Description = null;

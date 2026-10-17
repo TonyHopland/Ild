@@ -7,7 +7,8 @@ namespace ILD.Data.Stores.Interfaces;
 /// Loop Template Proposals (ADR-0028): agents propose a whole new document for a
 /// saved loop template against its latest version, and a human saves or
 /// rejects it. Saving is a new template version, written by
-/// <see cref="ILoopTemplateStore.AddVersionAsync"/>.
+/// <see cref="ILoopTemplateStore.SaveProposalAsync"/>, or by
+/// <see cref="ILoopTemplateStore.AddVersionAsync"/> for a Loop Editor save from it.
 /// </summary>
 public interface ILoopTemplateProposalStore
 {
@@ -79,9 +80,3 @@ public sealed record LoopTemplateProposalDecision(
     LoopTemplateProposalDecisionOutcome Outcome,
     LoopTemplateProposalEntry? Entry,
     IReadOnlyList<Guid> ChangedChatSessionIds);
-
-/// <summary>The pending proposals a template write made stale, and the chats that made them.</summary>
-public sealed record StaledLoopTemplateProposals(int Count, IReadOnlyList<Guid> ChatSessionIds)
-{
-    public static readonly StaledLoopTemplateProposals None = new(0, []);
-}

@@ -67,9 +67,3 @@ public sealed record GlobalVariableProposalDecision(
     GlobalVariableProposalDecisionOutcome Outcome,
     GlobalVariableProposalEntry? Entry,
     IReadOnlyList<Guid> ChangedChatSessionIds);
-
-/// <summary>The pending suggestions a write to a variable made stale, and the chats that made them.</summary>
-public sealed record StaledGlobalVariableProposals(int Count, IReadOnlyList<Guid> ChatSessionIds)
-{
-    public static readonly StaledGlobalVariableProposals None = new(0, []);
-}

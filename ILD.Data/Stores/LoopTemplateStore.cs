@@ -105,7 +105,7 @@ public class LoopTemplateStore : ILoopTemplateStore
         }
     }
 
-    public async Task<StaledLoopTemplateProposals> DeleteTemplateAsync(LoopTemplate template)
+    public async Task<StaledProposals> DeleteTemplateAsync(LoopTemplate template)
     {
         await using var tx = await _db.Database.BeginTransactionAsync();
         _db.LoopTemplates.Remove(template);
@@ -115,16 +115,63 @@ public class LoopTemplateStore : ILoopTemplateStore
         return staled;
     }
 
-    public async Task<LoopTemplateVersionSave> AddVersionAsync(LoopTemplateVersionWrite write, CancellationToken ct = default)
+    public async Task<LoopTemplateVersionSave> AddVersionAsync(
+        LoopTemplateVersionWrite write, Guid? fromProposalId = null, CancellationToken ct = default)
     {
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        if (await WriteTemplateAsync(write, ct) is not { } template)
+            return Unsaved(LoopTemplateVersionSaveOutcome.TemplateNotFound);
+        var latest = await LatestVersionAsync(template.Id, ct);
+        var proposal = fromProposalId is { } proposalId ? await PendingProposalAsync(proposalId, template.Id, ct) : null;
+
+        if (!await InsertVersionAsync(template.Id, write, latest, ct))
+        {
+            await RollBackAsync(tx, template, write);
+            return Unsaved(LoopTemplateVersionSaveOutcome.Conflict);
+        }
+        var now = DateTime.UtcNow;
+        var applied = proposal is { } applying && applying.BaseVersion == latest && await ApplyAsync(applying, write, now, ct);
+        return await CommitAsync(tx, template.Id, write, applied ? proposal : null, now, ct);
+    }
+
+    public async Task<LoopTemplateVersionSave> SaveProposalAsync(
+        LoopTemplateVersionWrite write, Guid proposalId, CancellationToken ct = default)
+    {
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        if (await WriteTemplateAsync(write, ct) is not { } template)
+            return Unsaved(LoopTemplateVersionSaveOutcome.TemplateNotFound);
+        var latest = await LatestVersionAsync(template.Id, ct);
+        if (await PendingProposalAsync(proposalId, template.Id, ct) is not { } proposal)
+        {
+            await RollBackAsync(tx, template, write);
+            return Unsaved(LoopTemplateVersionSaveOutcome.ProposalNotPending);
+        }
+
+        if (proposal.BaseVersion != latest || !await InsertVersionAsync(template.Id, write, latest, ct))
+        {
+            await RollBackAsync(tx, template, write);
+            return await StaleAfterConflictAsync(proposalId);
+        }
+        var now = DateTime.UtcNow;
+        if (!await ApplyAsync(proposal, write, now, ct))
+        {
+            // Decided concurrently: undo the write.
+            await RollBackAsync(tx, template, write);
+            return Unsaved(LoopTemplateVersionSaveOutcome.ProposalNotPending);
+        }
+        return await CommitAsync(tx, template.Id, write, proposal, now, ct);
+    }
+
+    /// <summary>The template with the save's name, description and policy written; null when it is gone.</summary>
+    private async Task<LoopTemplate?> WriteTemplateAsync(LoopTemplateVersionWrite write, CancellationToken ct)
+    {
         var template = await _db.LoopTemplates.FindAsync([write.TemplateId], ct);
         if (template is null)
-            return Unsaved(LoopTemplateVersionSaveOutcome.TemplateNotFound);
+            return null;
 
         // Written first: on Postgres the row lock this takes queues the save behind
         // any other save or proposal of the template still in flight, so the latest
-        // version read below is the one they committed.
+        // version read after it is the one they committed.
         template.Name = write.Name;
         template.Description = write.Description;
         template.RecoveryPolicy = write.RecoveryPolicy;
@@ -136,31 +183,30 @@ public class LoopTemplateStore : ILoopTemplateStore
         catch (DbUpdateConcurrencyException)
         {
             _db.Entry(template).State = EntityState.Detached;
-            return Unsaved(LoopTemplateVersionSaveOutcome.TemplateNotFound);
+            return null;
         }
+        return template;
+    }
 
-        var latest = await _db.LoopTemplateVersions
-            .Where(v => v.LoopTemplateId == template.Id)
+    private async Task<int> LatestVersionAsync(Guid templateId, CancellationToken ct)
+        => await _db.LoopTemplateVersions
+            .Where(v => v.LoopTemplateId == templateId)
             .MaxAsync(v => (int?)v.VersionNumber, ct) ?? 0;
-        var proposal = write.FromProposalId is { } proposalId
-            ? await _db.LoopTemplateProposals.AsNoTracking().FirstOrDefaultAsync(p => p.Id == proposalId, ct)
-            : null;
-        var pendingOfTemplate = proposal is { Status: LoopTemplateProposalStatus.Pending }
-            && proposal.LoopTemplateId == template.Id;
-        var applies = pendingOfTemplate && proposal!.BaseVersion == latest;
-        var basedOnOlderVersion = pendingOfTemplate && !applies;
-        if (write.RequireProposal && !applies)
-        {
-            await RollBackAsync(tx, template, write);
-            return basedOnOlderVersion
-                ? await StaleAfterConflictAsync(write)
-                : Unsaved(LoopTemplateVersionSaveOutcome.ProposalNotPending);
-        }
 
+    private Task<LoopTemplateProposal?> PendingProposalAsync(Guid proposalId, Guid templateId, CancellationToken ct)
+        => _db.LoopTemplateProposals.AsNoTracking().FirstOrDefaultAsync(
+            p => p.Id == proposalId && p.LoopTemplateId == templateId && p.Status == LoopTemplateProposalStatus.Pending, ct);
+
+    /// <summary>
+    /// Insert the write as the version after <paramref name="latest"/>. False when
+    /// another save took that number first; nothing is rolled back here.
+    /// </summary>
+    private async Task<bool> InsertVersionAsync(Guid templateId, LoopTemplateVersionWrite write, int latest, CancellationToken ct)
+    {
         // Saved on its own, before the nodes: if another save took this number
-        // after the read above, the (template, number) unique index refuses it.
-        // Only that refusal is a lost race; any other failure propagates.
-        write.Version.LoopTemplateId = template.Id;
+        // after the latest version was read, the (template, number) unique index
+        // refuses it. Only that refusal is a lost race; any other failure propagates.
+        write.Version.LoopTemplateId = templateId;
         write.Version.VersionNumber = latest + 1;
         _db.LoopTemplateVersions.Add(write.Version);
         try
@@ -169,51 +215,49 @@ public class LoopTemplateStore : ILoopTemplateStore
         }
         catch (DbUpdateException ex) when (DbErrors.IsUniqueViolation(ex))
         {
-            await RollBackAsync(tx, template, write);
-            return await StaleAfterConflictAsync(write);
+            return false;
         }
         _db.LoopNodes.AddRange(write.Nodes);
         _db.LoopNodeEdges.AddRange(write.Edges);
         await _db.SaveChangesAsync(ct);
+        return true;
+    }
 
-        var now = DateTime.UtcNow;
-        var applied = applies && await _db.LoopTemplateProposals
-            .Where(p => p.Id == proposal!.Id && p.Status == LoopTemplateProposalStatus.Pending)
+    /// <summary>Mark the proposal Applied as the version just inserted, only while it is still pending.</summary>
+    private async Task<bool> ApplyAsync(LoopTemplateProposal proposal, LoopTemplateVersionWrite write, DateTime now, CancellationToken ct)
+        => await _db.LoopTemplateProposals
+            .Where(p => p.Id == proposal.Id && p.Status == LoopTemplateProposalStatus.Pending)
             .ExecuteUpdateAsync(s => s
                 .SetProperty(p => p.Status, LoopTemplateProposalStatus.Applied)
-                .SetProperty(p => p.EditedBeforeSave, !LoopTemplateChanges.Equivalent(proposal!.Document, write.Document))
+                .SetProperty(p => p.EditedBeforeSave, !LoopTemplateChanges.Equivalent(proposal.Document, write.Document))
                 .SetProperty(p => p.AppliedVersion, write.Version.VersionNumber)
                 .SetProperty(p => p.DecidedAt, now), ct) == 1;
-        if (write.RequireProposal && !applied)
-        {
-            // Decided concurrently: undo the write.
-            await RollBackAsync(tx, template, write);
-            return Unsaved(LoopTemplateVersionSaveOutcome.ProposalNotPending);
-        }
 
-        var staled = await LoopTemplateProposalStore.StalePendingAsync(_db, template.Id, now, ct);
+    /// <summary>Make every other pending proposal of the template stale, and commit the save.</summary>
+    private async Task<LoopTemplateVersionSave> CommitAsync(
+        IDbContextTransaction tx, Guid templateId, LoopTemplateVersionWrite write, LoopTemplateProposal? applied, DateTime now, CancellationToken ct)
+    {
+        var staled = await LoopTemplateProposalStore.StalePendingAsync(_db, templateId, now, ct);
         await tx.CommitAsync(ct);
-        var appliedChat = applied && proposal!.CreatedByChatSessionId is { } chat ? new[] { chat } : [];
+        var appliedChat = applied?.CreatedByChatSessionId is { } chat ? new[] { chat } : [];
         return new(
             LoopTemplateVersionSaveOutcome.Saved,
             write.Version.VersionNumber,
-            applied,
-            staled.Count + (applied ? 1 : 0),
+            applied is not null,
+            staled.Count + (applied is not null ? 1 : 0),
             appliedChat.Concat(staled.ChatSessionIds).Distinct().ToList());
     }
 
     /// <summary>
-    /// The save lost to another version. A proposal's own Save makes the proposal
-    /// Stale, in a statement of its own after the rollback: Postgres aborts a
-    /// transaction once an insert in it has failed (short of EF's savepoint), and
-    /// the save's template write must be undone anyway.
+    /// A proposal's own Save lost to another version: the proposal goes Stale, in
+    /// a statement of its own after the rollback: Postgres aborts a transaction
+    /// once an insert in it has failed (short of EF's savepoint), and the save's
+    /// template write must be undone anyway.
     /// </summary>
-    private async Task<LoopTemplateVersionSave> StaleAfterConflictAsync(LoopTemplateVersionWrite write)
+    private async Task<LoopTemplateVersionSave> StaleAfterConflictAsync(Guid proposalId)
     {
-        if (!write.RequireProposal || write.FromProposalId is not { } proposalId)
-            return Unsaved(LoopTemplateVersionSaveOutcome.Conflict);
-        var staled = await LoopTemplateProposalStore.DecideAsync(
-            _db, proposalId, LoopTemplateProposalStatus.Stale, null, DateTime.UtcNow, CancellationToken.None);
+        var staled = await LoopTemplateProposalStore.Proposals(_db).DecideAsync(
+            proposalId, LoopTemplateProposalStatus.Stale, null, DateTime.UtcNow, CancellationToken.None);
         var chat = staled == 0
             ? null
             : await _db.LoopTemplateProposals.Where(p => p.Id == proposalId).Select(p => p.CreatedByChatSessionId).FirstOrDefaultAsync();

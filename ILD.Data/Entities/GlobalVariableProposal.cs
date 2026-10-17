@@ -13,7 +13,7 @@ namespace ILD.Data.Entities;
 /// The source run or chat is only referenced, never owned: deleting it leaves
 /// the suggestion to be decided on the Global Variables page.
 /// </summary>
-public class GlobalVariableProposal
+public class GlobalVariableProposal : IAgentProposal<GlobalVariableProposalStatus>
 {
     public const int MaxRationaleLength = 2000;
 

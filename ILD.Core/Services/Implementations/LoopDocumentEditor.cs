@@ -363,12 +363,19 @@ public static class LoopDocumentEditor
             return Array.Empty<string>();
         }
 
-        var graph = new LoopTemplateGraph(
-            Guid.Empty,
-            shape.Nodes ?? new List<LoopNodeDto>(),
-            shape.Edges ?? new List<LoopNodeEdgeDto>());
-        return LoopTemplateValidator.Validate(graph);
+        return LoopTemplateValidator.Validate(GraphOf(shape));
     }
+
+    /// <summary>
+    /// The graph of a parsed document's <c>nodes</c> and <c>edges</c>, either of
+    /// them missing read as empty. Throws <see cref="JsonException"/> when they
+    /// are not in the <c>ild-loop-template/v2</c> shape.
+    /// </summary>
+    internal static LoopTemplateGraph ReadGraph(JsonObject root)
+        => GraphOf(root.Deserialize<LoopDocumentShape>(GraphParseOptions)!);
+
+    private static LoopTemplateGraph GraphOf(LoopDocumentShape shape)
+        => new(Guid.Empty, shape.Nodes ?? new List<LoopNodeDto>(), shape.Edges ?? new List<LoopNodeEdgeDto>());
 
     private static int CountOccurrences(string haystack, string needle)
     {

@@ -18,7 +18,7 @@ public sealed class GlobalVariableStore : IGlobalVariableStore
     public Task<GlobalVariable?> GetAsync(Guid id, CancellationToken ct = default)
         => _db.GlobalVariables.AsNoTracking().FirstOrDefaultAsync(g => g.Id == id, ct);
 
-    public async Task<StaledGlobalVariableProposals> AddAsync(GlobalVariable variable, CancellationToken ct = default)
+    public async Task<StaledProposals> AddAsync(GlobalVariable variable, CancellationToken ct = default)
     {
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         _db.GlobalVariables.Add(variable);
@@ -28,7 +28,7 @@ public sealed class GlobalVariableStore : IGlobalVariableStore
         return staled;
     }
 
-    public async Task<StaledGlobalVariableProposals> UpdateAsync(GlobalVariable variable, CancellationToken ct = default)
+    public async Task<StaledProposals> UpdateAsync(GlobalVariable variable, CancellationToken ct = default)
     {
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         _db.GlobalVariables.Update(variable);
@@ -38,7 +38,7 @@ public sealed class GlobalVariableStore : IGlobalVariableStore
         return staled;
     }
 
-    public async Task<StaledGlobalVariableProposals?> DeleteAsync(Guid id, CancellationToken ct = default)
+    public async Task<StaledProposals?> DeleteAsync(Guid id, CancellationToken ct = default)
     {
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         var name = await _db.GlobalVariables.Where(g => g.Id == id).Select(g => g.NormalizedName).FirstOrDefaultAsync(ct);

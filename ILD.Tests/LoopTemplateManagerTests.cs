@@ -2,6 +2,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Tests;
@@ -54,8 +55,8 @@ public class LoopTemplateManagerTests
         var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         var id = await mgr.CreateLoopTemplateAsync("t", "", MinimalGraph());
-        Assert.Equal(LoopTemplateVersionSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(id, "t", "v2", MinimalGraph(), RecoveryPolicy.AutoResume)).Outcome);
-        Assert.Equal(LoopTemplateVersionSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(id, "t", "v3", MinimalGraph(), RecoveryPolicy.AutoResume)).Outcome);
+        Assert.Equal(LoopTemplateSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(id, "t", "v2", MinimalGraph(), RecoveryPolicy.AutoResume)).Outcome);
+        Assert.Equal(LoopTemplateSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(id, "t", "v3", MinimalGraph(), RecoveryPolicy.AutoResume)).Outcome);
 
         var versions = await mgr.GetVersionsAsync(id);
         Assert.Equal(new[] { 1, 2, 3 }, versions.Select(v => v.VersionNumber));
@@ -68,7 +69,7 @@ public class LoopTemplateManagerTests
         var mgr = new LoopTemplateManager(db.LoopTemplates);
 
         var srcId = await mgr.CreateLoopTemplateAsync("src", "", MinimalGraph());
-        Assert.Equal(LoopTemplateVersionSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(srcId, "src", "", MinimalGraph(), RecoveryPolicy.AutoResume)).Outcome);
+        Assert.Equal(LoopTemplateSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(srcId, "src", "", MinimalGraph(), RecoveryPolicy.AutoResume)).Outcome);
 
         var cloneId = await mgr.CloneLoopTemplateAsync(srcId, "src-copy");
 
@@ -287,7 +288,7 @@ public class LoopTemplateManagerTests
 
         var id = await mgr.CreateLoopTemplateAsync("outputs", "", graph);
         var saved = await mgr.GetVersionGraphAsync(id, 1);
-        Assert.Equal(LoopTemplateVersionSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(id, "outputs", "", saved!, RecoveryPolicy.AutoResume)).Outcome);
+        Assert.Equal(LoopTemplateSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(id, "outputs", "", saved!, RecoveryPolicy.AutoResume)).Outcome);
         var cloneId = await mgr.CloneLoopTemplateAsync(id, "outputs copy");
 
         var first = await StoredConfigs(db, id, 1);
@@ -322,7 +323,7 @@ public class LoopTemplateManagerTests
 
         var id = await mgr.CreateLoopTemplateAsync("outputs", "", graph);
         var reloaded = await mgr.GetVersionGraphAsync(id, 1);
-        Assert.Equal(LoopTemplateVersionSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(id, "outputs", "", reloaded!, RecoveryPolicy.AutoResume)).Outcome);
+        Assert.Equal(LoopTemplateSaveOutcome.Saved, (await mgr.SaveNewVersionAsync(id, "outputs", "", reloaded!, RecoveryPolicy.AutoResume)).Outcome);
         var cloneId = await mgr.CloneLoopTemplateAsync(id, "outputs copy");
 
         foreach (var node in reloaded!.Nodes)

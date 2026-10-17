@@ -27,21 +27,7 @@ public sealed record LoopTemplateVersionWrite(
     LoopTemplateVersion Version,
     IReadOnlyList<LoopNode> Nodes,
     IReadOnlyList<LoopNodeEdge> Edges,
-    string Document)
-{
-    /// <summary>
-    /// The Loop Template Proposal the save comes from. It is marked Applied only
-    /// while it is pending, of this template, and based on the version this save
-    /// follows; otherwise the save is a plain save and leaves it alone.
-    /// </summary>
-    public Guid? FromProposalId { get; init; }
-
-    /// <summary>
-    /// The save is the proposal's own Save: nothing is written unless it applies.
-    /// When the template has moved on past its base version the proposal goes Stale.
-    /// </summary>
-    public bool RequireProposal { get; init; }
-}
+    string Document);
 
 public enum LoopTemplateVersionSaveOutcome
 {
@@ -51,7 +37,7 @@ public enum LoopTemplateVersionSaveOutcome
     /// <summary>Another version was saved first; nothing was written.</summary>
     Conflict,
 
-    /// <summary>A required proposal was no longer pending; nothing was written.</summary>
+    /// <summary>The proposal of its own Save was no longer pending; nothing was written.</summary>
     ProposalNotPending,
 }
 
@@ -92,15 +78,28 @@ public interface ILoopTemplateStore
     /// Delete the template and make its pending proposals stale, in one
     /// transaction: with no template left to save to they could never be decided.
     /// </summary>
-    Task<StaledLoopTemplateProposals> DeleteTemplateAsync(LoopTemplate template);
+    Task<StaledProposals> DeleteTemplateAsync(LoopTemplate template);
 
     /// <summary>
     /// Save <paramref name="write"/> as the template's next version and make every
     /// pending proposal of the template stale, except the one it applies, in one
-    /// transaction. Every save of a new version of an existing template goes
-    /// through here.
+    /// transaction. Every save of a new version of an existing template other than
+    /// a proposal's own Save goes through here. <paramref name="fromProposalId"/>
+    /// names the Loop Template Proposal the save comes from: it is marked Applied
+    /// only while it is pending, of this template, and based on the version this
+    /// save follows; otherwise the save is a plain save and leaves it alone.
     /// </summary>
-    Task<LoopTemplateVersionSave> AddVersionAsync(LoopTemplateVersionWrite write, CancellationToken ct = default);
+    Task<LoopTemplateVersionSave> AddVersionAsync(
+        LoopTemplateVersionWrite write, Guid? fromProposalId = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// A proposal's own Save: <paramref name="write"/> as the template's next
+    /// version, marking the proposal Applied, as <see cref="AddVersionAsync"/>
+    /// does. Nothing is written unless the proposal is pending and based on the
+    /// latest version; when the template has moved on past it the proposal goes Stale.
+    /// </summary>
+    Task<LoopTemplateVersionSave> SaveProposalAsync(
+        LoopTemplateVersionWrite write, Guid proposalId, CancellationToken ct = default);
     Task CreateVersionAsync(LoopTemplateVersion version);
     Task CreateNodesAsync(IReadOnlyList<LoopNode> nodes);
     Task CreateEdgesAsync(IReadOnlyList<LoopNodeEdge> edges);
