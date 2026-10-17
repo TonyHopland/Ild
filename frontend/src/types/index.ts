@@ -939,6 +939,55 @@ export interface WorkItemServerConfig {
   graceIntervalSeconds: number;
 }
 
+/** One line of the storage overview. A null size was not measured; it is never estimated. */
+export interface StorageEntry {
+  key: string;
+  label: string;
+  repositoryId: string | null;
+  repositoryName: string | null;
+  bytes: number | null;
+  incomplete: boolean;
+}
+
+export interface StorageCategory {
+  key: string;
+  label: string;
+  bytes: number | null;
+  incomplete: boolean;
+  entries: StorageEntry[];
+}
+
+export interface StorageOverview {
+  categories: StorageCategory[];
+}
+
+export interface WorktreeCleanupCandidate {
+  runId: string;
+  workItemId: string;
+  workItemTitle: string;
+  repositoryId: string | null;
+  repositoryName: string | null;
+  bytes: number | null;
+  incomplete: boolean;
+}
+
+export interface WorktreeCleanupCandidates {
+  candidates: WorktreeCleanupCandidate[];
+  totalBytes: number | null;
+}
+
+export interface WorktreeCleanupRunResult {
+  runId: string;
+  outcome: "Cleaned" | "Skipped" | "Failed";
+  bytes: number | null;
+  reason: string | null;
+}
+
+export interface WorktreeCleanupResult {
+  results: WorktreeCleanupRunResult[];
+  totalBytes: number | null;
+}
+
 export interface RemoteProviderTypeOption {
   type: string;
 }

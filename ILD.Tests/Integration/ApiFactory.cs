@@ -31,6 +31,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly Action<IServiceCollection>? _configureServices;
     private readonly Func<string, string?> _readVariable;
 
+    /// <summary>This host's own data root (<c>App:DataPath</c>), deleted with it.</summary>
+    public string DataRoot => _dataRoot;
+
     public string AdminUsername { get; } = "admin";
     public string AdminPassword { get; } = "ild-int-tests-admin-pw";
 
@@ -102,12 +105,16 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         // pipeline is exercised as shipped rather than registered and then 404ing.
         builder.UseWebRoot(Path.Combine(AppContext.BaseDirectory, "wwwroot"));
 
+        // Program reads the data root while it is still building the host, before
+        // anything ConfigureAppConfiguration adds is applied; a host setting is
+        // there from the start, and stays this host's own.
+        builder.UseSetting("Storage:DataRoot", _dataRoot);
+        builder.UseSetting("Storage:WorktreesSubdir", "worktrees");
+
         builder.ConfigureAppConfiguration((_, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Storage:DataRoot"] = _dataRoot,
-                ["Storage:WorktreesSubdir"] = "worktrees",
                 ["Serilog:WriteToConsole"] = "false",
             });
             config.AddInMemoryCollection(_extraConfiguration);

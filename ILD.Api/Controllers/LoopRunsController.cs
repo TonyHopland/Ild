@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ILD.Api.Contracts;
 using ILD.Api.Services;
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
@@ -353,23 +354,15 @@ public class LoopRunsController : ControllerBase
 
         var run = await _loopRunStore.GetByIdAsync(guid);
         if (run == null) return NotFound();
-        // Stricter than Delete: resuming a WaitingHuman run is its expected next
-        // step and re-enters at CurrentNodeId without passing through Start, so
-        // it would not re-create what this destroys. A finished run's ↻ Retry
-        // would — or fails cleanly on a node that needs a worktree.
-        if (run.Status is ILD.Data.Enums.LoopRunStatus.Running or ILD.Data.Enums.LoopRunStatus.WaitingHuman)
-            return BadRequest(new { error = "Cannot clean up a run that has not finished. Let it finish, or cancel it first." });
 
-        if (!await _runReclaimer.ReclaimLocalStateAsync(run))
-            return Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was left untouched. Retry, or check server logs." });
-
-        // The row now outlives the git state it names, so the pointers go with
-        // it: a surviving BranchName would keep claiming a branch that is free,
-        // and a surviving WorktreePath would name a directory that is gone.
-        run.WorktreePath = null;
-        run.BranchName = null;
-        await _loopRunStore.UpdateRunAsync(run);
-        return NoContent();
+        // Stricter than Delete, which only refuses a Running run (see RunCleanup).
+        return await RunCleanup.CleanUpAsync(run, _runReclaimer, _loopRunStore) switch
+        {
+            RunCleanupOutcome.NotFinished => BadRequest(new { error = "Cannot clean up a run that has not finished. Let it finish, or cancel it first." }),
+            RunCleanupOutcome.ReclaimFailed => Conflict(new { error = "Could not reclaim the run's worktree/branch; the run was left untouched. Retry, or check server logs." }),
+            RunCleanupOutcome.RunGone => NotFound(),
+            _ => NoContent(),
+        };
     }
 
     [HttpPost("{id}/nodes/{runNodeId}/retry")]

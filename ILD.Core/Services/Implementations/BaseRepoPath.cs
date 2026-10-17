@@ -6,10 +6,11 @@ namespace ILD.Core.Services.Implementations;
 /// <summary>
 /// Where a repository's base clone lives on disk — the repo the Start node adds
 /// per-run worktrees to. The convention has two parts (the repository's own
-/// <c>WorktreesPath</c>, else <c>{App:DataPath}/repos/{id:N}</c>) and three
+/// <c>WorktreesPath</c>, else <c>{App:DataPath}/repos/{id:N}</c>) and four
 /// readers that must agree on it: the Start node, which clones there; the run
-/// reclaimer, which deletes branches there; and the branch-name conflict check,
-/// which reads branches there before a run exists.
+/// reclaimer, which deletes branches there; the branch-name conflict check,
+/// which reads branches there before a run exists; and Settings &gt; Storage,
+/// which measures it.
 /// </summary>
 internal static class BaseRepoPath
 {
@@ -18,11 +19,13 @@ internal static class BaseRepoPath
     /// the path whether or not anything is there yet.
     /// </summary>
     public static string Fallback(Guid repositoryId, IConfiguration? config)
+        => Path.Combine(StoreRoot(config), repositoryId.ToString("N"));
+
+    /// <summary>The directory every fallback clone lives under, one per repository id.</summary>
+    public static string StoreRoot(IConfiguration? config)
     {
         var dataPath = config?["App:DataPath"];
-        return Path.GetFullPath(Path.Combine(
-            string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath,
-            "repos", repositoryId.ToString("N")));
+        return Path.GetFullPath(Path.Combine(string.IsNullOrWhiteSpace(dataPath) ? "data" : dataPath, "repos"));
     }
 
     /// <summary>

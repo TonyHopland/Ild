@@ -5,6 +5,7 @@ import NetworkSettings from "./sections/NetworkSettings";
 import PackageFeedsSettings from "./sections/PackageFeedsSettings";
 import LoggingSettings from "./sections/LoggingSettings";
 import WorkItemServerSettings from "./sections/WorkItemServerSettings";
+import StorageSettings from "./sections/StorageSettings";
 import "./Settings.css";
 
 function Icon({ path }: { path: string }) {
@@ -61,6 +62,12 @@ const SECTIONS = [
     label: "WorkItem Server",
     icon: "M4 5h16v6H4V5Zm0 8h16v6H4v-6Zm4-5h.01M8 16h.01",
     Component: WorkItemServerSettings,
+  },
+  {
+    id: "storage",
+    label: "Storage",
+    icon: "M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 0v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3",
+    Component: StorageSettings,
   },
 ] as const;
 

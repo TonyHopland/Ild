@@ -9,6 +9,7 @@ describe("formatBytes", () => {
     expect(formatBytes(900)).not.toMatch(/KB|MB/);
     expect(formatBytes(2 * 1024)).toMatch(/2.*KB/);
     expect(formatBytes(25 * MB)).toMatch(/25.*MB/);
+    expect(formatBytes(1536 * MB)).toBe("1.5 GB");
   });
 });
 

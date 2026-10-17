@@ -64,7 +64,8 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 }
 
 export const api = {
-  get: <T>(endpoint: string) => request<T>(endpoint, { method: "GET" }),
+  get: <T>(endpoint: string, signal?: AbortSignal) =>
+    request<T>(endpoint, { method: "GET", signal }),
   post: <T>(endpoint: string, body: unknown) =>
     request<T>(endpoint, {
       method: "POST",

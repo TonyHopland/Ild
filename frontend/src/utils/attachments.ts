@@ -1,10 +1,12 @@
 const KILOBYTE = 1024;
 const MEGABYTE = 1024 * KILOBYTE;
+const GIGABYTE = 1024 * MEGABYTE;
 
 const trim = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(1));
 
 /** A byte count in the unit a human reads it in, e.g. `25 MB`. */
 export function formatBytes(bytes: number): string {
+  if (bytes >= GIGABYTE) return `${trim(bytes / GIGABYTE)} GB`;
   if (bytes >= MEGABYTE) return `${trim(bytes / MEGABYTE)} MB`;
   if (bytes >= KILOBYTE) return `${trim(bytes / KILOBYTE)} KB`;
   return `${bytes} bytes`;

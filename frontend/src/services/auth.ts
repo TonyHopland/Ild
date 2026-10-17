@@ -54,6 +54,9 @@ import {
   AppSetting,
   UserSession,
   WorkItemServerConfig,
+  StorageOverview,
+  WorktreeCleanupCandidates,
+  WorktreeCleanupResult,
   RunAnalyticsOverview,
   AnalyticsFilters,
   NetworkForward,
@@ -1187,5 +1190,18 @@ export const workItemServerService = {
     graceIntervalSeconds: number;
   }): Promise<WorkItemServerConfig> => {
     return api.put<WorkItemServerConfig>("/workitemserver", data);
+  },
+};
+
+export const storageService = {
+  /** Measuring walks the disk, so a caller that loses interest should abort it. */
+  getOverview: async (signal?: AbortSignal): Promise<StorageOverview> => {
+    return api.get<StorageOverview>("/storage", signal);
+  },
+  getCleanupCandidates: async (): Promise<WorktreeCleanupCandidates> => {
+    return api.get<WorktreeCleanupCandidates>("/storage/worktree-cleanup");
+  },
+  cleanUpWorktrees: async (runIds: string[]): Promise<WorktreeCleanupResult> => {
+    return api.post<WorktreeCleanupResult>("/storage/worktree-cleanup", { runIds });
   },
 };

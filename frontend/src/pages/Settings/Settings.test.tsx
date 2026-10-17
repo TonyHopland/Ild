@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, within } from "@testing-library/react";
+import { render, screen, cleanup, within, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router";
 import Settings from "./index";
 import * as useAuthHook from "../../hooks/useAuth";
@@ -49,6 +49,7 @@ describe("Settings sections", () => {
       "/settings/package-feeds",
       "/settings/logging",
       "/settings/work-item-server",
+      "/settings/storage",
     ]);
   });
 
@@ -100,5 +101,19 @@ describe("Settings sections", () => {
       nav.getAllByRole("link").filter((l) => l.getAttribute("aria-current") === "page"),
     ).toEqual([link]);
     await screen.findByLabelText(/url/i);
+  });
+
+  test("shows the Storage section at its own URL and marks only it current", async () => {
+    vi.spyOn((services as any).storageService, "getOverview").mockResolvedValue({ categories: [] });
+    renderAt("/settings/storage");
+
+    expect(screen.getByRole("heading", { level: 2, name: "Storage" })).toBeTruthy();
+    const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
+    const link = nav.getByRole("link", { name: "Storage" });
+    expect(link.className).toContain("active");
+    expect(
+      nav.getAllByRole("link").filter((l) => l.getAttribute("aria-current") === "page"),
+    ).toEqual([link]);
+    await waitFor(() => expect((services as any).storageService.getOverview).toHaveBeenCalled());
   });
 });

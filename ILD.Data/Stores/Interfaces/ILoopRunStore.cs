@@ -110,6 +110,12 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200);
 
     /// <summary>
+    /// Every run that still names a worktree, in any state, untracked: what
+    /// Settings &gt; Storage measures and picks cleanup candidates from.
+    /// </summary>
+    Task<IReadOnlyList<LoopRun>> GetRunsWithWorktreeAsync();
+
+    /// <summary>
     /// Runs parked at a PR node awaiting merge: <c>WaitingHuman</c> with a
     /// <c>PrUrl</c> set and <c>HumanFeedbackReason</c> =
     /// <see cref="ILD.Data.Enums.HumanFeedbackReasons.PrAwaitingMerge"/>. Backs
@@ -187,6 +193,15 @@ public interface ILoopRunStore
     /// new reason.
     /// </summary>
     Task SetHumanFeedbackReasonAsync(Guid runId, string? reason);
+
+    /// <summary>
+    /// Clear the run's <c>WorktreePath</c> and <c>BranchName</c> once the state
+    /// they name is gone, touching only those columns (and UpdatedAt): a reclaim
+    /// takes seconds, and a pin or status another writer committed meanwhile must
+    /// not be written back over. A copy of the run this store already tracks is
+    /// brought in step. False when there is no such run.
+    /// </summary>
+    Task<bool> ClearLocalGitStateAsync(Guid runId);
 
     /// <summary>
     /// Run <paramref name="body"/> in one transaction holding the run's row

@@ -5,6 +5,7 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Implementations.Network;
 using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Implementations.RemoteProviders;
+using ILD.Core.Services.Implementations.Storage;
 using ILD.Core.Services.Remote;
 using ILD.Api.Middleware;
 using ILD.Api.Services;
@@ -74,6 +75,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<StuckRunWatchdog>();
         services.AddHostedService<ThrottledRunResumeSweeper>();
         services.AddScoped<IRunReclaimer, RunReclaimer>();
+        services.AddScoped<IStorageService, StorageService>();
         services.AddScoped<IBranchNameOverrideService, BranchNameOverrideService>();
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();
