@@ -92,7 +92,7 @@ import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
 import ProposalReviewBanner from "./components/ProposalReviewBanner";
 import SaveDiffModal from "./components/SaveDiffModal";
-import { useProposalReview, useReviewSession, type SavedFrom } from "./useProposalReview";
+import { useProposalReview, type SavedFrom } from "./useProposalReview";
 import type {
   ImportFeedbackItem,
   LoopTemplateVersion,
@@ -461,7 +461,8 @@ export default function LoopEditor() {
     [setEdges],
   );
 
-  const loadTemplates = useCallback(async () => {
+  // Resolves to the list as it now is: the one just read, or the last one when the read failed.
+  const loadTemplates = useCallback(async (): Promise<LoopTemplate[]> => {
     try {
       const data = await loopTemplateService.getAll({ includeArchived: true });
       setTemplates(data);
@@ -471,6 +472,7 @@ export default function LoopEditor() {
     } finally {
       setTemplatesLoaded(true);
     }
+    return templatesRef.current;
   }, []);
 
   const loadAiProviders = async () => {
@@ -482,8 +484,32 @@ export default function LoopEditor() {
     }
   };
 
-  const reviewSession = useReviewSession(selectedTemplate, selectedTemplateRef);
-  const { closeReview } = reviewSession;
+  // The template the route asked for, once it is open on the canvas.
+  const [openedTemplateId, setOpenedTemplateId] = useState<string | null>(null);
+
+  const proposalReview = useProposalReview({
+    board,
+    templates,
+    routeTemplateOpen: routeTemplateId !== undefined && openedTemplateId === routeTemplateId,
+    selectedTemplate,
+    readOnlyVersion,
+    editor: {
+      loadTemplates,
+      showTemplate: (template) => selectTemplate(template),
+      loadDocument: (rawDocument, rejectedAs) => loadDocument(rawDocument, rejectedAs),
+      isCanvasDirty: () => isCanvasDirty(),
+      markClean: (loaded) => markClean(loaded),
+      setErrorText,
+    },
+  });
+  const {
+    shownReview,
+    saveFromProposalId,
+    closeReview,
+    refreshReview,
+    discardReview,
+    handleListedProposalDecided,
+  } = proposalReview;
 
   // Every replacement of the canvas ends the open proposal review, except a
   // save's (`savedFrom` given): that ends the review only if it is the one the
@@ -519,17 +545,16 @@ export default function LoopEditor() {
   // `/loop-editor/<id>` opens that template's graph directly. Tracking the id we
   // last opened keeps an unrelated `templates` refresh (save, clone, archive)
   // from re-loading — and clobbering — the canvas the user is editing.
-  const openedTemplateIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!routeTemplateId) {
-      openedTemplateIdRef.current = null;
+      setOpenedTemplateId(null);
       return;
     }
-    if (openedTemplateIdRef.current === routeTemplateId) return;
+    if (openedTemplateId === routeTemplateId) return;
 
     const match = templates.find((template) => template.id === routeTemplateId);
     if (match) {
-      openedTemplateIdRef.current = routeTemplateId;
+      setOpenedTemplateId(routeTemplateId);
       selectTemplate(match);
       return;
     }
@@ -538,7 +563,7 @@ export default function LoopEditor() {
     if (templatesLoaded) {
       void navigate("/loop-editor", { replace: true });
     }
-  }, [routeTemplateId, templates, templatesLoaded, selectTemplate, navigate]);
+  }, [routeTemplateId, openedTemplateId, templates, templatesLoaded, selectTemplate, navigate]);
 
   const handleNewTemplate = () => {
     replaceCanvas("", "");
@@ -579,17 +604,13 @@ export default function LoopEditor() {
     const before = lastSavedExportRef.current;
     const frozenNodes = nodesToLoopNodes(nodesRef.current);
     const frozenEdges = edgesToLoopNodeEdges(edgesRef.current);
-    const reviewing = review;
     setSaveDiff({
       before,
       after,
       snapshot,
       nodes: frozenNodes,
       edges: frozenEdges,
-      fromProposalId:
-        reviewing && reviewing.templateId === selectedTemplateRef.current?.id
-          ? reviewing.proposal.id
-          : null,
+      fromProposalId: saveFromProposalId,
     });
   };
 
@@ -875,25 +896,6 @@ export default function LoopEditor() {
     cleanExportRef.current = canvasExportOf(loaded);
   }, []);
 
-  const proposalReview = useProposalReview(reviewSession, {
-    board,
-    readOnlyVersion,
-    templatesRef,
-    loadTemplates,
-    selectTemplate,
-    loadDocument,
-    isCanvasDirty,
-    markClean,
-    setErrorText,
-  });
-  const {
-    review,
-    shownReview,
-    replaceConfirm,
-    refreshReview,
-    discardReview,
-    handleListedProposalDecided,
-  } = proposalReview;
 
   // Join the current session's hub group, and leave it when the id changes (e.g.
   // the user ends one session and starts another) so we never linger on a stale
@@ -1122,7 +1124,7 @@ export default function LoopEditor() {
   // the viewport.
   const canvasKey = isNewTemplate
     ? "new"
-    : `${selectedTemplate?.id ?? "none"}:${readOnlyVersion ?? `v${selectedTemplate?.version}`}:${review?.proposal.id ?? "saved"}`;
+    : `${selectedTemplate?.id ?? "none"}:${readOnlyVersion ?? `v${selectedTemplate?.version}`}:${shownReview?.proposal.id ?? "saved"}`;
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {
@@ -1713,7 +1715,7 @@ export default function LoopEditor() {
       )}
 
       <ConfirmModal
-        isOpen={replaceConfirm !== null}
+        isOpen={proposalReview.confirmingReplace}
         title="Replace unsaved changes?"
         message="The loop has changes that are not saved. Open the proposal in their place and lose them?"
         confirmText="Open proposal"

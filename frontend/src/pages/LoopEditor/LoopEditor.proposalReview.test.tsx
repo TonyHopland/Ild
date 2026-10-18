@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, cleanup, act, fireEvent, within } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
+import { MemoryRouter, Routes, Route, useNavigate, type NavigateFunction } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 import { setCurrentChatSessionId } from "../../services/chatSessionStore";
@@ -187,9 +187,18 @@ const authValue = {
   logout: vi.fn(),
 };
 
+/** Moves the router the way a link elsewhere in the app does; set while an editor is rendered. */
+let navigateTo: NavigateFunction | null = null;
+
+function Navigator() {
+  navigateTo = useNavigate();
+  return null;
+}
+
 function renderEditor(path: string) {
   render(
     <MemoryRouter initialEntries={[path]}>
+      <Navigator />
       <AuthContext.Provider value={authValue}>
         <Routes>
           <Route path="/loop-editor" element={<LoopEditor />} />
@@ -542,5 +551,24 @@ describe("a review opened while a save is in flight", () => {
     expect(calls.find((c) => c.method === "PUT")?.body?.fromProposalId ?? null).toBeNull();
     expect(banner()).not.toBeNull();
     expect(onCanvas("Run Linter")).toBe(true);
+  });
+});
+
+describe("a Review link to the template that is still open", () => {
+  test("opens the review after the route has opened its template again, whichever effect runs first", async () => {
+    renderEditor("/loop-editor/tpl-1");
+    await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
+    await act(async () => {
+      await navigateTo?.("/loop-editor");
+    });
+    expect(onCanvas("Initialize")).toBe(true);
+
+    await act(async () => {
+      await navigateTo?.("/loop-editor/tpl-1?proposal=lp-1");
+    });
+
+    await waitFor(() => expect(banner()).not.toBeNull());
+    expect(onCanvas("Run Linter")).toBe(true);
+    expect(calls.filter((c) => c.path === "/api/v1/loop-template-proposals/lp-1")).toHaveLength(1);
   });
 });
