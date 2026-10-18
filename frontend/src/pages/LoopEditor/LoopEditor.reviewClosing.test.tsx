@@ -2,30 +2,18 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, waitFor, cleanup, act, fireEvent, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
-import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
+import { NodeType, EdgeType, RecoveryPolicy, type LoopTemplateProposal } from "../../types";
 
 // Every way the Loop Editor replaces its canvas with something else ends a
 // proposal review that is open; only the open template's own replacement does.
 // The banner's Discard sits with its decision actions, before Reject, and stays
 // on a review whose proposal is no longer pending.
-const { handlers } = vi.hoisted(() => ({
-  handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
-}));
-
-vi.mock("../../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: "connected",
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      (handlers[event] ??= new Set()).add(handler);
-    },
-    off: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event]?.delete(handler);
-    },
-    invoke: vi.fn(() => Promise.resolve()),
-  }),
-}));
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
 
 import LoopEditor from "./index";
+import { makeLoopTemplateProposal, reply, signalRHub, stubFetch } from "../../test-support";
 
 const node = (id: string, type: NodeType, label: string) => ({ id, type, label, config: {} });
 const edge = (id: string, sourceNodeId: string, targetNodeId: string) => ({
@@ -91,34 +79,14 @@ const proposedDocument = {
   ],
 };
 
-let proposal: { id: string; status: string; [key: string]: unknown };
+let proposal: LoopTemplateProposal;
 let templates: (typeof devLoop)[];
-
-function reply(status: number, body: unknown) {
-  return {
-    ok: status < 400,
-    status,
-    statusText: "",
-    text: () => Promise.resolve(body === undefined ? "" : JSON.stringify(body)),
-  } as Response;
-}
 
 beforeEach(() => {
   templates = [devLoop, docsLoop];
-  proposal = {
-    id: "lp-1",
-    templateId: "tpl-1",
+  proposal = makeLoopTemplateProposal({
     templateName: "Dev Loop",
-    templateExists: true,
-    baseVersion: 3,
-    latestVersion: 3,
     rationale: RATIONALE,
-    status: "Pending",
-    editedBeforeSave: false,
-    appliedVersion: null,
-    rejectionReason: null,
-    createdAt: "2026-10-01T10:00:00Z",
-    decidedAt: null,
     createdByLoopRunId: null,
     createdByRunNodeId: null,
     createdByChatSessionId: "chat-9",
@@ -135,57 +103,52 @@ beforeEach(() => {
       edgesAdded: [],
       edgesRemoved: [],
     },
-  };
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string, init?: RequestInit) => {
-      const path = new URL(input, "http://localhost").pathname;
-      const method = (init?.method ?? "GET").toUpperCase();
-      if (method === "GET" && path === "/api/v1/looptemplates")
-        return reply(
-          200,
-          templates.filter((t) => !t.isArchived),
-        );
-      if (method === "GET" && path === "/api/v1/looptemplates/tpl-1/versions")
-        return reply(200, [
-          {
-            id: "v-3",
-            loopTemplateId: "tpl-1",
-            versionNumber: 3,
-            createdAt: devLoop.createdAt,
-            nodeCount: 2,
-          },
-          {
-            id: "v-2",
-            loopTemplateId: "tpl-1",
-            versionNumber: 2,
-            createdAt: devLoop.createdAt,
-            nodeCount: 2,
-          },
-        ]);
-      if (method === "GET" && path === "/api/v1/looptemplates/tpl-1/versions/2")
-        return reply(200, devLoopV2);
-      if (method === "POST" && path.endsWith("/archive")) {
-        const id = path.split("/")[4];
-        templates = templates.map((t) => (t.id === id ? { ...t, isArchived: true } : t));
-        return reply(200, undefined);
-      }
-      if (method === "POST" && path === "/api/v1/looptemplates/validate")
-        return reply(200, { valid: true, errors: [] });
-      if (method === "GET" && path === "/api/v1/loop-template-proposals/lp-1")
-        return reply(200, proposal);
-      if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
-        return reply(200, {});
-      if (method === "GET" && path === "/api/v1/looptemplates/node-outputs") return reply(200, {});
-      if (method === "GET") return reply(200, []);
-      return reply(404, { error: "not stubbed" });
-    }),
-  );
+  });
+  stubFetch(({ method, path }) => {
+    if (method === "GET" && path === "/api/v1/looptemplates")
+      return reply(
+        200,
+        templates.filter((t) => !t.isArchived),
+      );
+    if (method === "GET" && path === "/api/v1/looptemplates/tpl-1/versions")
+      return reply(200, [
+        {
+          id: "v-3",
+          loopTemplateId: "tpl-1",
+          versionNumber: 3,
+          createdAt: devLoop.createdAt,
+          nodeCount: 2,
+        },
+        {
+          id: "v-2",
+          loopTemplateId: "tpl-1",
+          versionNumber: 2,
+          createdAt: devLoop.createdAt,
+          nodeCount: 2,
+        },
+      ]);
+    if (method === "GET" && path === "/api/v1/looptemplates/tpl-1/versions/2")
+      return reply(200, devLoopV2);
+    if (method === "POST" && path.endsWith("/archive")) {
+      const id = path.split("/")[4];
+      templates = templates.map((t) => (t.id === id ? { ...t, isArchived: true } : t));
+      return reply(200);
+    }
+    if (method === "POST" && path === "/api/v1/looptemplates/validate")
+      return reply(200, { valid: true, errors: [] });
+    if (method === "GET" && path === "/api/v1/loop-template-proposals/lp-1")
+      return reply(200, proposal);
+    if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
+      return reply(200, {});
+    if (method === "GET" && path === "/api/v1/looptemplates/node-outputs") return reply(200, {});
+    if (method === "GET") return reply(200, []);
+    return reply(404, { error: "not stubbed" });
+  });
 });
 
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -276,8 +239,7 @@ describe("the review banner's Discard", () => {
 
     proposal = { ...proposal, status: "Stale", latestVersion: 4 };
     act(() => {
-      for (const handler of Array.from(handlers.LoopTemplateProposalsChanged ?? []))
-        handler({ payload: { templateId: "tpl-1" } });
+      signalRHub.dispatch("LoopTemplateProposalsChanged", { templateId: "tpl-1" });
     });
     await waitFor(() => expect(screen.queryByRole("button", { name: "Reject" })).toBeNull());
     expect(discardButton()).not.toBeNull();
