@@ -68,7 +68,7 @@ describe("StorageSettings preview data focus and outcome", () => {
     fireEvent.click(within(entry()).getByRole("button", { name: /confirm/i }));
 
     const status = await within(entry()).findByText("Deleted.");
-    expect(document.activeElement).toBe(status);
+    await waitFor(() => expect(document.activeElement).toBe(status));
     expect(within(entry()).queryByRole("button", { name: /delete/i })).toBeNull();
 
     remeasure.resolve({ categories: [] } as never);
