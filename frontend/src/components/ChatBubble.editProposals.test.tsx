@@ -243,9 +243,9 @@ describe("ChatBubble edit proposals", () => {
 
     await waitFor(() =>
       expect(
-        within(
-          proposalCardAround(screen.getByText("Title A")),
-        ).queryByRole("button", { name: "Approve" }),
+        within(proposalCardAround(screen.getByText("Title A"))).queryByRole("button", {
+          name: "Approve",
+        }),
       ).toBeNull(),
     );
     expect(documentOrder(byText(expected))).toEqual(expected);

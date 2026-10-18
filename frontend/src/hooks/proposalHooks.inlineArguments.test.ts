@@ -25,7 +25,12 @@ describe("passed inline, every render", () => {
 
     const { result, rerender } = renderHook(() =>
       usePendingProposalCount(
-        { key: "loop-template", read: () => read(), empty: {}, hint: "LoopTemplateProposalsChanged" },
+        {
+          key: "loop-template",
+          read: () => read(),
+          empty: {},
+          hint: "LoopTemplateProposalsChanged",
+        },
         hub.connection,
       ),
     );

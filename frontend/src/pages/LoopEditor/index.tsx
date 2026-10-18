@@ -896,7 +896,6 @@ export default function LoopEditor() {
     cleanExportRef.current = canvasExportOf(loaded);
   }, []);
 
-
   // Join the current session's hub group, and leave it when the id changes (e.g.
   // the user ends one session and starts another) so we never linger on a stale
   // group or miss the new one.
