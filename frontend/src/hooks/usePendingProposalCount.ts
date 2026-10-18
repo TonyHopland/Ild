@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useJoinThenRefresh } from "./useJoinThenRefresh";
 import { useSignalR, type SignalRConnection } from "./useSignalR";
 import type { SignalREventName } from "../types/signalr";
 
@@ -15,11 +16,9 @@ export function usePendingProposalCount<T>(
   hub?: SignalRConnection,
 ): T {
   const own = useSignalR(hub ? null : "/hubs/work-item");
-  const { connectionState, on, off, invoke } = hub ?? own;
-  // Read through a ref: joining again is for a (re)connect, not a new function.
-  const invokeRef = useRef(invoke);
-  invokeRef.current = invoke;
-  // Read through refs too: a caller may pass these inline, new every render.
+  const connection = hub ?? own;
+  const { on, off } = connection;
+  // Read through refs: a caller may pass these inline, new every render.
   const readRef = useRef(read);
   readRef.current = read;
   const emptyRef = useRef(empty);
@@ -47,22 +46,7 @@ export function usePendingProposalCount<T>(
     })();
   }, []);
 
-  useEffect(() => {
-    if (connectionState !== "connected") return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await invokeRef.current("SubscribeToWorkItems");
-      } catch (err) {
-        console.error(err);
-        return;
-      }
-      if (!cancelled) refresh();
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [connectionState, refresh]);
+  useJoinThenRefresh(connection, null, refresh);
 
   useEffect(() => {
     on(hint, refresh);

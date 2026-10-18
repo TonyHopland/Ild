@@ -1,5 +1,5 @@
 import type { SignalRConnection } from "./useSignalR";
-import { proposalHint, useProposalList, type ProposalListKind } from "./useProposalList";
+import { boardHint, chatHint, useProposalList, type ProposalListKind } from "./useProposalList";
 import { loopTemplateProposalService } from "../services/auth";
 import type { LoopTemplateProposal } from "../types";
 
@@ -27,8 +27,8 @@ const loopTemplateProposals: ProposalListKind<Mode, LoopTemplateProposal> = {
     ),
   hint: (mode, id) =>
     mode === "chat"
-      ? proposalHint("ChatLoopTemplateProposalsChanged", (p) => p.chatSessionId === id)
-      : proposalHint("LoopTemplateProposalsChanged", (p) => mode === "item" || p.templateId === id),
+      ? chatHint("ChatLoopTemplateProposalsChanged", id)
+      : boardHint("LoopTemplateProposalsChanged", (p) => mode === "item" || p.templateId === id),
 };
 
 /**

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import { proposalHint, useProposalList } from "./useProposalList";
+import { boardHint, useProposalList } from "./useProposalList";
 import { usePendingProposalCount } from "./usePendingProposalCount";
 import { fakeHub, makeLoopTemplateProposal } from "../test-support";
 
@@ -44,7 +44,7 @@ describe("passed inline, every render", () => {
       useProposalList(
         {
           read: () => read(),
-          hint: () => proposalHint("LoopTemplateProposalsChanged"),
+          hint: () => boardHint("LoopTemplateProposalsChanged"),
         },
         "template",
         "tpl-1",

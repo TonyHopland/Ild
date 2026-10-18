@@ -1,4 +1,4 @@
-import { proposalHint, useProposalList, type ProposalListKind } from "./useProposalList";
+import { boardHint, chatHint, useProposalList, type ProposalListKind } from "./useProposalList";
 import { globalVariableService } from "../services/auth";
 import type { GlobalVariableProposal } from "../types";
 
@@ -18,8 +18,8 @@ const globalVariableProposals: ProposalListKind<Mode, GlobalVariableProposal> = 
     ),
   hint: (mode, id) =>
     mode === "chat"
-      ? proposalHint("ChatGlobalVariableProposalsChanged", (p) => p.chatSessionId === id)
-      : proposalHint("GlobalVariableProposalsChanged"),
+      ? chatHint("ChatGlobalVariableProposalsChanged", id)
+      : boardHint("GlobalVariableProposalsChanged"),
 };
 
 /**

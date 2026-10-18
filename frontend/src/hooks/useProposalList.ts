@@ -1,25 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useJoinThenRefresh } from "./useJoinThenRefresh";
 import { useSignalR, type SignalRConnection } from "./useSignalR";
 import type { SignalREventName, SignalREventPayloads, TypedSignalRMessage } from "../types/signalr";
 
-/** A hub event that says a target's proposals changed, and which of its payloads concern the target. */
+/**
+ * A hub event that says a target's proposals changed, which of its payloads
+ * concern the target, and where it is sent: to one chat's group on the chat hub,
+ * or to the board on the work-item hub when `chatSessionId` is null.
+ */
 export interface ProposalHint {
   event: SignalREventName;
   matches: (payload: unknown) => boolean;
+  chatSessionId: string | null;
 }
 
-export function proposalHint<E extends SignalREventName>(
+/** A hint sent to the board on the work-item hub. */
+export function boardHint<E extends SignalREventName>(
   event: E,
   matches: (payload: SignalREventPayloads[E]) => boolean = () => true,
 ): ProposalHint {
-  return { event, matches: matches as (payload: unknown) => boolean };
+  return { event, matches: matches as (payload: unknown) => boolean, chatSessionId: null };
 }
 
-/**
- * One kind of proposal as its list is read. A target is a mode and an id; the
- * "chat" mode is a chat, hinted on the chat hub to the chat's group, and every
- * other mode is hinted on the work-item hub to the board.
- */
+type ChatHintEvent = {
+  [E in SignalREventName]: SignalREventPayloads[E] extends { chatSessionId: string } ? E : never;
+}[SignalREventName];
+
+/** A hint sent to the group of chat `chatSessionId` on the chat hub, about that chat. */
+export function chatHint(event: ChatHintEvent, chatSessionId: string): ProposalHint {
+  return {
+    event,
+    matches: (payload) => (payload as { chatSessionId: string }).chatSessionId === chatSessionId,
+    chatSessionId,
+  };
+}
+
+/** One kind of proposal as its list is read: a target is a mode and an id. */
 export interface ProposalListKind<M extends string, T> {
   read: (mode: M, id: string) => Promise<T[]>;
   hint: (mode: M, id: string) => ProposalHint;
@@ -44,17 +60,13 @@ export function useProposalList<M extends string, T>(
   hub?: SignalRConnection,
 ) {
   const targetKey = `${mode}:${id}`;
-  const chat = mode === "chat";
-  const own = useSignalR(hub ? null : chat ? "/hubs/chat" : "/hubs/work-item");
-  const { connectionState, on, off, invoke } = hub ?? own;
-
-  // Read through a ref: joining again is for a (re)connect or a new target, not a new function.
-  const invokeRef = useRef(invoke);
-  invokeRef.current = invoke;
-
-  // And the kind: a caller may pass it inline, new every render.
+  // Read through a ref: a caller may pass the kind inline, new every render.
   const kindRef = useRef(kind);
   kindRef.current = kind;
+  const { chatSessionId } = kind.hint(mode, id);
+  const own = useSignalR(hub ? null : chatSessionId !== null ? "/hubs/chat" : "/hubs/work-item");
+  const connection = hub ?? own;
+  const { on, off } = connection;
 
   const [view, setView] = useState<ProposalsView<T> | null>(null);
   const generationRef = useRef(0);
@@ -82,28 +94,7 @@ export function useProposalList<M extends string, T>(
     })();
   }, [targetKey, mode, id]);
 
-  useEffect(() => {
-    if (connectionState !== "connected") return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        // A read before the join has taken effect could miss a hint sent in the gap.
-        await (chat
-          ? invokeRef.current("SubscribeToChat", id)
-          : invokeRef.current("SubscribeToWorkItems"));
-      } catch (err) {
-        console.error(err);
-        return;
-      }
-      if (!cancelled) refresh();
-    })();
-    return () => {
-      cancelled = true;
-      if (chat) {
-        void invokeRef.current("UnsubscribeFromChat", id)?.catch((err) => console.error(err));
-      }
-    };
-  }, [connectionState, chat, id, refresh]);
+  useJoinThenRefresh(connection, chatSessionId, refresh);
 
   useEffect(() => {
     const hint = kindRef.current.hint(mode, id);
