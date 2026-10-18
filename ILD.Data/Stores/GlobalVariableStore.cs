@@ -1,4 +1,5 @@
 using ILD.Data.Entities;
+using ILD.Data.Enums;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
@@ -7,8 +8,13 @@ namespace ILD.Data.Stores;
 public sealed class GlobalVariableStore : IGlobalVariableStore
 {
     private readonly AppDbContext _db;
+    private readonly AgentProposals<GlobalVariableProposal, GlobalVariableProposalStatus> _proposals;
 
-    public GlobalVariableStore(AppDbContext db) { _db = db; }
+    public GlobalVariableStore(AppDbContext db)
+    {
+        _db = db;
+        _proposals = new(db);
+    }
 
     public async Task<IReadOnlyList<GlobalVariable>> GetAllAsync(CancellationToken ct = default)
         => (await _db.GlobalVariables.AsNoTracking().ToListAsync(ct))
@@ -23,7 +29,7 @@ public sealed class GlobalVariableStore : IGlobalVariableStore
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         _db.GlobalVariables.Add(variable);
         await _db.SaveChangesAsync(ct);
-        var staled = await GlobalVariableProposalStore.StalePendingAsync(_db, variable.NormalizedName, variable.UpdatedAt, ct);
+        var staled = await StalePendingAsync(variable.NormalizedName, variable.UpdatedAt, ct);
         await tx.CommitAsync(ct);
         return staled;
     }
@@ -33,7 +39,7 @@ public sealed class GlobalVariableStore : IGlobalVariableStore
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         _db.GlobalVariables.Update(variable);
         await _db.SaveChangesAsync(ct);
-        var staled = await GlobalVariableProposalStore.StalePendingAsync(_db, variable.NormalizedName, variable.UpdatedAt, ct);
+        var staled = await StalePendingAsync(variable.NormalizedName, variable.UpdatedAt, ct);
         await tx.CommitAsync(ct);
         return staled;
     }
@@ -44,8 +50,12 @@ public sealed class GlobalVariableStore : IGlobalVariableStore
         var name = await _db.GlobalVariables.Where(g => g.Id == id).Select(g => g.NormalizedName).FirstOrDefaultAsync(ct);
         if (name is null || await _db.GlobalVariables.Where(g => g.Id == id).ExecuteDeleteAsync(ct) == 0)
             return null;
-        var staled = await GlobalVariableProposalStore.StalePendingAsync(_db, name, DateTime.UtcNow, ct);
+        var staled = await StalePendingAsync(name, DateTime.UtcNow, ct);
         await tx.CommitAsync(ct);
         return staled;
     }
+
+    /// <summary>Every pending suggestion for the variable goes stale, in the transaction of the write to it.</summary>
+    private Task<StaledProposals> StalePendingAsync(string normalizedName, DateTime now, CancellationToken ct)
+        => _proposals.StalePendingAsync(p => p.NormalizedName == normalizedName, now, ct);
 }

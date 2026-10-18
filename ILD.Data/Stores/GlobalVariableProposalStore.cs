@@ -13,22 +13,13 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
     public GlobalVariableProposalStore(AppDbContext db)
     {
         _db = db;
-        _proposals = Proposals(db);
+        _proposals = new(db);
     }
-
-    private static AgentProposals<GlobalVariableProposal, GlobalVariableProposalStatus> Proposals(AppDbContext db)
-        => new(
-            db,
-            db.GlobalVariableProposals,
-            GlobalVariableProposalStatus.Pending,
-            GlobalVariableProposalStatus.Rejected,
-            GlobalVariableProposalStatus.Stale,
-            GlobalVariableProposalStatus.Superseded);
 
     public async Task<GlobalVariableProposal> ProposeAsync(GlobalVariableProposal proposal, CancellationToken ct = default)
     {
         proposal.NormalizedName = GlobalVariable.Normalize(proposal.Name);
-        await _proposals.ProposeAsync(
+        return await _proposals.ProposeAsync(
             proposal,
             p => p.NormalizedName == proposal.NormalizedName,
             async ct =>
@@ -37,10 +28,10 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
                     .Where(g => g.NormalizedName == proposal.NormalizedName)
                     .Select(g => (DateTime?)g.UpdatedAt)
                     .FirstOrDefaultAsync(ct);
-                return true;
+                return null;
             },
+            () => proposal,
             ct);
-        return proposal;
     }
 
     public async Task<IReadOnlyList<GlobalVariableProposalEntry>> ListAsync(GlobalVariableProposalQuery query, CancellationToken ct = default)
@@ -71,30 +62,29 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
                     .SetProperty(g => g.Value, proposal.Value)
                     .SetProperty(g => g.UpdatedAt, now), ct)
             : await CreateUnlessPresentAsync(proposal, now, ct);
-        var ownChat = proposal.CreatedByChatSessionId is { } chat ? new[] { chat } : [];
 
         if (applied == 0)
         {
-            if (await _proposals.DecideAsync(id, GlobalVariableProposalStatus.Stale, null, now, ct) == 0)
+            if (await _proposals.DecideAsync(id, GlobalVariableProposalStatus.Stale, null, now, ct: ct) == 0)
                 return await RefusedAsync(id, ct);
             await transaction.CommitAsync(ct);
-            return new(GlobalVariableProposalDecisionOutcome.Stale, await GetAsync(id, ct), ownChat);
+            return new(GlobalVariableProposalDecisionOutcome.Stale, await GetAsync(id, ct), AgentProposals.ChangedChats(proposal));
         }
 
         // Decided concurrently: undo the write.
-        if (await _proposals.DecideAsync(id, GlobalVariableProposalStatus.Approved, null, now, ct) == 0)
+        if (await _proposals.DecideAsync(id, GlobalVariableProposalStatus.Approved, null, now, ct: ct) == 0)
         {
             await transaction.RollbackAsync(ct);
             return await RefusedAsync(id, ct);
         }
 
         // Every other pending suggestion was made against the value just replaced.
-        var staled = await StalePendingAsync(_db, proposal.NormalizedName, now, ct);
+        var staled = await _proposals.StalePendingAsync(p => p.NormalizedName == proposal.NormalizedName, now, ct);
         await transaction.CommitAsync(ct);
         return new(
             GlobalVariableProposalDecisionOutcome.Approved,
             await GetAsync(id, ct),
-            ownChat.Concat(staled.ChatSessionIds).Distinct().ToList());
+            AgentProposals.ChangedChats(proposal, staled));
     }
 
     public async Task<GlobalVariableProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct = default)
@@ -105,17 +95,8 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
         return new(
             GlobalVariableProposalDecisionOutcome.Rejected,
             entry,
-            entry?.Proposal.CreatedByChatSessionId is { } chat ? [chat] : []);
+            AgentProposals.ChangedChats(entry?.Proposal));
     }
-
-    /// <summary>
-    /// Mark every pending suggestion for the variable stale. Called inside the
-    /// transaction of the write that changed it, so no suggestion stays pending
-    /// against a value that is gone.
-    /// </summary>
-    internal static Task<StaledProposals> StalePendingAsync(
-        AppDbContext db, string normalizedName, DateTime now, CancellationToken ct)
-        => Proposals(db).StalePendingAsync(p => p.NormalizedName == normalizedName, now, ct);
 
     /// <summary>
     /// Create the variable a "missing" snapshot expects to still be missing, in

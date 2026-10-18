@@ -43,6 +43,14 @@ public class LoopTemplateProposal : IAgentProposal<LoopTemplateProposalStatus>
 
     public LoopTemplateProposalStatus Status { get; set; } = LoopTemplateProposalStatus.Pending;
 
+    public static ProposalStatuses<LoopTemplateProposalStatus> Statuses { get; } = new()
+    {
+        Pending = LoopTemplateProposalStatus.Pending,
+        Rejected = LoopTemplateProposalStatus.Rejected,
+        Stale = LoopTemplateProposalStatus.Stale,
+        Superseded = LoopTemplateProposalStatus.Superseded,
+    };
+
     /// <summary>Applied with a loop that differs from the proposed document (layout and edge ids aside).</summary>
     public bool EditedBeforeSave { get; set; }
 

@@ -9,10 +9,12 @@ namespace ILD.Data.Stores;
 public class LoopTemplateStore : ILoopTemplateStore
 {
     private readonly AppDbContext _db;
+    private readonly AgentProposals<LoopTemplateProposal, LoopTemplateProposalStatus> _proposals;
 
     public LoopTemplateStore(AppDbContext db)
     {
         _db = db;
+        _proposals = new(db);
     }
 
     public async Task<LoopTemplate?> GetByIdAsync(Guid id)
@@ -110,7 +112,7 @@ public class LoopTemplateStore : ILoopTemplateStore
         await using var tx = await _db.Database.BeginTransactionAsync();
         _db.LoopTemplates.Remove(template);
         await _db.SaveChangesAsync();
-        var staled = await LoopTemplateProposalStore.StalePendingAsync(_db, template.Id, DateTime.UtcNow, CancellationToken.None);
+        var staled = await StalePendingAsync(template.Id, DateTime.UtcNow, CancellationToken.None);
         await tx.CommitAsync();
         return staled;
     }
@@ -225,41 +227,53 @@ public class LoopTemplateStore : ILoopTemplateStore
 
     /// <summary>Mark the proposal Applied as the version just inserted, only while it is still pending.</summary>
     private async Task<bool> ApplyAsync(LoopTemplateProposal proposal, LoopTemplateVersionWrite write, DateTime now, CancellationToken ct)
-        => await LoopTemplateProposalStore.Proposals(_db).DecideAsync(
-            proposal.Id, LoopTemplateProposalStatus.Applied, null, now, ct, s => s
+        => await _proposals.DecideAsync(
+            proposal.Id,
+            LoopTemplateProposalStatus.Applied,
+            null,
+            now,
+            s => s
                 .SetProperty(p => p.EditedBeforeSave, !LoopTemplateChanges.Equivalent(proposal.Document, write.Document))
-                .SetProperty(p => p.AppliedVersion, write.Version.VersionNumber)) == 1;
+                .SetProperty(p => p.AppliedVersion, write.Version.VersionNumber),
+            ct) == 1;
 
     /// <summary>Make every other pending proposal of the template stale, and commit the save.</summary>
     private async Task<LoopTemplateVersionSave> CommitAsync(
         IDbContextTransaction tx, Guid templateId, LoopTemplateVersionWrite write, LoopTemplateProposal? applied, DateTime now, CancellationToken ct)
     {
-        var staled = await LoopTemplateProposalStore.StalePendingAsync(_db, templateId, now, ct);
+        var staled = await StalePendingAsync(templateId, now, ct);
         await tx.CommitAsync(ct);
-        var appliedChat = applied?.CreatedByChatSessionId is { } chat ? new[] { chat } : [];
         return new(
             LoopTemplateVersionSaveOutcome.Saved,
             write.Version.VersionNumber,
             applied is not null,
             staled.Count + (applied is not null ? 1 : 0),
-            appliedChat.Concat(staled.ChatSessionIds).Distinct().ToList());
+            AgentProposals.ChangedChats(applied, staled));
     }
 
     /// <summary>
-    /// A proposal's own Save lost to another version: the proposal goes Stale, in
-    /// a statement of its own after the rollback: Postgres aborts a transaction
-    /// once an insert in it has failed (short of EF's savepoint), and the save's
-    /// template write must be undone anyway.
+    /// A proposal's own Save lost to another version, so the proposal goes Stale.
+    /// That runs in a statement of its own after the rollback, because Postgres
+    /// aborts a transaction once an insert in it has failed (short of EF's
+    /// savepoint), and the save's template write must be undone anyway.
     /// </summary>
     private async Task<LoopTemplateVersionSave> StaleAfterConflictAsync(Guid proposalId)
     {
-        var staled = await LoopTemplateProposalStore.Proposals(_db).DecideAsync(
-            proposalId, LoopTemplateProposalStatus.Stale, null, DateTime.UtcNow, CancellationToken.None);
+        var staled = await _proposals.DecideAsync(
+            proposalId, LoopTemplateProposalStatus.Stale, null, DateTime.UtcNow, ct: CancellationToken.None);
         var chat = staled == 0
             ? null
             : await _db.LoopTemplateProposals.Where(p => p.Id == proposalId).Select(p => p.CreatedByChatSessionId).FirstOrDefaultAsync();
         return new(LoopTemplateVersionSaveOutcome.Conflict, null, false, staled, chat is { } id ? [id] : []);
     }
+
+    /// <summary>
+    /// Mark every pending proposal of the template stale, in the transaction of
+    /// the write that moved it on, so none stays pending against a version that
+    /// is no longer the latest.
+    /// </summary>
+    private Task<StaledProposals> StalePendingAsync(Guid templateId, DateTime now, CancellationToken ct)
+        => _proposals.StalePendingAsync(p => p.LoopTemplateId == templateId, now, ct);
 
     /// <summary>Roll back, and forget what was tracked for the save so no later save of this context writes it.</summary>
     private async Task RollBackAsync(IDbContextTransaction tx, LoopTemplate template, LoopTemplateVersionWrite write)

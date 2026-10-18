@@ -52,6 +52,14 @@ public class GlobalVariableProposal : IAgentProposal<GlobalVariableProposalStatu
 
     public GlobalVariableProposalStatus Status { get; set; } = GlobalVariableProposalStatus.Pending;
 
+    public static ProposalStatuses<GlobalVariableProposalStatus> Statuses { get; } = new()
+    {
+        Pending = GlobalVariableProposalStatus.Pending,
+        Rejected = GlobalVariableProposalStatus.Rejected,
+        Stale = GlobalVariableProposalStatus.Stale,
+        Superseded = GlobalVariableProposalStatus.Superseded,
+    };
+
     [MaxLength(MaxRationaleLength)]
     public string? RejectionReason { get; set; }
 

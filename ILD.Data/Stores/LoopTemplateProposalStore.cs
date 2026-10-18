@@ -13,52 +13,34 @@ public sealed class LoopTemplateProposalStore : ILoopTemplateProposalStore
     public LoopTemplateProposalStore(AppDbContext db)
     {
         _db = db;
-        _proposals = Proposals(db);
+        _proposals = new(db);
     }
 
-    internal static AgentProposals<LoopTemplateProposal, LoopTemplateProposalStatus> Proposals(AppDbContext db)
-        => new(
-            db,
-            db.LoopTemplateProposals,
-            LoopTemplateProposalStatus.Pending,
-            LoopTemplateProposalStatus.Rejected,
-            LoopTemplateProposalStatus.Stale,
-            LoopTemplateProposalStatus.Superseded);
-
-    public async Task<LoopTemplateProposeResult> ProposeAsync(LoopTemplateProposal proposal, CancellationToken ct = default)
-    {
-        LoopTemplateProposeResult? refused = null;
-        var latest = 0;
-        var proposed = await _proposals.ProposeAsync(
+    public Task<LoopTemplateProposeResult> ProposeAsync(LoopTemplateProposal proposal, CancellationToken ct = default)
+        => _proposals.ProposeAsync(
             proposal,
             p => p.LoopTemplateId == proposal.LoopTemplateId,
-            async ct =>
-            {
-                // A write that changes nothing, for the row lock it takes on Postgres:
-                // a save of the template still in flight commits its version before
-                // the latest version is read below, so no proposal is left pending
-                // against a version a save has already replaced.
-                var locked = await _db.LoopTemplates
-                    .Where(t => t.Id == proposal.LoopTemplateId)
-                    .ExecuteUpdateAsync(s => s.SetProperty(t => t.UpdatedAt, t => t.UpdatedAt), ct);
-                if (locked == 0)
-                {
-                    refused = new(LoopTemplateProposeOutcome.TemplateNotFound, null, null);
-                    return false;
-                }
-
-                latest = await _db.LoopTemplateVersions
-                    .Where(v => v.LoopTemplateId == proposal.LoopTemplateId)
-                    .MaxAsync(v => (int?)v.VersionNumber, ct) ?? 0;
-                if (latest != proposal.BaseVersion)
-                {
-                    refused = new(LoopTemplateProposeOutcome.NotLatest, null, latest);
-                    return false;
-                }
-                return true;
-            },
+            ct => RefusalAsync(proposal, ct),
+            () => new LoopTemplateProposeResult(LoopTemplateProposeOutcome.Proposed, proposal, proposal.BaseVersion),
             ct);
-        return proposed ? new(LoopTemplateProposeOutcome.Proposed, proposal, latest) : refused!;
+
+    /// <summary>Why <paramref name="proposal"/> cannot be stored now; null when it can.</summary>
+    private async Task<LoopTemplateProposeResult?> RefusalAsync(LoopTemplateProposal proposal, CancellationToken ct)
+    {
+        // A write that changes nothing, for the row lock it takes on Postgres:
+        // a save of the template still in flight commits its version before
+        // the latest version is read below, so no proposal is left pending
+        // against a version a save has already replaced.
+        var locked = await _db.LoopTemplates
+            .Where(t => t.Id == proposal.LoopTemplateId)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.UpdatedAt, t => t.UpdatedAt), ct);
+        if (locked == 0)
+            return new(LoopTemplateProposeOutcome.TemplateNotFound, null, null);
+
+        var latest = await _db.LoopTemplateVersions
+            .Where(v => v.LoopTemplateId == proposal.LoopTemplateId)
+            .MaxAsync(v => (int?)v.VersionNumber, ct) ?? 0;
+        return latest == proposal.BaseVersion ? null : new(LoopTemplateProposeOutcome.NotLatest, null, latest);
     }
 
     public async Task<IReadOnlyList<LoopTemplateProposalEntry>> ListAsync(LoopTemplateProposalQuery query, CancellationToken ct = default)
@@ -81,26 +63,19 @@ public sealed class LoopTemplateProposalStore : ILoopTemplateProposalStore
     public async Task<LoopTemplateProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct = default)
     {
         if (await _proposals.RejectAsync(id, reason, ct) == 0)
-        {
-            return await GetAsync(id, ct) is { } current
-                ? new(LoopTemplateProposalDecisionOutcome.NotPending, current, [])
-                : new(LoopTemplateProposalDecisionOutcome.NotFound, null, []);
-        }
+            return await RefusedAsync(id, ct);
         var entry = await GetAsync(id, ct);
         return new(
             LoopTemplateProposalDecisionOutcome.Rejected,
             entry,
-            entry?.Proposal.CreatedByChatSessionId is { } chat ? [chat] : []);
+            AgentProposals.ChangedChats(entry?.Proposal));
     }
 
-    /// <summary>
-    /// Mark every pending proposal of the template stale. Called inside the
-    /// transaction of the write that moved the template on, so no proposal stays
-    /// pending against a version that is no longer the latest.
-    /// </summary>
-    internal static Task<StaledProposals> StalePendingAsync(
-        AppDbContext db, Guid templateId, DateTime now, CancellationToken ct)
-        => Proposals(db).StalePendingAsync(p => p.LoopTemplateId == templateId, now, ct);
+    /// <summary>A decision that did not land: the proposal was decided first, or does not exist.</summary>
+    private async Task<LoopTemplateProposalDecision> RefusedAsync(Guid id, CancellationToken ct)
+        => await GetAsync(id, ct) is { } current
+            ? new(LoopTemplateProposalDecisionOutcome.NotPending, current, [])
+            : new(LoopTemplateProposalDecisionOutcome.NotFound, null, []);
 
     private async Task<IReadOnlyList<LoopTemplateProposalEntry>> EntriesAsync(
         IReadOnlyList<LoopTemplateProposal> rows, CancellationToken ct)

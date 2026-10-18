@@ -1,6 +1,5 @@
 using System.Linq.Expressions;
 using ILD.Data.Entities;
-using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Query;
 
@@ -19,39 +18,34 @@ internal sealed class AgentProposals<TProposal, TStatus>
     /// <summary>Enough for a few proposals from one source arriving at once; each round lets one through.</summary>
     private const int MaxProposeAttempts = 3;
 
+    private static readonly ProposalStatuses<TStatus> Statuses = TProposal.Statuses;
+    private static readonly Expression<Func<TProposal, bool>> IsPending = HasStatus(Statuses.Pending);
+
     private readonly AppDbContext _db;
     private readonly DbSet<TProposal> _table;
-    private readonly TStatus _pending;
-    private readonly TStatus _rejected;
-    private readonly TStatus _stale;
-    private readonly TStatus _superseded;
-    private readonly Expression<Func<TProposal, bool>> _isPending;
 
-    public AgentProposals(
-        AppDbContext db, DbSet<TProposal> table, TStatus pending, TStatus rejected, TStatus stale, TStatus superseded)
+    public AgentProposals(AppDbContext db)
     {
         _db = db;
-        _table = table;
-        _pending = pending;
-        _rejected = rejected;
-        _stale = stale;
-        _superseded = superseded;
-        _isPending = HasStatus(pending);
+        _table = db.Set<TProposal>();
     }
 
     /// <summary>
     /// Store <paramref name="proposal"/> as pending, superseding its source's
     /// pending proposal for the same target in the same transaction.
-    /// <paramref name="admitAsync"/> runs first in that transaction; when it
-    /// returns false nothing is stored and false comes back.
+    /// <paramref name="checkAsync"/> runs first in that transaction: a refusal it
+    /// returns comes back as is and nothing is stored; otherwise
+    /// <paramref name="proposed"/> says what storing it came to.
     /// </summary>
-    public async Task<bool> ProposeAsync(
+    public async Task<TResult> ProposeAsync<TResult>(
         TProposal proposal,
         Expression<Func<TProposal, bool>> sameTarget,
-        Func<CancellationToken, Task<bool>> admitAsync,
+        Func<CancellationToken, Task<TResult?>> checkAsync,
+        Func<TResult> proposed,
         CancellationToken ct)
+        where TResult : class
     {
-        proposal.Status = _pending;
+        proposal.Status = Statuses.Pending;
         var sameSource = FromSourceOf(proposal);
 
         // A proposal from the same source racing this one past the supersede
@@ -59,8 +53,8 @@ internal sealed class AgentProposals<TProposal, TStatus>
         for (var attempt = 1; ; attempt++)
         {
             await using var tx = await _db.Database.BeginTransactionAsync(ct);
-            if (!await admitAsync(ct))
-                return false;
+            if (await checkAsync(ct) is { } refusal)
+                return refusal;
 
             var now = DateTime.UtcNow;
             proposal.Id = Guid.NewGuid();
@@ -68,9 +62,9 @@ internal sealed class AgentProposals<TProposal, TStatus>
             await _table
                 .Where(sameTarget)
                 .Where(sameSource)
-                .Where(_isPending)
+                .Where(IsPending)
                 .ExecuteUpdateAsync(s => s
-                    .SetProperty(p => p.Status, _superseded)
+                    .SetProperty(p => p.Status, Statuses.Superseded)
                     .SetProperty(p => p.DecidedAt, now), ct);
 
             _table.Add(proposal);
@@ -78,7 +72,7 @@ internal sealed class AgentProposals<TProposal, TStatus>
             {
                 await _db.SaveChangesAsync(ct);
                 await tx.CommitAsync(ct);
-                return true;
+                return proposed();
             }
             catch (DbUpdateException ex) when (attempt < MaxProposeAttempts && DbErrors.IsUniqueViolation(ex))
             {
@@ -111,11 +105,11 @@ internal sealed class AgentProposals<TProposal, TStatus>
     /// else that kind of decision records. Returns the rows written.
     /// </summary>
     public Task<int> DecideAsync(
-        Guid id, TStatus to, string? rejectionReason, DateTime now, CancellationToken ct,
-        Action<UpdateSettersBuilder<TProposal>>? alsoSet = null)
+        Guid id, TStatus to, string? rejectionReason, DateTime now,
+        Action<UpdateSettersBuilder<TProposal>>? alsoSet = null, CancellationToken ct = default)
         => _table
             .Where(p => p.Id == id)
-            .Where(_isPending)
+            .Where(IsPending)
             .ExecuteUpdateAsync(s =>
             {
                 s.SetProperty(p => p.Status, to)
@@ -128,7 +122,7 @@ internal sealed class AgentProposals<TProposal, TStatus>
     public Task<int> RejectAsync(Guid id, string? reason, CancellationToken ct)
     {
         var trimmed = reason is null ? null : AppDbContext.WithoutNul(reason).Trim();
-        return DecideAsync(id, _rejected, trimmed is "" ? null : trimmed, DateTime.UtcNow, ct);
+        return DecideAsync(id, Statuses.Rejected, trimmed is "" ? null : trimmed, DateTime.UtcNow, ct: ct);
     }
 
     /// <summary>
@@ -141,7 +135,7 @@ internal sealed class AgentProposals<TProposal, TStatus>
     {
         var pending = await _table.AsNoTracking()
             .Where(ofTarget)
-            .Where(_isPending)
+            .Where(IsPending)
             .Select(p => new { p.Id, p.CreatedByChatSessionId })
             .ToListAsync(ct);
         if (pending.Count == 0) return StaledProposals.None;
@@ -149,9 +143,9 @@ internal sealed class AgentProposals<TProposal, TStatus>
         var ids = pending.Select(p => p.Id).ToList();
         var count = await _table
             .Where(p => ids.Contains(p.Id))
-            .Where(_isPending)
+            .Where(IsPending)
             .ExecuteUpdateAsync(s => s
-                .SetProperty(p => p.Status, _stale)
+                .SetProperty(p => p.Status, Statuses.Stale)
                 .SetProperty(p => p.DecidedAt, now), ct);
         return new(count, pending.Select(p => p.CreatedByChatSessionId).OfType<Guid>().Distinct().ToList());
     }
@@ -200,4 +194,14 @@ internal sealed class ProposalSources(IReadOnlyDictionary<Guid, string> runWorkI
 
     public string? ChatOwnerOf(IAgentProposal proposal)
         => proposal.CreatedByChatSessionId is { } chat ? chatOwners.GetValueOrDefault(chat) : null;
+}
+
+internal static class AgentProposals
+{
+    /// <summary>The chats a decision changed: the decided proposal's own, and those of the proposals it made stale.</summary>
+    public static IReadOnlyList<Guid> ChangedChats(IAgentProposal? decided, StaledProposals? staled = null)
+        => new[] { decided?.CreatedByChatSessionId }.OfType<Guid>()
+            .Concat(staled?.ChatSessionIds ?? [])
+            .Distinct()
+            .ToList();
 }
