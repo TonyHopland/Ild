@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-18
+
 ### Added
 
 - **A repository can keep its previews' data between runs and work items, with a reset on the repository and a delete on the Storage page.**
