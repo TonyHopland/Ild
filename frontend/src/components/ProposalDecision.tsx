@@ -15,10 +15,12 @@ interface ProposalDecisionProps {
   onSettled: (refusal: string | null, decided: boolean) => void;
   /** What the approve button says. */
   approveLabel?: string;
-  /** More actions for a pending proposal, after Approve and Reject. */
+  /** More actions, after Approve and Reject unless placed first. */
   extraActions?: ReactNode;
-  /** Actions shown whether or not it is pending, before Approve and Reject. */
-  leadingActions?: ReactNode;
+  /** Where the extra actions go among Approve and Reject; last by default. */
+  extraActionsPlacement?: "first" | "last";
+  /** Whether the extra actions only show while it is pending; they do by default. */
+  extraActionsOnlyWhilePending?: boolean;
 }
 
 /** A 409 means it was decided elsewhere first: the owner's re-read shows how, so it is no error here. */
@@ -46,7 +48,8 @@ export default function ProposalDecision({
   onSettled,
   approveLabel = "Approve",
   extraActions,
-  leadingActions,
+  extraActionsPlacement = "last",
+  extraActionsOnlyWhilePending = true,
 }: ProposalDecisionProps) {
   const [approveBusy, setApproveBusy] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
@@ -55,6 +58,7 @@ export default function ProposalDecision({
   const [rejectBusy, setRejectBusy] = useState(false);
   const [rejectError, setRejectError] = useState<string | null>(null);
   const decisionBusy = approveBusy || rejectBusy;
+  const extra = pending || !extraActionsOnlyWhilePending ? extraActions : null;
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -101,9 +105,9 @@ export default function ProposalDecision({
 
   return (
     <>
-      {(pending || leadingActions) && (
+      {(pending || extra) && (
         <div className="edit-proposal-actions">
-          {leadingActions}
+          {extraActionsPlacement === "first" && extra}
           {pending && approve && (
             <button
               type="button"
@@ -124,7 +128,7 @@ export default function ProposalDecision({
               Reject
             </button>
           )}
-          {pending && extraActions}
+          {extraActionsPlacement === "last" && extra}
         </div>
       )}
       {pending && rejectOpen && (

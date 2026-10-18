@@ -53,11 +53,13 @@ export default function ProposalReviewBanner({
       <div className="proposal-review-actions">
         <ProposalDecision
           pending={pending}
-          leadingActions={
+          extraActions={
             <button type="button" className="btn btn-secondary btn-sm" onClick={onDiscard}>
               Discard
             </button>
           }
+          extraActionsPlacement="first"
+          extraActionsOnlyWhilePending={false}
           reject={(reason) => loopTemplateProposalService.reject(proposal.id, reason)}
           onSettled={(refusal, decided) => {
             if (decided) onRejected();
