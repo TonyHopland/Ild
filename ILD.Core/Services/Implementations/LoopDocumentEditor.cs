@@ -45,7 +45,19 @@ public sealed record LoopEditResult(
 }
 
 /// <summary>
-/// A loop document after <see cref="LoopDocumentEditor.Check(string, Func{LoopTemplateGraph, string?}?)"/>:
+/// What a scoped edit's apply step produced: the edited document text, or why
+/// the edit did not land, in the words the public edit reports. An apply step
+/// never validates the graph.
+/// </summary>
+internal sealed record LoopEditApplication(int MatchCount, string? Document, string? Error)
+{
+    public static LoopEditApplication Failed(int matchCount, string error) => new(matchCount, null, error);
+
+    public static LoopEditApplication Landed(int matchCount, string document) => new(matchCount, document, null);
+}
+
+/// <summary>
+/// A loop document after<see cref="LoopDocumentEditor.Check(string, Func{LoopTemplateGraph, string?}?)"/>:
 /// the document as upgraded, and either its graph with every rule it breaks, its
 /// graph with why the caller's own checks refused it, or why its graph could not
 /// be read.
@@ -119,28 +131,33 @@ public static class LoopDocumentEditor
     /// </summary>
     public static LoopEditResult EditNodeField(
         string document, string nodeId, string field, string oldString, string newString)
+        => Validate(ApplyEditNodeField(document, nodeId, field, oldString, newString), $"Edited field '{field}' on node '{nodeId}'.");
+
+    /// <summary>The apply step of <see cref="EditNodeField"/>: the edit without graph validation.</summary>
+    internal static LoopEditApplication ApplyEditNodeField(
+        string document, string nodeId, string field, string oldString, string newString)
     {
         if (string.IsNullOrEmpty(oldString))
-            return LoopEditResult.MatchFailure(0, "old_string must not be empty.");
+            return LoopEditApplication.Failed(0, "old_string must not be empty.");
 
         if (!TryResolveField(document, nodeId, field, out var root, out var config, out var current, out var error))
-            return LoopEditResult.MatchFailure(0, error!);
+            return LoopEditApplication.Failed(0, error!);
 
         if (current is not JsonValue value || value.GetValueKind() != JsonValueKind.String)
-            return LoopEditResult.MatchFailure(0,
+            return LoopEditApplication.Failed(0,
                 $"Field '{field}' on node '{nodeId}' is not a text field; use set_loop_node_field to overwrite it or edit_loop_file for structural changes.");
 
         var text = value.GetValue<string>();
         var count = CountOccurrences(text, oldString);
         if (count == 0)
-            return LoopEditResult.MatchFailure(0,
+            return LoopEditApplication.Failed(0,
                 $"old_string was not found in field '{field}' of node '{nodeId}'; no change made.");
         if (count > 1)
-            return LoopEditResult.MatchFailure(count,
+            return LoopEditApplication.Failed(count,
                 $"old_string matches {count} times in field '{field}' of node '{nodeId}'; make it unique (include surrounding context). No change made.");
 
         config![field] = JsonValue.Create(ReplaceOnce(text, oldString, newString));
-        return Finalize(root!, 1, $"Edited field '{field}' on node '{nodeId}'.");
+        return LoopEditApplication.Landed(1, root!.ToJsonString(OutputOptions));
     }
 
     /// <summary>
@@ -159,23 +176,27 @@ public static class LoopDocumentEditor
     /// array and refuses anything else, changing nothing.
     /// </summary>
     public static LoopEditResult SetNodeField(string document, string nodeId, string field, string value)
+        => Validate(ApplySetNodeField(document, nodeId, field, value), $"Set field '{field}' on node '{nodeId}'.");
+
+    /// <summary>The apply step of <see cref="SetNodeField"/>: the edit without graph validation.</summary>
+    internal static LoopEditApplication ApplySetNodeField(string document, string nodeId, string field, string value)
     {
         if (string.IsNullOrWhiteSpace(field))
-            return LoopEditResult.MatchFailure(0, "field must not be empty.");
+            return LoopEditApplication.Failed(0, "field must not be empty.");
 
         if (!TryParseRoot(document, out var root, out var parseError))
-            return LoopEditResult.MatchFailure(0, parseError!);
+            return LoopEditApplication.Failed(0, parseError!);
 
         var node = FindNode(root, nodeId);
         if (node == null)
-            return LoopEditResult.MatchFailure(0, $"No node with id '{nodeId}' exists in the current loop.");
+            return LoopEditApplication.Failed(0, $"No node with id '{nodeId}' exists in the current loop.");
         if (node["config"] is not JsonObject config)
-            return LoopEditResult.MatchFailure(0, $"Node '{nodeId}' has no config object to edit.");
+            return LoopEditApplication.Failed(0, $"Node '{nodeId}' has no config object to edit.");
 
         if (StructuredFields.Contains(field))
         {
             if (ParseArray(value) is not { } array)
-                return LoopEditResult.MatchFailure(0,
+                return LoopEditApplication.Failed(0,
                     $"Field '{field}' holds a JSON array, and value is not one. Pass the whole array as JSON, "
                     + $"e.g. {StructuredFieldExample(field)}. No change made.");
             config[field] = array;
@@ -184,7 +205,7 @@ public static class LoopDocumentEditor
         {
             config[field] = JsonValue.Create(value);
         }
-        return Finalize(root, 1, $"Set field '{field}' on node '{nodeId}'.");
+        return LoopEditApplication.Landed(1, root.ToJsonString(OutputOptions));
     }
 
     private static JsonArray? ParseArray(string value)
@@ -216,24 +237,28 @@ public static class LoopDocumentEditor
     /// changes only in the replaced bytes.
     /// </summary>
     public static LoopEditResult EditFile(string document, string oldString, string newString)
+        => Validate(ApplyEditFile(document, oldString, newString), "Edited the raw loop document.");
+
+    /// <summary>
+    /// The apply step of <see cref="EditFile"/>: the edit without graph validation,
+    /// refused when the edited text does not parse as a loop document.
+    /// </summary>
+    internal static LoopEditApplication ApplyEditFile(string document, string oldString, string newString)
     {
         if (string.IsNullOrEmpty(oldString))
-            return LoopEditResult.MatchFailure(0, "old_string must not be empty.");
+            return LoopEditApplication.Failed(0, "old_string must not be empty.");
 
         var count = CountOccurrences(document, oldString);
         if (count == 0)
-            return LoopEditResult.MatchFailure(0, "old_string was not found in the loop document; no change made.");
+            return LoopEditApplication.Failed(0, "old_string was not found in the loop document; no change made.");
         if (count > 1)
-            return LoopEditResult.MatchFailure(count,
+            return LoopEditApplication.Failed(count,
                 $"old_string matches {count} times in the loop document; make it unique (include surrounding context). No change made.");
 
-        var check = Check(ReplaceOnce(document, oldString, newString));
-        if (check.ParseError != null)
-            return LoopEditResult.MatchFailure(1, $"The edit produced invalid JSON: {check.ParseError}. No change made.");
-        if (check.ValidationErrors.Count > 0)
-            return LoopEditResult.Invalid(1, check.ValidationErrors);
-
-        return LoopEditResult.Success(1, check.Document, "Edited the raw loop document.");
+        var edited = ReplaceOnce(document, oldString, newString);
+        return Read(edited).ParseError is { } parseError
+            ? LoopEditApplication.Failed(1, InvalidJson(parseError))
+            : LoopEditApplication.Landed(1, edited);
     }
 
     /// <summary>
@@ -257,22 +282,27 @@ public static class LoopDocumentEditor
     // -- internals -------------------------------------------------------------
 
     /// <summary>
-    /// Re-serialize a mutated document DOM, validate it, and turn the outcome into a
-    /// <see cref="LoopEditResult"/>. Shared tail of the JsonNode-mutating surfaces
-    /// (field edit/set) so reject-on-invalid behaves identically for all of them.
+    /// Validate what an apply step produced and turn the outcome into a
+    /// <see cref="LoopEditResult"/>. Shared tail of the scoped edits, so
+    /// reject-on-invalid behaves identically for all of them.
     /// </summary>
-    private static LoopEditResult Finalize(JsonObject root, int matchCount, string summary)
+    private static LoopEditResult Validate(LoopEditApplication applied, string summary)
     {
-        var check = Check(root.ToJsonString(OutputOptions));
-        // A DOM we just mutated always re-parses, so a parse error here would be a
-        // bug rather than bad input; surface it as a match failure rather than throw.
-        if (check.ParseError != null)
-            return LoopEditResult.MatchFailure(matchCount, $"The edit produced invalid JSON: {check.ParseError}. No change made.");
-        if (check.ValidationErrors.Count > 0)
-            return LoopEditResult.Invalid(matchCount, check.ValidationErrors);
+        if (applied.Error != null)
+            return LoopEditResult.MatchFailure(applied.MatchCount, applied.Error);
 
-        return LoopEditResult.Success(matchCount, check.Document, summary);
+        var check = Check(applied.Document!);
+        // An apply step only lands a document that parses, so a parse error here would
+        // be a bug rather than bad input; surface it as a match failure rather than throw.
+        if (check.ParseError != null)
+            return LoopEditResult.MatchFailure(applied.MatchCount, InvalidJson(check.ParseError));
+        if (check.ValidationErrors.Count > 0)
+            return LoopEditResult.Invalid(applied.MatchCount, check.ValidationErrors);
+
+        return LoopEditResult.Success(applied.MatchCount, check.Document, summary);
     }
+
+    private static string InvalidJson(string parseError) => $"The edit produced invalid JSON: {parseError}. No change made.";
 
     private static bool TryResolveField(
         string document, string nodeId, string field,
@@ -359,6 +389,18 @@ public static class LoopDocumentEditor
     /// </summary>
     internal static LoopDocumentCheck Check(string document, Func<LoopTemplateGraph, string?>? prepare = null)
     {
+        var (upgraded, graph, parseError) = Read(document);
+        if (graph == null)
+            return new(upgraded, null, parseError, null, []);
+
+        return prepare?.Invoke(graph) is { } refusal
+            ? new(upgraded, graph, null, refusal, [])
+            : new(upgraded, graph, null, null, LoopTemplateValidator.Validate(graph));
+    }
+
+    /// <summary>A loop document upgraded to v2 and read into its graph, or why it could not be read.</summary>
+    private static (string Document, LoopTemplateGraph? Graph, string? ParseError) Read(string document)
+    {
         document = LoopDocumentUpgrader.Upgrade(document);
         LoopDocumentShape? shape;
         try
@@ -367,19 +409,16 @@ public static class LoopDocumentEditor
         }
         catch (JsonException ex)
         {
-            return new(document, null, ex.Message, null, []);
+            return (document, null, ex.Message);
         }
 
         if (shape == null)
-            return new(document, null, "The loop document is empty.", null, []);
+            return (document, null, "The loop document is empty.");
 
-        var graph = new LoopTemplateGraph(
+        return (document, new LoopTemplateGraph(
             Guid.Empty,
             shape.Nodes ?? new List<LoopNodeDto>(),
-            shape.Edges ?? new List<LoopNodeEdgeDto>());
-        return prepare?.Invoke(graph) is { } refusal
-            ? new(document, graph, null, refusal, [])
-            : new(document, graph, null, null, LoopTemplateValidator.Validate(graph));
+            shape.Edges ?? new List<LoopNodeEdgeDto>()), null);
     }
 
     /// <summary><see cref="Check(string, Func{LoopTemplateGraph, string?}?)"/> over a parsed document, as compact JSON.</summary>

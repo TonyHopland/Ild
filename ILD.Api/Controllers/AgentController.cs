@@ -862,7 +862,7 @@ public class AgentController : ControllerBase
             isLatest = chosen.VersionNumber == latest.VersionNumber,
             versionCreatedAt = chosen.CreatedAt,
             isArchived = template.IsArchived,
-            document = LoopTemplateDocument.From(template, graph),
+            document = new RawJson(LoopTemplateDocument.From(template, graph).Render()),
         });
     }
 

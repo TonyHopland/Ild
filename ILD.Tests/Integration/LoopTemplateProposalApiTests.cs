@@ -396,6 +396,37 @@ public class LoopTemplateProposalApiTests
         Assert.Equal(archivedId.ToString(), (await ReadProposalAsync(host, byName)).GetProperty("templateId").GetString());
     }
 
+    [Fact]
+    public async Task Get_loop_template_returns_the_document_exactly_as_the_template_document_renderer_writes_it()
+    {
+        await using var host = await StartHostAsync();
+        var graph = JsonSerializer.SerializeToNode(Graph())!.AsObject();
+        graph["nodes"]!.AsArray()[2] = new JsonObject
+        {
+            ["id"] = "test", ["type"] = "Prompt", ["label"] = "Review",
+            ["config"] = new JsonObject { ["prompt"] = "Don't <stop> & add 1+1 — café" },
+        };
+        var created = await host.Human.PostAsJsonAsync(TemplatesUrl, SaveBody("Escaped Loop", "A loop.", "AutoResume", graph), Ct);
+        Assert.True(created.StatusCode == HttpStatusCode.Created, $"create: {(int)created.StatusCode} {await created.Content.ReadAsStringAsync(Ct)}");
+        var templateId = (await ReadJsonAsync(created)).GetProperty("id").GetGuid();
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+
+        var resp = await agent.GetAsync($"{AgentDocumentUrl}?nameOrId={templateId}", Ct);
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var document = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(Ct)).RootElement.GetProperty("document");
+        Assert.Equal(JsonValueKind.Object, document.ValueKind);
+        string rendered;
+        using (var scope = host.Factory.Services.CreateScope())
+        {
+            var templates = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
+            var template = (await templates.GetLoopTemplateAsync(templateId))!;
+            rendered = LoopTemplateDocument.From(template, (await templates.GetVersionGraphAsync(templateId, 1))!).Render();
+        }
+        Assert.Equal(rendered, document.GetRawText());
+        Assert.Contains(@"""prompt"":""Don\u0027t \u003Cstop\u003E \u0026 add 1\u002B1 \u2014 caf\u00E9""", rendered);
+    }
+
     private static async Task<Guid[]> ListTemplateIdsNamedAsync(Host host, string name)
     {
         using var scope = host.Factory.Services.CreateScope();

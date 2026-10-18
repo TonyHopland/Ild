@@ -223,11 +223,7 @@ public class LoopTemplateManager : ILoopTemplateManager
 
     /// <summary>A loop as the <c>ild-loop-template/v2</c> document get_loop_template returns.</summary>
     private static string DocumentOf(string name, string description, RecoveryPolicy recoveryPolicy, LoopTemplateGraph graph)
-        => JsonSerializer.Serialize(
-            new LoopTemplateDocument(LoopDocumentUpgrader.V2, name, description, recoveryPolicy.ToString(), graph.Nodes, graph.Edges),
-            DocumentOptions);
-
-    private static readonly JsonSerializerOptions DocumentOptions = new(JsonSerializerDefaults.Web);
+        => new LoopTemplateDocument(LoopDocumentUpgrader.V2, name, description, recoveryPolicy.ToString(), graph.Nodes, graph.Edges).Render();
 
     /// <summary>A version of <paramref name="graph"/> ready to insert, but for its template and number.</summary>
     private static (LoopTemplateVersion Version, List<LoopNode> Nodes, List<LoopNodeEdge> Edges) BuildVersion(LoopTemplateGraph graph)
