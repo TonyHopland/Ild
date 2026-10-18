@@ -1,6 +1,6 @@
-namespace ILD.Core.Services.Interfaces;
+namespace ILD.Data;
 
-public enum LoopTemplateSaveOutcome
+public enum LoopTemplateVersionSaveOutcome
 {
     Saved,
     TemplateNotFound,
@@ -17,8 +17,8 @@ public enum LoopTemplateSaveOutcome
 /// <param name="ProposalApplied">Whether the proposal the save came from was marked Applied.</param>
 /// <param name="ProposalsChanged">How many proposals the save changed: applied, or made stale.</param>
 /// <param name="ChangedChatSessionIds">The chats whose proposals it changed.</param>
-public sealed record LoopTemplateSaveResult(
-    LoopTemplateSaveOutcome Outcome,
+public sealed record LoopTemplateVersionSave(
+    LoopTemplateVersionSaveOutcome Outcome,
     int? VersionNumber,
     bool ProposalApplied,
     int ProposalsChanged,

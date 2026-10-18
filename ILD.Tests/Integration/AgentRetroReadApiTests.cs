@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using ILD.Core.Services.Interfaces;
+using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
@@ -235,7 +236,7 @@ public class AgentRetroReadApiTests
         {
             var templates = scope.ServiceProvider.GetRequiredService<ILoopTemplateManager>();
             templateId = await templates.CreateLoopTemplateAsync(name, "first", Graph("Review the code."), RecoveryPolicy.NeedsReview);
-            Assert.Equal(LoopTemplateSaveOutcome.Saved,
+            Assert.Equal(LoopTemplateVersionSaveOutcome.Saved,
                 (await templates.SaveNewVersionAsync(templateId, name, "second", Graph("Review the code twice."), RecoveryPolicy.NeedsReview)).Outcome);
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             db.LoopTemplates.Single(t => t.Id == templateId).Description = null;

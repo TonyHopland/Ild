@@ -1,5 +1,4 @@
 using System.ComponentModel.DataAnnotations;
-using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Data;
@@ -57,17 +56,17 @@ public class LoopTemplateManager : ILoopTemplateManager
     public async Task<IEnumerable<LoopTemplate>> GetAllLoopTemplatesAsync(int skip = 0, int take = 100, bool includeArchived = false)
         => await _store.GetAllAsync(skip, take, includeArchived);
 
-    public async Task<LoopTemplateSaveResult> SaveNewVersionAsync(
+    public async Task<LoopTemplateVersionSave> SaveNewVersionAsync(
         Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy, Guid? fromProposalId = null)
     {
         NormalizeOutputs(graph);
         var errors = LoopTemplateValidator.Validate(graph);
         if (errors.Count > 0)
             throw new InvalidOperationException("Invalid loop template graph: " + string.Join("; ", errors));
-        return ResultOf(await _store.AddVersionAsync(WriteOf(templateId, name, description, recoveryPolicy, graph), fromProposalId));
+        return await _store.AddVersionAsync(WriteOf(templateId, name, description, recoveryPolicy, graph), fromProposalId);
     }
 
-    public async Task<LoopTemplateSaveResult> SaveProposalAsync(LoopTemplateProposal proposal)
+    public async Task<LoopTemplateVersionSave> SaveProposalAsync(LoopTemplateProposal proposal)
     {
         var checkedDocument = CheckProposedDocument(proposal.Document);
         if (checkedDocument.Request is not { } request)
@@ -79,7 +78,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             request.Description,
             request.RecoveryPolicy,
             new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges));
-        return ResultOf(await _store.SaveProposalAsync(write, proposal.Id));
+        return await _store.SaveProposalAsync(write, proposal.Id);
     }
 
     public ProposedLoopDocument CheckProposedDocument(string document)
@@ -97,39 +96,32 @@ public class LoopTemplateManager : ILoopTemplateManager
             return Refused($"The document must be a JSON object: the whole {LoopDocumentUpgrader.V2} document get_loop_template returns.");
         if (!root.ContainsKey("$schema"))
             return Refused($"The document has no $schema. Send the whole {LoopDocumentUpgrader.V2} document get_loop_template returns, with your changes.");
+        // Upgraded here rather than by the shared check: the schema and policy are
+        // refused before the graph is read.
         LoopDocumentUpgrader.TryUpgrade(root);
         if (JsonText.Of(root["$schema"]) != LoopDocumentUpgrader.V2)
             return Refused($"$schema must be \"{LoopDocumentUpgrader.V2}\" (a {LoopDocumentUpgrader.V1} document is upgraded to it).");
         if (!Enum.TryParse<RecoveryPolicy>(JsonText.Of(root["recoveryPolicy"]), ignoreCase: true, out var policy) || !Enum.IsDefined(policy))
             return Refused($"recoveryPolicy must be one of {string.Join(", ", Enum.GetNames<RecoveryPolicy>())}.");
 
-        LoopTemplateGraph parsed;
-        try
-        {
-            parsed = LoopDocumentEditor.ReadGraph(root);
-        }
-        catch (JsonException ex)
-        {
-            return Refused($"The document's nodes or edges are not in the {LoopDocumentUpgrader.V2} shape: {ex.Message}");
-        }
+        var check = LoopDocumentEditor.Check(root, NormalizeOutputs);
+        if (check.Graph is not { } graph)
+            return Refused($"The document's nodes or edges are not in the {LoopDocumentUpgrader.V2} shape: {check.ParseError}");
 
         var request = new LoopTemplateCreateRequest
         {
             Name = JsonText.Of(root["name"]) ?? string.Empty,
             Description = JsonText.Of(root["description"]) ?? string.Empty,
             RecoveryPolicy = policy,
-            Nodes = parsed.Nodes,
-            Edges = parsed.Edges,
+            Nodes = graph.Nodes,
+            Edges = graph.Edges,
         };
         var refused = new List<ValidationResult>();
         if (!Validator.TryValidateObject(request, new ValidationContext(request), refused, validateAllProperties: true))
             return Refused(string.Join(" ", refused.Select(r => r.ErrorMessage)));
 
-        var graph = new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges);
-        NormalizeOutputs(graph);
-        var errors = LoopTemplateValidator.Validate(graph);
-        return errors.Count > 0
-            ? new ProposedLoopDocument(null, null, null, errors)
+        return check.ValidationErrors.Count > 0
+            ? new ProposedLoopDocument(null, null, null, check.ValidationErrors)
             : new ProposedLoopDocument(request, DocumentOf(request.Name, request.Description, policy, graph), null, []);
     }
 
@@ -174,12 +166,11 @@ public class LoopTemplateManager : ILoopTemplateManager
         return Task.FromResult((errors.Count == 0, errors));
     }
 
-    public async Task<LoopTemplateDeletion> DeleteLoopTemplateAsync(Guid templateId)
+    public async Task<StaledProposals> DeleteLoopTemplateAsync(Guid templateId)
     {
         var template = await _store.GetByIdAsync(templateId);
-        if (template == null) return LoopTemplateDeletion.None;
-        var staled = await _store.DeleteTemplateAsync(template);
-        return new(staled.Count, staled.ChatSessionIds);
+        if (template == null) return StaledProposals.None;
+        return await _store.DeleteTemplateAsync(template);
     }
 
     public async Task ArchiveLoopTemplateAsync(Guid templateId)
@@ -220,21 +211,6 @@ public class LoopTemplateManager : ILoopTemplateManager
             templateId, name, description, recoveryPolicy, version, nodes, edges,
             DocumentOf(name, description, recoveryPolicy, graph));
     }
-
-    private static LoopTemplateSaveResult ResultOf(LoopTemplateVersionSave save)
-        => new(
-            save.Outcome switch
-            {
-                LoopTemplateVersionSaveOutcome.Saved => LoopTemplateSaveOutcome.Saved,
-                LoopTemplateVersionSaveOutcome.TemplateNotFound => LoopTemplateSaveOutcome.TemplateNotFound,
-                LoopTemplateVersionSaveOutcome.Conflict => LoopTemplateSaveOutcome.Conflict,
-                LoopTemplateVersionSaveOutcome.ProposalNotPending => LoopTemplateSaveOutcome.ProposalNotPending,
-                _ => throw new UnreachableException($"Unhandled save outcome {save.Outcome}."),
-            },
-            save.VersionNumber,
-            save.ProposalApplied,
-            save.ProposalsChanged,
-            save.ChangedChatSessionIds);
 
     private static ProposedLoopDocument Refused(string error) => new(null, null, error, []);
 

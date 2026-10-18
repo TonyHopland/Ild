@@ -1,3 +1,4 @@
+using ILD.Data;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
 using ILD.Data.Enums;
@@ -20,7 +21,7 @@ public interface ILoopTemplateManager
     /// other pending proposal of the template goes Stale. An invalid graph throws
     /// <see cref="InvalidOperationException"/>.
     /// </summary>
-    Task<LoopTemplateSaveResult> SaveNewVersionAsync(
+    Task<LoopTemplateVersionSave> SaveNewVersionAsync(
         Guid templateId, string name, string description, LoopTemplateGraph graph, RecoveryPolicy recoveryPolicy, Guid? fromProposalId = null);
 
     /// <summary>
@@ -28,7 +29,7 @@ public interface ILoopTemplateManager
     /// proposal is pending and its base version is the latest. A template that
     /// has moved on makes it Stale and writes nothing.
     /// </summary>
-    Task<LoopTemplateSaveResult> SaveProposalAsync(LoopTemplateProposal proposal);
+    Task<LoopTemplateVersionSave> SaveProposalAsync(LoopTemplateProposal proposal);
 
     /// <summary>
     /// Check a proposed <c>ild-loop-template/v2</c> document the way a Loop Editor
@@ -44,5 +45,5 @@ public interface ILoopTemplateManager
     Task<(bool Valid, IReadOnlyList<string> Errors)> ValidateGraphAsync(LoopTemplateGraph graph);
 
     /// <summary>Deletes the template, making its pending proposals stale.</summary>
-    Task<LoopTemplateDeletion> DeleteLoopTemplateAsync(Guid templateId);
+    Task<StaledProposals> DeleteLoopTemplateAsync(Guid templateId);
 }

@@ -106,7 +106,7 @@ public class LoopTemplatesController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-        LoopTemplateSaveResult saved;
+        LoopTemplateVersionSave saved;
         try
         {
             var graph = new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges);
@@ -125,9 +125,9 @@ public class LoopTemplatesController : ControllerBase
         await LoopTemplateProposalHints.SendAsync(_notifier, _chatNotifier, guid, saved.ProposalsChanged, saved.ChangedChatSessionIds);
         return saved.Outcome switch
         {
-            LoopTemplateSaveOutcome.Saved => Ok(new { id = guid, version = saved.VersionNumber, proposalApplied = saved.ProposalApplied }),
-            LoopTemplateSaveOutcome.TemplateNotFound => BadRequest(new { error = $"Template {guid} not found" }),
-            LoopTemplateSaveOutcome.Conflict => Conflict(new { error = "Someone else saved this template at the same moment; save again." }),
+            LoopTemplateVersionSaveOutcome.Saved => Ok(new { id = guid, version = saved.VersionNumber, proposalApplied = saved.ProposalApplied }),
+            LoopTemplateVersionSaveOutcome.TemplateNotFound => BadRequest(new { error = $"Template {guid} not found" }),
+            LoopTemplateVersionSaveOutcome.Conflict => Conflict(new { error = "Someone else saved this template at the same moment; save again." }),
             _ => throw new UnreachableException($"A save that requires no proposal ended as {saved.Outcome}."),
         };
     }
@@ -231,8 +231,8 @@ public class LoopTemplatesController : ControllerBase
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
-        var deleted = await _loopTemplateManager.DeleteLoopTemplateAsync(guid);
-        await LoopTemplateProposalHints.SendAsync(_notifier, _chatNotifier, guid, deleted.ProposalsStaled, deleted.ChangedChatSessionIds);
+        var staled = await _loopTemplateManager.DeleteLoopTemplateAsync(guid);
+        await LoopTemplateProposalHints.SendAsync(_notifier, _chatNotifier, guid, staled.Count, staled.ChatSessionIds);
         return NoContent();
     }
 }
