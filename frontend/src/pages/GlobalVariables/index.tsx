@@ -163,9 +163,10 @@ export default function GlobalVariables() {
       </div>
       <p className="gv-intro">
         Values every loop prompt can read with <code>{"{{Global.<name>}}"}</code>, for conventions
-        that apply across all repositories. A run halts before a node that uses one that is missing
-        or empty. Edits apply to the next prompt that is rendered; there is no history. Agents
-        cannot change them: they suggest a new value, which waits here for a human to approve.
+        that apply across all repositories. A run halts before a node that uses a global variable
+        that is missing or empty. Edits apply to the next prompt that is rendered; there is no
+        history. Agents cannot change them: they suggest a new value, which waits here for a human
+        to approve.
       </p>
 
       {loadError && (
