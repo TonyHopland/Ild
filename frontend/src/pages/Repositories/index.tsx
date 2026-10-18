@@ -11,6 +11,7 @@ import { packageFeedService, repositoryService, remoteProviderService } from "..
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import ConnectionTest from "../../components/ConnectionTest";
 import ProviderDialog from "./ProviderDialog";
+import PreviewDataReset from "./PreviewDataReset";
 
 export default function Repositories() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -36,6 +37,7 @@ export default function Repositories() {
   const [packageFeeds, setPackageFeeds] = useState<PackageFeed[]>([]);
   const [packageFeedsError, setPackageFeedsError] = useState<string | null>(null);
   const [selectedFeeds, setSelectedFeeds] = useState<string[]>([]);
+  const [keepPreviewData, setKeepPreviewData] = useState(false);
   // The .env is masked out of the repository list, so the plaintext is fetched only
   // once an edit is open — never behind the page load — and only for the repository
   // being edited: a response for a previously-edited one is dropped.
@@ -78,6 +80,7 @@ export default function Repositories() {
     setWorktreesPath(repo.worktreesPath || "");
     setDefaultIntakeStatus(repo.defaultIntakeStatus);
     setSelectedFeeds(repo.packageFeeds?.map((f) => f.name) ?? []);
+    setKeepPreviewData(repo.keepPreviewData ?? false);
     // Every form field starts from this repository, the .env included: a session
     // that was abandoned rather than saved must not carry into the new one.
     previewEnv.reset();
@@ -93,6 +96,7 @@ export default function Repositories() {
     setWorktreesPath("");
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
     setSelectedFeeds([]);
+    setKeepPreviewData(false);
     previewEnv.reset();
   };
 
@@ -125,6 +129,7 @@ export default function Repositories() {
       worktreesPath: worktreesPath || null,
       defaultIntakeStatus,
       packageFeeds: selectedFeeds,
+      keepPreviewData,
       // The .env rides along only when the user changed the prefilled text; emptying
       // it removes the stored value instead, which this write cannot express and the
       // commit below does.
@@ -469,6 +474,23 @@ export default function Repositories() {
                 </span>
               </div>
               <div className="form-group">
+                <label className="repo-feed-option">
+                  <input
+                    type="checkbox"
+                    checked={keepPreviewData}
+                    onChange={(e) => setKeepPreviewData(e.target.checked)}
+                  />
+                  Keep preview data between runs
+                </label>
+                <span className="repo-hint">
+                  The volumes in ild.config.json become one folder for every work item and run of
+                  this repository, so their data carries over from one preview to the next. Only one
+                  preview of the repository runs at a time while this is on. Turning it off leaves
+                  the data in place.
+                </span>
+                {editingRepo && <PreviewDataReset key={editingRepo.id} repository={editingRepo} />}
+              </div>
+              <div className="form-group">
                 <span className="repo-group-label" id="repoPackageFeeds">
                   Package feeds
                 </span>
@@ -662,6 +684,15 @@ export default function Repositories() {
         .delete-confirm {
           display: flex;
           gap: 0.25rem;
+        }
+
+        .repo-reset,
+        .repo-reset-confirm {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 0.5rem;
+          margin-top: 0.25rem;
         }
 
         .repo-load-error,

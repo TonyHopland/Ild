@@ -20,6 +20,13 @@ type Cleanup =
   | { kind: "done"; candidates: WorktreeCleanupCandidate[]; result: WorktreeCleanupResult }
   | { kind: "error"; message: string };
 
+/** The one preview-data entry whose delete is being asked for, run, or has failed. */
+type PreviewDataDelete = {
+  repositoryId: string;
+  step: "confirming" | "deleting" | "failed";
+  message?: string;
+};
+
 const failure = (error: unknown) => (error as ApiError | Error | undefined)?.message || null;
 
 function Size({ bytes, incomplete }: { bytes: number | null; incomplete: boolean }) {
@@ -68,6 +75,7 @@ function repositoryOf(candidate: WorktreeCleanupCandidate) {
 export default function StorageSettings() {
   const [overview, setOverview] = useState<Overview>({ data: null, loading: true, error: null });
   const [cleanup, setCleanup] = useState<Cleanup>({ kind: "idle" });
+  const [previewDataDelete, setPreviewDataDelete] = useState<PreviewDataDelete | null>(null);
   const mounted = useRef(true);
   // Only the latest measurement may land: an earlier one finishing last would show older figures.
   const latestMeasurement = useRef(0);
@@ -156,7 +164,71 @@ export default function StorageSettings() {
     if (mounted.current) void measure();
   };
 
+  const deletePreviewData = async (repositoryId: string) => {
+    setPreviewDataDelete({ repositoryId, step: "deleting" });
+    try {
+      await storageService.deletePreviewData(repositoryId);
+      if (!mounted.current) return;
+      setPreviewDataDelete(null);
+      void measure();
+    } catch (error) {
+      if (mounted.current)
+        setPreviewDataDelete({
+          repositoryId,
+          step: "failed",
+          message: failure(error) ?? "Could not delete the preview data.",
+        });
+    }
+  };
+
   const cleanupBusy = cleanup.kind === "loadingCandidates" || cleanup.kind === "cleaning";
+  const previewDataBusy = previewDataDelete?.step === "deleting";
+
+  const previewDataActions = (repositoryId: string, label: string) => {
+    const own = previewDataDelete?.repositoryId === repositoryId ? previewDataDelete : null;
+    if (own?.step === "confirming" || own?.step === "deleting")
+      return (
+        <div className="storage-preview-data-confirm" role="group" aria-label="Delete preview data">
+          <span>Deletes this repository&apos;s preview data for every work item.</span>
+          <div className="storage-actions">
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={() => void deletePreviewData(repositoryId)}
+              disabled={previewDataBusy}
+            >
+              Confirm delete
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setPreviewDataDelete(null)}
+              disabled={previewDataBusy}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      );
+    return (
+      <>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          aria-label={`Delete preview data: ${label}`}
+          onClick={() => setPreviewDataDelete({ repositoryId, step: "confirming" })}
+          disabled={previewDataBusy}
+        >
+          Delete
+        </button>
+        {own?.step === "failed" && (
+          <div className="settings-error" role="alert">
+            {own.message}
+          </div>
+        )}
+      </>
+    );
+  };
 
   return (
     <>
@@ -208,6 +280,9 @@ export default function StorageSettings() {
                           bytes={entry.bytes}
                           incomplete={entry.incomplete}
                         />
+                        {category.key === "preview-data" &&
+                          entry.repositoryId &&
+                          previewDataActions(entry.repositoryId, entry.label)}
                       </li>
                     ))}
                   </ul>

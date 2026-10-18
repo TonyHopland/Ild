@@ -746,6 +746,8 @@ export interface Repository {
   hasPreviewEnv?: boolean;
   /** The package feeds it selects, by name; `missing` once the feed has been deleted. */
   packageFeeds?: RepositoryPackageFeed[];
+  /** Previews share one folder per volume across every work item and run, one preview at a time. */
+  keepPreviewData?: boolean;
   createdAt: string;
   updatedAt?: string | null;
 }

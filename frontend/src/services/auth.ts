@@ -706,6 +706,12 @@ export const repositoryService = {
     return api.delete<Repository>(`/repositories/${id}/preview-env`);
   },
 
+  // Empties the preview data every work item of the repository shares; refused
+  // (409) while a preview of the repository is running.
+  resetPreviewData: async (id: string): Promise<void> => {
+    await api.post<void>(`/repositories/${id}/preview-data/reset`, {});
+  },
+
   test: async (id: string): Promise<ConnectionTestResult> => {
     return api.post<ConnectionTestResult>(`/repositories/${id}/test`, {});
   },
@@ -1203,5 +1209,9 @@ export const storageService = {
   },
   cleanUpWorktrees: async (runIds: string[]): Promise<WorktreeCleanupResult> => {
     return api.post<WorktreeCleanupResult>("/storage/worktree-cleanup", { runIds });
+  },
+  /** Refused (409) while a preview of the repository is running. */
+  deletePreviewData: async (repositoryId: string): Promise<void> => {
+    await api.delete<void>(`/storage/preview-data/${repositoryId}`);
   },
 };
