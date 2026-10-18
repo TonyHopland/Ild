@@ -685,11 +685,15 @@ public sealed class ChatService : IChatService
             .ExecuteUpdateAsync(s => s.SetProperty(p => p.DecisionDeliveredAt, now), CancellationToken.None);
     }
 
-    /// <summary>The decisions on one kind of this chat's proposals stored here, a line each, as the prompt tells them.</summary>
+    /// <summary>
+    /// Decisions on this chat's proposals of one kind kept in ILD's own database
+    /// (global variable suggestions, loop template proposals; edit proposals live
+    /// on the WorkItem server), a line each, as the prompt tells them.
+    /// </summary>
     private sealed record LocalDecisions(string Header, string Intro, IReadOnlyList<DecisionLine> Lines)
     {
         public string? Format()
-            => Lines.Count == 0 ? null : string.Join("\n", Lines.Select(l => l.Text).Prepend(Intro).Prepend(Header));
+            => Lines.Count == 0 ? null : string.Join("\n", new[] { Header, Intro }.Concat(Lines.Select(l => l.Text)));
     }
 
     private sealed record DecisionLine(Guid ProposalId, string Text);

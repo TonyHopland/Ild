@@ -15,18 +15,16 @@ namespace ILD.Tests.Integration;
 
 /// <summary>
 /// An API host for the agent proposal tests: the board and chat notifiers
-/// recorded, runs reclaimable, <typeparamref name="TRace"/> intercepting every
-/// statement, a signed-in human and agents calling the way the MCP server does.
+/// recorded, runs reclaimable, an interceptor on every statement, a signed-in
+/// human and agents calling the way the MCP server does.
 /// </summary>
-internal class ProposalApiTestHost<TRace> : IAsyncDisposable
-    where TRace : DbCommandInterceptor, new()
+internal class ProposalApiTestHost : IAsyncDisposable
 {
     public const string RunHeader = "X-ILD-Run-Id";
     public const string ChatHeader = "X-ILD-Chat-Session-Id";
 
     public Mock<IWorkItemNotifier> WorkItemNotifier { get; } = new();
     public Mock<IChatNotifier> ChatNotifier { get; } = new();
-    public TRace Race { get; } = new();
     public HttpClient Human { get; private set; } = null!;
     public Guid RepositoryId { get; private set; }
     public ApiFactory Factory { get; }
@@ -34,7 +32,8 @@ internal class ProposalApiTestHost<TRace> : IAsyncDisposable
     private readonly string _hintName;
 
     /// <param name="hintName">What the notifier methods for this kind of proposal are named after.</param>
-    public ProposalApiTestHost(string hintName)
+    /// <param name="race">Intercepts every statement the API runs.</param>
+    protected ProposalApiTestHost(string hintName, DbCommandInterceptor race)
     {
         _hintName = hintName;
         Factory = new ApiFactory(configureServices: services =>
@@ -44,7 +43,7 @@ internal class ProposalApiTestHost<TRace> : IAsyncDisposable
             var reclaimer = new Mock<IRunReclaimer>();
             reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).ReturnsAsync(true);
             services.ReplaceSingleton(reclaimer.Object);
-            services.ConfigureDbContext<AppDbContext>(options => options.AddInterceptors(Race));
+            services.ConfigureDbContext<AppDbContext>(options => options.AddInterceptors(race));
         });
     }
 
@@ -83,12 +82,30 @@ internal class ProposalApiTestHost<TRace> : IAsyncDisposable
     public async ValueTask DisposeAsync() => await Factory.DisposeAsync();
 }
 
+/// <summary>A <see cref="ProposalApiTestHost"/> whose interceptor plays <typeparamref name="TRace"/>.</summary>
+internal class ProposalApiTestHost<TRace> : ProposalApiTestHost
+    where TRace : DbCommandInterceptor, new()
+{
+    public ProposalApiTestHost(string hintName)
+        : this(hintName, new TRace())
+    {
+    }
+
+    private ProposalApiTestHost(string hintName, TRace race)
+        : base(hintName, race)
+    {
+        Race = race;
+    }
+
+    public TRace Race { get; }
+}
+
+public enum Caller { LoopRun, ChatSession }
+
 /// <summary>Reading responses and seeding sources, for the agent proposal API tests.</summary>
-public static class ProposalApiTestSupport
+internal static class ProposalApiTestSupport
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
-
-    public enum Caller { LoopRun, ChatSession }
 
     internal static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage resp)
         => JsonDocument.Parse(await resp.Content.ReadAsStringAsync(Ct)).RootElement;
@@ -108,14 +125,12 @@ public static class ProposalApiTestSupport
         return body;
     }
 
-    internal static async Task<(Guid? RunId, Guid? ChatId)> SeedCallerAsync<TRace>(ProposalApiTestHost<TRace> host, Caller caller)
-        where TRace : DbCommandInterceptor, new()
+    internal static async Task<(Guid? RunId, Guid? ChatId)> SeedCallerAsync(ProposalApiTestHost host, Caller caller)
         => caller == Caller.LoopRun
             ? (await SeedRunAsync(host.Factory), null)
             : (null, await SeedChatSessionAsync(host.Factory));
 
-    internal static async Task<string> CreateHumanItemAsync<TRace>(ProposalApiTestHost<TRace> host)
-        where TRace : DbCommandInterceptor, new()
+    internal static async Task<string> CreateHumanItemAsync(ProposalApiTestHost host)
     {
         var resp = await host.Human.PostAsJsonAsync("/api/v1/workitems", new
         {
@@ -126,6 +141,7 @@ public static class ProposalApiTestSupport
         Assert.Equal(HttpStatusCode.Created, resp.StatusCode);
         return (await ReadJsonAsync(resp)).GetProperty("id").GetString()!;
     }
+
     internal static async Task SetRunStatusAsync(ApiFactory factory, Guid runId, LoopRunStatus status)
     {
         using var scope = factory.Services.CreateScope();
