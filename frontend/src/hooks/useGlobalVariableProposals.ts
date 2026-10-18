@@ -12,6 +12,7 @@ function modeOf(target: GlobalVariableProposalsTarget) {
 }
 
 const globalVariableProposals: ProposalListKind<Mode, GlobalVariableProposal> = {
+  key: "global-variable",
   read: (mode, id) =>
     globalVariableService.listProposals(
       mode === "item" ? { workItemId: id } : { chatSessionId: id },

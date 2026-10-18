@@ -17,6 +17,7 @@ function modeOf(target: LoopTemplateProposalsTarget) {
 }
 
 const loopTemplateProposals: ProposalListKind<Mode, LoopTemplateProposal> = {
+  key: "loop-template",
   read: (mode, id) =>
     loopTemplateProposalService.list(
       mode === "item"

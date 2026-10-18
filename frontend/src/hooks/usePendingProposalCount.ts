@@ -1,50 +1,73 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useJoinThenRefresh } from "./useJoinThenRefresh";
+import { useLatest } from "./useLatest";
 import { useSignalR, type SignalRConnection } from "./useSignalR";
 import type { SignalREventName } from "../types/signalr";
 
 /**
- * How many proposals of one kind wait for a human, read on every (re)connect
- * once the board is joined and on every `hint`. Only the latest read counts; one
- * that fails shows `empty` rather than an old count. `hub` is a work-item hub
- * connection the caller already holds; without it the hook opens its own.
+ * One kind of proposal as its pending count is read. `key` names the kind: a
+ * count keeps its subscription and read while the key stays the same, however
+ * often the descriptor itself is rebuilt. `empty` is shown before the first read
+ * and after a read that fails.
  */
-export function usePendingProposalCount<T>(
-  read: () => Promise<T>,
-  hint: SignalREventName,
-  empty: T,
-  hub?: SignalRConnection,
-): T {
+export interface ProposalCountKind<T> {
+  key: string;
+  read: () => Promise<T>;
+  empty: T;
+  hint: SignalREventName;
+}
+
+interface CountView<T> {
+  key: string;
+  count: T;
+}
+
+/** The kind a count reads for, while it is still the count's kind and mounted. */
+interface Reader {
+  key: string;
+  live: boolean;
+}
+
+/**
+ * How many proposals of one kind wait for a human, read on every (re)connect
+ * once the board is joined and on every hint. Only the latest read counts; one
+ * that fails shows the kind's empty value rather than an old count. `hub` is a
+ * work-item hub connection the caller already holds; without it the hook opens
+ * its own.
+ */
+export function usePendingProposalCount<T>(kind: ProposalCountKind<T>, hub?: SignalRConnection): T {
+  const { key, hint } = kind;
+  const kindRef = useLatest(kind);
   const own = useSignalR(hub ? null : "/hubs/work-item");
   const connection = hub ?? own;
   const { on, off } = connection;
-  // Read through refs: a caller may pass these inline, new every render.
-  const readRef = useRef(read);
-  readRef.current = read;
-  const emptyRef = useRef(empty);
-  emptyRef.current = empty;
-  const [count, setCount] = useState(empty);
+  const [view, setView] = useState<CountView<T> | null>(null);
   const seqRef = useRef(0);
+  const readerRef = useRef<Reader | null>(null);
 
-  useEffect(
-    () => () => {
-      seqRef.current++;
-    },
-    [],
-  );
+  useEffect(() => {
+    const reader = { key, live: true };
+    readerRef.current = reader;
+    return () => {
+      reader.live = false;
+    };
+  }, [key]);
 
   const refresh = useCallback(() => {
+    const reader = readerRef.current;
+    if (reader === null || reader.key !== key || !reader.live) return;
     const seq = ++seqRef.current;
+    const { read, empty } = kindRef.current;
     void (async () => {
-      let next = emptyRef.current;
+      let count = empty;
       try {
-        next = await readRef.current();
+        count = await read();
       } catch (err) {
         console.error(err);
       }
-      if (seq === seqRef.current) setCount(next);
+      if (seq === seqRef.current && reader.live) setView({ key, count });
     })();
-  }, []);
+  }, [kindRef, key]);
 
   useJoinThenRefresh(connection, null, refresh);
 
@@ -53,5 +76,5 @@ export function usePendingProposalCount<T>(
     return () => off(hint, refresh);
   }, [on, off, hint, refresh]);
 
-  return count;
+  return view?.key === key ? view.count : kind.empty;
 }

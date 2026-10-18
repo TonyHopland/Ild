@@ -1,10 +1,15 @@
 import type { SignalRConnection } from "./useSignalR";
-import { usePendingProposalCount } from "./usePendingProposalCount";
+import { usePendingProposalCount, type ProposalCountKind } from "./usePendingProposalCount";
 import { loopTemplateProposalService } from "../services/auth";
 
 const NONE: Record<string, number> = {};
 
-const readCounts = async () => (await loopTemplateProposalService.pendingCounts()) ?? NONE;
+const pendingLoopTemplateProposals: ProposalCountKind<Record<string, number>> = {
+  key: "loop-template",
+  read: async () => (await loopTemplateProposalService.pendingCounts()) ?? NONE,
+  empty: NONE,
+  hint: "LoopTemplateProposalsChanged",
+};
 
 /**
  * How many loop template proposals wait for a human, per template id, read on
@@ -16,5 +21,5 @@ const readCounts = async () => (await loopTemplateProposalService.pendingCounts(
 export function usePendingLoopTemplateProposalCounts(
   hub?: SignalRConnection,
 ): Record<string, number> {
-  return usePendingProposalCount(readCounts, "LoopTemplateProposalsChanged", NONE, hub);
+  return usePendingProposalCount(pendingLoopTemplateProposals, hub);
 }

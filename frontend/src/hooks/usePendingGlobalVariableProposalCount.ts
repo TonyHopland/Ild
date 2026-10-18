@@ -1,7 +1,12 @@
-import { usePendingProposalCount } from "./usePendingProposalCount";
+import { usePendingProposalCount, type ProposalCountKind } from "./usePendingProposalCount";
 import { globalVariableService } from "../services/auth";
 
-const readCount = () => globalVariableService.pendingProposalCount();
+const pendingGlobalVariableProposals: ProposalCountKind<number> = {
+  key: "global-variable",
+  read: () => globalVariableService.pendingProposalCount(),
+  empty: 0,
+  hint: "GlobalVariableProposalsChanged",
+};
 
 /**
  * How many global variable suggestions wait for a human, read on every
@@ -9,5 +14,5 @@ const readCount = () => globalVariableService.pendingProposalCount();
  * the latest read counts; one that fails shows no count rather than an old one.
  */
 export function usePendingGlobalVariableProposalCount(): number {
-  return usePendingProposalCount(readCount, "GlobalVariableProposalsChanged", 0);
+  return usePendingProposalCount(pendingGlobalVariableProposals);
 }

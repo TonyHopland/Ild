@@ -1,25 +1,35 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useJoinThenRefresh } from "./useJoinThenRefresh";
+import { useLatest } from "./useLatest";
 import { useSignalR, type SignalRConnection } from "./useSignalR";
 import type { SignalREventName, SignalREventPayloads, TypedSignalRMessage } from "../types/signalr";
 
 /**
- * A hub event that says a target's proposals changed, which of its payloads
- * concern the target, and where it is sent: to one chat's group on the chat hub,
- * or to the board on the work-item hub when `chatSessionId` is null.
+ * Where a target's proposals are hinted to have changed: to one chat's group on
+ * the chat hub, or to the board on the work-item hub when `chatSessionId` is
+ * null. `listen` calls `changed` on each hint about the target, and returns how
+ * to stop.
  */
 export interface ProposalHint {
-  event: SignalREventName;
-  matches: (payload: unknown) => boolean;
   chatSessionId: string | null;
+  listen: (hub: Pick<SignalRConnection, "on" | "off">, changed: () => void) => () => void;
 }
 
 /** A hint sent to the board on the work-item hub. */
 export function boardHint<E extends SignalREventName>(
   event: E,
-  matches: (payload: SignalREventPayloads[E]) => boolean = () => true,
+  matches: (payload: TypedSignalRMessage<E>["payload"]) => boolean = () => true,
 ): ProposalHint {
-  return { event, matches: matches as (payload: unknown) => boolean, chatSessionId: null };
+  return {
+    chatSessionId: null,
+    listen: (hub, changed) => {
+      const onHint = (msg: TypedSignalRMessage<E>) => {
+        if (matches(msg.payload)) changed();
+      };
+      hub.on(event, onHint);
+      return () => hub.off(event, onHint);
+    },
+  };
 }
 
 type ChatHintEvent = {
@@ -27,16 +37,26 @@ type ChatHintEvent = {
 }[SignalREventName];
 
 /** A hint sent to the group of chat `chatSessionId` on the chat hub, about that chat. */
-export function chatHint(event: ChatHintEvent, chatSessionId: string): ProposalHint {
+export function chatHint<E extends ChatHintEvent>(event: E, chatSessionId: string): ProposalHint {
   return {
-    event,
-    matches: (payload) => (payload as { chatSessionId: string }).chatSessionId === chatSessionId,
     chatSessionId,
+    listen: (hub, changed) => {
+      const onHint = (msg: TypedSignalRMessage<E>) => {
+        if (msg.payload.chatSessionId === chatSessionId) changed();
+      };
+      hub.on(event, onHint);
+      return () => hub.off(event, onHint);
+    },
   };
 }
 
-/** One kind of proposal as its list is read: a target is a mode and an id. */
+/**
+ * One kind of proposal as its list is read: a target is a mode and an id.
+ * `key` names the kind: a list keeps its subscription and read while the key
+ * stays the same, however often the descriptor itself is rebuilt.
+ */
 export interface ProposalListKind<M extends string, T> {
+  key: string;
   read: (mode: M, id: string) => Promise<T[]>;
   hint: (mode: M, id: string) => ProposalHint;
 }
@@ -44,6 +64,12 @@ export interface ProposalListKind<M extends string, T> {
 interface ProposalsView<T> {
   targetKey: string;
   proposals: T[];
+}
+
+/** The target a list reads for, while it is still the list's target. */
+interface Target {
+  key: string;
+  live: boolean;
 }
 
 /**
@@ -59,10 +85,8 @@ export function useProposalList<M extends string, T>(
   id: string,
   hub?: SignalRConnection,
 ) {
-  const targetKey = `${mode}:${id}`;
-  // Read through a ref: a caller may pass the kind inline, new every render.
-  const kindRef = useRef(kind);
-  kindRef.current = kind;
+  const targetKey = `${kind.key}:${mode}:${id}`;
+  const kindRef = useLatest(kind);
   const { chatSessionId } = kind.hint(mode, id);
   const own = useSignalR(hub ? null : chatSessionId !== null ? "/hubs/chat" : "/hubs/work-item");
   const connection = hub ?? own;
@@ -70,40 +94,38 @@ export function useProposalList<M extends string, T>(
 
   const [view, setView] = useState<ProposalsView<T> | null>(null);
   const generationRef = useRef(0);
-  const currentTargetRef = useRef<string | null>(null);
+  const targetRef = useRef<Target | null>(null);
 
   useEffect(() => {
-    currentTargetRef.current = targetKey;
+    const target = { key: targetKey, live: true };
+    targetRef.current = target;
     return () => {
-      currentTargetRef.current = null;
-      generationRef.current++;
+      target.live = false;
     };
   }, [targetKey]);
 
   const refresh = useCallback(() => {
-    if (currentTargetRef.current !== targetKey) return;
+    const target = targetRef.current;
+    if (target === null || target.key !== targetKey || !target.live) return;
     const generation = ++generationRef.current;
+    const { read } = kindRef.current;
     void (async () => {
       try {
-        const proposals = await kindRef.current.read(mode, id);
-        if (generation !== generationRef.current || currentTargetRef.current !== targetKey) return;
+        const proposals = await read(mode, id);
+        if (generation !== generationRef.current || !target.live) return;
         setView({ targetKey, proposals });
       } catch (err) {
         console.error(err);
       }
     })();
-  }, [targetKey, mode, id]);
+  }, [kindRef, targetKey, mode, id]);
 
   useJoinThenRefresh(connection, chatSessionId, refresh);
 
-  useEffect(() => {
-    const hint = kindRef.current.hint(mode, id);
-    const onChanged = (msg: TypedSignalRMessage) => {
-      if (hint.matches(msg.payload)) refresh();
-    };
-    on(hint.event, onChanged);
-    return () => off(hint.event, onChanged);
-  }, [on, off, mode, id, refresh]);
+  useEffect(
+    () => kindRef.current.hint(mode, id).listen({ on, off }, refresh),
+    [kindRef, on, off, mode, id, refresh],
+  );
 
   const proposals = view?.targetKey === targetKey ? view.proposals : undefined;
   return { proposals, refresh };

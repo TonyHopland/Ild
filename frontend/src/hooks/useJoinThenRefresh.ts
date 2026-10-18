@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import type { SignalRConnection } from "./useSignalR";
 
 /**
@@ -13,9 +13,6 @@ export function useJoinThenRefresh(
   refresh: () => void,
 ) {
   const { connectionState, invoke } = hub;
-  // Read through a ref: joining again is for a (re)connect or a new group, not a new function.
-  const invokeRef = useRef(invoke);
-  invokeRef.current = invoke;
 
   useEffect(() => {
     if (connectionState !== "connected") return;
@@ -24,8 +21,8 @@ export function useJoinThenRefresh(
       try {
         // A read before the join has taken effect could miss a hint sent in the gap.
         await (chatSessionId !== null
-          ? invokeRef.current("SubscribeToChat", chatSessionId)
-          : invokeRef.current("SubscribeToWorkItems"));
+          ? invoke("SubscribeToChat", chatSessionId)
+          : invoke("SubscribeToWorkItems"));
       } catch (err) {
         console.error(err);
         return;
@@ -35,10 +32,8 @@ export function useJoinThenRefresh(
     return () => {
       cancelled = true;
       if (chatSessionId !== null) {
-        void invokeRef
-          .current("UnsubscribeFromChat", chatSessionId)
-          ?.catch((err) => console.error(err));
+        void invoke("UnsubscribeFromChat", chatSessionId)?.catch((err) => console.error(err));
       }
     };
-  }, [connectionState, chatSessionId, refresh]);
+  }, [connectionState, invoke, chatSessionId, refresh]);
 }
