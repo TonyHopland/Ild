@@ -238,7 +238,9 @@ describe("ChatBubble edit proposals", () => {
     ];
     expect(documentOrder(byText(expected))).toEqual(expected);
 
-    const cardA = screen.getByText("Title A").closest('[data-testid="proposal-card"]') as HTMLElement;
+    const cardA = screen
+      .getByText("Title A")
+      .closest('[data-testid="proposal-card"]') as HTMLElement;
     fireEvent.click(within(cardA).getByRole("button", { name: "Approve" }));
 
     await waitFor(() =>

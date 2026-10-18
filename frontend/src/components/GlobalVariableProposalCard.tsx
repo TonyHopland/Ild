@@ -47,14 +47,16 @@ export default function GlobalVariableProposalCard({
   }, [reveal]);
 
   return (
-    <div ref={cardRef} className={`proposal-card proposal-card--${status}`} data-testid="proposal-card">
+    <div
+      ref={cardRef}
+      className={`proposal-card proposal-card--${status}`}
+      data-testid="proposal-card"
+    >
       <div className="proposal-header">
         <span className="proposal-heading">
           Suggested change to <code>{proposal.name}</code>
         </span>
-        <span className={`proposal-status proposal-status--${status}`}>
-          {proposal.status}
-        </span>
+        <span className={`proposal-status proposal-status--${status}`}>{proposal.status}</span>
       </div>
 
       <p className="proposal-rationale">{proposal.rationale}</p>

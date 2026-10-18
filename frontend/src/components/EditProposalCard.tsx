@@ -98,13 +98,12 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
   const removedDependencies = proposed.removeDependencies ?? [];
   return (
     <div
-      className={`proposal-card proposal-card--${proposal.status.toLowerCase()}`} data-testid="proposal-card"
+      className={`proposal-card proposal-card--${proposal.status.toLowerCase()}`}
+      data-testid="proposal-card"
     >
       <div className="proposal-header">
         <span className="proposal-heading">Proposed edit to #{proposal.workItemId}</span>
-        <span
-          className={`proposal-status proposal-status--${proposal.status.toLowerCase()}`}
-        >
+        <span className={`proposal-status proposal-status--${proposal.status.toLowerCase()}`}>
           {proposal.status}
         </span>
       </div>

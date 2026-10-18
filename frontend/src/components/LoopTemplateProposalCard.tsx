@@ -89,9 +89,7 @@ export default function LoopTemplateProposalCard({
           {proposal.templateName ? <strong>{proposal.templateName}</strong> : "since deleted"}, made
           against version {proposal.baseVersion}
         </span>
-        <span className={`proposal-status proposal-status--${status}`}>
-          {proposal.status}
-        </span>
+        <span className={`proposal-status proposal-status--${status}`}>{proposal.status}</span>
       </div>
 
       <p className="proposal-rationale">{proposal.rationale}</p>
