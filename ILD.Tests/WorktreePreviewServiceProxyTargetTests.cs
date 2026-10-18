@@ -43,7 +43,7 @@ public class WorktreePreviewServiceProxyTargetTests : IDisposable
             factory.Object,
             new ConfigurationBuilder().Build(),
             PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance);
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
         return _service;
     }
 

@@ -11,10 +11,12 @@ namespace ILD.Api.Controllers;
 public class StorageController : ControllerBase
 {
     private readonly IStorageService _storage;
+    private readonly IPreviewDataService _previewData;
 
-    public StorageController(IStorageService storage)
+    public StorageController(IStorageService storage, IPreviewDataService previewData)
     {
         _storage = storage;
+        _previewData = previewData;
     }
 
     [HttpGet]
@@ -61,5 +63,14 @@ public class StorageController : ControllerBase
         {
             return StatusCode(503, new { error = "WorkItemServer unreachable: no worktree was cleaned up. Retry later.", detail = ex.Message });
         }
+    }
+
+    // No repository lookup: the folder of a deleted repository can only be removed here.
+    [HttpDelete("preview-data/{repositoryId}")]
+    public async Task<IActionResult> DeletePreviewData(string repositoryId)
+    {
+        if (!Guid.TryParse(repositoryId, out var id))
+            return BadRequest(new { error = $"Invalid repository GUID: '{repositoryId}'." });
+        return PreviewDataResponse.From(await _previewData.DeleteAsync(id));
     }
 }

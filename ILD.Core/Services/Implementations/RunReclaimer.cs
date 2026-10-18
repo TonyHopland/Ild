@@ -71,6 +71,15 @@ public sealed class RunReclaimer : IRunReclaimer
                 return false;
         }
 
+        // The preview's ${STATE_DIR}, per-run volumes included, belongs to the worktree
+        // and goes with it. Kept preview data lives elsewhere and is never touched here.
+        if (!string.IsNullOrEmpty(run.WorktreePath)
+            && !await AgentWritableFiles.DeleteAsync([WorktreePreviewService.StateDirectoryOf(run.WorktreePath)]))
+        {
+            _log?.LogWarning("Could not remove the preview state directory of run {RunId}", run.Id);
+            return false;
+        }
+
         if (string.IsNullOrEmpty(run.BranchName))
             return true;
 

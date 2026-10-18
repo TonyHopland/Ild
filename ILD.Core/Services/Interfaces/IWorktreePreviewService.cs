@@ -44,6 +44,11 @@ namespace ILD.Core.Services.Interfaces;
 /// over everything else, <paramref name="CustomEnv"/> included. The file exists only
 /// while an install step or a service of the preview is running.
 /// </param>
+/// <param name="Volumes">
+/// Whose preview data the volumes are; see <see cref="PreviewVolumeScope"/>. Read only
+/// when this call creates the runtime: a running preview keeps the folders it was
+/// created with.
+/// </param>
 public sealed record WorktreePreviewStartOptions(
     string? ProfileName = null,
     bool SkipInstall = false,
@@ -51,7 +56,19 @@ public sealed record WorktreePreviewStartOptions(
     IReadOnlyDictionary<string, int>? PortOverrides = null,
     string? CustomEnv = null,
     string? WorkItemId = null,
-    IReadOnlyList<PackageFeedCredential>? PackageFeeds = null);
+    IReadOnlyList<PackageFeedCredential>? PackageFeeds = null,
+    PreviewVolumeScope? Volumes = null);
+
+/// <summary>
+/// Whose preview data a preview's named volumes (<c>${VOLUME:name}</c>) are: the run's
+/// repository and its Keep preview data between runs setting, read when the start or
+/// install begins, and the work item named when another preview is refused for it.
+/// With <see cref="KeepData"/> on, every volume is one folder per repository, and only
+/// one work item's preview of the repository runs at a time; off, each worktree gets
+/// its own folders under its <c>${STATE_DIR}</c>. Without a scope (no repository)
+/// volumes are per worktree and nothing is held.
+/// </summary>
+public sealed record PreviewVolumeScope(Guid RepositoryId, bool KeepData, string WorkItemId, string WorkItemTitle);
 
 /// <summary>
 /// Why <see cref="IWorktreePreviewService.ResolvePreviewTargetAsync"/> could not
@@ -227,8 +244,11 @@ public interface IWorktreePreviewService
     /// <paramref name="packageFeeds"/> are the selected feeds' credentials, handed to
     /// each step over <paramref name="customEnv"/>; their file is removed when the
     /// install ends, however it ends.
+    /// <paramref name="volumes"/> decides where the profile's volumes are, and holds the
+    /// repository's preview data for as long as the install runs; see
+    /// <see cref="PreviewVolumeScope"/>.
     /// </summary>
-    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, CancellationToken cancellationToken = default);
+    Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, PreviewVolumeScope? volumes = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Loads and validates the worktree's <c>ild.config.json</c> preview config
@@ -291,7 +311,7 @@ public sealed class NoopPreviewService : IWorktreePreviewService
         => throw new NotImplementedException();
     public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
-    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, CancellationToken cancellationToken = default)
+    public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, PreviewVolumeScope? volumes = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();
     public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
         => throw new NotImplementedException();

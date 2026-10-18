@@ -61,7 +61,7 @@ public class WorktreePreviewServiceEnvironmentIsolationTests : IDisposable
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         var configuration = new ConfigurationBuilder().Build();
         _service = new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance);
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
         return _service;
     }
 

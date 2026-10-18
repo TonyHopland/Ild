@@ -91,7 +91,8 @@ public sealed class StartNodeExecutor : INodeExecutor
                 yield break;
             }
 
-            var (installError, warning) = await RunInstallAsync(preview, worktreePath, repo.PreviewEnv, feeds.Feeds, ctx.CancellationToken);
+            var volumes = new PreviewVolumeScope(repo.Id, repo.KeepPreviewData, wi.Id, wi.Title);
+            var (installError, warning) = await RunInstallAsync(preview, worktreePath, repo.PreviewEnv, feeds.Feeds, volumes, ctx.CancellationToken);
             if (installError is not null)
             {
                 yield return new NodeOutcome.Fail(EdgeType.OnFailure, $"ild.config install failed: {installError}");
@@ -107,12 +108,12 @@ public sealed class StartNodeExecutor : INodeExecutor
 
     private static async Task<(string? Error, string? Warning)> RunInstallAsync(
         IWorktreePreviewService preview, string worktreePath, string? customEnv,
-        IReadOnlyList<PackageFeedCredential> packageFeeds, CancellationToken ct)
+        IReadOnlyList<PackageFeedCredential> packageFeeds, PreviewVolumeScope volumes, CancellationToken ct)
     {
         try
         {
             var result = await preview.InstallAsync(
-                worktreePath, customEnv: customEnv, packageFeeds: packageFeeds, cancellationToken: ct);
+                worktreePath, customEnv: customEnv, packageFeeds: packageFeeds, volumes: volumes, cancellationToken: ct);
             // A missing ild.config.json is expected for most projects — surface a
             // warning rather than failing the run on it.
             return result.Installed

@@ -49,15 +49,17 @@ public sealed class ConfigTools
       ],
       "templateTokens": {
         "${WORKTREE}": "Absolute path to the prepared git worktree root.",
-        "${STATE_DIR}": "Absolute path to a per-worktree state directory that persists across preview restarts. Use it for data/scratch that must live outside the repo tree.",
+        "${STATE_DIR}": "Absolute path to a per-worktree state directory that persists across preview restarts and is deleted with the worktree. Use it for data/scratch that must live outside the repo tree.",
         "${HOST}": "Bind address for services to listen on (0.0.0.0).",
         "${PUBLIC_HOST}": "Externally reachable host used to build public URLs.",
         "${PORT}": "The port ILD allocated to THIS service. Valid only inside that service's own command, env values, and healthUrl.",
-        "${PORT:<alias>}": "The port ILD allocated to another service, looked up by its 'port' alias. Use to connect services to each other."
+        "${PORT:<alias>}": "The port ILD allocated to another service, looked up by its 'port' alias. Use to connect services to each other.",
+        "${VOLUME:<name>}": "Absolute path to the folder of a volume the profile declares in 'volumes'; it exists before the first install step runs. Use it for data that a deployment would keep on a persistent volume. With the repository's Keep preview data between runs setting on, the folder is shared by every work item and run of the repository, and only one preview of the repository runs at a time; with it off, each run gets a fresh folder."
       },
       "fieldReference": {
         "preview.defaultProfile": "Optional. Name of the profile to use by default.",
-        "preview.profiles": "Required. Map of profile name to { install, services }.",
+        "preview.profiles": "Required. Map of profile name to { install, services, volumes }.",
+        "volumes": "Optional. Names of the profile's volumes, letters, digits and '-' only, unique regardless of case. Reference each as ${VOLUME:<name>}; naming an undeclared volume is a config error.",
         "install[].cwd": "Optional. Working directory relative to the worktree root. Defaults to the worktree root.",
         "install[].command": "Required. Shell command run once to provision the worktree (e.g. dependency install).",
         "install[].env": "Optional. Extra environment variables for the step.",
@@ -96,6 +98,10 @@ public sealed class ConfigTools
           "profile": {
             "type": "object",
             "properties": {
+              "volumes": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^[A-Za-z0-9-]+$" }
+              },
               "install": { "type": "array", "items": { "$ref": "#/definitions/command" } },
               "services": {
                 "type": "array",

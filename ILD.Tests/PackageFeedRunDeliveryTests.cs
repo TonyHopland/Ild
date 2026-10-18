@@ -183,7 +183,7 @@ public sealed class PackageFeedRunDeliveryTests : IDisposable
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
         services.AddSingleton<IWorktreePreviewService>(new WorktreePreviewService(
             new Mock<IHttpClientFactory>().Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance));
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims()));
         services.AddSingleton(Resolver());
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1", RepositoryId = repoId, WorktreePath = _worktree, BranchName = "b" };
         var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.Start, Config = "{\"runInstall\":true}" };

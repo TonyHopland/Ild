@@ -43,7 +43,7 @@ public sealed class WorktreePreviewServicePackageFeedTests : IDisposable
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(() => new HttpClient());
         _service = new WorktreePreviewService(factory.Object, new ConfigurationBuilder().Build(), PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance);
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
         return _service;
     }
 

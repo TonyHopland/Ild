@@ -37,7 +37,7 @@ public class WorktreePreviewServiceCustomEnvTests : IDisposable
         var factory = new Mock<IHttpClientFactory>();
         var configuration = new ConfigurationBuilder().Build();
         return new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance);
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
     }
 
     // An install step that writes the value of an environment variable to a marker

@@ -13,12 +13,14 @@ public class RepositoriesController : ControllerBase
     private readonly IRepositoryManager _repositoryManager;
     private readonly AppDbContext _db;
     private readonly IConnectionTester _connectionTester;
+    private readonly IPreviewDataService _previewData;
 
-    public RepositoriesController(IRepositoryManager repositoryManager, AppDbContext db, IConnectionTester connectionTester)
+    public RepositoriesController(IRepositoryManager repositoryManager, AppDbContext db, IConnectionTester connectionTester, IPreviewDataService previewData)
     {
         _repositoryManager = repositoryManager;
         _db = db;
         _connectionTester = connectionTester;
+        _previewData = previewData;
     }
 
     // The custom .env holds secrets, so it is never echoed back in plaintext by
@@ -40,6 +42,7 @@ public class RepositoriesController : ControllerBase
         worktreesPath = r.WorktreesPath,
         defaultIntakeStatus = r.DefaultIntakeStatus,
         hasPreviewEnv = !string.IsNullOrEmpty(r.PreviewEnv),
+        keepPreviewData = r.KeepPreviewData,
         packageFeeds = r.PackageFeeds
             .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .Select(s => new { name = s.Name, missing = !existingFeeds.Contains(s.NormalizedName) }),
@@ -106,6 +109,7 @@ public class RepositoriesController : ControllerBase
             RemoteProviderId = providerId,
             DefaultIntakeStatus = request.DefaultIntakeStatus,
             PreviewEnv = string.IsNullOrEmpty(request.PreviewEnv) ? null : request.PreviewEnv,
+            KeepPreviewData = request.KeepPreviewData ?? false,
             CreatedAt = DateTime.UtcNow,
         };
         if (await SelectFeedsAsync(repo, request.PackageFeeds) is { } feedsError)
@@ -131,6 +135,7 @@ public class RepositoriesController : ControllerBase
         // Masked field: only overwrite when the client sends a new value, so a save
         // that leaves the textarea blank keeps the stored .env (mirrors ApiKey).
         if (!string.IsNullOrEmpty(request.PreviewEnv)) repo.PreviewEnv = request.PreviewEnv;
+        if (request.KeepPreviewData is { } keepPreviewData) repo.KeepPreviewData = keepPreviewData;
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return Ok(await ResponseAsync(repo));
@@ -203,6 +208,17 @@ public class RepositoriesController : ControllerBase
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return Ok(await ResponseAsync(repo));
+    }
+
+    // Empties the data every work item's previews share when Keep preview data is on.
+    // User-only like the rest of this controller: persisted preview data is only ever
+    // removed by a person, never by an agent.
+    [HttpPost("{id}/preview-data/reset")]
+    public async Task<IActionResult> ResetPreviewData(string id)
+    {
+        if (!Guid.TryParse(id, out var guid)) return BadRequest();
+        if (!await _db.Repositories.AsNoTracking().AnyAsync(r => r.Id == guid)) return NotFound();
+        return PreviewDataResponse.From(await _previewData.DeleteAsync(guid));
     }
 
     [HttpDelete("{id}")]

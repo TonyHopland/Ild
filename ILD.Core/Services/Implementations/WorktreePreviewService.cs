@@ -18,6 +18,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 {
     private const string ConfigFileName = "ild.config.json";
     private static readonly Regex TemplateTokenRegex = new("\\$\\{([^}]+)\\}", RegexOptions.Compiled);
+    private const string VolumeTokenPrefix = "VOLUME:";
+    private static readonly Regex VolumeNameRegex = new(@"^[A-Za-z0-9-]+\z", RegexOptions.Compiled);
 
     /// <summary>
     /// A preview hostname's leading label: <c>wi-{workItemId}</c>, optionally
@@ -41,6 +43,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     private readonly string? _egressProxy;
     private readonly IProcessEnvironment _environment;
     private readonly Func<int, bool> _isPortAvailable;
+    private readonly PreviewDataClaims _claims;
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -52,10 +55,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         PreviewProxyBase proxyBase,
-        ILogger<WorktreePreviewService> logger)
+        ILogger<WorktreePreviewService> logger,
+        PreviewDataClaims claims)
         : this(httpClientFactory, configuration, proxyBase, logger,
             AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome,
-            AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current)
+            AgentIsolation.EgressProxyUrl(aiProviderId: null), ProcessEnvironment.Current, claims: claims)
     {
     }
 
@@ -72,6 +76,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// process environment unless a test supplies its own.
     /// <paramref name="isPortAvailable"/> is how a port is probed before it is
     /// handed out: binding it on loopback unless a test supplies its own.
+    /// <paramref name="claims"/> records which previews hold each repository's preview
+    /// data: the host's, which its reset consults too, or a private one.
     /// </summary>
     public WorktreePreviewService(
         IHttpClientFactory httpClientFactory,
@@ -83,7 +89,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         string? agentHome,
         string? egressProxy = null,
         IProcessEnvironment? environment = null,
-        Func<int, bool>? isPortAvailable = null)
+        Func<int, bool>? isPortAvailable = null,
+        PreviewDataClaims? claims = null)
     {
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
@@ -97,6 +104,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         _egressProxy = NonEmpty(egressProxy);
         _environment = environment ?? ProcessEnvironment.Current;
         _isPortAvailable = isPortAvailable ?? IsPortAvailable;
+        _claims = claims ?? new PreviewDataClaims();
     }
 
     /// <summary>
@@ -139,6 +147,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var normalized = NormalizeWorktreePath(worktreePath);
         options ??= new WorktreePreviewStartOptions();
 
+        PreviewDataClaims.Lease? lease = null;
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -156,7 +165,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                     return existingResponse;
                 }
 
-                await StopRuntimeAsync(existing, cancellationToken);
+                await RetireRuntimeAsync(existing, cancellationToken);
                 _runtimes.TryRemove(normalized, out _);
             }
 
@@ -168,7 +177,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
             ValidateProfile(profileName, profile);
 
-            var runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, cancellationToken);
+            lease = await ClaimPreviewDataAsync(options.Volumes, normalized);
+            var runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, cancellationToken);
 
             // The runtime only becomes reachable — to StopAsync, to Dispose, to every
             // status surface — on the last line of this block. Anything that fails in
@@ -210,10 +220,12 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             }
 
             _runtimes[normalized] = runtime;
+            lease = null;
             return BuildResponse(loaded, runtime);
         }
         finally
         {
+            lease?.Dispose();
             _gate.Release();
         }
     }
@@ -228,7 +240,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             var loaded = await LoadConfigAsync(normalized, cancellationToken);
             if (_runtimes.TryRemove(normalized, out var runtime))
             {
-                await StopRuntimeAsync(runtime, cancellationToken);
+                await RetireRuntimeAsync(runtime, cancellationToken);
                 return BuildStoppedResponse(loaded, runtime.ProfileName, runtime.PublicHost, runtime.StateDirectory, loaded.ConfigPath);
             }
 
@@ -245,6 +257,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var normalized = NormalizeWorktreePath(worktreePath);
         options ??= new WorktreePreviewStartOptions();
 
+        PreviewDataClaims.Lease? lease = null;
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -290,8 +303,10 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             }
             else
             {
-                runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, cancellationToken);
+                lease = await ClaimPreviewDataAsync(options.Volumes, normalized);
+                runtime = await CreateRuntimeAsync(normalized, loaded, profileName, profile, options, lease, cancellationToken);
                 _runtimes[normalized] = runtime;
+                lease = null;
             }
 
             runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
@@ -301,6 +316,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
         finally
         {
+            lease?.Dispose();
             _gate.Release();
         }
     }
@@ -326,6 +342,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             if (runtime.Processes.Count == 0)
             {
                 _runtimes.TryRemove(normalized, out _);
+                await RetireRuntimeAsync(runtime, cancellationToken);
                 return BuildStoppedResponse(loaded, runtime.ProfileName, runtime.PublicHost, runtime.StateDirectory, loaded.ConfigPath);
             }
 
@@ -383,6 +400,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException($"Service config name '{edited.Name}' must match '{serviceName}'; this editor updates a service in place.");
 
         ValidateService(resolvedProfileName, edited);
+        if (loaded.Config.Preview!.Profiles.TryGetValue(resolvedProfileName, out var editedProfile) && editedProfile != null)
+            EnsureVolumesDeclared(resolvedProfileName, DeclaredVolumes(resolvedProfileName, editedProfile), Templates(edited));
 
         var node = await LoadConfigNodeAsync(loaded.ConfigPath!, cancellationToken);
         if (node?["preview"]?["profiles"]?[resolvedProfileName]?["services"] is not JsonArray services)
@@ -435,6 +454,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         string? profileName = null,
         string? customEnv = null,
         IReadOnlyList<PackageFeedCredential>? packageFeeds = null,
+        PreviewVolumeScope? volumes = null,
         CancellationToken cancellationToken = default)
     {
         var normalized = NormalizeWorktreePath(worktreePath);
@@ -453,27 +473,45 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             throw new InvalidOperationException($"Preview profile '{resolvedProfileName}' not found.");
         }
 
-        var stateDirectory = BuildStateDirectory(normalized);
-        Directory.CreateDirectory(stateDirectory);
-        var logDirectory = BuildLogDirectory(normalized);
+        ValidateVolumes(resolvedProfileName, profile);
 
-        // Install needs no ports or running services — build a port-less runtime so
-        // the shared install runner resolves ${WORKTREE}/${STATE_DIR} the same way
-        // the preview start path does.
-        var runtime = new PreviewRuntime(
-            normalized,
-            loaded.ConfigPath!,
-            resolvedProfileName,
-            stateDirectory,
-            logDirectory,
-            _configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1",
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
-            new List<ManagedPreviewProcess>(),
-            DotEnvParser.Parse(customEnv),
-            new PackageFeedFileShare(packageFeeds ?? [], "install", _logger));
+        // The gate only orders the claim against starts and stops; the install itself
+        // runs outside it, holding the preview data through its own lease.
+        PreviewDataClaims.Lease? lease;
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            lease = await ClaimPreviewDataAsync(volumes, normalized);
+        }
+        finally
+        {
+            _gate.Release();
+        }
 
-        await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
-        return new WorktreeInstallResult(true);
+        using (lease)
+        {
+            var stateDirectory = BuildStateDirectory(normalized);
+            var logDirectory = BuildLogDirectory(normalized);
+
+            // Install needs no ports or running services — build a port-less runtime so
+            // the shared install runner resolves ${WORKTREE}/${STATE_DIR}/${VOLUME:name}
+            // the same way the preview start path does.
+            var runtime = new PreviewRuntime(
+                normalized,
+                loaded.ConfigPath!,
+                resolvedProfileName,
+                stateDirectory,
+                logDirectory,
+                _configuration["ILD_PREVIEW_PUBLIC_HOST"] ?? "127.0.0.1",
+                new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase),
+                new List<ManagedPreviewProcess>(),
+                DotEnvParser.Parse(customEnv),
+                new PackageFeedFileShare(packageFeeds ?? [], "install", _logger),
+                await CreateVolumesAsync(profile, volumes, stateDirectory, cancellationToken));
+
+            await RunInstallStepsAsync(profile.Install, runtime, cancellationToken);
+            return new WorktreeInstallResult(true);
+        }
     }
 
     public async Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default)
@@ -600,7 +638,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         {
             try
             {
-                StopRuntimeAsync(runtime, CancellationToken.None).GetAwaiter().GetResult();
+                RetireRuntimeAsync(runtime, CancellationToken.None).GetAwaiter().GetResult();
             }
             catch
             {
@@ -683,6 +721,56 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             if (!seenNames.Add(service.Name))
                 throw new InvalidOperationException($"Preview profile '{profileName}' defines duplicate service name '{service.Name}'.");
         }
+
+        ValidateVolumes(profileName, profile);
+    }
+
+    /// <summary>
+    /// The profile's declared volumes are valid names, and every <c>${VOLUME:name}</c>
+    /// in its install steps and services names one of them.
+    /// </summary>
+    private static void ValidateVolumes(string profileName, PreviewProfileConfig profile)
+        => EnsureVolumesDeclared(
+            profileName,
+            DeclaredVolumes(profileName, profile),
+            profile.Install.SelectMany(Templates).Concat(profile.Services.SelectMany(Templates)));
+
+    private static HashSet<string> DeclaredVolumes(string profileName, PreviewProfileConfig profile)
+    {
+        var declared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in profile.Volumes ?? [])
+        {
+            // Names become folder names, so nothing that could reach outside one is allowed.
+            if (name == null || !VolumeNameRegex.IsMatch(name))
+                throw new InvalidOperationException($"Preview profile '{profileName}' declares volume '{name}': volume names may only contain letters, digits and '-'.");
+            if (!declared.Add(name))
+                throw new InvalidOperationException($"Preview profile '{profileName}' declares volume '{name}' more than once.");
+        }
+
+        return declared;
+    }
+
+    private static void EnsureVolumesDeclared(string profileName, IReadOnlySet<string> declared, IEnumerable<string> templates)
+    {
+        foreach (var template in templates)
+        {
+            foreach (Match match in TemplateTokenRegex.Matches(template))
+            {
+                var token = match.Groups[1].Value;
+                if (token.StartsWith(VolumeTokenPrefix, StringComparison.OrdinalIgnoreCase) && !declared.Contains(token[VolumeTokenPrefix.Length..]))
+                    throw new InvalidOperationException(
+                        $"Preview profile '{profileName}' references volume '{token[VolumeTokenPrefix.Length..]}', which it does not declare in \"volumes\".");
+            }
+        }
+    }
+
+    /// <summary>Every field of a step or service that <see cref="ResolveTemplate"/> expands.</summary>
+    private static IEnumerable<string> Templates(PreviewCommandConfig step)
+    {
+        IEnumerable<string?> fields = [step.Command, step.Cwd, .. step.Env?.Values ?? Enumerable.Empty<string>()];
+        if (step is PreviewServiceConfig service)
+            fields = fields.Append(service.HealthUrl).Append(service.PublicUrl);
+        return fields.OfType<string>().Where(field => field.Length > 0);
     }
 
     /// <summary>
@@ -815,11 +903,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         string profileName,
         PreviewProfileConfig profile,
         WorktreePreviewStartOptions options,
+        PreviewDataClaims.Lease? lease,
         CancellationToken cancellationToken)
     {
         var publicHost = ResolvePublicHost(options.PublicHost);
         var stateDirectory = BuildStateDirectory(normalized);
-        Directory.CreateDirectory(stateDirectory);
         var logDirectory = BuildLogDirectory(normalized);
 
         var ports = AllocatePorts(profile, options.PortOverrides);
@@ -834,6 +922,8 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             new List<ManagedPreviewProcess>(),
             DotEnvParser.Parse(options.CustomEnv),
             new PackageFeedFileShare(options.PackageFeeds ?? [], "preview", _logger),
+            await CreateVolumesAsync(profile, options.Volumes, stateDirectory, cancellationToken),
+            lease,
             options.WorkItemId);
 
         if (!options.SkipInstall)
@@ -842,6 +932,84 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         }
 
         return runtime;
+    }
+
+    /// <summary>
+    /// Takes the hold on the repository's preview data a start or install of
+    /// <paramref name="normalized"/> needs, or throws naming what holds it; null when
+    /// the caller named no repository. Called under <see cref="_gate"/>, which is what
+    /// makes the check and the start one step against every other start.
+    /// <para>
+    /// A refusal by the same work item's preview on another worktree — an earlier
+    /// run's, still registered — stops that preview and claims again. Every preview
+    /// surface addresses a work item's current worktree, so nothing else could ever
+    /// stop it, and the work item's own previews would stay locked out until a restart.
+    /// </para>
+    /// </summary>
+    private async Task<PreviewDataClaims.Lease?> ClaimPreviewDataAsync(PreviewVolumeScope? scope, string normalized)
+    {
+        if (scope == null)
+            return null;
+
+        if (_claims.TryAcquire(scope, normalized, out var lease, out var refusal))
+            return lease;
+
+        if (refusal.Holder is { } holder
+            && string.Equals(holder.WorkItemId, scope.WorkItemId, StringComparison.Ordinal)
+            && _runtimes.TryRemove(holder.WorktreePath, out var earlier))
+        {
+            await RetireRuntimeAsync(earlier, CancellationToken.None);
+            if (_claims.TryAcquire(scope, normalized, out lease, out refusal))
+                return lease;
+        }
+
+        throw new InvalidOperationException(refusal.Message);
+    }
+
+    /// <summary>
+    /// Stops a runtime that is leaving <see cref="_runtimes"/>, and lets go of its hold
+    /// on the repository's preview data.
+    /// </summary>
+    private async Task RetireRuntimeAsync(PreviewRuntime runtime, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await StopRuntimeAsync(runtime, cancellationToken);
+        }
+        finally
+        {
+            runtime.PreviewDataLease?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The folder of each of the profile's volumes, created before anything runs:
+    /// with Keep preview data on, the repository's folder that every work item shares;
+    /// otherwise, and without a repository, one under the worktree's state directory.
+    /// Created as the agent, since the preview's own steps write there.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>> CreateVolumesAsync(
+        PreviewProfileConfig profile, PreviewVolumeScope? scope, string stateDirectory, CancellationToken cancellationToken)
+    {
+        var volumes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var name in profile.Volumes ?? [])
+        {
+            var folder = scope is { KeepData: true }
+                ? Path.Combine(PreviewVolumes.RepositoryFolder(_configuration, scope.RepositoryId), name.ToLowerInvariant())
+                : Path.Combine(stateDirectory, "volumes", name.ToLowerInvariant());
+            try
+            {
+                await AgentWritableFiles.CreateDirectoryAsync(folder, cancellationToken);
+            }
+            catch (IOException ex)
+            {
+                throw new InvalidOperationException($"Preview volume '{name}' could not be created: {ex.Message}", ex);
+            }
+
+            volumes[name] = folder;
+        }
+
+        return volumes;
     }
 
     private string ResolvePublicHost(string? requestedHost)
@@ -926,7 +1094,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// <summary>
     /// The port aliases a service's templates name other than its own — its
     /// cross-service references, which are the ones that only mean anything while the
-    /// service owning the alias is up. Reads the fields <see cref="BuildResolvedStep"/>
+    /// service owning the alias is up. Reads the fields <see cref="BuildResolvedStepAsync"/>
     /// and <see cref="ResolveHealthUrl"/> resolve for a launch, so a reference cannot
     /// hide in one this does not look at. Deliberately not <c>publicUrl</c>: it never
     /// reaches the child, and is resolved for display against a port map that always
@@ -954,7 +1122,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             if (string.IsNullOrWhiteSpace(step.Command))
                 continue;
 
-            var resolved = BuildResolvedStep(step, runtime, null, feeds.Environment);
+            var resolved = await BuildResolvedStepAsync(step, runtime, null, feeds.Environment, cancellationToken);
             var result = await RunCommandAsync(resolved, cancellationToken);
 
             var builder = new StringBuilder();
@@ -987,7 +1155,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         try
         {
-            var resolved = BuildResolvedStep(service, runtime, service.Port, feeds.Environment);
+            var resolved = await BuildResolvedStepAsync(service, runtime, service.Port, feeds.Environment, cancellationToken);
             var logPath = Path.Combine(runtime.LogDirectory, $"{service.Name}.log");
             writer = new StreamWriter(new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
             {
@@ -1332,7 +1500,17 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
     /// </para>
     /// </summary>
     private static string BuildStateDirectory(string worktreePath)
-        => AgentIsolation.CreateScratchDirectory("preview", WorktreeSlug(worktreePath));
+        => AgentIsolation.CreateScratchDirectory(StateDirectorySegments(worktreePath));
+
+    /// <summary>
+    /// The <c>${STATE_DIR}</c> a preview of <paramref name="worktreePath"/> uses, in
+    /// whatever form the path is given, without creating it: what run reclaim deletes.
+    /// </summary>
+    public static string StateDirectoryOf(string worktreePath)
+        => Path.Combine([AgentIsolation.ScratchRoot, .. StateDirectorySegments(NormalizeWorktreePath(worktreePath))]);
+
+    private static string[] StateDirectorySegments(string normalizedWorktreePath)
+        => ["preview", WorktreeSlug(normalizedWorktreePath)];
 
     /// <summary>
     /// Where the per-service and install logs go. Deliberately <em>not</em> the
@@ -1362,11 +1540,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         => Convert.ToHexString(
             System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(worktreePath))).ToLowerInvariant();
 
-    private ResolvedStep BuildResolvedStep(
+    private async Task<ResolvedStep> BuildResolvedStepAsync(
         PreviewCommandConfig step, PreviewRuntime runtime, string? currentPortAlias,
-        IReadOnlyDictionary<string, string> feedEnvironment)
+        IReadOnlyDictionary<string, string> feedEnvironment, CancellationToken cancellationToken)
     {
-        var workingDirectory = ResolveWorkingDirectory(step.Cwd, runtime, currentPortAlias);
+        var workingDirectory = await ResolveWorkingDirectoryAsync(step.Cwd, runtime, currentPortAlias, cancellationToken);
         var environment = BuildDefaultEnvironment(runtime.StateDirectory);
 
         // Precedence: base defaults < per-service ild.config env < repo custom .env
@@ -1582,7 +1760,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         return ResolveTemplate(service.HealthUrl!, runtime, service.Port);
     }
 
-    private string ResolveWorkingDirectory(string? cwd, PreviewRuntime runtime, string? currentPortAlias)
+    private async Task<string> ResolveWorkingDirectoryAsync(string? cwd, PreviewRuntime runtime, string? currentPortAlias, CancellationToken cancellationToken)
     {
         var resolved = string.IsNullOrWhiteSpace(cwd)
             ? runtime.WorktreePath
@@ -1591,6 +1769,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         var full = Path.GetFullPath(Path.IsPathRooted(resolved)
             ? resolved
             : Path.Combine(runtime.WorktreePath, resolved));
+
+        // A volume may be shared by every work item of the repository, and the agent
+        // can write it, so the directory is made as the agent rather than by us.
+        if (runtime.Volumes.Values.Any(volume => full == volume || full.StartsWith(volume + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
+        {
+            await AgentWritableFiles.CreateDirectoryAsync(full, cancellationToken);
+            return full;
+        }
 
         if (!full.StartsWith(runtime.WorktreePath, StringComparison.Ordinal)
             && !full.StartsWith(runtime.StateDirectory, StringComparison.Ordinal))
@@ -1627,6 +1813,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 if (!runtime.Ports.TryGetValue(alias, out var namedPort))
                     throw new InvalidOperationException($"Template '{value}' references unknown port alias '{alias}'.");
                 return namedPort.ToString();
+            }
+            if (token.StartsWith(VolumeTokenPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var name = token[VolumeTokenPrefix.Length..];
+                if (!runtime.Volumes.TryGetValue(name, out var folder))
+                    throw new InvalidOperationException($"Template '{value}' references undeclared volume '{name}'.");
+                return folder;
             }
 
             throw new InvalidOperationException($"Unsupported preview template token '{token}'.");
@@ -1725,9 +1918,13 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
             List<ManagedPreviewProcess> processes,
             IReadOnlyDictionary<string, string> customEnv,
             PackageFeedFileShare feeds,
+            IReadOnlyDictionary<string, string> volumes,
+            PreviewDataClaims.Lease? previewDataLease = null,
             string? workItemId = null)
         {
             Feeds = feeds;
+            Volumes = volumes;
+            PreviewDataLease = previewDataLease;
             WorkItemId = workItemId;
             WorktreePath = worktreePath;
             ConfigPath = configPath;
@@ -1796,6 +1993,18 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         /// install run or a service of this runtime is running; each holds a lease.
         /// </summary>
         public PackageFeedFileShare Feeds { get; }
+
+        /// <summary>
+        /// Each declared volume's folder by name (any case), fixed when the runtime is
+        /// created: a later change of the repository's setting does not move it.
+        /// </summary>
+        public IReadOnlyDictionary<string, string> Volumes { get; }
+
+        /// <summary>
+        /// This preview's hold on its repository's preview data, released when the
+        /// runtime leaves the registry (<c>RetireRuntimeAsync</c>); null without a repository.
+        /// </summary>
+        public PreviewDataClaims.Lease? PreviewDataLease { get; }
     }
 
     private sealed class ManagedPreviewProcess
@@ -1882,6 +2091,7 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
     private sealed class PreviewProfileConfig
     {
+        public List<string>? Volumes { get; set; }
         public List<PreviewCommandConfig> Install { get; set; } = new();
         public List<PreviewServiceConfig> Services { get; set; } = new();
     }

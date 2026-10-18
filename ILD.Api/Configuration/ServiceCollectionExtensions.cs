@@ -66,7 +66,9 @@ public static class ServiceCollectionExtensions
                 logger.LogInformation("Worktree previews served on *.{Host} over {Scheme} (unauthenticated)", proxyBase.Host, proxyBase.Scheme);
             return proxyBase;
         });
+        services.AddSingleton<PreviewDataClaims>();
         services.AddSingleton<IWorktreePreviewService, WorktreePreviewService>();
+        services.AddSingleton<IPreviewDataService, PreviewDataService>();
         services.AddScoped<IEventLogService, EventLogService>();
         services.AddScoped<IRunConversationService, RunConversationService>();
         services.AddHostedService<WorktreeRetentionSweeper>();
