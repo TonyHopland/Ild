@@ -218,10 +218,11 @@ Place an `ild.config.json` file in the root of a repository to enable QA preview
 
 ### Profile fields
 
-| Field      | Type  | Description                                                                    |
-| ---------- | ----- | ------------------------------------------------------------------------------ |
-| `install`  | array | Ordered list of one-time setup commands run before services start (idempotent) |
-| `services` | array | Ordered list of long-running services to start; each must become healthy       |
+| Field      | Type  | Description                                                                                             |
+| ---------- | ----- | ------------------------------------------------------------------------------------------------------- |
+| `install`  | array | Ordered list of one-time setup commands run before services start (idempotent)                          |
+| `services` | array | Ordered list of long-running services to start; each must become healthy                                |
+| `volumes`  | array | Names of the profile's data folders, used as `${VOLUME:name}` — see [Preview volumes](#preview-volumes) |
 
 ### Install step fields
 
@@ -252,12 +253,13 @@ at runtime. Everything expanded comes from `ild.config.json`: values supplied th
 preview `.env` are secrets rather than templates and are never expanded — see
 [Giving a preview its own configuration](#giving-a-preview-its-own-configuration).
 
-| Token          | Expands to                                                                        |
-| -------------- | --------------------------------------------------------------------------------- |
-| `${HOST}`      | The bind host (loopback by default, overridable via `publicHost` on start)        |
-| `${PORT}`      | The port allocated to this service                                                |
-| `${PORT:name}` | The port allocated to the named service (for wiring services together)            |
-| `${STATE_DIR}` | A per-preview state directory for data files that should not land in the worktree |
+| Token            | Expands to                                                                                        |
+| ---------------- | ------------------------------------------------------------------------------------------------- |
+| `${HOST}`        | The bind host (loopback by default, overridable via `publicHost` on start)                        |
+| `${PORT}`        | The port allocated to this service                                                                |
+| `${PORT:name}`   | The port allocated to the named service (for wiring services together)                            |
+| `${STATE_DIR}`   | A per-preview state directory for data files that should not land in the worktree                 |
+| `${VOLUME:name}` | The folder of the volume the profile declares as `name` — see [Preview volumes](#preview-volumes) |
 
 ### Ports across restarts
 
@@ -285,6 +287,73 @@ launch. Two rules follow from that, and both are enforced rather than left to yo
 `suggestedPort` pins a service to a fixed port across restarts (ILD uses it when
 it is free and falls back to an ephemeral port when it is not), which is worth
 having for a stable browser URL. Cross-references do not need it.
+
+### Preview volumes
+
+Data that a deployment keeps on a persistent volume — an uploads folder, an
+embedded database file, a search index — goes in a **volume**. A profile declares
+its volumes by name and uses each through `${VOLUME:name}`, in install steps and
+services alike:
+
+```json
+"app": {
+  "volumes": ["data"],
+  "install": [{ "command": "./seed-if-empty.sh \"${VOLUME:data}\"" }],
+  "services": [
+    {
+      "name": "api",
+      "command": "dotnet run --project Api",
+      "port": "api",
+      "env": { "ILD_DATA_PATH": "${VOLUME:data}" },
+      "healthUrl": "http://127.0.0.1:${PORT}/health"
+    }
+  ]
+}
+```
+
+Names may contain letters, digits and `-` only, are matched regardless of case,
+and must be unique; a `${VOLUME:name}` that names no declared volume is a config
+error, reported before any step runs. Each volume's folder exists before the
+first install step, and a `cwd` inside one is allowed.
+
+Where the folder is depends on the repository's **Keep preview data between
+runs** setting (Repositories page, next to the custom `.env`; off by default). It
+is read when a preview, or a Start node's install, begins; changing it does not
+affect a preview that is already running.
+
+- **Off:** each volume is a fresh folder under the run's `${STATE_DIR}`. It
+  survives restarts of that preview and is deleted with the run's worktree.
+- **On:** each volume is one folder for the whole repository, under
+  `.preview-volumes/<repository id>/<name>` in the worktrees directory. Every work
+  item and every run of the repository uses the same folder, so whatever one
+  preview wrote is there for the next, including on a new work item.
+
+Switching the setting moves no data: turning it on starts from an empty
+repository folder, and turning it off leaves that folder where it is.
+
+**One preview per repository while it is on.** Previews sharing a folder would
+write over each other, so while the setting is on a preview, a single service or
+a Start node's install is not started while a preview of another work item of the
+repository is running. It fails with _"A preview is already running for work
+item 305 (Title). Stop it before starting this one."_ — in the Preview panel, as
+the error of the agent's preview tools, or as the Start node's failure. Restarting
+the work item that holds the folder, or one of its services, is allowed; starting
+it on a newer run's worktree stops the preview of its earlier run first. With the
+setting off, previews run side by side as before.
+
+**Reset and cleanup.** A preview inherits whatever an earlier work item, or an
+abandoned branch, left in the shared folder. **Reset preview data** on the
+repository (next to the setting) empties it, after a confirmation that it wipes
+the preview data of every work item in the repository. Nothing else removes it:
+not Done, run or worktree cleanup, the retention sweep, deleting work items or the
+repository, nor turning the setting off. The only other way is the **Preview
+data** entry on the Storage settings page, which also lists folders whose
+repository is deleted or has the setting off. Both refuse while a preview of the
+repository is running, and neither is available to an agent.
+
+The shared folder is as reachable by every run's agent as the worktrees beside
+it, so treat it like a worktree: no secrets. ILD does not provide a database
+either; a preview that needs one brings its own through the `.env`.
 
 ### Example
 
@@ -388,7 +457,8 @@ Three things follow that are worth knowing when you write a profile:
 
 - **`${STATE_DIR}` lives under the shared scratch root** (`/tmp/ild-agent-scratch`
   by default), because your preview writes there and now does so as `agent`. It is
-  still per-worktree and still discarded with the container. Your service's **log
+  per-worktree, survives preview restarts, and is deleted together with the
+  worktree when the run is cleaned up. Your service's **log
   file is not** in it: ILD opens, appends to and serves those itself, so they stay
   in a directory only ILD can reach. Read them through the Preview tab or
   `get_preview_logs` rather than by path — if your service wants a log file of its
