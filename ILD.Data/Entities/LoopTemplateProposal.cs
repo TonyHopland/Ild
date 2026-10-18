@@ -26,6 +26,12 @@ public class LoopTemplateProposal : IAgentProposal<LoopTemplateProposalStatus>
     [Required]
     public string Document { get; set; } = string.Empty;
 
+    /// <summary>
+    /// The Edit List the document was made from, as JSON, exactly as the agent sent
+    /// it; null when the agent sent the whole document.
+    /// </summary>
+    public string? Edits { get; set; }
+
     [Required]
     [MaxLength(MaxRationaleLength)]
     public string Rationale { get; set; } = string.Empty;

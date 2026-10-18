@@ -1,7 +1,10 @@
 using System.Net;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ILD.McpServer;
+using ILD.McpServer.Tools;
+using ModelContextProtocol.Server;
 
 namespace ILD.Tests;
 
@@ -66,6 +69,52 @@ public class LoopTemplateProposalToolsTests
         Assert.Equal(document, json.GetProperty("document").GetString());
         Assert.Equal("Builds keep failing.", json.GetProperty("rationale").GetString());
         Assert.Contains("lp-1", result);
+    }
+
+    [Fact]
+    public async Task propose_loop_template_change_posts_an_edit_list_as_a_json_array()
+    {
+        var edits = new[]
+        {
+            new LoopTemplateEdit { Op = "editNodeField", NodeId = "build", Field = "prompt", OldString = "strict", NewString = "lenient" },
+            new LoopTemplateEdit { Op = "setNodeField", NodeId = "build", Field = "outputs", Value = "[{\"name\":\"approve\"}]" },
+            new LoopTemplateEdit { Op = "editFile", OldString = "\"label\":\"Cleanup\"", NewString = "\"label\":\"Tidy up\"" },
+        };
+        var (result, request, body) = await InvokeToolAsync("propose_loop_template_change", new Dictionary<string, object?>
+        {
+            ["nameOrId"] = "Release Loop",
+            ["baseVersion"] = 3,
+            ["edits"] = edits,
+            ["rationale"] = "Builds keep failing.",
+        }, """{"id":"lp-1","templateId":"t-1","baseVersion":3,"status":"Pending"}""");
+
+        Assert.Equal($"{BaseAddress}api/v1/agent/loop-templates/proposals", request.RequestUri!.ToString());
+        var json = JsonNode.Parse(body!)!.AsObject();
+        Assert.True(json["document"] is null, json.ToJsonString());
+        var sent = Assert.IsType<JsonArray>(json["edits"]);
+        Assert.Equal(new[] { "editNodeField", "setNodeField", "editFile" }, sent.Select(e => e!["op"]!.GetValue<string>()));
+        Assert.Equal("lenient", sent[0]!["newString"]!.GetValue<string>());
+        Assert.Equal("[{\"name\":\"approve\"}]", sent[1]!["value"]!.GetValue<string>());
+        Assert.Equal("\"label\":\"Cleanup\"", sent[2]!["oldString"]!.GetValue<string>());
+        Assert.Contains("lp-1", result);
+    }
+
+    [Fact]
+    public void propose_loop_template_change_takes_a_document_or_a_typed_edit_list_both_optional()
+    {
+        var method = typeof(LoopTemplateProposalTools).GetMethod(nameof(LoopTemplateProposalTools.ProposeLoopTemplateChange))!;
+        var tool = McpServerTool.Create(method, _ => new LoopTemplateProposalTools(null!));
+        var schema = JsonNode.Parse(tool.ProtocolTool.InputSchema.GetRawText())!;
+
+        var required = schema["required"]!.AsArray().Select(r => r!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "baseVersion", "nameOrId", "rationale" }, required.OrderBy(r => r, StringComparer.Ordinal));
+        var edits = schema["properties"]!["edits"]!;
+        Assert.Contains("array", edits["type"]!.ToJsonString());
+        var item = edits["items"]!["properties"]!.AsObject();
+        Assert.Equal(
+            new[] { "field", "newString", "nodeId", "oldString", "op", "value" },
+            item.Select(p => p.Key).OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Contains("string", schema["properties"]!["document"]!["type"]!.ToJsonString());
     }
 
     [Fact]

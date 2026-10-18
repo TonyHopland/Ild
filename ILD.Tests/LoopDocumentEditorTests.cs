@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.Core.Services.Implementations;
+using ILD.Data.DTOs;
 
 namespace ILD.Tests;
 
@@ -422,5 +423,126 @@ public class LoopDocumentEditorTests
         var edges = Root(document)["edges"]!.AsArray();
         Assert.DoesNotContain(edges, e => (string?)e!["name"] == "reject");
         Assert.Equal("ai", (string)edges.Single(e => (string?)e!["name"] == "rework")!["sourceNodeId"]!);
+    }
+
+    // -- Edit List ---------------------------------------------------------------
+
+    private static LoopTemplateEdit EditNodeFieldEdit(string nodeId, string field, string oldString, string newString)
+        => new() { Op = "editNodeField", NodeId = nodeId, Field = field, OldString = oldString, NewString = newString };
+
+    private static LoopTemplateEdit SetNodeFieldEdit(string nodeId, string field, string value)
+        => new() { Op = "setNodeField", NodeId = nodeId, Field = field, Value = value };
+
+    private static LoopTemplateEdit EditFileEdit(string oldString, string newString)
+        => new() { Op = "editFile", OldString = oldString, NewString = newString };
+
+    public static TheoryData<string, bool, string, LoopTemplateEdit> SingleEditCases() => new()
+    {
+        { "editNodeField lands", true, ValidDocument(), EditNodeFieldEdit("ai", "prompt", "strict", "lenient") },
+        { "setNodeField lands on a text field", true, ValidDocument(), SetNodeFieldEdit("ai", "prompt", "A new prompt.") },
+        { "setNodeField lands on a structured field", true, StructuredDocument, SetNodeFieldEdit("ai", "outputs", "[{\"name\":\"reject\",\"visible\":false}]") },
+        { "editFile lands", true, ValidDocument(), EditFileEdit("\"label\":\"Reviewer\"", "\"label\":\"Critic\"") },
+        { "editNodeField on an unknown node", false, ValidDocument(), EditNodeFieldEdit("ghost", "prompt", "a", "b") },
+        { "setNodeField on an unknown node", false, ValidDocument(), SetNodeFieldEdit("ghost", "prompt", "b") },
+        { "editNodeField on a missing field", false, ValidDocument(), EditNodeFieldEdit("ai", "nope", "a", "b") },
+        { "editNodeField on a field that is not text", false, StructuredDocument, EditNodeFieldEdit("ai", "outputs", "reject", "rework") },
+        { "editNodeField with zero matches", false, ValidDocument(), EditNodeFieldEdit("ai", "prompt", "not in the prompt", "x") },
+        { "editNodeField with several matches", false, ValidDocument("code code"), EditNodeFieldEdit("ai", "prompt", "code", "x") },
+        { "editFile with zero matches", false, ValidDocument(), EditFileEdit("\"label\":\"Nobody\"", "x") },
+        { "editFile with several matches", false, ValidDocument(), EditFileEdit("\"OnSuccess\"", "\"OnFailure\"") },
+        { "editNodeField with an empty oldString", false, ValidDocument(), EditNodeFieldEdit("ai", "prompt", "", "x") },
+        { "editFile with an empty oldString", false, ValidDocument(), EditFileEdit("", "x") },
+        { "setNodeField with a structured value that is not an array", false, StructuredDocument, SetNodeFieldEdit("ai", "outputs", "approve") },
+    };
+
+    private static LoopEditResult ThroughTheEditorOp(string document, LoopTemplateEdit edit) => edit.Op switch
+    {
+        "editNodeField" => LoopDocumentEditor.EditNodeField(document, edit.NodeId!, edit.Field!, edit.OldString!, edit.NewString!),
+        "setNodeField" => LoopDocumentEditor.SetNodeField(document, edit.NodeId!, edit.Field!, edit.Value!),
+        "editFile" => LoopDocumentEditor.EditFile(document, edit.OldString!, edit.NewString!),
+        _ => throw new ArgumentOutOfRangeException(nameof(edit)),
+    };
+
+    [Theory]
+    [MemberData(nameof(SingleEditCases))]
+    public void A_one_edit_list_gives_the_editor_ops_document_or_its_message(
+        string because, bool lands, string document, LoopTemplateEdit edit)
+    {
+        var single = ThroughTheEditorOp(document, edit);
+        var list = LoopDocumentEditor.ApplyEditList(document, [edit]);
+
+        Assert.True(lands == single.Applied, because);
+        if (lands)
+        {
+            Assert.Null(list.Failure);
+            Assert.True(JsonNode.DeepEquals(JsonNode.Parse(single.Document!), JsonNode.Parse(list.Document!)), because);
+        }
+        else
+        {
+            Assert.Empty(single.ValidationErrors);
+            Assert.Null(list.Document);
+            var failure = list.Failure!;
+            Assert.Equal(0, failure.Index);
+            Assert.Equal(edit.Op, failure.Op);
+            Assert.Equal(edit.NodeId, failure.NodeId);
+            Assert.Equal(edit.Field, failure.Field);
+            Assert.Equal(single.Error, failure.Message);
+        }
+    }
+
+    [Fact]
+    public void An_edit_list_lands_through_an_invalid_intermediate_graph_the_editor_op_refuses()
+    {
+        var declareNode = EditFileEdit(
+            "{\"id\":\"cleanup\"",
+            "{\"id\":\"fixer\",\"type\":\"AI\",\"label\":\"Fixer\",\"config\":{\"prompt\":\"Fix it\",\"aiProviderId\":\"prov\"}},{\"id\":\"cleanup\"");
+        var wireNode = EditFileEdit(
+            "\"edges\":[",
+            "\"edges\":[{\"id\":\"e-rework\",\"sourceNodeId\":\"ai\",\"targetNodeId\":\"fixer\",\"edgeType\":\"Custom\",\"name\":\"rework\"},"
+            + "{\"id\":\"e-fixed\",\"sourceNodeId\":\"fixer\",\"targetNodeId\":\"cleanup\",\"edgeType\":\"OnSuccess\",\"name\":null},");
+        var declareOutput = SetNodeFieldEdit("ai", "outputs", "[{\"name\":\"rework\"}]");
+        var routeToIt = SetNodeFieldEdit("ai", "matchRules", "[{\"pattern\":\"REWORK\",\"edgeName\":\"rework\"}]");
+
+        var firstStepAlone = LoopDocumentEditor.EditFile(ValidDocument(), declareNode.OldString!, declareNode.NewString!);
+        var list = LoopDocumentEditor.ApplyEditList(ValidDocument(), [declareNode, wireNode, declareOutput, routeToIt]);
+
+        Assert.False(firstStepAlone.Applied);
+        Assert.NotEmpty(firstStepAlone.ValidationErrors);
+        Assert.Null(list.Failure);
+        var final = LoopDocumentEditor.ReplaceDocument(list.Document!);
+        Assert.True(final.Applied, string.Join("; ", final.ValidationErrors) + final.Error);
+        Assert.Equal("fixer", (string)Root(list.Document!)["edges"]!.AsArray()
+            .Single(e => (string?)e!["name"] == "rework")!["targetNodeId"]!);
+        Assert.Equal("rework", (string)ConfigOf(list.Document!, "ai")["matchRules"]![0]!["edgeName"]!);
+    }
+
+    [Fact]
+    public void An_edit_file_after_a_field_edit_matches_the_compact_text()
+    {
+        var list = LoopDocumentEditor.ApplyEditList(ValidDocument(),
+        [
+            EditNodeFieldEdit("ai", "prompt", "strict", "lenient"),
+            EditFileEdit("\"label\":\"Cleanup\",\"config\":{}", "\"label\":\"Tidy up\",\"config\":{}"),
+        ]);
+
+        Assert.Null(list.Failure);
+        Assert.Contains("lenient", PromptOf(list.Document!, "ai"));
+        Assert.Contains("\"label\":\"Tidy up\"", list.Document);
+    }
+
+    [Fact]
+    public void An_edit_file_that_leaves_unparseable_json_fails_at_its_own_index()
+    {
+        var list = LoopDocumentEditor.ApplyEditList(ValidDocument(),
+        [
+            EditNodeFieldEdit("ai", "prompt", "strict", "lenient"),
+            EditFileEdit("\"nodes\":", "\"nodes\""),
+            SetNodeFieldEdit("ai", "prompt", "never reached"),
+        ]);
+
+        Assert.Null(list.Document);
+        Assert.Equal(1, list.Failure!.Index);
+        Assert.Equal("editFile", list.Failure.Op);
+        Assert.Contains("invalid JSON", list.Failure.Message);
     }
 }

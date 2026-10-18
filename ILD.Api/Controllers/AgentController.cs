@@ -898,6 +898,47 @@ public class AgentController : ControllerBase
             : (null, NotFound(new { error = $"Loop template not found: {key}" }));
     }
 
+    /// <summary>The Edit List as stored: the edits as sent, without the members an op does not take.</summary>
+    private static readonly JsonSerializerOptions EditListJson = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>
+    /// <paramref name="template"/>'s latest version number and, when it is
+    /// <paramref name="baseVersion"/>, its document as the text
+    /// <c>get_loop_template</c> returns: what an Edit List applies to.
+    /// </summary>
+    private async Task<(int Version, string? Document)> RenderLatestLoopTemplateAsync(LoopTemplate template, int baseVersion)
+    {
+        var latest = (await _templates.GetVersionsAsync(template.Id)).Select(v => v.VersionNumber).DefaultIfEmpty().Max();
+        if (latest != baseVersion)
+            return (latest, null);
+        var graph = await _templates.GetVersionGraphAsync(template.Id, latest)
+            ?? throw new InvalidOperationException($"Loop template {template.Id} has no version {latest}.");
+        return (latest, LoopTemplateDocument.From(template, graph).Render());
+    }
+
+    private ConflictObjectResult NotLatestLoopTemplateVersion(LoopTemplate template, int baseVersion, int? latestVersion)
+        => Conflict(new
+        {
+            error = $"Version {baseVersion} is not the latest version of loop template '{template.Name}'; the latest is version {latestVersion}. "
+                + "Read it with get_loop_template, make your change to that document and propose again.",
+            latestVersion,
+        });
+
+    private static string EditListFailureMessage(LoopEditListFailure failure)
+    {
+        var names = new[]
+        {
+            failure.Op,
+            failure.NodeId is null ? null : $"node '{failure.NodeId}'",
+            failure.Field is null ? null : $"field '{failure.Field}'",
+        }.OfType<string>().ToList();
+        var named = names.Count == 0 ? string.Empty : $" ({string.Join(", ", names)})";
+        return $"edits[{failure.Index}]{named}: {failure.Message}";
+    }
+
     /// <summary>
     /// The analytics dashboard's per-template rows for the same filters, each with
     /// per-node figures from the runs that still exist (<c>runsWithNodeDetail</c>
@@ -1820,9 +1861,20 @@ public class AgentController : ControllerBase
             return BadRequest(new { error = "nameOrId is required: the loop template's id or name, as get_loop_template takes it." });
         if (request.BaseVersion is not { } baseVersion || baseVersion < 1)
             return BadRequest(new { error = "baseVersion is required: the version get_loop_template returned with the document, 1 or greater." });
-        if (string.IsNullOrWhiteSpace(request.Document))
-            return BadRequest(new { error = "document is required: the complete ild-loop-template/v2 document, as JSON text." });
-        if (request.Document.Length > MaxLoopDocumentChars)
+        string? edits = null;
+        if (request.Edits is not null)
+        {
+            if (request.Document is not null)
+                return BadRequest(new { error = "Send either document or edits, not both: edits for most changes, a whole document only for a rewrite." });
+            if (request.Edits.Count == 0)
+                return BadRequest(new { error = "edits is empty: send at least one edit, or a whole document." });
+            edits = JsonSerializer.Serialize(request.Edits, EditListJson);
+            if (edits.Length > MaxLoopDocumentChars)
+                return BadRequest(new { error = $"edits is too large ({edits.Length} chars); the limit is {MaxLoopDocumentChars}." });
+        }
+        else if (string.IsNullOrWhiteSpace(request.Document))
+            return BadRequest(new { error = "document or edits is required: an Edit List to apply to the latest version, or the complete ild-loop-template/v2 document, as JSON text." });
+        else if (request.Document.Length > MaxLoopDocumentChars)
             return BadRequest(new { error = $"document is too large ({request.Document.Length} chars); the limit is {MaxLoopDocumentChars}." });
         // Checked as it will be stored: the save drops NUL characters.
         var rationale = AppDbContext.WithoutNul(request.Rationale ?? string.Empty).Trim();
@@ -1831,7 +1883,25 @@ public class AgentController : ControllerBase
         if (rationale.Length > LoopTemplateProposal.MaxRationaleLength)
             return BadRequest(new { error = $"The rationale is {rationale.Length} characters; keep it to {LoopTemplateProposal.MaxRationaleLength}." });
 
-        var proposed = _templates.CheckProposedDocument(request.Document);
+        LoopTemplate? template = null;
+        IActionResult? notFound;
+        var document = request.Document;
+        if (request.Edits is not null)
+        {
+            (template, notFound) = await FindLoopTemplateAsync(request.NameOrId);
+            if (template == null)
+                return notFound!;
+            var (latestVersion, latestDocument) = await RenderLatestLoopTemplateAsync(template, baseVersion);
+            if (latestDocument is null)
+                return NotLatestLoopTemplateVersion(template, baseVersion, latestVersion);
+
+            var applied = LoopDocumentEditor.ApplyEditList(latestDocument, request.Edits);
+            if (applied.Failure is { } failure)
+                return BadRequest(new { error = EditListFailureMessage(failure), editIndex = failure.Index });
+            document = applied.Document;
+        }
+
+        var proposed = _templates.CheckProposedDocument(document!);
         if (proposed.Error is { } documentError)
             return BadRequest(new { error = documentError });
         if (proposed.ValidationErrors.Count > 0)
@@ -1841,15 +1911,19 @@ public class AgentController : ControllerBase
                 validationErrors = proposed.ValidationErrors,
             });
 
-        var (template, notFound) = await FindLoopTemplateAsync(request.NameOrId);
         if (template == null)
-            return notFound!;
+        {
+            (template, notFound) = await FindLoopTemplateAsync(request.NameOrId);
+            if (template == null)
+                return notFound!;
+        }
 
         var result = await proposals.ProposeAsync(new LoopTemplateProposal
         {
             LoopTemplateId = template.Id,
             BaseVersion = baseVersion,
             Document = proposed.Document!,
+            Edits = edits,
             Rationale = rationale,
             CreatedByLoopRunId = runId,
             CreatedByChatSessionId = chatSessionId,
@@ -1862,12 +1936,7 @@ public class AgentController : ControllerBase
             case LoopTemplateProposeOutcome.TemplateNotFound:
                 return NotFound(new { error = $"Loop template not found: {request.NameOrId.Trim()}" });
             case LoopTemplateProposeOutcome.NotLatest:
-                return Conflict(new
-                {
-                    error = $"Version {baseVersion} is not the latest version of loop template '{template.Name}'; the latest is version {result.LatestVersion}. "
-                        + "Read it with get_loop_template, make your change to that document and propose again.",
-                    latestVersion = result.LatestVersion,
-                });
+                return NotLatestLoopTemplateVersion(template, baseVersion, result.LatestVersion);
         }
 
         var proposal = result.Proposal!;
@@ -1904,6 +1973,7 @@ public class AgentController : ControllerBase
             templateName = e.Template?.Name,
             baseVersion = e.Proposal.BaseVersion,
             rationale = e.Proposal.Rationale,
+            editCount = e.Proposal.Edits is null ? (int?)null : System.Text.Json.Nodes.JsonNode.Parse(e.Proposal.Edits)!.AsArray().Count,
             status = e.Proposal.Status.ToString(),
             editedBeforeSave = e.Proposal.EditedBeforeSave,
             appliedVersion = e.Proposal.AppliedVersion,

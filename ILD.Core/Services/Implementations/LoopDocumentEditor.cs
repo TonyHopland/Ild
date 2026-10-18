@@ -45,6 +45,18 @@ public sealed record LoopEditResult(
 }
 
 /// <summary>
+/// Why an Edit List stopped: the first edit that did not land, at
+/// <see cref="Index"/>, with the members that name it and its edit's own message.
+/// </summary>
+public sealed record LoopEditListFailure(int Index, string? Op, string? NodeId, string? Field, string Message);
+
+/// <summary>
+/// What an Edit List produced: the final document text when every edit landed,
+/// else the first failure. The graph is not validated.
+/// </summary>
+public sealed record LoopEditListResult(string? Document, LoopEditListFailure? Failure);
+
+/// <summary>
 /// What a scoped edit's apply step produced: the edited document text, or why
 /// the edit did not land, in the words the public edit reports. An apply step
 /// never validates the graph.
@@ -102,6 +114,9 @@ public static class LoopDocumentEditor
     {
         WriteIndented = true,
     };
+
+    /// <summary>Compact, with the default encoder: the text <c>get_loop_template</c> returns.</summary>
+    private static readonly JsonSerializerOptions CompactOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
     /// Return one node's <c>{ id, type, label, config }</c> as indented JSON. The
@@ -259,6 +274,58 @@ public static class LoopDocumentEditor
         return Read(edited).ParseError is { } parseError
             ? LoopEditApplication.Failed(1, InvalidJson(parseError))
             : LoopEditApplication.Landed(1, edited);
+    }
+
+    /// <summary>
+    /// Apply an Edit List (ADR-0028) to <paramref name="document"/>, in order,
+    /// through the same apply steps as the scoped edits, stopping at the first edit
+    /// that does not land. After each edit the document is re-rendered as compact
+    /// JSON, the layout <c>get_loop_template</c> returns, so a later
+    /// <c>editFile</c> matches the text the agent read. The graph is never
+    /// validated here: only the final document has to be a valid loop, and the
+    /// caller checks it.
+    /// </summary>
+    public static LoopEditListResult ApplyEditList(string document, IReadOnlyList<LoopTemplateEdit?> edits)
+    {
+        for (var index = 0; index < edits.Count; index++)
+        {
+            var edit = edits[index];
+            var applied = edit is null
+                ? LoopEditApplication.Failed(0, "An edit must be an object with an op.")
+                : ApplyEdit(document, edit);
+            if (applied.Error != null)
+                return new(null, new LoopEditListFailure(index, edit?.Op, edit?.NodeId, edit?.Field, applied.Error));
+            document = JsonNode.Parse(applied.Document!)!.ToJsonString(CompactOptions);
+        }
+        return new(document, null);
+    }
+
+    private static LoopEditApplication ApplyEdit(string document, LoopTemplateEdit edit) => edit.Op switch
+    {
+        "editNodeField" when Missing(edit, "nodeId", "field", "oldString", "newString") is { } missing
+            => LoopEditApplication.Failed(0, missing),
+        "editNodeField" => ApplyEditNodeField(document, edit.NodeId!, edit.Field!, edit.OldString!, edit.NewString!),
+        "setNodeField" when Missing(edit, "nodeId", "field", "value") is { } missing
+            => LoopEditApplication.Failed(0, missing),
+        "setNodeField" => ApplySetNodeField(document, edit.NodeId!, edit.Field!, edit.Value!),
+        "editFile" when Missing(edit, "oldString", "newString") is { } missing
+            => LoopEditApplication.Failed(0, missing),
+        "editFile" => ApplyEditFile(document, edit.OldString!, edit.NewString!),
+        _ => LoopEditApplication.Failed(0,
+            $"op must be one of editNodeField, setNodeField or editFile, not {(edit.Op is null ? "missing" : $"'{edit.Op}'")}."),
+    };
+
+    private static string? Missing(LoopTemplateEdit edit, params string[] members)
+    {
+        var missing = members.Where(member => member switch
+        {
+            "nodeId" => edit.NodeId is null,
+            "field" => edit.Field is null,
+            "oldString" => edit.OldString is null,
+            "newString" => edit.NewString is null,
+            _ => edit.Value is null,
+        }).ToList();
+        return missing.Count == 0 ? null : $"{edit.Op} needs {string.Join(", ", missing)}.";
     }
 
     /// <summary>
