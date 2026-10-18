@@ -1209,7 +1209,9 @@ describe("Repositories page — preview data", () => {
         { ...repo("repo-2", "beta-app"), keepPreviewData: true },
       ],
     };
-    const fetchMock = previewDataFetch(state, () => Promise.resolve(reply({ error: refusal }, 409)));
+    const fetchMock = previewDataFetch(state, () =>
+      Promise.resolve(reply({ error: refusal }, 409)),
+    );
     renderPage(fetchMock);
     await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
 

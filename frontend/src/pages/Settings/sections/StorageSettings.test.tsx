@@ -450,7 +450,9 @@ describe("StorageSettings preview data", () => {
     // Only the preview-data entries that name a repository can be deleted.
     expect(screen.getAllByRole("button", { name: /delete/i })).toHaveLength(2);
     expect(
-      within(entryRow("Not a repository's preview data")).queryByRole("button", { name: /delete/i }),
+      within(entryRow("Not a repository's preview data")).queryByRole("button", {
+        name: /delete/i,
+      }),
     ).toBeNull();
 
     fireEvent.click(within(entryRow("gamma-app")).getByRole("button", { name: /delete/i }));
@@ -473,7 +475,9 @@ describe("StorageSettings preview data", () => {
     fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
 
     await waitFor(() => expect(deleteCalls(fetchMock)).toHaveLength(1));
-    expect(deleteCalls(fetchMock)[0][0]).toMatch(new RegExp(`/storage/preview-data/${DELETED_REPO}$`));
+    expect(deleteCalls(fetchMock)[0][0]).toMatch(
+      new RegExp(`/storage/preview-data/${DELETED_REPO}$`),
+    );
   });
 
   test("a refused delete shows the reason", async () => {
