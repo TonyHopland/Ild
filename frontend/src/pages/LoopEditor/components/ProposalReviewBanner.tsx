@@ -41,7 +41,7 @@ export default function ProposalReviewBanner({
           <LoopTemplateProposalSource proposal={proposal} />
         </span>
       </div>
-      <p className="edit-proposal-rationale">{proposal.rationale}</p>
+      <p className="proposal-rationale">{proposal.rationale}</p>
       {!pending && (
         <p className="proposal-review-closed" role="status">
           {proposal.status === "Stale"

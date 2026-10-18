@@ -106,7 +106,7 @@ export default function ProposalDecision({
   return (
     <>
       {(pending || extra) && (
-        <div className="edit-proposal-actions">
+        <div className="proposal-actions">
           {extraActionsPlacement === "first" && extra}
           {pending && approve && (
             <button
@@ -132,7 +132,7 @@ export default function ProposalDecision({
         </div>
       )}
       {pending && rejectOpen && (
-        <div className="edit-proposal-reject">
+        <div className="proposal-reject">
           <textarea
             aria-label="Rejection reason (optional)"
             placeholder="Why not? (optional)"
@@ -142,7 +142,7 @@ export default function ProposalDecision({
             rows={2}
             disabled={rejectBusy}
           />
-          <div className="edit-proposal-actions">
+          <div className="proposal-actions">
             <button
               type="button"
               className="btn btn-danger btn-sm"
@@ -166,12 +166,12 @@ export default function ProposalDecision({
         </div>
       )}
       {approveError && (
-        <p className="edit-proposal-error" role="alert">
+        <p className="proposal-error" role="alert">
           {approveError}
         </p>
       )}
       {rejectError && (
-        <p className="edit-proposal-error" role="alert">
+        <p className="proposal-error" role="alert">
           {rejectError}
         </p>
       )}

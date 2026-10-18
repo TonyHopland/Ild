@@ -186,7 +186,7 @@ async function renderDialog(workItem: WorkItem) {
 const overview = () => document.getElementById("wiv2-panel-overview") as HTMLElement;
 const action = () => document.getElementById("wiv2-panel-action") as HTMLElement;
 const cardOf = (title: string) =>
-  within(action()).getByText(title).closest(".edit-proposal-card") as HTMLElement;
+  within(action()).getByText(title).closest('[data-testid="proposal-card"]') as HTMLElement;
 
 /** The labels, in the order their elements appear in the document. */
 function documentOrder(entries: [string, Element][]): string[] {

@@ -469,7 +469,7 @@ describe("saving a listed proposal", () => {
     renderEditor("/loop-editor/tpl-1");
     await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
     const listed = (await screen.findByText(RATIONALE)).closest(
-      ".edit-proposal-card",
+      '[data-testid="proposal-card"]',
     ) as HTMLElement;
 
     fireEvent.click(within(listed).getByRole("button", { name: "Save" }));
@@ -541,7 +541,7 @@ describe("a review opened while a save is in flight", () => {
     await waitFor(() => expect(held).toBe(true));
 
     const listed = (await screen.findByText(RATIONALE)).closest(
-      ".edit-proposal-card",
+      '[data-testid="proposal-card"]',
     ) as HTMLElement;
     fireEvent.click(reviewControl(listed));
     await waitFor(() => expect(banner()).not.toBeNull());

@@ -35,18 +35,18 @@ function Outcome({ proposal }: { proposal: LoopTemplateProposal }) {
   switch (proposal.status) {
     case "Applied":
       return (
-        <p className="edit-proposal-reason">
+        <p className="proposal-reason">
           Saved as version {proposal.appliedVersion}
           {proposal.editedBeforeSave ? ", with edits made in the Loop Editor" : ", as is"}.
         </p>
       );
     case "Rejected":
       return proposal.rejectionReason ? (
-        <p className="edit-proposal-reason">Reason: {proposal.rejectionReason}</p>
+        <p className="proposal-reason">Reason: {proposal.rejectionReason}</p>
       ) : null;
     case "Stale":
       return (
-        <p className="edit-proposal-reason">
+        <p className="proposal-reason">
           The template was saved after this was proposed, so it can no longer be saved.
         </p>
       );
@@ -82,19 +82,19 @@ export default function LoopTemplateProposalCard({
   const pending = proposal.status === "Pending";
 
   return (
-    <div className={`proposal-card edit-proposal-card edit-proposal-card--${status}`}>
-      <div className="edit-proposal-header">
-        <span className="edit-proposal-heading">
+    <div className={`proposal-card proposal-card--${status}`} data-testid="proposal-card">
+      <div className="proposal-header">
+        <span className="proposal-heading">
           Proposed change to loop template{" "}
           {proposal.templateName ? <strong>{proposal.templateName}</strong> : "since deleted"}, made
           against version {proposal.baseVersion}
         </span>
-        <span className={`edit-proposal-status edit-proposal-status--${status}`}>
+        <span className={`proposal-status proposal-status--${status}`}>
           {proposal.status}
         </span>
       </div>
 
-      <p className="edit-proposal-rationale">{proposal.rationale}</p>
+      <p className="proposal-rationale">{proposal.rationale}</p>
 
       <LoopTemplateChangeList changes={proposal.changes} />
 
