@@ -344,6 +344,7 @@ export function makeLoopTemplateProposal(
     createdByChatSessionId: null,
     chatReplySequence: null,
     source: { kind: "run", workItemId: "wi-1", chatSessionId: null, linkable: true },
+    edits: null,
     changes: {
       nameChanged: false,
       descriptionChanged: false,

@@ -1,4 +1,5 @@
 import LoopTemplateChangeList from "../../../components/LoopTemplateChangeList";
+import LoopTemplateEditList from "../../../components/LoopTemplateEditList";
 import { LoopTemplateProposalSource } from "../../../components/LoopTemplateProposalCard";
 import ProposalDecision from "../../../components/ProposalDecision";
 import { loopTemplateProposalService } from "../../../services/auth";
@@ -50,6 +51,7 @@ export default function ProposalReviewBanner({
         </p>
       )}
       <LoopTemplateChangeList changes={proposal.changes} />
+      <LoopTemplateEditList proposal={proposal} />
       <div className="proposal-review-actions">
         <ProposalDecision
           pending={pending}

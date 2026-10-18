@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { loopTemplateProposalService } from "../services/auth";
 import { ROUTES } from "../utils/constants";
 import LoopTemplateChangeList from "./LoopTemplateChangeList";
+import LoopTemplateEditList from "./LoopTemplateEditList";
 import ProposalDecision from "./ProposalDecision";
 import type { LoopTemplateProposal } from "../types";
 import "./ProposalCard.css";
@@ -95,6 +96,7 @@ export default function LoopTemplateProposalCard({
       <p className="proposal-rationale">{proposal.rationale}</p>
 
       <LoopTemplateChangeList changes={proposal.changes} />
+      <LoopTemplateEditList proposal={proposal} />
 
       <Outcome proposal={proposal} />
 

@@ -33,3 +33,83 @@
   color: #a0a0b0;
   font-style: italic;
 }
+
+.lt-edits {
+  margin-top: 0.4rem;
+}
+
+.lt-edits-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lt-edits-count {
+  font-weight: 600;
+}
+
+.lt-edit-rows {
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.lt-edit {
+  border-top: 1px solid #3a3a5c;
+  padding-top: 0.4rem;
+  min-width: 0;
+}
+
+.lt-edit-target {
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+
+.lt-edit-field {
+  font-family: monospace;
+  font-weight: 400;
+  color: #a0a0b0;
+}
+
+.lt-edit-note {
+  color: #fbbf24;
+  font-size: 0.7rem;
+  margin-bottom: 0.2rem;
+}
+
+.lt-edit-text {
+  margin-top: 0.2rem;
+}
+
+.lt-edit-text-label {
+  display: block;
+  font-size: 0.675rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #a0a0b0;
+}
+
+.lt-edit-text pre {
+  margin: 0.1rem 0 0;
+  padding: 0.3rem 0.4rem;
+  max-width: 100%;
+  background: #1a1a2e;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.lt-edit-expand {
+  margin-top: 0.2rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #93c5fd;
+  font-size: 0.7rem;
+  cursor: pointer;
+}

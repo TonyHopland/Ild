@@ -682,6 +682,9 @@ public class LoopTemplateProposalApiTests
         var (otherVersion, otherDocument) = await ReadDocumentAsync(agent, otherTemplateId.ToString());
         var wholeId = await ProposeOkAsync(agent, otherTemplateId.ToString(), otherVersion, otherDocument);
         Assert.True(IsNullOrAbsent(await ReadProposalAsync(host, wholeId), "edits"));
+        var listed = await ListAsHumanAsync(host);
+        Assert.True(JsonNode.DeepEquals(edits, JsonNode.Parse(listed.Single(p => Id(p) == id).GetProperty("edits").GetRawText())));
+        Assert.True(IsNullOrAbsent(listed.Single(p => Id(p) == wholeId), "edits"));
         var own = await ListAsAgentAsync(agent);
         Assert.Equal(3, own.Single(p => Id(p) == id).GetProperty("editCount").GetInt32());
         Assert.True(IsNullOrAbsent(own.Single(p => Id(p) == wholeId), "editCount"));
