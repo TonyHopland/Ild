@@ -452,14 +452,13 @@ public class LoopDocumentEditorTests
         { "editNodeField with several matches", false, ValidDocument("code code"), EditNodeFieldEdit("ai", "prompt", "code", "x") },
         { "editFile with zero matches", false, ValidDocument(), EditFileEdit("\"label\":\"Nobody\"", "x") },
         { "editFile with several matches", false, ValidDocument(), EditFileEdit("\"OnSuccess\"", "\"OnFailure\"") },
-        { "editNodeField with an empty oldString", false, ValidDocument(), EditNodeFieldEdit("ai", "prompt", "", "x") },
-        { "editFile with an empty oldString", false, ValidDocument(), EditFileEdit("", "x") },
         { "setNodeField with a structured value that is not an array", false, StructuredDocument, SetNodeFieldEdit("ai", "outputs", "approve") },
         { "editNodeField with an empty field", false, ValidDocument(), EditNodeFieldEdit("ai", "", "a", "b") },
         { "setNodeField with a whitespace field", false, ValidDocument(), SetNodeFieldEdit("ai", "  ", "b") },
         { "editFile leaving a duplicate key", false, ValidDocument(), EditFileEdit("\"label\":\"Reviewer\"", "\"label\":\"Reviewer\",\"label\":\"Critic\"") },
         { "editNodeField on a document with a duplicate key", false, DuplicateKeyDocument, EditNodeFieldEdit("ai", "prompt", "strict", "lenient") },
         { "setNodeField on a document with a duplicate key", false, DuplicateKeyDocument, SetNodeFieldEdit("ai", "prompt", "b") },
+        { "setNodeField with a structured value holding a duplicate key", false, StructuredDocument, SetNodeFieldEdit("ai", "outputs", "[{\"name\":\"reject\",\"name\":\"rework\"}]") },
     };
 
     private static LoopEditResult ThroughTheEditorOp(string document, LoopTemplateEdit edit) => edit.Op switch
@@ -507,6 +506,17 @@ public class LoopDocumentEditorTests
         var list = LoopDocumentEditor.ApplyEditList(ValidDocument(), [edit]);
 
         Assert.Equal(LoopDocumentEditor.FieldRequired, list.Failure!.Message);
+    }
+
+    [Fact]
+    public void An_edit_list_names_an_empty_old_string_in_its_own_words()
+    {
+        var editNodeField = LoopDocumentEditor.ApplyEditList(ValidDocument(), [EditNodeFieldEdit("ai", "prompt", "", "x")]);
+        var editFile = LoopDocumentEditor.ApplyEditList(ValidDocument(), [EditFileEdit("", "x")]);
+
+        Assert.Equal("editNodeField needs oldString.", editNodeField.Failure!.Message);
+        Assert.Equal("editFile needs oldString.", editFile.Failure!.Message);
+        Assert.Equal("old_string must not be empty.", LoopDocumentEditor.EditFile(ValidDocument(), "", "x").Error);
     }
 
     [Fact]

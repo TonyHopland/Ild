@@ -57,15 +57,18 @@ public sealed record LoopEditListFailure(int Index, string? Op, string? NodeId, 
 public sealed record LoopEditListResult(string? Document, LoopEditListFailure? Failure);
 
 /// <summary>
-/// What a scoped edit's apply step produced: the edited document text, or why
-/// the edit did not land, in the words the public edit reports. An apply step
-/// never validates the graph.
+/// What a scoped edit's apply step produced: the edited document, parsed for a
+/// field edit (<see cref="Root"/>) or as text for a raw edit (<see cref="Text"/>),
+/// or why the edit did not land, in the words the public edit reports. An apply
+/// step never validates the graph.
 /// </summary>
-internal sealed record LoopEditApplication(int MatchCount, string? Document, string? Error)
+internal sealed record LoopEditApplication(int MatchCount, JsonNode? Root, string? Text, string? Error)
 {
-    public static LoopEditApplication Failed(int matchCount, string error) => new(matchCount, null, error);
+    public static LoopEditApplication Failed(int matchCount, string error) => new(matchCount, null, null, error);
 
-    public static LoopEditApplication Landed(int matchCount, string document) => new(matchCount, document, null);
+    public static LoopEditApplication Landed(int matchCount, JsonNode root) => new(matchCount, root, null, null);
+
+    public static LoopEditApplication Landed(int matchCount, string text) => new(matchCount, null, text, null);
 }
 
 /// <summary>
@@ -175,7 +178,7 @@ public static class LoopDocumentEditor
                 $"old_string matches {count} times in field '{field}' of node '{nodeId}'; make it unique (include surrounding context). No change made.");
 
         config![field] = JsonValue.Create(ReplaceOnce(text, oldString, newString));
-        return LoopEditApplication.Landed(1, root!.ToJsonString(OutputOptions));
+        return LoopEditApplication.Landed(1, root!);
     }
 
     /// <summary>
@@ -223,14 +226,14 @@ public static class LoopDocumentEditor
         {
             config[field] = JsonValue.Create(value);
         }
-        return LoopEditApplication.Landed(1, root.ToJsonString(OutputOptions));
+        return LoopEditApplication.Landed(1, root);
     }
 
     private static JsonArray? ParseArray(string value)
     {
         try
         {
-            return JsonNode.Parse(value) as JsonArray;
+            return JsonText.Parse(value) as JsonArray;
         }
         catch (JsonException)
         {
@@ -298,20 +301,20 @@ public static class LoopDocumentEditor
                 : ApplyEdit(document, edit);
             if (applied.Error != null)
                 return new(null, new LoopEditListFailure(index, edit?.Op, edit?.NodeId, edit?.Field, applied.Error));
-            document = LoopTemplateDocument.Render(JsonNode.Parse(applied.Document!)!);
+            document = LoopTemplateDocument.Render(applied.Root ?? JsonText.Parse(applied.Text!)!);
         }
         return new(document, null);
     }
 
     private static LoopEditApplication ApplyEdit(string document, LoopTemplateEdit edit) => edit.Op switch
     {
-        EditNodeFieldOp when Missing(edit, ("nodeId", edit.NodeId), ("field", edit.Field), ("oldString", edit.OldString), ("newString", edit.NewString)) is { } missing
+        EditNodeFieldOp when Missing(edit, ("nodeId", edit.NodeId), ("field", edit.Field), ("oldString", NonEmpty(edit.OldString)), ("newString", edit.NewString)) is { } missing
             => LoopEditApplication.Failed(0, missing),
         EditNodeFieldOp => ApplyEditNodeField(document, edit.NodeId!, edit.Field!, edit.OldString!, edit.NewString!),
         SetNodeFieldOp when Missing(edit, ("nodeId", edit.NodeId), ("field", edit.Field), ("value", edit.Value)) is { } missing
             => LoopEditApplication.Failed(0, missing),
         SetNodeFieldOp => ApplySetNodeField(document, edit.NodeId!, edit.Field!, edit.Value!),
-        EditFileOp when Missing(edit, ("oldString", edit.OldString), ("newString", edit.NewString)) is { } missing
+        EditFileOp when Missing(edit, ("oldString", NonEmpty(edit.OldString)), ("newString", edit.NewString)) is { } missing
             => LoopEditApplication.Failed(0, missing),
         EditFileOp => ApplyEditFile(document, edit.OldString!, edit.NewString!),
         _ => LoopEditApplication.Failed(0,
@@ -323,6 +326,9 @@ public static class LoopDocumentEditor
         var missing = members.Where(member => member.Value is null).Select(member => member.Name).ToList();
         return missing.Count == 0 ? null : $"{edit.Op} needs {string.Join(", ", missing)}.";
     }
+
+    /// <summary>An empty oldString counts as missing, so the list names it in its own words rather than the editor tools' old_string.</summary>
+    private static string? NonEmpty(string? text) => string.IsNullOrEmpty(text) ? null : text;
 
     /// <summary>
     /// Validate and accept a whole-document replacement (the <c>update_current_loop</c>
@@ -354,7 +360,7 @@ public static class LoopDocumentEditor
         if (applied.Error != null)
             return LoopEditResult.MatchFailure(applied.MatchCount, applied.Error);
 
-        var check = Check(applied.Document!);
+        var check = Check(applied.Text ?? applied.Root!.ToJsonString(OutputOptions));
         // An apply step only lands a document that parses, so a parse error here would
         // be a bug rather than bad input; surface it as a match failure rather than throw.
         if (check.ParseError != null)

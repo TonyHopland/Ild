@@ -39,7 +39,7 @@ An agent's proposed change to a saved **Loop Template** that saves nothing until
 _Avoid_: template edit request, loop patch
 
 **Edit List**:
-The ordered list of loop edits a **Loop Template Proposal** can be made from instead of a whole document. These are the Loop Editor's own edits, `editNodeField`, `setNodeField` and `editFile`, applied in order to the base version when the proposal is made. All of them land or the proposal is refused naming the first failing edit; only the final document has to be a valid graph. The proposal keeps the list beside the document it produced, and shows it as each edit's before and after text. See [ADR-0028](docs/adr/0028-agents-propose-loop-template-changes.md).
+The ordered list of loop edits a **Loop Template Proposal** can be made from instead of a whole document. These are the Loop Editor's own edits, `editNodeField`, `setNodeField` and `editFile`, applied in order to the base version when the proposal is made. All of them land or the proposal is refused naming the first failing edit; only the final document has to be a valid graph. The proposal keeps the list beside the document it produced, and shows each edit's before and after text for `editNodeField` and `editFile`, and the new value for `setNodeField`. See [ADR-0028](docs/adr/0028-agents-propose-loop-template-changes.md).
 _Avoid_: patch, loop patch, patch proposal, diff
 
 **Worktree**:

@@ -910,21 +910,6 @@ public class AgentController : ControllerBase
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    /// <summary>
-    /// <paramref name="template"/>'s latest version number and, when it is
-    /// <paramref name="baseVersion"/>, its document as the text
-    /// <c>get_loop_template</c> returns: what an Edit List applies to.
-    /// </summary>
-    private async Task<(int Version, string? Document)> RenderLatestLoopTemplateAsync(LoopTemplate template, int baseVersion)
-    {
-        var latest = (await _templates.GetVersionsAsync(template.Id)).Select(v => v.VersionNumber).DefaultIfEmpty().Max();
-        if (latest != baseVersion)
-            return (latest, null);
-        var graph = await _templates.GetVersionGraphAsync(template.Id, latest)
-            ?? throw new InvalidOperationException($"Loop template {template.Id} has no version {latest}.");
-        return (latest, LoopTemplateDocument.From(template, graph).Render());
-    }
-
     private ConflictObjectResult NotLatestLoopTemplateVersion(LoopTemplate template, int baseVersion, int? latestVersion)
         => Conflict(new
         {
@@ -932,6 +917,9 @@ public class AgentController : ControllerBase
                 + "Read it with get_loop_template, make your change to that document and propose again.",
             latestVersion,
         });
+
+    private static BadRequestObjectResult TooLarge(string member, int length)
+        => new(new { error = $"{member} is too large ({length} chars); the limit is {MaxLoopDocumentChars}." });
 
     private static string EditListFailureMessage(LoopEditListFailure failure)
     {
@@ -1876,12 +1864,12 @@ public class AgentController : ControllerBase
                 return BadRequest(new { error = "edits is empty: send at least one edit, or a whole document." });
             edits = JsonSerializer.Serialize(request.Edits, EditListJson);
             if (edits.Length > MaxLoopDocumentChars)
-                return BadRequest(new { error = $"edits is too large ({edits.Length} chars); the limit is {MaxLoopDocumentChars}." });
+                return TooLarge("edits", edits.Length);
         }
         else if (string.IsNullOrWhiteSpace(request.Document))
             return BadRequest(new { error = "document or edits is required: an Edit List to apply to the latest version, or the complete ild-loop-template/v2 document, as JSON text." });
         else if (request.Document.Length > MaxLoopDocumentChars)
-            return BadRequest(new { error = $"document is too large ({request.Document.Length} chars); the limit is {MaxLoopDocumentChars}." });
+            return TooLarge("document", request.Document.Length);
         // Checked as it will be stored: the save drops NUL characters.
         var rationale = AppDbContext.WithoutNul(request.Rationale ?? string.Empty).Trim();
         if (rationale.Length == 0)
@@ -1898,16 +1886,16 @@ public class AgentController : ControllerBase
             document = request.Document!;
         else
         {
-            var (latestVersion, latestDocument) = await RenderLatestLoopTemplateAsync(template, baseVersion);
-            if (latestDocument is null)
-                return NotLatestLoopTemplateVersion(template, baseVersion, latestVersion);
+            var latest = await _templates.GetLatestDocumentAsync(template);
+            if (latest is not { Version: var latestVersion, Document: var latestDocument } || latestVersion != baseVersion)
+                return NotLatestLoopTemplateVersion(template, baseVersion, latest?.Version ?? 0);
 
             var applied = LoopDocumentEditor.ApplyEditList(latestDocument, request.Edits);
             if (applied.Failure is { } failure)
                 return BadRequest(new { error = EditListFailureMessage(failure), editIndex = failure.Index });
             document = applied.Document!;
             if (document.Length > MaxLoopDocumentChars)
-                return BadRequest(new { error = $"document is too large ({document.Length} chars); the limit is {MaxLoopDocumentChars}." });
+                return TooLarge("document", document.Length);
         }
 
         var proposed = _templates.CheckProposedDocument(document);

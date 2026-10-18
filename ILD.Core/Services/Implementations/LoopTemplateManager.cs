@@ -159,6 +159,14 @@ public class LoopTemplateManager : ILoopTemplateManager
         return await BuildGraphFromVersion(latest);
     }
 
+    public async Task<(int Version, string Document)?> GetLatestDocumentAsync(LoopTemplate template)
+    {
+        var latest = await _store.GetLatestVersionAsync(template.Id);
+        if (latest == null) return null;
+        var graph = await BuildGraphFromVersion(latest);
+        return (latest.VersionNumber, LoopTemplateDocument.From(template, graph).Render());
+    }
+
     public async Task<LoopTemplateGraph?> GetVersionGraphAsync(Guid templateId, int versionNumber)
     {
         var version = await _store.GetVersionAsync(templateId, versionNumber);
