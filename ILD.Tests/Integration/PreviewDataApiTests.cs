@@ -18,7 +18,8 @@ namespace ILD.Tests.Integration;
 /// <summary>
 /// A keep-on repository's persisted preview data over the API: one work item's
 /// preview holds it at a time, and only a person removes it — by the repository's
-/// reset or the storage page's delete — never while a preview holds it.
+/// Reset, through the one delete endpoint the storage page uses — never while a
+/// preview holds it.
 /// </summary>
 [SupportedOSPlatform("linux")]
 public class PreviewDataApiTests
@@ -34,7 +35,7 @@ public class PreviewDataApiTests
     [Fact]
     public async Task One_work_items_preview_holds_the_repositorys_data_against_other_starts_and_every_removal_until_it_stops()
     {
-        // The preview service the API runs, from the same container as reset and delete.
+        // The preview service the API runs, from the same container as the delete.
         await using var factory = new ApiFactory(configureServices: services =>
         {
             services.RemoveAll<IWorktreePreviewService>();
@@ -69,7 +70,7 @@ public class PreviewDataApiTests
         Assert.True(File.Exists(Path.Combine(folder, "data", "file")));
 
         Assert.Equal(HttpStatusCode.OK, (await user.PostAsync($"/api/v1/workitems/{a}/preview/stop", null, Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await user.PostAsync($"/api/v1/repositories/{repositoryId}/preview-data/reset", null, Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await user.DeleteAsync($"/api/v1/storage/preview-data/{repositoryId}", Ct)).StatusCode);
         Assert.False(AgentWritableFiles.EntryExists(folder));
 
         // The next preview starts on empty volumes.
@@ -91,7 +92,7 @@ public class PreviewDataApiTests
     }
 
     [Fact]
-    public async Task Reset_and_delete_are_for_the_user_and_refuse_ids_that_are_not_a_repositorys()
+    public async Task Deleting_preview_data_is_for_the_user_and_refuses_ids_that_are_not_guids()
     {
         await using var factory = new ApiFactory();
         var user = await factory.CreateAuthenticatedClientAsync();
@@ -104,22 +105,19 @@ public class PreviewDataApiTests
         var orphan = PreviewDataFolder(factory, deleted);
         WriteFile(Path.Combine(orphan, "data", "file.bin"), 4 * KiB);
 
-        Assert.Equal(HttpStatusCode.Forbidden, (await agent.PostAsync($"/api/v1/repositories/{repositoryId}/preview-data/reset", null, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await agent.DeleteAsync($"/api/v1/storage/preview-data/{repositoryId}", Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await agent.DeleteAsync($"/api/v1/storage/preview-data/{deleted}", Ct)).StatusCode);
         Assert.True(File.Exists(Path.Combine(folder, "data", "file.bin")));
         Assert.True(File.Exists(Path.Combine(orphan, "data", "file.bin")));
 
-        Assert.Equal(HttpStatusCode.BadRequest, (await user.PostAsync("/api/v1/repositories/not-a-guid/preview-data/reset", null, Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.NotFound, (await user.PostAsync($"/api/v1/repositories/{deleted}/preview-data/reset", null, Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await user.DeleteAsync("/api/v1/storage/preview-data/not-a-guid", Ct)).StatusCode);
         Assert.True(File.Exists(Path.Combine(orphan, "data", "file.bin")));
 
-        // The storage page is the only way to remove the folder of a deleted repository.
+        // Also the folder of a deleted repository.
         Assert.Equal(HttpStatusCode.OK, (await user.DeleteAsync($"/api/v1/storage/preview-data/{deleted}", Ct)).StatusCode);
         Assert.False(AgentWritableFiles.EntryExists(orphan));
 
-        Assert.Equal(HttpStatusCode.OK, (await user.PostAsync($"/api/v1/repositories/{repositoryId}/preview-data/reset", null, Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await user.DeleteAsync($"/api/v1/storage/preview-data/{repositoryId}", Ct)).StatusCode);
         Assert.False(AgentWritableFiles.EntryExists(folder));
     }
 
@@ -151,15 +149,9 @@ public class PreviewDataApiTests
 
     private static async Task AssertRemovalRefusedAsync(HttpClient user, Guid repositoryId, string holderSentence)
     {
-        foreach (var removal in new[]
-        {
-            await user.PostAsync($"/api/v1/repositories/{repositoryId}/preview-data/reset", null, Ct),
-            await user.DeleteAsync($"/api/v1/storage/preview-data/{repositoryId}", Ct),
-        })
-        {
-            Assert.Equal(HttpStatusCode.Conflict, removal.StatusCode);
-            Assert.StartsWith(holderSentence, await ErrorAsync(removal));
-        }
+        var removal = await user.DeleteAsync($"/api/v1/storage/preview-data/{repositoryId}", Ct);
+        Assert.Equal(HttpStatusCode.Conflict, removal.StatusCode);
+        Assert.StartsWith(holderSentence, await ErrorAsync(removal));
     }
 
     private static async Task<string?> ErrorAsync(HttpResponseMessage response)

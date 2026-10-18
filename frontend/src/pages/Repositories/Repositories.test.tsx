@@ -1091,8 +1091,8 @@ function previewDataFetch(
 ) {
   return vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
-    const reset = /\/repositories\/([^/]+)\/preview-data\/reset$/.exec(url);
-    if (reset && method === "POST") return onReset(reset[1]);
+    const reset = /\/storage\/preview-data\/([^/]+)$/.exec(url);
+    if (reset && method === "DELETE") return onReset(reset[1]);
     if (/\/repositories\/[^/]+\/preview-env$/.test(url))
       return Promise.resolve(reply({ previewEnv: null }));
     const one = /\/repositories\/([^/?]+)$/.exec(url);
@@ -1125,7 +1125,7 @@ function sentBodies(fetchMock: ReturnType<typeof vi.fn>, method: string) {
 }
 
 function resetRequests(fetchMock: ReturnType<typeof vi.fn>) {
-  return sentBodies(fetchMock, "POST").filter((c) => c.url.includes("/preview-data/reset"));
+  return sentBodies(fetchMock, "DELETE").filter((c) => c.url.includes("/storage/preview-data/"));
 }
 
 describe("Repositories page — preview data", () => {
@@ -1197,7 +1197,7 @@ describe("Repositories page — preview data", () => {
     fireEvent.click(screen.getByRole("button", { name: /^confirm/i }));
 
     await waitFor(() => expect(resetRequests(fetchMock)).toHaveLength(1));
-    expect(resetRequests(fetchMock)[0].url).toMatch(/\/repositories\/repo-1\/preview-data\/reset$/);
+    expect(resetRequests(fetchMock)[0].url).toMatch(/\/storage\/preview-data\/repo-1$/);
   });
 
   test("a refused reset shows the reason in the form, and not in another repository's", async () => {

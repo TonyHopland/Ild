@@ -350,20 +350,9 @@
   gap: 0.5rem;
 }
 
-.storage-entries li > .btn,
-.storage-entries li > .settings-error,
-.storage-preview-data-note,
-.storage-preview-data-confirm {
+.storage-entries li > .preview-data-delete,
+.storage-entries li > .preview-data-delete-confirm {
   margin: 0.15rem 0 0.35rem 1rem;
-}
-
-.storage-preview-data-confirm {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  color: #c0c0d0;
 }
 
 @media (max-width: 720px) {

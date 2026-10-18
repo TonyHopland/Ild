@@ -8,6 +8,7 @@ import type {
   WorktreeCleanupRunResult,
 } from "../../../types";
 import { formatBytes } from "../../../utils/attachments";
+import PreviewDataDelete from "../../../components/PreviewDataDelete";
 
 type Overview = { data: StorageOverview | null; loading: boolean; error: string | null };
 
@@ -19,13 +20,6 @@ type Cleanup =
   | { kind: "cleaning"; candidates: WorktreeCleanupCandidate[]; totalBytes: number | null }
   | { kind: "done"; candidates: WorktreeCleanupCandidate[]; result: WorktreeCleanupResult }
   | { kind: "error"; message: string };
-
-/** The one preview-data entry whose delete is being asked for, run, done or has failed. */
-type PreviewDataDelete = {
-  repositoryId: string;
-  step: "confirming" | "deleting" | "deleted" | "failed";
-  message?: string;
-};
 
 const failure = (error: unknown) => (error as ApiError | Error | undefined)?.message || null;
 
@@ -75,7 +69,6 @@ function repositoryOf(candidate: WorktreeCleanupCandidate) {
 export default function StorageSettings() {
   const [overview, setOverview] = useState<Overview>({ data: null, loading: true, error: null });
   const [cleanup, setCleanup] = useState<Cleanup>({ kind: "idle" });
-  const [previewDataDelete, setPreviewDataDelete] = useState<PreviewDataDelete | null>(null);
   const mounted = useRef(true);
   // Only the latest measurement may land: an earlier one finishing last would show older figures.
   const latestMeasurement = useRef(0);
@@ -113,11 +106,7 @@ export default function StorageSettings() {
     setOverview((previous) => ({ ...previous, loading: true, error: null }));
     try {
       const data = await storageService.getOverview(abort.signal);
-      if (current()) {
-        setOverview({ data, loading: false, error: null });
-        // Once measured again, a deleted entry is gone or reflects whatever is there now.
-        setPreviewDataDelete((pending) => (pending?.step === "deleted" ? null : pending));
-      }
+      if (current()) setOverview({ data, loading: false, error: null });
     } catch (error) {
       if (current())
         setOverview({
@@ -168,108 +157,7 @@ export default function StorageSettings() {
     if (mounted.current) void measure();
   };
 
-  // Moves focus to the control that replaces the one just used in a preview-data
-  // entry, which unmounted with it; the entry's element registers itself as it renders.
-  const previewDataFocusEntry = useRef<string | null>(null);
-  const previewDataFocusTarget = useRef<HTMLElement | null>(null);
-  const previewDataFocus = (repositoryId: string) => (element: HTMLElement | null) => {
-    if (element && previewDataFocusEntry.current === repositoryId)
-      previewDataFocusTarget.current = element;
-  };
-  const changePreviewDataDelete = (repositoryId: string, next: PreviewDataDelete | null) => {
-    previewDataFocusEntry.current = repositoryId;
-    previewDataFocusTarget.current = null;
-    setPreviewDataDelete(next);
-  };
-
-  useEffect(() => {
-    if (previewDataFocusEntry.current && previewDataFocusTarget.current) {
-      previewDataFocusTarget.current.focus();
-      previewDataFocusEntry.current = null;
-      previewDataFocusTarget.current = null;
-    }
-  }, [previewDataDelete]);
-
-  const deletePreviewData = async (repositoryId: string) => {
-    setPreviewDataDelete({ repositoryId, step: "deleting" });
-    try {
-      await storageService.deletePreviewData(repositoryId);
-      if (!mounted.current) return;
-      changePreviewDataDelete(repositoryId, { repositoryId, step: "deleted" });
-      void measure();
-    } catch (error) {
-      if (mounted.current)
-        changePreviewDataDelete(repositoryId, {
-          repositoryId,
-          step: "failed",
-          message: failure(error) ?? "Could not delete the preview data.",
-        });
-    }
-  };
-
   const cleanupBusy = cleanup.kind === "loadingCandidates" || cleanup.kind === "cleaning";
-  const previewDataBusy = previewDataDelete?.step === "deleting";
-
-  const previewDataActions = (repositoryId: string, label: string) => {
-    const own = previewDataDelete?.repositoryId === repositoryId ? previewDataDelete : null;
-    if (own?.step === "deleted")
-      return (
-        <div
-          className="storage-preview-data-note"
-          role="status"
-          tabIndex={-1}
-          ref={previewDataFocus(repositoryId)}
-        >
-          Deleted.
-        </div>
-      );
-    if (own?.step === "confirming" || own?.step === "deleting")
-      return (
-        <div className="storage-preview-data-confirm" role="group" aria-label="Delete preview data">
-          <span>Deletes this repository&apos;s preview data for every work item.</span>
-          <div className="storage-actions">
-            <button
-              type="button"
-              className="btn btn-danger btn-sm"
-              ref={previewDataFocus(repositoryId)}
-              onClick={() => void deletePreviewData(repositoryId)}
-              disabled={previewDataBusy}
-            >
-              Confirm delete
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => changePreviewDataDelete(repositoryId, null)}
-              disabled={previewDataBusy}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      );
-    return (
-      <>
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          aria-label={`Delete preview data: ${label}`}
-          ref={previewDataFocus(repositoryId)}
-          onClick={() =>
-            changePreviewDataDelete(repositoryId, { repositoryId, step: "confirming" })
-          }
-          disabled={previewDataBusy}
-        >
-          Delete
-        </button>
-        {own?.step === "failed" && (
-          <div className="settings-error" role="alert">
-            {own.message}
-          </div>
-        )}
-      </>
-    );
-  };
 
   return (
     <>
@@ -321,9 +209,23 @@ export default function StorageSettings() {
                           bytes={entry.bytes}
                           incomplete={entry.incomplete}
                         />
-                        {category.key === "preview-data" &&
-                          entry.repositoryId &&
-                          previewDataActions(entry.repositoryId, entry.label)}
+                        {category.key === "preview-data" && entry.repositoryId && (
+                          <PreviewDataDelete
+                            key={entry.repositoryId}
+                            repositoryId={entry.repositoryId}
+                            wording={{
+                              trigger: "Delete",
+                              triggerLabel: `Delete preview data: ${entry.label}`,
+                              confirmGroup: "Delete preview data",
+                              warning:
+                                "Deletes this repository's preview data for every work item.",
+                              confirm: "Confirm delete",
+                              done: "Deleted.",
+                              failed: "Could not delete the preview data.",
+                            }}
+                            onDeleted={() => void measure()}
+                          />
+                        )}
                       </li>
                     ))}
                   </ul>

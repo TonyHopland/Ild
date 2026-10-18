@@ -1,0 +1,23 @@
+.preview-data-delete,
+.preview-data-delete-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.preview-data-delete-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.preview-data-delete-hint {
+  font-size: 0.75rem;
+  color: #a0a0b0;
+}
+
+.preview-data-delete-error {
+  font-size: 0.75rem;
+  color: #f87171;
+}

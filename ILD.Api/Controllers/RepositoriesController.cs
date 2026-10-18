@@ -13,14 +13,12 @@ public class RepositoriesController : ControllerBase
     private readonly IRepositoryManager _repositoryManager;
     private readonly AppDbContext _db;
     private readonly IConnectionTester _connectionTester;
-    private readonly IPreviewDataService _previewData;
 
-    public RepositoriesController(IRepositoryManager repositoryManager, AppDbContext db, IConnectionTester connectionTester, IPreviewDataService previewData)
+    public RepositoriesController(IRepositoryManager repositoryManager, AppDbContext db, IConnectionTester connectionTester)
     {
         _repositoryManager = repositoryManager;
         _db = db;
         _connectionTester = connectionTester;
-        _previewData = previewData;
     }
 
     // The custom .env holds secrets, so it is never echoed back in plaintext by
@@ -208,17 +206,6 @@ public class RepositoriesController : ControllerBase
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return Ok(await ResponseAsync(repo));
-    }
-
-    // Empties the data every work item's previews share when Keep preview data is on.
-    // User-only like the rest of this controller: persisted preview data is only ever
-    // removed by a person, never by an agent.
-    [HttpPost("{id}/preview-data/reset")]
-    public async Task<IActionResult> ResetPreviewData(string id)
-    {
-        if (!Guid.TryParse(id, out var guid)) return BadRequest();
-        if (!await _db.Repositories.AsNoTracking().AnyAsync(r => r.Id == guid)) return NotFound();
-        return PreviewDataResponse.From(await _previewData.DeleteAsync(guid));
     }
 
     [HttpDelete("{id}")]

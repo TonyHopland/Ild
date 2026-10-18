@@ -11,7 +11,7 @@ import { packageFeedService, repositoryService, remoteProviderService } from "..
 import { useStoredPreviewEnv } from "../../hooks/useStoredPreviewEnv";
 import ConnectionTest from "../../components/ConnectionTest";
 import ProviderDialog from "./ProviderDialog";
-import PreviewDataReset from "./PreviewDataReset";
+import PreviewDataDelete from "../../components/PreviewDataDelete";
 
 export default function Repositories() {
   const [repositories, setRepositories] = useState<Repository[]>([]);
@@ -489,7 +489,20 @@ export default function Repositories() {
                   preview of the repository runs at a time while this is on. Turning it off leaves
                   the data in place.
                 </span>
-                {editingRepo && <PreviewDataReset key={editingRepo.id} repository={editingRepo} />}
+                {editingRepo && (
+                  <PreviewDataDelete
+                    key={editingRepo.id}
+                    repositoryId={editingRepo.id}
+                    wording={{
+                      trigger: "Reset preview data",
+                      confirmGroup: "Reset preview data",
+                      warning: `This wipes the preview data for every work item in ${editingRepo.name}.`,
+                      confirm: "Confirm reset",
+                      done: "The preview data was reset.",
+                      failed: "Could not reset the preview data.",
+                    }}
+                  />
+                )}
               </div>
               <div className="form-group">
                 <span className="repo-group-label" id="repoPackageFeeds">
@@ -685,15 +698,6 @@ export default function Repositories() {
         .delete-confirm {
           display: flex;
           gap: 0.25rem;
-        }
-
-        .repo-reset,
-        .repo-reset-confirm {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 0.5rem;
-          margin-top: 0.25rem;
         }
 
         .repo-load-error,

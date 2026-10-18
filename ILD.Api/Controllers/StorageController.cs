@@ -65,12 +65,20 @@ public class StorageController : ControllerBase
         }
     }
 
-    // No repository lookup: the folder of a deleted repository can only be removed here.
+    // The one way a person removes a repository's preview data: the storage page and the
+    // repository's Reset both call it. No repository lookup, since the folder of a deleted
+    // repository can only be removed here. A preview holding the data is a 409.
     [HttpDelete("preview-data/{repositoryId}")]
     public async Task<IActionResult> DeletePreviewData(string repositoryId)
     {
         if (!Guid.TryParse(repositoryId, out var id))
             return BadRequest(new { error = $"Invalid repository GUID: '{repositoryId}'." });
-        return PreviewDataResponse.From(await _previewData.DeleteAsync(id));
+        var deletion = await _previewData.DeleteAsync(id);
+        return deletion.Outcome switch
+        {
+            PreviewDataDeletionOutcome.Deleted => Ok(),
+            PreviewDataDeletionOutcome.Refused => Conflict(new { error = deletion.Error }),
+            _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = deletion.Error }),
+        };
     }
 }

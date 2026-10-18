@@ -54,7 +54,7 @@ describe("StorageSettings preview data focus and outcome", () => {
     expect(document.activeElement).toBe(within(entry()).getByRole("button", { name: /delete/i }));
   });
 
-  test("a delete says it is done until the next measurement lands", async () => {
+  test("a delete says it is done, returns focus to Delete and measures again", async () => {
     const getOverview = vi
       .spyOn(services.storageService, "getOverview")
       .mockResolvedValue(overview as never);
@@ -67,9 +67,11 @@ describe("StorageSettings preview data focus and outcome", () => {
     fireEvent.click(within(entry()).getByRole("button", { name: /delete/i }));
     fireEvent.click(within(entry()).getByRole("button", { name: /confirm/i }));
 
-    const status = await within(entry()).findByText("Deleted.");
-    await waitFor(() => expect(document.activeElement).toBe(status));
-    expect(within(entry()).queryByRole("button", { name: /delete/i })).toBeNull();
+    expect((await within(entry()).findByRole("status")).textContent).toBe("Deleted.");
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(entry()).getByRole("button", { name: /delete/i })),
+    );
+    expect(getOverview).toHaveBeenCalledTimes(2);
 
     remeasure.resolve({ categories: [] } as never);
     await waitFor(() => expect(screen.queryByText("delta-app")).toBeNull());
