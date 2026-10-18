@@ -4,7 +4,6 @@ import { DescriptionDiff } from "./EditProposalCard";
 import ProposalDecision from "./ProposalDecision";
 import type { GlobalVariableProposal } from "../types";
 import "./ProposalCard.css";
-import "./EditProposalCard.css";
 import "./GlobalVariableProposalCard.css";
 
 interface GlobalVariableProposalCardProps {
