@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import type { NavigateFunction } from "react-router";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+} from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router";
+import { useJoinThenRefresh } from "../../hooks/useJoinThenRefresh";
 import type { SignalRConnection } from "../../hooks/useSignalR";
 import { loopTemplateProposalService } from "../../services/auth";
 import type { LoopTemplate, LoopTemplateProposal } from "../../types";
@@ -7,7 +16,7 @@ import type { TypedSignalRMessage } from "../../types/signalr";
 import { loadErrorMessage } from "./utils/loadErrorMessage";
 
 /** A Loop Template Proposal open in the editor as its unsaved working copy, on its template. */
-export interface ProposalReview {
+interface ProposalReview {
   templateId: string;
   proposal: LoopTemplateProposal;
 }
@@ -17,17 +26,63 @@ export interface SavedFrom {
   proposalId: string | null;
 }
 
+/**
+ * The proposal review open in the editor, and ending it: {@link useReviewSession}
+ * sets it up before anything that replaces the canvas, since every replacement
+ * ends it, and {@link useProposalReview} does the rest.
+ */
+export interface ReviewSession {
+  review: ProposalReview | null;
+  replaceConfirm: ProposalReview | null;
+  /** Ends the open review; given `savedFrom`, only if it is the review that save was made from. */
+  closeReview: (savedFrom?: SavedFrom) => void;
+  setReview: Dispatch<SetStateAction<ProposalReview | null>>;
+  setReplaceConfirm: Dispatch<SetStateAction<ProposalReview | null>>;
+  reviewRef: RefObject<ProposalReview | null>;
+  /** Bumped whenever the canvas is replaced, so an answer to a review asked for before that is dropped. */
+  reviewRequestRef: RefObject<number>;
+  selectedTemplateId: string | null;
+  selectedTemplateRef: RefObject<LoopTemplate | null>;
+}
+
+/** The review state of {@link ReviewSession}, for the template open in the editor. */
+export function useReviewSession(selectedTemplate: LoopTemplate | null): ReviewSession {
+  // The proposal open as the working copy, and one asked for over unsaved
+  // changes awaiting a confirm. Every reply about one is checked against these
+  // before it lands.
+  const [review, setReview] = useState<ProposalReview | null>(null);
+  const [replaceConfirm, setReplaceConfirm] = useState<ProposalReview | null>(null);
+  const reviewRef = useRef<ProposalReview | null>(null);
+  reviewRef.current = review;
+  const reviewRequestRef = useRef(0);
+  const selectedTemplateRef = useRef(selectedTemplate);
+  selectedTemplateRef.current = selectedTemplate;
+
+  const closeReview = useCallback((savedFrom?: SavedFrom) => {
+    if (savedFrom && reviewRef.current?.proposal.id !== savedFrom.proposalId) return;
+    reviewRequestRef.current++;
+    setReview(null);
+    setReplaceConfirm(null);
+  }, []);
+
+  return {
+    review,
+    replaceConfirm,
+    closeReview,
+    setReview,
+    setReplaceConfirm,
+    reviewRef,
+    reviewRequestRef,
+    selectedTemplateId: selectedTemplate?.id ?? null,
+    selectedTemplateRef,
+  };
+}
+
 interface ProposalReviewOptions {
   /** The page's work-item hub connection; the review joins and listens on it. */
   board: SignalRConnection;
-  routeTemplateId: string | undefined;
-  /** The `?proposal=` of the URL. */
-  requestedProposalId: string | null;
-  selectedTemplateId: string | null;
   readOnlyVersion: number | null;
-  navigate: NavigateFunction;
   templatesRef: RefObject<LoopTemplate[]>;
-  selectedTemplateRef: RefObject<LoopTemplate | null>;
   loadTemplates: () => Promise<void>;
   selectTemplate: (template: LoopTemplate) => void;
   /** Replaces the open loop with a document as unsaved state; null when it could not. */
@@ -42,43 +97,42 @@ interface ProposalReviewOptions {
  * Reviewing a Loop Template Proposal (ADR-0028). A Review link opens
  * `/loop-editor/<template>?proposal=<id>`. The proposal's document becomes the
  * unsaved working copy of that template, which the chat's loop tools go on
- * editing like any other, and Save names the proposal.
+ * editing like any other, and Save names the proposal. Called after the effect
+ * that opens the route's template, so that its `?proposal=` request follows
+ * that effect's canvas replacement when both run in one commit.
  */
-export function useProposalReview({
-  board,
-  routeTemplateId,
-  requestedProposalId,
-  selectedTemplateId,
-  readOnlyVersion,
-  navigate,
-  templatesRef,
-  selectedTemplateRef,
-  loadTemplates,
-  selectTemplate,
-  loadDocument,
-  isCanvasDirty,
-  markClean,
-  setErrorText,
-}: ProposalReviewOptions) {
-  // The proposal open as the working copy, and one asked for over unsaved
-  // changes awaiting a confirm. Every reply about one is checked against these
-  // before it lands.
-  const [review, setReview] = useState<ProposalReview | null>(null);
-  const [replaceConfirm, setReplaceConfirm] = useState<ProposalReview | null>(null);
-  const reviewRef = useRef<ProposalReview | null>(null);
-  reviewRef.current = review;
-  // Bumped whenever the canvas is replaced, so an answer to a review asked for
-  // before that is dropped; and per re-read of the reviewed proposal.
-  const reviewRequestRef = useRef(0);
+export function useProposalReview(
+  session: ReviewSession,
+  {
+    board,
+    readOnlyVersion,
+    templatesRef,
+    loadTemplates,
+    selectTemplate,
+    loadDocument,
+    isCanvasDirty,
+    markClean,
+    setErrorText,
+  }: ProposalReviewOptions,
+) {
+  const {
+    review,
+    replaceConfirm,
+    closeReview,
+    setReview,
+    setReplaceConfirm,
+    reviewRef,
+    reviewRequestRef,
+    selectedTemplateId,
+    selectedTemplateRef,
+  } = session;
+  const navigate = useNavigate();
+  const { templateId: routeTemplateId } = useParams<{ templateId?: string }>();
+  const [searchParams] = useSearchParams();
+  // The `?proposal=` of the URL.
+  const requestedProposalId = searchParams.get("proposal");
+  // Per re-read of the reviewed proposal.
   const reviewRefreshRef = useRef(0);
-
-  // Given `savedFrom`, only the review of the proposal a save was made from ends.
-  const closeReview = useCallback((savedFrom?: SavedFrom) => {
-    if (savedFrom && reviewRef.current?.proposal.id !== savedFrom.proposalId) return;
-    reviewRequestRef.current++;
-    setReview(null);
-    setReplaceConfirm(null);
-  }, []);
 
   const openReview = useCallback(
     (next: ProposalReview) => {
@@ -200,32 +254,8 @@ export function useProposalReview({
   // The board's hub says when a template's proposals change, the reviewed one
   // going stale included. Joined on every (re)connect, and the reviewed proposal
   // re-read then, since a hint sent while disconnected is lost.
-  const {
-    connectionState: boardConnectionState,
-    on: onBoard,
-    off: offBoard,
-    invoke: invokeBoard,
-  } = board;
-  // Read through a ref: joining again is for a (re)connect, not a new function.
-  const invokeBoardRef = useRef(invokeBoard);
-  invokeBoardRef.current = invokeBoard;
-
-  useEffect(() => {
-    if (boardConnectionState !== "connected") return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await invokeBoardRef.current("SubscribeToWorkItems");
-      } catch (err) {
-        console.error(err);
-        return;
-      }
-      if (!cancelled) refreshReview();
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [boardConnectionState, refreshReview]);
+  const { on: onBoard, off: offBoard } = board;
+  useJoinThenRefresh(board, null, refreshReview);
 
   useEffect(() => {
     const onChanged = (msg: TypedSignalRMessage<"LoopTemplateProposalsChanged">) => {
@@ -237,8 +267,9 @@ export function useProposalReview({
 
   return {
     review,
+    /** The review, while the template it is on is the one open. */
+    shownReview: review !== null && review.templateId === selectedTemplateId ? review : null,
     replaceConfirm,
-    closeReview,
     refreshReview,
     discardReview,
     handleListedProposalDecided,

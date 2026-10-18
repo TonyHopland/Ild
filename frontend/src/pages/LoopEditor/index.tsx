@@ -1,6 +1,6 @@
 import "./LoopEditor.css";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import {
   ReactFlow,
   Background,
@@ -92,7 +92,7 @@ import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
 import ProposalReviewBanner from "./components/ProposalReviewBanner";
 import SaveDiffModal from "./components/SaveDiffModal";
-import { useProposalReview, type SavedFrom } from "./useProposalReview";
+import { useProposalReview, useReviewSession, type SavedFrom } from "./useProposalReview";
 import type {
   ImportFeedbackItem,
   LoopTemplateVersion,
@@ -315,8 +315,6 @@ export default function LoopEditor() {
     /** The proposal under review when Save was clicked; the server decides whether it applies. */
     fromProposalId: string | null;
   } | null>(null);
-  const [searchParams] = useSearchParams();
-  const requestedProposalId = searchParams.get("proposal");
   // The page's one work-item hub connection: the proposal counts, the open
   // template's proposal list and the review all listen on it.
   const board = useSignalR("/hubs/work-item");
@@ -484,18 +482,20 @@ export default function LoopEditor() {
     }
   };
 
-  // Read through a ref: the review is set up further down, after the effect that
-  // opens the route's template, so that its `?proposal=` request follows that
-  // effect's canvas replacement when both run in one commit.
-  const closeReviewRef = useRef<(savedFrom?: SavedFrom) => void>(() => {});
+  const reviewSession = useReviewSession(selectedTemplate);
+  const { closeReview } = reviewSession;
 
-  // Every replacement of the canvas ends the proposal review that is open; a
-  // save, only the review it was made from, since another can open while it runs.
-  const replaceCanvas = useCallback((saved: string, clean: string, savedFrom?: SavedFrom) => {
-    lastSavedExportRef.current = saved;
-    cleanExportRef.current = clean;
-    closeReviewRef.current(savedFrom);
-  }, []);
+  // Every replacement of the canvas ends the open proposal review, except a
+  // save's (`savedFrom` given): that ends the review only if it is the one the
+  // save was made from, since another can have opened while the save ran.
+  const replaceCanvas = useCallback(
+    (saved: string, clean: string, savedFrom?: SavedFrom) => {
+      lastSavedExportRef.current = saved;
+      cleanExportRef.current = clean;
+      closeReview(savedFrom);
+    },
+    [closeReview],
+  );
 
   const selectTemplate = useCallback(
     (template: LoopTemplate) => {
@@ -875,15 +875,10 @@ export default function LoopEditor() {
     cleanExportRef.current = canvasExportOf(loaded);
   }, []);
 
-  const proposalReview = useProposalReview({
+  const proposalReview = useProposalReview(reviewSession, {
     board,
-    routeTemplateId,
-    requestedProposalId,
-    selectedTemplateId: selectedTemplate?.id ?? null,
     readOnlyVersion,
-    navigate,
     templatesRef,
-    selectedTemplateRef,
     loadTemplates,
     selectTemplate,
     loadDocument,
@@ -891,9 +886,14 @@ export default function LoopEditor() {
     markClean,
     setErrorText,
   });
-  const { review, replaceConfirm, refreshReview, discardReview, handleListedProposalDecided } =
-    proposalReview;
-  closeReviewRef.current = proposalReview.closeReview;
+  const {
+    review,
+    shownReview,
+    replaceConfirm,
+    refreshReview,
+    discardReview,
+    handleListedProposalDecided,
+  } = proposalReview;
 
   // Join the current session's hub group, and leave it when the id changes (e.g.
   // the user ends one session and starts another) so we never linger on a stale
@@ -1624,7 +1624,6 @@ export default function LoopEditor() {
   );
 
   const selectedTemplateName = selectedTemplate?.name || newTemplateName || "Untitled";
-  const reviewShown = review !== null && review.templateId === selectedTemplate?.id;
   const showSidebar = sidebarVisible || isNarrow;
 
   return (
@@ -1741,7 +1740,7 @@ export default function LoopEditor() {
             selectedTemplateId={selectedTemplate?.id ?? null}
             pendingProposalCounts={pendingProposalCounts}
             board={board}
-            reviewedProposalId={reviewShown ? review.proposal.id : null}
+            reviewedProposalId={shownReview?.proposal.id ?? null}
             onListedProposalDecided={(templateId) => void handleListedProposalDecided(templateId)}
             cloningTemplateId={cloningTemplateId}
             cloneName={cloneName}
@@ -1789,7 +1788,7 @@ export default function LoopEditor() {
         )}
 
         <div
-          className={`loop-editor-workspace ${reviewShown ? "loop-editor-workspace-reviewing" : ""}`}
+          className={`loop-editor-workspace ${shownReview ? "loop-editor-workspace-reviewing" : ""}`}
         >
           <div className={`node-palette ${readOnlyVersion !== null ? "palette-disabled" : ""}`}>
             <div className="palette-header">Drag &amp; Drop</div>
@@ -1805,10 +1804,10 @@ export default function LoopEditor() {
             ))}
           </div>
 
-          {reviewShown && (
+          {shownReview && (
             <ProposalReviewBanner
-              key={review.proposal.id}
-              proposal={review.proposal}
+              key={shownReview.proposal.id}
+              proposal={shownReview.proposal}
               onDiscard={() => void discardReview()}
               onRejected={() => void discardReview()}
               onRefused={() => refreshReview()}
