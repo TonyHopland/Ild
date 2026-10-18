@@ -19,6 +19,11 @@ export function usePendingProposalCount<T>(
   // Read through a ref: joining again is for a (re)connect, not a new function.
   const invokeRef = useRef(invoke);
   invokeRef.current = invoke;
+  // Read through refs too: a caller may pass these inline, new every render.
+  const readRef = useRef(read);
+  readRef.current = read;
+  const emptyRef = useRef(empty);
+  emptyRef.current = empty;
   const [count, setCount] = useState(empty);
   const seqRef = useRef(0);
 
@@ -32,15 +37,15 @@ export function usePendingProposalCount<T>(
   const refresh = useCallback(() => {
     const seq = ++seqRef.current;
     void (async () => {
-      let next = empty;
+      let next = emptyRef.current;
       try {
-        next = await read();
+        next = await readRef.current();
       } catch (err) {
         console.error(err);
       }
       if (seq === seqRef.current) setCount(next);
     })();
-  }, [read, empty]);
+  }, []);
 
   useEffect(() => {
     if (connectionState !== "connected") return;

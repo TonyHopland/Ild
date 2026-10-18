@@ -52,6 +52,10 @@ export function useProposalList<M extends string, T>(
   const invokeRef = useRef(invoke);
   invokeRef.current = invoke;
 
+  // And the kind: a caller may pass it inline, new every render.
+  const kindRef = useRef(kind);
+  kindRef.current = kind;
+
   const [view, setView] = useState<ProposalsView<T> | null>(null);
   const generationRef = useRef(0);
   const currentTargetRef = useRef<string | null>(null);
@@ -69,14 +73,14 @@ export function useProposalList<M extends string, T>(
     const generation = ++generationRef.current;
     void (async () => {
       try {
-        const proposals = await kind.read(mode, id);
+        const proposals = await kindRef.current.read(mode, id);
         if (generation !== generationRef.current || currentTargetRef.current !== targetKey) return;
         setView({ targetKey, proposals });
       } catch (err) {
         console.error(err);
       }
     })();
-  }, [kind, targetKey, mode, id]);
+  }, [targetKey, mode, id]);
 
   useEffect(() => {
     if (connectionState !== "connected") return;
@@ -102,13 +106,13 @@ export function useProposalList<M extends string, T>(
   }, [connectionState, chat, id, refresh]);
 
   useEffect(() => {
-    const hint = kind.hint(mode, id);
+    const hint = kindRef.current.hint(mode, id);
     const onChanged = (msg: TypedSignalRMessage) => {
       if (hint.matches(msg.payload)) refresh();
     };
     on(hint.event, onChanged);
     return () => off(hint.event, onChanged);
-  }, [on, off, kind, mode, id, refresh]);
+  }, [on, off, mode, id, refresh]);
 
   const proposals = view?.targetKey === targetKey ? view.proposals : undefined;
   return { proposals, refresh };
