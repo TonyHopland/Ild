@@ -32,12 +32,12 @@ export default function ProposalReviewBanner({
   const pending = proposal.status === "Pending";
   return (
     <section className="proposal-card proposal-review-banner" aria-label="Proposal under review">
-      <div className="proposal-review-header">
+      <div className="proposal-header proposal-review-header">
         <span>
           Reviewing a proposed change, made against version {proposal.baseVersion}. It is not saved
           until you save it.
         </span>
-        <span className="proposal-review-source">
+        <span className="proposal-source proposal-review-source">
           <LoopTemplateProposalSource proposal={proposal} />
         </span>
       </div>

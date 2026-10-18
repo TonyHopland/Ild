@@ -1583,22 +1583,15 @@
   margin-bottom: 0;
 }
 
-.proposal-review-header {
-  display: flex;
+.proposal-header.proposal-review-header {
   flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.4rem;
+  align-items: normal;
   font-weight: 600;
 }
 
-.proposal-review-source {
+.proposal-source.proposal-review-source {
+  margin-top: 0;
   font-weight: 400;
-  color: #a0a0b0;
-}
-
-.proposal-review-source a {
-  color: #a5b4fc;
 }
 
 .proposal-review-closed {
