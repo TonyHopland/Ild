@@ -233,7 +233,7 @@ describe("replacing the canvas during a proposal review", () => {
 describe("the review banner's Discard", () => {
   test("comes before Reject while pending, stays once the proposal is stale, and still goes back to the saved version", async () => {
     await openReview();
-    const discard = discardButton()!;
+    const discard = screen.getByRole("button", { name: "Discard" });
     const reject = screen.getByRole("button", { name: "Reject" });
     expect(discard.compareDocumentPosition(reject) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
@@ -244,7 +244,7 @@ describe("the review banner's Discard", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Reject" })).toBeNull());
     expect(discardButton()).not.toBeNull();
 
-    fireEvent.click(discardButton()!);
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     await waitFor(() => expect(onCanvas("Run Linter")).toBe(false));
     expect(onCanvas("Initialize")).toBe(true);
     expect(discardButton()).toBeNull();

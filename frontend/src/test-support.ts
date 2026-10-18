@@ -194,12 +194,7 @@ export interface Call {
 
 /** A response with `body` as its JSON text, or no text without one. */
 export function reply(status: number, body?: unknown): Response {
-  return {
-    ok: status < 400,
-    status,
-    statusText: "",
-    text: () => Promise.resolve(body === undefined ? "" : JSON.stringify(body)),
-  } as Response;
+  return new Response(body === undefined ? null : JSON.stringify(body), { status });
 }
 
 /** Stubs `fetch` to answer each request with `answer`; returns every request, as it arrives. */
@@ -232,13 +227,20 @@ export function documentOrder(labels: string[], container: HTMLElement = documen
     .map(([l]) => l);
 }
 
-export type HubHandler = (msg: { payload: unknown }) => void;
+/**
+ * A handler a hub fake holds. Declared as a method, so the typed handler of any
+ * one event is held without a cast; it is only ever called with that event.
+ */
+export interface HubListener {
+  handle(msg: TypedSignalRMessage): void;
+}
 
 export type HubConnectionState = SignalRConnection["connectionState"];
 
 /** A hub connection that lets a test push events to its listeners and change its state. */
 export interface FakeHub {
-  handlers: Record<string, Set<HubHandler>>;
+  /** The listeners of each event, by the handler they were added with. */
+  handlers: Record<string, Map<unknown, HubListener>>;
   invoke: Mock<(...args: unknown[]) => Promise<void>>;
   /** The same object for the hub's whole life; a hook re-rendered after `setState` sees the new state. */
   connection: SignalRConnection;
@@ -252,20 +254,21 @@ export interface FakeHub {
 }
 
 export function fakeHub(state: HubConnectionState = "connected"): FakeHub {
-  const handlers: Record<string, Set<HubHandler>> = {};
+  const handlers: Record<string, Map<unknown, HubListener>> = {};
   const invoke = vi.fn((..._args: unknown[]) => Promise.resolve());
   const connection: SignalRConnection = {
     connectionState: state,
     on: <E extends string>(event: E, handler: (msg: TypedSignalRMessage<E>) => void) => {
-      (handlers[event] ??= new Set()).add(handler as HubHandler);
+      (handlers[event] ??= new Map()).set(handler, { handle: handler });
     },
     off: <E extends string>(event: E, handler: (msg: TypedSignalRMessage<E>) => void) => {
-      handlers[event]?.delete(handler as HubHandler);
+      handlers[event]?.delete(handler);
     },
     invoke,
   };
   const dispatch = (event: string, payload: unknown) => {
-    for (const handler of Array.from(handlers[event] ?? [])) handler({ payload });
+    for (const listener of Array.from(handlers[event]?.values() ?? []))
+      listener.handle({ type: event, payload, timestamp: "" });
   };
   const emit = (event: string, payload: unknown) =>
     act(async () => {
@@ -378,4 +381,11 @@ export function makeGlobalVariableProposal(
     source: { kind: "run", workItemId: "wi-1", chatSessionId: null, linkable: true },
     ...overrides,
   };
+}
+
+/** The proposal card `element` is in; throws when it is in none. */
+export function proposalCardAround(element: Element): HTMLElement {
+  const card = element.closest<HTMLElement>('[data-testid="proposal-card"]');
+  if (card === null) throw new Error("The element is not inside a proposal card.");
+  return card;
 }

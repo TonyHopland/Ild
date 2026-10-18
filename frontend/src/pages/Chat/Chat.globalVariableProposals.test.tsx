@@ -12,7 +12,7 @@ const { chatService, aiProviderService, workItemService, authService } = vi.hois
     interrupt: vi.fn(),
     deleteOne: vi.fn(),
     deleteAll: vi.fn(),
-    searchChats: vi.fn(() => Promise.resolve([] as string[])),
+    searchChats: vi.fn(() => Promise.resolve<string[]>([])),
     markRead: vi.fn(() => Promise.resolve()),
     rename: vi.fn(() => Promise.resolve()),
     setFavorite: vi.fn(() => Promise.resolve()),

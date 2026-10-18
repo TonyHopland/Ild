@@ -16,6 +16,7 @@ vi.mock("../../hooks/useSignalR", async () =>
 import LoopEditor from "./index";
 import {
   makeLoopTemplateProposal,
+  proposalCardAround,
   reply,
   signalRHub,
   stubFetch,
@@ -134,10 +135,10 @@ function answerAsServer({ method, path, query, body }: Call): Response {
   if (method === "POST" && path === "/api/v1/looptemplates/validate")
     return reply(200, { valid: true, errors: [] });
   if (method === "PUT" && path.startsWith("/api/v1/looptemplates/")) {
-    const id = path.split("/").pop()!;
+    const id = path.slice(path.lastIndexOf("/") + 1);
     const applied = body?.fromProposalId === "lp-1" && server.proposal.status === "Pending";
     server.templates = server.templates.map((t) =>
-      t.id === id ? { ...t, ...(body as object), version: t.version + 1, id: t.id } : t,
+      t.id === id ? { ...t, ...body, version: t.version + 1, id: t.id } : t,
     ) as (typeof devLoop)[];
     if (applied) server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 };
     return reply(200, { id, version: 4, proposalApplied: applied });
@@ -477,9 +478,7 @@ describe("saving a listed proposal", () => {
     };
     renderEditor("/loop-editor/tpl-1");
     await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
-    const listed = (await screen.findByText(RATIONALE)).closest(
-      '[data-testid="proposal-card"]',
-    ) as HTMLElement;
+    const listed = proposalCardAround(await screen.findByText(RATIONALE));
 
     fireEvent.click(within(listed).getByRole("button", { name: "Save" }));
 
@@ -540,9 +539,7 @@ describe("a review opened while a save is in flight", () => {
     fireEvent.click(await screen.findByText("Save changes"));
     await waitFor(() => expect(held).toBe(true));
 
-    const listed = (await screen.findByText(RATIONALE)).closest(
-      '[data-testid="proposal-card"]',
-    ) as HTMLElement;
+    const listed = proposalCardAround(await screen.findByText(RATIONALE));
     fireEvent.click(reviewControl(listed));
     await waitFor(() => expect(banner()).not.toBeNull());
     await act(async () => release());

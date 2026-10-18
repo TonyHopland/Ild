@@ -12,6 +12,7 @@ import {
   WorkItemPriority,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
+import { proposalCardAround } from "../../test-support";
 import * as authServices from "../../services/auth";
 
 afterEach(() => {
@@ -186,7 +187,7 @@ async function renderDialog(workItem: WorkItem) {
 const overview = () => document.getElementById("wiv2-panel-overview") as HTMLElement;
 const action = () => document.getElementById("wiv2-panel-action") as HTMLElement;
 const cardOf = (title: string) =>
-  within(action()).getByText(title).closest('[data-testid="proposal-card"]') as HTMLElement;
+  proposalCardAround(within(action()).getByText(title));
 
 /** The labels, in the order their elements appear in the document. */
 function documentOrder(entries: [string, Element][]): string[] {

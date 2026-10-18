@@ -254,90 +254,94 @@ interface CountKind<T extends Count> {
   none: T;
 }
 
-const countKinds = [
-  {
-    name: "global variable suggestions",
-    use: () => usePendingGlobalVariableProposalCount(),
-    spyRead: () => vi.spyOn(globalVariableService, "pendingProposalCount"),
-    hint: "GlobalVariableProposalsChanged",
-    hintPayload: {},
-    some: 2,
-    more: 5,
-    none: 0,
-  } satisfies CountKind<number>,
-  {
-    name: "loop template proposals",
-    use: () => usePendingLoopTemplateProposalCounts(),
-    spyRead: () => vi.spyOn(loopTemplateProposalService, "pendingCounts"),
-    hint: "LoopTemplateProposalsChanged",
-    hintPayload: { templateId: "tpl-1" },
-    some: { "tpl-1": 2 },
-    more: { "tpl-1": 5, "tpl-2": 1 },
-    none: {},
-  } satisfies CountKind<Record<string, number>>,
-] as CountKind<Count>[];
+const globalVariableCounts: CountKind<number> = {
+  name: "global variable suggestions",
+  use: () => usePendingGlobalVariableProposalCount(),
+  spyRead: () => vi.spyOn(globalVariableService, "pendingProposalCount"),
+  hint: "GlobalVariableProposalsChanged",
+  hintPayload: {},
+  some: 2,
+  more: 5,
+  none: 0,
+};
 
-describe.each(countKinds)("the pending count of $name", (kind) => {
-  test("joins the board before every read, on connect and on reconnect, and a hint re-reads", async () => {
-    const board = fakeHub("connected");
-    routeHubs(signalRHook, { "/hubs/work-item": board });
-    const join = deferred<void>();
-    board.invoke.mockImplementation(() => join.promise);
-    let onServer = kind.some;
-    const read = kind.spyRead().mockImplementation(async () => onServer);
+const loopTemplateCounts: CountKind<Record<string, number>> = {
+  name: "loop template proposals",
+  use: () => usePendingLoopTemplateProposalCounts(),
+  spyRead: () => vi.spyOn(loopTemplateProposalService, "pendingCounts"),
+  hint: "LoopTemplateProposalsChanged",
+  hintPayload: { templateId: "tpl-1" },
+  some: { "tpl-1": 2 },
+  more: { "tpl-1": 5, "tpl-2": 1 },
+  none: {},
+};
 
-    const { result, rerender } = renderHook(() => kind.use());
-    expect(result.current).toEqual(kind.none);
-    await waitFor(() => expect(board.invoke).toHaveBeenCalledWith("SubscribeToWorkItems"));
-    expect(read).not.toHaveBeenCalled();
-    await act(async () => join.resolve());
-    await waitFor(() => expect(result.current).toEqual(kind.some));
+function describePendingCount<T extends Count>(kind: CountKind<T>) {
+  describe(`the pending count of ${kind.name}`, () => {
+    test("joins the board before every read, on connect and on reconnect, and a hint re-reads", async () => {
+      const board = fakeHub("connected");
+      routeHubs(signalRHook, { "/hubs/work-item": board });
+      const join = deferred<void>();
+      board.invoke.mockImplementation(() => join.promise);
+      let onServer = kind.some;
+      const read = kind.spyRead().mockImplementation(async () => onServer);
 
-    onServer = kind.more;
-    emit(board, kind.hint, kind.hintPayload);
-    await waitFor(() => expect(result.current).toEqual(kind.more));
+      const { result, rerender } = renderHook(() => kind.use());
+      expect(result.current).toEqual(kind.none);
+      await waitFor(() => expect(board.invoke).toHaveBeenCalledWith("SubscribeToWorkItems"));
+      expect(read).not.toHaveBeenCalled();
+      await act(async () => join.resolve());
+      await waitFor(() => expect(result.current).toEqual(kind.some));
 
-    const rejoin = deferred<void>();
-    board.invoke.mockImplementation(() => rejoin.promise);
-    board.invoke.mockClear();
-    const readsBefore = read.mock.calls.length;
-    board.setState("reconnecting");
-    rerender();
-    onServer = kind.some;
-    board.setState("connected");
-    rerender();
-    await waitFor(() => expect(board.invoke).toHaveBeenCalledWith("SubscribeToWorkItems"));
-    expect(read).toHaveBeenCalledTimes(readsBefore);
-    await act(async () => rejoin.resolve());
-    await waitFor(() => expect(result.current).toEqual(kind.some));
+      onServer = kind.more;
+      emit(board, kind.hint, kind.hintPayload);
+      await waitFor(() => expect(result.current).toEqual(kind.more));
+
+      const rejoin = deferred<void>();
+      board.invoke.mockImplementation(() => rejoin.promise);
+      board.invoke.mockClear();
+      const readsBefore = read.mock.calls.length;
+      board.setState("reconnecting");
+      rerender();
+      onServer = kind.some;
+      board.setState("connected");
+      rerender();
+      await waitFor(() => expect(board.invoke).toHaveBeenCalledWith("SubscribeToWorkItems"));
+      expect(read).toHaveBeenCalledTimes(readsBefore);
+      await act(async () => rejoin.resolve());
+      await waitFor(() => expect(result.current).toEqual(kind.some));
+    });
+
+    test("only the latest read counts, and a failed one shows none rather than an old count", async () => {
+      const board = fakeHub("connected");
+      routeHubs(signalRHook, { "/hubs/work-item": board });
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { reads, read } = heldReads<T>();
+      kind.spyRead().mockImplementation(read);
+
+      const { result } = renderHook(() => kind.use());
+      await waitFor(() => expect(reads.length).toBe(1));
+      await act(async () => reads[0].resolve(kind.some));
+      await waitFor(() => expect(result.current).toEqual(kind.some));
+
+      emit(board, kind.hint, kind.hintPayload);
+      emit(board, kind.hint, kind.hintPayload);
+      await waitFor(() => expect(reads.length).toBe(3));
+      await act(async () => reads[2].resolve(kind.more));
+      await waitFor(() => expect(result.current).toEqual(kind.more));
+      await act(async () => reads[1].resolve(kind.some));
+      expect(result.current).toEqual(kind.more);
+
+      emit(board, kind.hint, kind.hintPayload);
+      await waitFor(() => expect(reads.length).toBe(4));
+      await act(async () => reads[3].reject(new Error("read failed")));
+      await waitFor(() => expect(result.current).toEqual(kind.none));
+    });
   });
+}
 
-  test("only the latest read counts, and a failed one shows none rather than an old count", async () => {
-    const board = fakeHub("connected");
-    routeHubs(signalRHook, { "/hubs/work-item": board });
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const { reads, read } = heldReads<Count>();
-    kind.spyRead().mockImplementation(read);
-
-    const { result } = renderHook(() => kind.use());
-    await waitFor(() => expect(reads.length).toBe(1));
-    await act(async () => reads[0].resolve(kind.some));
-    await waitFor(() => expect(result.current).toEqual(kind.some));
-
-    emit(board, kind.hint, kind.hintPayload);
-    emit(board, kind.hint, kind.hintPayload);
-    await waitFor(() => expect(reads.length).toBe(3));
-    await act(async () => reads[2].resolve(kind.more));
-    await waitFor(() => expect(result.current).toEqual(kind.more));
-    await act(async () => reads[1].resolve(kind.some));
-    expect(result.current).toEqual(kind.more);
-
-    emit(board, kind.hint, kind.hintPayload);
-    await waitFor(() => expect(reads.length).toBe(4));
-    await act(async () => reads[3].reject(new Error("read failed")));
-    await waitFor(() => expect(result.current).toEqual(kind.none));
-  });
-});
+describePendingCount(globalVariableCounts);
+describePendingCount(loopTemplateCounts);
 
 describe("the pending loop template proposal counts on a hub the caller holds", () => {
   test("open no connection of their own and join and listen on the given one", async () => {
