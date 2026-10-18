@@ -493,8 +493,11 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // item's earlier preview. The install itself runs outside it, holding the
         // preview data through its own lease.
         PreviewDataClaims.Lease? lease = null;
-        if (volumes != null && !_claims.TryAcquire(volumes, normalized, out lease, out _))
+        if (volumes != null && !_claims.TryAcquire(volumes, normalized, out lease, out var refusal))
         {
+            if (!string.Equals(refusal.Holder?.WorkItemId, volumes.WorkItemId, StringComparison.Ordinal))
+                throw new InvalidOperationException(refusal.Message);
+
             await _gate.WaitAsync(cancellationToken);
             try
             {
