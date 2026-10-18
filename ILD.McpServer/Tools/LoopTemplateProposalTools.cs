@@ -37,7 +37,10 @@ public sealed class LoopTemplateProposalTools
         => _ild.GetRawAsync("api/v1/agent/loop-templates/proposals");
 }
 
-/// <summary>One edit of an Edit List: a Loop Editor edit named by <see cref="Op"/>, with that edit's own members.</summary>
+/// <summary>
+/// One edit of an Edit List: a Loop Editor edit named by <see cref="Op"/>, with that edit's own members.
+/// The server reads it as <c>ILD.Data.DTOs.LoopTemplateEdit</c>, which has the same members.
+/// </summary>
 public sealed class LoopTemplateEdit
 {
     [Description("editNodeField, setNodeField or editFile.")]

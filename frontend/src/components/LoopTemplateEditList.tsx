@@ -46,7 +46,7 @@ function nodeLabels(document: string | null | undefined): Map<string, string> {
       if (typeof node?.id === "string" && typeof node.label === "string" && node.label)
         labels.set(node.id, node.label);
   } catch {
-    // An unreadable document names no nodes; the ids as sent stand.
+    return labels;
   }
   return labels;
 }

@@ -86,7 +86,7 @@ public class LoopTemplateManager : ILoopTemplateManager
         JsonObject? root;
         try
         {
-            root = JsonNode.Parse(document) as JsonObject;
+            root = JsonText.Parse(document) as JsonObject;
         }
         catch (JsonException ex)
         {

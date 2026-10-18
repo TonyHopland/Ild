@@ -278,9 +278,10 @@ describe("LoopTemplateProposalCard for an Edit List proposal", () => {
   });
 
   test("a whole-document proposal shows no edit list", () => {
-    const { container } = renderCard(makeProposal({ edits: null }));
+    renderCard(makeProposal({ edits: null }));
 
-    expect(container.textContent).not.toMatch(/\bedits?\b/i);
+    expect(screen.queryByText(/^\d+ edits?$/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Show edits" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Edits" })).toBeNull();
   });
 });

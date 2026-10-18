@@ -1906,6 +1906,8 @@ public class AgentController : ControllerBase
             if (applied.Failure is { } failure)
                 return BadRequest(new { error = EditListFailureMessage(failure), editIndex = failure.Index });
             document = applied.Document!;
+            if (document.Length > MaxLoopDocumentChars)
+                return BadRequest(new { error = $"document is too large ({document.Length} chars); the limit is {MaxLoopDocumentChars}." });
         }
 
         var proposed = _templates.CheckProposedDocument(document);

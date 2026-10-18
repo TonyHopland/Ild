@@ -866,9 +866,9 @@ export type LoopTemplateEdit =
   | { op: "editFile"; oldString: string; newString: string };
 
 /**
- * An agent's proposed whole new document for a saved loop template, made against
- * `baseVersion`, which was its latest version then. Only a human saves or rejects
- * it; once the template has a newer version it is Stale and closed.
+ * An agent's proposed whole new document or Edit List for a saved loop template,
+ * made against `baseVersion`, which was its latest version then. Only a human saves
+ * or rejects it; once the template has a newer version it is Stale and closed.
  */
 export interface LoopTemplateProposal {
   id: string;

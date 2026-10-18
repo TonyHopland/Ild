@@ -436,6 +436,8 @@ public class LoopDocumentEditorTests
     private static LoopTemplateEdit EditFileEdit(string oldString, string newString)
         => new() { Op = "editFile", OldString = oldString, NewString = newString };
 
+    private static string DuplicateKeyDocument => ValidDocument().Replace("\"label\":\"Cleanup\"", "\"label\":\"Cleanup\",\"label\":\"Tidy up\"");
+
     public static TheoryData<string, bool, string, LoopTemplateEdit> SingleEditCases() => new()
     {
         { "editNodeField lands", true, ValidDocument(), EditNodeFieldEdit("ai", "prompt", "strict", "lenient") },
@@ -455,13 +457,16 @@ public class LoopDocumentEditorTests
         { "setNodeField with a structured value that is not an array", false, StructuredDocument, SetNodeFieldEdit("ai", "outputs", "approve") },
         { "editNodeField with an empty field", false, ValidDocument(), EditNodeFieldEdit("ai", "", "a", "b") },
         { "setNodeField with a whitespace field", false, ValidDocument(), SetNodeFieldEdit("ai", "  ", "b") },
+        { "editFile leaving a duplicate key", false, ValidDocument(), EditFileEdit("\"label\":\"Reviewer\"", "\"label\":\"Reviewer\",\"label\":\"Critic\"") },
+        { "editNodeField on a document with a duplicate key", false, DuplicateKeyDocument, EditNodeFieldEdit("ai", "prompt", "strict", "lenient") },
+        { "setNodeField on a document with a duplicate key", false, DuplicateKeyDocument, SetNodeFieldEdit("ai", "prompt", "b") },
     };
 
     private static LoopEditResult ThroughTheEditorOp(string document, LoopTemplateEdit edit) => edit.Op switch
     {
-        "editNodeField" => LoopDocumentEditor.EditNodeField(document, edit.NodeId!, edit.Field!, edit.OldString!, edit.NewString!),
-        "setNodeField" => LoopDocumentEditor.SetNodeField(document, edit.NodeId!, edit.Field!, edit.Value!),
-        "editFile" => LoopDocumentEditor.EditFile(document, edit.OldString!, edit.NewString!),
+        LoopDocumentEditor.EditNodeFieldOp => LoopDocumentEditor.EditNodeField(document, edit.NodeId!, edit.Field!, edit.OldString!, edit.NewString!),
+        LoopDocumentEditor.SetNodeFieldOp => LoopDocumentEditor.SetNodeField(document, edit.NodeId!, edit.Field!, edit.Value!),
+        LoopDocumentEditor.EditFileOp => LoopDocumentEditor.EditFile(document, edit.OldString!, edit.NewString!),
         _ => throw new ArgumentOutOfRangeException(nameof(edit)),
     };
 
@@ -497,8 +502,6 @@ public class LoopDocumentEditorTests
     [InlineData("setNodeField")]
     public void An_edit_list_refuses_a_blank_field_with_the_editor_endpoints_message(string op)
     {
-        // The editor endpoints refuse a blank field up front with FieldRequired; an
-        // Edit List reaches the apply step, which must answer the same.
         var edit = op == "editNodeField" ? EditNodeFieldEdit("ai", " ", "a", "b") : SetNodeFieldEdit("ai", " ", "b");
 
         var list = LoopDocumentEditor.ApplyEditList(ValidDocument(), [edit]);

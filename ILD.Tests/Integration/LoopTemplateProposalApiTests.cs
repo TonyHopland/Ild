@@ -452,7 +452,7 @@ public class LoopTemplateProposalApiTests
     public enum Invalid
     {
         NotJson, JsonArray, NoSchema, UnknownSchema, EmptyName, NameOver256, DescriptionOver8192, UnknownPolicy,
-        DocumentOver1000000, BlankRationale, RationaleOver2000, BaseVersionZero, BaseVersionNegative,
+        DocumentOver1000000, DuplicateKey, BlankRationale, RationaleOver2000, BaseVersionZero, BaseVersionNegative,
     }
 
     [Theory]
@@ -465,6 +465,7 @@ public class LoopTemplateProposalApiTests
     [InlineData(Invalid.DescriptionOver8192)]
     [InlineData(Invalid.UnknownPolicy)]
     [InlineData(Invalid.DocumentOver1000000)]
+    [InlineData(Invalid.DuplicateKey)]
     [InlineData(Invalid.BlankRationale)]
     [InlineData(Invalid.RationaleOver2000)]
     [InlineData(Invalid.BaseVersionZero)]
@@ -494,6 +495,7 @@ public class LoopTemplateProposalApiTests
         {
             Invalid.NotJson => "{\"$schema\": \"ild-loop-template/v2\", \"nodes\": [",
             Invalid.JsonArray => "[1, 2]",
+            Invalid.DuplicateKey => "{\"name\":\"Twice\"," + document.ToJsonString()[1..],
             _ => document.ToJsonString(),
         };
 
@@ -752,6 +754,45 @@ public class LoopTemplateProposalApiTests
             body.GetProperty("error").GetString());
         Assert.Equal(earlier, Id((await ListAsHumanAsync(host)).Single()));
         Assert.Equal("Pending", Status(await ReadProposalAsync(host, earlier)));
+    }
+
+    [Fact]
+    public async Task An_edit_file_leaving_a_duplicate_key_is_a_400_naming_its_index_that_stores_nothing()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var (version, document) = await ReadDocumentAsync(agent, templateId.ToString());
+
+        var resp = await ProposeEditsAsync(agent, templateId.ToString(), version,
+        [
+            EditFile("\"label\":\"Build\"", "\"label\":\"Build\",\"label\":\"B2\""),
+            EditNodeField(NodeIdLabelled(document, "Test"), "command", "make test", "make check"),
+        ]);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.BadRequest, $"expected 400, got {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        var body = await ReadJsonAsync(resp);
+        Assert.Equal(0, body.GetProperty("editIndex").GetInt32());
+        Assert.StartsWith("edits[0] (editFile): The edit produced invalid JSON:", body.GetProperty("error").GetString());
+        Assert.Contains("'label'", body.GetProperty("error").GetString());
+        Assert.Empty(await ListAsHumanAsync(host));
+    }
+
+    [Fact]
+    public async Task An_edit_list_producing_a_document_over_the_size_limit_is_refused_as_a_whole_document_is()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var (version, document) = await ReadDocumentAsync(agent, templateId.ToString());
+        var edits = new JsonArray { SetNodeField(NodeIdLabelled(document, "Build"), "notes", new string('x', 1_000_000 - 500)) };
+        Assert.True(edits.ToJsonString().Length < 1_000_000, "the edit list itself is under the limit");
+
+        var resp = await ProposeEditsAsync(agent, templateId.ToString(), version, edits);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.BadRequest, $"expected 400, got {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        Assert.Matches(@"^document is too large \(\d+ chars\); the limit is 1000000\.$", (await ReadJsonAsync(resp)).GetProperty("error").GetString());
+        Assert.Empty(await ListAsHumanAsync(host));
     }
 
     [Fact]

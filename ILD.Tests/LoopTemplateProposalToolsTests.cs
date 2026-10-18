@@ -119,6 +119,14 @@ public class LoopTemplateProposalToolsTests
                 .OrderBy(n => n, StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void The_tool_edit_carries_the_members_the_server_reads()
+    {
+        static string[] Members(Type type) => type.GetProperties().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(Members(typeof(ILD.Data.DTOs.LoopTemplateEdit)), Members(typeof(LoopTemplateEdit)));
+    }
+
     private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
