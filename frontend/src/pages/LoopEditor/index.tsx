@@ -489,11 +489,11 @@ export default function LoopEditor() {
 
   const proposalReview = useProposalReview({
     board,
-    templates,
     routeTemplateOpen: routeTemplateId !== undefined && openedTemplateId === routeTemplateId,
     selectedTemplate,
     readOnlyVersion,
     editor: {
+      currentTemplates: () => templatesRef.current,
       loadTemplates,
       showTemplate: (template) => selectTemplate(template),
       loadDocument: (rawDocument, rejectedAs) => loadDocument(rawDocument, rejectedAs),

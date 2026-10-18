@@ -552,7 +552,7 @@ describe("a review opened while a save is in flight", () => {
 });
 
 describe("a Review link to the template that is still open", () => {
-  test("opens the review after the route has opened its template again, whichever effect runs first", async () => {
+  test("opens the review once the route has opened its template again", async () => {
     renderEditor("/loop-editor/tpl-1");
     await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
     await act(async () => {

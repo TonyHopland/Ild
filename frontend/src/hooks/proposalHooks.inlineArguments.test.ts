@@ -157,4 +157,44 @@ describe("another kind for the same target", () => {
     expect(readTemplates).toHaveBeenCalledTimes(1);
     expect(readOthers).toHaveBeenCalledTimes(2);
   });
+
+  test("the pending count shows the new kind's empty value, and never the old kind's late answer", async () => {
+    const hub = fakeHub();
+    let answerTemplates: (count: number) => void = () => {};
+    let answerVariables: (count: number) => void = () => {};
+    const readTemplates = vi.fn(
+      () => new Promise<number>((resolve) => (answerTemplates = resolve)),
+    );
+    const readVariables = vi.fn(
+      () => new Promise<number>((resolve) => (answerVariables = resolve)),
+    );
+    const templates: ProposalCountKind<number> = {
+      key: "loop-template",
+      read: () => readTemplates(),
+      empty: 0,
+      hint: "LoopTemplateProposalsChanged",
+    };
+    const variables: ProposalCountKind<number> = {
+      key: "global-variable",
+      read: () => readVariables(),
+      empty: -1,
+      hint: "GlobalVariableProposalsChanged",
+    };
+
+    const { result, rerender } = renderHook(
+      ({ kind }) => usePendingProposalCount(kind, hub.connection),
+      { initialProps: { kind: templates } },
+    );
+    await waitFor(() => expect(readTemplates).toHaveBeenCalledTimes(1));
+    rerender({ kind: variables });
+    await waitFor(() => expect(readVariables).toHaveBeenCalledTimes(1));
+    expect(result.current).toBe(-1);
+
+    await act(async () => answerTemplates(2));
+    await settle();
+    expect(result.current).toBe(-1);
+
+    await act(async () => answerVariables(5));
+    await waitFor(() => expect(result.current).toBe(5));
+  });
 });

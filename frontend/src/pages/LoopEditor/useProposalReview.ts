@@ -20,7 +20,9 @@ export interface SavedFrom {
 }
 
 /** What a review does to the editor's canvas. Read when it is used, never during render. */
-export interface ReviewEditor {
+interface ReviewEditor {
+  /** The template list as the editor last read it. */
+  currentTemplates: () => LoopTemplate[];
   /** Reloads the template list, and resolves to it as it is now. */
   loadTemplates: () => Promise<LoopTemplate[]>;
   /** Opens the saved version of `template` on the canvas. */
@@ -36,7 +38,6 @@ export interface ReviewEditor {
 interface ProposalReviewOptions {
   /** The page's work-item hub connection; the review joins and listens on it. */
   board: SignalRConnection;
-  templates: LoopTemplate[];
   /**
    * The route's template has been opened on the canvas for this route. A
    * template still selected from before the route named it does not count: the
@@ -56,7 +57,6 @@ interface ProposalReviewOptions {
  */
 export function useProposalReview({
   board,
-  templates,
   routeTemplateOpen,
   selectedTemplate,
   readOnlyVersion,
@@ -75,7 +75,6 @@ export function useProposalReview({
   const [replaceConfirm, setReplaceConfirm] = useState<ProposalReview | null>(null);
   const reviewRef = useLatest(review);
   const selectedTemplateRef = useLatest(selectedTemplate);
-  const templatesRef = useLatest(templates);
   const editorRef = useLatest(editor);
   // Bumped per `?proposal=` request and whenever the review is closed, so only
   // the latest request's answer lands; and per re-read of the reviewed proposal.
@@ -146,7 +145,9 @@ export function useProposalReview({
   // behind rather than replaced.
   const handleListedProposalDecided = useCallback(
     async (templateId: string) => {
-      const known = templatesRef.current.find((template) => template.id === templateId)?.version;
+      const known = editorRef.current
+        .currentTemplates()
+        .find((template) => template.id === templateId)?.version;
       const loaded = await editorRef.current.loadTemplates();
       const open = selectedTemplateRef.current;
       const latest = loaded.find((template) => template.id === templateId);
@@ -158,7 +159,7 @@ export function useProposalReview({
           `Version ${latest.version} of this template was just saved from a proposal. The loop open here does not include it, and saving it replaces version ${latest.version}.`,
         );
     },
-    [templatesRef, editorRef, selectedTemplateRef, reviewRef],
+    [editorRef, selectedTemplateRef, reviewRef],
   );
 
   // The request in the URL is taken once the route's template is open, and then
@@ -167,7 +168,9 @@ export function useProposalReview({
     if (!requestedProposalId || !routeTemplateId) return;
     // An old version open read-only is left for the latest, which a review edits.
     if (readOnlyVersion !== null) {
-      const latest = templatesRef.current.find((template) => template.id === routeTemplateId);
+      const latest = editorRef.current
+        .currentTemplates()
+        .find((template) => template.id === routeTemplateId);
       if (latest) editorRef.current.showTemplate(latest);
       return;
     }
@@ -200,7 +203,6 @@ export function useProposalReview({
     routeTemplateOpen,
     selectedTemplateId,
     readOnlyVersion,
-    templatesRef,
     editorRef,
     navigate,
     openReview,
