@@ -104,21 +104,28 @@ public class LoopTemplateManager : ILoopTemplateManager
         if (!Enum.TryParse<RecoveryPolicy>(JsonText.Of(root["recoveryPolicy"]), ignoreCase: true, out var policy) || !Enum.IsDefined(policy))
             return Refused($"recoveryPolicy must be one of {string.Join(", ", Enum.GetNames<RecoveryPolicy>())}.");
 
-        var check = LoopDocumentEditor.Check(root, NormalizeOutputs);
-        if (check.Graph is not { } graph)
-            return Refused($"The document's nodes or edges are not in the {LoopDocumentUpgrader.V2} shape: {check.ParseError}");
-
         var request = new LoopTemplateCreateRequest
         {
             Name = JsonText.Of(root["name"]) ?? string.Empty,
             Description = JsonText.Of(root["description"]) ?? string.Empty,
             RecoveryPolicy = policy,
-            Nodes = graph.Nodes,
-            Edges = graph.Edges,
         };
-        var refused = new List<ValidationResult>();
-        if (!Validator.TryValidateObject(request, new ValidationContext(request), refused, validateAllProperties: true))
-            return Refused(string.Join(" ", refused.Select(r => r.ErrorMessage)));
+        // The request is refused for its name and description before its graph is
+        // normalised or validated, which a malformed graph would not survive.
+        var check = LoopDocumentEditor.Check(root, graph =>
+        {
+            var refused = new List<ValidationResult>();
+            if (!Validator.TryValidateObject(request, new ValidationContext(request), refused, validateAllProperties: true))
+                return string.Join(" ", refused.Select(r => r.ErrorMessage));
+            NormalizeOutputs(graph);
+            return null;
+        });
+        if (check.Graph is not { } graph)
+            return Refused($"The document's nodes or edges are not in the {LoopDocumentUpgrader.V2} shape: {check.ParseError}");
+        if (check.Refusal is { } refusal)
+            return Refused(refusal);
+        request.Nodes = graph.Nodes;
+        request.Edges = graph.Edges;
 
         return check.ValidationErrors.Count > 0
             ? new ProposedLoopDocument(null, null, null, check.ValidationErrors)

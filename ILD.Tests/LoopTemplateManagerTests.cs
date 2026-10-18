@@ -4,6 +4,7 @@ using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Implementations;
 using ILD.Data;
 using Microsoft.EntityFrameworkCore;
+using Moq;
 
 namespace ILD.Tests;
 
@@ -337,5 +338,17 @@ public class LoopTemplateManagerTests
             foreach (var (label, config) in configs)
                 Assert.Equal(expected.GetValueOrDefault(label, new()), VisibleOf(config));
         }
+    }
+
+    [Fact]
+    public void A_proposed_document_with_no_name_is_refused_for_it_before_its_nodes_are_normalised_or_validated()
+    {
+        var result = new LoopTemplateManager(Mock.Of<ILoopTemplateStore>()).CheckProposedDocument(
+            """{"$schema":"ild-loop-template/v2","name":"","recoveryPolicy":"AutoResume","nodes":[null],"edges":[]}""");
+
+        Assert.Equal("The Name field is required.", result.Error);
+        Assert.Null(result.Request);
+        Assert.Null(result.Document);
+        Assert.Empty(result.ValidationErrors);
     }
 }

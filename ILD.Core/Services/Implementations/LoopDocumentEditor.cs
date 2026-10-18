@@ -45,14 +45,16 @@ public sealed record LoopEditResult(
 }
 
 /// <summary>
-/// A loop document after <see cref="LoopDocumentEditor.Check(string, Action{LoopTemplateGraph}?)"/>:
-/// the document as upgraded, and either its graph with every rule it breaks, or
-/// why its graph could not be read.
+/// A loop document after <see cref="LoopDocumentEditor.Check(string, Func{LoopTemplateGraph, string?}?)"/>:
+/// the document as upgraded, and either its graph with every rule it breaks, its
+/// graph with why the caller's own checks refused it, or why its graph could not
+/// be read.
 /// </summary>
 internal sealed record LoopDocumentCheck(
     string Document,
     LoopTemplateGraph? Graph,
     string? ParseError,
+    string? Refusal,
     IReadOnlyList<string> ValidationErrors);
 
 /// <summary>
@@ -349,12 +351,13 @@ public static class LoopDocumentEditor
     /// proposal's alike: upgraded to v2 (an old-format document; any other is
     /// left as it is), its <c>nodes</c>/<c>edges</c> read into the graph DTO, and
     /// that graph run through <see cref="LoopTemplateValidator"/>.
-    /// <paramref name="normalize"/> runs on the graph before it is validated. A
+    /// <paramref name="prepare"/> runs on the graph before it is validated, and a
+    /// refusal it returns ends the check there. A
     /// parse failure comes back as <see cref="LoopDocumentCheck.ParseError"/>,
     /// apart from graph-validation errors, so callers can tell "not JSON" from
     /// "graph is wrong".
     /// </summary>
-    internal static LoopDocumentCheck Check(string document, Action<LoopTemplateGraph>? normalize = null)
+    internal static LoopDocumentCheck Check(string document, Func<LoopTemplateGraph, string?>? prepare = null)
     {
         document = LoopDocumentUpgrader.Upgrade(document);
         LoopDocumentShape? shape;
@@ -364,23 +367,24 @@ public static class LoopDocumentEditor
         }
         catch (JsonException ex)
         {
-            return new(document, null, ex.Message, []);
+            return new(document, null, ex.Message, null, []);
         }
 
         if (shape == null)
-            return new(document, null, "The loop document is empty.", []);
+            return new(document, null, "The loop document is empty.", null, []);
 
         var graph = new LoopTemplateGraph(
             Guid.Empty,
             shape.Nodes ?? new List<LoopNodeDto>(),
             shape.Edges ?? new List<LoopNodeEdgeDto>());
-        normalize?.Invoke(graph);
-        return new(document, graph, null, LoopTemplateValidator.Validate(graph));
+        return prepare?.Invoke(graph) is { } refusal
+            ? new(document, graph, null, refusal, [])
+            : new(document, graph, null, null, LoopTemplateValidator.Validate(graph));
     }
 
-    /// <summary><see cref="Check(string, Action{LoopTemplateGraph}?)"/> over a parsed document, as compact JSON.</summary>
-    internal static LoopDocumentCheck Check(JsonObject root, Action<LoopTemplateGraph>? normalize = null)
-        => Check(root.ToJsonString(GraphParseOptions), normalize);
+    /// <summary><see cref="Check(string, Func{LoopTemplateGraph, string?}?)"/> over a parsed document, as compact JSON.</summary>
+    internal static LoopDocumentCheck Check(JsonObject root, Func<LoopTemplateGraph, string?>? prepare = null)
+        => Check(root.ToJsonString(GraphParseOptions), prepare);
 
     private static int CountOccurrences(string haystack, string needle)
     {
