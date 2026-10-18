@@ -3,7 +3,7 @@ import { LoopTemplateProposalSource } from "../../../components/LoopTemplateProp
 import ProposalDecision from "../../../components/ProposalDecision";
 import { loopTemplateProposalService } from "../../../services/auth";
 import type { LoopTemplateProposal } from "../../../types";
-import "../../../components/EditProposalCard.css";
+import "../../../components/ProposalCard.css";
 import "../../../components/LoopTemplateProposalCard.css";
 
 interface ProposalReviewBannerProps {
@@ -31,17 +31,17 @@ export default function ProposalReviewBanner({
 }: ProposalReviewBannerProps) {
   const pending = proposal.status === "Pending";
   return (
-    <section className="proposal-review-banner" aria-label="Proposal under review">
-      <div className="proposal-review-header">
+    <section className="proposal-card proposal-review-banner" aria-label="Proposal under review">
+      <div className="proposal-header proposal-review-header">
         <span>
           Reviewing a proposed change, made against version {proposal.baseVersion}. It is not saved
           until you save it.
         </span>
-        <span className="proposal-review-source">
+        <span className="proposal-source proposal-review-source">
           <LoopTemplateProposalSource proposal={proposal} />
         </span>
       </div>
-      <p className="edit-proposal-rationale">{proposal.rationale}</p>
+      <p className="proposal-rationale">{proposal.rationale}</p>
       {!pending && (
         <p className="proposal-review-closed" role="status">
           {proposal.status === "Stale"
@@ -51,11 +51,15 @@ export default function ProposalReviewBanner({
       )}
       <LoopTemplateChangeList changes={proposal.changes} />
       <div className="proposal-review-actions">
-        <button type="button" className="btn btn-secondary btn-sm" onClick={onDiscard}>
-          Discard
-        </button>
         <ProposalDecision
           pending={pending}
+          extraActions={
+            <button type="button" className="btn btn-secondary btn-sm" onClick={onDiscard}>
+              Discard
+            </button>
+          }
+          extraActionsPlacement="first"
+          extraActionsOnlyWhilePending={false}
           reject={(reason) => loopTemplateProposalService.reject(proposal.id, reason)}
           onSettled={(refusal, decided) => {
             if (decided) onRejected();

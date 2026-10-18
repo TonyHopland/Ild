@@ -7,7 +7,8 @@ namespace ILD.Data.Stores.Interfaces;
 /// Loop Template Proposals (ADR-0028): agents propose a whole new document for a
 /// saved loop template against its latest version, and a human saves or
 /// rejects it. Saving is a new template version, written by
-/// <see cref="ILoopTemplateStore.AddVersionAsync"/>.
+/// <see cref="ILoopTemplateStore.SaveProposalAsync"/>, or by
+/// <see cref="ILoopTemplateStore.AddVersionAsync"/> for a Loop Editor save from it.
 /// </summary>
 public interface ILoopTemplateProposalStore
 {
@@ -17,17 +18,17 @@ public interface ILoopTemplateProposalStore
     /// earlier pending proposal for the same template is superseded in the same
     /// transaction.
     /// </summary>
-    Task<LoopTemplateProposeResult> ProposeAsync(LoopTemplateProposal proposal, CancellationToken ct = default);
+    Task<LoopTemplateProposeResult> ProposeAsync(LoopTemplateProposal proposal, CancellationToken ct);
 
     /// <summary>Newest first.</summary>
-    Task<IReadOnlyList<LoopTemplateProposalEntry>> ListAsync(LoopTemplateProposalQuery query, CancellationToken ct = default);
+    Task<IReadOnlyList<LoopTemplateProposalEntry>> ListAsync(LoopTemplateProposalQuery query, CancellationToken ct);
 
-    Task<LoopTemplateProposalEntry?> GetAsync(Guid id, CancellationToken ct = default);
+    Task<LoopTemplateProposalEntry?> GetAsync(Guid id, CancellationToken ct);
 
     /// <summary>Pending proposals per template; a template with none is absent.</summary>
-    Task<IReadOnlyDictionary<Guid, int>> CountPendingByTemplateAsync(CancellationToken ct = default);
+    Task<IReadOnlyDictionary<Guid, int>> CountPendingByTemplateAsync(CancellationToken ct);
 
-    Task<LoopTemplateProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct = default);
+    Task<LoopTemplateProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct);
 }
 
 /// <summary>Every filter set narrows the list; none set lists every proposal.</summary>
@@ -79,9 +80,3 @@ public sealed record LoopTemplateProposalDecision(
     LoopTemplateProposalDecisionOutcome Outcome,
     LoopTemplateProposalEntry? Entry,
     IReadOnlyList<Guid> ChangedChatSessionIds);
-
-/// <summary>The pending proposals a template write made stale, and the chats that made them.</summary>
-public sealed record StaledLoopTemplateProposals(int Count, IReadOnlyList<Guid> ChatSessionIds)
-{
-    public static readonly StaledLoopTemplateProposals None = new(0, []);
-}

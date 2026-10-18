@@ -1576,31 +1576,22 @@
   grid-column: 2;
   max-height: 16rem;
   overflow: auto;
-  background: #22223a;
-  border: 1px solid #3a3a5c;
-  border-left: 3px solid #d97706;
-  border-radius: 0.375rem;
-  padding: 0.6rem 0.75rem;
-  font-size: 0.8rem;
-  color: #e0e0e0;
 }
 
-.proposal-review-header {
-  display: flex;
+/* Two classes, since the shared card sheet may load after this one. */
+.proposal-card.proposal-review-banner {
+  margin-bottom: 0;
+}
+
+.proposal-header.proposal-review-header {
   flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.4rem;
+  align-items: normal;
   font-weight: 600;
 }
 
-.proposal-review-source {
+.proposal-source.proposal-review-source {
+  margin-top: 0;
   font-weight: 400;
-  color: #a0a0b0;
-}
-
-.proposal-review-source a {
-  color: #a5b4fc;
 }
 
 .proposal-review-closed {
@@ -1613,10 +1604,6 @@
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 0.4rem;
-}
-
-.proposal-review-actions > .btn {
-  margin-top: 0.5rem;
 }
 
 @media (max-width: 900px) {

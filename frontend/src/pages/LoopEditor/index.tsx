@@ -1,6 +1,6 @@
 import "./LoopEditor.css";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import {
   ReactFlow,
   Background,
@@ -21,14 +21,8 @@ import LoopEdgeComponent from "../../components/LoopEdgeComponent";
 import { LoopEdgeInteractionContext } from "../../components/loopEdgeInteraction";
 import ConfirmModal from "../../components/ConfirmModal";
 import ErrorBanner from "../../components/ErrorBanner";
-import {
-  loopTemplateService,
-  aiProviderService,
-  globalVariableService,
-  loopTemplateProposalService,
-} from "../../services/auth";
+import { loopTemplateService, aiProviderService, globalVariableService } from "../../services/auth";
 import { useSignalR } from "../../hooks/useSignalR";
-import type { TypedSignalRMessage } from "../../types/signalr";
 import { usePendingLoopTemplateProposalCounts } from "../../hooks/usePendingLoopTemplateProposalCounts";
 import { setOpenLoopProvider } from "../../utils/openLoopDocument";
 import { getCurrentChatSessionId, subscribeChatSessionId } from "../../services/chatSessionStore";
@@ -87,7 +81,6 @@ import {
   type LoopNodeEdge,
   type LoopTemplate,
   type LoopTemplateExport,
-  type LoopTemplateProposal,
   type ChatLoopUpdatePayload,
   EdgeType,
   NodeType,
@@ -99,12 +92,14 @@ import { LoopEditorSidebar } from "./components/LoopEditorSidebar";
 import { NodeSettingsModal } from "./components/NodeSettingsModal";
 import ProposalReviewBanner from "./components/ProposalReviewBanner";
 import SaveDiffModal from "./components/SaveDiffModal";
+import { useProposalReview, type SavedFrom } from "./useProposalReview";
 import type {
   ImportFeedbackItem,
   LoopTemplateVersion,
   NodeSettingsSnapshot,
   SessionPlaceholderUsage,
 } from "./types";
+import { loadErrorMessage } from "./utils/loadErrorMessage";
 import { validateLoopGraphLocally } from "./utils/loopGraphValidation";
 import { isTemplatedSessionName, sessionPlaceholderError } from "./utils/sessionPlaceholder";
 import { resolveProviderForTag } from "../../utils/providerTags";
@@ -124,18 +119,6 @@ function canvasExportOf(template: LoopTemplate): string {
     null,
     2,
   );
-}
-
-/** A Loop Template Proposal open in the editor as its unsaved working copy, on its template. */
-interface ProposalReview {
-  templateId: string;
-  proposal: LoopTemplateProposal;
-}
-
-function loadErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string") return error;
-  return fallback;
 }
 
 const nodeTypes = {
@@ -332,19 +315,6 @@ export default function LoopEditor() {
     /** The proposal under review when Save was clicked; the server decides whether it applies. */
     fromProposalId: string | null;
   } | null>(null);
-  // Reviewing a Loop Template Proposal (ADR-0028): the proposal open as the
-  // working copy, and one asked for over unsaved changes awaiting a confirm.
-  // Every reply about one is checked against these before it lands.
-  const [review, setReview] = useState<ProposalReview | null>(null);
-  const [replaceConfirm, setReplaceConfirm] = useState<ProposalReview | null>(null);
-  const reviewRef = useRef<ProposalReview | null>(null);
-  reviewRef.current = review;
-  // Bumped whenever the canvas is replaced, so an answer to a review asked for
-  // before that is dropped; and per re-read of the reviewed proposal.
-  const reviewRequestRef = useRef(0);
-  const reviewRefreshRef = useRef(0);
-  const [searchParams] = useSearchParams();
-  const requestedProposalId = searchParams.get("proposal");
   // The page's one work-item hub connection: the proposal counts, the open
   // template's proposal list and the review all listen on it.
   const board = useSignalR("/hubs/work-item");
@@ -491,7 +461,8 @@ export default function LoopEditor() {
     [setEdges],
   );
 
-  const loadTemplates = useCallback(async () => {
+  // Resolves to the list as it now is: the one just read, or the last one when the read failed.
+  const loadTemplates = useCallback(async (): Promise<LoopTemplate[]> => {
     try {
       const data = await loopTemplateService.getAll({ includeArchived: true });
       setTemplates(data);
@@ -501,6 +472,7 @@ export default function LoopEditor() {
     } finally {
       setTemplatesLoaded(true);
     }
+    return templatesRef.current;
   }, []);
 
   const loadAiProviders = async () => {
@@ -512,18 +484,52 @@ export default function LoopEditor() {
     }
   };
 
-  const closeReview = useCallback(() => {
-    reviewRequestRef.current++;
-    setReview(null);
-    setReplaceConfirm(null);
-  }, []);
+  // The template the route asked for, once it is open on the canvas.
+  const [openedTemplateId, setOpenedTemplateId] = useState<string | null>(null);
+
+  const proposalReview = useProposalReview({
+    board,
+    routeTemplateOpen: routeTemplateId !== undefined && openedTemplateId === routeTemplateId,
+    selectedTemplate,
+    readOnlyVersion,
+    editor: {
+      currentTemplates: () => templatesRef.current,
+      loadTemplates,
+      showTemplate: (template) => selectTemplate(template),
+      loadDocument: (rawDocument, rejectedAs) => loadDocument(rawDocument, rejectedAs),
+      isCanvasDirty: () => isCanvasDirty(),
+      markClean: (loaded) => markClean(loaded),
+      setErrorText,
+    },
+  });
+  const {
+    shownReview,
+    saveFromProposalId,
+    closeReview,
+    refreshReview,
+    discardReview,
+    handleListedProposalDecided,
+  } = proposalReview;
+
+  // Every replacement of the canvas ends the open proposal review, except a
+  // save's (`savedFrom` given): that ends the review only if it is the one the
+  // save was made from, since another can have opened while the save ran.
+  const replaceCanvas = useCallback(
+    (saved: string, clean: string, savedFrom?: SavedFrom) => {
+      lastSavedExportRef.current = saved;
+      cleanExportRef.current = clean;
+      closeReview(savedFrom);
+    },
+    [closeReview],
+  );
 
   const selectTemplate = useCallback(
     (template: LoopTemplate) => {
-      closeReview();
+      replaceCanvas(
+        JSON.stringify(serializeForExport(template), null, 2),
+        canvasExportOf(template),
+      );
       setSelectedTemplate(template);
-      lastSavedExportRef.current = JSON.stringify(serializeForExport(template), null, 2);
-      cleanExportRef.current = canvasExportOf(template);
       setNodes(templateToNodes(template));
       setEdges(templateToEdges(template));
       setValidationErrors([]);
@@ -532,24 +538,23 @@ export default function LoopEditor() {
       setNewTemplateName("");
       setReadOnlyVersion(null);
     },
-    [setEdges, setNodes, closeReview],
+    [setEdges, setNodes, replaceCanvas],
   );
 
   // The URL is the source of truth for which template is open, so a link to
   // `/loop-editor/<id>` opens that template's graph directly. Tracking the id we
   // last opened keeps an unrelated `templates` refresh (save, clone, archive)
   // from re-loading — and clobbering — the canvas the user is editing.
-  const openedTemplateIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!routeTemplateId) {
-      openedTemplateIdRef.current = null;
+      setOpenedTemplateId(null);
       return;
     }
-    if (openedTemplateIdRef.current === routeTemplateId) return;
+    if (openedTemplateId === routeTemplateId) return;
 
     const match = templates.find((template) => template.id === routeTemplateId);
     if (match) {
-      openedTemplateIdRef.current = routeTemplateId;
+      setOpenedTemplateId(routeTemplateId);
       selectTemplate(match);
       return;
     }
@@ -558,13 +563,11 @@ export default function LoopEditor() {
     if (templatesLoaded) {
       void navigate("/loop-editor", { replace: true });
     }
-  }, [routeTemplateId, templates, templatesLoaded, selectTemplate, navigate]);
+  }, [routeTemplateId, openedTemplateId, templates, templatesLoaded, selectTemplate, navigate]);
 
   const handleNewTemplate = () => {
-    closeReview();
+    replaceCanvas("", "");
     setSelectedTemplate(null);
-    lastSavedExportRef.current = "";
-    cleanExportRef.current = "";
     setNodes([]);
     setEdges([]);
     setValidationErrors([]);
@@ -601,17 +604,13 @@ export default function LoopEditor() {
     const before = lastSavedExportRef.current;
     const frozenNodes = nodesToLoopNodes(nodesRef.current);
     const frozenEdges = edgesToLoopNodeEdges(edgesRef.current);
-    const reviewing = reviewRef.current;
     setSaveDiff({
       before,
       after,
       snapshot,
       nodes: frozenNodes,
       edges: frozenEdges,
-      fromProposalId:
-        reviewing && reviewing.templateId === selectedTemplateRef.current?.id
-          ? reviewing.proposal.id
-          : null,
+      fromProposalId: saveFromProposalId,
     });
   };
 
@@ -667,13 +666,10 @@ export default function LoopEditor() {
       // The document we just persisted becomes the new diff baseline — it is
       // exactly the snapshot the modal reviewed (pending.after === serialized
       // pending.snapshot). Refresh here (never in applyLoopDocument) so a later
-      // re-save diffs against what is now in the DB.
-      lastSavedExportRef.current = pending.after;
-      cleanExportRef.current = pending.after;
-      // Saved from review: the proposal is Applied, or the save was an ordinary
-      // one if it had gone stale. Either way the review is over.
-      if (pending.fromProposalId && reviewRef.current?.proposal.id === pending.fromProposalId)
-        closeReview();
+      // re-save diffs against what is now in the DB. Saved from review: the
+      // proposal is Applied, or the save was an ordinary one if it had gone
+      // stale. Either way that review is over.
+      replaceCanvas(pending.after, pending.after, { proposalId: pending.fromProposalId });
 
       setSaveSuccess(true);
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
@@ -713,9 +709,8 @@ export default function LoopEditor() {
       } else {
         await loopTemplateService.archive(template.id);
         if (selectedTemplate?.id === template.id) {
-          closeReview();
+          replaceCanvas("", "");
           setSelectedTemplate(null);
-          cleanExportRef.current = "";
           setNodes([]);
           setEdges([]);
           setReadOnlyVersion(null);
@@ -746,10 +741,11 @@ export default function LoopEditor() {
         const version = await loopTemplateService.getById(
           `${loopTemplateId}/versions/${versionNumber}`,
         );
-        closeReview();
+        replaceCanvas(
+          JSON.stringify(serializeForExport(version), null, 2),
+          canvasExportOf(version),
+        );
         setSelectedTemplate(version);
-        lastSavedExportRef.current = JSON.stringify(serializeForExport(version), null, 2);
-        cleanExportRef.current = canvasExportOf(version);
         setNodes(templateToNodes(version));
         setEdges(templateToEdges(version));
         setReadOnlyVersion(versionNumber);
@@ -761,15 +757,13 @@ export default function LoopEditor() {
         setErrorText(loadErrorMessage(error, "Failed to load version."));
       }
     },
-    [setEdges, setNodes, closeReview],
+    [setEdges, setNodes, replaceCanvas],
   );
 
   const exitReadOnlyMode = () => {
-    closeReview();
+    replaceCanvas("", "");
     setReadOnlyVersion(null);
     setSelectedTemplate(null);
-    lastSavedExportRef.current = "";
-    cleanExportRef.current = "";
     setNodes([]);
     setEdges([]);
     if (routeTemplateId) void navigate("/loop-editor");
@@ -893,167 +887,14 @@ export default function LoopEditor() {
     [loadDocument],
   );
 
-  // --- Reviewing a Loop Template Proposal (ADR-0028) ---
-  // A Review link opens `/loop-editor/<template>?proposal=<id>`. The proposal's
-  // document becomes the unsaved working copy of that template, which the chat's
-  // loop tools go on editing like any other, and Save names the proposal.
-
   const isCanvasDirty = useCallback(
     () => JSON.stringify(buildExportData(), null, 2) !== cleanExportRef.current,
     [buildExportData],
   );
 
-  const openReview = useCallback(
-    (next: ProposalReview) => {
-      if (selectedTemplateRef.current?.id !== next.templateId) return;
-      const loaded = loadDocument(next.proposal.document ?? "", "The proposal could not be opened");
-      if (!loaded) return;
-      cleanExportRef.current = canvasExportOf(loaded);
-      setReview(next);
-    },
-    [loadDocument],
-  );
-
-  // Re-reads the reviewed proposal, or `proposalId` when its review is only just
-  // being opened, for its status; the copy on the canvas is left as it is.
-  const refreshReview = useCallback((proposalId = reviewRef.current?.proposal.id) => {
-    if (!proposalId) return;
-    const refresh = ++reviewRefreshRef.current;
-    void (async () => {
-      try {
-        const proposal = await loopTemplateProposalService.get(proposalId);
-        if (refresh !== reviewRefreshRef.current) return;
-        setReview((current) =>
-          current?.proposal.id === proposalId ? { ...current, proposal } : current,
-        );
-      } catch (err) {
-        console.error(err);
-      }
-    })();
+  const markClean = useCallback((loaded: LoopTemplate) => {
+    cleanExportRef.current = canvasExportOf(loaded);
   }, []);
-
-  // Back to the saved version as it is now, which may be newer than the one the
-  // review was opened on.
-  const discardReview = useCallback(async () => {
-    const current = reviewRef.current;
-    if (!current) return;
-    await loadTemplates();
-    if (reviewRef.current?.proposal.id !== current.proposal.id) return;
-    const saved = templatesRef.current.find((template) => template.id === current.templateId);
-    if (saved) selectTemplate(saved);
-    else closeReview();
-  }, [loadTemplates, selectTemplate, closeReview]);
-
-  // A proposal saved from the template list is a new version of that template:
-  // show it, unless the canvas holds work of its own, which is then told it is
-  // behind rather than replaced.
-  const handleListedProposalDecided = useCallback(
-    async (templateId: string) => {
-      const known = templatesRef.current.find((template) => template.id === templateId)?.version;
-      await loadTemplates();
-      const open = selectedTemplateRef.current;
-      const latest = templatesRef.current.find((template) => template.id === templateId);
-      if (!open || open.id !== templateId || !latest || latest.version === known) return;
-      if (!reviewRef.current && !isCanvasDirty()) selectTemplate(latest);
-      else
-        setErrorText(
-          `Version ${latest.version} of this template was just saved from a proposal. The loop open here does not include it, and saving it replaces version ${latest.version}.`,
-        );
-    },
-    [loadTemplates, isCanvasDirty, selectTemplate],
-  );
-
-  const selectedTemplateId = selectedTemplate?.id ?? null;
-  // The request in the URL is taken once the template it names is open, and then
-  // dropped from the URL, so following the same link again asks again.
-  useEffect(() => {
-    if (!requestedProposalId || !routeTemplateId) return;
-    // An old version open read-only is left for the latest, which a review edits.
-    if (readOnlyVersion !== null) {
-      const latest = templatesRef.current.find((template) => template.id === routeTemplateId);
-      if (latest) selectTemplate(latest);
-      return;
-    }
-    if (selectedTemplateId !== routeTemplateId) return;
-    const templateId = routeTemplateId;
-    const request = ++reviewRequestRef.current;
-    void navigate(`/loop-editor/${templateId}`, { replace: true });
-    void (async () => {
-      let proposal: LoopTemplateProposal;
-      try {
-        proposal = await loopTemplateProposalService.get(requestedProposalId);
-      } catch (error) {
-        if (request === reviewRequestRef.current)
-          setErrorText(loadErrorMessage(error, "Failed to load the proposal."));
-        return;
-      }
-      if (request !== reviewRequestRef.current) return;
-      if (proposal.templateId !== templateId || proposal.status !== "Pending") {
-        setErrorText(
-          `This proposal is ${proposal.status} and can no longer be reviewed on this template.`,
-        );
-        return;
-      }
-      if (isCanvasDirty()) setReplaceConfirm({ templateId, proposal });
-      else openReview({ templateId, proposal });
-    })();
-  }, [
-    requestedProposalId,
-    routeTemplateId,
-    selectedTemplateId,
-    readOnlyVersion,
-    selectTemplate,
-    navigate,
-    isCanvasDirty,
-    openReview,
-  ]);
-
-  const confirmReplace = () => {
-    const pending = replaceConfirm;
-    setReplaceConfirm(null);
-    if (!pending) return;
-    openReview(pending);
-    // It may have been decided while the question was open.
-    refreshReview(pending.proposal.id);
-  };
-
-  // The board's hub says when a template's proposals change, the reviewed one
-  // going stale included. Joined on every (re)connect, and the reviewed proposal
-  // re-read then, since a hint sent while disconnected is lost.
-  const {
-    connectionState: boardConnectionState,
-    on: onBoard,
-    off: offBoard,
-    invoke: invokeBoard,
-  } = board;
-  // Read through a ref: joining again is for a (re)connect, not a new function.
-  const invokeBoardRef = useRef(invokeBoard);
-  invokeBoardRef.current = invokeBoard;
-
-  useEffect(() => {
-    if (boardConnectionState !== "connected") return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        await invokeBoardRef.current("SubscribeToWorkItems");
-      } catch (err) {
-        console.error(err);
-        return;
-      }
-      if (!cancelled) refreshReview();
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [boardConnectionState, refreshReview]);
-
-  useEffect(() => {
-    const onChanged = (msg: TypedSignalRMessage<"LoopTemplateProposalsChanged">) => {
-      if (msg.payload.templateId === reviewRef.current?.templateId) refreshReview();
-    };
-    onBoard("LoopTemplateProposalsChanged", onChanged);
-    return () => offBoard("LoopTemplateProposalsChanged", onChanged);
-  }, [onBoard, offBoard, refreshReview]);
 
   // Join the current session's hub group, and leave it when the id changes (e.g.
   // the user ends one session and starts another) so we never linger on a stale
@@ -1282,7 +1123,7 @@ export default function LoopEditor() {
   // the viewport.
   const canvasKey = isNewTemplate
     ? "new"
-    : `${selectedTemplate?.id ?? "none"}:${readOnlyVersion ?? `v${selectedTemplate?.version}`}:${review?.proposal.id ?? "saved"}`;
+    : `${selectedTemplate?.id ?? "none"}:${readOnlyVersion ?? `v${selectedTemplate?.version}`}:${shownReview?.proposal.id ?? "saved"}`;
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {
@@ -1784,7 +1625,6 @@ export default function LoopEditor() {
   );
 
   const selectedTemplateName = selectedTemplate?.name || newTemplateName || "Untitled";
-  const reviewShown = review !== null && review.templateId === selectedTemplate?.id;
   const showSidebar = sidebarVisible || isNarrow;
 
   return (
@@ -1874,12 +1714,12 @@ export default function LoopEditor() {
       )}
 
       <ConfirmModal
-        isOpen={replaceConfirm !== null}
+        isOpen={proposalReview.confirmingReplace}
         title="Replace unsaved changes?"
         message="The loop has changes that are not saved. Open the proposal in their place and lose them?"
         confirmText="Open proposal"
-        onConfirm={confirmReplace}
-        onCancel={() => setReplaceConfirm(null)}
+        onConfirm={proposalReview.confirmReplace}
+        onCancel={proposalReview.cancelReplace}
       />
 
       <LoopEditorHeader readOnlyVersion={readOnlyVersion} onExitReadOnlyMode={exitReadOnlyMode} />
@@ -1901,7 +1741,7 @@ export default function LoopEditor() {
             selectedTemplateId={selectedTemplate?.id ?? null}
             pendingProposalCounts={pendingProposalCounts}
             board={board}
-            reviewedProposalId={reviewShown ? review.proposal.id : null}
+            reviewedProposalId={shownReview?.proposal.id ?? null}
             onListedProposalDecided={(templateId) => void handleListedProposalDecided(templateId)}
             cloningTemplateId={cloningTemplateId}
             cloneName={cloneName}
@@ -1949,7 +1789,7 @@ export default function LoopEditor() {
         )}
 
         <div
-          className={`loop-editor-workspace ${reviewShown ? "loop-editor-workspace-reviewing" : ""}`}
+          className={`loop-editor-workspace ${shownReview ? "loop-editor-workspace-reviewing" : ""}`}
         >
           <div className={`node-palette ${readOnlyVersion !== null ? "palette-disabled" : ""}`}>
             <div className="palette-header">Drag &amp; Drop</div>
@@ -1965,10 +1805,10 @@ export default function LoopEditor() {
             ))}
           </div>
 
-          {reviewShown && (
+          {shownReview && (
             <ProposalReviewBanner
-              key={review.proposal.id}
-              proposal={review.proposal}
+              key={shownReview.proposal.id}
+              proposal={shownReview.proposal}
               onDiscard={() => void discardReview()}
               onRejected={() => void discardReview()}
               onRefused={() => refreshReview()}

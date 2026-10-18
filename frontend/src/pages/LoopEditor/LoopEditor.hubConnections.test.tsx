@@ -52,6 +52,7 @@ vi.mock("@microsoft/signalr", () => ({
 }));
 
 import LoopEditor from "./index";
+import { reply, stubFetch } from "../../test-support";
 
 const template = {
   id: "tpl-1",
@@ -77,25 +78,17 @@ beforeEach(() => {
   builtFor.length = 0;
   asked.length = 0;
   localStorage.setItem("auth_token", "test-token");
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string) => {
-      const path = new URL(input, "http://localhost").pathname;
-      asked.push(path);
-      const body =
-        path === "/api/v1/looptemplates"
-          ? [template]
-          : path.endsWith("/pending-counts") || path.endsWith("/node-outputs")
-            ? {}
-            : [];
-      return {
-        ok: true,
-        status: 200,
-        statusText: "",
-        text: () => Promise.resolve(JSON.stringify(body)),
-      } as Response;
-    }),
-  );
+  stubFetch(({ path }) => {
+    asked.push(path);
+    return reply(
+      200,
+      path === "/api/v1/looptemplates"
+        ? [template]
+        : path.endsWith("/pending-counts") || path.endsWith("/node-outputs")
+          ? {}
+          : [],
+    );
+  });
 });
 
 afterEach(() => {

@@ -56,7 +56,7 @@ public static class LoopTemplateChanges
         var nodes = ById(b.Nodes);
         if (a.Nodes.Any(n => !nodes.TryGetValue(n.Id, out var match) || FieldsThatDiffer(n, match).Count > 0))
             return false;
-        return EdgeKeys(a).Order(StringComparer.Ordinal).SequenceEqual(EdgeKeys(b).Order(StringComparer.Ordinal));
+        return a.Edges.Count == b.Edges.Count && EdgesOnlyIn(a, b).Count == 0;
     }
 
     /// <summary>A save does not refuse two nodes with one id; only the first is compared.</summary>
@@ -77,9 +77,6 @@ public static class LoopTemplateChanges
         }
         return fields;
     }
-
-    private static IEnumerable<string> EdgeKeys(Loop loop)
-        => loop.Edges.Select(e => $"{e.Source}\n{e.Target}\n{e.Type}\n{e.Name}");
 
     /// <summary>The edges of <paramref name="loop"/> that <paramref name="other"/> lacks, counted as a multiset.</summary>
     private static List<LoopEdgeRef> EdgesOnlyIn(Loop loop, Loop other)
@@ -130,19 +127,19 @@ public static class LoopTemplateChanges
             var root = JsonNode.Parse(document) as JsonObject
                 ?? throw new JsonException("A loop document is a JSON object.");
             return new(
-                Text(root["name"]) ?? string.Empty,
-                Text(root["description"]) ?? string.Empty,
-                Canonical<RecoveryPolicy>(Text(root["recoveryPolicy"])),
+                JsonText.Of(root["name"]) ?? string.Empty,
+                JsonText.Of(root["description"]) ?? string.Empty,
+                Canonical<RecoveryPolicy>(JsonText.Of(root["recoveryPolicy"])),
                 (root["nodes"] as JsonArray ?? []).OfType<JsonObject>().Select(n => new Node(
-                    Text(n["id"]) ?? string.Empty,
-                    Canonical<NodeType>(Text(n["type"])),
-                    Text(n["label"]) ?? string.Empty,
+                    JsonText.Of(n["id"]) ?? string.Empty,
+                    Canonical<NodeType>(JsonText.Of(n["type"])),
+                    JsonText.Of(n["label"]) ?? string.Empty,
                     ConfigOf(n["config"]))).ToList(),
                 (root["edges"] as JsonArray ?? []).OfType<JsonObject>().Select(e => new Edge(
-                    Text(e["sourceNodeId"]) ?? string.Empty,
-                    Text(e["targetNodeId"]) ?? string.Empty,
-                    Canonical<EdgeType>(Text(e["edgeType"])),
-                    NameOf(Text(e["name"])))).ToList());
+                    JsonText.Of(e["sourceNodeId"]) ?? string.Empty,
+                    JsonText.Of(e["targetNodeId"]) ?? string.Empty,
+                    Canonical<EdgeType>(JsonText.Of(e["edgeType"])),
+                    NameOf(JsonText.Of(e["name"])))).ToList());
         }
     }
 
@@ -159,9 +156,6 @@ public static class LoopTemplateChanges
     /// <summary>An enum value as the save stores it, whatever its case; anything else as written.</summary>
     private static string Canonical<TEnum>(string? text) where TEnum : struct, Enum
         => Enum.TryParse<TEnum>(text, ignoreCase: true, out var value) && Enum.IsDefined(value) ? value.ToString() : text ?? string.Empty;
-
-    private static string? Text(JsonNode? node)
-        => node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 }
 
 /// <summary>A proposal's structural changes against its base version, as a person reviews them.</summary>

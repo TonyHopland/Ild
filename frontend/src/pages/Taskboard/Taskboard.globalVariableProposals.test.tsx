@@ -5,7 +5,13 @@ import Taskboard from "./index";
 import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
-import { mockTaskboardServer } from "../../test-support";
+import {
+  fakeHub,
+  makeGlobalVariableProposal,
+  mockTaskboardServer,
+  reply,
+  stubFetch,
+} from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -43,33 +49,20 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
 }
 
 function suggestion(id: string, rationale: string) {
-  return {
+  return makeGlobalVariableProposal({
     id,
-    name: "review_rules",
     value: `Suggested text for ${id}`,
     rationale,
-    status: "Pending",
-    rejectionReason: null,
     createdAt: "2026-09-26T10:00:00Z",
-    decidedAt: null,
     snapshotUpdatedAt: "2026-09-01T00:00:00Z",
     currentValue: "Keep reviews short.",
-    variableExists: true,
     createdByLoopRunId: "run-old",
     createdByRunNodeId: null,
-    createdByChatSessionId: null,
-    chatReplySequence: null,
-    source: { kind: "run", workItemId: "wi-1", chatSessionId: null, linkable: true },
-  };
+  });
 }
 
 function mockDialogServices(item: WorkItem) {
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: vi.fn(),
-    off: vi.fn(),
-    invoke: vi.fn(() => Promise.resolve()),
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
+  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(fakeHub().connection);
   mockTaskboardServer([item]);
   vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(item);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
@@ -85,26 +78,13 @@ function mockDialogServices(item: WorkItem) {
     maxFilesPerRequest: 10,
     maxTotalBytesPerWorkItem: 250 * MB,
   });
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string) => {
-      const url = new URL(input, "http://localhost");
-      const listed =
-        url.pathname === "/api/v1/global-variables/proposals" &&
-        url.searchParams.get("workItemId") === item.id;
-      const body = listed
-        ? [
-            suggestion("gp-other", "Another suggestion"),
-            suggestion("gp-7", "The linked suggestion"),
-          ]
-        : { error: "not stubbed" };
-      return {
-        ok: listed,
-        status: listed ? 200 : 404,
-        statusText: "",
-        text: () => Promise.resolve(JSON.stringify(body)),
-      } as Response;
-    }),
+  stubFetch((call) =>
+    call.path === "/api/v1/global-variables/proposals" && call.query.get("workItemId") === item.id
+      ? reply(200, [
+          suggestion("gp-other", "Another suggestion"),
+          suggestion("gp-7", "The linked suggestion"),
+        ])
+      : reply(404, { error: "not stubbed" }),
   );
 }
 

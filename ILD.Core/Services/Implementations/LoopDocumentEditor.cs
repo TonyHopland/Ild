@@ -45,6 +45,19 @@ public sealed record LoopEditResult(
 }
 
 /// <summary>
+/// A loop document after <see cref="LoopDocumentEditor.Check(string, Func{LoopTemplateGraph, string?}?)"/>:
+/// the document as upgraded, and either its graph with every rule it breaks, its
+/// graph with why the caller's own checks refused it, or why its graph could not
+/// be read.
+/// </summary>
+internal sealed record LoopDocumentCheck(
+    string Document,
+    LoopTemplateGraph? Graph,
+    string? ParseError,
+    string? Refusal,
+    IReadOnlyList<string> ValidationErrors);
+
+/// <summary>
 /// Targeted, in-place edits over a live <c>ild-loop-template/v2</c> document
 /// (loop editor context, ADR-0011). Purpose: let an agent change one node's prompt
 /// or one substring of the raw JSON <em>without</em> re-serializing the whole
@@ -214,14 +227,13 @@ public static class LoopDocumentEditor
             return LoopEditResult.MatchFailure(count,
                 $"old_string matches {count} times in the loop document; make it unique (include surrounding context). No change made.");
 
-        var candidate = LoopDocumentUpgrader.Upgrade(ReplaceOnce(document, oldString, newString));
-        var validationErrors = Validate(candidate, out var parseError);
-        if (parseError != null)
-            return LoopEditResult.MatchFailure(1, $"The edit produced invalid JSON: {parseError}. No change made.");
-        if (validationErrors.Count > 0)
-            return LoopEditResult.Invalid(1, validationErrors);
+        var check = Check(ReplaceOnce(document, oldString, newString));
+        if (check.ParseError != null)
+            return LoopEditResult.MatchFailure(1, $"The edit produced invalid JSON: {check.ParseError}. No change made.");
+        if (check.ValidationErrors.Count > 0)
+            return LoopEditResult.Invalid(1, check.ValidationErrors);
 
-        return LoopEditResult.Success(1, candidate, "Edited the raw loop document.");
+        return LoopEditResult.Success(1, check.Document, "Edited the raw loop document.");
     }
 
     /// <summary>
@@ -233,14 +245,13 @@ public static class LoopDocumentEditor
     /// </summary>
     public static LoopEditResult ReplaceDocument(string document)
     {
-        document = LoopDocumentUpgrader.Upgrade(document);
-        var validationErrors = Validate(document, out var parseError);
-        if (parseError != null)
-            return LoopEditResult.MatchFailure(0, $"document is not valid JSON: {parseError}.");
-        if (validationErrors.Count > 0)
-            return LoopEditResult.Invalid(1, validationErrors);
+        var check = Check(document);
+        if (check.ParseError != null)
+            return LoopEditResult.MatchFailure(0, $"document is not valid JSON: {check.ParseError}.");
+        if (check.ValidationErrors.Count > 0)
+            return LoopEditResult.Invalid(1, check.ValidationErrors);
 
-        return LoopEditResult.Success(1, document, "Replaced the full loop document.");
+        return LoopEditResult.Success(1, check.Document, "Replaced the full loop document.");
     }
 
     // -- internals -------------------------------------------------------------
@@ -252,17 +263,15 @@ public static class LoopDocumentEditor
     /// </summary>
     private static LoopEditResult Finalize(JsonObject root, int matchCount, string summary)
     {
-        LoopDocumentUpgrader.TryUpgrade(root);
-        var candidate = root.ToJsonString(OutputOptions);
-        var validationErrors = Validate(candidate, out var parseError);
+        var check = Check(root.ToJsonString(OutputOptions));
         // A DOM we just mutated always re-parses, so a parse error here would be a
         // bug rather than bad input; surface it as a match failure rather than throw.
-        if (parseError != null)
-            return LoopEditResult.MatchFailure(matchCount, $"The edit produced invalid JSON: {parseError}. No change made.");
-        if (validationErrors.Count > 0)
-            return LoopEditResult.Invalid(matchCount, validationErrors);
+        if (check.ParseError != null)
+            return LoopEditResult.MatchFailure(matchCount, $"The edit produced invalid JSON: {check.ParseError}. No change made.");
+        if (check.ValidationErrors.Count > 0)
+            return LoopEditResult.Invalid(matchCount, check.ValidationErrors);
 
-        return LoopEditResult.Success(matchCount, candidate, summary);
+        return LoopEditResult.Success(matchCount, check.Document, summary);
     }
 
     private static bool TryResolveField(
@@ -338,14 +347,19 @@ public static class LoopDocumentEditor
     }
 
     /// <summary>
-    /// Run <see cref="LoopTemplateValidator"/> over a candidate document by parsing
-    /// its <c>nodes</c>/<c>edges</c> into the graph DTO the validator expects. A
-    /// parse failure is reported through <paramref name="parseError"/> (distinct from
-    /// graph-validation errors) so callers can tell "not JSON" from "graph is wrong".
+    /// The checks every loop document goes through, a loop edit's and a
+    /// proposal's alike: upgraded to v2 (an old-format document; any other is
+    /// left as it is), its <c>nodes</c>/<c>edges</c> read into the graph DTO, and
+    /// that graph run through <see cref="LoopTemplateValidator"/>.
+    /// <paramref name="prepare"/> runs on the graph before it is validated, and a
+    /// refusal it returns ends the check there. A
+    /// parse failure comes back as <see cref="LoopDocumentCheck.ParseError"/>,
+    /// apart from graph-validation errors, so callers can tell "not JSON" from
+    /// "graph is wrong".
     /// </summary>
-    private static IReadOnlyList<string> Validate(string document, out string? parseError)
+    internal static LoopDocumentCheck Check(string document, Func<LoopTemplateGraph, string?>? prepare = null)
     {
-        parseError = null;
+        document = LoopDocumentUpgrader.Upgrade(document);
         LoopDocumentShape? shape;
         try
         {
@@ -353,22 +367,24 @@ public static class LoopDocumentEditor
         }
         catch (JsonException ex)
         {
-            parseError = ex.Message;
-            return Array.Empty<string>();
+            return new(document, null, ex.Message, null, []);
         }
 
         if (shape == null)
-        {
-            parseError = "The loop document is empty.";
-            return Array.Empty<string>();
-        }
+            return new(document, null, "The loop document is empty.", null, []);
 
         var graph = new LoopTemplateGraph(
             Guid.Empty,
             shape.Nodes ?? new List<LoopNodeDto>(),
             shape.Edges ?? new List<LoopNodeEdgeDto>());
-        return LoopTemplateValidator.Validate(graph);
+        return prepare?.Invoke(graph) is { } refusal
+            ? new(document, graph, null, refusal, [])
+            : new(document, graph, null, null, LoopTemplateValidator.Validate(graph));
     }
+
+    /// <summary><see cref="Check(string, Func{LoopTemplateGraph, string?}?)"/> over a parsed document, as compact JSON.</summary>
+    internal static LoopDocumentCheck Check(JsonObject root, Func<LoopTemplateGraph, string?>? prepare = null)
+        => Check(root.ToJsonString(GraphParseOptions), prepare);
 
     private static int CountOccurrences(string haystack, string needle)
     {

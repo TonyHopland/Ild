@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, waitFor, cleanup, act, fireEvent, within } from "@testing-library/react";
-import { MemoryRouter, Routes, Route } from "react-router";
+import { MemoryRouter, Routes, Route, useNavigate, type NavigateFunction } from "react-router";
 import { AuthContext } from "../../hooks/useAuth";
 import { NodeType, EdgeType, RecoveryPolicy } from "../../types";
 import { setCurrentChatSessionId } from "../../services/chatSessionStore";
@@ -9,24 +9,20 @@ import { setCurrentChatSessionId } from "../../services/chatSessionStore";
 // real services; fetch answers as the server does, so the requests it sends —
 // above all the save naming the proposal — are what is checked. The hub handlers
 // are captured so a test can push a hint or a chat's loop edit.
-const { handlers } = vi.hoisted(() => ({
-  handlers: {} as Record<string, Set<(msg: { payload: unknown }) => void>>,
-}));
-
-vi.mock("../../hooks/useSignalR", () => ({
-  useSignalR: () => ({
-    connectionState: "connected",
-    on: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      (handlers[event] ??= new Set()).add(handler);
-    },
-    off: (event: string, handler: (msg: { payload: unknown }) => void) => {
-      handlers[event]?.delete(handler);
-    },
-    invoke: vi.fn(() => Promise.resolve()),
-  }),
-}));
+vi.mock("../../hooks/useSignalR", async () =>
+  (await import("../../test-support")).fakeSignalRModule(),
+);
 
 import LoopEditor from "./index";
+import {
+  makeLoopTemplateProposal,
+  proposalCardAround,
+  reply,
+  signalRHub,
+  stubFetch,
+  type Call,
+} from "../../test-support";
+import type { LoopTemplateProposal } from "../../types";
 
 const devLoop = {
   id: "tpl-1",
@@ -91,21 +87,10 @@ const proposedDocument = {
 
 const RATIONALE = "Lint before tidying up.";
 
-function proposalView(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "lp-1",
-    templateId: "tpl-1",
+function proposalView(overrides: Partial<LoopTemplateProposal> = {}): LoopTemplateProposal {
+  return makeLoopTemplateProposal({
     templateName: "Dev Loop",
-    templateExists: true,
-    baseVersion: 3,
-    latestVersion: 3,
     rationale: RATIONALE,
-    status: "Pending",
-    editedBeforeSave: false,
-    appliedVersion: null,
-    rejectionReason: null,
-    createdAt: "2026-10-01T10:00:00Z",
-    decidedAt: null,
     createdByLoopRunId: null,
     createdByRunNodeId: null,
     createdByChatSessionId: "chat-9",
@@ -128,87 +113,67 @@ function proposalView(overrides: Record<string, unknown> = {}) {
       ],
     },
     ...overrides,
-  };
-}
-
-interface Call {
-  method: string;
-  path: string;
-  query: URLSearchParams;
-  body: Record<string, unknown> | undefined;
+  });
 }
 
 /** What the fake server holds; a test changes it between steps. */
 let server: {
   templates: (typeof devLoop)[];
-  proposal: ReturnType<typeof proposalView>;
+  proposal: LoopTemplateProposal;
   /** What GET /loop-template-proposals lists, before its filters. */
-  listed: ReturnType<typeof proposalView>[];
+  listed: LoopTemplateProposal[];
   counts: Record<string, number>;
 };
 let calls: Call[] = [];
+/** How the stubbed fetch answers; a test may wrap it to hold one response. */
+let answer: (call: Call) => Response | Promise<Response>;
 
-function reply(status: number, body: unknown) {
-  return {
-    ok: status < 400,
-    status,
-    statusText: "",
-    text: () => Promise.resolve(body === undefined ? "" : JSON.stringify(body)),
-  } as Response;
+/** The fake server's answer to `call`. */
+function answerAsServer({ method, path, query, body }: Call): Response {
+  if (method === "GET" && path === "/api/v1/looptemplates") return reply(200, server.templates);
+  if (method === "GET" && path === "/api/v1/looptemplates/node-outputs") return reply(200, {});
+  if (method === "POST" && path === "/api/v1/looptemplates/validate")
+    return reply(200, { valid: true, errors: [] });
+  if (method === "PUT" && path.startsWith("/api/v1/looptemplates/")) {
+    const id = path.slice(path.lastIndexOf("/") + 1);
+    const applied = body?.fromProposalId === "lp-1" && server.proposal.status === "Pending";
+    server.templates = server.templates.map((t) =>
+      t.id === id ? { ...t, ...body, version: t.version + 1, id: t.id } : t,
+    ) as (typeof devLoop)[];
+    if (applied) server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 };
+    return reply(200, { id, version: 4, proposalApplied: applied });
+  }
+  if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
+    return reply(200, server.counts);
+  if (method === "GET" && path === "/api/v1/loop-template-proposals/lp-1")
+    return reply(200, server.proposal);
+  if (method === "GET" && path === "/api/v1/loop-template-proposals") {
+    const status = query.get("status");
+    const templateId = query.get("templateId");
+    return reply(
+      200,
+      server.listed.filter(
+        (p) => (!status || p.status === status) && (!templateId || p.templateId === templateId),
+      ),
+    );
+  }
+  if (method === "POST" && path === "/api/v1/loop-template-proposals/lp-1/reject") {
+    server.proposal = { ...server.proposal, status: "Rejected" };
+    return reply(200, server.proposal);
+  }
+  if (method === "GET") return reply(200, []);
+  return reply(404, { error: "not stubbed" });
 }
 
 beforeEach(() => {
   server = { templates: [devLoop], proposal: proposalView(), listed: [], counts: {} };
-  calls = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string, init?: RequestInit) => {
-      const url = new URL(input, "http://localhost");
-      const method = (init?.method ?? "GET").toUpperCase();
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-      calls.push({ method, path: url.pathname, query: url.searchParams, body });
-      const path = url.pathname;
-      if (method === "GET" && path === "/api/v1/looptemplates") return reply(200, server.templates);
-      if (method === "GET" && path === "/api/v1/looptemplates/node-outputs") return reply(200, {});
-      if (method === "POST" && path === "/api/v1/looptemplates/validate")
-        return reply(200, { valid: true, errors: [] });
-      if (method === "PUT" && path.startsWith("/api/v1/looptemplates/")) {
-        const id = path.split("/").pop()!;
-        const applied = body?.fromProposalId === "lp-1" && server.proposal.status === "Pending";
-        server.templates = server.templates.map((t) =>
-          t.id === id ? { ...t, ...(body as object), version: t.version + 1, id: t.id } : t,
-        ) as (typeof devLoop)[];
-        if (applied)
-          server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 } as never;
-        return reply(200, { id, version: 4, proposalApplied: applied });
-      }
-      if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
-        return reply(200, server.counts);
-      if (method === "GET" && path === "/api/v1/loop-template-proposals/lp-1")
-        return reply(200, server.proposal);
-      if (method === "GET" && path === "/api/v1/loop-template-proposals") {
-        const status = url.searchParams.get("status");
-        const templateId = url.searchParams.get("templateId");
-        return reply(
-          200,
-          server.listed.filter(
-            (p) => (!status || p.status === status) && (!templateId || p.templateId === templateId),
-          ),
-        );
-      }
-      if (method === "POST" && path === "/api/v1/loop-template-proposals/lp-1/reject") {
-        server.proposal = { ...server.proposal, status: "Rejected" };
-        return reply(200, server.proposal);
-      }
-      if (method === "GET") return reply(200, []);
-      return reply(404, { error: "not stubbed" });
-    }),
-  );
+  answer = answerAsServer;
+  calls = stubFetch((call) => answer(call));
 });
 
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(handlers)) delete handlers[k];
+  signalRHub.reset();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   setCurrentChatSessionId(null);
@@ -223,9 +188,18 @@ const authValue = {
   logout: vi.fn(),
 };
 
+/** Moves the router the way a link elsewhere in the app does; set while an editor is rendered. */
+let navigateTo: NavigateFunction | null = null;
+
+function Navigator() {
+  navigateTo = useNavigate();
+  return null;
+}
+
 function renderEditor(path: string) {
   render(
     <MemoryRouter initialEntries={[path]}>
+      <Navigator />
       <AuthContext.Provider value={authValue}>
         <Routes>
           <Route path="/loop-editor" element={<LoopEditor />} />
@@ -237,9 +211,7 @@ function renderEditor(path: string) {
 }
 
 function emit(event: string, payload: unknown) {
-  act(() => {
-    for (const handler of Array.from(handlers[event] ?? [])) handler({ payload });
-  });
+  act(() => signalRHub.dispatch(event, payload));
 }
 
 function pushLoopUpdate(chatSessionId: string, document: object) {
@@ -488,32 +460,25 @@ describe("pending proposals in the template list", () => {
 describe("saving a listed proposal", () => {
   test("the open template then shows the version the proposal became, so a later save builds on it", async () => {
     server.listed = [proposalView()];
-    const answer = globalThis.fetch;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string, init?: RequestInit) => {
-        const path = new URL(input, "http://localhost").pathname;
-        if ((init?.method ?? "GET").toUpperCase() === "POST" && path.endsWith("/lp-1/save")) {
-          server.templates = [
-            {
-              ...devLoop,
-              version: 4,
-              nodes: proposedDocument.nodes,
-              edges: proposedDocument.edges,
-            },
-          ] as (typeof devLoop)[];
-          server.listed = [];
-          server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 } as never;
-          return reply(200, { proposal: server.proposal, version: 4 });
-        }
-        return answer(input, init);
-      }),
-    );
+    answer = (call) => {
+      if (call.method === "POST" && call.path.endsWith("/lp-1/save")) {
+        server.templates = [
+          {
+            ...devLoop,
+            version: 4,
+            nodes: proposedDocument.nodes,
+            edges: proposedDocument.edges,
+          },
+        ] as (typeof devLoop)[];
+        server.listed = [];
+        server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 };
+        return reply(200, { proposal: server.proposal, version: 4 });
+      }
+      return answerAsServer(call);
+    };
     renderEditor("/loop-editor/tpl-1");
     await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
-    const listed = (await screen.findByText(RATIONALE)).closest(
-      ".edit-proposal-card",
-    ) as HTMLElement;
+    const listed = proposalCardAround(await screen.findByText(RATIONALE));
 
     fireEvent.click(within(listed).getByRole("button", { name: "Save" }));
 
@@ -527,21 +492,16 @@ describe("leaving a review while its proposal is re-read", () => {
     "%s goes back to the saved version even when a hint re-reads the proposal meanwhile",
     async (action) => {
       await openReview();
-      const answer = globalThis.fetch;
       let held = false;
       let release: () => void = () => {};
       const templatesRead = new Promise<void>((resolve) => (release = resolve));
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string, init?: RequestInit) => {
-          const path = new URL(input, "http://localhost").pathname;
-          if (!held && (init?.method ?? "GET") === "GET" && path === "/api/v1/looptemplates") {
-            held = true;
-            await templatesRead;
-          }
-          return answer(input, init);
-        }),
-      );
+      answer = async (call) => {
+        if (!held && call.method === "GET" && call.path === "/api/v1/looptemplates") {
+          held = true;
+          await templatesRead;
+        }
+        return answerAsServer(call);
+      };
 
       fireEvent.click(within(banner()!).getByRole("button", { name: action }));
       const confirm = screen.queryByRole("button", { name: /confirm/i });
@@ -558,4 +518,54 @@ describe("leaving a review while its proposal is re-read", () => {
       expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
     },
   );
+});
+
+describe("a review opened while a save is in flight", () => {
+  test("stays open when that save, made from no review, finishes", async () => {
+    server.listed = [proposalView()];
+    renderEditor("/loop-editor/tpl-1");
+    await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
+    let held = false;
+    let release: () => void = () => {};
+    const saveAnswered = new Promise<void>((resolve) => (release = resolve));
+    answer = async (call) => {
+      if (call.method === "PUT") {
+        held = true;
+        await saveAnswered;
+      }
+      return answerAsServer(call);
+    };
+    fireEvent.click(screen.getByText("Save"));
+    fireEvent.click(await screen.findByText("Save changes"));
+    await waitFor(() => expect(held).toBe(true));
+
+    const listed = proposalCardAround(await screen.findByText(RATIONALE));
+    fireEvent.click(reviewControl(listed));
+    await waitFor(() => expect(banner()).not.toBeNull());
+    await act(async () => release());
+
+    await screen.findByText("Saved!");
+    expect(calls.find((c) => c.method === "PUT")?.body?.fromProposalId ?? null).toBeNull();
+    expect(banner()).not.toBeNull();
+    expect(onCanvas("Run Linter")).toBe(true);
+  });
+});
+
+describe("a Review link to the template that is still open", () => {
+  test("opens the review once the route has opened its template again", async () => {
+    renderEditor("/loop-editor/tpl-1");
+    await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
+    await act(async () => {
+      await navigateTo?.("/loop-editor");
+    });
+    expect(onCanvas("Initialize")).toBe(true);
+
+    await act(async () => {
+      await navigateTo?.("/loop-editor/tpl-1?proposal=lp-1");
+    });
+
+    await waitFor(() => expect(banner()).not.toBeNull());
+    expect(onCanvas("Run Linter")).toBe(true);
+    expect(calls.filter((c) => c.path === "/api/v1/loop-template-proposals/lp-1")).toHaveLength(1);
+  });
 });

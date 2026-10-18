@@ -44,7 +44,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId: vi.fn(
 
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
-import { openChatFromList } from "../test-support";
+import { openChatFromList, proposalCardAround } from "../test-support";
 
 function session(): ChatSession {
   return {
@@ -238,14 +238,14 @@ describe("ChatBubble edit proposals", () => {
     ];
     expect(documentOrder(byText(expected))).toEqual(expected);
 
-    const cardA = screen.getByText("Title A").closest(".edit-proposal-card") as HTMLElement;
+    const cardA = proposalCardAround(screen.getByText("Title A"));
     fireEvent.click(within(cardA).getByRole("button", { name: "Approve" }));
 
     await waitFor(() =>
       expect(
-        within(
-          screen.getByText("Title A").closest(".edit-proposal-card") as HTMLElement,
-        ).queryByRole("button", { name: "Approve" }),
+        within(proposalCardAround(screen.getByText("Title A"))).queryByRole("button", {
+          name: "Approve",
+        }),
       ).toBeNull(),
     );
     expect(documentOrder(byText(expected))).toEqual(expected);

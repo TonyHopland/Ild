@@ -1,8 +1,8 @@
+using ILD.Data;
 using ILD.Data.DTOs;
 using Microsoft.Extensions.Logging;
 using ILD.Data.Enums;
 using ILD.Data.Entities;
-using ILD.Data.Stores.Interfaces;
 namespace ILD.Core.Services.Interfaces;
 
 public interface ILoopTemplateManager
@@ -45,17 +45,5 @@ public interface ILoopTemplateManager
     Task<(bool Valid, IReadOnlyList<string> Errors)> ValidateGraphAsync(LoopTemplateGraph graph);
 
     /// <summary>Deletes the template, making its pending proposals stale.</summary>
-    Task<StaledLoopTemplateProposals> DeleteLoopTemplateAsync(Guid templateId);
+    Task<StaledProposals> DeleteLoopTemplateAsync(Guid templateId);
 }
-
-/// <summary>
-/// A proposed loop document after the checks a save makes. Valid: <see cref="Request"/>
-/// is what a save of it sends and <see cref="Document"/> the document it stores,
-/// outputs normalised. Otherwise <see cref="Error"/> says what is wrong with the
-/// document, or <see cref="ValidationErrors"/> lists every rule its graph breaks.
-/// </summary>
-public sealed record ProposedLoopDocument(
-    LoopTemplateCreateRequest? Request,
-    string? Document,
-    string? Error,
-    IReadOnlyList<string> ValidationErrors);

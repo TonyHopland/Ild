@@ -3,6 +3,7 @@ import { workItemService } from "../services/auth";
 import { computeLineDiff } from "../utils/jsonDiff";
 import ProposalDecision from "./ProposalDecision";
 import type { EditProposalDependency, WorkItemEditProposal } from "../types";
+import "./ProposalCard.css";
 import "./EditProposalCard.css";
 
 interface EditProposalCardProps {
@@ -96,17 +97,18 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
   const addedDependencies = proposed.addDependencies ?? [];
   const removedDependencies = proposed.removeDependencies ?? [];
   return (
-    <div className={`edit-proposal-card edit-proposal-card--${proposal.status.toLowerCase()}`}>
-      <div className="edit-proposal-header">
-        <span className="edit-proposal-heading">Proposed edit to #{proposal.workItemId}</span>
-        <span
-          className={`edit-proposal-status edit-proposal-status--${proposal.status.toLowerCase()}`}
-        >
+    <div
+      className={`proposal-card proposal-card--${proposal.status.toLowerCase()}`}
+      data-testid="proposal-card"
+    >
+      <div className="proposal-header">
+        <span className="proposal-heading">Proposed edit to #{proposal.workItemId}</span>
+        <span className={`proposal-status proposal-status--${proposal.status.toLowerCase()}`}>
           {proposal.status}
         </span>
       </div>
 
-      {proposal.rationale && <p className="edit-proposal-rationale">{proposal.rationale}</p>}
+      {proposal.rationale && <p className="proposal-rationale">{proposal.rationale}</p>}
 
       <dl className="edit-proposal-fields">
         {proposed.title != null && (
@@ -170,7 +172,7 @@ export default function EditProposalCard({ proposal, onSettled }: EditProposalCa
       </dl>
 
       {proposal.status === "Rejected" && proposal.rejectionReason && (
-        <p className="edit-proposal-reason">Reason: {proposal.rejectionReason}</p>
+        <p className="proposal-reason">Reason: {proposal.rejectionReason}</p>
       )}
 
       <ProposalDecision

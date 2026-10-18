@@ -1,65 +1,14 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import type { ComponentProps } from "react";
 import GlobalVariableProposalCard from "./GlobalVariableProposalCard";
+import { makeGlobalVariableProposal as makeProposal, reply, stubFetch } from "../test-support";
+import type { GlobalVariableProposalStatus } from "../types";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-type Proposal = ComponentProps<typeof GlobalVariableProposalCard>["proposal"];
-
-function makeProposal(overrides: Record<string, unknown> = {}): Proposal {
-  return {
-    id: "gp-1",
-    name: "review_rules",
-    value: "Keep reviews short.\nName the file and the line.",
-    rationale: "Reviews keep missing where the problem is.",
-    status: "Pending",
-    rejectionReason: null,
-    createdAt: "2026-10-01T10:00:00Z",
-    decidedAt: null,
-    snapshotUpdatedAt: "2026-09-30T10:00:00Z",
-    currentValue: "Keep reviews short.\nName the file.",
-    variableExists: true,
-    createdByLoopRunId: "run-1",
-    createdByRunNodeId: "exec-1",
-    createdByChatSessionId: null,
-    chatReplySequence: null,
-    source: { kind: "run", workItemId: "wi-1", chatSessionId: null, linkable: true },
-    ...overrides,
-  } as unknown as Proposal;
-}
-
-interface Call {
-  method: string;
-  path: string;
-  body: unknown;
-}
-
-/** Answers every request with `reply`, recording each. */
-function stubFetch(reply: { status: number; body?: unknown }) {
-  const calls: Call[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string, init?: RequestInit) => {
-      calls.push({
-        method: (init?.method ?? "GET").toUpperCase(),
-        path: new URL(input, "http://localhost").pathname,
-        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
-      });
-      return {
-        ok: reply.status < 400,
-        status: reply.status,
-        statusText: "",
-        text: () => Promise.resolve(reply.body === undefined ? "" : JSON.stringify(reply.body)),
-      } as Response;
-    }),
-  );
-  return calls;
-}
 
 describe("GlobalVariableProposalCard", () => {
   test("shows the variable, its current text against the suggested text and the rationale, with no way to edit the text", () => {
@@ -98,7 +47,7 @@ describe("GlobalVariableProposalCard", () => {
   });
 
   test("approving posts the approval of this suggestion alone, then reports it settled", async () => {
-    const calls = stubFetch({ status: 200, body: { proposal: {}, variable: {} } });
+    const calls = stubFetch(() => reply(200, { proposal: {}, variable: {} }));
     const onSettled = vi.fn();
     render(<GlobalVariableProposalCard proposal={makeProposal()} onSettled={onSettled} />);
 
@@ -112,10 +61,9 @@ describe("GlobalVariableProposalCard", () => {
   });
 
   test("an approve refused as stale still reports it settled, so the owner re-reads", async () => {
-    stubFetch({
-      status: 409,
-      body: { error: "The variable changed after this suggestion was made.", proposal: {} },
-    });
+    stubFetch(() =>
+      reply(409, { error: "The variable changed after this suggestion was made.", proposal: {} }),
+    );
     const onSettled = vi.fn();
     render(<GlobalVariableProposalCard proposal={makeProposal()} onSettled={onSettled} />);
 
@@ -125,7 +73,7 @@ describe("GlobalVariableProposalCard", () => {
   });
 
   test("rejecting sends the optional reason for this suggestion, then reports it settled", async () => {
-    const calls = stubFetch({ status: 200, body: makeProposal({ status: "Rejected" }) });
+    const calls = stubFetch(() => reply(200, makeProposal({ status: "Rejected" })));
     const onSettled = vi.fn();
     render(<GlobalVariableProposalCard proposal={makeProposal()} onSettled={onSettled} />);
 
@@ -144,7 +92,7 @@ describe("GlobalVariableProposalCard", () => {
     });
   });
 
-  test.each([
+  test.each<{ status: GlobalVariableProposalStatus; reason: string | null }>([
     { status: "Approved", reason: null },
     { status: "Rejected", reason: "Too vague." },
     { status: "Stale", reason: null },

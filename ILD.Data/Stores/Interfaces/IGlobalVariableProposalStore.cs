@@ -15,23 +15,23 @@ public interface IGlobalVariableProposalStore
     /// snapshotting the variable it names. That source's earlier pending
     /// suggestion for the same variable is superseded in the same transaction.
     /// </summary>
-    Task<GlobalVariableProposal> ProposeAsync(GlobalVariableProposal proposal, CancellationToken ct = default);
+    Task<GlobalVariableProposal> ProposeAsync(GlobalVariableProposal proposal, CancellationToken ct);
 
     /// <summary>Newest first.</summary>
-    Task<IReadOnlyList<GlobalVariableProposalEntry>> ListAsync(GlobalVariableProposalQuery query, CancellationToken ct = default);
+    Task<IReadOnlyList<GlobalVariableProposalEntry>> ListAsync(GlobalVariableProposalQuery query, CancellationToken ct);
 
-    Task<GlobalVariableProposalEntry?> GetAsync(Guid id, CancellationToken ct = default);
+    Task<GlobalVariableProposalEntry?> GetAsync(Guid id, CancellationToken ct);
 
-    Task<int> CountPendingAsync(CancellationToken ct = default);
+    Task<int> CountPendingAsync(CancellationToken ct);
 
     /// <summary>
     /// Write the suggested value if the variable still matches the snapshot,
     /// making every other pending suggestion for it stale; otherwise the
     /// suggestion itself goes stale and nothing is written.
     /// </summary>
-    Task<GlobalVariableProposalDecision> ApproveAsync(Guid id, CancellationToken ct = default);
+    Task<GlobalVariableProposalDecision> ApproveAsync(Guid id, CancellationToken ct);
 
-    Task<GlobalVariableProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct = default);
+    Task<GlobalVariableProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct);
 }
 
 /// <summary>Every filter set narrows the list; none set lists every suggestion.</summary>
@@ -67,9 +67,3 @@ public sealed record GlobalVariableProposalDecision(
     GlobalVariableProposalDecisionOutcome Outcome,
     GlobalVariableProposalEntry? Entry,
     IReadOnlyList<Guid> ChangedChatSessionIds);
-
-/// <summary>The pending suggestions a write to a variable made stale, and the chats that made them.</summary>
-public sealed record StaledGlobalVariableProposals(int Count, IReadOnlyList<Guid> ChatSessionIds)
-{
-    public static readonly StaledGlobalVariableProposals None = new(0, []);
-}

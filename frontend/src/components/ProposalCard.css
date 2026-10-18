@@ -1,0 +1,99 @@
+.proposal-card {
+  background: #22223a;
+  border: 1px solid #3a3a5c;
+  border-left: 3px solid #d97706;
+  border-radius: 0.375rem;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.6rem;
+  font-size: 0.8rem;
+  color: #e0e0e0;
+}
+
+.proposal-card--approved,
+.proposal-card--applied {
+  border-left-color: #059669;
+}
+
+.proposal-card--rejected,
+.proposal-card--stale,
+.proposal-card--superseded {
+  border-left-color: #6b6b85;
+}
+
+.proposal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.proposal-heading {
+  font-weight: 600;
+}
+
+.proposal-status {
+  font-size: 0.675rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: #2d2a1a;
+  color: #fbbf24;
+}
+
+.proposal-status--approved,
+.proposal-status--applied {
+  background: #1a2d2a;
+  color: #34d399;
+}
+
+.proposal-status--rejected {
+  background: #2d1a1a;
+  color: #f87171;
+}
+
+.proposal-status--stale,
+.proposal-status--superseded {
+  background: #2d2d44;
+  color: #a0a0b0;
+}
+
+.proposal-rationale {
+  margin: 0 0 0.5rem;
+  color: #c0c0d0;
+  font-style: italic;
+}
+
+.proposal-reason {
+  margin: 0.5rem 0 0;
+  color: #c0c0d0;
+}
+
+.proposal-source {
+  margin-top: 0.5rem;
+  color: #a0a0b0;
+}
+
+.proposal-source a {
+  color: #a5b4fc;
+}
+
+.proposal-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.proposal-reject textarea {
+  width: 100%;
+  margin-top: 0.5rem;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.proposal-error {
+  margin: 0.4rem 0 0;
+  color: #f87171;
+}

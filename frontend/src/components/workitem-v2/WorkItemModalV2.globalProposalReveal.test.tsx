@@ -12,6 +12,7 @@ import {
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import { fakeHub, makeGlobalVariableProposal } from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -68,33 +69,18 @@ const turn: RunConversationMessage = {
   timestamp: "2026-09-26T10:00:00Z",
 };
 
-const linked = {
+const linked = makeGlobalVariableProposal({
   id: "gp-7",
-  name: "review_rules",
   value: "Suggested text",
   rationale: "The linked suggestion",
-  status: "Pending",
-  rejectionReason: null,
   createdAt: "2026-09-26T10:05:00Z",
-  decidedAt: null,
   snapshotUpdatedAt: "2026-09-01T00:00:00Z",
   currentValue: "Keep reviews short.",
-  variableExists: true,
-  createdByLoopRunId: "run-1",
-  createdByRunNodeId: "exec-1",
-  createdByChatSessionId: null,
-  chatReplySequence: null,
-  source: { kind: "run", workItemId: "wi-1", chatSessionId: null, linkable: true },
-};
+});
 
 describe("a link to a suggestion in the Action tab", () => {
   test("waits for the run's turns before scrolling to the card, so none lands above it afterwards", async () => {
-    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-      on: vi.fn(),
-      off: vi.fn(),
-      invoke: vi.fn(() => Promise.resolve()),
-      connectionState: "connected",
-    } as unknown as ReturnType<typeof signalRHook.useSignalR>);
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue(fakeHub().connection);
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
     vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
     vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
@@ -114,9 +100,7 @@ describe("a link to a suggestion in the Action tab", () => {
       maxFilesPerRequest: 1,
       maxTotalBytesPerWorkItem: 1,
     });
-    vi.spyOn(authServices.globalVariableService, "listProposals").mockResolvedValue([
-      linked,
-    ] as unknown as Awaited<ReturnType<typeof authServices.globalVariableService.listProposals>>);
+    vi.spyOn(authServices.globalVariableService, "listProposals").mockResolvedValue([linked]);
     let answerConversation: () => void = () => {};
     vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(
       (runId: string, after?: number) =>

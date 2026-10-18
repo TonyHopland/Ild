@@ -1,16 +1,15 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import type { ComponentProps } from "react";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router";
 import LoopTemplateProposalCard from "./LoopTemplateProposalCard";
+import { makeLoopTemplateProposal, reply, stubFetch } from "../test-support";
+import type { LoopTemplateProposal, LoopTemplateProposalStatus } from "../types";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
-
-type Proposal = ComponentProps<typeof LoopTemplateProposalCard>["proposal"];
 
 const proposedDocument = JSON.stringify({
   $schema: "ild-loop-template/v2",
@@ -21,26 +20,10 @@ const proposedDocument = JSON.stringify({
   edges: [],
 });
 
-function makeProposal(overrides: Record<string, unknown> = {}): Proposal {
-  return {
-    id: "lp-1",
-    templateId: "tpl-1",
-    templateName: "Release Loop",
-    templateExists: true,
+function makeProposal(overrides: Partial<LoopTemplateProposal> = {}): LoopTemplateProposal {
+  return makeLoopTemplateProposal({
     baseVersion: 7,
     latestVersion: 7,
-    rationale: "Builds keep failing on the slow runner.",
-    status: "Pending",
-    editedBeforeSave: false,
-    appliedVersion: null,
-    rejectionReason: null,
-    createdAt: "2026-10-01T10:00:00Z",
-    decidedAt: null,
-    createdByLoopRunId: "run-1",
-    createdByRunNodeId: "exec-1",
-    createdByChatSessionId: null,
-    chatReplySequence: null,
-    source: { kind: "run", workItemId: "wi-1", chatSessionId: null, linkable: true },
     document: proposedDocument,
     changes: {
       nameChanged: false,
@@ -57,35 +40,7 @@ function makeProposal(overrides: Record<string, unknown> = {}): Proposal {
       ],
     },
     ...overrides,
-  } as unknown as Proposal;
-}
-
-interface Call {
-  method: string;
-  path: string;
-  body: unknown;
-}
-
-/** Answers every request with `reply`, recording each. */
-function stubFetch(reply: { status: number; body?: unknown }) {
-  const calls: Call[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string, init?: RequestInit) => {
-      calls.push({
-        method: (init?.method ?? "GET").toUpperCase(),
-        path: new URL(input, "http://localhost").pathname,
-        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
-      });
-      return {
-        ok: reply.status < 400,
-        status: reply.status,
-        statusText: "",
-        text: () => Promise.resolve(reply.body === undefined ? "" : JSON.stringify(reply.body)),
-      } as Response;
-    }),
-  );
-  return calls;
+  });
 }
 
 /** Where a navigation from the card ended up. */
@@ -100,7 +55,7 @@ function EditorProbe() {
   );
 }
 
-function renderCard(proposal: Proposal, onSettled = vi.fn()) {
+function renderCard(proposal: LoopTemplateProposal, onSettled = vi.fn()) {
   return render(
     <MemoryRouter initialEntries={["/somewhere"]}>
       <Routes>
@@ -141,7 +96,7 @@ describe("LoopTemplateProposalCard", () => {
   });
 
   test("saving posts the save of this proposal alone, then reports it settled", async () => {
-    const calls = stubFetch({ status: 200, body: { proposal: {}, version: 8 } });
+    const calls = stubFetch(() => reply(200, { proposal: {}, version: 8 }));
     const onSettled = vi.fn();
     renderCard(makeProposal(), onSettled);
 
@@ -154,10 +109,9 @@ describe("LoopTemplateProposalCard", () => {
   });
 
   test("a save refused because the template moved on still reports it settled, so the owner re-reads", async () => {
-    stubFetch({
-      status: 409,
-      body: { error: "The template has a newer version.", proposal: { status: "Stale" } },
-    });
+    stubFetch(() =>
+      reply(409, { error: "The template has a newer version.", proposal: { status: "Stale" } }),
+    );
     const onSettled = vi.fn();
     renderCard(makeProposal(), onSettled);
 
@@ -167,7 +121,7 @@ describe("LoopTemplateProposalCard", () => {
   });
 
   test("rejecting sends the optional reason for this proposal, then reports it settled", async () => {
-    const calls = stubFetch({ status: 200, body: makeProposal({ status: "Rejected" }) });
+    const calls = stubFetch(() => reply(200, makeProposal({ status: "Rejected" })));
     const onSettled = vi.fn();
     renderCard(makeProposal(), onSettled);
 
@@ -187,7 +141,7 @@ describe("LoopTemplateProposalCard", () => {
   });
 
   test("Review opens the Loop Editor on the template with this proposal", async () => {
-    stubFetch({ status: 200, body: [] });
+    stubFetch(() => reply(200, []));
     renderCard(makeProposal());
 
     fireEvent.click(reviewControl()!);
@@ -201,7 +155,13 @@ describe("LoopTemplateProposalCard", () => {
     ).toBe("lp-1");
   });
 
-  test.each([
+  test.each<{
+    status: LoopTemplateProposalStatus;
+    edited: boolean;
+    version: number | null;
+    reason: string | null;
+    shows: RegExp;
+  }>([
     { status: "Applied", edited: false, version: 8, reason: null, shows: /as is/i },
     { status: "Applied", edited: true, version: 8, reason: null, shows: /edit/i },
     {

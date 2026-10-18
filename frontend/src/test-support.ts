@@ -1,7 +1,8 @@
 // Shared helpers for tests. Not a test file itself, so it is outside the
 // `src/**/*.test.{ts,tsx}` include and never collected as a suite.
 import { act, fireEvent, screen, within } from "@testing-library/react";
-import { vi } from "vite-plus/test";
+import { vi, type Mock } from "vite-plus/test";
+import type { SignalRConnection } from "./hooks/useSignalR";
 import { workItemService } from "./services/auth";
 import { compareServerOrder } from "./utils/taskboardColumns";
 import { compareTags, matchesTaskboardFilter, sameTag } from "./utils/taskboardFilter";
@@ -11,8 +12,11 @@ import type {
   ChatTurnCompletedPayload,
   ChatTurnProgressPayload,
   ChatTurnStartedPayload,
+  GlobalVariableProposal,
+  LoopTemplateProposal,
   WorkItem,
 } from "./types";
+import type { TypedSignalRMessage } from "./types/signalr";
 
 /** Presses before the loop gives up and reports the caller's own assertion. */
 const MaxPresses = 40;
@@ -178,4 +182,210 @@ export function mockTaskboardServer(initial: WorkItem[]) {
   const getTags = vi.spyOn(workItemService, "getTags").mockImplementation(async () => tags());
   const getAll = vi.spyOn(workItemService, "getAll").mockResolvedValue([]);
   return { items, page, counts, tags, getPage, getCounts, getTags, getAll };
+}
+
+/** A request the stubbed `fetch` received. */
+export interface Call {
+  method: string;
+  path: string;
+  query: URLSearchParams;
+  body: Record<string, unknown> | undefined;
+}
+
+/** A response with `body` as its JSON text, or no text without one. */
+export function reply(status: number, body?: unknown): Response {
+  return new Response(body === undefined ? null : JSON.stringify(body), { status });
+}
+
+/** Stubs `fetch` to answer each request with `answer`; returns every request, as it arrives. */
+export function stubFetch(answer: (call: Call) => Response | Promise<Response>): Call[] {
+  const calls: Call[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string, init?: RequestInit) => {
+      const url = new URL(input, "http://localhost");
+      const call: Call = {
+        method: (init?.method ?? "GET").toUpperCase(),
+        path: url.pathname,
+        query: url.searchParams,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      };
+      calls.push(call);
+      return answer(call);
+    }),
+  );
+  return calls;
+}
+
+/** The labels, in the order their elements appear in `container`. */
+export function documentOrder(labels: string[], container: HTMLElement = document.body): string[] {
+  return labels
+    .map((l) => [l, within(container).getByText(l, { exact: false })] as const)
+    .sort(([, a], [, b]) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    )
+    .map(([l]) => l);
+}
+
+/**
+ * A handler a hub fake holds. Declared as a method, so the typed handler of any
+ * one event is held without a cast; it is only ever called with that event.
+ */
+export interface HubListener {
+  handle(msg: TypedSignalRMessage): void;
+}
+
+export type HubConnectionState = SignalRConnection["connectionState"];
+
+/** A hub connection that lets a test push events to its listeners and change its state. */
+export interface FakeHub {
+  /** The listeners of each event, by the handler they were added with. */
+  handlers: Record<string, Map<unknown, HubListener>>;
+  invoke: Mock<(...args: unknown[]) => Promise<void>>;
+  /** The same object for the hub's whole life; a hook re-rendered after `setState` sees the new state. */
+  connection: SignalRConnection;
+  setState: (state: HubConnectionState) => void;
+  /** Calls every listener for `event`, outside act. */
+  dispatch: (event: string, payload: unknown) => void;
+  /** Calls every listener for `event`, inside an async act. */
+  emit: (event: string, payload: unknown) => Promise<void>;
+  /** Back to how the hub started: no listeners, its first state, and an invoke that resolves. */
+  reset: () => void;
+}
+
+export function fakeHub(state: HubConnectionState = "connected"): FakeHub {
+  const handlers: Record<string, Map<unknown, HubListener>> = {};
+  const invoke = vi.fn((..._args: unknown[]) => Promise.resolve());
+  const connection: SignalRConnection = {
+    connectionState: state,
+    on: <E extends string>(event: E, handler: (msg: TypedSignalRMessage<E>) => void) => {
+      (handlers[event] ??= new Map()).set(handler, { handle: handler });
+    },
+    off: <E extends string>(event: E, handler: (msg: TypedSignalRMessage<E>) => void) => {
+      handlers[event]?.delete(handler);
+    },
+    invoke,
+  };
+  const dispatch = (event: string, payload: unknown) => {
+    for (const listener of Array.from(handlers[event]?.values() ?? []))
+      listener.handle({ type: event, payload, timestamp: "" });
+  };
+  const emit = (event: string, payload: unknown) =>
+    act(async () => {
+      dispatch(event, payload);
+    });
+  const setState = (next: HubConnectionState) => {
+    connection.connectionState = next;
+  };
+  const reset = () => {
+    for (const event of Object.keys(handlers)) delete handlers[event];
+    connection.connectionState = state;
+    invoke.mockReset();
+    invoke.mockImplementation((..._args: unknown[]) => Promise.resolve());
+  };
+  return { handlers, invoke, connection, setState, dispatch, emit, reset };
+}
+
+/**
+ * Answers `useSignalR` with the connection of `hubs[url]`, and of a hub that
+ * stays disconnected for a url it does not name or for none; returns every url
+ * asked for, in order. The test passes its own import of `hooks/useSignalR`:
+ * importing it here would be circular for a file that mocks that module with
+ * {@link fakeSignalRModule}.
+ */
+export function routeHubs(
+  signalRModule: { useSignalR: (hubUrl?: string | null) => SignalRConnection },
+  hubs: Record<string, FakeHub>,
+): (string | null | undefined)[] {
+  const asked: (string | null | undefined)[] = [];
+  const unrouted = fakeHub("disconnected");
+  vi.spyOn(signalRModule, "useSignalR").mockImplementation((hubUrl?: string | null) => {
+    asked.push(hubUrl);
+    return (hubUrl ? (hubs[hubUrl] ?? unrouted) : unrouted).connection;
+  });
+  return asked;
+}
+
+/**
+ * The hub every connection of {@link fakeSignalRModule} is. Each test file has
+ * its own module instances, so this is one per file.
+ */
+export const signalRHub = fakeHub();
+
+/**
+ * A stand-in for `hooks/useSignalR`, for a test file's `vi.mock`, whose hook
+ * returns {@link signalRHub}'s connection for every hub:
+ * `vi.mock("../hooks/useSignalR", async () => (await import("../test-support")).fakeSignalRModule())`.
+ */
+export function fakeSignalRModule() {
+  return { useSignalR: () => signalRHub.connection };
+}
+
+/** A pending loop template proposal made by run-1 of work item wi-1, adding a Lint step to tpl-1 at version 3. */
+export function makeLoopTemplateProposal(
+  overrides: Partial<LoopTemplateProposal> = {},
+): LoopTemplateProposal {
+  return {
+    id: "lp-1",
+    templateId: "tpl-1",
+    templateName: "Release Loop",
+    templateExists: true,
+    baseVersion: 3,
+    latestVersion: 3,
+    rationale: "Builds keep failing on the slow runner.",
+    status: "Pending",
+    editedBeforeSave: false,
+    appliedVersion: null,
+    rejectionReason: null,
+    createdAt: "2026-10-01T10:00:00Z",
+    decidedAt: null,
+    createdByLoopRunId: "run-1",
+    createdByRunNodeId: "exec-1",
+    createdByChatSessionId: null,
+    chatReplySequence: null,
+    source: { kind: "run", workItemId: "wi-1", chatSessionId: null, linkable: true },
+    changes: {
+      nameChanged: false,
+      descriptionChanged: false,
+      recoveryPolicyChanged: false,
+      nodesAdded: [{ id: "n-lint", label: "Lint", type: "Cmd" }],
+      nodesRemoved: [],
+      nodesChanged: [],
+      edgesAdded: [],
+      edgesRemoved: [],
+    },
+    ...overrides,
+  };
+}
+
+/** A pending suggestion for the existing variable review_rules, made by run-1 of work item wi-1. */
+export function makeGlobalVariableProposal(
+  overrides: Partial<GlobalVariableProposal> = {},
+): GlobalVariableProposal {
+  return {
+    id: "gp-1",
+    name: "review_rules",
+    value: "Keep reviews short.\nName the file and the line.",
+    rationale: "Reviews keep missing where the problem is.",
+    status: "Pending",
+    rejectionReason: null,
+    createdAt: "2026-10-01T10:00:00Z",
+    decidedAt: null,
+    snapshotUpdatedAt: "2026-09-30T10:00:00Z",
+    currentValue: "Keep reviews short.\nName the file.",
+    variableExists: true,
+    createdByLoopRunId: "run-1",
+    createdByRunNodeId: "exec-1",
+    createdByChatSessionId: null,
+    chatReplySequence: null,
+    source: { kind: "run", workItemId: "wi-1", chatSessionId: null, linkable: true },
+    ...overrides,
+  };
+}
+
+/** The proposal card `element` is in; throws when it is in none. */
+export function proposalCardAround(element: Element): HTMLElement {
+  const card = element.closest<HTMLElement>('[data-testid="proposal-card"]');
+  if (card === null) throw new Error("The element is not inside a proposal card.");
+  return card;
 }

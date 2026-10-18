@@ -15,8 +15,12 @@ interface ProposalDecisionProps {
   onSettled: (refusal: string | null, decided: boolean) => void;
   /** What the approve button says. */
   approveLabel?: string;
-  /** More actions for a pending proposal, after Approve and Reject. */
+  /** More actions, after Approve and Reject unless placed first. */
   extraActions?: ReactNode;
+  /** Where the extra actions go among Approve and Reject; last by default. */
+  extraActionsPlacement?: "first" | "last";
+  /** Whether the extra actions only show while it is pending; they do by default. */
+  extraActionsOnlyWhilePending?: boolean;
 }
 
 /** A 409 means it was decided elsewhere first: the owner's re-read shows how, so it is no error here. */
@@ -44,6 +48,8 @@ export default function ProposalDecision({
   onSettled,
   approveLabel = "Approve",
   extraActions,
+  extraActionsPlacement = "last",
+  extraActionsOnlyWhilePending = true,
 }: ProposalDecisionProps) {
   const [approveBusy, setApproveBusy] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
@@ -52,6 +58,7 @@ export default function ProposalDecision({
   const [rejectBusy, setRejectBusy] = useState(false);
   const [rejectError, setRejectError] = useState<string | null>(null);
   const decisionBusy = approveBusy || rejectBusy;
+  const extra = pending || !extraActionsOnlyWhilePending ? extraActions : null;
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -98,9 +105,10 @@ export default function ProposalDecision({
 
   return (
     <>
-      {pending && (
-        <div className="edit-proposal-actions">
-          {approve && (
+      {(pending || extra) && (
+        <div className="proposal-actions">
+          {extraActionsPlacement === "first" && extra}
+          {pending && approve && (
             <button
               type="button"
               className="btn btn-primary btn-sm"
@@ -110,7 +118,7 @@ export default function ProposalDecision({
               {approveLabel}
             </button>
           )}
-          {!rejectOpen && (
+          {pending && !rejectOpen && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
@@ -120,11 +128,11 @@ export default function ProposalDecision({
               Reject
             </button>
           )}
-          {extraActions}
+          {extraActionsPlacement === "last" && extra}
         </div>
       )}
       {pending && rejectOpen && (
-        <div className="edit-proposal-reject">
+        <div className="proposal-reject">
           <textarea
             aria-label="Rejection reason (optional)"
             placeholder="Why not? (optional)"
@@ -134,7 +142,7 @@ export default function ProposalDecision({
             rows={2}
             disabled={rejectBusy}
           />
-          <div className="edit-proposal-actions">
+          <div className="proposal-actions">
             <button
               type="button"
               className="btn btn-danger btn-sm"
@@ -158,12 +166,12 @@ export default function ProposalDecision({
         </div>
       )}
       {approveError && (
-        <p className="edit-proposal-error" role="alert">
+        <p className="proposal-error" role="alert">
           {approveError}
         </p>
       )}
       {rejectError && (
-        <p className="edit-proposal-error" role="alert">
+        <p className="proposal-error" role="alert">
           {rejectError}
         </p>
       )}

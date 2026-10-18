@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, cleanup, act, waitFor, within } from "@testing-library/react";
+import { render, cleanup, act, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import {
@@ -13,6 +13,13 @@ import {
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
+import {
+  documentOrder,
+  fakeHub,
+  makeGlobalVariableProposal,
+  reply,
+  stubFetch,
+} from "../../test-support";
 
 afterEach(() => {
   cleanup();
@@ -116,27 +123,17 @@ function suggestion(
   createdAt: string,
   workItemId = "wi-1",
 ) {
-  return {
+  return makeGlobalVariableProposal({
     id: `gp-${rationale}`,
-    name: "review_rules",
     value: `Suggested text number ${++suggested}`,
     rationale,
-    status: "Pending",
-    rejectionReason: null,
     createdAt,
-    decidedAt: null,
     snapshotUpdatedAt: "2026-09-01T00:00:00Z",
     currentValue: "Keep reviews short.",
-    variableExists: true,
-    createdByLoopRunId: "run-1",
     createdByRunNodeId: runNodeId,
-    createdByChatSessionId: null,
-    chatReplySequence: null,
     source: { kind: "run", workItemId, chatSessionId: null, linkable: true },
-  };
+  });
 }
-
-type Reply = { status: number; body?: unknown };
 
 /**
  * Answers the suggestions listing per work item with `answer`, which may hold
@@ -144,31 +141,15 @@ type Reply = { status: number; body?: unknown };
  */
 function stubSuggestions(answer: (workItemId: string | null) => Promise<unknown[]> | unknown[]) {
   const asked: (string | null)[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: string, init?: RequestInit) => {
-      const url = new URL(input, "http://localhost");
-      let reply: Reply = { status: 404, body: { error: "not stubbed" } };
-      if (
-        (init?.method ?? "GET") === "GET" &&
-        url.pathname === "/api/v1/global-variables/proposals"
-      ) {
-        const workItemId = url.searchParams.get("workItemId");
-        asked.push(workItemId);
-        reply = { status: 200, body: await answer(workItemId) };
-      }
-      return {
-        ok: reply.status < 400,
-        status: reply.status,
-        statusText: "",
-        text: () => Promise.resolve(JSON.stringify(reply.body)),
-      } as Response;
-    }),
-  );
+  stubFetch(async (call) => {
+    if (call.method !== "GET" || call.path !== "/api/v1/global-variables/proposals")
+      return reply(404, { error: "not stubbed" });
+    const workItemId = call.query.get("workItemId");
+    asked.push(workItemId);
+    return reply(200, await answer(workItemId));
+  });
   return asked;
 }
-
-type HubHandler = (msg: { payload: unknown }) => void;
 
 /** Serves `run` and run-1's conversation, `messages`, and `edits` as the item's requested edit proposals. */
 function mockServices(
@@ -176,17 +157,8 @@ function mockServices(
   messages: RunConversationMessage[] = [],
   edits: WorkItemEditProposal[] = [],
 ) {
-  const hub: Record<string, HubHandler[]> = {};
-  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
-    on: (event: string, handler: HubHandler) => {
-      (hub[event] ??= []).push(handler);
-    },
-    off: (event: string, handler: HubHandler) => {
-      hub[event] = (hub[event] ?? []).filter((h) => h !== handler);
-    },
-    invoke: vi.fn(() => Promise.resolve()),
-    connectionState: "connected",
-  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
+  const hub = fakeHub();
+  vi.spyOn(signalRHook, "useSignalR").mockReturnValue(hub.connection);
   vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopTemplateService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
@@ -212,10 +184,7 @@ function mockServices(
     maxFilesPerRequest: 10,
     maxTotalBytesPerWorkItem: 250 * MB,
   });
-  return (event: string, payload: unknown) =>
-    act(async () => {
-      for (const h of hub[event] ?? []) h({ payload });
-    });
+  return hub.emit;
 }
 
 function dialog(workItem: WorkItem) {
@@ -227,16 +196,6 @@ function dialog(workItem: WorkItem) {
 }
 
 const action = () => document.getElementById("wiv2-panel-action") as HTMLElement;
-
-/** The labels, in the order their elements appear in the Action tab. */
-function documentOrder(labels: string[]): string[] {
-  return labels
-    .map((l) => [l, within(action()).getByText(l, { exact: false })] as const)
-    .sort(([, a], [, b]) =>
-      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
-    )
-    .map(([l]) => l);
-}
 
 describe("global variable suggestions in the Action tab", () => {
   test("the item's runs' suggestions sit after the turn that made them, in time order with its edit proposals, and one without a step closes the thread", async () => {
@@ -271,7 +230,7 @@ describe("global variable suggestions in the Action tab", () => {
       "At step two",
       "Loose suggestion",
     ];
-    expect(documentOrder(expected)).toEqual(expected);
+    expect(documentOrder(expected, action())).toEqual(expected);
     expect(action().textContent).toContain("review_rules");
   });
 

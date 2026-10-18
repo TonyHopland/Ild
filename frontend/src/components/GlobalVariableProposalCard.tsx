@@ -3,7 +3,7 @@ import { globalVariableService } from "../services/auth";
 import { DescriptionDiff } from "./EditProposalCard";
 import ProposalDecision from "./ProposalDecision";
 import type { GlobalVariableProposal } from "../types";
-import "./EditProposalCard.css";
+import "./ProposalCard.css";
 import "./GlobalVariableProposalCard.css";
 
 interface GlobalVariableProposalCardProps {
@@ -47,17 +47,19 @@ export default function GlobalVariableProposalCard({
   }, [reveal]);
 
   return (
-    <div ref={cardRef} className={`edit-proposal-card edit-proposal-card--${status}`}>
-      <div className="edit-proposal-header">
-        <span className="edit-proposal-heading">
+    <div
+      ref={cardRef}
+      className={`proposal-card proposal-card--${status}`}
+      data-testid="proposal-card"
+    >
+      <div className="proposal-header">
+        <span className="proposal-heading">
           Suggested change to <code>{proposal.name}</code>
         </span>
-        <span className={`edit-proposal-status edit-proposal-status--${status}`}>
-          {proposal.status}
-        </span>
+        <span className={`proposal-status proposal-status--${status}`}>{proposal.status}</span>
       </div>
 
-      <p className="edit-proposal-rationale">{proposal.rationale}</p>
+      <p className="proposal-rationale">{proposal.rationale}</p>
 
       {!proposal.variableExists && (
         <p className="gv-proposal-new">
@@ -69,10 +71,10 @@ export default function GlobalVariableProposalCard({
       <DescriptionDiff before={proposal.currentValue ?? ""} after={proposal.value} />
 
       {proposal.status === "Rejected" && proposal.rejectionReason && (
-        <p className="edit-proposal-reason">Reason: {proposal.rejectionReason}</p>
+        <p className="proposal-reason">Reason: {proposal.rejectionReason}</p>
       )}
 
-      {source && <div className="gv-proposal-source">{source}</div>}
+      {source && <div className="proposal-source">{source}</div>}
 
       <ProposalDecision
         pending={proposal.status === "Pending"}
