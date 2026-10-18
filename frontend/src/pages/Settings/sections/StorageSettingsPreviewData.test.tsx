@@ -76,4 +76,22 @@ describe("StorageSettings preview data focus and outcome", () => {
     remeasure.resolve({ categories: [] } as never);
     await waitFor(() => expect(screen.queryByText("delta-app")).toBeNull());
   });
+
+  test("a delete that finishes after the page is left measures nothing", async () => {
+    const getOverview = vi
+      .spyOn(services.storageService, "getOverview")
+      .mockResolvedValue(overview as never);
+    const deletion = deferred<void>();
+    vi.spyOn(services.storageService, "deletePreviewData").mockReturnValue(deletion.promise);
+    const { unmount } = render(<StorageSettings />);
+    await screen.findByText("delta-app");
+
+    fireEvent.click(within(entry()).getByRole("button", { name: /delete/i }));
+    fireEvent.click(within(entry()).getByRole("button", { name: /confirm/i }));
+    unmount();
+    deletion.resolve();
+    await deletion.promise;
+
+    expect(getOverview).toHaveBeenCalledTimes(1);
+  });
 });

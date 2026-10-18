@@ -927,14 +927,14 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         if (_claims.TryAcquire(scope, normalized, out var lease, out var refusal))
             return lease;
 
-        if (!string.Equals(refusal.Holder?.WorkItemId, scope.WorkItemId, StringComparison.Ordinal))
+        if (refusal.Holder is not { } holder || !string.Equals(holder.WorkItemId, scope.WorkItemId, StringComparison.Ordinal))
             throw new InvalidOperationException(refusal.Message);
 
         if (!holdsGate)
             await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (_runtimes.TryRemove(refusal.Holder!.WorktreePath, out var earlier))
+            if (_runtimes.TryRemove(holder.WorktreePath, out var earlier))
                 await RetireRuntimeAsync(earlier, CancellationToken.None);
             if (_claims.TryAcquire(scope, normalized, out lease, out refusal))
                 return lease;

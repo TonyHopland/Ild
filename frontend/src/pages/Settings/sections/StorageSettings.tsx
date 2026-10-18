@@ -223,7 +223,9 @@ export default function StorageSettings() {
                               done: "Deleted.",
                               failed: "Could not delete the preview data.",
                             }}
-                            onDeleted={() => void measure()}
+                            onDeleted={() => {
+                              if (mounted.current) void measure();
+                            }}
                           />
                         )}
                       </li>
