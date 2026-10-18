@@ -309,7 +309,20 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
                 lease = null;
             }
 
-            runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
+            try
+            {
+                runtime.AddProcess(await LaunchServiceProcessAsync(service, runtime, cancellationToken));
+            }
+            catch
+            {
+                // Nothing of this preview runs, and its state reads as stopped, so no stop
+                // control would ever be offered for it: left registered, it would hold the
+                // repository's preview data until a restart.
+                if (runtime.Processes.Count == 0 && _runtimes.TryRemove(normalized, out _))
+                    await RetireRuntimeAsync(runtime, CancellationToken.None);
+                throw;
+            }
+
             await WaitForHealthAsync(service.Name, ResolveHealthUrl(service, runtime), cancellationToken);
 
             return BuildResponse(loaded, runtime);
@@ -475,17 +488,22 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
 
         ValidateVolumes(resolvedProfileName, profile);
 
-        // The gate only orders the claim against starts and stops; the install itself
-        // runs outside it, holding the preview data through its own lease.
-        PreviewDataClaims.Lease? lease;
-        await _gate.WaitAsync(cancellationToken);
-        try
+        // The claim is atomic on its own, so an install waits on the gate — held for
+        // the whole of a preview start — only when it has to stop the same work
+        // item's earlier preview. The install itself runs outside it, holding the
+        // preview data through its own lease.
+        PreviewDataClaims.Lease? lease = null;
+        if (volumes != null && !_claims.TryAcquire(volumes, normalized, out lease, out _))
         {
-            lease = await ClaimPreviewDataAsync(volumes, normalized);
-        }
-        finally
-        {
-            _gate.Release();
+            await _gate.WaitAsync(cancellationToken);
+            try
+            {
+                lease = await ClaimPreviewDataAsync(volumes, normalized);
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
 
         using (lease)
@@ -1774,7 +1792,15 @@ public sealed class WorktreePreviewService : IWorktreePreviewService, IDisposabl
         // can write it, so the directory is made as the agent rather than by us.
         if (runtime.Volumes.Values.Any(volume => full == volume || full.StartsWith(volume + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
         {
-            await AgentWritableFiles.CreateDirectoryAsync(full, cancellationToken);
+            try
+            {
+                await AgentWritableFiles.CreateDirectoryAsync(full, cancellationToken);
+            }
+            catch (IOException ex)
+            {
+                throw new InvalidOperationException($"Preview cwd '{resolved}' could not be created: {ex.Message}", ex);
+            }
+
             return full;
         }
 

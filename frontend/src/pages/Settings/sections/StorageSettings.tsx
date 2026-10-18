@@ -20,10 +20,10 @@ type Cleanup =
   | { kind: "done"; candidates: WorktreeCleanupCandidate[]; result: WorktreeCleanupResult }
   | { kind: "error"; message: string };
 
-/** The one preview-data entry whose delete is being asked for, run, or has failed. */
+/** The one preview-data entry whose delete is being asked for, run, done or has failed. */
 type PreviewDataDelete = {
   repositoryId: string;
-  step: "confirming" | "deleting" | "failed";
+  step: "confirming" | "deleting" | "deleted" | "failed";
   message?: string;
 };
 
@@ -113,7 +113,11 @@ export default function StorageSettings() {
     setOverview((previous) => ({ ...previous, loading: true, error: null }));
     try {
       const data = await storageService.getOverview(abort.signal);
-      if (current()) setOverview({ data, loading: false, error: null });
+      if (current()) {
+        setOverview({ data, loading: false, error: null });
+        // Once measured again, a deleted entry is gone or reflects whatever is there now.
+        setPreviewDataDelete((pending) => (pending?.step === "deleted" ? null : pending));
+      }
     } catch (error) {
       if (current())
         setOverview({
@@ -164,16 +168,38 @@ export default function StorageSettings() {
     if (mounted.current) void measure();
   };
 
+  // Moves focus to the control that replaces the one just used in a preview-data
+  // entry, which unmounted with it; the entry's element registers itself as it renders.
+  const previewDataFocusEntry = useRef<string | null>(null);
+  const previewDataFocusTarget = useRef<HTMLElement | null>(null);
+  const previewDataFocus = (repositoryId: string) => (element: HTMLElement | null) => {
+    if (element && previewDataFocusEntry.current === repositoryId)
+      previewDataFocusTarget.current = element;
+  };
+  const changePreviewDataDelete = (repositoryId: string, next: PreviewDataDelete | null) => {
+    previewDataFocusEntry.current = repositoryId;
+    previewDataFocusTarget.current = null;
+    setPreviewDataDelete(next);
+  };
+
+  useEffect(() => {
+    if (previewDataFocusEntry.current && previewDataFocusTarget.current) {
+      previewDataFocusTarget.current.focus();
+      previewDataFocusEntry.current = null;
+      previewDataFocusTarget.current = null;
+    }
+  }, [previewDataDelete]);
+
   const deletePreviewData = async (repositoryId: string) => {
     setPreviewDataDelete({ repositoryId, step: "deleting" });
     try {
       await storageService.deletePreviewData(repositoryId);
       if (!mounted.current) return;
-      setPreviewDataDelete(null);
+      changePreviewDataDelete(repositoryId, { repositoryId, step: "deleted" });
       void measure();
     } catch (error) {
       if (mounted.current)
-        setPreviewDataDelete({
+        changePreviewDataDelete(repositoryId, {
           repositoryId,
           step: "failed",
           message: failure(error) ?? "Could not delete the preview data.",
@@ -186,6 +212,17 @@ export default function StorageSettings() {
 
   const previewDataActions = (repositoryId: string, label: string) => {
     const own = previewDataDelete?.repositoryId === repositoryId ? previewDataDelete : null;
+    if (own?.step === "deleted")
+      return (
+        <div
+          className="storage-preview-data-note"
+          role="status"
+          tabIndex={-1}
+          ref={previewDataFocus(repositoryId)}
+        >
+          Deleted.
+        </div>
+      );
     if (own?.step === "confirming" || own?.step === "deleting")
       return (
         <div className="storage-preview-data-confirm" role="group" aria-label="Delete preview data">
@@ -194,6 +231,7 @@ export default function StorageSettings() {
             <button
               type="button"
               className="btn btn-danger btn-sm"
+              ref={previewDataFocus(repositoryId)}
               onClick={() => void deletePreviewData(repositoryId)}
               disabled={previewDataBusy}
             >
@@ -202,7 +240,7 @@ export default function StorageSettings() {
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => setPreviewDataDelete(null)}
+              onClick={() => changePreviewDataDelete(repositoryId, null)}
               disabled={previewDataBusy}
             >
               Cancel
@@ -216,7 +254,10 @@ export default function StorageSettings() {
           type="button"
           className="btn btn-secondary btn-sm"
           aria-label={`Delete preview data: ${label}`}
-          onClick={() => setPreviewDataDelete({ repositoryId, step: "confirming" })}
+          ref={previewDataFocus(repositoryId)}
+          onClick={() =>
+            changePreviewDataDelete(repositoryId, { repositoryId, step: "confirming" })
+          }
           disabled={previewDataBusy}
         >
           Delete

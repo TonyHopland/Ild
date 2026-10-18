@@ -478,11 +478,12 @@ export default function Repositories() {
                   <input
                     type="checkbox"
                     checked={keepPreviewData}
+                    aria-describedby="repoKeepPreviewDataHint"
                     onChange={(e) => setKeepPreviewData(e.target.checked)}
                   />
                   Keep preview data between runs
                 </label>
-                <span className="repo-hint">
+                <span className="repo-hint" id="repoKeepPreviewDataHint">
                   The volumes in ild.config.json become one folder for every work item and run of
                   this repository, so their data carries over from one preview to the next. Only one
                   preview of the repository runs at a time while this is on. Turning it off leaves

@@ -352,6 +352,7 @@
 
 .storage-entries li > .btn,
 .storage-entries li > .settings-error,
+.storage-preview-data-note,
 .storage-preview-data-confirm {
   margin: 0.15rem 0 0.35rem 1rem;
 }
