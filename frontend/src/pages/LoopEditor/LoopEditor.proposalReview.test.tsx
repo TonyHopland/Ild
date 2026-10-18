@@ -124,50 +124,55 @@ let server: {
   counts: Record<string, number>;
 };
 let calls: Call[] = [];
+/** How the stubbed fetch answers; a test may wrap it to hold one response. */
+let answer: (call: Call) => Response | Promise<Response>;
+
+/** The fake server's answer to `call`. */
+function answerAsServer({ method, path, query, body }: Call): Response {
+  if (method === "GET" && path === "/api/v1/looptemplates") return reply(200, server.templates);
+  if (method === "GET" && path === "/api/v1/looptemplates/node-outputs") return reply(200, {});
+  if (method === "POST" && path === "/api/v1/looptemplates/validate")
+    return reply(200, { valid: true, errors: [] });
+  if (method === "PUT" && path.startsWith("/api/v1/looptemplates/")) {
+    const id = path.split("/").pop()!;
+    const applied = body?.fromProposalId === "lp-1" && server.proposal.status === "Pending";
+    server.templates = server.templates.map((t) =>
+      t.id === id ? { ...t, ...(body as object), version: t.version + 1, id: t.id } : t,
+    ) as (typeof devLoop)[];
+    if (applied) server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 };
+    return reply(200, { id, version: 4, proposalApplied: applied });
+  }
+  if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
+    return reply(200, server.counts);
+  if (method === "GET" && path === "/api/v1/loop-template-proposals/lp-1")
+    return reply(200, server.proposal);
+  if (method === "GET" && path === "/api/v1/loop-template-proposals") {
+    const status = query.get("status");
+    const templateId = query.get("templateId");
+    return reply(
+      200,
+      server.listed.filter(
+        (p) => (!status || p.status === status) && (!templateId || p.templateId === templateId),
+      ),
+    );
+  }
+  if (method === "POST" && path === "/api/v1/loop-template-proposals/lp-1/reject") {
+    server.proposal = { ...server.proposal, status: "Rejected" };
+    return reply(200, server.proposal);
+  }
+  if (method === "GET") return reply(200, []);
+  return reply(404, { error: "not stubbed" });
+}
 
 beforeEach(() => {
   server = { templates: [devLoop], proposal: proposalView(), listed: [], counts: {} };
-  calls = stubFetch(({ method, path, query, body }) => {
-    if (method === "GET" && path === "/api/v1/looptemplates") return reply(200, server.templates);
-    if (method === "GET" && path === "/api/v1/looptemplates/node-outputs") return reply(200, {});
-    if (method === "POST" && path === "/api/v1/looptemplates/validate")
-      return reply(200, { valid: true, errors: [] });
-    if (method === "PUT" && path.startsWith("/api/v1/looptemplates/")) {
-      const id = path.split("/").pop()!;
-      const applied = body?.fromProposalId === "lp-1" && server.proposal.status === "Pending";
-      server.templates = server.templates.map((t) =>
-        t.id === id ? { ...t, ...(body as object), version: t.version + 1, id: t.id } : t,
-      ) as (typeof devLoop)[];
-      if (applied)
-        server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 } as never;
-      return reply(200, { id, version: 4, proposalApplied: applied });
-    }
-    if (method === "GET" && path === "/api/v1/loop-template-proposals/pending-counts")
-      return reply(200, server.counts);
-    if (method === "GET" && path === "/api/v1/loop-template-proposals/lp-1")
-      return reply(200, server.proposal);
-    if (method === "GET" && path === "/api/v1/loop-template-proposals") {
-      const status = query.get("status");
-      const templateId = query.get("templateId");
-      return reply(
-        200,
-        server.listed.filter(
-          (p) => (!status || p.status === status) && (!templateId || p.templateId === templateId),
-        ),
-      );
-    }
-    if (method === "POST" && path === "/api/v1/loop-template-proposals/lp-1/reject") {
-      server.proposal = { ...server.proposal, status: "Rejected" };
-      return reply(200, server.proposal);
-    }
-    if (method === "GET") return reply(200, []);
-    return reply(404, { error: "not stubbed" });
-  });
+  answer = answerAsServer;
+  calls = stubFetch((call) => answer(call));
 });
 
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(signalRHub.handlers)) delete signalRHub.handlers[k];
+  signalRHub.reset();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   setCurrentChatSessionId(null);
@@ -445,27 +450,22 @@ describe("pending proposals in the template list", () => {
 describe("saving a listed proposal", () => {
   test("the open template then shows the version the proposal became, so a later save builds on it", async () => {
     server.listed = [proposalView()];
-    const answer = globalThis.fetch;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string, init?: RequestInit) => {
-        const path = new URL(input, "http://localhost").pathname;
-        if ((init?.method ?? "GET").toUpperCase() === "POST" && path.endsWith("/lp-1/save")) {
-          server.templates = [
-            {
-              ...devLoop,
-              version: 4,
-              nodes: proposedDocument.nodes,
-              edges: proposedDocument.edges,
-            },
-          ] as (typeof devLoop)[];
-          server.listed = [];
-          server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 } as never;
-          return reply(200, { proposal: server.proposal, version: 4 });
-        }
-        return answer(input, init);
-      }),
-    );
+    answer = (call) => {
+      if (call.method === "POST" && call.path.endsWith("/lp-1/save")) {
+        server.templates = [
+          {
+            ...devLoop,
+            version: 4,
+            nodes: proposedDocument.nodes,
+            edges: proposedDocument.edges,
+          },
+        ] as (typeof devLoop)[];
+        server.listed = [];
+        server.proposal = { ...server.proposal, status: "Applied", appliedVersion: 4 };
+        return reply(200, { proposal: server.proposal, version: 4 });
+      }
+      return answerAsServer(call);
+    };
     renderEditor("/loop-editor/tpl-1");
     await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
     const listed = (await screen.findByText(RATIONALE)).closest(
@@ -484,21 +484,16 @@ describe("leaving a review while its proposal is re-read", () => {
     "%s goes back to the saved version even when a hint re-reads the proposal meanwhile",
     async (action) => {
       await openReview();
-      const answer = globalThis.fetch;
       let held = false;
       let release: () => void = () => {};
       const templatesRead = new Promise<void>((resolve) => (release = resolve));
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async (input: string, init?: RequestInit) => {
-          const path = new URL(input, "http://localhost").pathname;
-          if (!held && (init?.method ?? "GET") === "GET" && path === "/api/v1/looptemplates") {
-            held = true;
-            await templatesRead;
-          }
-          return answer(input, init);
-        }),
-      );
+      answer = async (call) => {
+        if (!held && call.method === "GET" && call.path === "/api/v1/looptemplates") {
+          held = true;
+          await templatesRead;
+        }
+        return answerAsServer(call);
+      };
 
       fireEvent.click(within(banner()!).getByRole("button", { name: action }));
       const confirm = screen.queryByRole("button", { name: /confirm/i });
@@ -522,20 +517,16 @@ describe("a review opened while a save is in flight", () => {
     server.listed = [proposalView()];
     renderEditor("/loop-editor/tpl-1");
     await waitFor(() => expect(onCanvas("Initialize")).toBe(true));
-    const answer = globalThis.fetch;
     let held = false;
     let release: () => void = () => {};
     const saveAnswered = new Promise<void>((resolve) => (release = resolve));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: string, init?: RequestInit) => {
-        if ((init?.method ?? "GET").toUpperCase() === "PUT") {
-          held = true;
-          await saveAnswered;
-        }
-        return answer(input, init);
-      }),
-    );
+    answer = async (call) => {
+      if (call.method === "PUT") {
+        held = true;
+        await saveAnswered;
+      }
+      return answerAsServer(call);
+    };
     fireEvent.click(screen.getByText("Save"));
     fireEvent.click(await screen.findByText("Save changes"));
     await waitFor(() => expect(held).toBe(true));

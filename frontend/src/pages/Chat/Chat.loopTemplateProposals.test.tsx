@@ -140,7 +140,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
-  for (const k of Object.keys(signalRHub.handlers)) delete signalRHub.handlers[k];
+  signalRHub.reset();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   localStorage.clear();

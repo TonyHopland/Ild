@@ -234,22 +234,28 @@ export function documentOrder(labels: string[], container: HTMLElement = documen
 
 export type HubHandler = (msg: { payload: unknown }) => void;
 
-/** A hub connection that is always connected and lets a test push events to its listeners. */
+export type HubConnectionState = SignalRConnection["connectionState"];
+
+/** A hub connection that lets a test push events to its listeners and change its state. */
 export interface FakeHub {
   handlers: Record<string, Set<HubHandler>>;
   invoke: Mock<(...args: unknown[]) => Promise<void>>;
+  /** The same object for the hub's whole life; a hook re-rendered after `setState` sees the new state. */
   connection: SignalRConnection;
+  setState: (state: HubConnectionState) => void;
   /** Calls every listener for `event`, outside act. */
   dispatch: (event: string, payload: unknown) => void;
   /** Calls every listener for `event`, inside an async act. */
   emit: (event: string, payload: unknown) => Promise<void>;
+  /** Drops every listener. */
+  reset: () => void;
 }
 
-export function fakeHub(): FakeHub {
+export function fakeHub(state: HubConnectionState = "connected"): FakeHub {
   const handlers: Record<string, Set<HubHandler>> = {};
   const invoke = vi.fn((..._args: unknown[]) => Promise.resolve());
   const connection: SignalRConnection = {
-    connectionState: "connected",
+    connectionState: state,
     on: <E extends string>(event: E, handler: (msg: TypedSignalRMessage<E>) => void) => {
       (handlers[event] ??= new Set()).add(handler as HubHandler);
     },
@@ -265,7 +271,33 @@ export function fakeHub(): FakeHub {
     act(async () => {
       dispatch(event, payload);
     });
-  return { handlers, invoke, connection, dispatch, emit };
+  const setState = (next: HubConnectionState) => {
+    connection.connectionState = next;
+  };
+  const reset = () => {
+    for (const event of Object.keys(handlers)) delete handlers[event];
+  };
+  return { handlers, invoke, connection, setState, dispatch, emit, reset };
+}
+
+/**
+ * Answers `useSignalR` with the connection of `hubs[url]`, and of a hub that
+ * stays disconnected for a url it does not name or for none; returns every url
+ * asked for, in order. The test passes its own import of `hooks/useSignalR`:
+ * importing it here would be circular for a file that mocks that module with
+ * {@link fakeSignalRModule}.
+ */
+export function routeHubs(
+  signalRModule: { useSignalR: (hubUrl?: string | null) => SignalRConnection },
+  hubs: Record<string, FakeHub>,
+): (string | null | undefined)[] {
+  const asked: (string | null | undefined)[] = [];
+  const unrouted = fakeHub("disconnected");
+  vi.spyOn(signalRModule, "useSignalR").mockImplementation((hubUrl?: string | null) => {
+    asked.push(hubUrl);
+    return (hubUrl ? (hubs[hubUrl] ?? unrouted) : unrouted).connection;
+  });
+  return asked;
 }
 
 /**
