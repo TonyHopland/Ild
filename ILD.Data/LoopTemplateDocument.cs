@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
@@ -40,4 +41,7 @@ public sealed record LoopTemplateDocument(
     /// <c>+</c> and non-ASCII as <c>\uXXXX</c>; an <c>editFile</c> matches this text.
     /// </summary>
     public string Render() => JsonSerializer.Serialize(this, RenderOptions);
+
+    /// <summary>A parsed document re-rendered in <see cref="Render()"/>'s layout, so an edit to it keeps matching.</summary>
+    public static string Render(JsonNode document) => document.ToJsonString(RenderOptions);
 }

@@ -69,7 +69,7 @@ internal sealed record LoopEditApplication(int MatchCount, string? Document, str
 }
 
 /// <summary>
-/// A loop document after<see cref="LoopDocumentEditor.Check(string, Func{LoopTemplateGraph, string?}?)"/>:
+/// A loop document after <see cref="LoopDocumentEditor.Check(string, Func{LoopTemplateGraph, string?}?)"/>:
 /// the document as upgraded, and either its graph with every rule it breaks, its
 /// graph with why the caller's own checks refused it, or why its graph could not
 /// be read.
@@ -114,9 +114,6 @@ public static class LoopDocumentEditor
     {
         WriteIndented = true,
     };
-
-    /// <summary>Compact, with the default encoder: the text <c>get_loop_template</c> returns.</summary>
-    private static readonly JsonSerializerOptions CompactOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>
     /// Return one node's <c>{ id, type, label, config }</c> as indented JSON. The
@@ -279,8 +276,8 @@ public static class LoopDocumentEditor
     /// <summary>
     /// Apply an Edit List (ADR-0028) to <paramref name="document"/>, in order,
     /// through the same apply steps as the scoped edits, stopping at the first edit
-    /// that does not land. After each edit the document is re-rendered as compact
-    /// JSON, the layout <c>get_loop_template</c> returns, so a later
+    /// that does not land. After each edit the document is re-rendered through
+    /// <see cref="LoopTemplateDocument.Render(JsonNode)"/>, the layout <c>get_loop_template</c> returns, so a later
     /// <c>editFile</c> matches the text the agent read. The graph is never
     /// validated here: only the final document has to be a valid loop, and the
     /// caller checks it.
@@ -295,7 +292,7 @@ public static class LoopDocumentEditor
                 : ApplyEdit(document, edit);
             if (applied.Error != null)
                 return new(null, new LoopEditListFailure(index, edit?.Op, edit?.NodeId, edit?.Field, applied.Error));
-            document = JsonNode.Parse(applied.Document!)!.ToJsonString(CompactOptions);
+            document = LoopTemplateDocument.Render(JsonNode.Parse(applied.Document!)!);
         }
         return new(document, null);
     }

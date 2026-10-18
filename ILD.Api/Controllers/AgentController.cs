@@ -1,6 +1,8 @@
 using System.Data;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using ILD.Api.Authentication;
 using ILD.Api.Configuration;
 using ILD.Api.Contracts;
@@ -898,10 +900,13 @@ public class AgentController : ControllerBase
             : (null, NotFound(new { error = $"Loop template not found: {key}" }));
     }
 
-    /// <summary>The Edit List as stored: the edits as sent, without the members an op does not take.</summary>
+    /// <summary>
+    /// The Edit List as stored: the edits as the server parsed them, re-serialised
+    /// without null members. Not the document format, so not <see cref="LoopTemplateDocument.Render()"/>.
+    /// </summary>
     private static readonly JsonSerializerOptions EditListJson = new(JsonSerializerDefaults.Web)
     {
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
     /// <summary>
@@ -1840,8 +1845,8 @@ public class AgentController : ControllerBase
 
     // -- Loop Template Proposals (ADR-0028) ----------------------------------
     //
-    // Agents propose a whole new document for a saved template against its latest
-    // version. Saving and rejecting are human-only and live on
+    // Agents propose a whole new document, or an Edit List, for a saved template
+    // against its latest version. Saving and rejecting are human-only and live on
     // LoopTemplateProposalsController; saving from review is a LoopTemplatesController save.
 
     [HttpPost("loop-templates/proposals")]
@@ -1883,14 +1888,15 @@ public class AgentController : ControllerBase
         if (rationale.Length > LoopTemplateProposal.MaxRationaleLength)
             return BadRequest(new { error = $"The rationale is {rationale.Length} characters; keep it to {LoopTemplateProposal.MaxRationaleLength}." });
 
-        LoopTemplate? template = null;
-        IActionResult? notFound;
-        var document = request.Document;
-        if (request.Edits is not null)
+        var (template, notFound) = await FindLoopTemplateAsync(request.NameOrId);
+        if (template == null)
+            return notFound!;
+
+        string document;
+        if (request.Edits is null)
+            document = request.Document!;
+        else
         {
-            (template, notFound) = await FindLoopTemplateAsync(request.NameOrId);
-            if (template == null)
-                return notFound!;
             var (latestVersion, latestDocument) = await RenderLatestLoopTemplateAsync(template, baseVersion);
             if (latestDocument is null)
                 return NotLatestLoopTemplateVersion(template, baseVersion, latestVersion);
@@ -1898,10 +1904,10 @@ public class AgentController : ControllerBase
             var applied = LoopDocumentEditor.ApplyEditList(latestDocument, request.Edits);
             if (applied.Failure is { } failure)
                 return BadRequest(new { error = EditListFailureMessage(failure), editIndex = failure.Index });
-            document = applied.Document;
+            document = applied.Document!;
         }
 
-        var proposed = _templates.CheckProposedDocument(document!);
+        var proposed = _templates.CheckProposedDocument(document);
         if (proposed.Error is { } documentError)
             return BadRequest(new { error = documentError });
         if (proposed.ValidationErrors.Count > 0)
@@ -1910,13 +1916,6 @@ public class AgentController : ControllerBase
                 error = "A save would refuse this loop. Fix every error listed and propose again.",
                 validationErrors = proposed.ValidationErrors,
             });
-
-        if (template == null)
-        {
-            (template, notFound) = await FindLoopTemplateAsync(request.NameOrId);
-            if (template == null)
-                return notFound!;
-        }
 
         var result = await proposals.ProposeAsync(new LoopTemplateProposal
         {
@@ -1973,7 +1972,7 @@ public class AgentController : ControllerBase
             templateName = e.Template?.Name,
             baseVersion = e.Proposal.BaseVersion,
             rationale = e.Proposal.Rationale,
-            editCount = e.Proposal.Edits is null ? (int?)null : System.Text.Json.Nodes.JsonNode.Parse(e.Proposal.Edits)!.AsArray().Count,
+            editCount = e.Proposal.Edits is null ? (int?)null : JsonNode.Parse(e.Proposal.Edits)!.AsArray().Count,
             status = e.Proposal.Status.ToString(),
             editedBeforeSave = e.Proposal.EditedBeforeSave,
             appliedVersion = e.Proposal.AppliedVersion,

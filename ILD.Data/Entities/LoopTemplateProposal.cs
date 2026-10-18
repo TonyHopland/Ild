@@ -27,8 +27,8 @@ public class LoopTemplateProposal : IAgentProposal<LoopTemplateProposalStatus>
     public string Document { get; set; } = string.Empty;
 
     /// <summary>
-    /// The Edit List the document was made from, as JSON, exactly as the agent sent
-    /// it; null when the agent sent the whole document.
+    /// The Edit List the document was made from, as JSON, as the server parsed it
+    /// (null members dropped); null when the agent sent the whole document.
     /// </summary>
     public string? Edits { get; set; }
 

@@ -859,7 +859,7 @@ export interface LoopTemplateChanges {
   edgesRemoved: LoopTemplateProposalEdgeRef[];
 }
 
-/** One edit of an Edit List, exactly as the agent sent it. */
+/** One edit of an Edit List, as the server parsed it. */
 export type LoopTemplateEdit =
   | { op: "editNodeField"; nodeId: string; field: string; oldString: string; newString: string }
   | { op: "setNodeField"; nodeId: string; field: string; value: string }
@@ -904,7 +904,7 @@ export interface LoopTemplateProposal {
   };
   /** Against the base version; null once that version no longer exists. */
   changes: LoopTemplateChanges | null;
-  /** The Edit List it was made from, exactly as the agent sent it; null for a whole document. */
+  /** The Edit List it was made from, as the server parsed it; null for a whole document. */
   edits: LoopTemplateEdit[] | null;
   /** The whole proposed ild-loop-template/v2 document; only when read one by one. */
   document?: string | null;

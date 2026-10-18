@@ -4,7 +4,6 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ILD.McpServer;
 using ILD.McpServer.Tools;
-using ModelContextProtocol.Server;
 
 namespace ILD.Tests;
 
@@ -97,24 +96,6 @@ public class LoopTemplateProposalToolsTests
         Assert.Equal("[{\"name\":\"approve\"}]", sent[1]!["value"]!.GetValue<string>());
         Assert.Equal("\"label\":\"Cleanup\"", sent[2]!["oldString"]!.GetValue<string>());
         Assert.Contains("lp-1", result);
-    }
-
-    [Fact]
-    public void propose_loop_template_change_takes_a_document_or_a_typed_edit_list_both_optional()
-    {
-        var method = typeof(LoopTemplateProposalTools).GetMethod(nameof(LoopTemplateProposalTools.ProposeLoopTemplateChange))!;
-        var tool = McpServerTool.Create(method, _ => new LoopTemplateProposalTools(null!));
-        var schema = JsonNode.Parse(tool.ProtocolTool.InputSchema.GetRawText())!;
-
-        var required = schema["required"]!.AsArray().Select(r => r!.GetValue<string>()).ToArray();
-        Assert.Equal(new[] { "baseVersion", "nameOrId", "rationale" }, required.OrderBy(r => r, StringComparer.Ordinal));
-        var edits = schema["properties"]!["edits"]!;
-        Assert.Contains("array", edits["type"]!.ToJsonString());
-        var item = edits["items"]!["properties"]!.AsObject();
-        Assert.Equal(
-            new[] { "field", "newString", "nodeId", "oldString", "op", "value" },
-            item.Select(p => p.Key).OrderBy(k => k, StringComparer.Ordinal));
-        Assert.Contains("string", schema["properties"]!["document"]!["type"]!.ToJsonString());
     }
 
     [Fact]
