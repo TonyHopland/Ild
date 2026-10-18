@@ -453,6 +453,8 @@ public class LoopDocumentEditorTests
         { "editNodeField with an empty oldString", false, ValidDocument(), EditNodeFieldEdit("ai", "prompt", "", "x") },
         { "editFile with an empty oldString", false, ValidDocument(), EditFileEdit("", "x") },
         { "setNodeField with a structured value that is not an array", false, StructuredDocument, SetNodeFieldEdit("ai", "outputs", "approve") },
+        { "editNodeField with an empty field", false, ValidDocument(), EditNodeFieldEdit("ai", "", "a", "b") },
+        { "setNodeField with a whitespace field", false, ValidDocument(), SetNodeFieldEdit("ai", "  ", "b") },
     };
 
     private static LoopEditResult ThroughTheEditorOp(string document, LoopTemplateEdit edit) => edit.Op switch
@@ -488,6 +490,20 @@ public class LoopDocumentEditorTests
             Assert.Equal(edit.Field, failure.Field);
             Assert.Equal(single.Error, failure.Message);
         }
+    }
+
+    [Theory]
+    [InlineData("editNodeField")]
+    [InlineData("setNodeField")]
+    public void An_edit_list_refuses_a_blank_field_with_the_editor_endpoints_message(string op)
+    {
+        // The editor endpoints refuse a blank field up front with FieldRequired; an
+        // Edit List reaches the apply step, which must answer the same.
+        var edit = op == "editNodeField" ? EditNodeFieldEdit("ai", " ", "a", "b") : SetNodeFieldEdit("ai", " ", "b");
+
+        var list = LoopDocumentEditor.ApplyEditList(ValidDocument(), [edit]);
+
+        Assert.Equal(LoopDocumentEditor.FieldRequired, list.Failure!.Message);
     }
 
     [Fact]

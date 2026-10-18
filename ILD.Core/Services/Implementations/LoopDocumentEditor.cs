@@ -116,6 +116,12 @@ public static class LoopDocumentEditor
     };
 
     /// <summary>
+    /// The refusal for a blank field name. The editor endpoints and an Edit List both
+    /// reach it through the apply steps, so the two paths give the same message.
+    /// </summary>
+    public const string FieldRequired = "field is required.";
+
+    /// <summary>
     /// Return one node's <c>{ id, type, label, config }</c> as indented JSON. The
     /// config's prompt/text fields are ordinary nested JSON strings, so they come
     /// back decoded (a single JSON layer) — the agent reads real text and never has
@@ -194,7 +200,7 @@ public static class LoopDocumentEditor
     internal static LoopEditApplication ApplySetNodeField(string document, string nodeId, string field, string value)
     {
         if (string.IsNullOrWhiteSpace(field))
-            return LoopEditApplication.Failed(0, "field must not be empty.");
+            return LoopEditApplication.Failed(0, FieldRequired);
 
         if (!TryParseRoot(document, out var root, out var parseError))
             return LoopEditApplication.Failed(0, parseError!);
@@ -299,29 +305,22 @@ public static class LoopDocumentEditor
 
     private static LoopEditApplication ApplyEdit(string document, LoopTemplateEdit edit) => edit.Op switch
     {
-        "editNodeField" when Missing(edit, "nodeId", "field", "oldString", "newString") is { } missing
+        "editNodeField" when Missing(edit, ("nodeId", edit.NodeId), ("field", edit.Field), ("oldString", edit.OldString), ("newString", edit.NewString)) is { } missing
             => LoopEditApplication.Failed(0, missing),
         "editNodeField" => ApplyEditNodeField(document, edit.NodeId!, edit.Field!, edit.OldString!, edit.NewString!),
-        "setNodeField" when Missing(edit, "nodeId", "field", "value") is { } missing
+        "setNodeField" when Missing(edit, ("nodeId", edit.NodeId), ("field", edit.Field), ("value", edit.Value)) is { } missing
             => LoopEditApplication.Failed(0, missing),
         "setNodeField" => ApplySetNodeField(document, edit.NodeId!, edit.Field!, edit.Value!),
-        "editFile" when Missing(edit, "oldString", "newString") is { } missing
+        "editFile" when Missing(edit, ("oldString", edit.OldString), ("newString", edit.NewString)) is { } missing
             => LoopEditApplication.Failed(0, missing),
         "editFile" => ApplyEditFile(document, edit.OldString!, edit.NewString!),
         _ => LoopEditApplication.Failed(0,
             $"op must be one of editNodeField, setNodeField or editFile, not {(edit.Op is null ? "missing" : $"'{edit.Op}'")}."),
     };
 
-    private static string? Missing(LoopTemplateEdit edit, params string[] members)
+    private static string? Missing(LoopTemplateEdit edit, params (string Name, string? Value)[] members)
     {
-        var missing = members.Where(member => member switch
-        {
-            "nodeId" => edit.NodeId is null,
-            "field" => edit.Field is null,
-            "oldString" => edit.OldString is null,
-            "newString" => edit.NewString is null,
-            _ => edit.Value is null,
-        }).ToList();
+        var missing = members.Where(member => member.Value is null).Select(member => member.Name).ToList();
         return missing.Count == 0 ? null : $"{edit.Op} needs {string.Join(", ", missing)}.";
     }
 
@@ -376,7 +375,7 @@ public static class LoopDocumentEditor
 
         if (string.IsNullOrWhiteSpace(field))
         {
-            error = "field must not be empty.";
+            error = FieldRequired;
             return false;
         }
         if (!TryParseRoot(document, out var parsed, out var parseError))

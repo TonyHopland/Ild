@@ -45,10 +45,11 @@ namespace ILD.Api.Controllers;
 ///    Global Variable Proposal, ADR-0027), and read back what became of the
 ///    caller's own suggestions. Only a human decides a suggestion, on the
 ///    human-only <c>GlobalVariablesController</c>,
-///  - propose a whole new document for a saved loop template, against its
-///    latest version (a Loop Template Proposal, ADR-0028), and read back what
-///    became of the caller's own proposals. Only a human saves or rejects one,
-///    on the human-only <c>LoopTemplateProposalsController</c>,
+///  - propose a change to a saved loop template, as a whole document or an
+///    Edit List, against its latest version (a Loop Template Proposal,
+///    ADR-0028), and read back what became of the caller's own proposals.
+///    Only a human saves or rejects one, on the human-only
+///    <c>LoopTemplateProposalsController</c>,
 ///  - read and write per-run loop variables (scoped by the X-ILD-Run-Id
 ///    header) so one node can hand off state to a later node — the values
 ///    are also exposed to templates as <c>{{Var.&lt;name&gt;}}</c>,
@@ -1292,7 +1293,7 @@ public class AgentController : ControllerBase
         var (chatSessionId, error) = await ResolveChatSessionAsync();
         if (error != null) return error;
         if (request == null || string.IsNullOrWhiteSpace(request.Field))
-            return BadRequest(new { error = "field is required." });
+            return BadRequest(new { error = LoopDocumentEditor.FieldRequired });
 
         var notOpen = RequireOpenLoop(chatSessionId, out var document);
         if (notOpen != null) return notOpen;
@@ -1308,7 +1309,7 @@ public class AgentController : ControllerBase
         var (chatSessionId, error) = await ResolveChatSessionAsync();
         if (error != null) return error;
         if (request == null || string.IsNullOrWhiteSpace(request.Field))
-            return BadRequest(new { error = "field is required." });
+            return BadRequest(new { error = LoopDocumentEditor.FieldRequired });
 
         var notOpen = RequireOpenLoop(chatSessionId, out var document);
         if (notOpen != null) return notOpen;

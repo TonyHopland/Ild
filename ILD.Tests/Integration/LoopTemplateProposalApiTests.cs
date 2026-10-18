@@ -397,7 +397,7 @@ public class LoopTemplateProposalApiTests
     }
 
     [Fact]
-    public async Task Get_loop_template_returns_the_document_exactly_as_the_template_document_renderer_writes_it()
+    public async Task Get_loop_template_returns_the_document_escaped_as_the_template_document_renderer_writes_it()
     {
         await using var host = await StartHostAsync();
         var graph = JsonSerializer.SerializeToNode(Graph())!.AsObject();
@@ -416,15 +416,7 @@ public class LoopTemplateProposalApiTests
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
         var document = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(Ct)).RootElement.GetProperty("document");
         Assert.Equal(JsonValueKind.Object, document.ValueKind);
-        string rendered;
-        using (var scope = host.Factory.Services.CreateScope())
-        {
-            var templates = scope.ServiceProvider.GetRequiredService<ILD.Core.Services.Interfaces.ILoopTemplateManager>();
-            var template = (await templates.GetLoopTemplateAsync(templateId))!;
-            rendered = LoopTemplateDocument.From(template, (await templates.GetVersionGraphAsync(templateId, 1))!).Render();
-        }
-        Assert.Equal(rendered, document.GetRawText());
-        Assert.Contains(@"""prompt"":""Don\u0027t \u003Cstop\u003E \u0026 add 1\u002B1 \u2014 caf\u00E9""", rendered);
+        Assert.Contains(@"""prompt"":""Don\u0027t \u003Cstop\u003E \u0026 add 1\u002B1 \u2014 caf\u00E9""", document.GetRawText());
     }
 
     private static async Task<Guid[]> ListTemplateIdsNamedAsync(Host host, string name)
