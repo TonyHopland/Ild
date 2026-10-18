@@ -8,6 +8,7 @@ import type {
   WorktreeCleanupRunResult,
 } from "../../../types";
 import { formatBytes } from "../../../utils/attachments";
+import PreviewDataDelete from "../../../components/PreviewDataDelete";
 
 type Overview = { data: StorageOverview | null; loading: boolean; error: string | null };
 
@@ -208,6 +209,25 @@ export default function StorageSettings() {
                           bytes={entry.bytes}
                           incomplete={entry.incomplete}
                         />
+                        {category.key === "preview-data" && entry.repositoryId && (
+                          <PreviewDataDelete
+                            key={entry.repositoryId}
+                            repositoryId={entry.repositoryId}
+                            wording={{
+                              trigger: "Delete",
+                              triggerLabel: `Delete preview data: ${entry.label}`,
+                              confirmGroup: "Delete preview data",
+                              warning:
+                                "Deletes this repository's preview data for every work item.",
+                              confirm: "Confirm delete",
+                              done: "Deleted.",
+                              failed: "Could not delete the preview data.",
+                            }}
+                            onDeleted={() => {
+                              if (mounted.current) void measure();
+                            }}
+                          />
+                        )}
                       </li>
                     ))}
                   </ul>

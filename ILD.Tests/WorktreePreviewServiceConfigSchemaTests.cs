@@ -37,7 +37,7 @@ public class WorktreePreviewServiceConfigSchemaTests : IDisposable
         var factory = new Mock<IHttpClientFactory>();
         var configuration = new ConfigurationBuilder().Build();
         return new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-            NullLogger<WorktreePreviewService>.Instance);
+            NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims());
     }
 
     private static JsonElement ToolDocument()

@@ -11,10 +11,12 @@ namespace ILD.Api.Controllers;
 public class StorageController : ControllerBase
 {
     private readonly IStorageService _storage;
+    private readonly IPreviewDataService _previewData;
 
-    public StorageController(IStorageService storage)
+    public StorageController(IStorageService storage, IPreviewDataService previewData)
     {
         _storage = storage;
+        _previewData = previewData;
     }
 
     [HttpGet]
@@ -61,5 +63,22 @@ public class StorageController : ControllerBase
         {
             return StatusCode(503, new { error = "WorkItemServer unreachable: no worktree was cleaned up. Retry later.", detail = ex.Message });
         }
+    }
+
+    // The one way a person removes a repository's preview data: the storage page and the
+    // repository's Reset both call it. No repository lookup, since the folder of a deleted
+    // repository can only be removed here. A preview holding the data is a 409.
+    [HttpDelete("preview-data/{repositoryId}")]
+    public async Task<IActionResult> DeletePreviewData(string repositoryId)
+    {
+        if (!Guid.TryParse(repositoryId, out var id))
+            return BadRequest(new { error = $"Invalid repository GUID: '{repositoryId}'." });
+        var deletion = await _previewData.DeleteAsync(id);
+        return deletion.Outcome switch
+        {
+            PreviewDataDeletionOutcome.Deleted => Ok(),
+            PreviewDataDeletionOutcome.Refused => Conflict(new { error = deletion.Error }),
+            _ => StatusCode(StatusCodes.Status500InternalServerError, new { error = deletion.Error }),
+        };
     }
 }

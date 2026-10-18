@@ -780,6 +780,9 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
   // the bulk Start control shows only when nothing is running. Per-service rows
   // own the granular start/stop in between.
   const anyRunning = preview?.services?.some((service) => service.status === "running") ?? false;
+  // A preview whose services have all exited is still up as far as the server is
+  // concerned, and holds its repository's kept preview data, so it can be stopped too.
+  const anyStarted = preview?.services?.some((service) => service.status !== "stopped") ?? false;
   const primaryPreviewUrl = useMemo(
     () => preview?.services?.find((service) => !!service.publicUrl)?.publicUrl ?? null,
     [preview],
@@ -831,28 +834,17 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
         >
           Refresh
         </button>
-        {anyRunning ? (
-          <>
-            {primaryPreviewUrl && (
-              <a
-                href={primaryPreviewUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn btn-sm btn-primary preview-open-link"
-              >
-                Open App
-              </a>
-            )}
-            <button
-              type="button"
-              className="btn btn-sm btn-warning"
-              onClick={() => void detail.handleStopPreview()}
-              disabled={previewLoading}
-            >
-              Stop Preview
-            </button>
-          </>
-        ) : preview?.configured !== false ? (
+        {anyRunning && primaryPreviewUrl && (
+          <a
+            href={primaryPreviewUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-sm btn-primary preview-open-link"
+          >
+            Open App
+          </a>
+        )}
+        {!anyRunning && preview?.configured !== false && (
           <button
             type="button"
             className="btn btn-sm btn-primary"
@@ -861,7 +853,17 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
           >
             Start Preview
           </button>
-        ) : null}
+        )}
+        {anyStarted && (
+          <button
+            type="button"
+            className="btn btn-sm btn-warning"
+            onClick={() => void detail.handleStopPreview()}
+            disabled={previewLoading}
+          >
+            Stop Preview
+          </button>
+        )}
       </div>
       <RepoEnvEditor
         repository={detail.repositories.find(

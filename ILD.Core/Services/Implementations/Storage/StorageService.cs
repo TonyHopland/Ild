@@ -43,6 +43,7 @@ public sealed class StorageService : IStorageService
 
         var worktrees = new CategoryTally("worktrees", "Worktrees", hasBreakdown: true);
         var clones = new CategoryTally("repository-clones", "Repository clones", hasBreakdown: true);
+        var previewData = new CategoryTally("preview-data", "Preview data", hasBreakdown: true);
         var chats = new CategoryTally("chat-sessions", "Chat sessions", hasBreakdown: false);
         var agents = new CategoryTally("agent-installs", "Agent installs", hasBreakdown: false);
         var temp = new CategoryTally("temp", "Temp", hasBreakdown: true);
@@ -62,6 +63,13 @@ public sealed class StorageService : IStorageService
             if (Guid.TryParseExact(Path.GetFileName(directory), "N", out var repositoryId))
                 scan.Add(directory, RepositoryEntry(clones, repositoryId, repositories), clones.Shared);
         scan.Add(reposStore, notAClone, clones.Shared);
+
+        var previewDataRoot = PreviewVolumes.Root(_config);
+        var notPreviewData = previewData.Entry("unowned", "Not a repository's preview data");
+        foreach (var directory in Subdirectories(previewDataRoot, notPreviewData))
+            if (Guid.TryParseExact(Path.GetFileName(directory), "D", out var repositoryId))
+                scan.Add(directory, PreviewDataEntry(previewData, repositoryId, repositories), previewData.Shared);
+        scan.Add(previewDataRoot, notPreviewData, previewData.Shared);
 
         scan.Add(_worktreesRoot, worktrees.Entry("unowned", "Not owned by any run"), worktrees.Shared);
         scan.Add(_chatRoot, chats.Entry("all", chats.Label), chats.Shared);
@@ -84,7 +92,7 @@ public sealed class StorageService : IStorageService
         if (measured)
             scan.Run(cancellationToken);
         return new StorageOverview(
-            new[] { worktrees, clones, chats, agents, temp, other }.Select(c => c.ToCategory(measured)).ToList());
+            new[] { worktrees, clones, previewData, chats, agents, temp, other }.Select(c => c.ToCategory(measured)).ToList());
     }
 
     public async Task<WorktreeCleanupCandidates> GetCleanupCandidatesAsync(CancellationToken cancellationToken)
@@ -209,6 +217,22 @@ public sealed class StorageService : IStorageService
             return category.Entry("no-repository", "No repository");
         var name = repositories.GetValueOrDefault(id)?.Name;
         return category.Entry(id.ToString(), name ?? "Repository no longer exists", id, name);
+    }
+
+    /// <summary>
+    /// A repository's persisted preview data, marked when nothing uses it any more —
+    /// the repository is gone or keeps no preview data — since only this page removes it then.
+    /// </summary>
+    private static UsageTally PreviewDataEntry(CategoryTally category, Guid repositoryId, IReadOnlyDictionary<Guid, Repository> repositories)
+    {
+        var repository = repositories.GetValueOrDefault(repositoryId);
+        var label = repository switch
+        {
+            null => "Repository no longer exists",
+            { KeepPreviewData: false } => $"{repository.Name} (Keep preview data is off)",
+            _ => repository.Name,
+        };
+        return category.Entry(repositoryId.ToString(), label, repositoryId, repository?.Name);
     }
 
     /// <summary>A path the host sets at startup (Program); there is no default to fall back on here.</summary>

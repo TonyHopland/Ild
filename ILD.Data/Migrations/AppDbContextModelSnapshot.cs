@@ -1456,6 +1456,9 @@ namespace ILD.Data.Migrations
                     b.Property<int>("DefaultIntakeStatus")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("KeepPreviewData")
+                        .HasColumnType("boolean");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(256)

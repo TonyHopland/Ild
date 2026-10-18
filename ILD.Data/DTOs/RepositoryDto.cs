@@ -37,6 +37,9 @@ public class RepositoryDto
     /// </summary>
     public List<string>? PackageFeeds { get; set; }
 
+    /// <summary>Keep preview data between runs. Null on update keeps the stored value.</summary>
+    public bool? KeepPreviewData { get; set; }
+
     [Required]
     public string RemoteProviderId { get; set; } = string.Empty;
 

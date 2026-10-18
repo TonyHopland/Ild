@@ -40,6 +40,13 @@ public class Repository : IHasUpdatedAt
     /// </summary>
     public string? PreviewEnv { get; set; }
 
+    /// <summary>
+    /// Whether the preview's named volumes are one folder per repository, shared by
+    /// every work item and run, instead of a fresh folder per run. While on, only one
+    /// preview of the repository runs at a time.
+    /// </summary>
+    public bool KeepPreviewData { get; set; }
+
     public WorkItemStatus DefaultIntakeStatus { get; set; }
 
     public DateTime CreatedAt { get; set; }

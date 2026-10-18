@@ -3,6 +3,8 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.DTOs;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace ILD.Tests;
@@ -258,6 +260,60 @@ public class RunReclaimerTests : IDisposable
         Assert.True(await Build(new Mock<IRepositoryManager>()).ReclaimLocalStateAsync(run));
 
         Assert.False(Directory.Exists(agentDir));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Reclaim_deletes_the_state_directory_the_preview_used_for_the_worktree_but_never_persisted_preview_data(
+        bool keepPreviewData, bool storedPathNotNormalized)
+    {
+        var worktreesRoot = NewTempDir();
+        var worktree = Directory.CreateDirectory(Path.Combine(worktreesRoot, "wt")).FullName;
+        var stored = storedPathNotNormalized ? worktree + Path.DirectorySeparatorChar + "." : worktree;
+        File.WriteAllText(Path.Combine(worktree, "ild.config.json"), """
+            {
+              "preview": {
+                "profiles": {
+                  "app": {
+                    "volumes": ["data"],
+                    "install": [
+                      { "command": "printf '%s' \"${STATE_DIR}\" > \"${WORKTREE}/../state.path\" && printf '%s' \"${VOLUME:data}\" > \"${WORKTREE}/../volume.path\" && printf x > \"${VOLUME:data}/kept\" && printf x > \"${STATE_DIR}/scratch\"" }
+                    ],
+                    "services": []
+                  }
+                }
+              }
+            }
+            """);
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WorktreesPath"] = worktreesRoot })
+            .Build();
+        using var preview = new WorktreePreviewService(new Mock<IHttpClientFactory>().Object, configuration,
+            PreviewProxyBase.Disabled, NullLogger<WorktreePreviewService>.Instance,
+            agentUser: null, agentGroup: null, agentHome: null,
+            environment: new TestProcessEnvironment { { "HOME", Path.Combine(worktreesRoot, "home") } }.WithRealPath());
+        var repositoryId = Guid.NewGuid();
+        await preview.InstallAsync(stored, volumes: new PreviewVolumeScope(repositoryId, keepPreviewData, "wi-a", "Title"),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var stateDirectory = File.ReadAllText(Path.Combine(worktreesRoot, "state.path"));
+        var volume = File.ReadAllText(Path.Combine(worktreesRoot, "volume.path"));
+        _tempDirs.Add(stateDirectory);
+        Assert.True(File.Exists(Path.Combine(stateDirectory, "scratch")));
+
+        var repo = new Mock<IRepositoryManager>();
+        repo.Setup(r => r.DestroyWorktreeAsync(stored))
+            .Callback(() => Directory.Delete(worktree, recursive: true))
+            .Returns(Task.CompletedTask);
+
+        Assert.True(await Build(repo).ReclaimLocalStateAsync(Run(stored, branch: null)));
+
+        Assert.False(AgentWritableFiles.EntryExists(stateDirectory), "the run's ${STATE_DIR} was left behind");
+        if (keepPreviewData)
+            Assert.True(File.Exists(Path.Combine(volume, "kept")), "reclaiming a run removed the repository's preview data");
+        else
+            Assert.False(AgentWritableFiles.EntryExists(volume));
     }
 
     private static RunReclaimer Build(

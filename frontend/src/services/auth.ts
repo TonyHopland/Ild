@@ -1204,4 +1204,8 @@ export const storageService = {
   cleanUpWorktrees: async (runIds: string[]): Promise<WorktreeCleanupResult> => {
     return api.post<WorktreeCleanupResult>("/storage/worktree-cleanup", { runIds });
   },
+  /** Deletes a repository's kept preview data: the storage page's Delete and the repository's Reset. Refused (409) while a preview of the repository is running. */
+  deletePreviewData: async (repositoryId: string): Promise<void> => {
+    await api.delete<void>(`/storage/preview-data/${repositoryId}`);
+  },
 };

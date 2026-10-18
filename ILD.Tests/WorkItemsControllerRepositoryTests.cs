@@ -132,6 +132,28 @@ public class WorkItemsControllerRepositoryTests
     }
 
     [Fact]
+    public async Task Preview_of_an_existing_run_takes_its_volume_scope_from_the_repository_it_was_created_on()
+    {
+        var s = Setup();
+        using var _db = s.Db;
+        var repoA = s.Db.Context.Repositories.Single(r => r.Id == s.RepoA);
+        repoA.KeepPreviewData = true;
+        s.Db.Context.SaveChanges();
+        var id = await s.Mgr.CreateWorkItemAsync("t", "", s.RepoA);
+        SeedRun(s.Db, id, LoopRunStatus.WaitingHuman, s.RepoA);
+        await s.Controller.Update(id, new WorkItemCreateRequest { Title = "t", RepositoryId = s.RepoB.ToString() });
+
+        await s.Controller.StartPreview(id, new WorktreePreviewStartRequest());
+        await s.Controller.StartPreviewService(id, "web", new WorktreePreviewStartRequest());
+
+        var expected = new PreviewVolumeScope(s.RepoA, true, id, "t");
+        s.Preview.Verify(p => p.StartAsync(WorktreePath,
+            It.Is<WorktreePreviewStartOptions?>(o => o!.Volumes == expected), It.IsAny<CancellationToken>()), Times.Once);
+        s.Preview.Verify(p => p.StartServiceAsync(WorktreePath, "web",
+            It.Is<WorktreePreviewStartOptions?>(o => o!.Volumes == expected), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task Diff_of_an_existing_run_is_taken_against_the_repository_it_was_created_on()
     {
         var s = Setup();

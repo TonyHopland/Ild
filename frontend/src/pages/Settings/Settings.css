@@ -350,6 +350,11 @@
   gap: 0.5rem;
 }
 
+.storage-entries li > .preview-data-delete,
+.storage-entries li > .preview-data-delete-confirm {
+  margin: 0.15rem 0 0.35rem 1rem;
+}
+
 @media (max-width: 720px) {
   .settings-page {
     grid-template-columns: minmax(0, 1fr);

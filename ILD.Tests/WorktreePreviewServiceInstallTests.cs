@@ -37,7 +37,7 @@ public class WorktreePreviewServiceInstallTests : IDisposable
         var configuration = new ConfigurationBuilder().Build();
         return environment is null
             ? new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
-                NullLogger<WorktreePreviewService>.Instance)
+                NullLogger<WorktreePreviewService>.Instance, new PreviewDataClaims())
             : new WorktreePreviewService(factory.Object, configuration, PreviewProxyBase.Disabled,
                 NullLogger<WorktreePreviewService>.Instance,
                 agentUser: null, agentGroup: null, agentHome: null, environment: environment);

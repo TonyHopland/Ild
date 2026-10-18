@@ -40,6 +40,7 @@ public class RepositoriesController : ControllerBase
         worktreesPath = r.WorktreesPath,
         defaultIntakeStatus = r.DefaultIntakeStatus,
         hasPreviewEnv = !string.IsNullOrEmpty(r.PreviewEnv),
+        keepPreviewData = r.KeepPreviewData,
         packageFeeds = r.PackageFeeds
             .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .Select(s => new { name = s.Name, missing = !existingFeeds.Contains(s.NormalizedName) }),
@@ -106,6 +107,7 @@ public class RepositoriesController : ControllerBase
             RemoteProviderId = providerId,
             DefaultIntakeStatus = request.DefaultIntakeStatus,
             PreviewEnv = string.IsNullOrEmpty(request.PreviewEnv) ? null : request.PreviewEnv,
+            KeepPreviewData = request.KeepPreviewData ?? false,
             CreatedAt = DateTime.UtcNow,
         };
         if (await SelectFeedsAsync(repo, request.PackageFeeds) is { } feedsError)
@@ -131,6 +133,7 @@ public class RepositoriesController : ControllerBase
         // Masked field: only overwrite when the client sends a new value, so a save
         // that leaves the textarea blank keeps the stored .env (mirrors ApiKey).
         if (!string.IsNullOrEmpty(request.PreviewEnv)) repo.PreviewEnv = request.PreviewEnv;
+        if (request.KeepPreviewData is { } keepPreviewData) repo.KeepPreviewData = keepPreviewData;
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return Ok(await ResponseAsync(repo));

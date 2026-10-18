@@ -511,7 +511,7 @@ public sealed class PreviewProxyIntegrationTests : IAsyncLifetime
         public Task<string?> GetServiceConfigAsync(string worktreePath, string serviceName, string? profileName = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task UpdateServiceConfigAsync(string worktreePath, string serviceName, string serviceConfigJson, string? profileName = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<string?> GetServiceLogAsync(string worktreePath, string serviceName, int maxBytes = 64 * 1024, CancellationToken cancellationToken = default) => throw new NotSupportedException();
-        public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<WorktreeInstallResult> InstallAsync(string worktreePath, string? profileName = null, string? customEnv = null, IReadOnlyList<PackageFeedCredential>? packageFeeds = null, PreviewVolumeScope? volumes = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<WorktreePreviewValidationResult> ValidateConfigAsync(string worktreePath, string? profileName = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 }

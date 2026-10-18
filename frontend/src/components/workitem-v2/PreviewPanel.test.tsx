@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, test } from "vite-plus/test";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, screen } from "@testing-library/react";
 import { PreviewPanel } from "./panels";
-import { WorkItem, WorkItemStatus, WorkItemPriority, Repository } from "../../types";
+import {
+  WorkItem,
+  WorkItemStatus,
+  WorkItemPriority,
+  Repository,
+  WorktreePreviewService,
+} from "../../types";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
 afterEach(() => cleanup());
@@ -73,5 +79,56 @@ describe("PreviewPanel custom .env", () => {
     const warning = container.querySelector(".preview-env-warning");
     expect(warning?.textContent).toContain("alpha");
     expect(warning?.textContent).not.toContain("beta");
+  });
+});
+
+describe("PreviewPanel controls", () => {
+  const service = (status: string): WorktreePreviewService => ({
+    name: "web",
+    portAlias: "web",
+    status,
+    port: status === "stopped" ? null : 5173,
+    suggestedPort: null,
+    healthUrl: null,
+    publicUrl: null,
+    logFilePath: null,
+    processId: status === "stopped" ? null : 42,
+    exitCode: status === "exited" ? 1 : null,
+  });
+
+  function renderWith(status: string, state: string) {
+    const detail = {
+      ...makeDetail(),
+      preview: {
+        configured: true,
+        state,
+        worktreePath: "/tmp/wt",
+        configPath: null,
+        profileName: "app",
+        publicHost: null,
+        stateDirectory: null,
+        message: null,
+        services: [service(status)],
+      },
+    } as unknown as WorkItemDetail;
+    render(<PreviewPanel workItem={makeWorkItem()} detail={detail} />);
+  }
+
+  test("a preview whose services all exited can be stopped as well as started again", () => {
+    renderWith("exited", "failed");
+
+    expect(screen.getByRole("button", { name: "Stop Preview" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start Preview" })).toBeTruthy();
+  });
+
+  test("a running preview offers Stop and a stopped one only Start", () => {
+    renderWith("running", "running");
+    expect(screen.getByRole("button", { name: "Stop Preview" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Start Preview" })).toBeNull();
+    cleanup();
+
+    renderWith("stopped", "stopped");
+    expect(screen.queryByRole("button", { name: "Stop Preview" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Start Preview" })).toBeTruthy();
   });
 });
