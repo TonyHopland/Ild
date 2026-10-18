@@ -482,7 +482,7 @@ export default function LoopEditor() {
     }
   };
 
-  const reviewSession = useReviewSession(selectedTemplate);
+  const reviewSession = useReviewSession(selectedTemplate, selectedTemplateRef);
   const { closeReview } = reviewSession;
 
   // Every replacement of the canvas ends the open proposal review, except a

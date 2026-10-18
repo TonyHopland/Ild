@@ -247,7 +247,7 @@ export interface FakeHub {
   dispatch: (event: string, payload: unknown) => void;
   /** Calls every listener for `event`, inside an async act. */
   emit: (event: string, payload: unknown) => Promise<void>;
-  /** Drops every listener. */
+  /** Back to how the hub started: no listeners, its first state, and an invoke that resolves. */
   reset: () => void;
 }
 
@@ -276,6 +276,9 @@ export function fakeHub(state: HubConnectionState = "connected"): FakeHub {
   };
   const reset = () => {
     for (const event of Object.keys(handlers)) delete handlers[event];
+    connection.connectionState = state;
+    invoke.mockReset();
+    invoke.mockImplementation((..._args: unknown[]) => Promise.resolve());
   };
   return { handlers, invoke, connection, setState, dispatch, emit, reset };
 }

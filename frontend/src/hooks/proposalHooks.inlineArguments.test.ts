@@ -27,6 +27,7 @@ describe("passed inline, every render", () => {
       usePendingProposalCount(() => read(), "LoopTemplateProposalsChanged", {}, hub.connection),
     );
     await waitFor(() => expect(result.current).toEqual({ "tpl-1": 2 }));
+    const listening = [...(hub.handlers.LoopTemplateProposalsChanged ?? [])];
     rerender();
     rerender();
     await settle();
@@ -34,6 +35,11 @@ describe("passed inline, every render", () => {
     expect(hub.invoke).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledTimes(1);
     expect(result.current).toEqual({ "tpl-1": 2 });
+    expect([...(hub.handlers.LoopTemplateProposalsChanged ?? [])]).toEqual(listening);
+
+    await hub.emit("LoopTemplateProposalsChanged", { templateId: "tpl-1" });
+    await settle();
+    expect(read).toHaveBeenCalledTimes(2);
   });
 
   test("the proposal list's kind joins and reads once", async () => {
@@ -52,6 +58,7 @@ describe("passed inline, every render", () => {
       ),
     );
     await waitFor(() => expect(result.current.proposals?.map((p) => p.id)).toEqual(["p-1"]));
+    const listening = [...(hub.handlers.LoopTemplateProposalsChanged ?? [])];
     rerender();
     rerender();
     await settle();
@@ -59,5 +66,10 @@ describe("passed inline, every render", () => {
     expect(hub.invoke).toHaveBeenCalledTimes(1);
     expect(read).toHaveBeenCalledTimes(1);
     expect(result.current.proposals?.map((p) => p.id)).toEqual(["p-1"]);
+    expect([...(hub.handlers.LoopTemplateProposalsChanged ?? [])]).toEqual(listening);
+
+    await hub.emit("LoopTemplateProposalsChanged", { templateId: "tpl-1" });
+    await settle();
+    expect(read).toHaveBeenCalledTimes(2);
   });
 });

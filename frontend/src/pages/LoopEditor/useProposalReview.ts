@@ -39,14 +39,20 @@ export interface ReviewSession {
   setReview: Dispatch<SetStateAction<ProposalReview | null>>;
   setReplaceConfirm: Dispatch<SetStateAction<ProposalReview | null>>;
   reviewRef: RefObject<ProposalReview | null>;
-  /** Bumped whenever the canvas is replaced, so an answer to a review asked for before that is dropped. */
+  /** Bumped per `?proposal=` request and whenever the review is closed, so only the latest request's answer lands. */
   reviewRequestRef: RefObject<number>;
   selectedTemplateId: string | null;
   selectedTemplateRef: RefObject<LoopTemplate | null>;
 }
 
-/** The review state of {@link ReviewSession}, for the template open in the editor. */
-export function useReviewSession(selectedTemplate: LoopTemplate | null): ReviewSession {
+/**
+ * The review state of {@link ReviewSession}, for the template open in the
+ * editor; `selectedTemplateRef` is the page's own copy of it, read in callbacks.
+ */
+export function useReviewSession(
+  selectedTemplate: LoopTemplate | null,
+  selectedTemplateRef: RefObject<LoopTemplate | null>,
+): ReviewSession {
   // The proposal open as the working copy, and one asked for over unsaved
   // changes awaiting a confirm. Every reply about one is checked against these
   // before it lands.
@@ -55,8 +61,6 @@ export function useReviewSession(selectedTemplate: LoopTemplate | null): ReviewS
   const reviewRef = useRef<ProposalReview | null>(null);
   reviewRef.current = review;
   const reviewRequestRef = useRef(0);
-  const selectedTemplateRef = useRef(selectedTemplate);
-  selectedTemplateRef.current = selectedTemplate;
 
   const closeReview = useCallback((savedFrom?: SavedFrom) => {
     if (savedFrom && reviewRef.current?.proposal.id !== savedFrom.proposalId) return;
