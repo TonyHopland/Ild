@@ -18,7 +18,7 @@ namespace ILD.Tests.Integration;
 /// recorded, runs reclaimable, an interceptor on every statement, a signed-in
 /// human and agents calling the way the MCP server does.
 /// </summary>
-internal class ProposalApiTestHost : IAsyncDisposable
+internal abstract class ProposalApiTestHost : IAsyncDisposable
 {
     public const string RunHeader = "X-ILD-Run-Id";
     public const string ChatHeader = "X-ILD-Chat-Session-Id";
@@ -83,10 +83,10 @@ internal class ProposalApiTestHost : IAsyncDisposable
 }
 
 /// <summary>A <see cref="ProposalApiTestHost"/> whose interceptor plays <typeparamref name="TRace"/>.</summary>
-internal class ProposalApiTestHost<TRace> : ProposalApiTestHost
+internal abstract class ProposalApiTestHost<TRace> : ProposalApiTestHost
     where TRace : DbCommandInterceptor, new()
 {
-    public ProposalApiTestHost(string hintName)
+    protected ProposalApiTestHost(string hintName)
         : this(hintName, new TRace())
     {
     }
