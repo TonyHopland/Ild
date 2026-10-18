@@ -1184,6 +1184,9 @@ namespace ILD.Data.Migrations
                     b.Property<bool>("EditedBeforeSave")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("Edits")
+                        .HasColumnType("text");
+
                     b.Property<Guid>("LoopTemplateId")
                         .HasColumnType("uuid");
 

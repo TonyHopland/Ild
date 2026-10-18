@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useParams } from "react-router";
 import LoopTemplateProposalCard from "./LoopTemplateProposalCard";
 import { makeLoopTemplateProposal, reply, stubFetch } from "../test-support";
-import type { LoopTemplateProposal, LoopTemplateProposalStatus } from "../types";
+import type { LoopTemplateEdit, LoopTemplateProposal, LoopTemplateProposalStatus } from "../types";
 
 afterEach(() => {
   cleanup();
@@ -195,4 +195,93 @@ describe("LoopTemplateProposalCard", () => {
       expect(reviewControl()).toBeNull();
     },
   );
+});
+
+describe("LoopTemplateProposalCard for an Edit List proposal", () => {
+  const edits: LoopTemplateEdit[] = [
+    {
+      op: "editNodeField",
+      nodeId: "n-build",
+      field: "command",
+      oldString: "make",
+      newString: "make -j4",
+    },
+    { op: "setNodeField", nodeId: "n-gone", field: "command", value: "make check" },
+    { op: "editFile", oldString: '"label":"Cleanup"', newString: '"label":"Tidy up"' },
+  ];
+
+  test("says how many edits there are beside the structural change list, with the edits collapsed", () => {
+    const { container } = renderCard(makeProposal({ edits, document: undefined }));
+    const text = container.textContent ?? "";
+
+    expect(text).toContain("3 edits");
+    expect(screen.getByRole("list", { name: "Proposed changes" })).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Show edits" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(text).not.toContain("make -j4");
+    expect(text).not.toContain("Tidy up");
+  });
+
+  test("Show edits lists each edit in order with what the agent sent, naming nodes by id while the document is not loaded", () => {
+    renderCard(makeProposal({ edits, document: undefined }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Show edits" }));
+
+    const rows = within(screen.getByRole("list", { name: "Edits" })).getAllByRole("listitem");
+    expect(rows).toHaveLength(3);
+    const [nodeEdit, fieldSet, fileEdit] = rows.map((row) => within(row));
+
+    expect(nodeEdit.getByText("n-build")).toBeTruthy();
+    expect(nodeEdit.getByText("command")).toBeTruthy();
+    expect(nodeEdit.getByLabelText("Before").textContent).toBe("make");
+    expect(nodeEdit.getByLabelText("After").textContent).toBe("make -j4");
+
+    expect(fieldSet.getByText("n-gone")).toBeTruthy();
+    expect(fieldSet.getByText("command")).toBeTruthy();
+    expect(fieldSet.getByText(/replaced whole field/i)).toBeTruthy();
+    expect(fieldSet.getByLabelText("Value").textContent).toBe("make check");
+    expect(fieldSet.queryByLabelText("Before")).toBeNull();
+
+    expect(fileEdit.getByText("Document JSON")).toBeTruthy();
+    expect(fileEdit.getByLabelText("Before").textContent).toBe('"label":"Cleanup"');
+    expect(fileEdit.getByLabelText("After").textContent).toBe('"label":"Tidy up"');
+  });
+
+  test("names a node by its label in the resulting document when that is loaded, and by its id when it is not in it", () => {
+    renderCard(makeProposal({ edits, document: proposedDocument }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Show edits" }));
+
+    const [nodeEdit, fieldSet] = within(screen.getByRole("list", { name: "Edits" }))
+      .getAllByRole("listitem")
+      .map((row) => within(row));
+    expect(nodeEdit.getByText("Build")).toBeTruthy();
+    expect(nodeEdit.queryByText("n-build")).toBeNull();
+    expect(fieldSet.getByText("n-gone")).toBeTruthy();
+  });
+
+  test("a long whole-field value is collapsed until expanded", () => {
+    const value = Array.from({ length: 40 }, (_, i) => `Step ${i + 1}: check the build.`).join(
+      "\n",
+    );
+    renderCard(
+      makeProposal({ edits: [{ op: "setNodeField", nodeId: "n-build", field: "prompt", value }] }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Show edits" }));
+
+    expect(screen.getByLabelText("Value").textContent).toContain("Step 1: check the build.");
+    expect(screen.getByLabelText("Value").textContent).not.toContain("Step 40");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show whole value" }));
+
+    expect(screen.getByLabelText("Value").textContent).toBe(value);
+  });
+
+  test("a whole-document proposal shows no edit list", () => {
+    renderCard(makeProposal({ edits: null }));
+
+    expect(screen.queryByText(/^\d+ edits?$/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Show edits" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Edits" })).toBeNull();
+  });
 });

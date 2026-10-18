@@ -41,6 +41,12 @@ public interface ILoopTemplateManager
     Task<LoopTemplateVersion> GetVersionAsync(Guid templateId, int version);
     Task<IEnumerable<LoopTemplateVersion>> GetVersionsAsync(Guid templateId);
     Task<LoopTemplateGraph?> GetLatestGraphAsync(Guid templateId);
+    /// <summary>
+    /// <paramref name="template"/>'s latest version number and its document as the
+    /// text <c>get_loop_template</c> returns: what an Edit List applies to. Null
+    /// when the template has no saved version.
+    /// </summary>
+    Task<(int Version, string Document)?> GetLatestDocumentAsync(LoopTemplate template);
     Task<LoopTemplateGraph?> GetVersionGraphAsync(Guid templateId, int versionNumber);
     Task<(bool Valid, IReadOnlyList<string> Errors)> ValidateGraphAsync(LoopTemplateGraph graph);
 

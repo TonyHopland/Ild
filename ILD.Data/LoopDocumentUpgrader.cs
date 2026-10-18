@@ -29,7 +29,7 @@ public static class LoopDocumentUpgrader
         JsonNode? parsed;
         try
         {
-            parsed = JsonNode.Parse(document);
+            parsed = JsonText.Parse(document);
         }
         catch (JsonException)
         {

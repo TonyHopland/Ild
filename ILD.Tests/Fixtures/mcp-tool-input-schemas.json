@@ -676,19 +676,80 @@
         "description": "The version get_loop_template returned with the document; must be the template's latest version.",
         "type": "integer"
       },
-      "document": {
-        "description": "The complete proposed ild-loop-template/v2 document, as JSON text.",
-        "type": "string"
-      },
       "rationale": {
         "description": "Why the loop should change this way (up to 2000 chars), shown to the human deciding.",
         "type": "string"
+      },
+      "edits": {
+        "description": "The edits to make, in order, to the latest version (an Edit List). Use this for most changes; omit document.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "op": {
+              "description": "editNodeField, setNodeField or editFile.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nodeId": {
+              "description": "The node's id (editNodeField, setNodeField).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "field": {
+              "description": "The config field, e.g. prompt or outputs (editNodeField, setNodeField).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "oldString": {
+              "description": "The exact text to replace; must match exactly once (editNodeField: in the field's decoded text; editFile: in the document JSON as get_loop_template returned it).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "newString": {
+              "description": "The replacement text (editNodeField, editFile).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "value": {
+              "description": "The field's whole new value as text; a JSON array as text for outputs, matchRules, cases and toolAllowlist (setNodeField).",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "default": null
+      },
+      "document": {
+        "description": "The complete proposed ild-loop-template/v2 document, as JSON text, for a rewrite only; omit edits.",
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
       }
     },
     "required": [
       "nameOrId",
       "baseVersion",
-      "document",
       "rationale"
     ]
   },

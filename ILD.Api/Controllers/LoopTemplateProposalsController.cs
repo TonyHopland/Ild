@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ILD.Api.Configuration;
+using ILD.Api.Contracts;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Enums;
@@ -176,6 +177,7 @@ public class LoopTemplateProposalsController : ControllerBase
                 linkable = kind == "run" || (kind == "chat" && entry.SourceChatOwner == User.Identity?.Name),
             },
             changes = entry.BaseGraph is { } baseGraph ? LoopTemplateChanges.Diff(baseGraph, p.Document) : null,
+            edits = p.Edits is null ? null : new RawJson(p.Edits),
             document = withDocument ? p.Document : null,
         };
     }

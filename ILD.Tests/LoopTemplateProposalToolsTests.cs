@@ -1,7 +1,9 @@
 using System.Net;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ILD.McpServer;
+using ILD.McpServer.Tools;
 
 namespace ILD.Tests;
 
@@ -69,6 +71,34 @@ public class LoopTemplateProposalToolsTests
     }
 
     [Fact]
+    public async Task propose_loop_template_change_posts_an_edit_list_as_a_json_array()
+    {
+        var edits = new[]
+        {
+            new LoopTemplateEdit { Op = "editNodeField", NodeId = "build", Field = "prompt", OldString = "strict", NewString = "lenient" },
+            new LoopTemplateEdit { Op = "setNodeField", NodeId = "build", Field = "outputs", Value = "[{\"name\":\"approve\"}]" },
+            new LoopTemplateEdit { Op = "editFile", OldString = "\"label\":\"Cleanup\"", NewString = "\"label\":\"Tidy up\"" },
+        };
+        var (result, request, body) = await InvokeToolAsync("propose_loop_template_change", new Dictionary<string, object?>
+        {
+            ["nameOrId"] = "Release Loop",
+            ["baseVersion"] = 3,
+            ["edits"] = edits,
+            ["rationale"] = "Builds keep failing.",
+        }, """{"id":"lp-1","templateId":"t-1","baseVersion":3,"status":"Pending"}""");
+
+        Assert.Equal($"{BaseAddress}api/v1/agent/loop-templates/proposals", request.RequestUri!.ToString());
+        var json = JsonNode.Parse(body!)!.AsObject();
+        Assert.True(json["document"] is null, json.ToJsonString());
+        var sent = Assert.IsType<JsonArray>(json["edits"]);
+        Assert.Equal(new[] { "editNodeField", "setNodeField", "editFile" }, sent.Select(e => e!["op"]!.GetValue<string>()));
+        Assert.Equal("lenient", sent[0]!["newString"]!.GetValue<string>());
+        Assert.Equal("[{\"name\":\"approve\"}]", sent[1]!["value"]!.GetValue<string>());
+        Assert.Equal("\"label\":\"Cleanup\"", sent[2]!["oldString"]!.GetValue<string>());
+        Assert.Contains("lp-1", result);
+    }
+
+    [Fact]
     public async Task list_loop_template_proposals_reads_the_callers_own_from_the_agent_surface()
     {
         var (result, request, _) = await InvokeToolAsync("list_loop_template_proposals", new Dictionary<string, object?>(),
@@ -87,6 +117,14 @@ public class LoopTemplateProposalToolsTests
             McpServerToolReflection.Names()
                 .Where(n => n.Contains("loop_template", StringComparison.Ordinal))
                 .OrderBy(n => n, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void The_tool_edit_carries_the_members_the_server_reads()
+    {
+        static string[] Members(Type type) => type.GetProperties().Select(p => p.Name).Order(StringComparer.Ordinal).ToArray();
+
+        Assert.Equal(Members(typeof(ILD.Data.DTOs.LoopTemplateEdit)), Members(typeof(LoopTemplateEdit)));
     }
 
     private sealed class StubHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> respond) : HttpMessageHandler

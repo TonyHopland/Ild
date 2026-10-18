@@ -396,6 +396,29 @@ public class LoopTemplateProposalApiTests
         Assert.Equal(archivedId.ToString(), (await ReadProposalAsync(host, byName)).GetProperty("templateId").GetString());
     }
 
+    [Fact]
+    public async Task Get_loop_template_returns_the_document_escaped_as_the_template_document_renderer_writes_it()
+    {
+        await using var host = await StartHostAsync();
+        var graph = JsonSerializer.SerializeToNode(Graph())!.AsObject();
+        graph["nodes"]!.AsArray()[2] = new JsonObject
+        {
+            ["id"] = "test", ["type"] = "Prompt", ["label"] = "Review",
+            ["config"] = new JsonObject { ["prompt"] = "Don't <stop> & add 1+1 — café" },
+        };
+        var created = await host.Human.PostAsJsonAsync(TemplatesUrl, SaveBody("Escaped Loop", "A loop.", "AutoResume", graph), Ct);
+        Assert.True(created.StatusCode == HttpStatusCode.Created, $"create: {(int)created.StatusCode} {await created.Content.ReadAsStringAsync(Ct)}");
+        var templateId = (await ReadJsonAsync(created)).GetProperty("id").GetGuid();
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+
+        var resp = await agent.GetAsync($"{AgentDocumentUrl}?nameOrId={templateId}", Ct);
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var document = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(Ct)).RootElement.GetProperty("document");
+        Assert.Equal(JsonValueKind.Object, document.ValueKind);
+        Assert.Contains(@"""prompt"":""Don\u0027t \u003Cstop\u003E \u0026 add 1\u002B1 \u2014 caf\u00E9""", document.GetRawText());
+    }
+
     private static async Task<Guid[]> ListTemplateIdsNamedAsync(Host host, string name)
     {
         using var scope = host.Factory.Services.CreateScope();
@@ -429,7 +452,7 @@ public class LoopTemplateProposalApiTests
     public enum Invalid
     {
         NotJson, JsonArray, NoSchema, UnknownSchema, EmptyName, NameOver256, DescriptionOver8192, UnknownPolicy,
-        DocumentOver1000000, BlankRationale, RationaleOver2000, BaseVersionZero, BaseVersionNegative,
+        DocumentOver1000000, DuplicateKey, BlankRationale, RationaleOver2000, BaseVersionZero, BaseVersionNegative,
     }
 
     [Theory]
@@ -442,6 +465,7 @@ public class LoopTemplateProposalApiTests
     [InlineData(Invalid.DescriptionOver8192)]
     [InlineData(Invalid.UnknownPolicy)]
     [InlineData(Invalid.DocumentOver1000000)]
+    [InlineData(Invalid.DuplicateKey)]
     [InlineData(Invalid.BlankRationale)]
     [InlineData(Invalid.RationaleOver2000)]
     [InlineData(Invalid.BaseVersionZero)]
@@ -471,6 +495,7 @@ public class LoopTemplateProposalApiTests
         {
             Invalid.NotJson => "{\"$schema\": \"ild-loop-template/v2\", \"nodes\": [",
             Invalid.JsonArray => "[1, 2]",
+            Invalid.DuplicateKey => "{\"name\":\"Twice\"," + document.ToJsonString()[1..],
             _ => document.ToJsonString(),
         };
 
@@ -582,6 +607,263 @@ public class LoopTemplateProposalApiTests
         Assert.Equal(2, await PendingCountAsync(host, release));
         Assert.Equal(1, await PendingCountAsync(host, docs));
         Assert.Equal(new[] { 1 }, await VersionNumbersAsync(host, release));
+    }
+
+    // ── Edit Lists ────────────────────────────────────────────────────────
+
+    private static Task<HttpResponseMessage> ProposeEditsAsync(HttpClient agent, string nameOrId, int baseVersion, JsonArray edits, string rationale = "Builds keep failing.")
+        => agent.PostAsJsonAsync(AgentProposalsUrl, new JsonObject
+        {
+            ["nameOrId"] = nameOrId,
+            ["baseVersion"] = baseVersion,
+            ["rationale"] = rationale,
+            ["edits"] = edits,
+        }, Ct);
+
+    private static async Task<string> ProposeEditsOkAsync(HttpClient agent, Guid templateId, int baseVersion, JsonArray edits)
+    {
+        var resp = await ProposeEditsAsync(agent, templateId.ToString(), baseVersion, edits);
+        Assert.True(resp.StatusCode == HttpStatusCode.Created,
+            $"propose edits: {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        var json = await ReadJsonAsync(resp);
+        Assert.Equal("Pending", Status(json));
+        return Id(json);
+    }
+
+    private static JsonObject EditNodeField(string nodeId, string field, string oldString, string newString) => new()
+    {
+        ["op"] = "editNodeField", ["nodeId"] = nodeId, ["field"] = field, ["oldString"] = oldString, ["newString"] = newString,
+    };
+
+    private static JsonObject SetNodeField(string nodeId, string field, string value) => new()
+    {
+        ["op"] = "setNodeField", ["nodeId"] = nodeId, ["field"] = field, ["value"] = value,
+    };
+
+    private static JsonObject EditFile(string oldString, string newString) => new()
+    {
+        ["op"] = "editFile", ["oldString"] = oldString, ["newString"] = newString,
+    };
+
+    private static string NodeIdLabelled(JsonObject document, string label) => NodeLabelled(document, label)["id"]!.GetValue<string>();
+
+    [Fact]
+    public async Task An_edit_list_proposal_is_stored_pending_holding_the_base_document_with_the_edits_applied_and_the_list_as_sent()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var otherTemplateId = await CreateTemplateAsync(host, "Docs Loop");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var (version, document) = await ReadDocumentAsync(agent, templateId.ToString());
+        var edits = new JsonArray
+        {
+            EditNodeField(NodeIdLabelled(document, "Build"), "command", "make", "make -j4"),
+            SetNodeField(NodeIdLabelled(document, "Test"), "command", "make check"),
+            EditFile("\"label\":\"Cleanup\"", "\"label\":\"Tidy up\""),
+        };
+
+        var id = await ProposeEditsOkAsync(agent, templateId, version, edits);
+
+        var expected = document.DeepClone().AsObject();
+        NodeLabelled(expected, "Build")["config"]!["command"] = "make -j4";
+        NodeLabelled(expected, "Test")["config"]!["command"] = "make check";
+        NodeLabelled(expected, "Cleanup")["label"] = "Tidy up";
+        var asHuman = await ReadProposalAsync(host, id);
+        Assert.True(JsonNode.DeepEquals(expected, StoredDocument(asHuman)), StoredDocument(asHuman).ToJsonString());
+        Assert.True(JsonNode.DeepEquals(edits, JsonNode.Parse(asHuman.GetProperty("edits").GetRawText())), asHuman.GetProperty("edits").GetRawText());
+        Assert.Equal(new[] { 1 }, await VersionNumbersAsync(host, templateId));
+
+        var (otherVersion, otherDocument) = await ReadDocumentAsync(agent, otherTemplateId.ToString());
+        var wholeId = await ProposeOkAsync(agent, otherTemplateId.ToString(), otherVersion, otherDocument);
+        Assert.True(IsNullOrAbsent(await ReadProposalAsync(host, wholeId), "edits"));
+        var listed = await ListAsHumanAsync(host);
+        Assert.True(JsonNode.DeepEquals(edits, JsonNode.Parse(listed.Single(p => Id(p) == id).GetProperty("edits").GetRawText())));
+        Assert.True(IsNullOrAbsent(listed.Single(p => Id(p) == wholeId), "edits"));
+        var own = await ListAsAgentAsync(agent);
+        Assert.Equal(3, own.Single(p => Id(p) == id).GetProperty("editCount").GetInt32());
+        Assert.True(IsNullOrAbsent(own.Single(p => Id(p) == wholeId), "editCount"));
+    }
+
+    public enum Ambiguous { DocumentAndEdits, Neither, EmptyEdits }
+
+    [Theory]
+    [InlineData(Ambiguous.DocumentAndEdits)]
+    [InlineData(Ambiguous.Neither)]
+    [InlineData(Ambiguous.EmptyEdits)]
+    public async Task A_proposal_needs_exactly_one_of_a_document_or_a_non_empty_edit_list(Ambiguous ambiguous)
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var (version, document) = await EditedDocumentAsync(agent, templateId, "make -j4");
+        var body = new JsonObject { ["nameOrId"] = templateId.ToString(), ["baseVersion"] = version, ["rationale"] = "Builds are slow." };
+        if (ambiguous == Ambiguous.DocumentAndEdits) body["document"] = document.ToJsonString();
+        if (ambiguous != Ambiguous.Neither)
+            body["edits"] = ambiguous == Ambiguous.EmptyEdits ? new JsonArray() : new JsonArray { EditNodeField(NodeIdLabelled(document, "Build"), "command", "make", "make -j4") };
+
+        var resp = await ProposeRawAsync(agent, body.ToJsonString());
+
+        Assert.True(resp.StatusCode == HttpStatusCode.BadRequest, $"expected 400, got {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        Assert.False(string.IsNullOrWhiteSpace((await ReadJsonAsync(resp)).GetProperty("error").GetString()));
+        Assert.Empty(await ListAsHumanAsync(host));
+    }
+
+    [Fact]
+    public async Task An_edit_file_copied_from_the_get_loop_template_text_matches_escaped_characters_and_all()
+    {
+        await using var host = await StartHostAsync();
+        var graph = JsonSerializer.SerializeToNode(Graph())!.AsObject();
+        graph["nodes"]![2]!["label"] = "Bob's tests";
+        var created = await host.Human.PostAsJsonAsync(TemplatesUrl, SaveBody("Escaped Loop", "A loop.", "AutoResume", graph), Ct);
+        Assert.True(created.StatusCode == HttpStatusCode.Created, $"create: {(int)created.StatusCode} {await created.Content.ReadAsStringAsync(Ct)}");
+        var templateId = (await ReadJsonAsync(created)).GetProperty("id").GetGuid();
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var read = JsonDocument.Parse(await (await agent.GetAsync($"{AgentDocumentUrl}?nameOrId={templateId}", Ct)).Content.ReadAsStringAsync(Ct)).RootElement;
+        const string asRead = @"""label"":""Bob\u0027s tests""";
+        Assert.Contains(asRead, read.GetProperty("document").GetRawText());
+
+        var id = await ProposeEditsOkAsync(agent, templateId, read.GetProperty("version").GetInt32(),
+            [EditFile(asRead, @"""label"":""Integration tests""")]);
+
+        var stored = StoredDocument(await ReadProposalAsync(host, id));
+        Assert.Equal("make test", NodeLabelled(stored, "Integration tests")["config"]!["command"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_failing_edit_is_a_400_naming_its_index_that_stores_nothing_and_supersedes_nothing()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var earlier = await ProposeBuildCommandAsync(agent, templateId, "make one");
+        var (version, document) = await ReadDocumentAsync(agent, templateId.ToString());
+        var testId = NodeIdLabelled(document, "Test");
+
+        var resp = await ProposeEditsAsync(agent, templateId.ToString(), version,
+        [
+            EditNodeField(NodeIdLabelled(document, "Build"), "command", "make", "make -j4"),
+            EditNodeField(testId, "command", "ninja", "ninja test"),
+            EditFile("\"label\":\"Cleanup\"", "\"label\":\"Tidy up\""),
+        ]);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.BadRequest, $"expected 400, got {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        var body = await ReadJsonAsync(resp);
+        Assert.Equal(1, body.GetProperty("editIndex").GetInt32());
+        Assert.Equal(
+            $"edits[1] (editNodeField, node '{testId}', field 'command'): old_string was not found in field 'command' of node '{testId}'; no change made.",
+            body.GetProperty("error").GetString());
+        Assert.Equal(earlier, Id((await ListAsHumanAsync(host)).Single()));
+        Assert.Equal("Pending", Status(await ReadProposalAsync(host, earlier)));
+    }
+
+    [Fact]
+    public async Task An_edit_file_leaving_a_duplicate_key_is_a_400_naming_its_index_that_stores_nothing()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var (version, document) = await ReadDocumentAsync(agent, templateId.ToString());
+
+        var resp = await ProposeEditsAsync(agent, templateId.ToString(), version,
+        [
+            EditFile("\"label\":\"Build\"", "\"label\":\"Build\",\"label\":\"B2\""),
+            EditNodeField(NodeIdLabelled(document, "Test"), "command", "make test", "make check"),
+        ]);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.BadRequest, $"expected 400, got {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        var body = await ReadJsonAsync(resp);
+        Assert.Equal(0, body.GetProperty("editIndex").GetInt32());
+        Assert.StartsWith("edits[0] (editFile): The edit produced invalid JSON:", body.GetProperty("error").GetString());
+        Assert.Contains("'label'", body.GetProperty("error").GetString());
+        Assert.Empty(await ListAsHumanAsync(host));
+    }
+
+    [Fact]
+    public async Task An_edit_list_producing_a_document_over_the_size_limit_is_refused_as_a_whole_document_is()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var (version, document) = await ReadDocumentAsync(agent, templateId.ToString());
+        var edits = new JsonArray { SetNodeField(NodeIdLabelled(document, "Build"), "notes", new string('x', 1_000_000 - 500)) };
+        Assert.True(edits.ToJsonString().Length < 1_000_000, "the edit list itself is under the limit");
+
+        var resp = await ProposeEditsAsync(agent, templateId.ToString(), version, edits);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.BadRequest, $"expected 400, got {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        Assert.Matches(@"^document is too large \(\d+ chars\); the limit is 1000000\.$", (await ReadJsonAsync(resp)).GetProperty("error").GetString());
+        Assert.Empty(await ListAsHumanAsync(host));
+    }
+
+    [Fact]
+    public async Task An_edit_list_making_a_graph_a_save_would_refuse_gets_the_errors_the_whole_document_gets()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+        var (version, document) = await ReadDocumentAsync(agent, templateId.ToString());
+        var (cleanupId, testId) = (NodeIdLabelled(document, "Cleanup"), NodeIdLabelled(document, "Test"));
+        var edges = document["edges"]!.AsArray();
+        edges.Single(e => e!["targetNodeId"]!.GetValue<string>() == cleanupId)!["targetNodeId"] = "nowhere";
+        edges.Single(e => e!["targetNodeId"]!.GetValue<string>() == testId)!["edgeType"] = "Sideways";
+        var whole = await ProposeAsync(agent, templateId.ToString(), version, document.ToJsonString());
+        Assert.Equal(HttpStatusCode.BadRequest, whole.StatusCode);
+        var wholeErrors = (await ReadJsonAsync(whole)).GetProperty("validationErrors").EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+        var resp = await ProposeEditsAsync(agent, templateId.ToString(), version,
+        [
+            EditFile($"\"targetNodeId\":\"{cleanupId}\"", "\"targetNodeId\":\"nowhere\""),
+            EditFile($"\"targetNodeId\":\"{testId}\",\"edgeType\":\"OnSuccess\"", $"\"targetNodeId\":\"{testId}\",\"edgeType\":\"Sideways\""),
+        ]);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.BadRequest, $"expected 400, got {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        var errors = (await ReadJsonAsync(resp)).GetProperty("validationErrors").EnumerateArray().Select(e => e.GetString()!).ToArray();
+        Assert.True(wholeErrors.Length >= 2, string.Join("; ", wholeErrors));
+        Assert.Equal(wholeErrors, errors);
+        Assert.Empty(await ListAsHumanAsync(host));
+    }
+
+    [Fact]
+    public async Task An_edit_list_against_an_older_version_is_refused_naming_the_latest_and_never_applied_to_it()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        await PlainSaveAsync(host, templateId, "make two");
+        await PlainSaveAsync(host, templateId, "make three");
+        var agent = host.Agent(await SeedRunAsync(host.Factory));
+
+        var body = await ConflictAsync(
+            await ProposeEditsAsync(agent, templateId.ToString(), 1, [EditFile("\"command\":\"make\"}", "\"command\":\"make -j4\"}")]),
+            "an edit list against version 1");
+
+        Assert.Equal(3, body.GetProperty("latestVersion").GetInt32());
+        Assert.Contains("the latest is version 3", body.GetProperty("error").GetString());
+        Assert.Empty(await ListAsHumanAsync(host));
+    }
+
+    [Fact]
+    public async Task An_edit_list_proposal_supersedes_its_sources_earlier_one_saves_as_the_next_version_and_goes_stale_on_a_newer_one()
+    {
+        await using var host = await StartHostAsync();
+        var templateId = await CreateTemplateAsync(host, "Release Loop");
+        var run = host.Agent(await SeedRunAsync(host.Factory));
+        var chat = host.Agent(chatSessionId: await SeedChatSessionAsync(host.Factory));
+        var earlier = await ProposeBuildCommandAsync(run, templateId, "make one");
+        var (_, document) = await ReadDocumentAsync(run, templateId.ToString());
+
+        var saved = await ProposeEditsOkAsync(run, templateId, 1, [EditNodeField(NodeIdLabelled(document, "Build"), "command", "make", "make -j4")]);
+        var competing = await ProposeEditsOkAsync(chat, templateId, 1, [SetNodeField(NodeIdLabelled(document, "Test"), "command", "make check")]);
+        Assert.Equal("Superseded", Status(await ReadProposalAsync(host, earlier)));
+
+        var resp = await SaveAsync(host.Human, saved);
+
+        Assert.True(resp.StatusCode == HttpStatusCode.OK, $"save: {(int)resp.StatusCode} {await resp.Content.ReadAsStringAsync(Ct)}");
+        Assert.Equal("Applied", Status((await ReadJsonAsync(resp)).GetProperty("proposal")));
+        Assert.Equal(new[] { 1, 2 }, await VersionNumbersAsync(host, templateId));
+        var template = await TemplateAsync(host, templateId);
+        AssertSameGraph(StoredDocument(await ReadProposalAsync(host, saved)), template);
+        Assert.Equal("make -j4", NodeLabelled(JsonNode.Parse(template.GetRawText())!.AsObject(), "Build")["config"]!["command"]!.GetValue<string>());
+        Assert.Equal("Stale", Status(await ReadProposalAsync(host, competing)));
     }
 
     // ── What changed ──────────────────────────────────────────────────────
