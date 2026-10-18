@@ -101,12 +101,18 @@ internal sealed class AgentProposals<TProposal, TStatus>
 
     /// <summary>
     /// Move a proposal out of Pending, compared against Pending so that exactly
-    /// one decision ever lands on it. <paramref name="alsoSet"/> writes what
-    /// else that kind of decision records. Returns the rows written.
+    /// one decision ever lands on it. Returns the rows written.
+    /// </summary>
+    public Task<int> DecideAsync(Guid id, TStatus to, string? rejectionReason, DateTime now, CancellationToken ct)
+        => DecideAsync(id, to, rejectionReason, now, _ => { }, ct);
+
+    /// <summary>
+    /// <see cref="DecideAsync(Guid, TStatus, string?, DateTime, CancellationToken)"/>,
+    /// and <paramref name="alsoSet"/> writes what else that kind of decision records.
     /// </summary>
     public Task<int> DecideAsync(
         Guid id, TStatus to, string? rejectionReason, DateTime now,
-        Action<UpdateSettersBuilder<TProposal>>? alsoSet = null, CancellationToken ct = default)
+        Action<UpdateSettersBuilder<TProposal>> alsoSet, CancellationToken ct)
         => _table
             .Where(p => p.Id == id)
             .Where(IsPending)
@@ -115,14 +121,14 @@ internal sealed class AgentProposals<TProposal, TStatus>
                 s.SetProperty(p => p.Status, to)
                     .SetProperty(p => p.RejectionReason, rejectionReason)
                     .SetProperty(p => p.DecidedAt, now);
-                alsoSet?.Invoke(s);
+                alsoSet(s);
             }, ct);
 
     /// <summary>Reject a pending proposal, keeping the human's reason when they gave one. Returns the rows written.</summary>
     public Task<int> RejectAsync(Guid id, string? reason, CancellationToken ct)
     {
         var trimmed = reason is null ? null : AppDbContext.WithoutNul(reason).Trim();
-        return DecideAsync(id, Statuses.Rejected, trimmed is "" ? null : trimmed, DateTime.UtcNow, ct: ct);
+        return DecideAsync(id, Statuses.Rejected, trimmed is "" ? null : trimmed, DateTime.UtcNow, ct);
     }
 
     /// <summary>
@@ -200,7 +206,11 @@ internal static class AgentProposals
 {
     /// <summary>The chats a decision changed: the decided proposal's own, and those of the proposals it made stale.</summary>
     public static IReadOnlyList<Guid> ChangedChats(IAgentProposal? decided, StaledProposals? staled = null)
-        => new[] { decided?.CreatedByChatSessionId }.OfType<Guid>()
+        => ChangedChats(decided?.CreatedByChatSessionId, staled);
+
+    /// <summary>The chats a decision changed: the decided proposal's chat, and those of the proposals it made stale.</summary>
+    public static IReadOnlyList<Guid> ChangedChats(Guid? decidedChat, StaledProposals? staled = null)
+        => new[] { decidedChat }.OfType<Guid>()
             .Concat(staled?.ChatSessionIds ?? [])
             .Distinct()
             .ToList();

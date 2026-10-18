@@ -16,7 +16,7 @@ public sealed class LoopTemplateProposalStore : ILoopTemplateProposalStore
         _proposals = new(db);
     }
 
-    public Task<LoopTemplateProposeResult> ProposeAsync(LoopTemplateProposal proposal, CancellationToken ct = default)
+    public Task<LoopTemplateProposeResult> ProposeAsync(LoopTemplateProposal proposal, CancellationToken ct)
         => _proposals.ProposeAsync(
             proposal,
             p => p.LoopTemplateId == proposal.LoopTemplateId,
@@ -43,24 +43,24 @@ public sealed class LoopTemplateProposalStore : ILoopTemplateProposalStore
         return latest == proposal.BaseVersion ? null : new(LoopTemplateProposeOutcome.NotLatest, null, latest);
     }
 
-    public async Task<IReadOnlyList<LoopTemplateProposalEntry>> ListAsync(LoopTemplateProposalQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<LoopTemplateProposalEntry>> ListAsync(LoopTemplateProposalQuery query, CancellationToken ct)
     {
         var matching = _proposals.Matching(query.Status, query.CreatedByLoopRunId, query.CreatedByChatSessionId, query.WorkItemId);
         if (query.TemplateId is { } templateId) matching = matching.Where(p => p.LoopTemplateId == templateId);
         return await EntriesAsync(await _proposals.NewestFirstAsync(matching, ct), ct);
     }
 
-    public async Task<LoopTemplateProposalEntry?> GetAsync(Guid id, CancellationToken ct = default)
+    public async Task<LoopTemplateProposalEntry?> GetAsync(Guid id, CancellationToken ct)
         => await _proposals.FindAsync(id, ct) is { } row ? (await EntriesAsync([row], ct))[0] : null;
 
-    public async Task<IReadOnlyDictionary<Guid, int>> CountPendingByTemplateAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyDictionary<Guid, int>> CountPendingByTemplateAsync(CancellationToken ct)
         => await _db.LoopTemplateProposals
             .Where(p => p.Status == LoopTemplateProposalStatus.Pending)
             .GroupBy(p => p.LoopTemplateId)
             .Select(g => new { TemplateId = g.Key, Count = g.Count() })
             .ToDictionaryAsync(g => g.TemplateId, g => g.Count, ct);
 
-    public async Task<LoopTemplateProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct = default)
+    public async Task<LoopTemplateProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct)
     {
         if (await _proposals.RejectAsync(id, reason, ct) == 0)
             return await RefusedAsync(id, ct);

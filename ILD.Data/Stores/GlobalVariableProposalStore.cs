@@ -16,7 +16,7 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
         _proposals = new(db);
     }
 
-    public async Task<GlobalVariableProposal> ProposeAsync(GlobalVariableProposal proposal, CancellationToken ct = default)
+    public async Task<GlobalVariableProposal> ProposeAsync(GlobalVariableProposal proposal, CancellationToken ct)
     {
         proposal.NormalizedName = GlobalVariable.Normalize(proposal.Name);
         return await _proposals.ProposeAsync(
@@ -34,19 +34,19 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
             ct);
     }
 
-    public async Task<IReadOnlyList<GlobalVariableProposalEntry>> ListAsync(GlobalVariableProposalQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<GlobalVariableProposalEntry>> ListAsync(GlobalVariableProposalQuery query, CancellationToken ct)
     {
         var matching = _proposals.Matching(query.Status, query.CreatedByLoopRunId, query.CreatedByChatSessionId, query.WorkItemId);
         return await EntriesAsync(await _proposals.NewestFirstAsync(matching, ct), ct);
     }
 
-    public async Task<GlobalVariableProposalEntry?> GetAsync(Guid id, CancellationToken ct = default)
+    public async Task<GlobalVariableProposalEntry?> GetAsync(Guid id, CancellationToken ct)
         => await _proposals.FindAsync(id, ct) is { } row ? (await EntriesAsync([row], ct))[0] : null;
 
-    public Task<int> CountPendingAsync(CancellationToken ct = default)
+    public Task<int> CountPendingAsync(CancellationToken ct)
         => _db.GlobalVariableProposals.CountAsync(p => p.Status == GlobalVariableProposalStatus.Pending, ct);
 
-    public async Task<GlobalVariableProposalDecision> ApproveAsync(Guid id, CancellationToken ct = default)
+    public async Task<GlobalVariableProposalDecision> ApproveAsync(Guid id, CancellationToken ct)
     {
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         var proposal = await _proposals.FindAsync(id, ct);
@@ -65,14 +65,14 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
 
         if (applied == 0)
         {
-            if (await _proposals.DecideAsync(id, GlobalVariableProposalStatus.Stale, null, now, ct: ct) == 0)
+            if (await _proposals.DecideAsync(id, GlobalVariableProposalStatus.Stale, null, now, ct) == 0)
                 return await RefusedAsync(id, ct);
             await transaction.CommitAsync(ct);
             return new(GlobalVariableProposalDecisionOutcome.Stale, await GetAsync(id, ct), AgentProposals.ChangedChats(proposal));
         }
 
         // Decided concurrently: undo the write.
-        if (await _proposals.DecideAsync(id, GlobalVariableProposalStatus.Approved, null, now, ct: ct) == 0)
+        if (await _proposals.DecideAsync(id, GlobalVariableProposalStatus.Approved, null, now, ct) == 0)
         {
             await transaction.RollbackAsync(ct);
             return await RefusedAsync(id, ct);
@@ -87,7 +87,7 @@ public sealed class GlobalVariableProposalStore : IGlobalVariableProposalStore
             AgentProposals.ChangedChats(proposal, staled));
     }
 
-    public async Task<GlobalVariableProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct = default)
+    public async Task<GlobalVariableProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct)
     {
         if (await _proposals.RejectAsync(id, reason, ct) == 0)
             return await RefusedAsync(id, ct);

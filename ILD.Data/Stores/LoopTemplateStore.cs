@@ -118,7 +118,7 @@ public class LoopTemplateStore : ILoopTemplateStore
     }
 
     public async Task<LoopTemplateVersionSave> AddVersionAsync(
-        LoopTemplateVersionWrite write, Guid? fromProposalId = null, CancellationToken ct = default)
+        LoopTemplateVersionWrite write, Guid? fromProposalId, CancellationToken ct)
     {
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         if (await WriteTemplateAsync(write, ct) is not { } template)
@@ -137,7 +137,7 @@ public class LoopTemplateStore : ILoopTemplateStore
     }
 
     public async Task<LoopTemplateVersionSave> SaveProposalAsync(
-        LoopTemplateVersionWrite write, Guid proposalId, CancellationToken ct = default)
+        LoopTemplateVersionWrite write, Guid proposalId, CancellationToken ct)
     {
         await using var tx = await _db.Database.BeginTransactionAsync(ct);
         if (await WriteTemplateAsync(write, ct) is not { } template)
@@ -260,11 +260,11 @@ public class LoopTemplateStore : ILoopTemplateStore
     private async Task<LoopTemplateVersionSave> StaleAfterConflictAsync(Guid proposalId)
     {
         var staled = await _proposals.DecideAsync(
-            proposalId, LoopTemplateProposalStatus.Stale, null, DateTime.UtcNow, ct: CancellationToken.None);
+            proposalId, LoopTemplateProposalStatus.Stale, null, DateTime.UtcNow, CancellationToken.None);
         var chat = staled == 0
             ? null
             : await _db.LoopTemplateProposals.Where(p => p.Id == proposalId).Select(p => p.CreatedByChatSessionId).FirstOrDefaultAsync();
-        return new(LoopTemplateVersionSaveOutcome.Conflict, null, false, staled, chat is { } id ? [id] : []);
+        return new(LoopTemplateVersionSaveOutcome.Conflict, null, false, staled, AgentProposals.ChangedChats(chat));
     }
 
     /// <summary>

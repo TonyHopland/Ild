@@ -14,9 +14,9 @@ public interface IGlobalVariableStore
 
     Task<GlobalVariable?> GetAsync(Guid id, CancellationToken ct = default);
 
-    Task<StaledProposals> AddAsync(GlobalVariable variable, CancellationToken ct = default);
-    Task<StaledProposals> UpdateAsync(GlobalVariable variable, CancellationToken ct = default);
+    Task<StaledProposals> AddAsync(GlobalVariable variable, CancellationToken ct);
+    Task<StaledProposals> UpdateAsync(GlobalVariable variable, CancellationToken ct);
 
     /// <summary>Null when there was no such variable.</summary>
-    Task<StaledProposals?> DeleteAsync(Guid id, CancellationToken ct = default);
+    Task<StaledProposals?> DeleteAsync(Guid id, CancellationToken ct);
 }

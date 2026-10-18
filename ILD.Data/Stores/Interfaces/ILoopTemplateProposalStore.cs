@@ -18,17 +18,17 @@ public interface ILoopTemplateProposalStore
     /// earlier pending proposal for the same template is superseded in the same
     /// transaction.
     /// </summary>
-    Task<LoopTemplateProposeResult> ProposeAsync(LoopTemplateProposal proposal, CancellationToken ct = default);
+    Task<LoopTemplateProposeResult> ProposeAsync(LoopTemplateProposal proposal, CancellationToken ct);
 
     /// <summary>Newest first.</summary>
-    Task<IReadOnlyList<LoopTemplateProposalEntry>> ListAsync(LoopTemplateProposalQuery query, CancellationToken ct = default);
+    Task<IReadOnlyList<LoopTemplateProposalEntry>> ListAsync(LoopTemplateProposalQuery query, CancellationToken ct);
 
-    Task<LoopTemplateProposalEntry?> GetAsync(Guid id, CancellationToken ct = default);
+    Task<LoopTemplateProposalEntry?> GetAsync(Guid id, CancellationToken ct);
 
     /// <summary>Pending proposals per template; a template with none is absent.</summary>
-    Task<IReadOnlyDictionary<Guid, int>> CountPendingByTemplateAsync(CancellationToken ct = default);
+    Task<IReadOnlyDictionary<Guid, int>> CountPendingByTemplateAsync(CancellationToken ct);
 
-    Task<LoopTemplateProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct = default);
+    Task<LoopTemplateProposalDecision> RejectAsync(Guid id, string? reason, CancellationToken ct);
 }
 
 /// <summary>Every filter set narrows the list; none set lists every proposal.</summary>

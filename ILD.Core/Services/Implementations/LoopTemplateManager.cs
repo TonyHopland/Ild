@@ -63,7 +63,7 @@ public class LoopTemplateManager : ILoopTemplateManager
         var errors = LoopTemplateValidator.Validate(graph);
         if (errors.Count > 0)
             throw new InvalidOperationException("Invalid loop template graph: " + string.Join("; ", errors));
-        return await _store.AddVersionAsync(WriteOf(templateId, name, description, recoveryPolicy, graph), fromProposalId);
+        return await _store.AddVersionAsync(WriteOf(templateId, name, description, recoveryPolicy, graph), fromProposalId, CancellationToken.None);
     }
 
     public async Task<LoopTemplateVersionSave> SaveProposalAsync(LoopTemplateProposal proposal)
@@ -78,7 +78,7 @@ public class LoopTemplateManager : ILoopTemplateManager
             request.Description,
             request.RecoveryPolicy,
             new LoopTemplateGraph(Guid.Empty, request.Nodes, request.Edges));
-        return await _store.SaveProposalAsync(write, proposal.Id);
+        return await _store.SaveProposalAsync(write, proposal.Id, CancellationToken.None);
     }
 
     public ProposedLoopDocument CheckProposedDocument(string document)

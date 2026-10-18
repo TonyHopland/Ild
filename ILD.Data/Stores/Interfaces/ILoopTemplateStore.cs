@@ -67,7 +67,7 @@ public interface ILoopTemplateStore
     /// save follows; otherwise the save is a plain save and leaves it alone.
     /// </summary>
     Task<LoopTemplateVersionSave> AddVersionAsync(
-        LoopTemplateVersionWrite write, Guid? fromProposalId = null, CancellationToken ct = default);
+        LoopTemplateVersionWrite write, Guid? fromProposalId, CancellationToken ct);
 
     /// <summary>
     /// A proposal's own Save: <paramref name="write"/> as the template's next
@@ -76,7 +76,7 @@ public interface ILoopTemplateStore
     /// latest version; when the template has moved on past it the proposal goes Stale.
     /// </summary>
     Task<LoopTemplateVersionSave> SaveProposalAsync(
-        LoopTemplateVersionWrite write, Guid proposalId, CancellationToken ct = default);
+        LoopTemplateVersionWrite write, Guid proposalId, CancellationToken ct);
     Task CreateVersionAsync(LoopTemplateVersion version);
     Task CreateNodesAsync(IReadOnlyList<LoopNode> nodes);
     Task CreateEdgesAsync(IReadOnlyList<LoopNodeEdge> edges);
