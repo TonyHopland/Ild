@@ -512,6 +512,26 @@ public sealed class EgressProxyTests : IAsyncLifetime
         Assert.Equal("pong", await ReadUntilClosedAsync(stream));
     }
 
+    [Fact]
+    public async Task A_switching_protocols_answer_to_a_request_that_asked_for_no_upgrade_gets_502_and_nothing_more_is_relayed()
+    {
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n");
+            await connection.SendAsync("HTTP/1.1 101 Switching Protocols\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n");
+            await connection.Closed;
+        });
+
+        using var client = await OpenAsync();
+        await SendAsync(client, PostHead(upstream.Port, "Content-Length: 0") + Stray);
+        var response = await ReadUntilClosedAsync(client.GetStream());
+
+        Assert.StartsWith("HTTP/1.1 502", response);
+        var connection = Assert.Single(upstream.Connections);
+        await connection.Closed.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.Equal(string.Empty, BodyOf(connection.Received));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

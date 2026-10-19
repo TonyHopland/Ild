@@ -18,8 +18,9 @@ namespace ILD.Core.Services.Implementations.Network;
 /// </para>
 ///
 /// <para>
-/// A <c>101 Switching Protocols</c> leaves the connection as the upstream
-/// answered it: both directions relay raw from there on.
+/// A <c>101 Switching Protocols</c> to a request that asked for an upgrade
+/// leaves the connection as the upstream answered it: both directions relay raw
+/// from there on.
 /// </para>
 /// </summary>
 internal sealed class PlainHttpExchange
@@ -93,7 +94,10 @@ internal sealed class PlainHttpExchange
                 headLength += 4;
 
                 var status = StatusCode(buffer.AsSpan(0, headLength));
-                if (status is null) throw await BadGatewayAsync(client, ct).ConfigureAwait(false);
+                // A 101 the request never asked for would hand the upstream raw
+                // relay of whatever the client sends next, credentials included.
+                if (status is null || (status == 101 && !_request.AsksUpgrade))
+                    throw await BadGatewayAsync(client, ct).ConfigureAwait(false);
 
                 if (status is >= 100 and < 200 and not 101)
                 {

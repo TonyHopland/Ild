@@ -280,6 +280,7 @@ public sealed class EgressProxy : BackgroundService
         var sawHostHeader = false;
         var transferEncodings = new List<string>();
         var contentLengths = new List<string>();
+        var asksUpgrade = false;
 
         foreach (var line in lines.Skip(1))
         {
@@ -305,6 +306,8 @@ public sealed class EgressProxy : BackgroundService
                 transferEncodings.Add(value);
             else if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                 contentLengths.Add(value);
+            else if (name.Equals("Upgrade", StringComparison.OrdinalIgnoreCase))
+                asksUpgrade = true;
             forwarded.Append(line).Append("\r\n");
         }
 
@@ -344,7 +347,7 @@ public sealed class EgressProxy : BackgroundService
             .Append(forwarded)
             .Append("Connection: close\r\n\r\n")
             .ToString();
-        return new ProxyRequest(RequestKind.Http, host, port, provider, bodyStart, Encoding.ASCII.GetBytes(headText), chunked, contentLength);
+        return new ProxyRequest(RequestKind.Http, host, port, provider, bodyStart, Encoding.ASCII.GetBytes(headText), chunked, contentLength, asksUpgrade);
     }
 
     /// <summary>
@@ -427,7 +430,8 @@ public sealed class EgressProxy : BackgroundService
     internal enum RequestKind { Connect, Http, Tls }
 
     /// <param name="ChunkedBody">A plain request's body is chunked; otherwise it is <paramref name="ContentLength"/> bytes long.</param>
+    /// <param name="AsksUpgrade">A plain request names a protocol to switch to, the only case a 101 answers.</param>
     internal sealed record ProxyRequest(
         RequestKind Kind, string Host, int Port, Guid? AiProviderId, int BodyStart, byte[] ForwardedHead,
-        bool ChunkedBody = false, long ContentLength = 0);
+        bool ChunkedBody = false, long ContentLength = 0, bool AsksUpgrade = false);
 }
