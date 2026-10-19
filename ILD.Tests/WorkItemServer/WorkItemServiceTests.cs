@@ -24,7 +24,7 @@ public class WorkItemServiceTests : IAsyncLifetime
             .UseSqlite(_conn)
             .Options;
         _options = options;
-        _db = new WorkItemServerDbContext(options);
+        _db = new WorkItemServerDbContext(options) { HistoryActor = TestActors.ServerHuman };
         await _db.Database.EnsureCreatedAsync();
         _clock = new TestClock(new DateTime(2026, 5, 1, 12, 0, 0, DateTimeKind.Utc));
         _svc = new WorkItemService(_db, _clock);
@@ -326,7 +326,7 @@ public class WorkItemServiceTests : IAsyncLifetime
     }
 
     private WorkItemServerDbContext NewContext()
-        => new(new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).Options);
+        => new(new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).Options) { HistoryActor = TestActors.ServerHuman };
 
     [Fact]
     public async Task Transition_to_Running_fails_when_dependency_not_done()
@@ -738,7 +738,7 @@ public class WorkItemServiceTests : IAsyncLifetime
 
         // Another writer — a second request, or another ILD instance
         // reconciling the same item — records a PR this one has never seen.
-        await using var otherDb = new WorkItemServerDbContext(_options);
+        await using var otherDb = new WorkItemServerDbContext(_options) { HistoryActor = TestActors.ServerHuman };
         var other = new WorkItemService(otherDb, _clock);
         Assert.Equal(RecordPullRequestOutcome.Recorded, await other.RecordPullRequestAsync(wi.Id, new RecordPullRequestRequest { Url = "pulls/1", CreatedAt = day }, TestContext.Current.CancellationToken));
 

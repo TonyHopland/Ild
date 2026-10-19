@@ -38,7 +38,7 @@ public class LoopEngineStartRunTests
         await engine.StartRunAsync(workItemId, TestContext.Current.CancellationToken);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
-        workItems.Verify(w => w.ParkWithoutRunAsync(workItemId, "Matched loop template has no version"), Times.Once);
+        workItems.Verify(w => w.ParkWithoutRunAsync(It.IsAny<WorkItemActor>(), workItemId, "Matched loop template has no version"), Times.Once);
     }
 
     [Theory]
@@ -159,7 +159,7 @@ public class LoopEngineStartRunTests
         await DrainAsync(engine);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
-        workItems.Verify(w => w.ParkWithoutRunAsync(workItemId, conflict), Times.Once);
+        workItems.Verify(w => w.ParkWithoutRunAsync(It.IsAny<WorkItemActor>(), workItemId, conflict), Times.Once);
     }
 
     [Fact]
@@ -177,7 +177,7 @@ public class LoopEngineStartRunTests
         await DrainAsync(engine);
 
         Assert.Empty(db.Fresh().LoopRuns.Where(r => r.WorkItemId == workItemId));
-        workItems.Verify(w => w.ParkWithoutRunAsync(workItemId, "Branch name cannot contain spaces."), Times.Once);
+        workItems.Verify(w => w.ParkWithoutRunAsync(It.IsAny<WorkItemActor>(), workItemId, "Branch name cannot contain spaces."), Times.Once);
     }
 
     [Fact]
@@ -302,7 +302,7 @@ public class LoopEngineStartRunTests
             BranchNameOverride = branchNameOverride,
         };
         workItems.Setup(w => w.GetWorkItemAsync(workItemId)).ReturnsAsync(wi);
-        workItems.Setup(w => w.TransitionAsync(It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
+        workItems.Setup(w => w.TransitionAsync(It.IsAny<WorkItemActor>(), It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(true);
 
@@ -332,7 +332,7 @@ public class LoopEngineStartRunTests
         services.AddSingleton(branchNames.Object);
         var sp = services.BuildServiceProvider();
 
-        var engine = new LoopEngine(sp, registry, sp.GetRequiredService<IRunNotifier>(), NullLogger<LoopEngine>.Instance);
+        var engine = new LoopEngine(sp, registry, sp.GetRequiredService<IRunNotifier>(), TestActors.Instance, NullLogger<LoopEngine>.Instance);
         return (engine, workItems);
     }
 

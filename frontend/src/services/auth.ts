@@ -4,6 +4,7 @@ import {
   WorkItem,
   WorkItemEditProposal,
   WorkItemEditProposalStatus,
+  WorkItemHistoryEntry,
   WorkItemAttachment,
   AttachmentLimits,
   LoopTemplate,
@@ -273,6 +274,11 @@ export const workItemService = {
 
   getRuns: async (id: string, opts?: { skip?: number; take?: number }): Promise<LoopRun[]> => {
     return api.get<LoopRun[]>(`/workitems/${id}/runs${pageQuery(opts)}`);
+  },
+
+  /** The item's change history, newest first, with each old value paired. */
+  getHistory: async (id: string): Promise<WorkItemHistoryEntry[]> => {
+    return api.get<WorkItemHistoryEntry[]>(`/workitems/${id}/history`);
   },
 
   listEditProposals: async (id: string): Promise<WorkItemEditProposal[]> => {

@@ -1,0 +1,133 @@
+.wiv2-history {
+  padding: 0.75rem 1rem;
+  overflow-y: auto;
+}
+
+.wiv2-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.75rem;
+  border-left: 2px solid #2d2d44;
+}
+
+.wiv2-history-save {
+  position: relative;
+  padding: 0 0 1rem 0.75rem;
+}
+
+.wiv2-history-save::before {
+  content: "";
+  position: absolute;
+  left: calc(-0.75rem - 5px);
+  top: 0.35rem;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7f849c;
+}
+
+.wiv2-history-save--created::before,
+.wiv2-history-save--baseline::before {
+  background: #89b4fa;
+}
+
+.wiv2-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.wiv2-history-user {
+  color: #cdd6f4;
+}
+
+.wiv2-history-what {
+  color: #a6adc8;
+}
+
+.wiv2-history-time {
+  margin-left: auto;
+  color: #7f849c;
+  font-size: 0.75rem;
+}
+
+.wiv2-history-actor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+  color: #7f849c;
+  font-size: 0.75rem;
+}
+
+.wiv2-history-kind {
+  padding: 0 0.35rem;
+  border: 1px solid #45475a;
+  border-radius: 0.25rem;
+}
+
+.wiv2-history-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 0.75rem;
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+}
+
+.wiv2-history-field {
+  display: contents;
+}
+
+.wiv2-history-fields dt {
+  color: #7f849c;
+}
+
+.wiv2-history-fields dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.wiv2-history-values {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  word-break: break-word;
+}
+
+.wiv2-history-old {
+  color: #f38ba8;
+  text-decoration: line-through;
+}
+
+.wiv2-history-new {
+  color: #a6e3a1;
+}
+
+.wiv2-history-none {
+  font-style: italic;
+  color: #7f849c;
+}
+
+.wiv2-history-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 10rem;
+  overflow: auto;
+}
+
+.wiv2-history-reason {
+  margin-top: 0.2rem;
+  color: #a6adc8;
+  font-style: italic;
+}
+
+.wiv2-history-empty {
+  color: #7f849c;
+}
+
+.wiv2-history-error {
+  color: #f38ba8;
+}

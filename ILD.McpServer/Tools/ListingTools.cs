@@ -65,11 +65,12 @@ public sealed class ListingTools
     }
 
     [McpServerTool(Name = "get_workitem")]
-    [Description("Get a single work item's full record: full description body, dependencies and reverse 'blocks' edges resolved to {id,title,status}. The conversation is excluded by default (it is the largest field); pass includeConversation=true to include the latest run's conversation, projected from that run's event log, as {runId, messages}. Each message carries its run id, event id, runNodeId, role, name, text and timestamp, in event order; earlier runs are listed by list_loop_runs.")]
+    [Description("Get a single work item's full record: full description body, dependencies and reverse 'blocks' edges resolved to {id,title,status}. The conversation is excluded by default (it is the largest field); pass includeConversation=true to include the latest run's conversation, projected from that run's event log, as {runId, messages}. Each message carries its run id, event id, runNodeId, role, name, text and timestamp, in event order; earlier runs are listed by list_loop_runs. Its change history is excluded too; pass includeHistory=true to include it as history, newest first: one entry per changed field, with saveId (shared by one save's changes), timestamp, kind (Created, Baseline or Changed), username, actorKind, actorDetail, actorWorkItemId (the work item of the loop run that made the change), field, oldValue, newValue and reason.")]
     public Task<string> GetWorkItem(
         [Description("Work item GUID.")] string id,
-        [Description("Include the latest run's conversation, projected from its event log, with run id, event id and timestamp per message (large; default false).")] bool includeConversation = false)
-        => _ild.GetRawAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}?includeConversation={(includeConversation ? "true" : "false")}");
+        [Description("Include the latest run's conversation, projected from its event log, with run id, event id and timestamp per message (large; default false).")] bool includeConversation = false,
+        [Description("Include the item's change history: who changed which field, from what to what, and why (default false).")] bool includeHistory = false)
+        => _ild.GetRawAsync($"api/v1/agent/workitems/{Uri.EscapeDataString(id)}?includeConversation={(includeConversation ? "true" : "false")}&includeHistory={(includeHistory ? "true" : "false")}");
 
     [McpServerTool(Name = "list_repositories")]
     [Description("List repositories the agent can attach a work item to.")]

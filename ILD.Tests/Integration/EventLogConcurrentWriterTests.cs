@@ -221,7 +221,7 @@ public sealed class EventLogConcurrentWriterTests : IAsyncDisposable
         await db.SaveChangesAsync(TestContext.Current.CancellationToken);
 
         var workItemId = await scope.ServiceProvider.GetRequiredService<IWorkItemManager>()
-            .CreateWorkItemAsync("answer me", "", repo.Id);
+            .CreateWorkItemAsync(TestActors.Human, "answer me", "", repo.Id);
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),

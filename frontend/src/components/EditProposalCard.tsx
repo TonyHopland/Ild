@@ -28,7 +28,7 @@ export function DescriptionDiff({ before, after }: { before: string; after: stri
   );
 }
 
-function TagsChange({ before, after }: { before: string[]; after: string[] }) {
+export function TagsChange({ before, after }: { before: string[]; after: string[] }) {
   const removed = before.filter((t) => !after.includes(t));
   const added = after.filter((t) => !before.includes(t));
   const kept = after.filter((t) => before.includes(t));

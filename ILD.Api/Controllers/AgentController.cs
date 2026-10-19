@@ -91,6 +91,7 @@ public class AgentController : ControllerBase
     private readonly IChatLoopScratchpad _loopScratchpad;
     private readonly IChatNotifier _chatNotifier;
     private readonly IWorkItemNotifier _notifier;
+    private readonly BootstrapCredentials _instance;
 
     public AgentController(
         IWorkItemManager workItems,
@@ -102,6 +103,7 @@ public class AgentController : ControllerBase
         IWorktreePreviewService preview,
         IChatLoopScratchpad loopScratchpad,
         IChatNotifier chatNotifier,
+        BootstrapCredentials instance,
         IWorkItemNotifier? notifier = null)
     {
         _workItems = workItems;
@@ -114,6 +116,7 @@ public class AgentController : ControllerBase
         _loopScratchpad = loopScratchpad;
         _chatNotifier = chatNotifier;
         _notifier = notifier ?? new NoopWorkItemNotifier();
+        _instance = instance;
     }
 
     /// <summary>
@@ -273,7 +276,8 @@ public class AgentController : ControllerBase
     public async Task<IActionResult> GetWorkItem(
         string id,
         [FromServices] IRunConversationService conversations,
-        [FromQuery] bool includeConversation = false)
+        [FromQuery] bool includeConversation = false,
+        [FromQuery] bool includeHistory = false)
     {
         var wi = await _workItems.GetWorkItemAsync(id);
         if (wi == null) return NotFound();
@@ -315,15 +319,22 @@ public class AgentController : ControllerBase
                 sizeBytes = a.SizeBytes,
             }),
         };
-        if (!includeConversation) return Ok(item);
+        if (!includeConversation && !includeHistory) return Ok(item);
 
-        // The latest run's conversation, the largest field and rarely needed for
-        // planning, so it is only there when asked for.
-        var page = wi.LatestLoopRunId is { } runId ? await conversations.GetPageAsync(runId) : null;
         var body = JsonSerializer.SerializeToNode(item, JsonSerializerOptions.Web)!.AsObject();
-        body["conversation"] = page is null
-            ? null
-            : JsonSerializer.SerializeToNode(new { runId = wi.LatestLoopRunId, messages = page.Messages }, JsonSerializerOptions.Web);
+        if (includeConversation)
+        {
+            // The latest run's conversation, the largest field and rarely needed for
+            // planning, so it is only there when asked for.
+            var page = wi.LatestLoopRunId is { } runId ? await conversations.GetPageAsync(runId) : null;
+            body["conversation"] = page is null
+                ? null
+                : JsonSerializer.SerializeToNode(new { runId = wi.LatestLoopRunId, messages = page.Messages }, JsonSerializerOptions.Web);
+        }
+        // How the item got to where it is, for an agent picking up or proposing an
+        // edit to an item it did not create. Asked for, like the conversation.
+        if (includeHistory)
+            body["history"] = JsonSerializer.SerializeToNode(await _workItems.GetHistoryAsync(id), JsonSerializerOptions.Web);
         return Ok(body);
     }
 
@@ -1181,6 +1192,33 @@ public class AgentController : ControllerBase
             && Guid.TryParse(hdr.ToString(), out chatSessionId);
     }
 
+    /// <summary>Who the changes this call makes are for, from the session headers it sent.</summary>
+    private Task<WorkItemActor?> CallerActorAsync() => ActorAsync(CallerRunId(), CallerChatSessionId());
+
+    /// <summary>
+    /// Who a change is for: a loop run as this instance's user, named by the step
+    /// it is running and tied to the work item it works on; else a chat session
+    /// as the user it belongs to; else the signed-in person, or this instance for
+    /// the agent token with no session behind it. Null for a signed-in session
+    /// whose user can no longer be resolved.
+    /// </summary>
+    private async Task<WorkItemActor?> ActorAsync(Guid? runId, Guid? chatSessionId)
+    {
+        if (runId is { } run && await _runs.GetByIdAsync(run) is { } loopRun)
+        {
+            var step = await _runs.GetRunningNodeIdAsync(run) is { } runNodeId
+                ? (await _runs.GetRunNodeByIdAsync(runNodeId))?.NodeLabel
+                : null;
+            return WorkItemActor.Agent(_instance.Username, run, step, loopRun.WorkItemId);
+        }
+        if (chatSessionId is { } chat
+            && await _db.ChatSessions.AsNoTracking().Where(c => c.Id == chat).Select(c => c.UserId).FirstOrDefaultAsync() is { } chatUser)
+            return WorkItemActor.Chat(chatUser, chat);
+        if (User.IsInRole(IldAuthentication.AgentRole))
+            return WorkItemActor.System(_instance.Username, "agent with no run or chat");
+        return User.Identity?.Name is { Length: > 0 } name ? WorkItemActor.Human(name) : null;
+    }
+
     // -- Loop Editor context (ADR-0011) ----------------------------------------
     //
     // The browser stashes the loop currently open in the Loop Editor into a
@@ -1446,10 +1484,14 @@ public class AgentController : ControllerBase
             }
         }
 
+        if (await ActorAsync(createdByLoopRunId, createdByChatSessionId) is not { } actor)
+            return Unauthorized();
+
         string id;
         try
         {
             id = await _workItems.CreateWorkItemAsync(
+                actor,
                 request.Title,
                 request.Description ?? string.Empty,
                 repositoryId,
@@ -1467,7 +1509,7 @@ public class AgentController : ControllerBase
 
         foreach (var dep in dependencyIds)
         {
-            try { await _workItems.AddDependencyAsync(id, dep); }
+            try { await _workItems.AddDependencyAsync(actor, id, dep); }
             catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         }
 
@@ -1500,8 +1542,10 @@ public class AgentController : ControllerBase
             && BranchNameRules.Validate(baseBranch, BranchNameRules.BaseBranchSubject) is { } baseError)
             return BadRequest(new { error = baseError });
 
+        if (await CallerActorAsync() is not { } actor)
+            return Unauthorized();
         var ok = await _workItems.UpdateAsync(
-            id, request.Title, request.Description ?? string.Empty, request.Tags,
+            actor, id, request.Title, request.Description ?? string.Empty, request.Tags,
             branchNameOverride: request.BranchNameOverride,
             baseBranchOverride: request.BaseBranchOverride);
         if (!ok)
@@ -1527,7 +1571,9 @@ public class AgentController : ControllerBase
         if (!CallerOwns(wi))
             return StatusCode(403, new { error = "You can only delete work items your own session created." });
 
-        var ok = await _workItems.DeleteAsync(id);
+        if (await CallerActorAsync() is not { } actor)
+            return Unauthorized();
+        var ok = await _workItems.DeleteAsync(actor, id);
         if (!ok) return NotFound();
         return NoContent();
     }
@@ -1571,12 +1617,14 @@ public class AgentController : ControllerBase
                 return Ok(DependencyChange(id, dependsOn, changed: false, unchanged, before));
             }
 
+            if (await CallerActorAsync() is not { } actor)
+                return Unauthorized();
             bool ok;
             try
             {
                 ok = adding
-                    ? await _workItems.AddDependencyAsync(id, dependsOn)
-                    : await _workItems.RemoveDependencyAsync(id, dependsOn);
+                    ? await _workItems.AddDependencyAsync(actor, id, dependsOn)
+                    : await _workItems.RemoveDependencyAsync(actor, id, dependsOn);
             }
             catch (InvalidOperationException ex)
             {
@@ -1648,7 +1696,9 @@ public class AgentController : ControllerBase
             if (await CheckProposedDependenciesAsync(id, addDependencies, removeDependencies) is { } dependencyError)
                 return dependencyError;
 
-            result = await _workItems.ProposeEditAsync(id, new RemoteCreateEditProposalRequest
+            if (await ActorAsync(runId, chatSessionId) is not { } actor)
+                return Unauthorized();
+            result = await _workItems.ProposeEditAsync(actor, id, new RemoteCreateEditProposalRequest
             {
                 Title = request.Title,
                 Description = request.Description,

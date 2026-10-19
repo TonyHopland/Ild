@@ -73,7 +73,7 @@ public class PrWebhookResumeTests
         }
 
         public PrSyncService Build() => new(
-            Runs.Object, Events.Object, new Mock<IWorkItemManager>().Object, Engine.Object, Poller.Object);
+            Runs.Object, Events.Object, new Mock<IWorkItemManager>().Object, Engine.Object, Poller.Object, TestActors.Instance);
     }
 
     private static WebhookPayload ChangesRequested() =>

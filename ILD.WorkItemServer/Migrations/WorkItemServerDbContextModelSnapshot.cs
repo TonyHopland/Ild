@@ -246,6 +246,64 @@ namespace ILD.WorkItemServer.Migrations
                     b.ToTable("WorkItemEditProposals");
                 });
 
+            modelBuilder.Entity("ILD.WorkItemServer.Domain.WorkItemHistoryEntry", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<string>("ActorDetail")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
+                    b.Property<int?>("ActorKind")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ActorWorkItemId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Field")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("SaveId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Username")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("Value")
+                        .HasColumnType("text");
+
+                    b.Property<string>("WorkItemId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkItemId", "Field", "Timestamp");
+
+                    b.ToTable("WorkItemHistoryEntries");
+                });
+
             modelBuilder.Entity("ILD.WorkItemServer.Domain.WorkItemAttachment", b =>
                 {
                     b.HasOne("ILD.WorkItemServer.Domain.WorkItem", null)

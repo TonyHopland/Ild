@@ -31,7 +31,7 @@ public class WorkItemAttachmentPollTests : IAsyncLifetime
             .UseSqlite(_connection)
             .AddInterceptors(_commands)
             .Options;
-        _db = new WorkItemServerDbContext(options);
+        _db = new WorkItemServerDbContext(options) { HistoryActor = TestActors.ServerHuman };
         await _db.Database.EnsureCreatedAsync();
         _service = new WorkItemService(_db, TimeProvider.System);
     }

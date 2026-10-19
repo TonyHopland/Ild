@@ -47,7 +47,7 @@ public class LoopEngineStopRunTests
         // Done would otherwise have to overwrite one, and the overwritten state
         // still leaves a conversation entry and a notification behind.
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
+            It.IsAny<WorkItemActor>(), It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
     }
 
@@ -63,7 +63,7 @@ public class LoopEngineStopRunTests
 
         Assert.Equal(LoopRunStatus.Cancelled, h.ReloadRun().Status);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
     }
 
@@ -124,8 +124,8 @@ public class LoopEngineStopRunTests
         // exists to catch never happens.
         var seedMgr = new WorkItemManager(
             new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object,
-            db.LoopRuns, db.ServerClient, db.ServerOptions);
-        var workItemId = await seedMgr.CreateWorkItemAsync("cancel me", "", null);
+            db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance);
+        var workItemId = await seedMgr.CreateWorkItemAsync(TestActors.Human, "cancel me", "", null);
 
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
         var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
@@ -150,13 +150,13 @@ public class LoopEngineStopRunTests
         services.AddScoped<ILoopTemplateStore>(sp => new LoopTemplateStore(sp.GetRequiredService<AppDbContext>()));
         services.AddScoped<IWorkItemManager>(sp => new WorkItemManager(
             new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object,
-            sp.GetRequiredService<ILoopRunStore>(), db.ServerClient, db.ServerOptions));
+            sp.GetRequiredService<ILoopRunStore>(), db.ServerClient, db.ServerOptions, TestActors.Instance));
         services.AddSingleton<IRunNotifier>(new NoopRunNotifier());
         services.AddSingleton<IWorkItemNotifier>(new Mock<IWorkItemNotifier>().Object);
         using var sp = services.BuildServiceProvider();
 
         var engine = new LoopEngine(sp, new ScriptedExecutorRegistry(),
-            sp.GetRequiredService<IRunNotifier>(), NullLogger<LoopEngine>.Instance,
+            sp.GetRequiredService<IRunNotifier>(), TestActors.Instance, NullLogger<LoopEngine>.Instance,
             sp.GetRequiredService<IWorkItemNotifier>());
 
         await engine.CancelRunAsync(run.Id);

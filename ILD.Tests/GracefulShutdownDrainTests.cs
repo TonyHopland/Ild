@@ -65,7 +65,7 @@ public class GracefulShutdownDrainTests
         await h.Engine.DrainForShutdownAsync(DrainTimeout);
 
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            It.IsAny<string>(),
+            It.IsAny<WorkItemActor>(), It.IsAny<string>(),
             It.IsAny<RemoteWorkItemStatus>(),
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()),
             Times.Never);

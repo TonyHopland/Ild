@@ -59,7 +59,7 @@ public class PrSyncServiceCommentWebhookTests
 
         public PrSyncService Build() => new(
             Runs.Object, new Mock<IEventLogService>().Object, new Mock<IWorkItemManager>().Object,
-            Engine.Object, Poller.Object);
+            Engine.Object, Poller.Object, TestActors.Instance);
     }
 
     [Fact]

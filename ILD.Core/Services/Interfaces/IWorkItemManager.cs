@@ -4,8 +4,8 @@ namespace ILD.Core.Services.Interfaces;
 
 public interface IWorkItemManager
 {
-    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId);
-    Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null);
+    Task<string> CreateWorkItemAsync(WorkItemActor actor, string title, string description, Guid? repositoryId);
+    Task<string> CreateWorkItemAsync(WorkItemActor actor, string title, string description, Guid? repositoryId, Guid? createdByLoopRunId, bool forceBacklog, IEnumerable<string>? tags = null, Guid? createdByChatSessionId = null, string? branchNameOverride = null, string? baseBranchOverride = null);
 
     /// <summary>
     /// Edit the server-held fields of a work item. <paramref name="branchNameOverride"/>
@@ -15,7 +15,7 @@ public interface IWorkItemManager
     /// respectively). Either way they only affect the item's next run, as does
     /// <paramref name="repositoryId"/>, which null leaves alone.
     /// </summary>
-    Task<bool> UpdateAsync(string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null, string? branchNameOverride = null, string? baseBranchOverride = null, Guid? repositoryId = null);
+    Task<bool> UpdateAsync(WorkItemActor actor, string workItemId, string title, string description, IEnumerable<string>? tags = null, RemoteAiProviderOverrideMode? aiProviderOverride = null, Guid? aiProviderOverrideId = null, string? branchNameOverride = null, string? baseBranchOverride = null, Guid? repositoryId = null);
     Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 
     /// <summary>
@@ -69,12 +69,12 @@ public interface IWorkItemManager
     /// Refused for an item with a live run behind it — that is
     /// <see cref="CleanupToBacklogAsync"/>'s job.
     /// </summary>
-    Task<bool> TransitionToBacklogAsync(string workItemId);
-    Task<bool> TransitionToWorkQueueAsync(string workItemId);
-    Task<bool> TransitionToReadyAsync(string workItemId);
-    Task<bool> TransitionToRunningAsync(string workItemId);
-    Task<bool> TransitionToHumanFeedbackAsync(string workItemId, string reason);
-    Task<bool> TransitionToDoneAsync(string workItemId);
+    Task<bool> TransitionToBacklogAsync(WorkItemActor actor, string workItemId);
+    Task<bool> TransitionToWorkQueueAsync(WorkItemActor actor, string workItemId);
+    Task<bool> TransitionToReadyAsync(WorkItemActor actor, string workItemId);
+    Task<bool> TransitionToRunningAsync(WorkItemActor actor, string workItemId);
+    Task<bool> TransitionToHumanFeedbackAsync(WorkItemActor actor, string workItemId, string reason);
+    Task<bool> TransitionToDoneAsync(WorkItemActor actor, string workItemId);
 
     /// <summary>
     /// Generic transition entry point. Mirrors the remote server transition contract.
@@ -87,6 +87,7 @@ public interface IWorkItemManager
     /// item may have its label cleared, but is never given one.
     /// </param>
     Task<bool> TransitionAsync(
+        WorkItemActor actor,
         string workItemId,
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
@@ -99,9 +100,9 @@ public interface IWorkItemManager
     /// failed before its run existed — recording <paramref name="reason"/> as the
     /// item's own status reason. No run is touched.
     /// </summary>
-    Task<bool> ParkWithoutRunAsync(string workItemId, string reason);
+    Task<bool> ParkWithoutRunAsync(WorkItemActor actor, string workItemId, string reason);
 
-    Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId);
+    Task<bool> AddDependencyAsync(WorkItemActor actor, string workItemId, string dependsOnWorkItemId);
 
     /// <summary>
     /// Why <paramref name="workItemId"/> may not depend on
@@ -110,15 +111,23 @@ public interface IWorkItemManager
     /// check <see cref="AddDependencyAsync"/> makes before it adds an edge.
     /// </summary>
     Task<string?> CheckNewDependencyAsync(string workItemId, string dependsOnWorkItemId);
-    Task<bool> RemoveDependencyAsync(string workItemId, string dependsOnWorkItemId);
+    Task<bool> RemoveDependencyAsync(WorkItemActor actor, string workItemId, string dependsOnWorkItemId);
     Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId);
     Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(string workItemId);
+
+    /// <summary>
+    /// The work item's history from the WorkItem server, newest first, each entry
+    /// paired with the value it replaced. A Baseline save that names no loop run's
+    /// work item gets the one of the run that created the item, when that run is
+    /// one of this instance's. Null when there is no such work item.
+    /// </summary>
+    Task<IReadOnlyList<RemoteWorkItemHistoryEntry>?> GetHistoryAsync(string workItemId, CancellationToken ct = default);
     Task<bool> IsReadyAsync(string workItemId);
     /// <summary>
     /// Link a PR to a work item by hand: records it against the item and, when
     /// the item still has a current run, points that run at it too.
     /// </summary>
-    Task<bool> LinkPullRequestAsync(string workItemId, string prUrl);
+    Task<bool> LinkPullRequestAsync(WorkItemActor actor, string workItemId, string prUrl);
 
     /// <summary>
     /// Record a PR against the work item on the WorkItem server, which is where
@@ -132,9 +141,9 @@ public interface IWorkItemManager
     /// rejected the write; callers treat it as best-effort, since the next read
     /// of the item re-reports anything its runs still carry.
     /// </summary>
-    Task<bool> RecordPullRequestAsync(string workItemId, string prUrl, Guid? loopRunId, bool merged = false, DateTime? createdAt = null);
-    Task<bool> CleanupToDoneAsync(string workItemId);
-    Task<bool> CleanupToBacklogAsync(string workItemId);
+    Task<bool> RecordPullRequestAsync(WorkItemActor actor, string workItemId, string prUrl, Guid? loopRunId, bool merged = false, DateTime? createdAt = null);
+    Task<bool> CleanupToDoneAsync(WorkItemActor actor, string workItemId);
+    Task<bool> CleanupToBacklogAsync(WorkItemActor actor, string workItemId);
 
     /// <summary>
     /// Commit any uncommitted changes in the work item's current run worktree
@@ -200,7 +209,7 @@ public interface IWorkItemManager
     /// current run cannot be found.
     /// </summary>
     Task<MergePullRequestResult?> MergePullRequestAsync(string workItemId, bool deleteBranch);
-    Task<bool> DeleteAsync(string workItemId);
+    Task<bool> DeleteAsync(WorkItemActor actor, string workItemId);
 
     /// <summary>
     /// The files attached to a work item, metadata only. Null when there is no
@@ -215,12 +224,12 @@ public interface IWorkItemManager
     /// travels back as an outcome carrying the reason rather than as an
     /// exception a caller would report as an outage.
     /// </summary>
-    Task<AttachmentUploadResult> AddAttachmentsAsync(string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default);
+    Task<AttachmentUploadResult> AddAttachmentsAsync(WorkItemActor actor, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default);
 
     /// <summary>One attachment's bytes, with the content type to serve them as. Null when either id is unknown.</summary>
     Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default);
 
-    Task<bool> DeleteAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default);
+    Task<bool> DeleteAttachmentAsync(WorkItemActor actor, string workItemId, Guid attachmentId, CancellationToken ct = default);
 
     /// <summary>
     /// Propose an edit to any work item (a Work Item Edit Proposal). Nothing on
@@ -228,7 +237,7 @@ public interface IWorkItemManager
     /// last word on the proposal's limits, so a refusal is an outcome carrying
     /// its reason.
     /// </summary>
-    Task<EditProposalCreateResult> ProposeEditAsync(string workItemId, RemoteCreateEditProposalRequest request, CancellationToken ct = default);
+    Task<EditProposalCreateResult> ProposeEditAsync(WorkItemActor actor, string workItemId, RemoteCreateEditProposalRequest request, CancellationToken ct = default);
 
     /// <summary>The work item's edit proposals, newest first. Null when there is no such work item.</summary>
     Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(string workItemId, CancellationToken ct = default);
@@ -249,7 +258,7 @@ public interface IWorkItemManager
     /// server is configured. Throws <see cref="HttpRequestException"/> when the
     /// server cannot be reached, and the caller then keeps the run so it can retry.
     /// </summary>
-    Task WithdrawPendingProposalsOfRunAsync(Guid runId, CancellationToken ct = default);
+    Task WithdrawPendingProposalsOfRunAsync(WorkItemActor actor, Guid runId, CancellationToken ct = default);
 
     /// <summary>
     /// A human's approve: applies exactly the proposed fields if the item's
@@ -259,13 +268,17 @@ public interface IWorkItemManager
     /// item still matches but whose additions would now close a cycle or name a
     /// missing item is <see cref="EditProposalDecisionOutcome.Refused"/>: nothing
     /// changes and it stays Pending.
+    /// <para>
+    /// History records the applied change as <paramref name="approver"/>'s, naming
+    /// the proposal and who proposed it, and the work item of a proposing loop run.
+    /// </para>
     /// </summary>
-    Task<EditProposalApproval> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default);
+    Task<EditProposalApproval> ApproveEditProposalAsync(WorkItemActor approver, string workItemId, Guid proposalId, CancellationToken ct = default);
 
-    Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default);
+    Task<EditProposalDecisionResult> RejectEditProposalAsync(WorkItemActor actor, string workItemId, Guid proposalId, string? reason, CancellationToken ct = default);
 
     /// <summary>Record that the proposing chat has been told these decisions.</summary>
-    Task MarkEditProposalDecisionsDeliveredAsync(IReadOnlyList<Guid> proposalIds, CancellationToken ct = default);
+    Task MarkEditProposalDecisionsDeliveredAsync(WorkItemActor actor, IReadOnlyList<Guid> proposalIds, CancellationToken ct = default);
 }
 
 /// <summary>

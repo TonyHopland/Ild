@@ -74,6 +74,7 @@ public sealed class WorkItemServerApiTests : IClassFixture<WorkItemServerApiTest
     {
         var c = _factory.CreateClient();
         c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Factory.ApiKey);
+        c.DefaultRequestHeaders.Add(ILD.Core.Services.Remote.WorkItemActor.HeaderName, TestActors.Human.ToHeaderValue());
         return c;
     }
 

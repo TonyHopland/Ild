@@ -90,7 +90,7 @@ public class LoopEngineStartRunEventsTests
             services.AddSingleton<IRunNotifier, NoopRunNotifier>();
             services.AddSingleton<INodeExecutorRegistry>(registry);
             var sp = services.BuildServiceProvider();
-            Engine = new LoopEngine(sp, registry, sp.GetRequiredService<IRunNotifier>(), NullLogger<LoopEngine>.Instance);
+            Engine = new LoopEngine(sp, registry, sp.GetRequiredService<IRunNotifier>(), TestActors.Instance, NullLogger<LoopEngine>.Instance);
         }
 
         public WorkItemManager UseRealManager()
@@ -205,7 +205,7 @@ public class LoopEngineStartRunEventsTests
         const string cause = "work item server unreachable: connection refused (example.test:8080)";
         rig.UseManager(ManagerSeeing(workItemId, (method, args) =>
             method.Name == nameof(IWorkItemManager.TransitionAsync)
-                ? (true, args[1] is RemoteWorkItemStatus.Running
+                ? (true, args[2] is RemoteWorkItemStatus.Running
                     ? Task.FromException<bool>(new HttpRequestException(cause))
                     : Task.FromResult(true))
                 : (false, null)));
@@ -235,7 +235,7 @@ public class LoopEngineStartRunEventsTests
     {
         using var rig = new Rig();
         var manager = rig.UseRealManager();
-        var workItemId = await manager.CreateWorkItemAsync("t", "d", rig.RepoId, null, false,
+        var workItemId = await manager.CreateWorkItemAsync(TestActors.Human, "t", "d", rig.RepoId, null, false,
             tags: new[] { "build" }, branchNameOverride: failure == PreRun.BranchTaken ? "feature/taken" : null);
 
         var earlier = RunTimeline.SeedRun(rig.Db, workItemId, RunTimeline.SeedVersion(rig.Db),

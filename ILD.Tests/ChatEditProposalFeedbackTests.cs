@@ -46,9 +46,9 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "turn one", CancellationToken.None);
         Assert.False(Mentions(adapter.Prompts[0], approved));
 
-        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _db.ServerClient.ApproveEditProposalAsync(opts, approvedItem, approved, TestContext.Current.CancellationToken)).Outcome);
-        Assert.Equal(EditProposalDecisionOutcome.Rejected, (await _db.ServerClient.RejectEditProposalAsync(opts, rejectedItem, rejected, "Too vague, name the failing test.", TestContext.Current.CancellationToken)).Outcome);
-        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _db.ServerClient.ApproveEditProposalAsync(opts, staleItem, otherChats, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _db.ServerClient.ApproveEditProposalAsync(opts, approvedItem, approved, TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.Rejected, (await _db.ServerClient.RejectEditProposalAsync(opts, rejectedItem, rejected, "Too vague, name the failing test.", TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _db.ServerClient.ApproveEditProposalAsync(opts, staleItem, otherChats, TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
 
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "turn two", CancellationToken.None);
         var notice = adapter.Prompts[1];
@@ -82,7 +82,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
         var item = await CreateItemAsync("Some item");
         var proposal = await ProposeAsync(item, chat);
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "turn one", CancellationToken.None);
-        await _db.ServerClient.RejectEditProposalAsync(opts, item, proposal, "Not now.", TestContext.Current.CancellationToken);
+        await _db.ServerClient.RejectEditProposalAsync(opts, item, proposal, "Not now.", TestActors.Human, TestContext.Current.CancellationToken);
 
         adapter.FailNextTurnBeforeLaunch = true;
         await svc.ExecuteTurnAsync(chat, Guid.NewGuid(), "turn two", CancellationToken.None);
@@ -101,7 +101,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
         var adapter = new RecordingChatAdapter();
         var unreachable = new WorkItemManager(
             Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns,
-            new WorkItemServerClient(new HttpClient(new RefusingHandler())), _db.ServerOptions);
+            new WorkItemServerClient(new HttpClient(new RefusingHandler())), _db.ServerOptions, TestActors.Instance);
         var svc = NewService(adapter, unreachable);
         var chat = (await svc.StartAsync("alice", (await SeedProviderAsync()).Id, new[] { "ild" }, TestContext.Current.CancellationToken)).Id;
 
@@ -125,7 +125,7 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
     private async Task<string> CreateItemAsync(string title)
     {
         var opts = await _db.ServerOptions.ResolveForRepositoryAsync(null);
-        return (await _db.ServerClient.CreateAsync(opts, new RemoteCreateWorkItemRequest { Title = title })).Id;
+        return (await _db.ServerClient.CreateAsync(opts, new RemoteCreateWorkItemRequest { Title = title }, TestActors.Human)).Id;
     }
 
     private async Task<Guid> ProposeAsync(string workItemId, Guid chatSessionId)
@@ -135,13 +135,13 @@ public sealed class ChatEditProposalFeedbackTests : IDisposable
         {
             Title = $"Proposed {Guid.NewGuid():N}",
             CreatedByChatSessionId = chatSessionId,
-        });
+        }, TestActors.Human);
         Assert.Equal(EditProposalCreateOutcome.Created, result.Outcome);
         return result.Proposal!.Id;
     }
 
     private WorkItemManager NewWorkItemManager(IWorkItemServerOptionsResolver options)
-        => new(Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, options);
+        => new(Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, options, TestActors.Instance);
 
     private ChatService NewService(IAgentAdapter adapter, IWorkItemManager workItems)
         => new(

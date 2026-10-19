@@ -130,10 +130,10 @@ public class LoopRunsControllerTests
     }
 
     private static LoopRunsController BuildController(Mock<ILoopRunStore> store, Mock<IRunReclaimer> reclaimer)
-        => new(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
+        => TestActors.SignedIn(new LoopRunsController(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
             new Mock<IAdapterSessionSnapshotStore>().Object,
             new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
-            reclaimer.Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
+            reclaimer.Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>()));
 
     [Fact]
     public async Task GetEvents_includes_runNodeId_in_response()

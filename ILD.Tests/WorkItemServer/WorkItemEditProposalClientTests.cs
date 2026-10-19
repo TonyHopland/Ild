@@ -77,11 +77,11 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
             Tags = new[] { "legacy-tag", "HIL" },
             BranchNameOverride = "feature/original",
             BaseBranchOverride = "develop",
-        });
+        }, TestActors.Human);
 
     private async Task<RemoteWorkItemEditProposal> ProposeAsync(string workItemId, RemoteCreateEditProposalRequest request)
     {
-        var result = await _client.CreateEditProposalAsync(_opts, workItemId, request);
+        var result = await _client.CreateEditProposalAsync(_opts, workItemId, request, TestActors.Human);
         Assert.Equal(EditProposalCreateOutcome.Created, result.Outcome);
         return result.Proposal!;
     }
@@ -102,7 +102,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     public async Task A_proposal_snapshots_the_item_changes_nothing_and_approving_it_applies_exactly_the_proposed_fields()
     {
         var item = await CreateItemAsync();
-        await _client.TransitionAsync(_opts, item.Id, new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.WorkQueue }, TestContext.Current.CancellationToken);
+        await _client.TransitionAsync(_opts, item.Id, new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.WorkQueue }, TestActors.Human, TestContext.Current.CancellationToken);
         var runId = Guid.NewGuid();
 
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest
@@ -138,7 +138,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         Assert.Equal(1, untouched.PendingEditProposalCount);
         var statusBefore = untouched.Status;
 
-        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(EditProposalDecisionOutcome.Applied, approved.Outcome);
         Assert.Equal(RemoteEditProposalStatus.Approved, approved.Proposal!.Status);
@@ -160,9 +160,9 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var item = await CreateItemAsync();
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Agent title" });
 
-        await _client.UpdateAsync(_opts, item.Id, new RemoteUpdateWorkItemRequest { Description = "Edited by a human." }, TestContext.Current.CancellationToken);
+        await _client.UpdateAsync(_opts, item.Id, new RemoteUpdateWorkItemRequest { Description = "Edited by a human." }, TestActors.Human, TestContext.Current.CancellationToken);
 
-        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(EditProposalDecisionOutcome.Stale, result.Outcome);
         Assert.Equal(RemoteEditProposalStatus.Stale, result.Proposal!.Status);
@@ -182,11 +182,11 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var item = await CreateItemAsync();
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Agent title" });
 
-        await _client.TransitionAsync(_opts, item.Id, new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.WorkQueue }, TestContext.Current.CancellationToken);
+        await _client.TransitionAsync(_opts, item.Id, new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.WorkQueue }, TestActors.Human, TestContext.Current.CancellationToken);
         var statusBefore = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.Status;
         Assert.NotEqual(RemoteWorkItemStatus.Backlog, statusBefore);
 
-        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(EditProposalDecisionOutcome.Applied, result.Outcome);
         var stored = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!;
@@ -208,7 +208,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Agent title" });
 
         _humanEdit.Arm(item.Id, "Edited by a human mid-approve.");
-        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.True(_humanEdit.Fired, "the approve never wrote to the work item");
         Assert.Equal(EditProposalDecisionOutcome.Stale, result.Outcome);
@@ -227,14 +227,14 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var third = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { BranchNameOverride = "feature/third" });
         Assert.Equal(3, (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.PendingEditProposalCount);
 
-        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, first.Id, TestContext.Current.CancellationToken);
+        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, first.Id, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Equal(EditProposalDecisionOutcome.Applied, approved.Outcome);
 
         Assert.Equal(RemoteEditProposalStatus.Stale, (await ReadProposalAsync(item.Id, second.Id)).Status);
         Assert.Equal(RemoteEditProposalStatus.Stale, (await ReadProposalAsync(item.Id, third.Id)).Status);
         Assert.Equal(0, (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.PendingEditProposalCount);
 
-        var late = await _client.ApproveEditProposalAsync(_opts, item.Id, second.Id, TestContext.Current.CancellationToken);
+        var late = await _client.ApproveEditProposalAsync(_opts, item.Id, second.Id, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.NotEqual(EditProposalDecisionOutcome.Applied, late.Outcome);
         var stored = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!;
         AssertFieldsEqual(stored, "First title", "The original description.",
@@ -247,7 +247,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var item = await CreateItemAsync();
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Agent title" });
 
-        var rejected = await _client.RejectEditProposalAsync(_opts, item.Id, proposal.Id, "Too vague.", TestContext.Current.CancellationToken);
+        var rejected = await _client.RejectEditProposalAsync(_opts, item.Id, proposal.Id, "Too vague.", TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(EditProposalDecisionOutcome.Rejected, rejected.Outcome);
         Assert.Equal(RemoteEditProposalStatus.Rejected, rejected.Proposal!.Status);
@@ -257,8 +257,8 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         Assert.Equal(RemoteEditProposalStatus.Rejected, listed.Status);
         Assert.Equal("Too vague.", listed.RejectionReason);
 
-        Assert.Equal(EditProposalDecisionOutcome.NotPending, (await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken)).Outcome);
-        Assert.Equal(EditProposalDecisionOutcome.NotPending, (await _client.RejectEditProposalAsync(_opts, item.Id, proposal.Id, "again", TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.NotPending, (await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.NotPending, (await _client.RejectEditProposalAsync(_opts, item.Id, proposal.Id, "again", TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
 
         var stored = (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!;
         Assert.Equal("Old backlog item", stored.Title);
@@ -270,11 +270,11 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     {
         var item = await CreateItemAsync();
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Agent title" });
-        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken)).Outcome);
-        await _client.UpdateAsync(_opts, item.Id, new RemoteUpdateWorkItemRequest { Title = "Human title" }, TestContext.Current.CancellationToken);
+        Assert.Equal(EditProposalDecisionOutcome.Applied, (await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
+        await _client.UpdateAsync(_opts, item.Id, new RemoteUpdateWorkItemRequest { Title = "Human title" }, TestActors.Human, TestContext.Current.CancellationToken);
 
-        Assert.Equal(EditProposalDecisionOutcome.NotPending, (await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken)).Outcome);
-        Assert.Equal(EditProposalDecisionOutcome.NotPending, (await _client.RejectEditProposalAsync(_opts, item.Id, proposal.Id, null, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.NotPending, (await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.NotPending, (await _client.RejectEditProposalAsync(_opts, item.Id, proposal.Id, null, TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
 
         Assert.Equal("Human title", (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.Title);
         Assert.Equal(RemoteEditProposalStatus.Approved, (await ReadProposalAsync(item.Id, proposal.Id)).Status);
@@ -287,9 +287,9 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var other = await CreateItemAsync("Another item");
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Agent title" });
 
-        Assert.Equal(EditProposalDecisionOutcome.NotFound, (await _client.ApproveEditProposalAsync(_opts, item.Id, Guid.NewGuid(), TestContext.Current.CancellationToken)).Outcome);
-        Assert.Equal(EditProposalDecisionOutcome.NotFound, (await _client.ApproveEditProposalAsync(_opts, other.Id, proposal.Id, TestContext.Current.CancellationToken)).Outcome);
-        Assert.Equal(EditProposalDecisionOutcome.NotFound, (await _client.RejectEditProposalAsync(_opts, other.Id, proposal.Id, null, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.NotFound, (await _client.ApproveEditProposalAsync(_opts, item.Id, Guid.NewGuid(), TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.NotFound, (await _client.ApproveEditProposalAsync(_opts, other.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
+        Assert.Equal(EditProposalDecisionOutcome.NotFound, (await _client.RejectEditProposalAsync(_opts, other.Id, proposal.Id, null, TestActors.Human, TestContext.Current.CancellationToken)).Outcome);
 
         Assert.Equal("Another item", (await _client.GetAsync(_opts, other.Id, TestContext.Current.CancellationToken))!.Title);
         Assert.Equal(RemoteEditProposalStatus.Pending, (await ReadProposalAsync(item.Id, proposal.Id)).Status);
@@ -300,7 +300,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
     public async Task Creating_a_proposal_is_refused_for_an_unknown_item_and_past_twenty_pending_on_one_item()
     {
         var unknown = await _client.CreateEditProposalAsync(_opts, "no-such-item",
-            new RemoteCreateEditProposalRequest { Title = "Agent title" }, TestContext.Current.CancellationToken);
+            new RemoteCreateEditProposalRequest { Title = "Agent title" }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Equal(EditProposalCreateOutcome.NotFound, unknown.Outcome);
 
         var item = await CreateItemAsync();
@@ -308,7 +308,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
             await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = $"Title {i}" });
 
         var overCap = await _client.CreateEditProposalAsync(_opts, item.Id,
-            new RemoteCreateEditProposalRequest { Title = "One too many" }, TestContext.Current.CancellationToken);
+            new RemoteCreateEditProposalRequest { Title = "One too many" }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(EditProposalCreateOutcome.TooManyPending, overCap.Outcome);
         Assert.Equal(20, (await _client.ListEditProposalsAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.Count);
@@ -320,9 +320,9 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var item = await CreateItemAsync();
 
         var blankTitle = await _client.CreateEditProposalAsync(_opts, item.Id,
-            new RemoteCreateEditProposalRequest { Title = "   " }, TestContext.Current.CancellationToken);
+            new RemoteCreateEditProposalRequest { Title = "   " }, TestActors.Human, TestContext.Current.CancellationToken);
         var nothingProposed = await _client.CreateEditProposalAsync(_opts, item.Id,
-            new RemoteCreateEditProposalRequest { Rationale = "no fields" }, TestContext.Current.CancellationToken);
+            new RemoteCreateEditProposalRequest { Rationale = "no fields" }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(EditProposalCreateOutcome.Invalid, blankTitle.Outcome);
         Assert.False(string.IsNullOrWhiteSpace(blankTitle.Error));
@@ -340,8 +340,8 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var rejected = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Rejected title", CreatedByChatSessionId = chat });
         var stillPending = await ProposeAsync(otherItem.Id, new RemoteCreateEditProposalRequest { Title = "Pending title", CreatedByChatSessionId = chat });
         var otherChats = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Other chat title", CreatedByChatSessionId = otherChat });
-        await _client.RejectEditProposalAsync(_opts, item.Id, rejected.Id, "Too vague.", TestContext.Current.CancellationToken);
-        await _client.RejectEditProposalAsync(_opts, item.Id, otherChats.Id, null, TestContext.Current.CancellationToken);
+        await _client.RejectEditProposalAsync(_opts, item.Id, rejected.Id, "Too vague.", TestActors.Human, TestContext.Current.CancellationToken);
+        await _client.RejectEditProposalAsync(_opts, item.Id, otherChats.Id, null, TestActors.Human, TestContext.Current.CancellationToken);
 
         var undelivered = new RemoteEditProposalQuery { CreatedByChatSessionId = chat, UndeliveredOnly = true };
         var due = await _client.QueryEditProposalsAsync(_opts, undelivered, TestContext.Current.CancellationToken);
@@ -350,10 +350,10 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
 
         // A pending proposal has no decision to deliver, so acknowledging it early
         // must not swallow the decision it gets later.
-        await _client.MarkEditProposalDecisionsDeliveredAsync(_opts, new[] { rejected.Id, stillPending.Id }, TestContext.Current.CancellationToken);
+        await _client.MarkEditProposalDecisionsDeliveredAsync(_opts, new[] { rejected.Id, stillPending.Id }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Empty(await _client.QueryEditProposalsAsync(_opts, undelivered, TestContext.Current.CancellationToken));
 
-        await _client.RejectEditProposalAsync(_opts, otherItem.Id, stillPending.Id, "No.", TestContext.Current.CancellationToken);
+        await _client.RejectEditProposalAsync(_opts, otherItem.Id, stillPending.Id, "No.", TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Equal(stillPending.Id, Assert.Single(await _client.QueryEditProposalsAsync(_opts, undelivered, TestContext.Current.CancellationToken)).Id);
 
         var pending = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery { Status = RemoteEditProposalStatus.Pending }, TestContext.Current.CancellationToken);
@@ -370,7 +370,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var a = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "A" });
         var b = await ProposeAsync(otherItem.Id, new RemoteCreateEditProposalRequest { Title = "B" });
         var decided = await ProposeAsync(otherItem.Id, new RemoteCreateEditProposalRequest { Title = "C" });
-        await _client.RejectEditProposalAsync(_opts, otherItem.Id, decided.Id, null, TestContext.Current.CancellationToken);
+        await _client.RejectEditProposalAsync(_opts, otherItem.Id, decided.Id, null, TestActors.Human, TestContext.Current.CancellationToken);
 
         var pending = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery { Status = RemoteEditProposalStatus.Pending }, TestContext.Current.CancellationToken);
 
@@ -388,7 +388,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var byRun = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "A", CreatedByLoopRunId = run });
         var bySecondRun = await ProposeAsync(otherItem.Id, new RemoteCreateEditProposalRequest { Title = "B", CreatedByLoopRunId = secondRun });
         var decided = await ProposeAsync(otherItem.Id, new RemoteCreateEditProposalRequest { Title = "C", CreatedByLoopRunId = run });
-        await _client.RejectEditProposalAsync(_opts, otherItem.Id, decided.Id, null, TestContext.Current.CancellationToken);
+        await _client.RejectEditProposalAsync(_opts, otherItem.Id, decided.Id, null, TestActors.Human, TestContext.Current.CancellationToken);
         await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "D", CreatedByLoopRunId = Guid.NewGuid() });
         await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "E", CreatedByChatSessionId = Guid.NewGuid() });
 
@@ -427,8 +427,8 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         Assert.Equal((step, (int?)null), (fromLoop.CreatedByRunNodeId, fromLoop.ChatReplySequence));
         Assert.Equal(((Guid?)null, (int?)0), (fromChat.CreatedByRunNodeId, fromChat.ChatReplySequence));
 
-        var reject = await _client.RejectEditProposalAsync(_opts, item.Id, rejected.Id, "No.", TestContext.Current.CancellationToken);
-        var approve = await _client.ApproveEditProposalAsync(_opts, item.Id, fromLoop.Id, TestContext.Current.CancellationToken);
+        var reject = await _client.RejectEditProposalAsync(_opts, item.Id, rejected.Id, "No.", TestActors.Human, TestContext.Current.CancellationToken);
+        var approve = await _client.ApproveEditProposalAsync(_opts, item.Id, fromLoop.Id, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(((Guid?)null, (int?)7), (reject.Proposal!.CreatedByRunNodeId, reject.Proposal.ChatReplySequence));
         Assert.Equal((step, (int?)null), (approve.Proposal!.CreatedByRunNodeId, approve.Proposal.ChatReplySequence));
@@ -481,7 +481,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
                 break;
         }
 
-        var result = await _client.CreateEditProposalAsync(_opts, item.Id, request, TestContext.Current.CancellationToken);
+        var result = await _client.CreateEditProposalAsync(_opts, item.Id, request, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(EditProposalCreateOutcome.Invalid, result.Outcome);
         Assert.False(string.IsNullOrWhiteSpace(result.Error));
@@ -496,8 +496,8 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var dropped = await CreateItemAsync("Dropped dependency");
         var added = await CreateItemAsync("Chat tab");
         var gone = await CreateItemAsync("Soon deleted");
-        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, kept.Id, TestContext.Current.CancellationToken));
-        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, dropped.Id, TestContext.Current.CancellationToken));
+        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, kept.Id, TestActors.Human, TestContext.Current.CancellationToken));
+        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, dropped.Id, TestActors.Human, TestContext.Current.CancellationToken));
 
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest
         {
@@ -506,7 +506,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
             RemoveDependencies = new[] { dropped.Id },
         });
         var other = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { AddDependencies = new[] { gone.Id } });
-        Assert.True(await _client.DeleteAsync(_opts, gone.Id, TestContext.Current.CancellationToken));
+        Assert.True(await _client.DeleteAsync(_opts, gone.Id, TestActors.Human, TestContext.Current.CancellationToken));
 
         Assert.Equal(new[] { kept.Id, dropped.Id }.Order(), proposal.Snapshot.Dependencies!.Order());
         Assert.Equal(new[] { (added.Id, (string?)"Chat tab") }, proposal.Proposed.AddDependencies!.Select(d => (d.Id, d.Title)));
@@ -515,7 +515,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         Assert.Equal(new[] { (gone.Id, (string?)null) }, otherRead.Proposed.AddDependencies!.Select(d => (d.Id, d.Title)));
         Assert.Equal(new[] { kept.Id, dropped.Id }.Order(), (await _client.GetAsync(_opts, item.Id, TestContext.Current.CancellationToken))!.Dependencies.Order());
 
-        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+        var approved = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal(EditProposalDecisionOutcome.Applied, approved.Outcome);
         Assert.Equal(new[] { (added.Id, (string?)"Chat tab") }, approved.Proposal!.Proposed.AddDependencies!.Select(d => (d.Id, d.Title)));
@@ -536,11 +536,11 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         var item = await CreateItemAsync();
         var dropped = await CreateItemAsync("Dropped dependency");
         var humanAdded = await CreateItemAsync("Added by a human");
-        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, dropped.Id, TestContext.Current.CancellationToken));
+        Assert.True(await _client.AddDependencyAsync(_opts, item.Id, dropped.Id, TestActors.Human, TestContext.Current.CancellationToken));
         var proposal = await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { RemoveDependencies = new[] { dropped.Id } });
 
         _humanEdit.ArmDependencies(item.Id, new[] { dropped.Id, humanAdded.Id });
-        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestContext.Current.CancellationToken);
+        var result = await _client.ApproveEditProposalAsync(_opts, item.Id, proposal.Id, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.True(_humanEdit.Fired, "the approve never wrote to the work item");
         Assert.Equal(EditProposalDecisionOutcome.Stale, result.Outcome);
@@ -567,7 +567,7 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         await ProposeAsync(item.Id, new RemoteCreateEditProposalRequest { Title = "Gone with the item" });
         var kept = await ProposeAsync(keep.Id, new RemoteCreateEditProposalRequest { Title = "Stays" });
 
-        Assert.True(await _client.DeleteAsync(_opts, item.Id, TestContext.Current.CancellationToken));
+        Assert.True(await _client.DeleteAsync(_opts, item.Id, TestActors.Human, TestContext.Current.CancellationToken));
 
         var remaining = await _client.QueryEditProposalsAsync(_opts, new RemoteEditProposalQuery(), TestContext.Current.CancellationToken);
         Assert.Equal(kept.Id, Assert.Single(remaining).Id);

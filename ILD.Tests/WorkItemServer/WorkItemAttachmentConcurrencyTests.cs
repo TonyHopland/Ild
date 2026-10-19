@@ -46,7 +46,7 @@ public sealed class WorkItemAttachmentConcurrencyTests : IAsyncLifetime
     }
 
     private WorkItemServerDbContext NewContext()
-        => new(new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_connectionString).Options);
+        => new(new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_connectionString).Options) { HistoryActor = TestActors.ServerHuman };
 
     private static IncomingAttachment File(string name, int size)
     {

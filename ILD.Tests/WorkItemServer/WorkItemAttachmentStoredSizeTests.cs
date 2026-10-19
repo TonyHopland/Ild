@@ -28,7 +28,10 @@ public sealed class WorkItemAttachmentStoredSizeTests : IAsyncLifetime
         _connection = new SqliteConnection("DataSource=:memory:");
         await _connection.OpenAsync();
         _db = new WorkItemServerDbContext(
-            new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_connection).Options);
+            new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_connection).Options)
+        {
+            HistoryActor = TestActors.ServerHuman,
+        };
         await _db.Database.EnsureCreatedAsync();
         _workItemId = (await new WorkItemService(_db, TimeProvider.System)
             .CreateAsync(new CreateWorkItemRequest { Title = "declared sizes" })).Id;

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ILD.Core.Services.Remote;
 
 /// <summary>
@@ -174,6 +176,9 @@ public sealed class RemoteTransitionRequest
 {
     public RemoteWorkItemStatus TargetStatus { get; set; }
     public string? Actions { get; set; }
+
+    /// <summary>Why the item moves, for its history. Optional; never a reason to refuse the move.</summary>
+    public string? Reason { get; set; }
 }
 
 public sealed class RemoteTransitionResponse
@@ -187,6 +192,40 @@ public sealed class RemotePollResponse
 {
     public IReadOnlyList<RemoteWorkItem> ActiveItems { get; set; } = Array.Empty<RemoteWorkItem>();
     public IReadOnlyList<RemoteWorkItem> ReadyItems { get; set; } = Array.Empty<RemoteWorkItem>();
+}
+
+/// <summary>Mirrors the WorkItem server's WorkItemHistoryKind.</summary>
+public enum RemoteWorkItemHistoryKind
+{
+    Created = 0,
+    Baseline = 1,
+    Changed = 2,
+}
+
+/// <summary>
+/// One field of one save in a work item's history, paired with the value it
+/// replaced. Every save's rows share <see cref="SaveId"/>. The actor's kind,
+/// detail and work item are optional attribution and absent when unknown.
+/// </summary>
+public sealed class RemoteWorkItemHistoryEntry
+{
+    public string SaveId { get; set; } = string.Empty;
+    public DateTime Timestamp { get; set; }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<RemoteWorkItemHistoryKind>))]
+    public RemoteWorkItemHistoryKind Kind { get; set; }
+
+    public string? Username { get; set; }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<RemoteWorkItemActorKind>))]
+    public RemoteWorkItemActorKind? ActorKind { get; set; }
+
+    public string? ActorDetail { get; set; }
+    public string? ActorWorkItemId { get; set; }
+    public string Field { get; set; } = string.Empty;
+    public string? OldValue { get; set; }
+    public string? NewValue { get; set; }
+    public string? Reason { get; set; }
 }
 
 /// <summary>Mirrors the WorkItem server's WorkItemEditProposalStatus.</summary>

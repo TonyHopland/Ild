@@ -1,5 +1,6 @@
 namespace ILD.Core.Services.Remote;
 
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Executors;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
@@ -63,6 +64,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     private readonly ILoopTemplateResolver _resolver;
     private readonly ILoopEngine _engine;
     private readonly ILoopRunStore _loopRunStore;
+    private readonly WorkItemActor _scheduler;
     private readonly IProviderStore? _providerStore;
     private readonly IAiProviderConcurrencyTracker? _aiTracker;
     private readonly IWorkItemNotifier _workItemNotifier;
@@ -73,6 +75,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         ILoopTemplateResolver resolver,
         ILoopEngine engine,
         ILoopRunStore loopRunStore,
+        BootstrapCredentials instance,
         IProviderStore? providerStore = null,
         IAiProviderConcurrencyTracker? aiTracker = null,
         IWorkItemNotifier? workItemNotifier = null,
@@ -82,6 +85,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         _resolver = resolver;
         _engine = engine;
         _loopRunStore = loopRunStore;
+        _scheduler = WorkItemActor.System(instance.Username, "scheduler");
         _providerStore = providerStore;
         _aiTracker = aiTracker;
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
@@ -96,7 +100,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         // would silently turn it into a global cap shared by every ILD instance
         // pointed at the same board.
         var activeIds = await _loopRunStore.GetActiveWorkItemIdsAsync();
-        var poll = await _client.PollAsync(opts, activeIds, ct);
+        var poll = await _client.PollAsync(opts, activeIds, _scheduler, ct);
 
         var claimed = new List<RemoteWorkItem>();
         var resumed = new List<RemoteWorkItem>();
@@ -122,7 +126,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             if (!await HasProviderCapacityForResumeAsync(w, run, ct)) continue;
 
             var resp = await _client.TransitionAsync(opts, w.Id,
-                new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running }, ct);
+                new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running, Reason = "AI provider capacity is free again" },
+                _scheduler, ct);
             if (!resp.Success) continue;
             resumed.Add(w);
 
@@ -215,7 +220,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                 var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
                 {
                     TargetStatus = RemoteWorkItemStatus.HumanFeedback,
-                }, ct);
+                    Reason = reason,
+                }, _scheduler, ct);
                 if (!transition.Success)
                 {
                     _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback: {Reason}",
@@ -232,7 +238,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             var claim = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
             {
                 TargetStatus = RemoteWorkItemStatus.Running,
-            }, ct);
+                Reason = "Claimed to run",
+            }, _scheduler, ct);
             if (claim.Success)
             {
                 slotHolders.Add(ready.Id);
@@ -269,17 +276,19 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                     slotHolders.Remove(ready.Id);
                     try
                     {
+                        var startFailure = $"Failed to start run: {ex.Message}";
                         var transition = await _client.TransitionAsync(opts, ready.Id, new RemoteTransitionRequest
                         {
                             TargetStatus = RemoteWorkItemStatus.HumanFeedback,
-                        }, ct);
+                            Reason = startFailure,
+                        }, _scheduler, ct);
                         if (!transition.Success)
                         {
                             _logger?.LogWarning("Could not move work item {WorkItemId} to HumanFeedback after run start failure: {Reason}",
                                 ready.Id, transition.Reason);
                             continue;
                         }
-                        await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, $"Failed to start run: {ex.Message}");
+                        await _loopRunStore.SetWorkItemStatusReasonAsync(ready.Id, startFailure);
                         await _workItemNotifier.WorkItemStateChangedAsync(
                             ready.Id, RemoteWorkItemStatus.Running, RemoteWorkItemStatus.HumanFeedback);
                         escalated.Add(ready);

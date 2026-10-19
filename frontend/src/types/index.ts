@@ -96,6 +96,8 @@ export interface WorkItem {
   statusReasonAt?: string | null;
   humanFeedbackActions: string | null;
   createdAt: string;
+  /** When the WorkItem server last changed the item; moves with every change its history records. */
+  updatedAt?: string | null;
   startedAt: string | null;
   completedAt: string | null;
   currentLoopRunId: string | null;
@@ -135,6 +137,35 @@ export interface WorkItem {
   attachments?: WorkItemAttachment[] | null;
   /** Agent-proposed edits to this item still waiting for a human decision. */
   pendingEditProposalCount?: number;
+}
+
+export type WorkItemHistoryKind = "Created" | "Baseline" | "Changed";
+
+export type WorkItemActorKind = "Human" | "Agent" | "Chat" | "System";
+
+/**
+ * One field of one save in a work item's history, newest first, with the value it
+ * replaced already paired by the server. The rows of one save share
+ * {@link saveId}. Only the time, user, field and values are always there: the
+ * actor's kind, detail and work item are attribution a tracker may not have.
+ */
+export interface WorkItemHistoryEntry {
+  saveId: string;
+  timestamp: string;
+  /** Baseline: the item's values when history began, not its original ones. */
+  kind: WorkItemHistoryKind;
+  /** Null only on a Baseline whose item never recorded its creator. */
+  username: string | null;
+  actorKind?: WorkItemActorKind | null;
+  /** What acted for the user: a loop run's step, a chat, an edit proposal, a system process. */
+  actorDetail?: string | null;
+  /** The work item the acting loop run was working on. */
+  actorWorkItemId?: string | null;
+  field: string;
+  /** Null for a field's first entry, and always for the pullRequest event. */
+  oldValue: string | null;
+  newValue: string | null;
+  reason?: string | null;
 }
 
 export type WorkItemEditProposalStatus = "Pending" | "Approved" | "Rejected" | "Stale";

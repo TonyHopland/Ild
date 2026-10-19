@@ -67,7 +67,7 @@ public class WorkItemsControllerBranchNameTests
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _db = db;
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
 
         var result = await controller.Update(id, new WorkItemCreateRequest
         {
@@ -85,7 +85,7 @@ public class WorkItemsControllerBranchNameTests
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _db = db;
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId, null, false, branchNameOverride: "feature/foo");
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId, null, false, branchNameOverride: "feature/foo");
 
         var result = await controller.Update(id, new WorkItemCreateRequest
         {
@@ -154,7 +154,7 @@ public class WorkItemsControllerBranchNameTests
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _db = db;
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
 
         var result = await controller.Update(id, new WorkItemCreateRequest
         {
@@ -172,7 +172,7 @@ public class WorkItemsControllerBranchNameTests
     {
         var (controller, mgr, db, repoId) = Setup();
         using var _db = db;
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId, null, false, baseBranchOverride: "release/1.0");
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId, null, false, baseBranchOverride: "release/1.0");
 
         var result = await controller.Update(id, new WorkItemCreateRequest
         {
@@ -208,14 +208,14 @@ public class WorkItemsControllerBranchNameTests
             eventLog.Object,
             db.LoopRuns,
             db.ServerClient,
-            db.ServerOptions,
+            db.ServerOptions, TestActors.Instance,
             engine: new Mock<ILoopEngine>().Object);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
         branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(verdict ?? BranchNameVerdict.Usable);
 
-        var controller = new WorkItemsController(
+        var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,
             new Mock<ILoopEngine>().Object,
             new Mock<IWorktreePreviewService>().Object,
@@ -225,7 +225,7 @@ public class WorkItemsControllerBranchNameTests
             NoPackageFeeds.Resolver,
             branchNames.Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
-            NullLogger<WorkItemsController>.Instance);
+            NullLogger<WorkItemsController>.Instance));
 
         return (controller, mgr, db, repo.Id);
     }

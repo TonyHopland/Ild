@@ -77,7 +77,7 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
             Title = "client-roundtrip",
             Tags = new[] { "alpha", "beta" },
             Priority = RemoteWorkItemPriority.High,
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal("client-roundtrip", created.Title);
         Assert.Equal(new[] { "alpha", "beta" }, created.Tags);
@@ -94,20 +94,20 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         {
             Title = "custom-branch",
             BranchNameOverride = "feature/foo",
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Equal("feature/foo", created.BranchNameOverride);
         Assert.Equal("feature/foo", (await _client.GetAsync(_opts, created.Id, TestContext.Current.CancellationToken))!.BranchNameOverride);
 
         var renamed = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
         {
             BranchNameOverride = "feature/bar",
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Equal("feature/bar", renamed!.BranchNameOverride);
 
         var cleared = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
         {
             BranchNameOverride = "",
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Null(cleared!.BranchNameOverride);
     }
 
@@ -118,20 +118,20 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         {
             Title = "base-branch",
             BaseBranchOverride = "release/1.0",
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Equal("release/1.0", created.BaseBranchOverride);
         Assert.Equal("release/1.0", (await _client.GetAsync(_opts, created.Id, TestContext.Current.CancellationToken))!.BaseBranchOverride);
 
         var moved = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
         {
             BaseBranchOverride = "release/2.0",
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Equal("release/2.0", moved!.BaseBranchOverride);
 
         var cleared = await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest
         {
             BaseBranchOverride = "",
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Null(cleared!.BaseBranchOverride);
     }
 
@@ -148,11 +148,11 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         var created = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
         {
             Title = "tx", ForceStatus = RemoteWorkItemStatus.Ready,
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         var resp = await _client.TransitionAsync(_opts, created.Id, new RemoteTransitionRequest
         {
             TargetStatus = RemoteWorkItemStatus.Running,
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.True(resp.Success);
         Assert.Equal(RemoteWorkItemStatus.Running, resp.ActualStatus);
     }
@@ -163,15 +163,15 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         var ready = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
         {
             Title = "ready", ForceStatus = RemoteWorkItemStatus.Ready,
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         var running = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
         {
             Title = "running", ForceStatus = RemoteWorkItemStatus.Ready,
-        }, TestContext.Current.CancellationToken);
+        }, TestActors.Human, TestContext.Current.CancellationToken);
         await _client.TransitionAsync(_opts, running.Id,
-            new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running }, TestContext.Current.CancellationToken);
+            new RemoteTransitionRequest { TargetStatus = RemoteWorkItemStatus.Running }, TestActors.Human, TestContext.Current.CancellationToken);
 
-        var poll = await _client.PollAsync(_opts, new[] { running.Id }, TestContext.Current.CancellationToken);
+        var poll = await _client.PollAsync(_opts, new[] { running.Id }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Contains(ready.Id, poll.ReadyItems.Select(x => x.Id));
         Assert.Contains(running.Id, poll.ActiveItems.Select(x => x.Id));
     }
@@ -179,8 +179,8 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
     [Fact]
     public async Task List_filters_by_status()
     {
-        await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest { Title = "a" }, TestContext.Current.CancellationToken);
-        await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest { Title = "b", ForceStatus = RemoteWorkItemStatus.Ready }, TestContext.Current.CancellationToken);
+        await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest { Title = "a" }, TestActors.Human, TestContext.Current.CancellationToken);
+        await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest { Title = "b", ForceStatus = RemoteWorkItemStatus.Ready }, TestActors.Human, TestContext.Current.CancellationToken);
 
         var ready = await _client.ListAsync(_opts, RemoteWorkItemStatus.Ready, null, TestContext.Current.CancellationToken);
         Assert.All(ready, w => Assert.Equal(RemoteWorkItemStatus.Ready, w.Status));

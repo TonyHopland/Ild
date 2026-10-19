@@ -34,12 +34,14 @@ public sealed class FakeWorkItemServerHarness : IDisposable
         var opts = new DbContextOptionsBuilder<WorkItemServerDbContext>()
             .UseSqlite(_connection)
             .Options;
-        ServerDb = new WorkItemServerDbContext(opts);
+        // Tests that seed through the service directly act as the test user; a call
+        // through the client replaces it with the actor that call names.
+        ServerDb = new WorkItemServerDbContext(opts, clock ?? TimeProvider.System) { HistoryActor = TestActors.ServerHuman };
         Service = new WorkItemService(ServerDb, clock ?? TimeProvider.System);
         Attachments = new WorkItemAttachmentService(
             ServerDb, limits ?? AttachmentLimits.FromEnvironment(), clock ?? TimeProvider.System);
         EditProposals = new WorkItemEditProposalService(ServerDb, Service, clock ?? TimeProvider.System);
-        Client = new FakeWorkItemServerClient(Service, Attachments, EditProposals);
+        Client = new FakeWorkItemServerClient(ServerDb, Service, Attachments, EditProposals);
     }
 
     public void Dispose()

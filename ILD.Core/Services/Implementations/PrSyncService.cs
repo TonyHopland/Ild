@@ -18,6 +18,7 @@ public class PrSyncService : IPrSyncService
     private readonly IWorkItemManager _workItems;
     private readonly ILoopEngine _loopEngine;
     private readonly IPrStatusPoller _poller;
+    private readonly BootstrapCredentials _instance;
     private readonly ILogger<PrSyncService> _logger;
 
     public PrSyncService(
@@ -26,6 +27,7 @@ public class PrSyncService : IPrSyncService
         IWorkItemManager workItems,
         ILoopEngine loopEngine,
         IPrStatusPoller poller,
+        BootstrapCredentials instance,
         ILogger<PrSyncService>? logger = null)
     {
         _loopRunStore = loopRunStore;
@@ -33,6 +35,7 @@ public class PrSyncService : IPrSyncService
         _workItems = workItems;
         _loopEngine = loopEngine;
         _poller = poller;
+        _instance = instance;
         _logger = logger ?? NullLogger<PrSyncService>.Instance;
     }
 
@@ -60,7 +63,8 @@ public class PrSyncService : IPrSyncService
 
             // Merged is the one PR fact worth keeping forever, so it goes onto
             // the work item's own record and not just the run's.
-            await _workItems.RecordPullRequestAsync(run.WorkItemId, run.PrUrl!, run.Id, merged: true,
+            var webhook = WorkItemActor.System(_instance.Username, "pr webhook");
+            await _workItems.RecordPullRequestAsync(webhook, run.WorkItemId, run.PrUrl!, run.Id, merged: true,
                 createdAt: run.StartedAt ?? run.CreatedAt);
 
             // An active run completes through its own graph (PR node signal →
@@ -71,8 +75,8 @@ public class PrSyncService : IPrSyncService
             {
                 var latest = await _loopRunStore.GetLatestByWorkItemAsync(run.WorkItemId);
                 if (latest?.Id == run.Id)
-                    await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Done,
-                        currentLoopRunId: run.Id);
+                    await _workItems.TransitionAsync(webhook, run.WorkItemId, RemoteWorkItemStatus.Done,
+                        reason: $"PR {run.PrUrl} merged", currentLoopRunId: run.Id);
             }
         }
 
@@ -159,7 +163,7 @@ public class PrSyncService : IPrSyncService
     public Task SyncPullRequestCommentsAsync(string workItemId, string prUrl) => Task.CompletedTask;
 
     public async Task RegisterWorkItemPrLinkAsync(string workItemId, string prUrl)
-        => await _workItems.LinkPullRequestAsync(workItemId, prUrl);
+        => await _workItems.LinkPullRequestAsync(WorkItemActor.System(_instance.Username, "pr link"), workItemId, prUrl);
 
     public async Task<string?> GetPrUrlForWorkItemAsync(string workItemId)
     {

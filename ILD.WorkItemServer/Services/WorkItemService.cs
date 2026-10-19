@@ -48,6 +48,12 @@ public interface IWorkItemService
     /// was lost to a crash, cancellation, or concurrent completion.
     /// </summary>
     Task<int> ReconcileWorkQueueAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// The item's history, newest first, each entry paired with the value it
+    /// replaced. Null when there is no such work item.
+    /// </summary>
+    Task<IReadOnlyList<WorkItemHistoryEntryDto>?> GetHistoryAsync(string id, CancellationToken ct = default);
 }
 
 public sealed class WorkItemService : IWorkItemService
@@ -82,10 +88,13 @@ public sealed class WorkItemService : IWorkItemService
         WorkItemMapper.WriteTags(w, req.Tags ?? Array.Empty<string>());
         WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<string>());
 
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         _db.WorkItems.Add(w);
         await _db.SaveChangesAsync(ct);
         w.Id = w.InternalId.ToString(CultureInfo.InvariantCulture);
+        _db.AddHistorySave(w.Id, WorkItemHistoryKind.Created, WorkItemHistoryFields.Of(_db.Entry(w).CurrentValues), reason: null);
         await _db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
         return WorkItemMapper.ToDto(w);
     }
 
@@ -191,13 +200,14 @@ public sealed class WorkItemService : IWorkItemService
                 var deps = WorkItemMapper.ReadDependencies(d).Where(depId => depId != id).ToList();
                 WorkItemMapper.WriteDependencies(d, deps);
                 d.UpdatedAt = now;
+                _db.SetHistoryReason(d, $"dependency {id} deleted");
             }
             await _db.SaveChangesAsync(ct);
 
             // Dropping the dependency may have satisfied a WorkQueue dependent's
             // last outstanding requirement; promote any that are now ready.
             await PromoteWorkQueueItemsAsync(
-                dependents.Where(d => d.Status == WorkItemStatus.WorkQueue).ToList(), ct);
+                dependents.Where(d => d.Status == WorkItemStatus.WorkQueue).ToList(), $"dependency {id} deleted", ct);
         }
 
         return true;
@@ -209,9 +219,12 @@ public sealed class WorkItemService : IWorkItemService
         if (w == null)
             return new TransitionResponse { Success = false, ActualStatus = WorkItemStatus.Backlog, Reason = "Not found" };
 
+        var reason = WorkItemHistoryFields.NormalizeReason(req.Reason)
+            ?? (req.TargetStatus == WorkItemStatus.HumanFeedback ? req.Actions : null);
+
         // Running is the only validated transition: dependency check + atomic claim.
         if (req.TargetStatus == WorkItemStatus.Running)
-            return await ClaimRunningAsync(w, ct);
+            return await ClaimRunningAsync(w, reason, ct);
 
         var now = _clock.GetUtcNow().UtcDateTime;
         w.Status = req.TargetStatus;
@@ -225,6 +238,7 @@ public sealed class WorkItemService : IWorkItemService
         if (req.TargetStatus == WorkItemStatus.Done || req.TargetStatus == WorkItemStatus.Ready)
             w.LastHeartbeatAt = null;
 
+        _db.SetHistoryReason(w, reason);
         await _db.SaveChangesAsync(ct);
 
         // Once an item is Done, any WorkQueue item that was waiting on it may now
@@ -253,7 +267,7 @@ public sealed class WorkItemService : IWorkItemService
                 .ToListAsync(ct))
             .Where(w => WorkItemMapper.ReadDependencies(w).Contains(completedId))
             .ToList();
-        await PromoteWorkQueueItemsAsync(dependents, ct);
+        await PromoteWorkQueueItemsAsync(dependents, $"dependency {completedId} done", ct);
     }
 
     /// <inheritdoc />
@@ -262,7 +276,7 @@ public sealed class WorkItemService : IWorkItemService
         var candidates = await _db.WorkItems
             .Where(w => w.Status == WorkItemStatus.WorkQueue)
             .ToListAsync(ct);
-        return await PromoteWorkQueueItemsAsync(candidates, ct);
+        return await PromoteWorkQueueItemsAsync(candidates, "dependencies done", ct);
     }
 
     /// <summary>
@@ -271,9 +285,10 @@ public sealed class WorkItemService : IWorkItemService
     /// with no dependencies is trivially satisfied) to
     /// <see cref="WorkItemStatus.Ready"/>. Returns the number promoted.
     /// Backlog dependents are never passed in by callers — they still require
-    /// human approval to enter the work queue.
+    /// human approval to enter the work queue. <paramref name="reason"/> goes on
+    /// each promotion's history.
     /// </summary>
-    private async Task<int> PromoteWorkQueueItemsAsync(IReadOnlyList<WorkItem> candidates, CancellationToken ct)
+    private async Task<int> PromoteWorkQueueItemsAsync(IReadOnlyList<WorkItem> candidates, string reason, CancellationToken ct)
     {
         if (candidates.Count == 0) return 0;
 
@@ -296,6 +311,7 @@ public sealed class WorkItemService : IWorkItemService
             w.Status = WorkItemStatus.Ready;
             w.UpdatedAt = now;
             w.LastHeartbeatAt = null;
+            _db.SetHistoryReason(w, reason);
             promoted++;
         }
 
@@ -311,9 +327,10 @@ public sealed class WorkItemService : IWorkItemService
     /// and both try to claim, the database serializes the writes so only the
     /// first flips a row — every later attempt updates zero rows and is rejected
     /// with "Already claimed". This is the atomicity the read-then-write guard
-    /// could not provide.
+    /// could not provide. A won claim writes its status history in the same
+    /// transaction; a lost one writes none.
     /// </summary>
-    private async Task<TransitionResponse> ClaimRunningAsync(WorkItem w, CancellationToken ct)
+    private async Task<TransitionResponse> ClaimRunningAsync(WorkItem w, string? reason, CancellationToken ct)
     {
         var depIds = WorkItemMapper.ReadDependencies(w);
         if (depIds.Count > 0)
@@ -337,6 +354,7 @@ public sealed class WorkItemService : IWorkItemService
         // fresh from the very first poll, and clears any prior HumanFeedback
         // actions — mirroring the shared transition path for non-Running states.
         var now = _clock.GetUtcNow().UtcDateTime;
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         var claimed = await _db.WorkItems
             .Where(x => x.Id == w.Id && x.Status != WorkItemStatus.Running)
             .ExecuteUpdateAsync(s => s
@@ -354,6 +372,11 @@ public sealed class WorkItemService : IWorkItemService
                 Reason = "Already claimed",
             };
         }
+
+        _db.AddHistorySave(w.Id, WorkItemHistoryKind.Changed,
+            [(WorkItemHistoryFields.Status, WorkItemHistoryFields.Encode(WorkItemStatus.Running))], reason);
+        await _db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
 
         // The conditional UPDATE bypasses the change tracker, so the entity we
         // loaded above still holds its pre-claim state. Reload it from the row
@@ -426,6 +449,7 @@ public sealed class WorkItemService : IWorkItemService
             var now = _clock.GetUtcNow().UtcDateTime;
             var prs = WorkItemMapper.ReadPullRequests(w);
             var existing = prs.FindIndex(p => string.Equals(p.Url, req.Url, StringComparison.Ordinal));
+            string? historyEvent;
 
             if (existing >= 0)
             {
@@ -443,22 +467,32 @@ public sealed class WorkItemService : IWorkItemService
                 // read path, and no reason to touch the row.
                 if (updated == was) return RecordPullRequestOutcome.Recorded;
                 prs[existing] = updated;
+                historyEvent = updated.Merged && !was.Merged ? WorkItemHistoryFields.PullRequestMerged : null;
             }
             else
             {
                 prs.Add(new WorkItemPullRequest(req.Url, req.LoopRunId, req.Merged, req.CreatedAt ?? now));
+                historyEvent = req.Merged ? WorkItemHistoryFields.PullRequestMerged : WorkItemHistoryFields.PullRequestLinked;
             }
 
             var json = WorkItemMapper.SerializePullRequests(prs);
             // Status is deliberately untouched — linking a PR is a record of
             // what the item produced, not a lifecycle transition. UpdatedAt
             // moves so clients ordering by it still see the change.
+            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
             var rows = await _db.WorkItems
                 .Where(x => x.Id == id && x.PullRequestsJson == seen)
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(x => x.PullRequestsJson, json)
                     .SetProperty(x => x.UpdatedAt, now), ct);
             if (rows == 0) continue;
+
+            if (historyEvent is not null)
+            {
+                _db.AddHistorySave(id, WorkItemHistoryKind.Changed, [(WorkItemHistoryFields.PullRequest, req.Url)], historyEvent);
+                await _db.SaveChangesAsync(ct);
+            }
+            await transaction.CommitAsync(ct);
 
             // The write went straight to the column, so a copy this scope was
             // already tracking still holds the old list — refresh it, or a
@@ -510,6 +544,7 @@ public sealed class WorkItemService : IWorkItemService
 
         foreach (var w in stale)
         {
+            _db.SetHistoryReason(w, $"no heartbeat since {w.LastHeartbeatAt:u}");
             w.Status = WorkItemStatus.Ready;
             w.LastHeartbeatAt = null;
             w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
@@ -517,5 +552,43 @@ public sealed class WorkItemService : IWorkItemService
         if (stale.Count > 0)
             await _db.SaveChangesAsync(ct);
         return stale.Count;
+    }
+
+    public async Task<IReadOnlyList<WorkItemHistoryEntryDto>?> GetHistoryAsync(string id, CancellationToken ct = default)
+    {
+        if (!await _db.WorkItems.AnyAsync(w => w.Id == id, ct)) return null;
+
+        var rows = await _db.WorkItemHistoryEntries.AsNoTracking()
+            .Where(e => e.WorkItemId == id)
+            .OrderBy(e => e.Timestamp).ThenBy(e => e.Id)
+            .ToListAsync(ct);
+
+        var latest = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var history = new List<WorkItemHistoryEntryDto>(rows.Count);
+        foreach (var row in rows)
+        {
+            string? old = null;
+            if (row.Field != WorkItemHistoryFields.PullRequest)
+            {
+                latest.TryGetValue(row.Field, out old);
+                latest[row.Field] = row.Value;
+            }
+            history.Add(new WorkItemHistoryEntryDto
+            {
+                SaveId = row.SaveId,
+                Timestamp = row.Timestamp,
+                Kind = row.Kind,
+                Username = row.Username,
+                ActorKind = row.ActorKind,
+                ActorDetail = row.ActorDetail,
+                ActorWorkItemId = row.ActorWorkItemId,
+                Field = row.Field,
+                OldValue = old,
+                NewValue = row.Value,
+                Reason = row.Reason,
+            });
+        }
+        history.Reverse();
+        return history;
     }
 }

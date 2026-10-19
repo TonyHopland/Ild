@@ -22,6 +22,7 @@ public sealed class WorkItemServerConversationRemovalTests : IClassFixture<WorkI
     {
         var c = _factory.CreateClient();
         c.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", WorkItemServerApiTests.Factory.ApiKey);
+        c.DefaultRequestHeaders.Add(ILD.Core.Services.Remote.WorkItemActor.HeaderName, TestActors.Human.ToHeaderValue());
         var ct = TestContext.Current.CancellationToken;
         var create = await c.PostAsJsonAsync("/workitems", new CreateWorkItemRequest { Title = "no thread" }, cancellationToken: ct);
         var id = (await create.Content.ReadFromJsonAsync<WorkItemDto>(ct))!.Id;

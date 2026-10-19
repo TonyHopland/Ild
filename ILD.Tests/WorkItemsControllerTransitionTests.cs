@@ -59,10 +59,10 @@ public class WorkItemsControllerTransitionTests
             eventLog.Object,
             db.LoopRuns,
             db.ServerClient,
-            db.ServerOptions,
+            db.ServerOptions, TestActors.Instance,
             engine: new Mock<ILoopEngine>().Object);
 
-        var controller = new WorkItemsController(
+        var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,
             new Mock<ILoopEngine>().Object,
             new Mock<IWorktreePreviewService>().Object,
@@ -72,7 +72,7 @@ public class WorkItemsControllerTransitionTests
             NoPackageFeeds.Resolver,
             new Mock<IBranchNameOverrideService>().Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
-            NullLogger<WorkItemsController>.Instance);
+            NullLogger<WorkItemsController>.Instance));
 
         return (controller, mgr, db, repo.Id);
     }
@@ -83,8 +83,8 @@ public class WorkItemsControllerTransitionTests
     /// </summary>
     private static async Task<string> SeedIdleItemAsync(WorkItemManager mgr, Guid repoId, RemoteWorkItemStatus from)
     {
-        var id = await mgr.CreateWorkItemAsync("move me back", "", repoId);
-        await mgr.TransitionAsync(id, from);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "move me back", "", repoId);
+        await mgr.TransitionAsync(TestActors.Human, id, from);
         var seeded = await mgr.GetWorkItemAsync(id);
         Assert.Equal(from, seeded!.Status);
         Assert.Null(seeded.CurrentLoopRunId);

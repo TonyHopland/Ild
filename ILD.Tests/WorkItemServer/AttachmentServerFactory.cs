@@ -72,6 +72,7 @@ internal sealed class AttachmentServerFactory : WebApplicationFactory<WorkItemSe
     {
         var client = CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", ApiKey);
+        client.DefaultRequestHeaders.Add(ILD.Core.Services.Remote.WorkItemActor.HeaderName, TestActors.Human.ToHeaderValue());
         return client;
     }
 
@@ -80,7 +81,7 @@ internal sealed class AttachmentServerFactory : WebApplicationFactory<WorkItemSe
     {
         var options = new DbContextOptionsBuilder<WorkItemServerDbContext>();
         Configure(options);
-        return new WorkItemServerDbContext(options.Options);
+        return new WorkItemServerDbContext(options.Options) { HistoryActor = TestActors.ServerHuman };
     }
 
     protected override void Dispose(bool disposing)

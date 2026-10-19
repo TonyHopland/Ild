@@ -46,7 +46,7 @@ public class WorkItemRunEventsTests
             Manager = RunTimeline.Manager(Db, noEngine ? null : engine ?? Engine.Object, Events);
         }
 
-        public Task<string> WorkItemAsync() => Manager.CreateWorkItemAsync("item", "body", RepoId);
+        public Task<string> WorkItemAsync() => Manager.CreateWorkItemAsync(TestActors.Human, "item", "body", RepoId);
 
         public void Dispose() => Db.Dispose();
     }
@@ -120,7 +120,7 @@ public class WorkItemRunEventsTests
     private static async Task<string> WaitingItemAsync(Rig rig)
     {
         var id = await rig.WorkItemAsync();
-        Assert.True(await rig.Manager.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback));
+        Assert.True(await rig.Manager.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback));
         return id;
     }
 
@@ -192,9 +192,9 @@ public class WorkItemRunEventsTests
         // The answer moves nothing on the work item server itself: the one move
         // to Running is the engine's, for the run it resumed.
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, (await rig.Manager.GetWorkItemAsync(id))!.Status);
-        h.WorkItemsMock.Verify(m => m.TransitionAsync(id, RemoteWorkItemStatus.Running,
+        h.WorkItemsMock.Verify(m => m.TransitionAsync(It.IsAny<WorkItemActor>(), id, RemoteWorkItemStatus.Running,
             It.IsAny<string?>(), It.IsAny<string?>(), run.Id, It.IsAny<string?>()), Times.Once);
-        h.WorkItemsMock.Verify(m => m.TransitionAsync(It.IsAny<string>(), RemoteWorkItemStatus.Running,
+        h.WorkItemsMock.Verify(m => m.TransitionAsync(It.IsAny<WorkItemActor>(), It.IsAny<string>(), RemoteWorkItemStatus.Running,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
     }
 
@@ -307,7 +307,7 @@ public class WorkItemRunEventsTests
         AssertNoAnswerRecorded(rig.Db);
         Assert.Equal(before, RunState(rig.Db, id));
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, (await rig.Manager.GetWorkItemAsync(id))!.Status);
-        h?.WorkItemsMock.Verify(m => m.TransitionAsync(It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
+        h?.WorkItemsMock.Verify(m => m.TransitionAsync(It.IsAny<WorkItemActor>(), It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
     }
 
@@ -344,7 +344,7 @@ public class WorkItemRunEventsTests
         using var h = new LoopEngineHarness();
         using var rig = new Rig(h.Db, h.Services.GetRequiredService<IEventLogService>(), h.Engine);
         var human = RoutedHumanNode(h);
-        h.WorkItemsMock.Setup(m => m.TransitionAsync(It.IsAny<string>(), RemoteWorkItemStatus.Running,
+        h.WorkItemsMock.Setup(m => m.TransitionAsync(It.IsAny<WorkItemActor>(), It.IsAny<string>(), RemoteWorkItemStatus.Running,
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ThrowsAsync(new HttpRequestException("The work item server is unreachable"));
         var id = await WaitingItemAsync(rig);
@@ -368,7 +368,7 @@ public class WorkItemRunEventsTests
         var id = await rig.WorkItemAsync();
         var (run, _) = ParkedAtHuman(rig, id);
 
-        await rig.Manager.TransitionToDoneAsync(id);
+        await rig.Manager.TransitionToDoneAsync(TestActors.Human, id);
 
         var ended = Assert.Single(RunTimeline.EndingEvents(rig.Db, run.Id));
         Assert.Equal(EventType.LoopRunCancelled, ended.EventType);
@@ -382,7 +382,7 @@ public class WorkItemRunEventsTests
         var id = await rig.WorkItemAsync();
         var (run, _) = ParkedAtHuman(rig, id);
 
-        await rig.Manager.TransitionToDoneAsync(id);
+        await rig.Manager.TransitionToDoneAsync(TestActors.Human, id);
 
         Assert.Equal(LoopRunStatus.Cancelled, rig.Db.Fresh().LoopRuns.Single(r => r.Id == run.Id).Status);
         Assert.Equal(EventType.LoopRunCancelled, Assert.Single(RunTimeline.EndingEvents(rig.Db, run.Id)).EventType);
@@ -397,7 +397,7 @@ public class WorkItemRunEventsTests
             humanFeedbackReason: "earlier", startedAt: DateTime.UtcNow.AddHours(-2));
         var live = RunTimeline.SeedRun(rig.Db, id, rig.VersionId, LoopRunStatus.Running);
 
-        await rig.Manager.TransitionToHumanFeedbackAsync(id, "Needs a product decision before going further");
+        await rig.Manager.TransitionToHumanFeedbackAsync(TestActors.Human, id, "Needs a product decision before going further");
 
         Assert.Contains("Needs a product decision before going further",
             Assert.Single(RunTimeline.Events(rig.Db, live.Id, EventType.RunParked)).Data);
@@ -411,7 +411,7 @@ public class WorkItemRunEventsTests
         var id = await rig.WorkItemAsync();
         var previous = RunTimeline.SeedRun(rig.Db, id, rig.VersionId, LoopRunStatus.Cancelled, humanFeedbackReason: "Run Cancelled");
 
-        await rig.Manager.TransitionToHumanFeedbackAsync(id, "Needs a product decision before going further");
+        await rig.Manager.TransitionToHumanFeedbackAsync(TestActors.Human, id, "Needs a product decision before going further");
 
         var view = await rig.Manager.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.HumanFeedback, view!.Status);
@@ -429,9 +429,9 @@ public class WorkItemRunEventsTests
     {
         using var rig = new Rig();
         var id = await rig.WorkItemAsync();
-        await rig.Manager.TransitionToHumanFeedbackAsync(id, "Needs a product decision before going further");
+        await rig.Manager.TransitionToHumanFeedbackAsync(TestActors.Human, id, "Needs a product decision before going further");
 
-        await rig.Manager.TransitionAsync(id, next);
+        await rig.Manager.TransitionAsync(TestActors.Human, id, next);
 
         var view = await rig.Manager.GetWorkItemAsync(id);
         Assert.Equal(next, view!.Status);
@@ -447,13 +447,13 @@ public class WorkItemRunEventsTests
         var id = await rig.WorkItemAsync();
         var previous = RunTimeline.SeedRun(rig.Db, id, rig.VersionId, LoopRunStatus.Failed, humanFeedbackReason: "Node Failed");
 
-        await rig.Manager.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Not about this run",
+        await rig.Manager.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "Not about this run",
             humanFeedbackReason: "Not about this run");
 
         Assert.Contains(rig.Db.Fresh().LoopRuns.Single(r => r.Id == previous.Id).HumanFeedbackReason,
             new[] { "Node Failed", null });
 
-        await rig.Manager.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "About this run",
+        await rig.Manager.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "About this run",
             humanFeedbackReason: "About this run", currentLoopRunId: previous.Id);
 
         Assert.Equal("About this run", rig.Db.Fresh().LoopRuns.Single(r => r.Id == previous.Id).HumanFeedbackReason);
@@ -471,13 +471,13 @@ public class WorkItemRunEventsTests
         var previous = RunTimeline.SeedRun(rig.Db, id, rig.VersionId, LoopRunStatus.Failed, humanFeedbackReason: "Node Failed");
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new RemotePollResponse
             {
                 ReadyItems = new[] { new RemoteWorkItem { Id = id, Title = "item", Status = RemoteWorkItemStatus.Ready, Tags = new[] { "build" } } },
             });
-        client.Setup(c => c.TransitionAsync(Opts, id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((WorkItemServerOptions _, string _, RemoteTransitionRequest r, CancellationToken _) =>
+        client.Setup(c => c.TransitionAsync(Opts, id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((WorkItemServerOptions _, string _, RemoteTransitionRequest r, WorkItemActor _, CancellationToken _) =>
                 new RemoteTransitionResponse { Success = true, ActualStatus = r.TargetStatus });
         var resolver = new Mock<ILoopTemplateResolver>();
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
@@ -487,7 +487,7 @@ public class WorkItemRunEventsTests
         rig.Engine.Setup(e => e.StartRunAsync(id, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Matched template t has a broken graph"));
 
-        await new RemoteWorkItemCoordinator(client.Object, resolver.Object, rig.Engine.Object, rig.Db.LoopRuns)
+        await new RemoteWorkItemCoordinator(client.Object, resolver.Object, rig.Engine.Object, rig.Db.LoopRuns, TestActors.Instance)
             .RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         var view = await rig.Manager.GetWorkItemAsync(id);
@@ -543,7 +543,7 @@ public class WorkItemRunEventsTests
         services.AddSingleton(workItems.Object);
         services.AddSingleton(rig.Events);
         using var provider = services.BuildServiceProvider();
-        var watchdog = new StuckRunWatchdog(provider.GetRequiredService<IServiceScopeFactory>(), engine.Object,
+        var watchdog = new StuckRunWatchdog(provider.GetRequiredService<IServiceScopeFactory>(), engine.Object, TestActors.Instance,
             NullLogger<StuckRunWatchdog>.Instance);
 
         await (Task)typeof(StuckRunWatchdog)

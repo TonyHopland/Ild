@@ -427,6 +427,11 @@
         "description": "Include the latest run's conversation, projected from its event log, with run id, event id and timestamp per message (large; default false).",
         "type": "boolean",
         "default": false
+      },
+      "includeHistory": {
+        "description": "Include the item's change history: who changed which field, from what to what, and why (default false).",
+        "type": "boolean",
+        "default": false
       }
     },
     "required": [

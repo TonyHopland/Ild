@@ -57,11 +57,13 @@ public sealed class StuckRunWatchdog : BackgroundService
     private readonly IServiceScopeFactory _scopes;
     private readonly ILoopEngine _engine;
     private readonly ILogger<StuckRunWatchdog> _log;
+    private readonly WorkItemActor _actor;
 
-    public StuckRunWatchdog(IServiceScopeFactory scopes, ILoopEngine engine, ILogger<StuckRunWatchdog> log)
+    public StuckRunWatchdog(IServiceScopeFactory scopes, ILoopEngine engine, BootstrapCredentials instance, ILogger<StuckRunWatchdog> log)
     {
         _scopes = scopes;
         _engine = engine;
+        _actor = WorkItemActor.System(instance.Username, "stuck run watchdog");
         _log = log;
     }
 
@@ -218,7 +220,7 @@ public sealed class StuckRunWatchdog : BackgroundService
         {
             _log.LogWarning(ex, "Could not record the failure of healed run {RunId}", run.Id);
         }
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        await workItems.TransitionAsync(_actor, run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: HumanFeedbackReasons.RunCrashed, humanFeedbackReason: HumanFeedbackReasons.RunCrashed,
             currentLoopRunId: run.Id);
     }

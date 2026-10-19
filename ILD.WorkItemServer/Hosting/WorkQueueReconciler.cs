@@ -1,3 +1,4 @@
+using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Services;
 
 namespace ILD.WorkItemServer.Hosting;
@@ -12,6 +13,8 @@ namespace ILD.WorkItemServer.Hosting;
 /// </summary>
 public sealed class WorkQueueReconciler : BackgroundService
 {
+    private static readonly WorkItemActor Actor = new("system", WorkItemActorKind.System, "system: work queue reconcile", null);
+
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<WorkQueueReconciler> _logger;
     private readonly TimeSpan _interval;
@@ -34,6 +37,7 @@ public sealed class WorkQueueReconciler : BackgroundService
             try
             {
                 using var scope = _scopes.CreateScope();
+                scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().HistoryActor = Actor;
                 var svc = scope.ServiceProvider.GetRequiredService<IWorkItemService>();
                 var n = await svc.ReconcileWorkQueueAsync(stoppingToken);
                 if (n > 0) _logger.LogInformation("Promoted {Count} ready WorkQueue item(s) to Ready", n);

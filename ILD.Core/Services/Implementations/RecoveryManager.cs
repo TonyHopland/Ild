@@ -17,9 +17,11 @@ public class RecoveryManager : IRecoveryManager
     private readonly ILoopEngine _engine;
     private readonly IEventLogService _eventLog;
     private readonly ILogger<RecoveryManager> _logger;
+    private readonly WorkItemActor _actor;
 
-    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog, ILogger<RecoveryManager>? logger = null)
+    public RecoveryManager(IWorkItemManager workItems, ILoopRunStore loopRunStore, IProviderStore providerStore, ILoopTemplateStore templateStore, IRepositoryManager repo, ILoopEngine engine, IEventLogService eventLog, BootstrapCredentials instance, ILogger<RecoveryManager>? logger = null)
     {
+        _actor = WorkItemActor.System(instance.Username, "recovery");
         _eventLog = eventLog;
         _logger = logger ?? NullLogger<RecoveryManager>.Instance;
         _workItems = workItems;
@@ -69,7 +71,7 @@ public class RecoveryManager : IRecoveryManager
                 var wi = await _workItems.GetWorkItemAsync(run.WorkItemId);
                 if (wi != null && wi.Status != RemoteWorkItemStatus.HumanFeedback)
                 {
-                    await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback);
+                    await _workItems.TransitionAsync(_actor, run.WorkItemId, RemoteWorkItemStatus.HumanFeedback);
                 }
                 return true;
             }
@@ -100,7 +102,7 @@ public class RecoveryManager : IRecoveryManager
         // Best-effort: a lost record must not keep the run from being parked for review.
         try { await _eventLog.AppendAsync(run.Id, EventType.RecoveryTriggered, reason); }
         catch (Exception ex) { _logger.LogWarning(ex, "Could not record recovery of run {RunId}", run.Id); }
-        await _workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        await _workItems.TransitionAsync(_actor, run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.RecoveryRequiresReview, currentLoopRunId: run.Id);
     }
 
