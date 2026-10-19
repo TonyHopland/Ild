@@ -31,6 +31,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     private int _proxyPort;
     private TcpListener? _upstream;
     private int _upstreamPort;
+    private readonly List<ScriptedUpstream> _scripted = new();
 
     public EgressProxyTests()
     {
@@ -60,6 +61,7 @@ public sealed class EgressProxyTests : IAsyncLifetime
     {
         if (_proxy is not null) await _proxy.StopAsync(CancellationToken.None);
         _upstream?.Stop();
+        foreach (var scripted in _scripted) scripted.Dispose();
         await _services.DisposeAsync();
         _db.Dispose();
     }
@@ -386,6 +388,508 @@ public sealed class EgressProxyTests : IAsyncLifetime
 
         _clock.Advance(EgressPolicy.CacheTtl + TimeSpan.FromMilliseconds(1));
         Assert.Equal(NetworkMode.Whitelist, (await _policy.GetAsync(TestContext.Current.CancellationToken)).Mode);
+    }
+
+    // Shaped like a Node/Express SSE reply whose handler sets Connection: keep-alive
+    // itself, as LM Studio's does, whatever the request asked for.
+    private const string SseHead =
+        "HTTP/1.1 200 OK\r\nX-Powered-By: Express\r\nContent-Type: text/event-stream\r\nConnection: keep-alive\r\n"
+        + "Keep-Alive: timeout=5\r\nDate: Mon, 19 Oct 2026 12:00:00 GMT\r\nTransfer-Encoding: chunked\r\n\r\n";
+
+    private const string Stray = "GET http://localhost/stray HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    private const string ChunkedBody = "5;name=value\r\nhello\r\nA\r\n0123456789\r\n0\r\nX-Trailer: t\r\n\r\n";
+
+    [Fact]
+    public async Task A_streamed_keep_alive_response_reaches_the_client_chunk_by_chunk_saying_close_and_the_next_request_takes_a_new_connection()
+    {
+        const string request = "{\"stream\":true}";
+        var first = Chunk("data: {\"delta\":\"Hel\"}\n\n");
+        var second = Chunk("data: {\"delta\":\"lo\"}\n\n");
+        const string last = "0\r\n\r\n";
+        var clientHasFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync(request);
+            await connection.SendAsync(SseHead + first);
+            await clientHasFirst.Task.WaitAsync(Timeout);
+            await connection.SendAsync(second + last);
+            connection.EndResponse();
+        });
+        var provider = Guid.NewGuid();
+
+        using (var client = await OpenAsync())
+        {
+            await SendAsync(client, PostHead(upstream.Port, $"Content-Length: {request.Length}", provider) + request);
+            var soFar = await ReadUntilAsync(client.GetStream(), text => text.Contains(first, StringComparison.Ordinal));
+            clientHasFirst.SetResult();
+            var response = soFar + await ReadUntilClosedAsync(client.GetStream());
+
+            var body = AssertClosingHead(response, "HTTP/1.1 200 OK",
+                "X-Powered-By: Express", "Content-Type: text/event-stream", "Date: Mon, 19 Oct 2026 12:00:00 GMT", "Transfer-Encoding: chunked");
+            Assert.Equal(first + second + last, body);
+        }
+
+        using (var again = await OpenAsync())
+        {
+            await SendAsync(again, PostHead(upstream.Port, $"Content-Length: {request.Length}", provider) + request);
+            Assert.StartsWith("HTTP/1.1 200 OK\r\n", await ReadUntilClosedAsync(again.GetStream()));
+        }
+
+        Assert.Equal(2, upstream.Connections.Count);
+        var row = ("localhost", upstream.Port, NetworkDecision.Advisory, (Guid?)provider);
+        Assert.Equal(new[] { row, row }, _log.Entries);
+        await WaitUntilAsync(() => _proxy!.OpenTunnelCount == 0);
+    }
+
+    [Fact]
+    public async Task Headers_the_upstream_names_in_Connection_are_dropped_and_the_rest_kept_in_order()
+    {
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n");
+            await connection.SendAsync(
+                "HTTP/1.1 200 OK\r\nX-Keep: 1\r\nConnection: keep-alive, X-Hop\r\nX-Hop: 1\r\nproxy-connection: keep-alive\r\n"
+                + "CONNECTION: x-other\r\nX-Other: 2\r\nContent-Length: 2\r\nX-Hopper: 3\r\n\r\nok");
+            connection.EndResponse();
+        });
+
+        using var client = await OpenAsync();
+        await SendAsync(client, $"GET http://localhost:{upstream.Port}/ HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n");
+        var response = await ReadUntilClosedAsync(client.GetStream());
+
+        Assert.Equal("ok", AssertClosingHead(response, "HTTP/1.1 200 OK", "X-Keep: 1", "Content-Length: 2", "X-Hopper: 3"));
+    }
+
+    [Fact]
+    public async Task Interim_responses_pass_unchanged_ahead_of_the_rewritten_final_head_and_a_body_sent_after_100_continue_arrives()
+    {
+        const string body = "{\"n\":1}";
+        const string earlyHints = "HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n";
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n");
+            await connection.SendAsync("HTTP/1.1 100 Continue\r\n\r\n");
+            await connection.WaitForAsync(body);
+            await connection.SendAsync(earlyHints + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok");
+            connection.EndResponse();
+        });
+
+        using var client = await OpenAsync();
+        var stream = client.GetStream();
+        await SendAsync(client, PostHead(upstream.Port, $"Content-Length: {body.Length}\r\nExpect: 100-continue"));
+        Assert.Equal("HTTP/1.1 100 Continue\r\n\r\n", await ReadUntilAsync(stream, text => text.Contains("\r\n\r\n", StringComparison.Ordinal)));
+
+        await SendAsync(client, body);
+        var rest = await ReadUntilClosedAsync(stream);
+        Assert.StartsWith(earlyHints, rest);
+        Assert.Equal("ok", AssertClosingHead(rest[earlyHints.Length..], "HTTP/1.1 200 OK", "Content-Length: 2"));
+
+        client.Client.Shutdown(SocketShutdown.Send);
+        var connection = Assert.Single(upstream.Connections);
+        await connection.Closed.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.Equal(body, BodyOf(connection.Received));
+    }
+
+    [Fact]
+    public async Task A_switching_protocols_response_passes_unchanged_and_both_directions_then_relay_raw()
+    {
+        const string switching = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n";
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n");
+            await connection.SendAsync(switching);
+            await connection.WaitForAsync("ping");
+            await connection.SendAsync("pong");
+            connection.EndResponse();
+        });
+
+        using var client = await OpenAsync();
+        var stream = client.GetStream();
+        await SendAsync(client, $"GET http://localhost:{upstream.Port}/socket HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\nUpgrade: echo\r\n\r\n");
+        Assert.Equal(switching, await ReadUntilAsync(stream, text => text.Contains("\r\n\r\n", StringComparison.Ordinal)));
+
+        await SendAsync(client, "ping");
+        Assert.Equal("pong", await ReadUntilClosedAsync(stream));
+    }
+
+    [Fact]
+    public async Task A_switching_protocols_answer_to_a_request_that_asked_for_no_upgrade_gets_502_and_nothing_more_is_relayed()
+    {
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n");
+            await connection.SendAsync("HTTP/1.1 101 Switching Protocols\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n");
+            await connection.Closed;
+        });
+
+        using var client = await OpenAsync();
+        await SendAsync(client, PostHead(upstream.Port, "Content-Length: 0") + Stray);
+        var response = await ReadUntilClosedAsync(client.GetStream());
+
+        Assert.StartsWith("HTTP/1.1 502", response);
+        var connection = Assert.Single(upstream.Connections);
+        await connection.Closed.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.Equal(string.Empty, BodyOf(connection.Received));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_second_request_on_the_same_connection_never_reaches_the_upstream(bool pipelined)
+    {
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("{\"n\":1}");
+            await connection.SendAsync("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: keep-alive\r\nKeep-Alive: timeout=5\r\n\r\nok");
+            connection.EndResponse();
+        });
+        var first = PostHead(upstream.Port, "Content-Length: 7") + "{\"n\":1}";
+        var second = PostHead(upstream.Port, "Content-Length: 7") + "{\"n\":2}";
+
+        using var client = await OpenAsync();
+        string response;
+        if (pipelined)
+        {
+            await SendAsync(client, first + second);
+            response = await ReadUntilClosedAsync(client.GetStream());
+            client.Client.Shutdown(SocketShutdown.Send);
+        }
+        else
+        {
+            await SendAsync(client, first);
+            response = await ReadUntilClosedAsync(client.GetStream());
+            // The proxy may already have hung up; what matters is where these bytes go.
+            try
+            {
+                await SendAsync(client, second);
+                client.Client.Shutdown(SocketShutdown.Send);
+            }
+            catch (IOException) { }
+            catch (SocketException) { }
+        }
+
+        var connection = Assert.Single(upstream.Connections);
+        await connection.Closed.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.StartsWith("HTTP/1.1 200 OK\r\n", response);
+        Assert.EndsWith("\r\n\r\nok", response);
+
+        var received = connection.Received;
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(received, "^POST ", System.Text.RegularExpressions.RegexOptions.Multiline));
+        Assert.DoesNotContain("Proxy-Authorization", received, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("http://", received, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("{\"n\":1}", BodyOf(received));
+        Assert.Single(upstream.Connections);
+    }
+
+    [Theory]
+    [InlineData("Content-Length: 11", "hello world", true, new[] { "hello world" + Stray })]
+    [InlineData("Content-Length: 11", "hello world", false, new[] { "hello ", "world" + Stray })]
+    [InlineData("Content-Length: 5, 5", "hello", true, new[] { "hello" + Stray })]
+    [InlineData("Content-Length: 0", "", true, new[] { Stray })]
+    [InlineData("", "", true, new[] { Stray })]
+    [InlineData("Transfer-Encoding: chunked", ChunkedBody, true, new[] { ChunkedBody + Stray })]
+    [InlineData("Transfer-Encoding: chunked", ChunkedBody, false, new[] { "5;name=val", "ue\r\nhel", "lo\r\nA\r\n0123456789\r", "\n0\r\nX-Trailer: t\r\n\r", "\n" + Stray })]
+    [InlineData("Transfer-Encoding: gzip, chunked", "3\r\nabc\r\n0\r\n\r\n", true, new[] { "3\r\nabc\r\n0\r\n\r\n" + Stray })]
+    public async Task A_request_body_reaches_the_upstream_whole_and_nothing_after_it_does(string framing, string body, bool withHead, string[] writes)
+    {
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n" + body);
+            await connection.SendAsync("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            connection.EndResponse();
+        });
+
+        using var client = await OpenAsync();
+        var head = PostHead(upstream.Port, framing);
+        if (withHead)
+        {
+            await SendAsync(client, head + writes[0]);
+        }
+        else
+        {
+            await SendAsync(client, head);
+            await WaitUntilAsync(() => upstream.Connections.Count == 1 && upstream.Connections[0].Received.Contains("\r\n\r\n", StringComparison.Ordinal));
+            await SendAsync(client, writes[0]);
+        }
+        foreach (var write in writes.Skip(1))
+            await SendAsync(client, write);
+
+        var response = await ReadUntilClosedAsync(client.GetStream());
+        client.Client.Shutdown(SocketShutdown.Send);
+        var connection = Assert.Single(upstream.Connections);
+        await connection.Closed.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("HTTP/1.1 200 OK\r\n", response);
+        Assert.Equal(body, BodyOf(connection.Received));
+    }
+
+    [Theory]
+    [InlineData("Transfer-Encoding: chunked\r\nContent-Length: 5")]
+    [InlineData("Transfer-Encoding: gzip")]
+    [InlineData("Transfer-Encoding: chunked, gzip")]
+    [InlineData("Content-Length: abc")]
+    [InlineData("Content-Length: +5")]
+    [InlineData("Content-Length: 5\r\nContent-Length: 6")]
+    [InlineData("Content-Length: 5, 6")]
+    public async Task A_request_whose_body_framing_is_ambiguous_gets_400_and_is_never_forwarded(string framing)
+    {
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n");
+            await connection.SendAsync("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            connection.EndResponse();
+        });
+
+        using var client = await OpenAsync();
+        await SendAsync(client, PostHead(upstream.Port, framing) + "hello");
+
+        Assert.StartsWith("HTTP/1.1 400", await ReadUntilClosedAsync(client.GetStream()));
+        Assert.Empty(upstream.Connections);
+    }
+
+    [Fact]
+    public async Task A_malformed_chunk_ends_the_connection_and_nothing_after_it_is_forwarded()
+    {
+        var upstream = StartUpstream(_ => Task.CompletedTask);
+
+        using var client = await OpenAsync();
+        await SendAsync(client, PostHead(upstream.Port, "Transfer-Encoding: chunked") + "5\r\nhello\r\n");
+        await WaitUntilAsync(() => upstream.Connections.Count == 1 && upstream.Connections[0].Received.Contains("hello", StringComparison.Ordinal));
+        await SendAsync(client, "ZZ\r\nmore data\r\n0\r\n\r\n");
+
+        // No client EOF and no upstream reply: only the proxy can end this.
+        await ReadUntilClosedAsync(client.GetStream());
+        var connection = Assert.Single(upstream.Connections);
+        await connection.Closed.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("more data", connection.Received);
+    }
+
+    [Theory]
+    [InlineData("SSH-2.0-OpenSSH_9.6\r\n\r\n")]
+    [InlineData("HTTP/1.1 OK\r\nContent-Length: 0\r\n\r\n")]
+    [InlineData("HTTP/1.1 200 OK\r\nContent-Le")]
+    [InlineData("HTTP/1.1 200 OK\r\nX-Big: {big}\r\n\r\n")]
+    public async Task A_malformed_truncated_or_oversized_upstream_head_gets_502_and_the_connection_closes(string reply)
+    {
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n");
+            await connection.SendAsync(reply.Replace("{big}", new string('a', 70 * 1024), StringComparison.Ordinal));
+            connection.EndResponse();
+        });
+
+        using var client = await OpenAsync();
+        await SendAsync(client, $"GET http://localhost:{upstream.Port}/ HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n");
+        var response = await ReadUntilClosedAsync(client.GetStream());
+
+        Assert.StartsWith("HTTP/1.1 502", response);
+        var head = response[..response.IndexOf("\r\n\r\n", StringComparison.Ordinal)].Split("\r\n");
+        Assert.Contains(head, line => line.Equals("Connection: close", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Newly_blacklisting_a_host_resets_a_plain_http_response_still_streaming_from_it()
+    {
+        await SetModeAsync(NetworkMode.Blacklist);
+        var first = Chunk("data: {\"delta\":\"Hel\"}\n\n");
+        var upstream = StartUpstream(async connection =>
+        {
+            await connection.WaitForAsync("\r\n\r\n");
+            await connection.SendAsync(SseHead + first);
+            await connection.Closed;
+        });
+
+        using (var client = await OpenAsync())
+        {
+            await SendAsync(client, $"GET http://localhost:{upstream.Port}/events HTTP/1.1\r\nHost: localhost:{upstream.Port}\r\n\r\n");
+            await ReadUntilAsync(client.GetStream(), text => text.Contains(first, StringComparison.Ordinal));
+            Assert.Equal(1, _proxy!.OpenTunnelCount);
+
+            await ListAsync("localhost", NetworkListKind.Blacklist);
+
+            await ReadUntilClosedAsync(client.GetStream());
+        }
+
+        await WaitUntilAsync(() => _proxy!.OpenTunnelCount == 0);
+        Assert.Contains(_log.Entries, e => e.Decision == NetworkDecision.Blocked && e.Host == "localhost");
+    }
+
+    private ScriptedUpstream StartUpstream(Func<UpstreamConnection, Task> script)
+    {
+        var upstream = new ScriptedUpstream(script);
+        _scripted.Add(upstream);
+        return upstream;
+    }
+
+    private async Task<TcpClient> OpenAsync()
+    {
+        var client = new TcpClient { NoDelay = true };
+        await client.ConnectAsync(IPAddress.Loopback, _proxyPort, TestContext.Current.CancellationToken);
+        return client;
+    }
+
+    /// <summary>An absolute-form POST carrying proxy credentials, the way a proxied HTTP client sends it.</summary>
+    private static string PostHead(int port, string framing, Guid? provider = null)
+    {
+        var auth = Convert.ToBase64String(Encoding.UTF8.GetBytes($"provider:{provider ?? Guid.NewGuid()}"));
+        return $"POST http://localhost:{port}/v1/chat/completions HTTP/1.1\r\nHost: localhost:{port}\r\n"
+            + $"Proxy-Authorization: Basic {auth}\r\nContent-Type: application/json\r\n"
+            + (framing.Length > 0 ? framing + "\r\n" : string.Empty) + "\r\n";
+    }
+
+    private static string Chunk(string data) => $"{data.Length:x}\r\n{data}\r\n";
+
+    private static string BodyOf(string message) => message[(message.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4)..];
+
+    private static Task SendAsync(TcpClient client, string text)
+        => client.GetStream().WriteAsync(Encoding.Latin1.GetBytes(text), TestContext.Current.CancellationToken).AsTask();
+
+    private static async Task<string> ReadUntilAsync(NetworkStream stream, Func<string, bool> done)
+    {
+        var text = new StringBuilder();
+        var buffer = new byte[8192];
+        using var cts = new CancellationTokenSource(Timeout);
+        while (!done(text.ToString()))
+        {
+            var read = await stream.ReadAsync(buffer, cts.Token);
+            if (read == 0) break;
+            text.Append(Encoding.Latin1.GetString(buffer, 0, read));
+        }
+        return text.ToString();
+    }
+
+    /// <summary>Everything the proxy sends until it closes; a reset counts as closing.</summary>
+    private static async Task<string> ReadUntilClosedAsync(NetworkStream stream)
+    {
+        var text = new StringBuilder();
+        var buffer = new byte[8192];
+        using var cts = new CancellationTokenSource(Timeout);
+        try
+        {
+            int read;
+            while ((read = await stream.ReadAsync(buffer, cts.Token)) > 0)
+                text.Append(Encoding.Latin1.GetString(buffer, 0, read));
+        }
+        catch (IOException) { }
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// Asserts the response head says close, with the status line and every
+    /// end-to-end header as listed and in that order; returns the bytes after it.
+    /// </summary>
+    private static string AssertClosingHead(string response, string statusLine, params string[] endToEndHeaders)
+    {
+        var end = response.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+        Assert.True(end >= 0, "no complete response head");
+        var lines = response[..end].Split("\r\n");
+        Assert.Equal(statusLine, lines[0]);
+
+        string Name(string line) => line.IndexOf(':') is var colon and > 0 ? line[..colon] : line;
+        string Value(string line) => line[(line.IndexOf(':') + 1)..].Trim();
+        var hopByHop = new[] { "Connection", "Proxy-Connection", "Keep-Alive" };
+
+        Assert.Equal(endToEndHeaders, lines.Skip(1).Where(l => !hopByHop.Contains(Name(l), StringComparer.OrdinalIgnoreCase)));
+        Assert.Equal("close", Value(Assert.Single(lines, l => Name(l).Equals("Connection", StringComparison.OrdinalIgnoreCase))), ignoreCase: true);
+        Assert.Equal("close", Value(Assert.Single(lines, l => Name(l).Equals("Proxy-Connection", StringComparison.OrdinalIgnoreCase))), ignoreCase: true);
+        Assert.DoesNotContain(lines, l => Name(l).Equals("Keep-Alive", StringComparison.OrdinalIgnoreCase));
+        return response[(end + 4)..];
+    }
+
+    /// <summary>
+    /// An upstream that records every byte each connection sends it, until that
+    /// connection closes, while a per-test script decides what to answer.
+    /// </summary>
+    private sealed class ScriptedUpstream : IDisposable
+    {
+        private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+        private readonly CancellationTokenSource _cts = new();
+        private readonly List<UpstreamConnection> _connections = new();
+
+        public ScriptedUpstream(Func<UpstreamConnection, Task> script)
+        {
+            _listener.Start();
+            Port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+            _ = AcceptAsync(script);
+        }
+
+        public int Port { get; }
+
+        public IReadOnlyList<UpstreamConnection> Connections
+        {
+            get { lock (_connections) return _connections.ToList(); }
+        }
+
+        private async Task AcceptAsync(Func<UpstreamConnection, Task> script)
+        {
+            while (true)
+            {
+                TcpClient tcp;
+                try { tcp = await _listener.AcceptTcpClientAsync(_cts.Token); }
+                catch (Exception) { return; }
+                var connection = new UpstreamConnection(tcp);
+                lock (_connections) _connections.Add(connection);
+                _ = Task.Run(async () =>
+                {
+                    using (tcp)
+                    {
+                        var recording = connection.RecordUntilClosedAsync(_cts.Token);
+                        try { await script(connection); }
+                        catch (Exception) { }
+                        await recording;
+                    }
+                });
+            }
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            _listener.Stop();
+        }
+    }
+
+    private sealed class UpstreamConnection
+    {
+        private readonly TcpClient _tcp;
+        private readonly MemoryStream _received = new();
+        private readonly TaskCompletionSource _closed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public UpstreamConnection(TcpClient tcp) => _tcp = tcp;
+
+        public string Received
+        {
+            get { lock (_received) return Encoding.Latin1.GetString(_received.ToArray()); }
+        }
+
+        /// <summary>Completes once the proxy has closed (or reset) its side.</summary>
+        public Task Closed => _closed.Task;
+
+        public Task WaitForAsync(string text) => WaitUntilAsync(() => Received.Contains(text, StringComparison.Ordinal));
+
+        public Task SendAsync(string text) => _tcp.GetStream().WriteAsync(Encoding.Latin1.GetBytes(text)).AsTask();
+
+        /// <summary>
+        /// Half-closes after a response, as a server does on Connection: close,
+        /// while still recording whatever the proxy sends afterwards.
+        /// </summary>
+        public void EndResponse() => _tcp.Client.Shutdown(SocketShutdown.Send);
+
+        public async Task RecordUntilClosedAsync(CancellationToken ct)
+        {
+            var buffer = new byte[8192];
+            try
+            {
+                int read;
+                while ((read = await _tcp.GetStream().ReadAsync(buffer, ct)) > 0)
+                    lock (_received) _received.Write(buffer, 0, read);
+            }
+            catch (Exception) { }
+            finally
+            {
+                _closed.TrySetResult();
+            }
+        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
