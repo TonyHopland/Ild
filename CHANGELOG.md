@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Agents can propose a small loop template change without resending the whole template.**
 
+### Fixed
+
+- **Previews and agents can send one plain-HTTP request after another through the network proxy, such as a tool-calling chat with a local model.**
+
 ## [0.18.0] - 2026-10-18
 
 ### Added

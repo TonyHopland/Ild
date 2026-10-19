@@ -17,6 +17,14 @@ namespace ILD.Core.Services.Implementations.Network;
 /// and either relays bytes untouched or answers <c>403</c>. Nothing is decrypted.
 ///
 /// <para>
+/// A plain-HTTP connection carries one request: the response head is rewritten
+/// to say <c>Connection: close</c>, and nothing the client sends after the first
+/// request's body reaches the upstream, so a follow-up request comes on a new
+/// connection that is judged and recorded like the first
+/// (<see cref="PlainHttpExchange"/>).
+/// </para>
+///
+/// <para>
 /// Per-provider scope rides on the proxy URL's credentials: a launch made for a
 /// provider gets <c>http://provider:&lt;id&gt;@127.0.0.1:port</c>, so the
 /// <c>Proxy-Authorization</c> header names the provider whose scoped entries
@@ -31,7 +39,7 @@ namespace ILD.Core.Services.Implementations.Network;
 /// </summary>
 public sealed class EgressProxy : BackgroundService
 {
-    private const int MaxHeadBytes = 64 * 1024;
+    internal const int MaxHeadBytes = 64 * 1024;
     private const int TlsDefaultPort = 443;
     private const int HttpDefaultPort = 80;
 
@@ -163,10 +171,13 @@ public sealed class EgressProxy : BackgroundService
         }
 
         var upstreamStream = upstream.GetStream();
+        var exchange = request.Kind == RequestKind.Http ? new PlainHttpExchange(request, head) : null;
         try
         {
             await _relay.RelayAsync(client, upstreamStream, request.Host, request.Port, request.AiProviderId, stoppingToken,
-                token => SendHeadAsync(client, upstreamStream, request, head, token)).ConfigureAwait(false);
+                token => SendHeadAsync(client, upstreamStream, request, head, token),
+                exchange is null ? null : exchange.CopyRequestAsync,
+                exchange is null ? null : exchange.CopyResponseAsync).ConfigureAwait(false);
         }
         finally
         {
@@ -176,9 +187,9 @@ public sealed class EgressProxy : BackgroundService
 
     /// <summary>
     /// What each kind of request owes the two sides before bytes start flowing:
-    /// the CONNECT acknowledgement, the ClientHello a redirected flow arrived
-    /// with, or the rewritten origin-form head — plus whatever of the body was
-    /// read along with the head.
+    /// the CONNECT acknowledgement plus whatever was read along with it, the
+    /// ClientHello a redirected flow arrived with, or the rewritten origin-form
+    /// head, whose body <see cref="PlainHttpExchange"/> sends on.
     /// </summary>
     private static async Task SendHeadAsync(NetworkStream client, NetworkStream upstream, ProxyRequest request, ArraySegment<byte> head, CancellationToken ct)
     {
@@ -194,8 +205,6 @@ public sealed class EgressProxy : BackgroundService
                 break;
             default:
                 await upstream.WriteAsync(request.ForwardedHead, ct).ConfigureAwait(false);
-                if (request.BodyStart < head.Count)
-                    await upstream.WriteAsync(head.AsMemory(request.BodyStart), ct).ConfigureAwait(false);
                 break;
         }
     }
@@ -211,7 +220,7 @@ public sealed class EgressProxy : BackgroundService
         await WriteResponseAsync(client, "403 Forbidden", $"ILD network policy blocks {request.Host}.", ct).ConfigureAwait(false);
     }
 
-    private static async Task WriteResponseAsync(NetworkStream client, string status, string body, CancellationToken ct)
+    internal static async Task WriteResponseAsync(NetworkStream client, string status, string body, CancellationToken ct)
     {
         var payload = Encoding.UTF8.GetBytes(body + "\n");
         var head = $"HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {payload.Length}\r\nConnection: close\r\nProxy-Connection: close\r\n\r\n";
@@ -269,6 +278,8 @@ public sealed class EgressProxy : BackgroundService
         string? hostHeader = null;
         var forwarded = new StringBuilder();
         var sawHostHeader = false;
+        var transferEncodings = new List<string>();
+        var contentLengths = new List<string>();
 
         foreach (var line in lines.Skip(1))
         {
@@ -290,6 +301,10 @@ public sealed class EgressProxy : BackgroundService
                 hostHeader = value;
                 sawHostHeader = true;
             }
+            else if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                transferEncodings.Add(value);
+            else if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                contentLengths.Add(value);
             forwarded.Append(line).Append("\r\n");
         }
 
@@ -319,6 +334,8 @@ public sealed class EgressProxy : BackgroundService
             return null;
         }
 
+        if (!TryReadBodyFraming(transferEncodings, contentLengths, out var chunked, out var contentLength)) return null;
+
         // An absolute-form request may legitimately omit Host (the authority is in
         // the target); the origin-form request the upstream gets may not.
         var headText = new StringBuilder()
@@ -327,7 +344,36 @@ public sealed class EgressProxy : BackgroundService
             .Append(forwarded)
             .Append("Connection: close\r\n\r\n")
             .ToString();
-        return new ProxyRequest(RequestKind.Http, host, port, provider, bodyStart, Encoding.ASCII.GetBytes(headText));
+        return new ProxyRequest(RequestKind.Http, host, port, provider, bodyStart, Encoding.ASCII.GetBytes(headText), chunked, contentLength);
+    }
+
+    /// <summary>
+    /// Where a plain request's body ends (RFC 9112 §6.3), so that nothing after it
+    /// reaches the upstream. Framing two readers could disagree on — both headers,
+    /// a last coding other than chunked, a Content-Length that is not one plain
+    /// number — is refused rather than guessed at.
+    /// </summary>
+    private static bool TryReadBodyFraming(List<string> transferEncodings, List<string> contentLengths, out bool chunked, out long contentLength)
+    {
+        chunked = false;
+        contentLength = 0;
+        if (transferEncodings.Count > 0)
+        {
+            if (contentLengths.Count > 0) return false;
+            var codings = string.Join(',', transferEncodings).Split(',');
+            chunked = codings[^1].Trim().Equals("chunked", StringComparison.OrdinalIgnoreCase);
+            return chunked;
+        }
+
+        long? length = null;
+        foreach (var value in contentLengths.SelectMany(v => v.Split(',')).Select(v => v.Trim()))
+        {
+            if (value.Length == 0 || !value.All(char.IsAsciiDigit) || !long.TryParse(value, out var parsed)) return false;
+            if (length is not null && length != parsed) return false;
+            length = parsed;
+        }
+        contentLength = length ?? 0;
+        return true;
     }
 
     /// <summary>
@@ -380,5 +426,8 @@ public sealed class EgressProxy : BackgroundService
 
     internal enum RequestKind { Connect, Http, Tls }
 
-    internal sealed record ProxyRequest(RequestKind Kind, string Host, int Port, Guid? AiProviderId, int BodyStart, byte[] ForwardedHead);
+    /// <param name="ChunkedBody">A plain request's body is chunked; otherwise it is <paramref name="ContentLength"/> bytes long.</param>
+    internal sealed record ProxyRequest(
+        RequestKind Kind, string Host, int Port, Guid? AiProviderId, int BodyStart, byte[] ForwardedHead,
+        bool ChunkedBody = false, long ContentLength = 0);
 }
