@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Agents can propose a small loop template change without resending the whole template.**
 
+- **A work item's History tab shows who changed what on it, when and why.**
+
 ## [0.18.0] - 2026-10-18
 
 ### Added

@@ -129,4 +129,4 @@ accounts. Use reserved example names instead (`example.com`, `*.example`,
 
 ## WorkItem Server contract
 
-The WorkItem Server API is a contract that may be implemented over external trackers (GitHub Issues, Azure DevOps). Do not add fields, columns or endpoints for Ild-specific data to it. Store such data on the Ild instance, keyed by work item ID. See [ADR-0025](docs/adr/0025-workitem-server-contract-is-tracker-mappable.md).
+The WorkItem Server API is a contract that may be implemented over external trackers (GitHub Issues, Azure DevOps). Do not add fields, columns or endpoints for Ild-specific data to it. Store such data on the Ild instance, keyed by work item ID. It does carry each item's change history, with every mutation naming its actor in `X-ILD-Actor`; the actor's kind, detail and work item are optional attribution and a transition's reason is optional. See [ADR-0025](docs/adr/0025-workitem-server-contract-is-tracker-mappable.md).
