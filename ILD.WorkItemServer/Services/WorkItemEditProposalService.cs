@@ -264,7 +264,7 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
         var changed = AppliedChanges(proposal, expectedDependencies, proposedDependencies);
         if (changed.Count > 0)
         {
-            _db.AddHistorySave(workItemId, WorkItemHistoryKind.Changed, changed, reason: null);
+            _db.AddHistorySave(workItemId, WorkItemHistoryKind.Changed, changed, proposal.Rationale);
             await _db.SaveChangesAsync(ct);
         }
 

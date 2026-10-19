@@ -57,7 +57,9 @@ function OldToNew({ before, after }: { before: string | null; after: string | nu
       <span className="wiv2-history-old">
         <Value value={before} />
       </span>{" "}
-      <span aria-hidden="true">→</span>{" "}
+      <span role="img" aria-label="to">
+        →
+      </span>{" "}
       <span className="wiv2-history-new">
         <Value value={after} />
       </span>
@@ -125,7 +127,9 @@ function SaveEvent({ save, now }: { save: Save; now: number }) {
   const shown = first.kind === "Changed" ? save.entries : save.entries.filter((e) => !isUnset(e));
   const what =
     first.kind === "Baseline"
-      ? "State at history start"
+      ? first.username
+        ? "— state at history start"
+        : "State at history start"
       : first.kind === "Created"
         ? "created the item"
         : `changed ${shown.map((e) => fieldLabel(e.field).toLowerCase()).join(", ")}`;

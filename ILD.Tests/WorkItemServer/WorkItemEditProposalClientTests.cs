@@ -152,6 +152,12 @@ public sealed class WorkItemEditProposalClientTests : IAsyncLifetime
         Assert.Equal(statusBefore, stored.Status);
         Assert.Equal(0, stored.PendingEditProposalCount);
         Assert.Equal(RemoteEditProposalStatus.Approved, (await ReadProposalAsync(item.Id, proposal.Id)).Status);
+
+        // The item's history says why each applied field changed: the proposal's rationale.
+        var applied = (await _client.GetHistoryAsync(_opts, item.Id, TestContext.Current.CancellationToken))!
+            .TakeWhile(e => e.Field != "status").ToList();
+        Assert.Equal(new[] { "baseBranchOverride", "description", "tags" }, applied.Select(e => e.Field).Order(StringComparer.Ordinal));
+        Assert.All(applied, e => Assert.Equal("The old description no longer matches the code.", e.Reason));
     }
 
     [Fact]
