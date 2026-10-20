@@ -53,6 +53,11 @@ interface FeedbackActionsProps {
 // success/failure roles; everything else names one of the node's outputs.
 const ROLE_TOKENS = new Set(["OnSuccess", "OnFailure"]);
 
+// The PR merge in the list of buttons. It holds a comma, which no output name
+// can, as the actions string is split on commas: an output called "Merge" is
+// its own button.
+const PR_MERGE = ",pr-merge";
+
 /** A button's look: one primary, Reject in danger, everything else secondary. */
 type Tone = "btn-primary" | "btn-secondary" | "btn-danger";
 
@@ -62,11 +67,11 @@ type Tone = "btn-primary" | "btn-secondary" | "btn-danger";
  * per named output, and Reject (OnFailure). Defaults to Approve + Reject when
  * empty. An output the node hides has no button.
  *
- * However many there are, one is primary: the node's default output, else
- * Merge, else Approve, else the first named output in node order. The default comes first and Reject last. A colour set on
- * an output in the loop editor shows as a dot and border, so the primary stays
- * the obvious choice. An output that asks to confirm is marked "…" and, when
- * pressed, swaps the buttons for an inline confirmation.
+ * At most one is primary: the node's default output, else the PR merge; with
+ * neither, none is. The default comes first and Reject last. A colour set on an
+ * output in the loop editor shows as a dot and border, so the primary stays the
+ * obvious choice. An output that asks to confirm swaps the buttons, when
+ * pressed, for an inline confirmation.
  * Merge is not an output and is always offered, behind its own confirmation.
  * With submitDefaultOnEnter, Enter in the feedback box presses the default
  * output's button, which is marked ⏎; Shift+Enter still adds a new line.
@@ -108,9 +113,9 @@ export default function FeedbackActions({
   const shownDefault =
     defaultOutput !== null && actionList.includes(defaultOutput) ? defaultOutput : null;
   const enterTarget = submitDefaultOnEnter ? shownDefault : null;
-  const primary: string | null =
-    shownDefault ??
-    (onMerge ? "Merge" : actionList.includes("OnSuccess") ? "OnSuccess" : (customNames[0] ?? null));
+  // Primary only by the loop's say: its default output, else the PR merge. With
+  // neither, no answer is pushed over the others.
+  const primary: string | null = shownDefault ?? (onMerge ? PR_MERGE : null);
 
   const toneOf = (name: string): Tone =>
     name === primary ? "btn-primary" : name === "OnFailure" ? "btn-danger" : "btn-secondary";
@@ -176,18 +181,18 @@ export default function FeedbackActions({
   const order = [
     ...(shownDefault ? [shownDefault] : []),
     ...(actionList.includes("OnSuccess") && shownDefault !== "OnSuccess" ? ["OnSuccess"] : []),
-    ...(onMerge ? ["Merge"] : []),
+    ...(onMerge ? [PR_MERGE] : []),
     ...customNames.filter((name) => name !== shownDefault),
     ...(actionList.includes("OnFailure") && shownDefault !== "OnFailure" ? ["OnFailure"] : []),
   ];
 
   const button = (name: string) => {
-    if (name === "Merge")
+    if (name === PR_MERGE)
       return (
         <button
-          key="Merge"
+          key={PR_MERGE}
           type="button"
-          className={`btn btn-sm ${toneOf("Merge")}`}
+          className={`btn btn-sm ${toneOf(PR_MERGE)}`}
           onClick={() => setConfirmingMerge(true)}
         >
           Merge

@@ -92,6 +92,9 @@ function ChatConversation({
           const content = draft.trim();
           if (!content) return;
           setDraft("");
+          // The box grew with the message; sent, it goes back to one line.
+          const box = e.currentTarget.querySelector<HTMLTextAreaElement>("textarea.chat-input");
+          if (box) box.style.height = "";
           onSend(content);
         }}
       >

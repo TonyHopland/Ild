@@ -2,19 +2,24 @@ import { useCallback, useEffect, useState } from "react";
 import { SchedulerSettingKeys, settingsService } from "../services/auth";
 import type { TypedSignalRMessage } from "../types/signalr";
 import { errorMessage } from "../utils/errorMessage";
-import { useSignalR } from "./useSignalR";
+import { useJoinThenRefresh } from "./useJoinThenRefresh";
+import { useSignalR, type SignalRConnection } from "./useSignalR";
 
 /**
  * Whether the scheduler is running, read from the server and kept live over the
  * work-item hub, and a way to change it. The header's chip and the Settings
  * switch both read this, so they always say the same thing: on means running.
+ * `hub` is a work-item hub connection the caller already holds; without it the
+ * hook opens its own.
  */
-export function useSchedulerState() {
+export function useSchedulerState(hub?: SignalRConnection) {
   // null until the server has said, so nothing claims a state it has not read.
   const [running, setRunning] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { on, off, connectionState } = useSignalR();
+  const own = useSignalR(hub ? null : "/hubs/work-item");
+  const connection = hub ?? own;
+  const { on, off } = connection;
 
   const load = useCallback(async () => {
     try {
@@ -24,12 +29,14 @@ export function useSchedulerState() {
       // Keep the last-known state if the read fails.
     }
   }, []);
+  const refresh = useCallback(() => void load(), [load]);
 
-  // Read on mount and again after every reconnect, since changes made while
-  // disconnected arrive by neither path.
-  useEffect(() => {
-    if (connectionState === "connected" || connectionState === "disconnected") void load();
-  }, [connectionState, load]);
+  // Read once at once, so the state shows even while the hub is still connecting.
+  useEffect(() => refresh(), [refresh]);
+  // SchedulerStateChanged goes to the board's group only: join it on every
+  // (re)connect, then read again, since a change made while out arrives by
+  // neither path.
+  useJoinThenRefresh(connection, null, refresh);
 
   useEffect(() => {
     const onChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {

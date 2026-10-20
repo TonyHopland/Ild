@@ -248,14 +248,18 @@ export function NumericSettingField({
 
   // Saves as the user finishes with the field (leaving it, or Enter), like every
   // other setting; nothing is sent while the box still holds what is stored.
+  // A ref, not the state: Enter and the blur that may follow in the same tick
+  // would both see a saving flag that has not re-rendered yet, and send twice.
+  const savingRef = useRef(false);
   const save = async () => {
-    if (draft === String(saved)) return;
+    if (savingRef.current || draft === String(saved)) return;
     const n = parseInt(draft, 10);
     if (Number.isNaN(n) || n < min || n > max) {
       setError(`Must be an integer between ${minLabel ?? min} and ${max}.`);
       return;
     }
     setError(null);
+    savingRef.current = true;
     setSaving(true);
     try {
       await settingsService.put(settingKey, String(n));
@@ -265,6 +269,7 @@ export function NumericSettingField({
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -296,7 +301,10 @@ export function NumericSettingField({
         onKeyDown={(e) => {
           if (e.key === "Enter") void save();
         }}
-        disabled={disabled || saving}
+        disabled={disabled}
+        // Read-only, not disabled, while saving: a disabled field drops focus.
+        readOnly={saving}
+        aria-busy={saving}
         style={{ width: "5rem" }}
       />
       {unit && <span className="settings-row-help">{unit}</span>}

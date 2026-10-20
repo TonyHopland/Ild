@@ -286,6 +286,20 @@ describe("ChatBubble", () => {
     );
   });
 
+  test("the message box goes back to one line once its message is sent", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    await openResumed(chatSession(), "/taskboard");
+
+    const input = (await screen.findByLabelText("Chat message")) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "a\nlong\nmessage" } });
+    input.style.height = "120px";
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalled());
+    expect(input.style.height).toBe("");
+  });
+
   test("Enter sends the message and Shift+Enter does not", async () => {
     chatService.sendMessage.mockResolvedValue(undefined);
     aiProviderService.getAll.mockResolvedValue([provider]);

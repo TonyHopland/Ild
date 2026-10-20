@@ -92,7 +92,7 @@ describe("user preferences", () => {
     expect(getPreference(PreferenceKeys.NotificationsEnabled)).toBe("true");
     await vi.waitFor(() => expect(put).toHaveBeenCalledWith(PreferenceKeys.ChatEnabled, "false"));
     expect(put).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem("ild_chat_enabled")).toBeNull();
+    await vi.waitFor(() => expect(localStorage.getItem("ild_chat_enabled")).toBeNull());
     expect(localStorage.getItem("ild_notifications_enabled")).toBeNull();
     // Only settings move: the sign-in itself stays in the browser.
     expect(localStorage.getItem("auth_token")).toBe("kept");
@@ -112,5 +112,78 @@ describe("user preferences", () => {
 
     expect(preferencesLoaded()).toBe(false);
     expect(getPreference(PreferenceKeys.ChatEnabled)).toBeUndefined();
+  });
+
+  test("a carried-over value goes out with the load itself, in one change", async () => {
+    clearPreferences();
+    localStorage.setItem("ild_chat_enabled", "false");
+    vi.spyOn(authServices.preferencesService, "getAll").mockResolvedValue({});
+    vi.spyOn(authServices.preferencesService, "put").mockResolvedValue();
+    const seen: Array<[boolean, string | undefined]> = [];
+    const loaded = renderHook(() => {
+      const state: [boolean, string | undefined] = [
+        usePreferencesLoaded(),
+        usePreference(PreferenceKeys.ChatEnabled),
+      ];
+      seen.push(state);
+      return state;
+    });
+
+    await act(async () => loadPreferences());
+
+    expect(loaded.result.current).toEqual([true, "false"]);
+    // Never loaded with the setting still at its default.
+    expect(seen).not.toContainEqual([true, undefined]);
+  });
+
+  test("a read that fails carries nothing over and leaves the browser's copy for next time", async () => {
+    clearPreferences();
+    localStorage.setItem("ild_chat_enabled", "false");
+    vi.spyOn(authServices.preferencesService, "getAll").mockRejectedValue(new Error("offline"));
+    const put = vi.spyOn(authServices.preferencesService, "put").mockResolvedValue();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await loadPreferences();
+
+    expect(preferencesLoaded()).toBe(true);
+    expect(getPreference(PreferenceKeys.ChatEnabled)).toBeUndefined();
+    expect(put).not.toHaveBeenCalled();
+    expect(localStorage.getItem("ild_chat_enabled")).toBe("false");
+  });
+
+  test("a browser copy whose save fails stays in the browser", async () => {
+    clearPreferences();
+    localStorage.setItem("ild_chat_enabled", "false");
+    vi.spyOn(authServices.preferencesService, "getAll").mockResolvedValue({});
+    const put = vi
+      .spyOn(authServices.preferencesService, "put")
+      .mockRejectedValue(new Error("500"));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await loadPreferences();
+
+    await vi.waitFor(() => expect(put).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(localStorage.getItem("ild_chat_enabled")).toBe("false");
+  });
+
+  test("saves still queued at sign-out are not sent", async () => {
+    clearPreferences();
+    vi.spyOn(authServices.preferencesService, "getAll").mockResolvedValue({});
+    await loadPreferences();
+    let release!: () => void;
+    const put = vi
+      .spyOn(authServices.preferencesService, "put")
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (release = resolve)))
+      .mockResolvedValue();
+
+    setPreference(PreferenceKeys.ChatEnabled, "false");
+    setPreference(PreferenceKeys.ChatEnabled, "true");
+    await vi.waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+
+    clearPreferences();
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(put).toHaveBeenCalledTimes(1);
   });
 });

@@ -1478,6 +1478,41 @@ describe("WorkItemModalV2", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(moved));
   });
 
+  test("the dialog stays open while a move is on its way, and a refusal clears once the item changes", async () => {
+    mockServices();
+    let finish!: () => void;
+    vi.spyOn(authServices.workItemService, "transition").mockReturnValue(
+      new Promise<void>((_, reject) => (finish = () => reject(new Error("Not allowed.")))),
+    );
+    const onClose = vi.fn();
+    const item = makeWorkItem({ status: WorkItemStatus.Backlog });
+    const { rerender } = await renderDialog(item, { onClose });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Move to Work queue" }));
+      await Promise.resolve();
+    });
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => finish());
+    expect((await screen.findByRole("alert")).textContent).toBe("Not allowed.");
+
+    await act(async () => {
+      rerender(
+        <MemoryRouter>
+          <WorkItemModalV2
+            workItem={{ ...item, status: WorkItemStatus.WorkQueue }}
+            onClose={onClose}
+            onSave={vi.fn()}
+          />
+        </MemoryRouter>,
+      );
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("Not allowed.")).toBeNull();
+  });
+
   test("a refused move says so in the footer, and only Backlog items offer it", async () => {
     mockServices();
     vi.spyOn(authServices.workItemService, "transition").mockRejectedValue(

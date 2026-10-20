@@ -349,11 +349,13 @@ export default function Taskboard() {
     }));
   };
 
+  // Centres the picked column's tab. The picker first renders once both the
+  // board and the folds have loaded, so each of those re-runs it too.
   useEffect(() => {
     pickerRef.current
       ?.querySelector<HTMLElement>('[aria-selected="true"]')
       ?.scrollIntoView?.({ inline: "center", block: "nearest" });
-  }, [mobileStatus, isMobile, isInitialLoading]);
+  }, [mobileStatus, isMobile, isInitialLoading, foldedColumns.loaded]);
 
   const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
   const repositoryNames = new Map(repositories.map((repo) => [repo.id, repo.name]));

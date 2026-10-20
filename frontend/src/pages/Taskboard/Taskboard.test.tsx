@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import Taskboard from "./index";
+import { foldedColumnKey } from "../../hooks/useFoldedColumns";
 import {
   PreferenceKeys,
   clearPreferences,
@@ -32,7 +33,7 @@ beforeEach(() => {
   localStorage.clear();
   // Done starts folded; these tests read the cards in every column, so this
   // user has opened it.
-  seedPreferences({ [PreferenceKeys.TaskboardFolded]: JSON.stringify({ Done: false }) });
+  seedPreferences({ [foldedColumnKey(WorkItemStatus.Done)]: "false" });
 });
 
 function LocationDisplay() {
@@ -1717,7 +1718,7 @@ describe("Taskboard folded columns", () => {
   });
 
   test("opens each column as the user left it, and saves a fold to their preferences", async () => {
-    seedPreferences({ [PreferenceKeys.TaskboardFolded]: JSON.stringify({ Backlog: true }) });
+    seedPreferences({ [foldedColumnKey(WorkItemStatus.Backlog)]: "true" });
     mockTaskboardServer([
       makeItem({ id: "wi-1", title: "Not started", status: WorkItemStatus.Backlog }),
       makeItem({ id: "wi-2", title: "Shipped", status: WorkItemStatus.Done }),
@@ -1733,10 +1734,7 @@ describe("Taskboard folded columns", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Done: 1 item. Show column" }));
     expect(screen.getByText("Shipped")).toBeTruthy();
-    expect(JSON.parse(getPreference(PreferenceKeys.TaskboardFolded)!)).toEqual({
-      Backlog: true,
-      Done: false,
-    });
+    expect(getPreference(foldedColumnKey(WorkItemStatus.Done))).toBe("false");
   });
 
   test("shows no columns until the preferences are loaded", async () => {

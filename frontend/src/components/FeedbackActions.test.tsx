@@ -325,7 +325,7 @@ function expectUncoloured(button: HTMLElement) {
 
 describe("FeedbackActions — button colours", () => {
   test.each([
-    ["Approve", "OnSuccess", "btn-primary", "onApprove"],
+    ["Approve", "OnSuccess", "btn-secondary", "onApprove"],
     ["Reject", "OnFailure", "btn-danger", "onReject"],
     ["Escalate", "Escalate", "btn-secondary", "onEdge"],
   ] as const)(
@@ -633,7 +633,7 @@ describe("FeedbackActions — order and the one primary", () => {
     );
   });
 
-  test("with no default and no Merge, Approve is the primary", () => {
+  test("with no default and no Merge, no answer is primary, Approve included", () => {
     render(
       <FeedbackActions
         actions="OnSuccess,Revise,OnFailure"
@@ -644,7 +644,7 @@ describe("FeedbackActions — order and the one primary", () => {
     );
 
     expect(names()).toEqual(["Approve", "Revise", "Reject"]);
-    expect(primaries().map((b) => b.textContent)).toEqual(["Approve"]);
+    expect(primaries()).toEqual([]);
   });
 
   test("an output that asks to confirm shows its label as it is, with nothing added that reads as cut off", () => {
@@ -661,7 +661,7 @@ describe("FeedbackActions — order and the one primary", () => {
     expect(screen.getByRole("button", { name: "Park" }).textContent).toBe("Park");
   });
 
-  test("with only named outputs and no default, the first in node order is the primary", () => {
+  test("with only named outputs and no default, none is promoted to primary", () => {
     render(
       <FeedbackActions
         actions="approve,reject"
@@ -671,9 +671,33 @@ describe("FeedbackActions — order and the one primary", () => {
       />,
     );
 
-    expect(primaries().map((b) => b.textContent)).toEqual(["approve"]);
-    expect(screen.getByRole("button", { name: "reject" }).classList.contains("btn-secondary")).toBe(
-      true,
+    expect(primaries()).toEqual([]);
+    expect(
+      screen.getByRole("button", { name: "approve" }).classList.contains("btn-secondary"),
+    ).toBe(true);
+  });
+
+  test("an output called Merge is its own answer, apart from the PR merge", () => {
+    const onEdge = vi.fn();
+    const onMerge = vi.fn();
+    render(
+      <FeedbackActions
+        actions="OnSuccess,Merge,OnFailure"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={onEdge}
+        onMerge={onMerge}
+      />,
     );
+
+    const merges = screen.getAllByRole("button", { name: "Merge" });
+    expect(merges).toHaveLength(2);
+    // The PR merge is the primary and asks first; the output sends at once.
+    const [prMerge, output] = merges;
+    expect(prMerge.classList.contains("btn-primary")).toBe(true);
+    expect(output.classList.contains("btn-secondary")).toBe(true);
+    fireEvent.click(output);
+    expect(onEdge).toHaveBeenCalledWith("Merge");
+    expect(onMerge).not.toHaveBeenCalled();
   });
 });

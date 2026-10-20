@@ -102,6 +102,9 @@ export default function WorkItemModalV2({
   // Backlog to Work queue without dragging the card, which a phone cannot do.
   const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
+  // A refusal was about the item as it was: once it has moved or changed state,
+  // the message no longer applies.
+  useEffect(() => setMoveError(null), [workItem?.id, workItem?.status]);
   const moveToWorkQueue = async () => {
     setMoving(true);
     setMoveError(null);
@@ -138,13 +141,14 @@ export default function WorkItemModalV2({
     // would land files the human is in the middle of discarding — the save that
     // is still running would upload them. Closing waits for whatever the dialog
     // is doing, not for the uploading part of it alone.
-    if (detail.busy) return;
+    // A move in flight is such a write too: its answer updates this item.
+    if (detail.busy || moving) return;
     if (hasUnsavedChanges) {
       setShowCloseConfirm(true);
     } else {
       onClose();
     }
-  }, [detail.busy, hasUnsavedChanges, onClose]);
+  }, [detail.busy, moving, hasUnsavedChanges, onClose]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

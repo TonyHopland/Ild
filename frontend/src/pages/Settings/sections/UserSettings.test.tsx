@@ -151,6 +151,35 @@ describe("User settings signed-in devices", () => {
     });
   });
 
+  test("Enter saves once, the blur after it sends nothing more, and the field keeps focus", async () => {
+    vi.spyOn(authServices.authService, "getSessions").mockResolvedValue([thisDevice]);
+    let land!: () => void;
+    const put = vi.spyOn(authServices.settingsService, "put").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          land = () => resolve({ key: authServices.SessionSettingKeys.IdleDays, value: "7" });
+        }),
+    );
+
+    render(<UserSettings />);
+
+    const input = (await screen.findByLabelText(/sign out after inactivity/i)) as HTMLInputElement;
+    input.focus();
+    fireEvent.change(input, { target: { value: "7" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(input.readOnly).toBe(true);
+    expect(input.disabled).toBe(false);
+    input.focus();
+    expect(document.activeElement).toBe(input);
+    await act(async () => land());
+    expect(input.readOnly).toBe(false);
+    fireEvent.blur(input);
+    expect(put).toHaveBeenCalledTimes(1);
+  });
+
   test("saves the absolute expiry setting independently of the idle one", async () => {
     vi.spyOn(authServices.authService, "getSessions").mockResolvedValue([thisDevice]);
     const put = vi

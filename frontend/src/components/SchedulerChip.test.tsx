@@ -9,17 +9,28 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * A work-item hub that, like the real one, sends SchedulerStateChanged only to a
+ * connection that has joined the board's group.
+ */
 function mockHub() {
   const handlers: Record<string, ((msg: { payload: { isPaused: boolean } }) => void)[]> = {};
+  const hub = { joined: false };
   vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
     on: vi.fn((type: string, handler: (msg: { payload: { isPaused: boolean } }) => void) => {
       (handlers[type] ??= []).push(handler);
     }),
     off: vi.fn(),
-    invoke: vi.fn(),
+    invoke: vi.fn(async (method: string) => {
+      if (method === "SubscribeToWorkItems") hub.joined = true;
+    }),
     connectionState: "connected",
   } as unknown as ReturnType<typeof signalRHook.useSignalR>);
-  return handlers;
+  const announce = (isPaused: boolean) => {
+    if (!hub.joined) return;
+    for (const h of handlers["SchedulerStateChanged"] ?? []) h({ payload: { isPaused } });
+  };
+  return { announce };
 }
 
 describe("SchedulerChip", () => {
@@ -54,7 +65,7 @@ describe("SchedulerChip", () => {
   });
 
   test("follows a change made elsewhere, as the hub announces it", async () => {
-    const handlers = mockHub();
+    const { announce } = mockHub();
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
       key: authServices.SchedulerSettingKeys.IsPaused,
       value: "false",
@@ -62,11 +73,9 @@ describe("SchedulerChip", () => {
     render(<SchedulerChip />);
     const chip = await screen.findByRole("switch", { name: "Scheduler running" });
 
-    act(() => {
-      for (const h of handlers["SchedulerStateChanged"] ?? []) h({ payload: { isPaused: true } });
-    });
+    act(() => announce(true));
 
-    expect(chip.textContent).toContain("Paused");
+    await waitFor(() => expect(chip.textContent).toContain("Paused"));
   });
 
   test("a failed change says so and leaves the chip as it was", async () => {

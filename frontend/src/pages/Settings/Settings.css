@@ -355,27 +355,22 @@
   margin: 0.15rem 0 0.35rem 1rem;
 }
 
-@media (max-width: 720px) {
+/* Phone: one column, with the sections as a row of chips that scrolls
+   sideways; each control sits under its label rather than squeezing it, and
+   wide tables scroll inside their card. */
+@media (max-width: 767px) {
   .settings-page {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-nav-heading {
+    display: none;
   }
 
   .settings-nav {
     position: static;
     flex-direction: row;
     overflow-x: auto;
-  }
-
-  .settings-nav-heading {
-    display: none;
-  }
-}
-
-/* Phone: the sections are a row of chips that scrolls sideways, each control
-   sits under its label rather than squeezing it, and wide tables scroll
-   inside their card. */
-@media (max-width: 767px) {
-  .settings-nav {
     gap: 6px;
     margin: 0 -12px;
     padding: 0 12px 4px;

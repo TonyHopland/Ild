@@ -126,7 +126,7 @@ export default function UserSettings() {
           </div>
           <SettingRow
             label="Browser notifications"
-            help="Notify this browser when a run needs you. Asks for permission the first time you turn it on."
+            help="Get a notification when a run needs you. This follows you to every device, but each browser still has to grant permission: it asks the first time you turn this on there."
           >
             <Switch
               checked={notificationsEnabled}

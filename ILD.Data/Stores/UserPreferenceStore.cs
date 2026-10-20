@@ -25,7 +25,7 @@ public sealed class UserPreferenceStore : IUserPreferenceStore
             {
                 await _db.SaveChangesAsync(ct);
             }
-            catch (DbUpdateException)
+            catch (DbUpdateException ex) when (DbErrors.IsUniqueViolation(ex))
             {
                 // Two devices set the same new key at once and the other insert
                 // landed first: the unique index refused this one, so it becomes
