@@ -35,7 +35,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-/** The phone tab bar along the bottom of the screen, which the icon stays above. */
+/**
+ * The phone tab bar's height, without the safe-area inset: the one source for
+ * the bar itself (MobileNav) and for the chat icon, which stays above it.
+ */
 export const MOBILE_TABBAR_HEIGHT = 60;
 
 /**

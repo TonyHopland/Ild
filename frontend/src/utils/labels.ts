@@ -18,6 +18,17 @@ const WORK_ITEM_STATUS: Record<WorkItemStatus, { label: string; tone: Tone }> = 
   [WorkItemStatus.Done]: { label: "Done", tone: "success" },
 };
 
+/** The statuses in the order a work item moves through them: the board's columns, left to right. */
+export const WORK_ITEM_STATUS_ORDER: readonly WorkItemStatus[] = [
+  WorkItemStatus.Backlog,
+  WorkItemStatus.WorkQueue,
+  WorkItemStatus.Ready,
+  WorkItemStatus.Running,
+  WorkItemStatus.HumanFeedback,
+  WorkItemStatus.WaitingForIld,
+  WorkItemStatus.Done,
+];
+
 export function workItemStatusLabel(status: WorkItemStatus | string): string {
   return WORK_ITEM_STATUS[status as WorkItemStatus]?.label ?? splitWords(status);
 }

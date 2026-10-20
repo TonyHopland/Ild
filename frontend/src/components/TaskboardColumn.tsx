@@ -35,8 +35,8 @@ interface TaskboardColumnProps {
   loadingMore?: boolean;
   // Loop template names, forwarded to each card so loop tags are highlighted.
   loopTemplateNames?: string[];
-  // Repository names by id, so each card can show which repository it is on.
-  repositoryNames?: ReadonlyMap<string, string>;
+  // A repository id in words, so each card can show which repository it is on.
+  repositoryName?: (id: string) => string | null;
   // Shown on its own, as on a phone, where a picker above names the column and
   // counts it: no header, and an empty column says what lands there instead of folding.
   alone?: boolean;
@@ -60,7 +60,7 @@ export default function TaskboardColumn({
   onLoadMore,
   loadingMore = false,
   loopTemplateNames,
-  repositoryNames,
+  repositoryName,
   alone = false,
   foldChoice,
   onFoldChange,
@@ -102,9 +102,7 @@ export default function TaskboardColumn({
     if (existingItem?.status === status) return;
 
     try {
-      await workItemService.transition(workItemId, status);
-      const updated = await workItemService.getById(workItemId);
-      onWorkItemUpdate(updated);
+      onWorkItemUpdate(await workItemService.moveTo(workItemId, status));
     } catch (error) {
       const msg = errorMessage(error, "Failed to update work item status.");
       if (onError) onError(msg);
@@ -182,7 +180,7 @@ export default function TaskboardColumn({
             onClick={onWorkItemClick}
             onMove={onMoveWorkItem}
             loopTemplateNames={loopTemplateNames}
-            repositoryName={repositoryNames?.get(item.repositoryId)}
+            repositoryName={repositoryName?.(item.repositoryId) ?? undefined}
           />
         ))}
         {hasMore && (

@@ -382,6 +382,12 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/transition`, { targetStatus });
   },
 
+  /** Moves an item to a status and reads it back as the server now holds it. */
+  moveTo: async (id: string, targetStatus: string): Promise<WorkItem> => {
+    await workItemService.transition(id, targetStatus);
+    return workItemService.getById(id);
+  },
+
   getDependencies: async (
     id: string,
     opts?: { skip?: number; take?: number },

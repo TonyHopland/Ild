@@ -23,6 +23,7 @@ import {
   workItemStatusLabel,
   workItemStatusTone,
 } from "../../utils/labels";
+import { repositoryName } from "../../utils/repositoryName";
 
 type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal" | "history";
 
@@ -109,8 +110,7 @@ export default function WorkItemModalV2({
     setMoving(true);
     setMoveError(null);
     try {
-      await workItemService.transition(workItem!.id, WorkItemStatus.WorkQueue);
-      onSave(await workItemService.getById(workItem!.id));
+      onSave(await workItemService.moveTo(workItem!.id, WorkItemStatus.WorkQueue));
     } catch (error) {
       setMoveError(errorMessage(error, "Could not move it to the work queue."));
     } finally {
@@ -502,8 +502,7 @@ export default function WorkItemModalV2({
           workItem={workItem}
           active={activeTab === "history"}
           repositoryName={(id) =>
-            detail.repositories.find((r) => r.id === id)?.name ??
-            (detail.repositories.length > 0 ? "Unknown repository" : id)
+            repositoryName(id, detail.repositories, detail.repositoriesLoaded)
           }
         />
       </section>

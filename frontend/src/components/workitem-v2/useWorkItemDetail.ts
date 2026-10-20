@@ -100,6 +100,8 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const [dependencies, setDependencies] = useState<WorkItem[]>([]);
   const [allWorkItems, setAllWorkItems] = useState<WorkItem[]>([]);
   const [repositories, setRepositories] = useState<Repository[]>([]);
+  // Whether the list has been read, so a repository missing from it is known missing.
+  const [repositoriesLoaded, setRepositoriesLoaded] = useState(false);
   const [templates, setTemplates] = useState<LoopTemplate[]>([]);
   const [aiProviders, setAiProviders] = useState<AiProvider[]>([]);
   const [progressText, setProgressText] = useState("");
@@ -146,6 +148,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
   const reloadRepositories = useCallback(async () => {
     try {
       setRepositories(await repositoryService.getEvery());
+      setRepositoriesLoaded(true);
     } catch {
       /* best effort — leave the last-known list in place */
     }
@@ -962,6 +965,7 @@ export function useWorkItemDetail(workItem: WorkItem | null, onSave: (wi: WorkIt
     dependencies,
     allWorkItems,
     repositories,
+    repositoriesLoaded,
     reloadRepositories,
     templates,
     aiProviders,

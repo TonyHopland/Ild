@@ -184,6 +184,25 @@ describe("WorkItemModalV2 History tab", () => {
     expect(panel.textContent).not.toContain("repo-gone");
   });
 
+  test("while the repositories are still loading, a repository change shows no raw id", async () => {
+    mockServices(async () => [
+      entry({
+        saveId: "save-1",
+        username: "bob",
+        field: "repository",
+        oldValue: "repo-a",
+        newValue: "repo-b",
+      }),
+    ]);
+    vi.spyOn(authServices.repositoryService, "getAll").mockReturnValue(new Promise(() => {}));
+    await renderDialog(makeWorkItem());
+
+    const panel = await openHistory();
+    await waitFor(() => expect(panel.textContent).toContain("bob"));
+    expect(panel.textContent).not.toContain("repo-a");
+    expect(panel.textContent).not.toContain("repo-b");
+  });
+
   test("lists one group per save, newest first, with the actor, a relative time and each change", async () => {
     const getHistory = mockServices(async () => [
       entry({

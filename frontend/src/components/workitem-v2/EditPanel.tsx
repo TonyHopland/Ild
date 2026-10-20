@@ -11,7 +11,7 @@ import { parseTags } from "../../utils/workItemJson";
 import TagAutocomplete from "../TagAutocomplete";
 import AttachmentPicker from "./AttachmentPicker";
 import type { WorkItemDetail } from "./useWorkItemDetail";
-import { workItemStatusLabel } from "../../utils/labels";
+import { WORK_ITEM_STATUS_ORDER, workItemStatusLabel } from "../../utils/labels";
 
 interface EditPanelProps {
   /** The item being edited, or null to create a new one. */
@@ -178,8 +178,7 @@ export default function EditPanel({
           saved = await workItemService.update(workItem.id, data as Partial<WorkItem>);
           if (workItem.status !== status) {
             try {
-              await workItemService.transition(workItem.id, status);
-              saved = await workItemService.getById(workItem.id);
+              saved = await workItemService.moveTo(workItem.id, status);
             } catch (err) {
               console.error("Failed to transition status:", err);
               setSubmitError(
@@ -322,18 +321,14 @@ export default function EditPanel({
             value={status}
             onChange={(e) => setStatus(e.target.value as WorkItemStatus)}
           >
-            {[
-              WorkItemStatus.Backlog,
-              WorkItemStatus.WorkQueue,
-              WorkItemStatus.Ready,
-              WorkItemStatus.Running,
-              WorkItemStatus.HumanFeedback,
-              WorkItemStatus.Done,
-            ].map((value) => (
-              <option key={value} value={value}>
-                {workItemStatusLabel(value)}
-              </option>
-            ))}
+            {/* Waiting for ILD is ILD's own to set while it finishes something. */}
+            {WORK_ITEM_STATUS_ORDER.filter((value) => value !== WorkItemStatus.WaitingForIld).map(
+              (value) => (
+                <option key={value} value={value}>
+                  {workItemStatusLabel(value)}
+                </option>
+              ),
+            )}
           </select>
         </div>
         <div className="form-group">

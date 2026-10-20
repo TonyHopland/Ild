@@ -13,6 +13,7 @@ import { PreferenceKeys, getPreference } from "../../utils/userPreferences";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
+import { WORK_ITEM_STATUS_ORDER, workItemStatusLabel } from "../../utils/labels";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
 import { errorMessage } from "../../utils/errorMessage";
 import { makeLoopTagMatcher } from "../../utils/workItemJson";
@@ -25,6 +26,7 @@ import {
 } from "../../utils/taskboardFilter";
 import { findLoadedItem } from "../../utils/taskboardColumns";
 import { useTaskboardColumns } from "./useTaskboardColumns";
+import { repositoryName } from "../../utils/repositoryName";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -38,6 +40,7 @@ export default function Taskboard() {
   const [editingItem, setEditingItem] = useState<WorkItem | null>(null);
   const [errorText, setErrorText] = useState("");
   const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [repositoriesLoaded, setRepositoriesLoaded] = useState(false);
   const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [tagOptions, setTagOptions] = useState<string[]>([]);
   const tagsRefreshRef = useRef({ inFlight: false, dirty: false });
@@ -90,7 +93,10 @@ export default function Taskboard() {
     requestTagsRefresh();
     void repositoryService
       .getEvery()
-      .then(setRepositories)
+      .then((repos) => {
+        setRepositories(repos);
+        setRepositoriesLoaded(true);
+      })
       .catch(() => {});
     void loopTemplateService
       .getEvery()
@@ -324,17 +330,15 @@ export default function Taskboard() {
   const [announcement, setAnnouncement] = useState("");
 
   const handleMoveWorkItem = async (workItem: WorkItem, direction: "prev" | "next") => {
-    const order = WORK_ITEM_STATUSES.map((s) => s.value);
+    const order = WORK_ITEM_STATUS_ORDER;
     const currentIndex = order.indexOf(workItem.status);
     if (currentIndex < 0) return;
     const nextIndex = direction === "next" ? currentIndex + 1 : currentIndex - 1;
     if (nextIndex < 0 || nextIndex >= order.length) return;
-    const target = order[nextIndex] as WorkItemStatus;
+    const target = order[nextIndex];
     try {
-      await workItemService.transition(workItem.id, target);
-      const updated = await workItemService.getById(workItem.id);
-      handleWorkItemUpdate(updated);
-      setAnnouncement(`${workItem.title} moved to ${target}`);
+      handleWorkItemUpdate(await workItemService.moveTo(workItem.id, target));
+      setAnnouncement(`${workItem.title} moved to ${workItemStatusLabel(target)}`);
     } catch (error) {
       setErrorText(errorMessage(error, "Failed to move work item."));
     }
@@ -358,7 +362,7 @@ export default function Taskboard() {
   }, [mobileStatus, isMobile, isInitialLoading, foldedColumns.loaded]);
 
   const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
-  const repositoryNames = new Map(repositories.map((repo) => [repo.id, repo.name]));
+  const repositoryNameOf = (id: string) => repositoryName(id, repositories, repositoriesLoaded);
   // A selected tag keeps its chip after its last use is gone, so it can still be unselected.
   const tagChips = [
     ...tagOptions,
@@ -476,7 +480,7 @@ export default function Taskboard() {
       {isMobile && (
         <div className="taskboard-picker" role="tablist" aria-label="Columns" ref={pickerRef}>
           {WORK_ITEM_STATUSES.map((status) => {
-            const value = status.value as WorkItemStatus;
+            const value = status.value;
             const total = columns[value].total;
             const picked = value === mobileStatus;
             return (
@@ -500,11 +504,11 @@ export default function Taskboard() {
       <div className={`taskboard${isMobile ? " taskboard--one" : ""}`}>
         {WORK_ITEM_STATUSES.filter((status) => !isMobile || status.value === mobileStatus).map(
           (status) => {
-            const column = columns[status.value as WorkItemStatus];
+            const column = columns[status.value];
             return (
               <TaskboardColumn
                 key={status.value}
-                status={status.value as WorkItemStatus}
+                status={status.value}
                 label={status.label}
                 workItems={column.items}
                 total={column.total}
@@ -513,14 +517,12 @@ export default function Taskboard() {
                 onError={(msg) => setErrorText(msg)}
                 onMoveWorkItem={handleMoveWorkItem}
                 loopTemplateNames={loopTemplateNames}
-                repositoryNames={repositoryNames}
-                onLoadMore={() => loadMore(status.value as WorkItemStatus)}
+                repositoryName={repositoryNameOf}
+                onLoadMore={() => loadMore(status.value)}
                 loadingMore={column.loadingMore}
                 alone={isMobile}
-                foldChoice={foldedColumns.choices[status.value as WorkItemStatus] ?? null}
-                onFoldChange={(folded) =>
-                  foldedColumns.setFolded(status.value as WorkItemStatus, folded)
-                }
+                foldChoice={foldedColumns.choices[status.value] ?? null}
+                onFoldChange={(folded) => foldedColumns.setFolded(status.value, folded)}
               />
             );
           },

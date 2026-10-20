@@ -25,6 +25,8 @@ import type { WorkItemDetail } from "./useWorkItemDetail";
 import Icon from "../Icon";
 import { feedbackReasonLabel, pillClass, type Tone } from "../../utils/labels";
 import { failureMessage } from "./RunDetailSections";
+import { repositoryName } from "../../utils/repositoryName";
+import { nodeTakesRetry, runTakesRetryNow } from "./retry";
 
 /**
  * What the round is about to say on the pull request, and the chance to stop
@@ -212,10 +214,8 @@ function FailedNodeCard({
   onShowRuns?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  // As on the Runs tab: a live or parked run can go back to a node; an ended one is not restarted.
-  const canRetry =
-    (run.status === LoopRunStatus.WaitingHuman || run.status === LoopRunStatus.Running) &&
-    !(run.status === LoopRunStatus.Running && !run.isPaused);
+  // The same rule as the Runs tab.
+  const canRetry = runTakesRetryNow(run) && nodeTakesRetry(node.status, node.nodeType);
   const busy = detail.runLock.pendingOf(run.id) !== null;
   const recorded = node.error ?? node.output;
   const failedAt = node.completedAt ? new Date(node.completedAt).toLocaleString() : null;
@@ -1034,8 +1034,8 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   // The repository by name. An id that matches none of the loaded repositories
   // says so in words (the id is on hover), never as a bare GUID; until the list
   // has loaded nothing is claimed either way.
-  const repo = detail.repositories.find((r) => r.id === workItem.repositoryId);
-  const repoName = repo?.name ?? (detail.repositories.length > 0 ? "Unknown repository" : "");
+  const repoName =
+    repositoryName(workItem.repositoryId, detail.repositories, detail.repositoriesLoaded) ?? "";
   // Items waiting on this one, by title when it is one of the items loaded here.
   const blocks = (workItem.dependentIds ?? []).map((id) => ({
     id,
@@ -1066,7 +1066,14 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
       </div>
       <div className="wiv2-meta-row">
         <span className="detail-label">Repository</span>
-        <span className="detail-value" title={repo ? undefined : workItem.repositoryId}>
+        <span
+          className="detail-value"
+          title={
+            detail.repositories.some((r) => r.id === workItem.repositoryId)
+              ? undefined
+              : workItem.repositoryId
+          }
+        >
           {repoName}
         </span>
       </div>

@@ -1,28 +1,18 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, type CSSProperties } from "react";
 import { NavLink, useLocation } from "react-router";
 import { useAuth } from "../hooks/useAuth";
 import { useNeedsYouCount } from "../hooks/useNeedsYouCount";
 import { usePendingGlobalVariableProposalCount } from "../hooks/usePendingGlobalVariableProposalCount";
-import { ROUTES } from "../utils/constants";
+import { NAV_ITEMS, ROUTES } from "../utils/constants";
 import { useChatInbox } from "./ChatInbox";
-import Icon, { type IconName } from "./Icon";
+import Icon from "./Icon";
 import Sheet from "./Sheet";
+import { MOBILE_TABBAR_HEIGHT } from "./chatPlacement";
 import "./MobileNav.css";
 
-/** The four places a phone reaches in one tap; everything else is under More. */
-const TABS: { label: string; path: string; icon: IconName }[] = [
-  { label: "Taskboard", path: ROUTES.TASKBOARD, icon: "board" },
-  { label: "Loops", path: ROUTES.LOOP_EDITOR, icon: "loop" },
-  { label: "Analytics", path: ROUTES.ANALYTICS, icon: "chart" },
-  { label: "Chat", path: ROUTES.CHAT, icon: "chat" },
-];
-
-const MORE: { label: string; path: string; icon: IconName }[] = [
-  { label: "Settings", path: ROUTES.SETTINGS, icon: "gear" },
-  { label: "Repositories", path: ROUTES.REPOSITORIES, icon: "repo" },
-  { label: "AI Providers", path: ROUTES.AI_PROVIDERS, icon: "chat" },
-  { label: "Global Variables", path: ROUTES.GLOBAL_VARIABLES, icon: "gear" },
-];
+// The pages on the tab bar, each under its short tab label; everything else is under More.
+const TABS = NAV_ITEMS.flatMap((item) => (item.tab ? [{ ...item, label: item.tab }] : []));
+const MORE = NAV_ITEMS.filter((item) => !item.tab);
 
 /** The app menu as a sheet: the pages not on the tab bar, who is signed in, and Log out. */
 export function MenuSheet({ onClose }: { onClose: () => void }) {
@@ -81,7 +71,12 @@ export default function MobileTabBar() {
 
   return (
     <>
-      <nav className="tabbar" aria-label="Main">
+      <nav
+        className="tabbar"
+        aria-label="Main"
+        // The one height the chat icon keeps clear of, given to the stylesheet.
+        style={{ "--tabbar-h": `${MOBILE_TABBAR_HEIGHT}px` } as CSSProperties}
+      >
         {TABS.map((tab) => {
           const count =
             tab.path === ROUTES.TASKBOARD

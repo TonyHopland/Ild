@@ -101,12 +101,13 @@ function FieldChange({
   repositoryName,
 }: {
   entry: WorkItemHistoryEntry;
-  repositoryName?: (id: string) => string;
+  repositoryName?: (id: string) => string | null;
 }) {
   const change = entry.kind === "Changed";
   // A repository is recorded by id; it is shown by name, as the Overview does.
   if (entry.field === "repository" && repositoryName) {
-    const name = (id: string | null) => (id ? repositoryName(id) : id);
+    // Until the repositories have loaded the change shows no name, and no GUID.
+    const name = (id: string | null) => (id ? repositoryName(id) : null);
     return change ? (
       <OldToNew before={name(entry.oldValue)} after={name(entry.newValue)} />
     ) : (
@@ -168,7 +169,7 @@ function SaveEvent({
 }: {
   save: Save;
   now: number;
-  repositoryName?: (id: string) => string;
+  repositoryName?: (id: string) => string | null;
 }) {
   const first = save.entries[0];
   const shown = first.kind === "Changed" ? save.entries : save.entries.filter((e) => !isUnset(e));
@@ -241,8 +242,8 @@ export default function HistoryPanel({
 }: {
   workItem: WorkItem;
   active: boolean;
-  /** A repository id in words: its name, or "Unknown repository" once the list says it is none. */
-  repositoryName?: (id: string) => string;
+  /** A repository id in words (see utils/repositoryName), or null until the list has loaded. */
+  repositoryName?: (id: string) => string | null;
 }) {
   const [opened, setOpened] = useState(active);
   if (active && !opened) setOpened(true);

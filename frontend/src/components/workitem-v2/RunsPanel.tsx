@@ -31,6 +31,7 @@ import RunCostSummary from "./RunCostSummary";
 import Icon from "../Icon";
 import MenuButton, { type MenuItem } from "../MenuButton";
 import { nodeStatusLabel, pillClass, runStatusLabel, runStatusTone } from "../../utils/labels";
+import { nodeTakesRetry, runOffersRetry, runTakesRetryNow } from "./retry";
 
 interface EffectiveInput {
   nodeType?: string;
@@ -231,24 +232,20 @@ function NodeRow({
             className={`wiv2-chevron wiv2-node-chevron ${expanded ? "wiv2-chevron-open" : ""}`}
           />
         </button>
-        {/* Start and Cleanup cannot be meaningfully run again; a failed node is
-            where a retry usually belongs, so it is the one that stands out. */}
-        {onRetry &&
-          status !== LoopRunNodeStatus.Running &&
-          nodeType !== NodeType.Start &&
-          nodeType !== NodeType.Cleanup && (
-            <button
-              type="button"
-              className={`btn btn-sm ${status === LoopRunNodeStatus.Failed ? "btn-primary" : "btn-ghost"} wiv2-node-retry`}
-              disabled={retryDisabled}
-              title="Retry from this node with the same input as last time"
-              aria-label="Retry from this node"
-              onClick={() => onRetry(node.id)}
-            >
-              <Icon name="retry" size={14} />
-              Retry
-            </button>
-          )}
+        {/* A failed node is where a retry usually belongs, so it is the one that stands out. */}
+        {onRetry && nodeTakesRetry(status, nodeType) && (
+          <button
+            type="button"
+            className={`btn btn-sm ${status === LoopRunNodeStatus.Failed ? "btn-primary" : "btn-ghost"} wiv2-node-retry`}
+            disabled={retryDisabled}
+            title="Retry from this node with the same input as last time"
+            aria-label="Retry from this node"
+            onClick={() => onRetry(node.id)}
+          >
+            <Icon name="retry" size={14} />
+            Retry
+          </button>
+        )}
       </div>
       {expanded && (
         <div className="wiv2-node-body">
@@ -479,12 +476,10 @@ function RunDetail({
     );
   }
 
-  // Retrying sends a live run back to a node; an ended run is not started
-  // again. It is blocked while the run is actively executing (a paused run can
-  // still be retried) or while any action on it is in flight.
-  const retryDisabled = busy || (runDetail.status === LoopRunStatus.Running && !runDetail.isPaused);
-  const canRetry =
-    runDetail.status === LoopRunStatus.Running || runDetail.status === LoopRunStatus.WaitingHuman;
+  // A live run offers a retry; it takes one only when parked or paused, and
+  // not while another action on it is in flight.
+  const retryDisabled = busy || !runTakesRetryNow(runDetail);
+  const canRetry = runOffersRetry(runDetail);
 
   const isLiveRun =
     runDetail.id === workItem.currentLoopRunId && workItem.status === WorkItemStatus.Running;
