@@ -111,7 +111,8 @@ describe("Analytics page", () => {
     // Provider breakdown and time series sections render. "claude" appears both
     // as a chart bar label and a filter <option>, so assert at least one.
     expect(screen.getByText("By agent provider")).toBeTruthy();
-    expect(screen.getByText("Cost over time")).toBeTruthy();
+    expect(screen.getByText("Cost per day")).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Cost over time" })).toBeTruthy();
     expect(screen.getAllByText("claude").length).toBeGreaterThan(0);
   });
 
@@ -206,5 +207,46 @@ describe("Analytics page", () => {
     expect(screen.getByText("900 / 80")).toBeTruthy();
     // No cost reported: the card shows a dash, as template cards do.
     expect(screen.getByText("—")).toBeTruthy();
+  });
+
+  test("the time series has a slot per day, a gap for a day without runs, and no bar for zero cost", async () => {
+    renderPage(
+      mockFetch({
+        ...overview,
+        series: [
+          { periodStart: "2026-06-01", runs: 3, inputTokens: 0, outputTokens: 0, costUsd: 1.25 },
+          { periodStart: "2026-06-03", runs: 1, inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        ],
+      }),
+    );
+
+    const chart = await screen.findByRole("list", { name: "Cost over time" });
+    const slots = Array.from(chart.querySelectorAll("[role=listitem]"));
+    expect(slots).toHaveLength(3);
+    expect(slots[1].getAttribute("aria-label")).toMatch(/no runs/);
+    expect(slots[2].getAttribute("aria-label")).toMatch(/\$0\.00 · 1 run$/);
+    expect((slots[2].firstElementChild as HTMLElement).style.height).toBe("0%");
+    expect((slots[0].firstElementChild as HTMLElement).style.height).toBe("100%");
+  });
+
+  test("a template with no finished run shows — rather than 0% success, and counts one run in the singular", async () => {
+    renderPage(
+      mockFetch({
+        ...overview,
+        templates: [
+          {
+            ...overview.templates[0],
+            totalRuns: 1,
+            completedRuns: 0,
+            failedRuns: 0,
+            cancelledRuns: 0,
+            successRate: 0,
+          },
+        ],
+      }),
+    );
+
+    expect(await screen.findByText("— success")).toBeTruthy();
+    expect(screen.getByText("1 run")).toBeTruthy();
   });
 });

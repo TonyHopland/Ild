@@ -10,6 +10,10 @@ import {
 import { analyticsService } from "../../services/auth";
 import { formatCost, formatPercent, formatTokens } from "../../utils/cost";
 import { formatDurationMs } from "../../utils/duration";
+import { fillBuckets } from "../../utils/analyticsBuckets";
+
+/** One series colour for every chart on the page. */
+const SERIES_COLOR = "var(--accent)";
 
 const GRANULARITIES: AnalyticsGranularity[] = ["Day", "Week", "Month", "Year"];
 const ALL_PROVIDERS = "";
@@ -44,7 +48,8 @@ function Bar({
   text: string;
   tone: string;
 }) {
-  const pct = max > 0 ? Math.max(2, Math.round((value / max) * 100)) : 0;
+  // Nothing is drawn for zero: a stub would read as a small amount.
+  const pct = max > 0 && value > 0 ? Math.max(1, Math.round((value / max) * 100)) : 0;
   return (
     <div className="analytics-bar-row">
       <span className="analytics-bar-label" title={label}>
@@ -66,6 +71,11 @@ function chartByCost<T>(items: T[], cost: (t: T) => number): boolean {
   return items.some((t) => cost(t) > 0);
 }
 
+/**
+ * Cost (or runs) per period as vertical bars on a real time axis: every period
+ * from the first to the last has a slot, so one with no runs is a gap, and a
+ * period with runs but no cost draws no bar. Hover or focus a slot for its value.
+ */
 function TimeSeriesChart({
   series,
   granularity,
@@ -74,20 +84,72 @@ function TimeSeriesChart({
   granularity: AnalyticsGranularity;
 }) {
   const byCost = chartByCost(series, (p) => p.costUsd);
-  const max = Math.max(0, ...series.map((p) => (byCost ? p.costUsd : p.runs)));
+  const buckets = fillBuckets(series, granularity);
+  const valueOf = (p: AnalyticsSeriesPoint) => (byCost ? p.costUsd : p.runs);
+  const max = Math.max(0, ...series.map(valueOf));
+  const unit = granularity === "Day" ? "day" : granularity.toLowerCase();
+  const describe = (periodStart: string, p: AnalyticsSeriesPoint | null) => {
+    const when = formatPeriod(periodStart, granularity);
+    if (!p) return `${when}: no runs`;
+    const runs = `${p.runs} ${p.runs === 1 ? "run" : "runs"}`;
+    return byCost ? `${when}: ${formatCost(p.costUsd) ?? "$0.00"} · ${runs}` : `${when}: ${runs}`;
+  };
+  // Axis labels: the first and last period, and where a new month (or year) starts.
+  const labelled = buckets.map((b, i) => {
+    if (i === 0 || i === buckets.length - 1) return true;
+    if (granularity === "Day" || granularity === "Week")
+      return b.periodStart.slice(5, 7) !== buckets[i - 1].periodStart.slice(5, 7);
+    return (
+      granularity === "Month" &&
+      b.periodStart.slice(0, 4) !== buckets[i - 1].periodStart.slice(0, 4)
+    );
+  });
   return (
     <section className="analytics-chart">
-      <h2 className="analytics-section-title">{byCost ? "Cost over time" : "Runs over time"}</h2>
-      {series.map((p) => (
-        <Bar
-          key={p.periodStart}
-          label={formatPeriod(p.periodStart, granularity)}
-          value={byCost ? p.costUsd : p.runs}
-          max={max}
-          text={byCost ? (formatCost(p.costUsd) ?? "—") : `${p.runs} runs`}
-          tone="#8b5cf6"
-        />
-      ))}
+      <h2 className="analytics-section-title">
+        {byCost ? `Cost per ${unit}` : `Runs per ${unit}`}
+      </h2>
+      <div
+        className="analytics-vbars"
+        role="list"
+        aria-label={byCost ? "Cost over time" : "Runs over time"}
+      >
+        {buckets.map((b) => {
+          const value = b.point ? valueOf(b.point) : 0;
+          const pct = max > 0 && value > 0 ? Math.max(1, (value / max) * 100) : 0;
+          const text = describe(b.periodStart, b.point);
+          return (
+            <div
+              key={b.periodStart}
+              className="analytics-vbar"
+              role="listitem"
+              tabIndex={0}
+              title={text}
+              aria-label={text}
+              data-tip={text}
+            >
+              <span style={{ height: `${pct}%`, backgroundColor: SERIES_COLOR }} />
+            </div>
+          );
+        })}
+      </div>
+      <div className="analytics-axis" aria-hidden="true">
+        {buckets.map((b, i) =>
+          labelled[i] ? (
+            <span
+              key={b.periodStart}
+              style={{ left: `${((i + 0.5) / buckets.length) * 100}%` }}
+              className={i === 0 ? "is-first" : i === buckets.length - 1 ? "is-last" : undefined}
+            >
+              {formatPeriod(b.periodStart, granularity)}
+            </span>
+          ) : null,
+        )}
+      </div>
+      <p className="analytics-chart-note">
+        Gaps are {unit}s with no runs.
+        {byCost ? " A period with runs but no cost draws no bar." : ""}
+      </p>
     </section>
   );
 }
@@ -109,7 +171,7 @@ function ProviderChart({ providers }: { providers: ProviderAnalytics[] }) {
               ? (formatCost(p.totalCostUsd) ?? "—")
               : `${formatTokens(p.totalInputTokens + p.totalOutputTokens)} tok`
           }
-          tone="#f59e0b"
+          tone={SERIES_COLOR}
         />
       ))}
     </section>
@@ -122,7 +184,9 @@ function TemplateCard({ t }: { t: TemplateAnalytics }) {
     <div className="analytics-card">
       <div className="analytics-card-head">
         <span className="analytics-card-title">{t.templateName}</span>
-        <span className="analytics-card-sub">{t.totalRuns} runs</span>
+        <span className="analytics-card-sub">
+          {t.totalRuns} {t.totalRuns === 1 ? "run" : "runs"}
+        </span>
       </div>
       <div className="analytics-success">
         <span className="analytics-bar-track">
@@ -131,7 +195,12 @@ function TemplateCard({ t }: { t: TemplateAnalytics }) {
             style={{ width: `${Math.round(t.successRate * 100)}%`, backgroundColor: "#22c55e" }}
           />
         </span>
-        <span className="analytics-success-pct">{formatPercent(t.successRate)} success</span>
+        <span className="analytics-success-pct">
+          {/* No finished run to compute a rate from reads as "—", not as 0%. */}
+          {t.completedRuns + t.failedRuns + t.cancelledRuns === 0
+            ? "— success"
+            : `${formatPercent(t.successRate)} success`}
+        </span>
       </div>
       <dl className="analytics-stats">
         <div>
@@ -151,7 +220,7 @@ function TemplateCard({ t }: { t: TemplateAnalytics }) {
           <dd>{seconds(t.avgNodeSeconds)}</dd>
         </div>
         <div>
-          <dt title="Times a node routed down its on_failure edge">on_failure</dt>
+          <dt title="Times a node routed down its on_failure edge">On failure</dt>
           <dd>{t.onFailureRoutings}</dd>
         </div>
         <div>
@@ -369,7 +438,7 @@ export default function Analytics() {
                       value={t.totalCostUsd}
                       max={maxCost}
                       text={formatCost(t.totalCostUsd) ?? "—"}
-                      tone="#3b82f6"
+                      tone={SERIES_COLOR}
                     />
                   ))}
                   {overview.chats
@@ -416,7 +485,7 @@ export default function Analytics() {
           padding: 0.4rem 0.8rem; background-color: #242438; color: #a0a0b0;
           border: none; cursor: pointer; font-size: 0.85rem;
         }
-        .analytics-gran-btn.active { background-color: #3b82f6; color: #fff; }
+        .analytics-gran-btn.active { background-color: var(--accent); color: #fff; }
         .analytics-filter { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.75rem; color: #a0a0b0; }
         .analytics-filter select, .analytics-filter input {
           padding: 0.35rem 0.5rem; background-color: #2a2a3e; color: #e0e0e0;
@@ -444,6 +513,85 @@ export default function Analytics() {
         .analytics-summary-value { font-size: 1.5rem; font-weight: 700; color: #fff; }
         .analytics-summary-label { font-size: 0.8rem; color: #a0a0b0; }
         .analytics-section-title { font-size: 1.05rem; font-weight: 600; margin: 0 0 0.75rem; }
+        /* Vertical bars on a real time axis; each slot is a full-height hover target. */
+        .analytics-vbars {
+          display: flex;
+          align-items: flex-end;
+          gap: 2px;
+          height: 180px;
+          border-bottom: 1px solid var(--border);
+          margin-top: 0.75rem;
+        }
+
+        .analytics-vbar {
+          flex: 1;
+          min-width: 2px;
+          height: 100%;
+          display: flex;
+          align-items: flex-end;
+          position: relative;
+          border-radius: 2px 2px 0 0;
+        }
+
+        .analytics-vbar > span {
+          display: block;
+          width: 100%;
+          border-radius: 2px 2px 0 0;
+        }
+
+        .analytics-vbar:hover,
+        .analytics-vbar:focus-visible {
+          background: rgba(255, 255, 255, 0.04);
+          outline: none;
+        }
+
+        .analytics-vbar:hover::after,
+        .analytics-vbar:focus-visible::after {
+          content: attr(data-tip);
+          position: absolute;
+          bottom: calc(100% + 6px);
+          left: 50%;
+          transform: translateX(-50%);
+          background: var(--surface-3);
+          border: 1px solid var(--border);
+          padding: 4px 8px;
+          border-radius: 4px;
+          font-size: 11px;
+          white-space: nowrap;
+          z-index: 2;
+          color: var(--text);
+        }
+
+        .analytics-axis {
+          position: relative;
+          height: 16px;
+          margin-top: 6px;
+          font-size: 11px;
+          color: var(--text-3);
+        }
+
+        .analytics-axis span {
+          position: absolute;
+          transform: translateX(-50%);
+          white-space: nowrap;
+        }
+
+        .analytics-axis span.is-first {
+          transform: none;
+          left: 0 !important;
+        }
+
+        .analytics-axis span.is-last {
+          transform: translateX(-100%);
+          left: 100% !important;
+        }
+
+        .analytics-chart-note {
+          margin: 8px 0 0;
+          font-size: var(--fs-xs);
+          color: var(--text-3);
+        }
+
         .analytics-chart {
           padding: 1rem;
           background-color: #242438;
