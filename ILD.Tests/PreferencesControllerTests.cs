@@ -53,11 +53,11 @@ public sealed class PreferencesControllerTests : IDisposable
     {
         await AddUser("user-one");
 
-        Assert.IsType<OkObjectResult>(await Put(As("user-one"), "taskboard.folded", """{"Done":true}"""));
-        Assert.IsType<OkObjectResult>(await Put(As("user-one"), "taskboard.folded", """{"Done":false}"""));
+        Assert.IsType<OkObjectResult>(await Put(As("user-one"), "taskboard.folded.done", "true"));
+        Assert.IsType<OkObjectResult>(await Put(As("user-one"), "taskboard.folded.done", "false"));
 
         var stated = Stated(await As("user-one").GetAll(default));
-        Assert.Equal("""{"Done":false}""", Assert.Single(stated).Value);
+        Assert.Equal("false", Assert.Single(stated).Value);
     }
 
     [Fact]
@@ -66,11 +66,11 @@ public sealed class PreferencesControllerTests : IDisposable
         await AddUser("user-one");
         await AddUser("user-two");
 
-        await Put(As("user-one"), "taskboard.folded", "user-one's");
-        await Put(As("user-two"), "taskboard.folded", "user-two's");
+        await Put(As("user-one"), "taskboard.folded.done", "user-one's");
+        await Put(As("user-two"), "taskboard.folded.done", "user-two's");
 
-        Assert.Equal("user-one's", Stated(await As("user-one").GetAll(default))["taskboard.folded"]);
-        Assert.Equal("user-two's", Stated(await As("user-two").GetAll(default))["taskboard.folded"]);
+        Assert.Equal("user-one's", Stated(await As("user-one").GetAll(default))["taskboard.folded.done"]);
+        Assert.Equal("user-two's", Stated(await As("user-two").GetAll(default))["taskboard.folded.done"]);
     }
 
     [Theory]

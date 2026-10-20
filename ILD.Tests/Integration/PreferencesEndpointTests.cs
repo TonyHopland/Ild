@@ -27,11 +27,11 @@ public class PreferencesEndpointTests
             new AuthenticationHeaderValue("Bearer", await factory.GetAdminTokenAsync());
         var ct = TestContext.Current.CancellationToken;
 
-        var put = await client.PutAsJsonAsync("/api/v1/preferences/taskboard.folded", new { value = """{"Done":true}""" }, ct);
+        var put = await client.PutAsJsonAsync("/api/v1/preferences/taskboard.folded.done", new { value = "true" }, ct);
         Assert.Equal(HttpStatusCode.OK, put.StatusCode);
 
         var all = await client.GetFromJsonAsync<Dictionary<string, string>>("/api/v1/preferences", ct);
-        Assert.Equal("""{"Done":true}""", all!["taskboard.folded"]);
+        Assert.Equal("true", all!["taskboard.folded.done"]);
     }
 
     [Fact]

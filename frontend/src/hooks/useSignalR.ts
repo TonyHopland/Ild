@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import * as signalR from "@microsoft/signalr";
 import type { TypedSignalRMessage } from "../types/signalr";
 import { authService } from "../services/auth";
@@ -191,5 +191,7 @@ export function useSignalR(hubUrl: string | null = "/hubs/work-item") {
     return connectionRef.current?.invoke(method, ...args);
   }, []);
 
-  return { connectionState, on, off, invoke };
+  // One object per connection state, so a context that hands it down (the
+  // shared work-item hub) re-renders its readers only when the state changes.
+  return useMemo(() => ({ connectionState, on, off, invoke }), [connectionState, on, off, invoke]);
 }

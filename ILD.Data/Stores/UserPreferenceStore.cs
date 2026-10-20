@@ -15,6 +15,12 @@ public sealed class UserPreferenceStore : IUserPreferenceStore
             .Where(p => p.UserId == userId)
             .ToDictionaryAsync(p => p.Key, p => p.Value, ct);
 
+    public Task<int> CountAsync(Guid userId, CancellationToken ct = default)
+        => _db.UserPreferences.CountAsync(p => p.UserId == userId, ct);
+
+    public Task<bool> HasAsync(Guid userId, string key, CancellationToken ct = default)
+        => _db.UserPreferences.AnyAsync(p => p.UserId == userId && p.Key == key, ct);
+
     public async Task<bool> DeleteAsync(Guid userId, string key, CancellationToken ct = default)
         => await _db.UserPreferences.Where(p => p.UserId == userId && p.Key == key).ExecuteDeleteAsync(ct) > 0;
 

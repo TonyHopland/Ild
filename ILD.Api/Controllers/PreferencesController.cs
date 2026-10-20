@@ -62,8 +62,9 @@ public partial class PreferencesController : ControllerBase
         var value = request.Value!;
         if (value.Length > MaxValueLength)
             return BadRequest(new { error = $"A preference value is at most {MaxValueLength} characters." });
-        var mine = await _preferences.GetAllAsync(userId.Value, ct);
-        if (!mine.ContainsKey(key) && mine.Count >= MaxKeysPerUser)
+        // A key the user already has can always change; only a new one counts against the cap.
+        if (!await _preferences.HasAsync(userId.Value, key, ct)
+            && await _preferences.CountAsync(userId.Value, ct) >= MaxKeysPerUser)
             return BadRequest(new { error = $"A user keeps at most {MaxKeysPerUser} preferences." });
 
         await _preferences.UpsertAsync(userId.Value, key, value, ct);

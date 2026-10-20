@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { useSchedulerState } from "../hooks/useSchedulerState";
 import Icon from "./Icon";
+import "./SchedulerChip.css";
 
 const ERROR_SHOWN_MS = 6000;
-import "./SchedulerChip.css";
 
 /**
  * The scheduler's state in the header, on every page: "Scheduler: Running" or

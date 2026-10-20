@@ -106,8 +106,10 @@ function FieldChange({
   const change = entry.kind === "Changed";
   // A repository is recorded by id; it is shown by name, as the Overview does.
   if (entry.field === "repository" && repositoryName) {
-    // Until the repositories have loaded the change shows no name, and no GUID.
-    const name = (id: string | null) => (id ? repositoryName(id) : null);
+    // Until the repositories have loaded (or if they could not be), a recorded
+    // repository shows as "…": it was there, its name is not known yet. "none"
+    // is kept for a change that really had no repository.
+    const name = (id: string | null) => (id ? (repositoryName(id) ?? "…") : null);
     return change ? (
       <OldToNew before={name(entry.oldValue)} after={name(entry.newValue)} />
     ) : (

@@ -19,9 +19,9 @@ describe("the shared work-item hub", () => {
     const shared = fakeHub();
     const unused = fakeHub();
     // The provider asks for the hub by URL; a hook handed a connection asks for none.
-    const useSignalR = vi.spyOn(signalRHook, "useSignalR").mockImplementation((url) =>
-      url === null ? unused.connection : shared.connection,
-    );
+    const useSignalR = vi
+      .spyOn(signalRHook, "useSignalR")
+      .mockImplementation((url) => (url === null ? unused.connection : shared.connection));
     stubFetch(() => reply(404, { error: "not stubbed" }));
 
     render(

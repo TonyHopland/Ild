@@ -184,7 +184,7 @@ describe("WorkItemModalV2 History tab", () => {
     expect(panel.textContent).not.toContain("repo-gone");
   });
 
-  test("while the repositories are still loading, a repository change shows no raw id", async () => {
+  test("while the repositories are still loading, a repository change shows … for each side, never none", async () => {
     mockServices(async () => [
       entry({
         saveId: "save-1",
@@ -201,6 +201,9 @@ describe("WorkItemModalV2 History tab", () => {
     await waitFor(() => expect(panel.textContent).toContain("bob"));
     expect(panel.textContent).not.toContain("repo-a");
     expect(panel.textContent).not.toContain("repo-b");
+    expect(panel.textContent).not.toContain("none");
+    expect(panel.querySelector(".wiv2-history-old")?.textContent).toBe("…");
+    expect(panel.querySelector(".wiv2-history-new")?.textContent).toBe("…");
   });
 
   test("lists one group per save, newest first, with the actor, a relative time and each change", async () => {

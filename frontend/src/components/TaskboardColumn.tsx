@@ -66,7 +66,6 @@ export default function TaskboardColumn({
   // Any column folds to a strip and opens again from it. Until the user
   // chooses, Done and the empty columns other than Running start folded, so the
   // busy ones get the room. A folded column opens while a card is dragged over it.
-  const fold = onFoldChange;
   // Empty means no card on screen and none counted: a card a live update just
   // added shows even before the count catches up.
   const empty = total === 0 && workItems.length === 0;
@@ -121,7 +120,7 @@ export default function TaskboardColumn({
           aria-expanded={false}
           aria-label={`${label}: ${summary}. Show column`}
           title={`${label}: ${summary}`}
-          onClick={() => fold(false)}
+          onClick={() => onFoldChange(false)}
         >
           <span className="taskboard-column-count">{total}</span>
           <h3 className="taskboard-column-title">{label}</h3>
@@ -148,7 +147,7 @@ export default function TaskboardColumn({
               className="taskboard-column-fold"
               aria-label={`Fold ${label}`}
               title="Fold column"
-              onClick={() => fold(true)}
+              onClick={() => onFoldChange(true)}
             >
               <Icon name="back" size={14} />
             </button>
