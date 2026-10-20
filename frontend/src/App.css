@@ -23,3 +23,22 @@
   font-weight: 600;
   margin-bottom: 1rem;
 }
+
+/* Phone: a shorter header, and the tab bar under the scrolling page. Inputs
+   are at least 16px so iOS does not zoom into them on focus. */
+@media (max-width: 767px) {
+  .app {
+    height: 100dvh;
+  }
+
+  .app-main {
+    margin-top: 3.5rem;
+    padding: 12px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

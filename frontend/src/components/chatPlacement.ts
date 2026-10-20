@@ -5,6 +5,8 @@
 // stays on-screen while the window is small and goes back to where it was put
 // when the window grows again. Whether the chat list is open is kept here too.
 
+import { MOBILE_QUERY } from "../hooks/useIsMobile";
+
 export interface Point {
   x: number;
   y: number;
@@ -32,12 +34,17 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-/** Current viewport size, or zeros when there is no `window` (SSR/tests). */
+/** The phone tab bar along the bottom of the screen, which the icon stays above. */
+export const MOBILE_TABBAR_HEIGHT = 60;
+
+/**
+ * The area the icon and panel may use, or zeros when there is no `window`
+ * (SSR/tests): the viewport, less the tab bar on a phone.
+ */
 export function viewportSize(): Size {
-  return {
-    width: typeof window === "undefined" ? 0 : window.innerWidth,
-    height: typeof window === "undefined" ? 0 : window.innerHeight,
-  };
+  if (typeof window === "undefined") return { width: 0, height: 0 };
+  const tabBar = window.matchMedia?.(MOBILE_QUERY).matches ? MOBILE_TABBAR_HEIGHT : 0;
+  return { width: window.innerWidth, height: window.innerHeight - tabBar };
 }
 
 /** Keep the floating icon fully inside the viewport, honouring the edge margin. */

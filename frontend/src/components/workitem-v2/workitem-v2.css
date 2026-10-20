@@ -2026,3 +2026,176 @@
   border-color: rgba(239, 68, 68, 0.6);
   background: linear-gradient(0deg, var(--danger-soft), var(--danger-soft)), var(--surface-2);
 }
+
+/* ---------- phone ---------- */
+
+/* Phone: the dialog is the whole screen. The tab strip scrolls sideways and
+   fades at the edge so a cut-off tab reads as more to come; panes that sit side
+   by side on a wide screen stack, and controls get room for a thumb. */
+@media (max-width: 767px) {
+  .modal-overlay:has(> .wiv2-dialog) {
+    align-items: stretch;
+  }
+
+  .wiv2-dialog,
+  .wiv2-dialog.wiv2-dialog-form {
+    width: 100vw;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .wiv2-header {
+    padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
+  }
+
+  .wiv2-header-actions .btn-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .wiv2-tabbar {
+    padding: 0 var(--space-2);
+    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+  }
+
+  .wiv2-tab {
+    min-height: 44px;
+  }
+
+  .wiv2-content {
+    padding: var(--space-3);
+  }
+
+  .wiv2-footer {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .wiv2-footer .btn {
+    min-height: 40px;
+  }
+
+  /* Answers: up to three share one row; more stack, one per row. */
+  .wiv2-feedback .feedback-actions {
+    flex-wrap: nowrap;
+  }
+
+  .wiv2-feedback .feedback-actions > .btn {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    margin-left: 0;
+  }
+
+  .wiv2-feedback .feedback-actions:has(> .btn:nth-of-type(4)) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* Runs: the run list is a strip that scrolls sideways; a step's status and
+     duration go under its name. */
+  .wiv2-runs-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .wiv2-run-item {
+    flex: none;
+  }
+
+  .wiv2-node-header {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .wiv2-node-label {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .wiv2-node-meta {
+    order: 5;
+    flex-basis: 100%;
+    padding-left: 22px;
+    text-align: left;
+  }
+
+  /* Files: the list or the open file, one at a time. */
+  .wiv2-files-tree {
+    width: auto;
+    flex: 1;
+    border-right: 0;
+  }
+
+  .wiv2-files--viewing .wiv2-files-tree,
+  .wiv2-files:not(.wiv2-files--viewing) .wiv2-files-viewer {
+    display: none;
+  }
+
+  .wiv2-files-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .wiv2-file-row {
+    min-height: 40px;
+  }
+
+  /* Preview: one card per service instead of a table. */
+  .preview-table,
+  .preview-table tbody,
+  .preview-table tr,
+  .preview-table td {
+    display: block;
+  }
+
+  .preview-table thead {
+    display: none;
+  }
+
+  .preview-table .preview-service-row {
+    margin-top: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+  }
+
+  .preview-table td {
+    border: 0;
+    padding: 4px 0;
+  }
+
+  .preview-table td[data-label] {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .preview-table td[data-label]::before {
+    content: attr(data-label);
+    width: 4rem;
+    flex: none;
+    color: var(--text-3);
+    font-size: var(--fs-xs);
+  }
+
+  .preview-table .preview-cell-name {
+    font-weight: 600;
+  }
+
+  .preview-table .preview-url {
+    overflow-wrap: anywhere;
+  }
+
+  .preview-table .preview-cell-actions .btn {
+    min-height: 40px;
+  }
+
+  /* Forms: fields stack. */
+  .wiv2-edit-form .form-row {
+    grid-template-columns: 1fr;
+  }
+}

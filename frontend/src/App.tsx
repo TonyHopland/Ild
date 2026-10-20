@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router";
 import { AuthContext, useProvideAuth, useAuth } from "./hooks/useAuth";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
+import MobileTabBar from "./components/MobileNav";
+import { useIsMobile } from "./hooks/useIsMobile";
 import ChatBubble from "./components/ChatBubble";
 import { ChatInboxProvider } from "./components/ChatInbox";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -27,6 +29,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
+  const isMobile = useIsMobile();
 
   if (isLoading) {
     return (
@@ -180,7 +183,8 @@ function AppRoutes() {
             <Route path="*" element={<Navigate to="/taskboard" replace />} />
           </Routes>
         </main>
-        <Footer />
+        {/* A phone navigates by the tab bar and has no room for the footer. */}
+        {isMobile ? <MobileTabBar /> : <Footer />}
         <ChatBubble />
       </div>
     </ChatInboxProvider>

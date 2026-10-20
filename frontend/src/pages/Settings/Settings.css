@@ -371,6 +371,51 @@
   }
 }
 
+/* Phone: the sections are a row of chips that scrolls sideways, each control
+   sits under its label rather than squeezing it, and wide tables scroll
+   inside their card. */
+@media (max-width: 767px) {
+  .settings-nav {
+    gap: 6px;
+    margin: 0 -12px;
+    padding: 0 12px 4px;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    scrollbar-width: none;
+  }
+
+  .settings-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .settings-nav-link {
+    flex: none;
+    min-height: 40px;
+    padding: 0 14px;
+    white-space: nowrap;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+  }
+
+  .settings-row {
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .settings-row-control {
+    flex-shrink: 1;
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .settings-card .net-table {
+    display: block;
+    overflow-x: auto;
+  }
+}
+
 /* "Saved", beside a field for a moment after its change has landed. */
 .settings-saved {
   min-width: 3.5rem;

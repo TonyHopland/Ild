@@ -930,3 +930,10 @@
   white-space: nowrap;
   border: 0;
 }
+
+/* Phone: form fields stack one per row. */
+@media (max-width: 767px) {
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+}

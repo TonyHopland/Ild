@@ -26,6 +26,7 @@ import { parseUnifiedDiff } from "../../utils/unifiedDiff";
 import { highlightLines } from "../../utils/syntaxHighlight";
 import MarkdownRenderer from "../MarkdownRenderer";
 import Icon from "../Icon";
+import { useIsMobile } from "../../hooks/useIsMobile";
 
 /** A changed file is marked with a coloured dot; this is what it says in words. */
 const STATUS_LABEL: Record<Exclude<WorktreeFileChangeStatus, "none">, string> = {
@@ -179,6 +180,10 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   const [downloadError, setDownloadError] = useState<string | null>(null);
   // Long lines wrap instead of scrolling sideways, when the reader asks.
   const [wrap, setWrap] = useState(false);
+  // A phone shows the list or the open file, not both: picking a file shows
+  // it, and Back returns to the list without closing it, so a draft survives.
+  const isMobile = useIsMobile();
+  const [showingFile, setShowingFile] = useState(false);
 
   const [selection, setSelection] = useState<DiffSelection>(ALL_CHANGES);
   const [commits, setCommits] = useState<WorktreeCommits | null>(null);
@@ -321,6 +326,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     (path: string) => {
       setSelectedPath(path);
       selectedPathRef.current = path;
+      setShowingFile(true);
       setDraft(null);
       setSaveError(null);
       setDownloadError(null);
@@ -491,7 +497,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
     });
 
   return (
-    <div className="wiv2-files">
+    <div className={`wiv2-files${isMobile && showingFile ? " wiv2-files--viewing" : ""}`}>
       <div className="wiv2-files-tree">
         <div className="wiv2-files-toolbar">
           <div className="wiv2-toggle-group" role="group" aria-label="File scope">
@@ -538,6 +544,16 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
 
       <div className="wiv2-files-viewer">
         <div className="wiv2-files-toolbar">
+          {isMobile && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon wiv2-files-back"
+              aria-label="Back to files"
+              onClick={() => setShowingFile(false)}
+            >
+              <Icon name="back" />
+            </button>
+          )}
           <span className="wiv2-files-viewer-path">{selectedPath ?? "No file selected"}</span>
           {/* The mode buttons lock while the editor is open: leaving the code
               view mid-edit would hide the draft behind a pane that cannot show

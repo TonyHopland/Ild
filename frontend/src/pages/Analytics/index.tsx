@@ -606,6 +606,18 @@ export default function Analytics() {
           gap: 0.75rem;
           margin-bottom: 0.5rem;
         }
+        /* Phone: the name and amount on one line, the bar under them at full width. */
+        @media (max-width: 767px) {
+          .analytics-bar-row {
+            grid-template-columns: 1fr auto;
+            row-gap: 4px;
+            margin-bottom: 0.75rem;
+          }
+          .analytics-bar-track {
+            grid-column: 1 / -1;
+            grid-row: 2;
+          }
+        }
         .analytics-bar-label {
           font-size: 0.85rem; color: #d0d0e0;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

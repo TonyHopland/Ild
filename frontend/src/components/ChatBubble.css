@@ -667,3 +667,26 @@ textarea.chat-input {
   max-height: 160px;
   line-height: 1.4;
 }
+
+/* Phone: the open chat is a full-screen sheet over the page and the tab bar;
+   it neither moves nor resizes. */
+@media (max-width: 767px) {
+  .chat-panel {
+    inset: 0 !important;
+    width: auto !important;
+    height: auto !important;
+    border: 0;
+    border-radius: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    z-index: 1100;
+  }
+
+  .chat-resize-handle {
+    display: none;
+  }
+
+  .chat-panel-header .chat-link-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}

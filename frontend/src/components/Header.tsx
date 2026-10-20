@@ -232,6 +232,25 @@ export default function Header() {
           background-color: #2d2d44;
           color: #e0e0e0;
         }
+
+        /* Phone: the tab bar and its More menu carry the navigation, the user
+           and Log out, so the header keeps the brand and the scheduler. */
+        @media (max-width: 767px) {
+          .header {
+            height: 3.5rem;
+          }
+
+          .header-nav,
+          .user-name,
+          .btn-logout,
+          .scheduler-chip-label {
+            display: none;
+          }
+
+          .scheduler-chip {
+            height: 36px;
+          }
+        }
       `}</style>
     </header>
   );

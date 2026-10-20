@@ -38,6 +38,9 @@ interface TaskboardColumnProps {
   loopTemplateNames?: string[];
   // Repository names by id, so each card can show which repository it is on.
   repositoryNames?: ReadonlyMap<string, string>;
+  // Shown on its own, as on a phone, where a picker above names the column and
+  // counts it: no header, and an empty column says what lands there instead of folding.
+  alone?: boolean;
 }
 
 export default function TaskboardColumn({
@@ -54,6 +57,7 @@ export default function TaskboardColumn({
   loadingMore = false,
   loopTemplateNames,
   repositoryNames,
+  alone = false,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
   // An empty column folds to a strip so the busy ones get the room; it opens
@@ -62,7 +66,7 @@ export default function TaskboardColumn({
   // Empty means no card on screen and none counted: a card a live update just
   // added shows even before the count catches up.
   const empty = total === 0 && workItems.length === 0;
-  const collapsed = empty && !opened && !dragOver;
+  const collapsed = empty && !opened && !dragOver && !alone;
   const needsYou = status === WorkItemStatus.HumanFeedback && !empty;
   const hasMore = onLoadMore !== undefined && workItems.length < total;
 
@@ -123,39 +127,41 @@ export default function TaskboardColumn({
 
   return (
     <div
-      className={`taskboard-column ${dragOver ? "drag-over" : ""}${needsYou ? " taskboard-column--needs" : ""}`}
+      className={`taskboard-column ${dragOver ? "drag-over" : ""}${needsYou ? " taskboard-column--needs" : ""}${alone ? " taskboard-column--alone" : ""}`}
       data-status={status}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="taskboard-column-header">
-        <h3 className="taskboard-column-title">{label}</h3>
-        <div className="taskboard-column-header-end">
-          <span className="taskboard-column-count">{total}</span>
-          {onAddItem && (
-            <button
-              type="button"
-              className="taskboard-column-add"
-              onClick={onAddItem}
-              title="New item"
-              aria-label="New item"
-            >
-              + New
-            </button>
-          )}
-          {empty && opened && (
-            <button
-              type="button"
-              className="taskboard-column-fold"
-              aria-label={`Fold ${label}`}
-              onClick={() => setOpened(false)}
-            >
-              ×
-            </button>
-          )}
+      {!alone && (
+        <div className="taskboard-column-header">
+          <h3 className="taskboard-column-title">{label}</h3>
+          <div className="taskboard-column-header-end">
+            <span className="taskboard-column-count">{total}</span>
+            {onAddItem && (
+              <button
+                type="button"
+                className="taskboard-column-add"
+                onClick={onAddItem}
+                title="New item"
+                aria-label="New item"
+              >
+                + New
+              </button>
+            )}
+            {empty && opened && (
+              <button
+                type="button"
+                className="taskboard-column-fold"
+                aria-label={`Fold ${label}`}
+                onClick={() => setOpened(false)}
+              >
+                ×
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
       <div className="taskboard-column-body">
         {empty && <p className="taskboard-column-empty">{EMPTY_HINT[status]}</p>}
         {workItems.map((item) => (
@@ -180,6 +186,16 @@ export default function TaskboardColumn({
         )}
       </div>
       <style>{`
+        .taskboard-column.taskboard-column--alone {
+          border: 0;
+          background: none;
+        }
+
+        .taskboard-column--alone .taskboard-column-body {
+          padding: 0;
+          overflow: visible;
+        }
+
         .taskboard-column {
           flex: 1 1 0;
           min-width: 0;

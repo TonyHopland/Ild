@@ -16,6 +16,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import LoopNodeComponent from "../../components/LoopNodeComponent";
 import LoopEdgeComponent from "../../components/LoopEdgeComponent";
 import { LoopEdgeInteractionContext } from "../../components/loopEdgeInteraction";
@@ -349,6 +350,8 @@ export default function LoopEditor() {
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const importFileInputRef = useRef<HTMLInputElement>(null);
   const isNarrow = useMediaQuery("(max-width: 900px)");
+  // A phone views a loop rather than builds one: no palette, and nodes stay put.
+  const isPhone = useIsMobile();
 
   const sessionPlaceholderUsages = collectSessionPlaceholderUsages(nodes);
   const selectedPlaceholderUsage = sessionPlaceholderUsages.find(
@@ -1791,19 +1794,25 @@ export default function LoopEditor() {
         <div
           className={`loop-editor-workspace ${shownReview ? "loop-editor-workspace-reviewing" : ""}`}
         >
-          <div className={`node-palette ${readOnlyVersion !== null ? "palette-disabled" : ""}`}>
-            <div className="palette-header">Drag &amp; Drop</div>
-            {paletteItems.map((item) => (
-              <div
-                key={item.type}
-                className="palette-item"
-                draggable={readOnlyVersion === null}
-                onDragStart={(event) => onPaletteDragStart(item.type, event)}
-              >
-                {item.label}
-              </div>
-            ))}
-          </div>
+          {isPhone ? (
+            <p className="loop-editor-phone-note">
+              Viewing only: building a loop needs a wider screen.
+            </p>
+          ) : (
+            <div className={`node-palette ${readOnlyVersion !== null ? "palette-disabled" : ""}`}>
+              <div className="palette-header">Drag &amp; Drop</div>
+              {paletteItems.map((item) => (
+                <div
+                  key={item.type}
+                  className="palette-item"
+                  draggable={readOnlyVersion === null}
+                  onDragStart={(event) => onPaletteDragStart(item.type, event)}
+                >
+                  {item.label}
+                </div>
+              ))}
+            </div>
+          )}
 
           {shownReview && (
             <ProposalReviewBanner
@@ -1836,6 +1845,8 @@ export default function LoopEditor() {
                   onConnect={onConnect}
                   onEdgeClick={onEdgeClick}
                   fitView
+                  nodesDraggable={!isPhone}
+                  nodesConnectable={!isPhone}
                   panOnDrag={true}
                   zoomOnScroll={true}
                   elementsSelectable={true}

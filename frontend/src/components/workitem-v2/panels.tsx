@@ -626,15 +626,15 @@ function PreviewServiceTable({
           const config = configs[service.name];
           return (
             <Fragment key={service.name}>
-              <tr>
-                <td>
+              <tr className="preview-service-row">
+                <td data-label="State">
                   <span className={pillClass(state.tone)}>{state.label}</span>
                   {service.exitCode != null && (
                     <span className="preview-exit-code"> (exit {service.exitCode})</span>
                   )}
                 </td>
                 <td className="preview-cell-name">{service.name}</td>
-                <td>
+                <td data-label="Port">
                   {running ? (
                     <span className="detail-value">{service.port ?? "—"}</span>
                   ) : (
@@ -648,7 +648,7 @@ function PreviewServiceTable({
                     />
                   )}
                 </td>
-                <td>
+                <td data-label="Link">
                   {service.publicUrl ? (
                     <a
                       href={service.publicUrl}
@@ -662,7 +662,7 @@ function PreviewServiceTable({
                     <span className="detail-value">—</span>
                   )}
                 </td>
-                <td>
+                <td className="preview-cell-actions">
                   <div className="preview-row-actions">
                     <button
                       type="button"

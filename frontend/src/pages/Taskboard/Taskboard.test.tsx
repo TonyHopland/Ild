@@ -1621,3 +1621,76 @@ describe("Taskboard direct link", () => {
     expect(badge("Backlog")).toBe("25");
   });
 });
+
+describe("Taskboard on a phone", () => {
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([makeRepo()]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const items = [
+    makeItem({ id: "wi-1", title: "Waiting on me", status: WorkItemStatus.HumanFeedback }),
+    makeItem({ id: "wi-2", title: "Not started", status: WorkItemStatus.Backlog }),
+  ];
+
+  test("shows one column at a time, picked above the board, opening on Needs you", async () => {
+    mockTaskboardServer(items);
+    renderTaskboard();
+
+    expect(await screen.findByText("Waiting on me")).toBeTruthy();
+    expect(screen.queryByText("Not started")).toBeNull();
+
+    const picker = within(screen.getByRole("tablist", { name: "Columns" }));
+    const needsYou = picker.getByRole("tab", { name: /Needs you/ });
+    expect(needsYou.getAttribute("aria-selected")).toBe("true");
+    expect(needsYou.textContent).toBe("Needs you1");
+
+    fireEvent.click(picker.getByRole("tab", { name: /Backlog/ }));
+    expect(await screen.findByText("Not started")).toBeTruthy();
+    expect(screen.queryByText("Waiting on me")).toBeNull();
+  });
+
+  test("an empty column says what lands there instead of folding to a strip", async () => {
+    mockTaskboardServer(items);
+    renderTaskboard();
+    await screen.findByText("Waiting on me");
+
+    fireEvent.click(screen.getByRole("tab", { name: /Running/ }));
+    expect(screen.getByText("Ready items start here while the scheduler is running.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Show column/ })).toBeNull();
+  });
+
+  test("the repository and tag filters move into a Filters sheet, and New work item is an icon", async () => {
+    mockTaskboardServer(items);
+    renderTaskboard();
+    await screen.findByText("Waiting on me");
+
+    expect(screen.queryByLabelText("Filter by repository")).toBeNull();
+    expect(screen.getByRole("button", { name: "New work item" }).textContent).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    const sheet = within(screen.getByRole("dialog", { name: "Filters" }));
+    fireEvent.change(sheet.getByLabelText("Filter by repository"), {
+      target: { value: "repo-1" },
+    });
+    fireEvent.click(sheet.getByRole("button", { name: "Show results" }));
+
+    expect(screen.queryByRole("dialog", { name: "Filters" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Filters/ }).textContent).toBe("Filters1 on");
+  });
+});

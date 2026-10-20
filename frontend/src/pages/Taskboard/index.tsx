@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { Repository, WorkItem, WorkItemStatus } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
@@ -6,6 +6,8 @@ import { workItemService, repositoryService, loopTemplateService } from "../../s
 import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
 import Icon from "../../components/Icon";
+import Sheet from "../../components/Sheet";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
@@ -38,6 +40,13 @@ export default function Taskboard() {
   const [tagOptions, setTagOptions] = useState<string[]>([]);
   const tagsRefreshRef = useRef({ inFlight: false, dirty: false });
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
+  // A phone shows one column at a time, picked above the board; it opens on
+  // Needs you, the column a person looks at the board for.
+  const isMobile = useIsMobile();
+  const [mobileStatus, setMobileStatus] = useState<WorkItemStatus>(WorkItemStatus.HumanFeedback);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const closeFilters = useCallback(() => setFiltersOpen(false), []);
+  const pickerRef = useRef<HTMLDivElement>(null);
   // Search reaches the server once typing pauses; the repository and tags at once.
   const [appliedSearch, setAppliedSearch] = useState(filter.search);
   const {
@@ -337,6 +346,12 @@ export default function Taskboard() {
     }));
   };
 
+  useEffect(() => {
+    pickerRef.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView?.({ inline: "center", block: "nearest" });
+  }, [mobileStatus, isMobile, isInitialLoading]);
+
   const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
   const repositoryNames = new Map(repositories.map((repo) => [repo.id, repo.name]));
   // A selected tag keeps its chip after its last use is gone, so it can still be unselected.
@@ -346,6 +361,56 @@ export default function Taskboard() {
   ].sort(compareTags);
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const filterActive = isFilterActive(filter);
+  const activeFilterCount = (filter.repositoryId ? 1 : 0) + filter.tags.length;
+  // The repository and tag filters: inline on a wide screen, in a sheet on a phone.
+  const filterControls = (
+    <>
+      <select
+        className="taskboard-filter-repo"
+        aria-label="Filter by repository"
+        value={filter.repositoryId}
+        onChange={(e) => setFilter((prev) => ({ ...prev, repositoryId: e.target.value }))}
+      >
+        <option value="">All repositories</option>
+        {repositoryOptions.map((repo) => (
+          <option key={repo.id} value={repo.id}>
+            {repo.name}
+          </option>
+        ))}
+      </select>
+      {tagChips.length > 0 && (
+        <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
+          {tagChips.map((tag) => {
+            const active = filter.tags.some((selected) => sameTag(selected, tag));
+            const loop = isLoopTag(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                className={`taskboard-filter-tag${loop ? " taskboard-filter-tag--loop" : ""}${
+                  active ? " is-active" : ""
+                }`}
+                aria-pressed={active}
+                onClick={() => toggleTagFilter(tag)}
+              >
+                {loop && <Icon name="loop" size={12} />}
+                {tag}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {filterActive && (
+        <button
+          type="button"
+          className="taskboard-filter-clear"
+          onClick={() => setFilter(EMPTY_TASKBOARD_FILTER)}
+        >
+          Clear filters
+        </button>
+      )}
+    </>
+  );
 
   if (isInitialLoading) {
     return (
@@ -368,81 +433,101 @@ export default function Taskboard() {
             value={filter.search}
             onChange={(e) => setFilter((prev) => ({ ...prev, search: e.target.value }))}
           />
-          <select
-            className="taskboard-filter-repo"
-            aria-label="Filter by repository"
-            value={filter.repositoryId}
-            onChange={(e) => setFilter((prev) => ({ ...prev, repositoryId: e.target.value }))}
-          >
-            <option value="">All repositories</option>
-            {repositoryOptions.map((repo) => (
-              <option key={repo.id} value={repo.id}>
-                {repo.name}
-              </option>
-            ))}
-          </select>
-          {tagChips.length > 0 && (
-            <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
-              {tagChips.map((tag) => {
-                const active = filter.tags.some((selected) => sameTag(selected, tag));
-                const loop = isLoopTag(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    className={`taskboard-filter-tag${loop ? " taskboard-filter-tag--loop" : ""}${
-                      active ? " is-active" : ""
-                    }`}
-                    aria-pressed={active}
-                    onClick={() => toggleTagFilter(tag)}
-                  >
-                    {loop && <Icon name="loop" size={12} />}
-                    {tag}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {filterActive && (
+          {isMobile ? (
             <button
               type="button"
-              className="taskboard-filter-clear"
-              onClick={() => setFilter(EMPTY_TASKBOARD_FILTER)}
+              className="btn btn-secondary taskboard-filters-button"
+              aria-haspopup="dialog"
+              aria-expanded={filtersOpen}
+              onClick={() => setFiltersOpen(true)}
             >
-              Clear filters
+              <Icon name="filter" />
+              Filters
+              {activeFilterCount > 0 && (
+                <span className="taskboard-filters-count">
+                  {activeFilterCount}
+                  <span className="sr-only"> on</span>
+                </span>
+              )}
             </button>
+          ) : (
+            filterControls
           )}
         </div>
-        <button type="button" className="btn btn-primary taskboard-new" onClick={openCreateModal}>
+        <button
+          type="button"
+          className={`btn btn-primary taskboard-new${isMobile ? " btn-icon" : ""}`}
+          aria-label={isMobile ? "New work item" : undefined}
+          onClick={openCreateModal}
+        >
           <Icon name="plus" />
-          New work item
+          {!isMobile && "New work item"}
         </button>
       </div>
       <div role="status" aria-live="polite" className="taskboard-live-region">
         {announcement}
       </div>
-      <div className="taskboard">
-        {WORK_ITEM_STATUSES.map((status) => {
-          const column = columns[status.value as WorkItemStatus];
-          return (
-            <TaskboardColumn
-              key={status.value}
-              status={status.value as WorkItemStatus}
-              label={status.label}
-              workItems={column.items}
-              total={column.total}
-              onWorkItemUpdate={handleWorkItemUpdate}
-              onWorkItemClick={handleCardClick}
-              onError={(msg) => setErrorText(msg)}
-              onMoveWorkItem={handleMoveWorkItem}
-              loopTemplateNames={loopTemplateNames}
-              repositoryNames={repositoryNames}
-              onLoadMore={() => loadMore(status.value as WorkItemStatus)}
-              loadingMore={column.loadingMore}
-            />
-          );
-        })}
+      {isMobile && (
+        <div className="taskboard-picker" role="tablist" aria-label="Columns" ref={pickerRef}>
+          {WORK_ITEM_STATUSES.map((status) => {
+            const value = status.value as WorkItemStatus;
+            const total = columns[value].total;
+            const picked = value === mobileStatus;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={picked}
+                className={`taskboard-picker-tab${
+                  value === WorkItemStatus.HumanFeedback && total > 0 ? " is-needs" : ""
+                }`}
+                onClick={() => setMobileStatus(value)}
+              >
+                {status.label}
+                <span className="taskboard-picker-count">{total}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div className={`taskboard${isMobile ? " taskboard--one" : ""}`}>
+        {WORK_ITEM_STATUSES.filter((status) => !isMobile || status.value === mobileStatus).map(
+          (status) => {
+            const column = columns[status.value as WorkItemStatus];
+            return (
+              <TaskboardColumn
+                key={status.value}
+                status={status.value as WorkItemStatus}
+                label={status.label}
+                workItems={column.items}
+                total={column.total}
+                onWorkItemUpdate={handleWorkItemUpdate}
+                onWorkItemClick={handleCardClick}
+                onError={(msg) => setErrorText(msg)}
+                onMoveWorkItem={handleMoveWorkItem}
+                loopTemplateNames={loopTemplateNames}
+                repositoryNames={repositoryNames}
+                onLoadMore={() => loadMore(status.value as WorkItemStatus)}
+                loadingMore={column.loadingMore}
+                alone={isMobile}
+              />
+            );
+          },
+        )}
       </div>
+      {isMobile && filtersOpen && (
+        <Sheet title="Filters" onClose={closeFilters}>
+          <div className="taskboard-filter taskboard-filter--sheet">{filterControls}</div>
+          <button
+            type="button"
+            className="btn btn-primary taskboard-filters-done"
+            onClick={closeFilters}
+          >
+            Show results
+          </button>
+        </Sheet>
+      )}
       {/* Existing items open in the tabbed detail dialog, keyed by the URL so the
           link matches the open item; a new item opens the same dialog with no
           work item, which renders its creation form. */}
@@ -592,14 +677,129 @@ export default function Taskboard() {
           padding-bottom: 1rem;
         }
 
-        @media (max-width: 640px) {
-          .taskboard {
-            flex-direction: column;
-            overflow-y: auto;
+        .taskboard-filters-count {
+          min-width: 18px;
+          padding: 0 5px;
+          border-radius: 999px;
+          background: var(--accent);
+          color: #fff;
+          font-size: 11px;
+          font-weight: 700;
+          line-height: 18px;
+        }
+
+        .taskboard-filter--sheet {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 16px;
+          margin-bottom: 16px;
+        }
+
+        .taskboard-filter--sheet .taskboard-filter-repo {
+          min-height: 44px;
+        }
+
+        .taskboard-filter--sheet .taskboard-filter-tag {
+          min-height: 36px;
+        }
+
+        .taskboard-filter--sheet .taskboard-filter-tags {
+          gap: 6px;
+        }
+
+        .taskboard-filters-done {
+          width: 100%;
+          min-height: 44px;
+        }
+
+        /* Phone: search, Filters and + on one row; the column picker scrolls
+           sideways under them; the picked column fills the page and the page
+           scrolls, not the column. */
+        @media (max-width: 767px) {
+          .taskboard-page {
+            height: auto;
           }
 
-          .taskboard-column {
-            min-height: 200px;
+          .taskboard-toolbar {
+            flex-wrap: nowrap;
+            gap: 8px;
+            margin-bottom: 12px;
+          }
+
+          .taskboard-toolbar .taskboard-filter {
+            flex-wrap: nowrap;
+            min-width: 0;
+          }
+
+          .taskboard-filter-search {
+            min-width: 0;
+            max-width: none;
+            flex: 1 1 auto;
+            min-height: 44px;
+          }
+
+          .taskboard-toolbar .btn {
+            min-height: 44px;
+            flex: none;
+          }
+
+          .taskboard-toolbar .btn-icon {
+            width: 44px;
+          }
+
+          .taskboard-picker {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            margin: 0 -12px 12px;
+            padding: 0 12px 4px;
+            scrollbar-width: none;
+          }
+
+          .taskboard-picker::-webkit-scrollbar {
+            display: none;
+          }
+
+          .taskboard-picker-tab {
+            flex: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-height: 40px;
+            padding: 0 14px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: var(--surface-2);
+            color: var(--text-2);
+            font-size: var(--fs-sm);
+            white-space: nowrap;
+            cursor: pointer;
+          }
+
+          .taskboard-picker-tab[aria-selected="true"] {
+            background: var(--surface-3);
+            border-color: var(--border-strong);
+            color: var(--text);
+          }
+
+          .taskboard-picker-count {
+            padding: 1px 7px;
+            border-radius: 999px;
+            background: var(--surface-3);
+            color: var(--text-2);
+            font-size: var(--fs-xs);
+          }
+
+          .taskboard-picker-tab.is-needs .taskboard-picker-count {
+            background: var(--attention);
+            color: #1a1205;
+            font-weight: 700;
+          }
+
+          .taskboard.taskboard--one {
+            display: block;
+            overflow: visible;
+            padding-bottom: 0;
           }
         }
       `}</style>

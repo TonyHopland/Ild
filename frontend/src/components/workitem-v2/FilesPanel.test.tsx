@@ -2279,3 +2279,47 @@ describe("FilesPanel diff range", () => {
     expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
   });
 });
+
+describe("FilesPanel on a phone", () => {
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("shows the list or the open file, and Back returns to the list with the file still open", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "a.ts", changeStatus: "modified" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockResolvedValue({
+      path: "a.ts",
+      changeStatus: "modified",
+      content: "const a = 1;",
+      diff: null,
+      isBinary: false,
+      imageMimeType: null,
+      imageBase64: null,
+    });
+    await renderPanel(makeWorkItem());
+    const panel = () => document.querySelector(".wiv2-files")!;
+    expect(panel().classList.contains("wiv2-files--viewing")).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("a.ts"));
+      await Promise.resolve();
+    });
+    expect(panel().classList.contains("wiv2-files--viewing")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to files" }));
+    expect(panel().classList.contains("wiv2-files--viewing")).toBe(false);
+    expect(document.querySelector(".wiv2-files-viewer-path")?.textContent).toBe("a.ts");
+  });
+});
