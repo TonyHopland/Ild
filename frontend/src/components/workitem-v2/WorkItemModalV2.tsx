@@ -212,7 +212,7 @@ export default function WorkItemModalV2({
       <>
         <div className="modal-overlay" onMouseDown={requestClose}>
           <div
-            className="wiv2-dialog"
+            className="wiv2-dialog wiv2-dialog-form"
             onMouseDown={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"

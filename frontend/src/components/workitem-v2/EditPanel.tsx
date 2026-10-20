@@ -11,6 +11,7 @@ import { parseTags } from "../../utils/workItemJson";
 import TagAutocomplete from "../TagAutocomplete";
 import AttachmentPicker from "./AttachmentPicker";
 import type { WorkItemDetail } from "./useWorkItemDetail";
+import { workItemStatusLabel } from "../../utils/labels";
 
 interface EditPanelProps {
   /** The item being edited, or null to create a new one. */
@@ -68,11 +69,20 @@ export default function EditPanel({
   const [baseBranchOverride, setBaseBranchOverride] = useState(baseBaseBranchOverride);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Problems with the two required fields, said beside them when Create or
+  // Update is pressed, instead of the browser's own bubble.
+  const [titleError, setTitleError] = useState<string | null>(null);
+  const [repositoryError, setRepositoryError] = useState<string | null>(null);
   // The item a first press already created. A retry after a failed upload saves
   // onto it rather than creating a second work item.
   const [createdId, setCreatedId] = useState<string | null>(null);
 
   const overridesProvider = aiProviderOverride !== AiProviderOverrideMode.None;
+  // Whether the item already sets any of the folded fields, so they open shown.
+  const hasAdvanced =
+    baseAiProviderOverride !== AiProviderOverrideMode.None ||
+    baseBranchNameOverride !== "" ||
+    baseBaseBranchOverride !== "";
   const attachments = detail.editAttachments;
 
   // Advice on the branch name, debounced while typing. Deliberately never gates
@@ -124,6 +134,14 @@ export default function EditPanel({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (submitting) return;
+    const missingTitle = !title.trim();
+    const missingRepository = !repositoryId;
+    setTitleError(missingTitle ? "Give it a title." : null);
+    setRepositoryError(missingRepository ? "Pick the repository it is for." : null);
+    if (missingTitle || missingRepository) {
+      document.getElementById(missingTitle ? "wiv2-title" : "wiv2-repository")?.focus();
+      return;
+    }
     setSubmitting(true);
     setSubmitError(null);
 
@@ -216,16 +234,34 @@ export default function EditPanel({
   };
 
   return (
-    <form onSubmit={handleSubmit} onPaste={attachments.handlePaste} className="wiv2-edit-form">
+    <form
+      onSubmit={handleSubmit}
+      onPaste={attachments.handlePaste}
+      className="wiv2-edit-form"
+      noValidate
+    >
       <div className="form-group">
-        <label htmlFor="wiv2-title">Title</label>
+        <label htmlFor="wiv2-title" className="is-required">
+          Title
+        </label>
         <input
           id="wiv2-title"
           type="text"
           value={title}
-          onChange={(e) => setTitle(e.target.value)}
+          onChange={(e) => {
+            setTitle(e.target.value);
+            if (titleError && e.target.value.trim()) setTitleError(null);
+          }}
+          placeholder="What should change?"
           required
+          aria-invalid={titleError ? true : undefined}
+          aria-describedby={titleError ? "wiv2-title-error" : undefined}
         />
+        {titleError && (
+          <small id="wiv2-title-error" className="form-hint is-error">
+            {titleError}
+          </small>
+        )}
       </div>
       <div className="form-group">
         <label htmlFor="wiv2-description">Description</label>
@@ -233,18 +269,31 @@ export default function EditPanel({
           id="wiv2-description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          rows={10}
+          rows={8}
+          placeholder="Context, acceptance criteria, links. Markdown works."
         />
       </div>
       <AttachmentPicker staging={attachments} inputId="wiv2-attachments" />
       <div className="form-row">
         <div className="form-group">
-          <label htmlFor="wiv2-repository">Repository</label>
+          <label htmlFor="wiv2-repository" className="is-required">
+            Repository
+          </label>
           <select
             id="wiv2-repository"
             value={repositoryId}
-            onChange={(e) => setRepositoryId(e.target.value)}
-            aria-describedby={workItem ? "wiv2-repository-hint" : undefined}
+            onChange={(e) => {
+              setRepositoryId(e.target.value);
+              if (e.target.value) setRepositoryError(null);
+            }}
+            aria-describedby={
+              repositoryError
+                ? "wiv2-repository-error"
+                : workItem
+                  ? "wiv2-repository-hint"
+                  : undefined
+            }
+            aria-invalid={repositoryError ? true : undefined}
             required
           >
             <option value="">Select repository...</option>
@@ -254,10 +303,16 @@ export default function EditPanel({
               </option>
             ))}
           </select>
-          {workItem && (
-            <small id="wiv2-repository-hint" className="form-hint">
-              Only the next run is affected.
+          {repositoryError ? (
+            <small id="wiv2-repository-error" className="form-hint is-error">
+              {repositoryError}
             </small>
+          ) : (
+            workItem && (
+              <small id="wiv2-repository-hint" className="form-hint">
+                Only the next run is affected.
+              </small>
+            )
           )}
         </div>
         <div className="form-group">
@@ -267,12 +322,18 @@ export default function EditPanel({
             value={status}
             onChange={(e) => setStatus(e.target.value as WorkItemStatus)}
           >
-            <option value={WorkItemStatus.Backlog}>Backlog</option>
-            <option value={WorkItemStatus.WorkQueue}>Work Queue</option>
-            <option value={WorkItemStatus.Ready}>Ready</option>
-            <option value={WorkItemStatus.Running}>Running</option>
-            <option value={WorkItemStatus.HumanFeedback}>Human Feedback</option>
-            <option value={WorkItemStatus.Done}>Done</option>
+            {[
+              WorkItemStatus.Backlog,
+              WorkItemStatus.WorkQueue,
+              WorkItemStatus.Ready,
+              WorkItemStatus.Running,
+              WorkItemStatus.HumanFeedback,
+              WorkItemStatus.Done,
+            ].map((value) => (
+              <option key={value} value={value}>
+                {workItemStatusLabel(value)}
+              </option>
+            ))}
           </select>
         </div>
         <div className="form-group">
@@ -290,83 +351,88 @@ export default function EditPanel({
         </div>
       </div>
       <div className="form-group">
-        <label htmlFor="wiv2-tags">
-          Tags (comma separated) — each tag must match a loop template name
-        </label>
+        <label htmlFor="wiv2-tags">Tags</label>
         <TagAutocomplete
           id="wiv2-tags"
           value={tags}
           onChange={setTags}
           options={detail.templates.map((t) => t.name)}
-          placeholder="e.g. build, deploy"
+          placeholder="Type to pick a loop, comma between tags"
         />
+        <small className="form-hint">
+          A tag that names a loop template decides which loop runs this item.
+        </small>
       </div>
-      <div className="form-row">
-        <div className="form-group">
-          <label htmlFor="wiv2-ai-override">AI provider override</label>
-          <select
-            id="wiv2-ai-override"
-            value={aiProviderOverride}
-            onChange={(e) => setAiProviderOverride(e.target.value as AiProviderOverrideMode)}
-          >
-            <option value={AiProviderOverrideMode.None}>Default (no override)</option>
-            <option value={AiProviderOverrideMode.OverrideDefault}>
-              Override default provider only
-            </option>
-            <option value={AiProviderOverrideMode.OverrideAll}>Override all providers</option>
-          </select>
-        </div>
-        {overridesProvider && (
+      {/* Rarely needed, so folded; open when the item already uses any of them. */}
+      <details className="wiv2-edit-advanced" open={hasAdvanced}>
+        <summary>Advanced: AI provider, branch, base branch</summary>
+        <div className="form-row">
           <div className="form-group">
-            <label htmlFor="wiv2-ai-override-provider">Provider</label>
+            <label htmlFor="wiv2-ai-override">AI provider override</label>
             <select
-              id="wiv2-ai-override-provider"
-              value={aiProviderOverrideId}
-              onChange={(e) => setAiProviderOverrideId(e.target.value)}
+              id="wiv2-ai-override"
+              value={aiProviderOverride}
+              onChange={(e) => setAiProviderOverride(e.target.value as AiProviderOverrideMode)}
             >
-              <option value="">Select provider...</option>
-              {detail.aiProviders.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
+              <option value={AiProviderOverrideMode.None}>Default (no override)</option>
+              <option value={AiProviderOverrideMode.OverrideDefault}>
+                Override default provider only
+              </option>
+              <option value={AiProviderOverrideMode.OverrideAll}>Override all providers</option>
             </select>
           </div>
-        )}
-      </div>
-      <div className="form-group">
-        <label htmlFor="wiv2-branch-name">Branch name (optional)</label>
-        <input
-          id="wiv2-branch-name"
-          type="text"
-          value={branchNameOverride}
-          onChange={(e) => setBranchNameOverride(e.target.value)}
-          placeholder="Leave empty for a generated branch per run"
-          aria-describedby="wiv2-branch-name-hint"
-        />
-        <small
-          id="wiv2-branch-name-hint"
-          className={branchNameProblem ? "form-hint is-problem" : "form-hint"}
-        >
-          {branchNameProblem ??
-            "Used verbatim by every run of this item. Only the next run is affected."}
-        </small>
-      </div>
-      <div className="form-group">
-        <label htmlFor="wiv2-base-branch">Base branch (optional)</label>
-        <input
-          id="wiv2-base-branch"
-          type="text"
-          value={baseBranchOverride}
-          onChange={(e) => setBaseBranchOverride(e.target.value)}
-          placeholder="Leave empty for the repository's default branch"
-          aria-describedby="wiv2-base-branch-hint"
-        />
-        <small id="wiv2-base-branch-hint" className="form-hint">
-          Runs start from this branch and open their PR against it. It must exist on the remote when
-          the run starts, or the run fails. Only the next run is affected.
-        </small>
-      </div>
+          {overridesProvider && (
+            <div className="form-group">
+              <label htmlFor="wiv2-ai-override-provider">Provider</label>
+              <select
+                id="wiv2-ai-override-provider"
+                value={aiProviderOverrideId}
+                onChange={(e) => setAiProviderOverrideId(e.target.value)}
+              >
+                <option value="">Select provider...</option>
+                {detail.aiProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+        <div className="form-group">
+          <label htmlFor="wiv2-branch-name">Branch name (optional)</label>
+          <input
+            id="wiv2-branch-name"
+            type="text"
+            value={branchNameOverride}
+            onChange={(e) => setBranchNameOverride(e.target.value)}
+            placeholder="Leave empty for a generated branch per run"
+            aria-describedby="wiv2-branch-name-hint"
+          />
+          <small
+            id="wiv2-branch-name-hint"
+            className={branchNameProblem ? "form-hint is-problem" : "form-hint"}
+          >
+            {branchNameProblem ??
+              "Used verbatim by every run of this item. Only the next run is affected."}
+          </small>
+        </div>
+        <div className="form-group">
+          <label htmlFor="wiv2-base-branch">Base branch (optional)</label>
+          <input
+            id="wiv2-base-branch"
+            type="text"
+            value={baseBranchOverride}
+            onChange={(e) => setBaseBranchOverride(e.target.value)}
+            placeholder="Leave empty for the repository's default branch"
+            aria-describedby="wiv2-base-branch-hint"
+          />
+          <small id="wiv2-base-branch-hint" className="form-hint">
+            Runs start from this branch and open their PR against it. It must exist on the remote
+            when the run starts, or the run fails. Only the next run is affected.
+          </small>
+        </div>
+      </details>
       {submitError && (
         <div role="alert" className="form-error">
           {submitError}

@@ -1839,6 +1839,34 @@ describe("WorkItemModalV2 creation", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
+  test("Create without a title or repository says so beside each and creates nothing", async () => {
+    mockServices();
+    const createSpy = vi.spyOn(authServices.workItemService, "create");
+    await renderCreateDialog();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+
+    expect(screen.getByText("Give it a title.")).toBeTruthy();
+    expect(screen.getByText("Pick the repository it is for.")).toBeTruthy();
+    expect(screen.getByLabelText("Title").getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByLabelText("Title"));
+    expect(createSpy).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Something" } });
+    expect(screen.queryByText("Give it a title.")).toBeNull();
+  });
+
+  test("the rarely used fields start folded under Advanced", async () => {
+    mockServices();
+    await renderCreateDialog();
+
+    const advanced = screen.getByText(/^Advanced/).closest("details")!;
+    expect(advanced.open).toBe(false);
+    expect(advanced.contains(screen.getByLabelText("Branch name (optional)"))).toBe(true);
+  });
+
   test("submitting the form creates the work item, reports it and closes", async () => {
     mockServices();
     const created = makeWorkItem({ id: "wi-new", title: "Fresh item" });

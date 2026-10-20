@@ -41,10 +41,16 @@ export default function AttachmentPicker({ staging, inputId }: AttachmentPickerP
             e.target.value = "";
           }}
         />
-        <small className="form-hint">
-          Drop files here or paste a screenshot.
-          {limits && ` Up to ${formatBytes(limits.maxBytesPerFile)} per file.`}
-        </small>
+        <div className="wiv2-attach-pick">
+          {/* The native file button is hidden; this label opens the same picker. */}
+          <label htmlFor={inputId} className="btn btn-sm btn-secondary wiv2-attach-browse">
+            Browse…
+          </label>
+          <small className="form-hint">
+            Drop files here or paste a screenshot.
+            {limits && ` Up to ${formatBytes(limits.maxBytesPerFile)} per file.`}
+          </small>
+        </div>
       </div>
       {stagingError && (
         <div role="alert" className="form-error">

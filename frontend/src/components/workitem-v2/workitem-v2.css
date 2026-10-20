@@ -252,7 +252,16 @@
 
 .wiv2-body-edit {
   overflow-y: auto;
-  padding: 1rem;
+  padding: var(--space-4) var(--space-5) 0;
+  flex: 1;
+  min-height: 0;
+}
+
+/* New work item is a short form: a right-sized dialog, not a near-fullscreen one. */
+.wiv2-dialog-form {
+  width: min(760px, 96vw);
+  height: auto;
+  max-height: 94vh;
 }
 
 /* The tab strip scrolls sideways once the tabs outgrow the dialog rather than
@@ -786,22 +795,46 @@
 .wiv2-attach-drop {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.5rem;
-  border: 1px dashed #3a3a5c;
-  border-radius: 0.375rem;
-  background-color: #1a1a2b;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
 }
 
 .wiv2-attach-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #a0a0b0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-2);
 }
 
+/* The native file button is replaced by the Browse label; the input stays for
+   the picker and for screen readers, out of sight. */
 .wiv2-attach-input {
-  font-size: 0.75rem;
-  color: #e0e0e0;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.wiv2-attach-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.wiv2-attach-pick .form-hint {
+  margin: 0;
+}
+
+.wiv2-attach-browse {
+  cursor: pointer;
+}
+
+.wiv2-attach-drop:focus-within .wiv2-attach-browse {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .wiv2-attach-staged,
@@ -1281,11 +1314,52 @@
   grid-template-columns: repeat(3, 1fr);
 }
 
+/* Create/Update and Cancel stay in view at the foot of the form however long
+   it gets. */
 .wiv2-edit-actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-top: 1rem;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  position: sticky;
+  bottom: 0;
+  padding: var(--space-3) 0 var(--space-4);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+/* A required field: its label carries a mark, out of its accessible name. */
+.wiv2-edit-form label.is-required::after {
+  content: " *";
+  /* The empty alternative keeps the mark out of the accessible name where supported. */
+  content: " *" / "";
+  color: var(--danger-text);
+}
+
+.wiv2-edit-form .form-hint.is-error {
+  color: var(--danger-text);
+}
+
+.wiv2-edit-form [aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.wiv2-edit-advanced {
+  margin: var(--space-2) 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0 var(--space-3);
+}
+
+.wiv2-edit-advanced > summary {
+  cursor: pointer;
+  padding: var(--space-3) 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.wiv2-edit-advanced[open] > summary {
+  margin-bottom: var(--space-2);
 }
 
 /* Pushes Delete to the left while Cancel/Update stay on the right. */
