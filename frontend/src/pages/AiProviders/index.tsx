@@ -876,33 +876,6 @@ export default function AiProviders() {
           user-select: none;
         }
 
-        .btn {
-          padding: 0.5rem 1rem;
-          border: none;
-          border-radius: 0.375rem;
-          cursor: pointer;
-          font-size: 0.875rem;
-        }
-
-        .btn-primary {
-          background-color: #6366f1;
-          color: #fff;
-        }
-
-        .btn-secondary {
-          background-color: #2d2d44;
-          color: #a0a0b0;
-        }
-
-        .btn-small {
-          padding: 0.25rem 0.5rem;
-          font-size: 0.75rem;
-        }
-
-        .btn:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
 
         .modal-overlay {
           position: fixed;

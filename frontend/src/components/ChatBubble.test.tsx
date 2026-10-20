@@ -1011,7 +1011,7 @@ describe("ChatBubble placement", () => {
     });
   });
 
-  test("a window resize clamps a now-off-screen icon back into view", async () => {
+  test("a window resize draws the icon in view but keeps the spot the user chose", async () => {
     localStorage.setItem(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
     chatService.listHistory.mockResolvedValue([]);
 
@@ -1028,7 +1028,18 @@ describe("ChatBubble placement", () => {
     // (400 - 52 - 20) = 328 is the furthest the icon can sit.
     expect((fab as HTMLElement).style.left).toBe("328px");
     expect((fab as HTMLElement).style.top).toBe("328px");
-    expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 328, y: 328 });
+    // The spot the user chose is not overwritten by a window that is small for a moment…
+    expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 900, y: 700 });
+
+    act(() => {
+      window.innerWidth = 1024;
+      window.innerHeight = 768;
+      window.dispatchEvent(new Event("resize"));
+    });
+
+    // …so the icon goes back to it when the window grows again.
+    expect((fab as HTMLElement).style.left).toBe("900px");
+    expect((fab as HTMLElement).style.top).toBe("696px");
   });
 
   test("dragging the window header moves and persists the panel position", async () => {

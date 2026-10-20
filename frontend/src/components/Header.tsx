@@ -164,15 +164,6 @@ export default function Header() {
           color: #a0a0b0;
         }
 
-        .btn {
-          padding: 0.375rem 0.75rem;
-          border-radius: 0.375rem;
-          border: none;
-          cursor: pointer;
-          font-size: 0.875rem;
-          transition: all 0.15s ease;
-        }
-
         .btn-logout {
           background-color: transparent;
           color: #a0a0b0;

@@ -9,6 +9,7 @@ import {
   loadPanelSize,
   loadSidebarOpen,
   panelPosition,
+  renderedFabPosition,
   saveFabPosition,
   savePanelPosition,
   savePanelSize,
@@ -42,19 +43,25 @@ export default function ChatBubble() {
   const [open, setOpen] = useState(false);
   const { loaded, unreadCount, activeChatId } = useChatInbox();
 
-  // Placement: a draggable icon position and a resizable panel size, both
-  // persisted and kept inside the viewport.
+  // Placement: a draggable icon position and a resizable panel size. State holds
+  // what the user chose and only a drag or resize changes it; what is drawn is
+  // that choice clamped to the current viewport, so a window that shrinks for a
+  // moment never overwrites it.
   const chatEnabled = useChatEnabled();
-  const [fabPos, setFabPos] = useState<Point>(loadFabPosition);
-  const [panelSize, setPanelSize] = useState<Size>(loadPanelSize);
+  const [vp, setVp] = useState<Size>(viewportSize);
+  // null until the user drags the icon: it then sits in the default corner.
+  const [chosenFab, setChosenFab] = useState<Point | null>(loadFabPosition);
+  const [chosenSize, setChosenSize] = useState<Size>(loadPanelSize);
   // The panel's own position once the user drags its header; until then it stays
   // anchored to the icon (null).
   const [panelOverride, setPanelOverride] = useState<Point | null>(loadPanelPosition);
+  const fabPos = renderedFabPosition(chosenFab, vp);
+  const panelSize = clampPanelSize(chosenSize, vp);
   // Set while a drag exceeds the threshold so the trailing click does not also
   // open the panel.
   const draggedRef = useRef(false);
-  // Latest panel size, so the window-resize handler can re-clamp the panel
-  // position without re-subscribing on every size change.
+  // Latest drawn panel size, read by callbacks that should not re-subscribe on
+  // every size change.
   const panelSizeRef = useRef(panelSize);
   panelSizeRef.current = panelSize;
 
@@ -70,23 +77,18 @@ export default function ChatBubble() {
   const unreadBadgeId = useId();
   const chatCovered = sidebarOpen && !wide;
 
-  // Persist placement changes and re-clamp into view whenever the window resizes.
+  // Persist what the user chose; a window resize only redraws.
   useEffect(() => {
-    saveFabPosition(fabPos);
-  }, [fabPos]);
+    if (chosenFab) saveFabPosition(chosenFab);
+  }, [chosenFab]);
   useEffect(() => {
-    savePanelSize(panelSize);
-  }, [panelSize]);
+    savePanelSize(chosenSize);
+  }, [chosenSize]);
   useEffect(() => {
     if (panelOverride) savePanelPosition(panelOverride);
   }, [panelOverride]);
   useEffect(() => {
-    const onResize = () => {
-      const vp = viewportSize();
-      setFabPos((p) => clampFabPosition(p, vp));
-      setPanelSize((s) => clampPanelSize(s, vp));
-      setPanelOverride((p) => (p ? panelPosition(p, panelSizeRef.current, vp) : p));
-    };
+    const onResize = () => setVp(viewportSize());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -101,7 +103,7 @@ export default function ChatBubble() {
         if (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX) {
           draggedRef.current = true;
         }
-        setFabPos(clampFabPosition({ x: origin.ox + dx, y: origin.oy + dy }, viewportSize()));
+        setChosenFab(clampFabPosition({ x: origin.ox + dx, y: origin.oy + dy }, viewportSize()));
       };
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
@@ -118,17 +120,17 @@ export default function ChatBubble() {
       e.preventDefault();
       const origin = { px: e.clientX, py: e.clientY, w: panelSize.width, h: panelSize.height };
       const onMove = (ev: PointerEvent) => {
-        const vp = viewportSize();
+        const now = viewportSize();
         const next = clampPanelSize(
           {
             width: origin.w + (ev.clientX - origin.px),
             height: origin.h + (ev.clientY - origin.py),
           },
-          vp,
+          now,
         );
-        setPanelSize(next);
+        setChosenSize(next);
         // Keep a moved panel on-screen as it grows toward the viewport edge.
-        setPanelOverride((p) => (p ? panelPosition(p, next, vp) : p));
+        setPanelOverride((p) => (p ? panelPosition(p, next, now) : p));
       };
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
@@ -214,7 +216,7 @@ export default function ChatBubble() {
           );
         }
 
-        const panelPos = panelPosition(panelOverride ?? fabPos, panelSize, viewportSize());
+        const panelPos = panelPosition(panelOverride ?? fabPos, panelSize, vp);
         // The button's name stays "Chat list"; the badge reaches screen readers as its description.
         const showUnreadBadge = !sidebarOpen && unreadCount > 0;
 

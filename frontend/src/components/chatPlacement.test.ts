@@ -8,6 +8,7 @@ import {
   loadFabPosition,
   loadPanelPosition,
   loadPanelSize,
+  renderedFabPosition,
   MIN_PANEL_SIZE,
   PANEL_POSITION_KEY,
   PANEL_SIZE_KEY,
@@ -80,14 +81,18 @@ describe("panelPosition", () => {
 });
 
 describe("load helpers", () => {
-  test("loadFabPosition returns the default corner when nothing is stored", () => {
+  test("loadFabPosition returns null when the icon was never moved, and it is drawn in the default corner", () => {
+    expect(loadFabPosition()).toBeNull();
     // jsdom defaults to 1024×768.
-    expect(loadFabPosition()).toEqual(defaultFabPosition({ width: 1024, height: 768 }));
+    const vp = { width: 1024, height: 768 };
+    expect(renderedFabPosition(null, vp)).toEqual(defaultFabPosition(vp));
   });
 
-  test("loadFabPosition clamps a stored but now-off-screen position", () => {
+  test("loadFabPosition returns the chosen spot as stored, and only drawing clamps it", () => {
     localStorage.setItem(FAB_POSITION_KEY, JSON.stringify({ x: 99999, y: 99999 }));
-    const pos = loadFabPosition();
+    const chosen = loadFabPosition();
+    expect(chosen).toEqual({ x: 99999, y: 99999 });
+    const pos = renderedFabPosition(chosen, { width: 1024, height: 768 });
     expect(pos.x).toBe(1024 - FAB_SIZE - VIEWPORT_MARGIN);
     expect(pos.y).toBe(768 - FAB_SIZE - VIEWPORT_MARGIN);
   });

@@ -627,3 +627,9 @@
   display: inline-flex;
   color: #a5b4fc;
 }
+
+/* A dialog owns the screen while it is open: the icon steps aside so it never
+   covers the dialog's own buttons (Close, Create, Delete). */
+body:has(.modal-overlay) .chat-bubble-fab {
+  display: none;
+}

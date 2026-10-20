@@ -1,0 +1,58 @@
+/*
+ * Design tokens: the one place colours, radii, spacing and type sizes are
+ * defined. Components read these instead of hard-coding values, so the app
+ * keeps one look and a change lands everywhere at once.
+ */
+:root {
+  /* Surfaces, from the page background up to raised controls. */
+  --bg: #13131c;
+  --surface: #1c1c2a;
+  --surface-2: #242436;
+  --surface-3: #2d2d44;
+  --border: #33334a;
+  --border-strong: #45456a;
+
+  /* Text, from primary down to the faintest hint. */
+  --text: #e6e6f0;
+  --text-2: #a9a9c0;
+  --text-3: #7d7d96;
+
+  /* Accent and the four status tones, each with a soft fill for pills. */
+  --accent: #6366f1;
+  --accent-hover: #7577f5;
+  --accent-soft: rgba(99, 102, 241, 0.16);
+  --attention: #f59e0b;
+  --attention-text: #fcd34d;
+  --attention-soft: rgba(245, 158, 11, 0.14);
+  --danger: #ef4444;
+  --danger-text: #fca5a5;
+  --danger-soft: rgba(239, 68, 68, 0.14);
+  --success: #22c55e;
+  --success-text: #86efac;
+  --success-soft: rgba(34, 197, 94, 0.14);
+  --info: #60a5fa;
+  --info-text: #93c5fd;
+  --info-soft: rgba(96, 165, 250, 0.14);
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 17px;
+  --fs-xl: 22px;
+
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Minimum height of an interactive control. */
+  --control-h: 32px;
+  --control-h-sm: 26px;
+}

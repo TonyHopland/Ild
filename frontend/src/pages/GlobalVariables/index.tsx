@@ -321,16 +321,6 @@ export default function GlobalVariables() {
           color: #a5b4fc;
         }
 
-        .btn-danger {
-          background-color: #7f1d1d;
-          color: #fecaca;
-        }
-
-        .btn-small {
-          padding: 0.35rem 0.7rem;
-          font-size: 0.78rem;
-        }
-
         .btn-close {
           background: none;
           border: none;

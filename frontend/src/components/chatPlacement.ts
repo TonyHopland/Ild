@@ -1,9 +1,9 @@
 // Persisted placement for the chat bubble: where the user dragged the floating
 // icon and how large they resized the panel. Both are kept per-browser in
-// localStorage and clamped to the current viewport so a bubble dragged to a
-// corner — or a panel sized on a wide monitor — can never end up stranded
-// off-screen after the window shrinks. Whether the chat list is open is kept
-// here too.
+// localStorage exactly as the user chose them, and clamped to the viewport only
+// when drawn: a bubble dragged to a corner, or a panel sized on a wide monitor,
+// stays on-screen while the window is small and goes back to where it was put
+// when the window grows again. Whether the chat list is open is kept here too.
 
 export interface Point {
   x: number;
@@ -98,22 +98,28 @@ function readPair(value: unknown, a: string, b: string): [number, number] | null
   return [first, second];
 }
 
-/** Load the stored icon position (clamped), or fall back to the default corner. */
-export function loadFabPosition(): Point {
-  const vp = viewportSize();
+/**
+ * The icon position the user dragged it to, unclamped, or `null` when it was
+ * never moved and sits in the default corner.
+ */
+export function loadFabPosition(): Point | null {
   const pair = readPair(readJson(FAB_POSITION_KEY), "x", "y");
-  return pair ? clampFabPosition({ x: pair[0], y: pair[1] }, vp) : defaultFabPosition(vp);
+  return pair ? { x: pair[0], y: pair[1] } : null;
+}
+
+/** Where the icon is drawn: the chosen spot pulled into view, or the default corner. */
+export function renderedFabPosition(chosen: Point | null, vp: Size): Point {
+  return chosen ? clampFabPosition(chosen, vp) : defaultFabPosition(vp);
 }
 
 export function saveFabPosition(pos: Point): void {
   localStorage.setItem(FAB_POSITION_KEY, JSON.stringify(pos));
 }
 
-/** Load the stored panel size (clamped), or fall back to the default size. */
+/** The panel size the user chose, unclamped, or the default size. Clamp it when drawing. */
 export function loadPanelSize(): Size {
-  const vp = viewportSize();
   const pair = readPair(readJson(PANEL_SIZE_KEY), "width", "height");
-  return clampPanelSize(pair ? { width: pair[0], height: pair[1] } : DEFAULT_PANEL_SIZE, vp);
+  return pair ? { width: pair[0], height: pair[1] } : DEFAULT_PANEL_SIZE;
 }
 
 export function savePanelSize(size: Size): void {

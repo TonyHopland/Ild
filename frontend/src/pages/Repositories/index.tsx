@@ -765,34 +765,6 @@ export default function Repositories() {
           color: #22c55e;
         }
 
-        .btn {
-          padding: 0.5rem 1rem;
-          border: none;
-          border-radius: 0.375rem;
-          cursor: pointer;
-          font-size: 0.875rem;
-        }
-
-        .btn-primary {
-          background-color: #6366f1;
-          color: #fff;
-        }
-
-        .btn-secondary {
-          background-color: #2d2d44;
-          color: #a0a0b0;
-        }
-
-        .btn-danger {
-          background-color: #5c1a1a;
-          color: #ef4444;
-        }
-
-        .btn-small {
-          padding: 0.35rem 0.7rem;
-          font-size: 0.78rem;
-        }
-
         .modal-overlay {
           position: fixed;
           top: 0;
