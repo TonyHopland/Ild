@@ -4,21 +4,24 @@ import type { TypedSignalRMessage } from "../types/signalr";
 import { errorMessage } from "../utils/errorMessage";
 import { useJoinThenRefresh } from "./useJoinThenRefresh";
 import { useSignalR, type SignalRConnection } from "./useSignalR";
+import { useSharedWorkItemHub } from "./useWorkItemHub";
 
 /**
  * Whether the scheduler is running, read from the server and kept live over the
  * work-item hub, and a way to change it. The header's chip and the Settings
  * switch both read this, so they always say the same thing: on means running.
  * `hub` is a work-item hub connection the caller already holds; without it the
- * hook opens its own.
+ * hook uses the app's shared one, and opens its own only where there is none.
  */
 export function useSchedulerState(hub?: SignalRConnection) {
   // null until the server has said, so nothing claims a state it has not read.
   const [running, setRunning] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const own = useSignalR(hub ? null : "/hubs/work-item");
-  const connection = hub ?? own;
+  const shared = useSharedWorkItemHub();
+  const given = hub ?? shared;
+  const own = useSignalR(given ? null : "/hubs/work-item");
+  const connection = given ?? own;
   const { on, off } = connection;
 
   const load = useCallback(async () => {
