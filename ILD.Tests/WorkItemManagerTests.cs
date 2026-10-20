@@ -75,7 +75,7 @@ public class WorkItemManagerTests
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
         engine = new Mock<ILoopEngine>();
-        return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions,
+        return (new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance,
             engine: engine.Object, remoteProvider: remoteProvider?.Object), db, repo.Id, repoMgr, eventLog);
     }
 
@@ -94,7 +94,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         db.Context.SaveChanges();
 
-        var id = mgr.CreateWorkItemAsync("merge me", "", repoId).GetAwaiter().GetResult();
+        var id = mgr.CreateWorkItemAsync(TestActors.Human, "merge me", "", repoId).GetAwaiter().GetResult();
         var runId = Guid.NewGuid();
         var prNodeId = Guid.NewGuid();
         db.Context.LoopRuns.Add(new LoopRun
@@ -124,7 +124,7 @@ public class WorkItemManagerTests
             Status = LoopRunNodeStatus.WaitingHuman,
         });
         db.Context.SaveChanges();
-        mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.PrAwaitingMerge).GetAwaiter().GetResult();
+        mgr.TransitionToHumanFeedbackAsync(TestActors.Human, id, HumanFeedbackReasons.PrAwaitingMerge).GetAwaiter().GetResult();
         return (id, runId, runNodeId);
     }
 
@@ -138,7 +138,7 @@ public class WorkItemManagerTests
         repo!.DefaultIntakeStatus = WorkItemStatus.WorkQueue;
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "title", "desc", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.WorkQueue, wi!.Status);
@@ -154,7 +154,7 @@ public class WorkItemManagerTests
         repo!.DefaultIntakeStatus = WorkItemStatus.Backlog;
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var id = await mgr.CreateWorkItemAsync("title", "desc", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "title", "desc", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Backlog, wi!.Status);
@@ -175,11 +175,11 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup(server);
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("orig", "origdesc", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "orig", "origdesc", repoId);
         var before = (await mgr.GetWorkItemAsync(id))!.UpdatedAt;
         clock.Now = clock.Now.AddMinutes(1);
 
-        var ok = await mgr.UpdateAsync(id, "new title", "new desc");
+        var ok = await mgr.UpdateAsync(TestActors.Human, id, "new title", "new desc");
         Assert.True(ok);
 
         var reloaded = await mgr.GetWorkItemAsync(id);
@@ -194,7 +194,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        Assert.False((await mgr.UpdateAsync(Guid.NewGuid().ToString(), "t", "d")));
+        Assert.False((await mgr.UpdateAsync(TestActors.Human, Guid.NewGuid().ToString(), "t", "d")));
     }
 
     [Fact]
@@ -210,12 +210,12 @@ public class WorkItemManagerTests
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
 
-        var id = await mgr.CreateWorkItemAsync("orig", "origdesc", repo.Id);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "orig", "origdesc", repo.Id);
         notifier.Invocations.Clear();
 
-        var ok = await mgr.UpdateAsync(id, "new title", "new desc");
+        var ok = await mgr.UpdateAsync(TestActors.Human, id, "new title", "new desc");
         Assert.True(ok);
 
         // An edit keeps the status, so old and new are both the current status.
@@ -238,9 +238,9 @@ public class WorkItemManagerTests
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
 
-        var ok = await mgr.UpdateAsync(Guid.NewGuid().ToString(), "t", "d");
+        var ok = await mgr.UpdateAsync(TestActors.Human, Guid.NewGuid().ToString(), "t", "d");
         Assert.False(ok);
 
         // A no-op update (item gone) must not broadcast — a phantom refresh would
@@ -254,8 +254,8 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        await mgr.TransitionToWorkQueueAsync(id);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
+        await mgr.TransitionToWorkQueueAsync(TestActors.Human, id);
 
         Assert.True((await mgr.IsReadyAsync(id)));
     }
@@ -266,9 +266,9 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
-        await mgr.AddDependencyAsync(child, dep);
+        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
+        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
 
         Assert.False((await mgr.IsReadyAsync(child)));
     }
@@ -279,16 +279,16 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
-        await mgr.AddDependencyAsync(child, dep);
+        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
+        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
 
         var depRunId = SeedLoopRun(db, dep);
         var depRun = await db.Context.LoopRuns.FindAsync([depRunId], TestContext.Current.CancellationToken);
         depRun!.Status = LoopRunStatus.Failed;
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        await mgr.CleanupToDoneAsync(dep);
+        await mgr.CleanupToDoneAsync(TestActors.Human, dep);
 
         Assert.True((await mgr.IsReadyAsync(child)));
     }
@@ -299,12 +299,12 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
-        await mgr.AddDependencyAsync(child, dep);
+        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
+        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
 
-        await mgr.LinkPullRequestAsync(dep, "https://forgejo/pr/1");
-        await mgr.TransitionToHumanFeedbackAsync(dep, "Node Failed");
+        await mgr.LinkPullRequestAsync(TestActors.Human, dep, "https://forgejo/pr/1");
+        await mgr.TransitionToHumanFeedbackAsync(TestActors.Human, dep, "Node Failed");
 
         Assert.False((await mgr.IsReadyAsync(child)));
     }
@@ -315,9 +315,9 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
 
-        var act = async () => await mgr.AddDependencyAsync(id, id);
+        var act = async () => await mgr.AddDependencyAsync(TestActors.Human, id, id);
         await Assert.ThrowsAsync<InvalidOperationException>(act);
     }
 
@@ -327,14 +327,14 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var a = await mgr.CreateWorkItemAsync("a", "", repoId);
-        var b = await mgr.CreateWorkItemAsync("b", "", repoId);
-        var c = await mgr.CreateWorkItemAsync("c", "", repoId);
+        var a = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
+        var b = await mgr.CreateWorkItemAsync(TestActors.Human, "b", "", repoId);
+        var c = await mgr.CreateWorkItemAsync(TestActors.Human, "c", "", repoId);
 
-        await mgr.AddDependencyAsync(b, a);
-        await mgr.AddDependencyAsync(c, b);
+        await mgr.AddDependencyAsync(TestActors.Human, b, a);
+        await mgr.AddDependencyAsync(TestActors.Human, c, b);
 
-        var act = async () => await mgr.AddDependencyAsync(a, c);
+        var act = async () => await mgr.AddDependencyAsync(TestActors.Human, a, c);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(act);
         Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -345,12 +345,12 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
-        await mgr.AddDependencyAsync(child, dep);
-        await mgr.TransitionToWorkQueueAsync(child);
+        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
+        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
+        await mgr.TransitionToWorkQueueAsync(TestActors.Human, child);
 
-        var transitioned = await mgr.TransitionToReadyAsync(child);
+        var transitioned = await mgr.TransitionToReadyAsync(TestActors.Human, child);
         Assert.False(transitioned);
         var wi = await mgr.GetWorkItemAsync(child);
         Assert.Equal(RemoteWorkItemStatus.WorkQueue, wi!.Status);
@@ -362,10 +362,10 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         SeedLoopRun(db, id);
 
-        var result = await mgr.LinkPullRequestAsync(id, "https://forgejo/pr/42");
+        var result = await mgr.LinkPullRequestAsync(TestActors.Human, id, "https://forgejo/pr/42");
 
         Assert.True(result);
         var wi = await mgr.GetWorkItemAsync(id);
@@ -378,7 +378,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Null(wi!.StartedAt);
@@ -391,7 +391,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Null(wi!.CurrentNodeLabel);
@@ -403,7 +403,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var (runId, versionId) = SeedRunWithVersion(db, id);
         var nodeId = Guid.NewGuid();
         db.Context.LoopNodes.Add(new LoopNode
@@ -435,7 +435,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var (runId, versionId) = SeedRunWithVersion(db, id);
         var nodeId = Guid.NewGuid();
         db.Context.LoopNodes.Add(new LoopNode
@@ -469,7 +469,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var runId = SeedLoopRun(db, id);
         var started = DateTime.UtcNow;
         var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
@@ -488,7 +488,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var runId = SeedLoopRun(db, id);
         var started = DateTime.UtcNow.AddMinutes(-5);
         var completed = DateTime.UtcNow;
@@ -511,7 +511,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         Assert.Null((await mgr.GetWorkItemAsync(id))!.LatestLoopRunId);
         Assert.Null((await mgr.ListAsync(null, null, null, 0, 100)).Single(v => v.Id == id).LatestLoopRunId);
 
@@ -546,7 +546,7 @@ public class WorkItemManagerTests
     {
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var versionId = RunTimeline.SeedVersion(db);
         var now = DateTime.UtcNow;
         RunTimeline.SeedRun(db, id, versionId, LoopRunStatus.Failed,
@@ -572,12 +572,12 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        await mgr.TransitionToReadyAsync(id);
-        await mgr.TransitionToRunningAsync(id);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
+        await mgr.TransitionToReadyAsync(TestActors.Human, id);
+        await mgr.TransitionToRunningAsync(TestActors.Human, id);
         SeedLoopRun(db, id);
 
-        var ok = await mgr.TransitionToHumanFeedbackAsync(id, "PR Awaiting Merge");
+        var ok = await mgr.TransitionToHumanFeedbackAsync(TestActors.Human, id, "PR Awaiting Merge");
 
         Assert.True(ok);
         var wi = await mgr.GetWorkItemAsync(id);
@@ -603,8 +603,8 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
-        await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
+        await mgr.TransitionToHumanFeedbackAsync(TestActors.Human, id, "Node Failed");
 
         var run = new LoopRun
         {
@@ -621,7 +621,7 @@ public class WorkItemManagerTests
         db.Context.LoopRuns.Add(run);
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        await mgr.CleanupToDoneAsync(id);
+        await mgr.CleanupToDoneAsync(TestActors.Human, id);
 
         // Worktree and branch live exactly as long as the run row: nothing is
         // destroyed here — the retention sweeper (or a manual run delete)
@@ -654,7 +654,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
 
         var runId = Guid.NewGuid();
         var run = new LoopRun
@@ -668,13 +668,13 @@ public class WorkItemManagerTests
         };
         db.Context.LoopRuns.Add(run);
 
-        await mgr.TransitionToHumanFeedbackAsync(id, "Node Failed");
+        await mgr.TransitionToHumanFeedbackAsync(TestActors.Human, id, "Node Failed");
         run.WorktreePath = "/tmp/worktrees/test-wi";
         run.BranchName = "ild/wi-x-run-1";
         run.HumanFeedbackReason = "Node Failed";
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        await mgr.CleanupToBacklogAsync(id);
+        await mgr.CleanupToBacklogAsync(TestActors.Human, id);
 
         // Worktree and branch stay with the run row for inspection; the next
         // run gets its own branch/worktree, so nothing can leak into it.
@@ -701,7 +701,7 @@ public class WorkItemManagerTests
         Directory.CreateDirectory(worktree);
         try
         {
-            var id = await mgr.CreateWorkItemAsync("Keep my work", "", repoId);
+            var id = await mgr.CreateWorkItemAsync(TestActors.Human, "Keep my work", "", repoId);
             var runId = SeedLoopRun(db, id);
             var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
             run!.WorktreePath = worktree;
@@ -745,14 +745,14 @@ public class WorkItemManagerTests
         Directory.CreateDirectory(worktree);
         try
         {
-            var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+            var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
             var runId = SeedLoopRun(db, id);
             var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
             run!.WorktreePath = worktree;
             run.BranchName = "ild/wi-x-run-1";
             run.RepositoryId = repoId;
             await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-            Assert.True(await mgr.UpdateAsync(id, "a", "", repositoryId: otherRepo.Id));
+            Assert.True(await mgr.UpdateAsync(TestActors.Human, id, "a", "", repositoryId: otherRepo.Id));
             Assert.Equal(otherRepo.Id, (await mgr.GetWorkItemAsync(id))!.RepositoryId);
 
             GitAuthOptions? pushedWith = null;
@@ -782,7 +782,7 @@ public class WorkItemManagerTests
         Directory.CreateDirectory(worktree);
         try
         {
-            var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+            var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
             var runId = SeedLoopRun(db, id);
             var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
             run!.WorktreePath = worktree;
@@ -813,7 +813,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         SeedLoopRun(db, id); // run has no WorktreePath
 
         var result = await mgr.CommitAndPushBranchAsync(id);
@@ -834,7 +834,7 @@ public class WorkItemManagerTests
         Directory.CreateDirectory(worktree);
         try
         {
-            var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+            var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
             var runId = SeedLoopRun(db, id);
             var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
             run!.WorktreePath = worktree;
@@ -878,7 +878,7 @@ public class WorkItemManagerTests
     {
         var worktree = Path.Combine(Path.GetTempPath(), "ild-pull-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
-        var id = await mgr.CreateWorkItemAsync("Pull me", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "Pull me", "", repoId);
         var runId = SeedLoopRun(db, id);
         var run = await db.Context.LoopRuns.FindAsync(runId);
         run!.WorktreePath = worktree;
@@ -1103,7 +1103,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, repoMgr, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         SeedLoopRun(db, id); // run has no WorktreePath
 
         var result = await mgr.PullBranchAsync(id, TestContext.Current.CancellationToken);
@@ -1122,7 +1122,7 @@ public class WorkItemManagerTests
         var ltv = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = lt.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
         db.Context.LoopTemplates.Add(lt);
         db.Context.LoopTemplateVersions.Add(ltv);
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var nodeId = Guid.NewGuid();
         var runId = Guid.NewGuid();
         db.Context.LoopNodes.Add(new LoopNode { Id = nodeId, LoopTemplateVersionId = ltv.Id, NodeType = NodeType.Human, Label = "human-review" });
@@ -1138,7 +1138,7 @@ public class WorkItemManagerTests
         var runNode = new LoopRunNode { Id = Guid.NewGuid(), LoopRunId = runId, LoopNodeId = nodeId, Status = LoopRunNodeStatus.WaitingHuman };
         db.Context.LoopRunNodes.Add(runNode);
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-        await mgr.TransitionToHumanFeedbackAsync(id, HumanFeedbackReasons.HumanInputNeeded);
+        await mgr.TransitionToHumanFeedbackAsync(TestActors.Human, id, HumanFeedbackReasons.HumanInputNeeded);
         return (id, runId, runNode.Id);
     }
 
@@ -1182,9 +1182,9 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
 
-        var ok = await mgr.DeleteAsync(id);
+        var ok = await mgr.DeleteAsync(TestActors.Human, id);
 
         Assert.True(ok);
         Assert.Null((await mgr.GetWorkItemAsync(id)));
@@ -1196,11 +1196,11 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
-        await mgr.AddDependencyAsync(child, dep);
+        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
+        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
 
-        var ok = await mgr.DeleteAsync(child);
+        var ok = await mgr.DeleteAsync(TestActors.Human, child);
 
         Assert.True(ok);
         Assert.Null((await mgr.GetWorkItemAsync(child)));
@@ -1213,11 +1213,11 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var dep = await mgr.CreateWorkItemAsync("dep", "", repoId);
-        var child = await mgr.CreateWorkItemAsync("child", "", repoId);
-        await mgr.AddDependencyAsync(child, dep);
+        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repoId);
+        var child = await mgr.CreateWorkItemAsync(TestActors.Human, "child", "", repoId);
+        await mgr.AddDependencyAsync(TestActors.Human, child, dep);
 
-        var ok = await mgr.DeleteAsync(dep);
+        var ok = await mgr.DeleteAsync(TestActors.Human, dep);
 
         Assert.True(ok);
         Assert.Null((await mgr.GetWorkItemAsync(dep)));
@@ -1230,7 +1230,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        Assert.False((await mgr.DeleteAsync(Guid.NewGuid().ToString())));
+        Assert.False((await mgr.DeleteAsync(TestActors.Human, Guid.NewGuid().ToString())));
     }
 
     // ---- MergePullRequestAsync -------------------------------------------
@@ -1301,7 +1301,7 @@ public class WorkItemManagerTests
             mgr, db, repoId, "https://example/repo/pulls/42", "ild/wi-x-run-4");
         db.Context.LoopRuns.Single(r => r.Id == runId).RepositoryId = repoId;
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-        Assert.True(await mgr.UpdateAsync(id, "merge me", "", repositoryId: otherRepo.Id));
+        Assert.True(await mgr.UpdateAsync(TestActors.Human, id, "merge me", "", repositoryId: otherRepo.Id));
         Assert.Equal(otherRepo.Id, (await mgr.GetWorkItemAsync(id))!.RepositoryId);
 
         var result = await mgr.MergePullRequestAsync(id, deleteBranch: false);
@@ -1395,7 +1395,7 @@ public class WorkItemManagerTests
         var (mgr, db, _, _, _) = Setup();
         using var _ = db;
 
-        Assert.False((await mgr.TransitionAsync(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Done)));
+        Assert.False((await mgr.TransitionAsync(TestActors.Human, Guid.NewGuid().ToString(), RemoteWorkItemStatus.Done)));
     }
 
     [Fact]
@@ -1404,9 +1404,9 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
         var runId = SeedLoopRun(db, id);
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]",
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "Need approval", "[\"approve\",\"reject\"]",
             currentLoopRunId: runId);
 
         var wi = await mgr.GetWorkItemAsync(id);
@@ -1420,14 +1420,14 @@ public class WorkItemManagerTests
     {
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
         // Seeded through the shared context, so the store hands back this copy.
         var run = RunTimeline.SeedRun(db, id, RunTimeline.SeedVersion(db), LoopRunStatus.Running);
         await using (var other = db.Fresh())
             await other.LoopRuns.Where(r => r.Id == run.Id)
                 .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, LoopRunStatus.Cancelled));
 
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
 
         await using var read = db.Fresh();
         Assert.Equal(LoopRunStatus.Cancelled, (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).Status);
@@ -1438,10 +1438,10 @@ public class WorkItemManagerTests
     {
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
         var run = RunTimeline.SeedRun(db, id, RunTimeline.SeedVersion(db), LoopRunStatus.WaitingHuman);
 
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "Need approval", currentLoopRunId: run.Id);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "Need approval", currentLoopRunId: run.Id);
 
         await using (var read = db.Fresh())
             Assert.Equal("Need approval", (await read.LoopRuns.SingleAsync(r => r.Id == run.Id)).HumanFeedbackReason);
@@ -1458,9 +1458,9 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "reason", "actions");
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "reason", "actions");
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running);
 
         var wi = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Running, wi!.Status);
@@ -1474,10 +1474,10 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
         var existingRunId = SeedLoopRun(db, id);
 
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: null);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running, currentLoopRunId: null);
 
         var after = await mgr.GetWorkItemAsync(id);
         Assert.NotNull(after!.CurrentLoopRunId);
@@ -1489,10 +1489,10 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
         var runId = SeedLoopRun(db, id);
 
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Done, currentLoopRunId: Guid.Empty);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Done, currentLoopRunId: Guid.Empty);
 
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
@@ -1504,10 +1504,10 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("t", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repoId);
         var newRunId = SeedLoopRun(db, id);
 
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running, currentLoopRunId: newRunId);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running, currentLoopRunId: newRunId);
 
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(newRunId, after!.CurrentLoopRunId);
@@ -1528,15 +1528,15 @@ public class WorkItemManagerTests
         eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(1L);
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
 
-        var id = await mgr.CreateWorkItemAsync("t", "", repo.Id);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id);
         notifier.Invocations.Clear();
 
         // Same-status transition: no state-change notification, but HumanFeedback
         // notification still fires when transitioning to HumanFeedback with a reason.
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "first");
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.HumanFeedback, "second");
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "first");
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.HumanFeedback, "second");
 
         notifier.Verify(n => n.WorkItemStateChangedAsync(id, It.IsAny<RemoteWorkItemStatus>(), RemoteWorkItemStatus.HumanFeedback), Times.Once);
         notifier.Verify(n => n.HumanFeedbackRequiredAsync(id, "first"), Times.Once);
@@ -1556,9 +1556,9 @@ public class WorkItemManagerTests
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
 
-        var id = await mgr.CreateWorkItemAsync("t", "", repo.Id);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id);
 
         // Creation has no prior status, so old and new are both the landing
         // status (here WorkQueue). The Taskboard's WorkItemStateChanged handler
@@ -1582,7 +1582,7 @@ public class WorkItemManagerTests
         var notifier = new Mock<IWorkItemNotifier>();
         var preview = new Mock<IWorktreePreviewService>();
         var engine = new Mock<ILoopEngine>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions,
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance,
             notifier.Object, preview.Object, engine: engine.Object);
         return (mgr, db, repo.Id, preview, notifier, engine);
     }
@@ -1598,13 +1598,13 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, notifier, engine) = SetupWithPreview();
         using var _d = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var runId = SeedLoopRun(db, id);
         var parked = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         parked!.Status = LoopRunStatus.WaitingHuman;
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        await mgr.TransitionToDoneAsync(id);
+        await mgr.TransitionToDoneAsync(TestActors.Human, id);
 
         var after = db.Fresh().LoopRuns.First(r => r.Id == runId);
         Assert.NotEqual(LoopRunStatus.WaitingHuman, after.Status);
@@ -1628,7 +1628,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, preview, notifier, _) = SetupWithPreview();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var runId = SeedLoopRun(db, id);
         var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.WorktreePath = "/tmp/worktrees/done-wi";
@@ -1636,7 +1636,7 @@ public class WorkItemManagerTests
 
         preview.Setup(p => p.IsPreviewRunning("/tmp/worktrees/done-wi")).Returns(true);
 
-        await mgr.TransitionToDoneAsync(id);
+        await mgr.TransitionToDoneAsync(TestActors.Human, id);
 
         preview.Verify(p => p.StopAsync("/tmp/worktrees/done-wi", It.IsAny<CancellationToken>()), Times.Once);
         notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
@@ -1648,7 +1648,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, preview, notifier, _) = SetupWithPreview();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var runId = SeedLoopRun(db, id);
         var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.WorktreePath = "/tmp/worktrees/done-wi";
@@ -1656,7 +1656,7 @@ public class WorkItemManagerTests
 
         preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns(false);
 
-        await mgr.TransitionToDoneAsync(id);
+        await mgr.TransitionToDoneAsync(TestActors.Human, id);
 
         preview.Verify(p => p.StopAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         notifier.Verify(n => n.PreviewStateChangedAsync(It.IsAny<string>()), Times.Never);
@@ -1668,7 +1668,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, preview, _, _) = SetupWithPreview();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var runId = SeedLoopRun(db, id);
         var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.WorktreePath = "/tmp/worktrees/running-wi";
@@ -1677,7 +1677,7 @@ public class WorkItemManagerTests
         preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns(true);
 
         // Moving to Running (e.g. resuming) must not tear down the preview.
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Running);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Running);
 
         preview.Verify(p => p.StopAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -1700,7 +1700,7 @@ public class WorkItemManagerTests
         db.Context.LoopTemplateVersions.Add(ltv);
         await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var run = new LoopRun
         {
             Id = Guid.NewGuid(),
@@ -1716,7 +1716,7 @@ public class WorkItemManagerTests
 
         preview.Setup(p => p.IsPreviewRunning("/tmp/worktrees/cleanup-wi")).Returns(true);
 
-        await mgr.CleanupToDoneAsync(id);
+        await mgr.CleanupToDoneAsync(TestActors.Human, id);
 
         preview.Verify(p => p.StopAsync("/tmp/worktrees/cleanup-wi", It.IsAny<CancellationToken>()), Times.Once);
         notifier.Verify(n => n.PreviewStateChangedAsync(id), Times.Once);
@@ -1735,13 +1735,13 @@ public class WorkItemManagerTests
         var repoMgr = new Mock<IRepositoryManager>();
         var eventLog = new Mock<IEventLogService>();
         var notifier = new Mock<IWorkItemNotifier>();
-        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, notifier.Object);
+        var mgr = new WorkItemManager(repoMgr.Object, db.Providers, eventLog.Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
 
         // The AI/MCP path forces Backlog regardless of the repo's intake default.
         // This is the path the bug report was about — an agent-created item must
         // still broadcast so the board updates without a refresh.
         var runId = Guid.NewGuid();
-        var id = await mgr.CreateWorkItemAsync("t", "", repo.Id, runId, forceBacklog: true);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id, runId, forceBacklog: true);
 
         notifier.Verify(n => n.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.Backlog, RemoteWorkItemStatus.Backlog), Times.Once);
     }
@@ -1757,7 +1757,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         SeedRunWithVersion(db, id);
 
         var wi = await mgr.GetWorkItemAsync(id);
@@ -1770,7 +1770,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var (runId, _) = SeedRunWithVersion(db, id);
         var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.PrSnapshot = SerializePrSnapshot(new RemotePrSnapshot(
@@ -1807,7 +1807,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup();
         using var _ = db;
 
-        var id = await mgr.CreateWorkItemAsync("a", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repoId);
         var (runId, _) = SeedRunWithVersion(db, id);
         var run = await db.Context.LoopRuns.FindAsync([runId], TestContext.Current.CancellationToken);
         run!.PrSnapshot = "{ not valid json";
@@ -1889,7 +1889,7 @@ public class WorkItemManagerTests
         run!.Status = LoopRunStatus.Completed;
         run.CompletedAt = DateTime.UtcNow;
         await db.Context.SaveChangesAsync();
-        await mgr.TransitionAsync(workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: runId);
+        await mgr.TransitionAsync(TestActors.Human, workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: runId);
     }
 
     [Fact]
@@ -1899,7 +1899,7 @@ public class WorkItemManagerTests
         using var _ = db;
         var ltvId = SeedTemplateVersion(db);
 
-        var id = await mgr.CreateWorkItemAsync("ship it", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "ship it", "", repoId);
         var runId = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/1", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
 
         // While the run is alive the PR is visible both ways.
@@ -1921,10 +1921,10 @@ public class WorkItemManagerTests
         using var _ = db;
         var ltvId = SeedTemplateVersion(db);
 
-        var id = await mgr.CreateWorkItemAsync("clean me up", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "clean me up", "", repoId);
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/7", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
 
-        Assert.True(await mgr.CleanupToDoneAsync(id));
+        Assert.True(await mgr.CleanupToDoneAsync(TestActors.Human, id));
 
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(RemoteWorkItemStatus.Done, after!.Status);
@@ -1940,7 +1940,7 @@ public class WorkItemManagerTests
 
         // Three attempts at the same item, each (per ADR-0008) with its own run,
         // branch and PR. All three PRs belong to the item's history.
-        var id = await mgr.CreateWorkItemAsync("third time lucky", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "third time lucky", "", repoId);
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/10", LoopRunStatus.Completed, DateTime.UtcNow.AddHours(-3));
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/11", LoopRunStatus.Failed, DateTime.UtcNow.AddHours(-2));
         var newest = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/12", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
@@ -1970,7 +1970,7 @@ public class WorkItemManagerTests
         // A retried run can be pointed back at the PR its predecessor opened
         // (PrSyncService and the manual Link PR action both write the URL onto
         // whatever run is current). The same URL is one PR, listed once.
-        var id = await mgr.CreateWorkItemAsync("retried", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "retried", "", repoId);
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/5", LoopRunStatus.Failed, DateTime.UtcNow.AddHours(-3));
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/9", LoopRunStatus.Completed, DateTime.UtcNow.AddHours(-2));
         var newest = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/5", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
@@ -1995,7 +1995,7 @@ public class WorkItemManagerTests
         // The taskboard reads ListAsync, the detail dialog reads
         // GetWorkItemAsync — both project the current run and both drop the PR
         // the same way, so both have to be pinned.
-        var id = await mgr.CreateWorkItemAsync("board and dialog agree", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "board and dialog agree", "", repoId);
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/20", LoopRunStatus.Completed, DateTime.UtcNow.AddHours(-2));
         var newest = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/21", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
 
@@ -2016,7 +2016,7 @@ public class WorkItemManagerTests
         using var _ = db;
         var ltvId = SeedTemplateVersion(db);
 
-        var id = await mgr.CreateWorkItemAsync("swept", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "swept", "", repoId);
         var runId = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/33", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
         await CompleteRunAndFinishItemAsync(mgr, db, runId, id);
 
@@ -2043,7 +2043,7 @@ public class WorkItemManagerTests
         using var _ = db;
         var ltvId = SeedTemplateVersion(db);
 
-        var id = await mgr.CreateWorkItemAsync("merged one", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "merged one", "", repoId);
         var startedAt = DateTime.UtcNow.AddHours(-1);
         var runId = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/44", LoopRunStatus.Running, startedAt,
             merged: true,
@@ -2086,7 +2086,7 @@ public class WorkItemManagerTests
         // /api/v1 is add-only (ADR-0002): PR history is a new collection, and
         // prUrl must keep pointing at the current run's PR — never at the
         // newest history entry — so existing clients see no behaviour change.
-        var id = await mgr.CreateWorkItemAsync("add only", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "add only", "", repoId);
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/60", LoopRunStatus.Completed, DateTime.UtcNow.AddHours(-2));
         var current = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/61", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
 
@@ -2114,7 +2114,7 @@ public class WorkItemManagerTests
         var (mgr, db, repoId, _, _) = Setup(server);
         var ltvId = SeedTemplateVersion(db);
 
-        var id = await mgr.CreateWorkItemAsync("outlives its instance", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "outlives its instance", "", repoId);
         var runId = SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/77", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
         await CompleteRunAndFinishItemAsync(mgr, db, runId, id);
         Assert.Equal(new[] { "https://forgejo/repo/pulls/77" }, (await mgr.GetWorkItemAsync(id))!.PullRequests.Select(p => p.Url));
@@ -2125,7 +2125,7 @@ public class WorkItemManagerTests
         using var restarted = new TestDb(server);
         var freshMgr = new WorkItemManager(
             new Mock<IRepositoryManager>().Object, restarted.Providers, new Mock<IEventLogService>().Object,
-            restarted.LoopRuns, restarted.ServerClient, restarted.ServerOptions);
+            restarted.LoopRuns, restarted.ServerClient, restarted.ServerOptions, TestActors.Instance);
 
         Assert.Empty(restarted.Context.LoopRuns);
         var view = (await freshMgr.GetWorkItemAsync(id))!;
@@ -2146,10 +2146,10 @@ public class WorkItemManagerTests
         // No run at all: the item is finished, and a human is recording the PR
         // that came out of it. The link belongs to the item, so it does not
         // need a run to hang on.
-        var id = await mgr.CreateWorkItemAsync("link it after the fact", "", repoId);
-        await mgr.TransitionAsync(id, RemoteWorkItemStatus.Done);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "link it after the fact", "", repoId);
+        await mgr.TransitionAsync(TestActors.Human, id, RemoteWorkItemStatus.Done);
 
-        Assert.True(await mgr.LinkPullRequestAsync(id, "https://forgejo/repo/pulls/88"));
+        Assert.True(await mgr.LinkPullRequestAsync(TestActors.Human, id, "https://forgejo/repo/pulls/88"));
 
         var after = await mgr.GetWorkItemAsync(id);
         Assert.Equal(new[] { "https://forgejo/repo/pulls/88" }, after!.PullRequests.Select(p => p.Url));
@@ -2164,7 +2164,7 @@ public class WorkItemManagerTests
         using var _ = db;
         var ltvId = SeedTemplateVersion(db);
 
-        var id = await mgr.CreateWorkItemAsync("duplicated", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "duplicated", "", repoId);
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/5", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
 
         // The upsert never writes a URL twice, but data that predates it — or
@@ -2192,7 +2192,7 @@ public class WorkItemManagerTests
         using var _ = db;
         var ltvId = SeedTemplateVersion(db);
 
-        var id = await mgr.CreateWorkItemAsync("read me twice", "", repoId);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "read me twice", "", repoId);
         SeedRunWithPr(db, ltvId, id, "https://forgejo/repo/pulls/99", LoopRunStatus.Running, DateTime.UtcNow.AddHours(-1));
 
         await mgr.GetWorkItemAsync(id);

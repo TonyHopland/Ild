@@ -331,13 +331,13 @@ public class WorkItemsControllerDiffBaseTests
             eventLog.Object,
             db.LoopRuns,
             db.ServerClient,
-            db.ServerOptions,
+            db.ServerOptions, TestActors.Instance,
             engine: new Mock<ILoopEngine>().Object);
 
-        var id = await mgr.CreateWorkItemAsync("t", "", repo.Id);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "t", "", repo.Id);
         // Editing is only offered while the item waits on a human, so that is
         // the state these save tests are written against.
-        await mgr.TransitionAsync(id, status);
+        await mgr.TransitionAsync(TestActors.Human, id, status);
 
         // The worktree the diff is taken in belongs to this run, and the run is
         // where the base was pinned — editing the work item since must not move
@@ -360,7 +360,7 @@ public class WorkItemsControllerDiffBaseTests
         branchNames.Setup(b => b.InspectAsync(It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(BranchNameVerdict.Usable);
 
-        var controller = new WorkItemsController(
+        var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,
             new Mock<ILoopEngine>().Object,
             new Mock<IWorktreePreviewService>().Object,
@@ -370,7 +370,7 @@ public class WorkItemsControllerDiffBaseTests
             NoPackageFeeds.Resolver,
             branchNames.Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
-            NullLogger<WorkItemsController>.Instance);
+            NullLogger<WorkItemsController>.Instance));
 
         return (controller, repoManager, db, id);
     }

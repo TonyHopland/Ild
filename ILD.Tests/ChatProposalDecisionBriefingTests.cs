@@ -38,12 +38,12 @@ public sealed class ChatProposalDecisionBriefingTests : IDisposable
         var chat = await StartChatAsync(adapter);
 
         var opts = await _db.ServerOptions.ResolveForRepositoryAsync(null, Ct);
-        var item = (await _db.ServerClient.CreateAsync(opts, new RemoteCreateWorkItemRequest { Title = "Flaky build" }, Ct)).Id;
+        var item = (await _db.ServerClient.CreateAsync(opts, new RemoteCreateWorkItemRequest { Title = "Flaky build" }, TestActors.Human, Ct)).Id;
         var edit = await _db.ServerClient.CreateEditProposalAsync(opts, item, new RemoteCreateEditProposalRequest
         {
             Title = "Fix the flaky build",
             CreatedByChatSessionId = chat,
-        }, Ct);
+        }, TestActors.Human, Ct);
 
         var gvApproved = await SuggestAsync(chat, "review_rules");
         var gvRejected = await SuggestAsync(chat, "build_rules");
@@ -62,7 +62,7 @@ public sealed class ChatProposalDecisionBriefingTests : IDisposable
 
         await TurnAsync(adapter, chat, "turn one");
 
-        await _db.ServerClient.RejectEditProposalAsync(opts, item, edit.Proposal!.Id, "Name   the\nfailing test.", Ct);
+        await _db.ServerClient.RejectEditProposalAsync(opts, item, edit.Proposal!.Id, "Name   the\nfailing test.", TestActors.Human, Ct);
         // Decided out of insertion order: the briefing follows DecidedAt.
         await DecideSuggestionAsync(gvStale, GlobalVariableProposalStatus.Stale, T0.AddMinutes(1));
         await DecideSuggestionAsync(gvRejected, GlobalVariableProposalStatus.Rejected, T0.AddMinutes(2), "Too vague.\n\n  Name the\tfailing test.");
@@ -270,7 +270,7 @@ public sealed class ChatProposalDecisionBriefingTests : IDisposable
             new ChatLoopScratchpad(),
             new ChatCloneCoordinator(),
             workItems: new WorkItemManager(
-                Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, _db.ServerOptions));
+                Mock.Of<IRepositoryManager>(), _db.Providers, Mock.Of<IEventLogService>(), _db.LoopRuns, _db.ServerClient, _db.ServerOptions, TestActors.Instance));
 
     private sealed class RecordingChatAdapter : IAgentAdapter
     {

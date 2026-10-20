@@ -94,13 +94,13 @@ public class LoopEngineThrottleParkTests
         // HumanFeedback, not WaitingForIld: the scheduler auto-resumes what it
         // finds waiting on ILD, and this park is waiting on a person.
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             ParkReason, It.IsAny<string?>(), It.IsAny<Guid?>(),
             HumanFeedbackReasons.AiProviderThrottled), Times.Once);
         Assert.Equal(Assert.Single(h.ReloadRunNodes()).Id,
             Assert.Single(h.ReloadEvents(), e => e.EventType == EventType.RunParked).RunNodeId);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            It.IsAny<string>(), RemoteWorkItemStatus.WaitingForIld,
+            It.IsAny<WorkItemActor>(), It.IsAny<string>(), RemoteWorkItemStatus.WaitingForIld,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(),
             It.IsAny<string?>()), Times.Never);
     }

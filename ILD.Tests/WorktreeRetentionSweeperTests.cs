@@ -150,19 +150,19 @@ public class WorktreeRetentionSweeperTests
             worktree: "/tmp/wt/proposer", branch: "ild/wi-x-run-proposer");
 
         var workItems = WorkItemsReturning(workItemId, RemoteWorkItemStatus.Done);
-        workItems.Setup(x => x.WithdrawPendingProposalsOfRunAsync(run.Id, It.IsAny<CancellationToken>()))
+        workItems.Setup(x => x.WithdrawPendingProposalsOfRunAsync(It.IsAny<WorkItemActor>(), run.Id, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection refused (workitem-server:8081)"));
 
         await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, ReclaimerReturning(true).Object, retentionDays: 30));
 
         Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
 
-        workItems.Setup(x => x.WithdrawPendingProposalsOfRunAsync(run.Id, It.IsAny<CancellationToken>()))
+        workItems.Setup(x => x.WithdrawPendingProposalsOfRunAsync(It.IsAny<WorkItemActor>(), run.Id, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, ReclaimerReturning(true).Object, retentionDays: 30));
 
         Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
-        workItems.Verify(x => x.WithdrawPendingProposalsOfRunAsync(run.Id, It.IsAny<CancellationToken>()), Times.Exactly(2));
+        workItems.Verify(x => x.WithdrawPendingProposalsOfRunAsync(It.IsAny<WorkItemActor>(), run.Id, It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
@@ -223,7 +223,7 @@ public class WorktreeRetentionSweeperTests
         services.AddSingleton(settings.Object);
         var provider = services.BuildServiceProvider();
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
-        return new WorktreeRetentionSweeper(scopes, NullLogger<WorktreeRetentionSweeper>.Instance);
+        return new WorktreeRetentionSweeper(scopes, TestActors.Instance, NullLogger<WorktreeRetentionSweeper>.Instance);
     }
 
     private static Task InvokeSweepOnceAsync(WorktreeRetentionSweeper sweeper) =>

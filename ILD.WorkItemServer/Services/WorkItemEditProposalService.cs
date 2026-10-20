@@ -261,6 +261,13 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
             return await RefusedAsync(workItemId, proposalId, ct);
         }
 
+        var changed = AppliedChanges(proposal, expectedDependencies, proposedDependencies);
+        if (changed.Count > 0)
+        {
+            _db.AddHistorySave(workItemId, WorkItemHistoryKind.Changed, changed, proposal.Rationale);
+            await _db.SaveChangesAsync(ct);
+        }
+
         // Every other pending proposal was made against the fields just replaced.
         await _db.WorkItemEditProposals
             .Where(p => p.WorkItemId == proposal.WorkItemId && p.Status == WorkItemEditProposalStatus.Pending)
@@ -362,6 +369,35 @@ public sealed class WorkItemEditProposalService : IWorkItemEditProposalService
         var result = snapshot.Where(id => !removals.Contains(id)).ToList();
         result.AddRange(DeserializeIds(proposal.ProposedAddDependenciesJson).Where(id => !result.Contains(id)));
         return (expected, WorkItemMapper.SerializeDependencies(result));
+    }
+
+    /// <summary>
+    /// The fields an applied approve changed, with their new values. The write
+    /// only landed because the row still held the snapshot (and, for a
+    /// dependency change, <paramref name="expectedDependencies"/>), so those are
+    /// the values it replaced.
+    /// </summary>
+    private static IReadOnlyList<(string Field, string? Value)> AppliedChanges(
+        WorkItemEditProposal proposal, string? expectedDependencies, string? proposedDependencies)
+    {
+        var changes = new List<(string Field, string? Value)>();
+        void Compare(string field, string? before, string? after)
+        {
+            if (before != after) changes.Add((field, after));
+        }
+        if (proposal.ProposedTitle is { } title)
+            Compare(WorkItemHistoryFields.Title, proposal.SnapshotTitle, title);
+        if (proposal.ProposedDescription is { } description)
+            Compare(WorkItemHistoryFields.Description, proposal.SnapshotDescription, description);
+        if (proposal.ProposedTagsJson is { } tags)
+            Compare(WorkItemHistoryFields.Tags, proposal.SnapshotTagsJson, tags);
+        if (proposal.ProposedBranchNameOverride is { } branch)
+            Compare(WorkItemHistoryFields.BranchNameOverride, proposal.SnapshotBranchNameOverride, WorkItemMapper.NormalizeBranchRef(branch));
+        if (proposal.ProposedBaseBranchOverride is { } baseBranch)
+            Compare(WorkItemHistoryFields.BaseBranchOverride, proposal.SnapshotBaseBranchOverride, WorkItemMapper.NormalizeBranchRef(baseBranch));
+        if (proposedDependencies is not null)
+            Compare(WorkItemHistoryFields.Dependencies, expectedDependencies, proposedDependencies);
+        return changes;
     }
 
     private static IReadOnlyList<string> DeserializeIds(string? json)

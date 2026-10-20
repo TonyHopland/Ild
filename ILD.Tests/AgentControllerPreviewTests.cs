@@ -35,6 +35,7 @@ public class AgentControllerPreviewTests
             preview.Object,
             new Mock<IChatLoopScratchpad>().Object,
             new Mock<IChatNotifier>().Object,
+            TestActors.Instance,
             notifier.Object);
     }
 

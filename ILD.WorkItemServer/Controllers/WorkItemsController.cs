@@ -69,6 +69,13 @@ public sealed class WorkItemsController : ControllerBase
         return Ok(resp);
     }
 
+    [HttpGet("{id}/history")]
+    public async Task<ActionResult<IReadOnlyList<WorkItemHistoryEntryDto>>> GetHistory(string id, CancellationToken ct)
+    {
+        var history = await _svc.GetHistoryAsync(id, ct);
+        return history == null ? NotFound() : Ok(history);
+    }
+
     [HttpGet("{id}/dependencies")]
     public async Task<ActionResult<IReadOnlyList<string>>> GetDependencies(string id, CancellationToken ct)
     {

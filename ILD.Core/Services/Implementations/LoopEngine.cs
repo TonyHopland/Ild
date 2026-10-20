@@ -28,6 +28,7 @@ public sealed class LoopEngine : ILoopEngine
     private readonly IRunProgressBuffer _progressBuffer;
     private readonly IWorkItemNotifier _workItemNotifier;
     private readonly IShutdownState _shutdown;
+    private readonly BootstrapCredentials _instance;
     private readonly ILogger<LoopEngine> _logger;
 
     private readonly ConcurrentDictionary<Guid, CancellationTokenSource> _runCts = new();
@@ -54,6 +55,7 @@ public sealed class LoopEngine : ILoopEngine
         IServiceProvider sp,
         INodeExecutorRegistry registry,
         IRunNotifier notifier,
+        BootstrapCredentials instance,
         ILogger<LoopEngine> logger,
         IWorkItemNotifier? workItemNotifier = null,
         IRunProgressBuffer? progressBuffer = null,
@@ -62,6 +64,7 @@ public sealed class LoopEngine : ILoopEngine
         _sp = sp;
         _registry = registry;
         _notifier = notifier;
+        _instance = instance;
         _logger = logger;
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
         _progressBuffer = progressBuffer ?? new RunProgressBuffer();
@@ -69,6 +72,13 @@ public sealed class LoopEngine : ILoopEngine
         // without one behaving exactly as it did before draining existed.
         _shutdown = shutdown ?? ShutdownState.NeverStopping;
     }
+
+    /// <summary>A run as the actor of its work item's changes, named by its step when it is on one.</summary>
+    private WorkItemActor RunActor(Guid runId, string workItemId, string? nodeLabel = null)
+        => WorkItemActor.Agent(_instance.Username, runId, nodeLabel, workItemId);
+
+    /// <summary>A start that never made a run: the scheduler asked for it, and nothing else acted.</summary>
+    private WorkItemActor SchedulerActor => WorkItemActor.System(_instance.Username, "scheduler");
 
     public async Task StartRunAsync(string workItemId, CancellationToken cancellationToken = default)
     {
@@ -107,7 +117,7 @@ public sealed class LoopEngine : ILoopEngine
             var reason = resolution.Kind == Remote.LoopTemplateResolutionKind.None
                 ? "No loop found for existing tags"
                 : $"Multiple loop templates match tags: {string.Join(", ", resolution.MatchingTemplateNames)}";
-            await workItems.ParkWithoutRunAsync(workItemId, reason);
+            await workItems.ParkWithoutRunAsync(SchedulerActor, workItemId, reason);
             return;
         }
         // Park instead of throwing for a broken template: an exception here
@@ -117,13 +127,13 @@ public sealed class LoopEngine : ILoopEngine
         var version = await templateStore.GetLatestVersionAsync(resolution.TemplateId.Value);
         if (version is null)
         {
-            await workItems.ParkWithoutRunAsync(workItemId, "Matched loop template has no version");
+            await workItems.ParkWithoutRunAsync(SchedulerActor, workItemId, "Matched loop template has no version");
             return;
         }
         var startNode = await loopRunStore.GetStartNodeAsync(version.Id);
         if (startNode is null)
         {
-            await workItems.ParkWithoutRunAsync(workItemId, "Matched loop template has no Start node");
+            await workItems.ParkWithoutRunAsync(SchedulerActor, workItemId, "Matched loop template has no Start node");
             return;
         }
 
@@ -141,7 +151,7 @@ public sealed class LoopEngine : ILoopEngine
                 branchOverride, wi.RepositoryId, workItemId, cancellationToken);
             if (!verdict.IsUsable)
             {
-                await workItems.ParkWithoutRunAsync(workItemId, verdict.Problem!);
+                await workItems.ParkWithoutRunAsync(SchedulerActor, workItemId, verdict.Problem!);
                 return;
             }
         }
@@ -189,7 +199,8 @@ public sealed class LoopEngine : ILoopEngine
         {
             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.LoopRunStarted,
                 $"Run started from loop {template?.Name ?? "(unknown)"}"));
-            await workItems.TransitionAsync(workItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+            await workItems.TransitionAsync(RunActor(run.Id, workItemId), workItemId, RemoteWorkItemStatus.Running,
+                reason: $"Run started from loop {template?.Name ?? "(unknown)"}", currentLoopRunId: run.Id);
             await loopRunStore.ClearWorkItemStatusReasonAsync(workItemId);
             await _notifier.RunStateChangedAsync(run.Id, LoopRunStatus.Running, LoopRunStatus.Running);
         }
@@ -314,7 +325,7 @@ public sealed class LoopEngine : ILoopEngine
         // StopRunAsync: a cancelled run's item is waiting on a human.
         using var scope = _sp.CreateScope();
         await scope.ServiceProvider.GetRequiredService<IWorkItemManager>().TransitionAsync(
-            workItemId, RemoteWorkItemStatus.HumanFeedback,
+            RunActor(runId, workItemId), workItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: HumanFeedbackReasons.RunCancelled, humanFeedbackReason: HumanFeedbackReasons.RunCancelled);
     }
 
@@ -364,7 +375,7 @@ public sealed class LoopEngine : ILoopEngine
         }
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.WaitingHuman);
         await _notifier.HaltedAsync(runId);
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: HumanFeedbackReasons.RunHalted, humanFeedbackReason: HumanFeedbackReasons.RunHalted,
             currentLoopRunId: run.Id);
     }
@@ -499,7 +510,8 @@ public sealed class LoopEngine : ILoopEngine
         // note is ILD's, not a person's.
         if (!automatic && !string.IsNullOrWhiteSpace(note) && sp.GetService<IEventLogService>() is { } eventLog)
             await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.HumanFeedbackReceived, note));
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
+            reason: automatic ? "Run resumed automatically" : "Run resumed", currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
     }
@@ -566,7 +578,8 @@ public sealed class LoopEngine : ILoopEngine
         // omitting the transition — stranding the card in HumanFeedback while the
         // run actively executed. Every resume that flips the run to Running pairs
         // it with this transition (run start, ResumeFromHaltAsync, RetryFromNodeAsync).
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
+            reason: "Run resumed", currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
     }
@@ -597,7 +610,8 @@ public sealed class LoopEngine : ILoopEngine
         try
         {
             await sp.GetRequiredService<IWorkItemManager>().TransitionAsync(
-                run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+                RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
+                reason: "A person answered the run", currentLoopRunId: run.Id);
         }
         catch (Exception ex)
         {
@@ -682,7 +696,8 @@ public sealed class LoopEngine : ILoopEngine
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
         await loopRunStore.UpdateRunAsync(run);
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Running, currentLoopRunId: run.Id);
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
+            reason: $"Retried from {target.NodeLabel ?? "a step"}", currentLoopRunId: run.Id);
         await _notifier.RunStateChangedAsync(runId, oldStatus, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
     }
@@ -1069,7 +1084,7 @@ public sealed class LoopEngine : ILoopEngine
                         // The item waits on a person before the run will take an
                         // answer, so an answer's move back to Running always lands
                         // after this one.
-                        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+                        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
                             reason: wa.Reason, actions: string.IsNullOrEmpty(actions) ? null : actions,
                             humanFeedbackReason: wa.Reason, currentLoopRunId: run.Id);
                         var oldStatus = run.Status;
@@ -1082,7 +1097,7 @@ public sealed class LoopEngine : ILoopEngine
                     case NodeOutcome.WaitingIld wi:
                     {
                         // Engine has not created a LoopRunNode yet (capacity gate fires before NodeStarting).
-                        var transitioned = await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.WaitingForIld,
+                        var transitioned = await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.WaitingForIld,
                             reason: wi.Reason, humanFeedbackReason: HumanFeedbackReasons.AiProviderThrottled);
                         if (transitioned && eventLog is not null)
                             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunParked, wi.Reason, node.Id));
@@ -1126,7 +1141,7 @@ public sealed class LoopEngine : ILoopEngine
                         // being reclaimed and this instance being reset — the
                         // manager re-reports it on read if this write is lost.
                         await TrySafe(run.Id, () => workItems.RecordPullRequestAsync(
-                            run.WorkItemId, pc.PrUrl, run.Id, merged: false, createdAt: run.StartedAt ?? run.CreatedAt));
+                            RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, pc.PrUrl, run.Id, merged: false, createdAt: run.StartedAt ?? run.CreatedAt));
                         break;
                     }
                     case NodeOutcome.WorktreeDestroyed _:
@@ -1396,7 +1411,7 @@ public sealed class LoopEngine : ILoopEngine
             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunParked, reason, node.Id, runNodeId));
         await _notifier.RunStateChangedAsync(run.Id, old, LoopRunStatus.WaitingHuman);
         await _notifier.HaltedAsync(run.Id);
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: feedbackReason, currentLoopRunId: run.Id);
     }
 
@@ -1412,7 +1427,8 @@ public sealed class LoopEngine : ILoopEngine
         // only the run's own end is its completion.
         if (IsAlive(old) && eventLog is not null)
             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.LoopRunCompleted, "Run completed"));
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.Done, currentLoopRunId: run.Id);
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Done,
+            reason: "Run completed", currentLoopRunId: run.Id);
         return ParkResult.Stop;
     }
 
@@ -1428,7 +1444,7 @@ public sealed class LoopEngine : ILoopEngine
         _progressBuffer.Clear(run.Id);
         if (IsAlive(old) && sp.GetService<IEventLogService>() is { } eventLog)
             await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.LoopRunFailed, reason, node.Id, runNodeId));
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.NodeFailed, currentLoopRunId: run.Id);
     }
 
@@ -1471,7 +1487,7 @@ public sealed class LoopEngine : ILoopEngine
         if (sp.GetService<IEventLogService>() is { } eventLog)
             await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.LoopRunFailed, reason, crashed?.LoopNodeId, crashed?.Id));
         await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Failed);
-        await workItems.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, crashed?.NodeLabel), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: run.HumanFeedbackReason, humanFeedbackReason: HumanFeedbackReasons.RunCrashed, currentLoopRunId: run.Id);
     }
 

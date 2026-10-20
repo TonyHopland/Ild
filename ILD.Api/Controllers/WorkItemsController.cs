@@ -236,6 +236,8 @@ public class WorkItemsController : ControllerBase
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
+        if (SignedInUser is not { } user)
+            return Unauthorized();
 
         // RepositoryId is a required FK on the WorkItem entity. Surface a
         // clean 400 instead of letting EF translate this into an opaque
@@ -259,7 +261,7 @@ public class WorkItemsController : ControllerBase
             return BadRequest(new { error = baseError });
 
         var id = await _workItemManager.CreateWorkItemAsync(
-            request.Title, request.Description,
+            user, request.Title, request.Description,
             repositoryId,
             createdByLoopRunId: null,
             forceBacklog: false,
@@ -276,6 +278,9 @@ public class WorkItemsController : ControllerBase
     [HttpPut("{id}")]
     public async Task<IActionResult> Update(string id, [FromBody] WorkItemCreateRequest request)
     {
+        if (SignedInUser is not { } user)
+            return Unauthorized();
+
         // A supplied (parseable) override mode replaces the work item's override;
         // the target id travels with it. An unset/unparseable mode leaves the
         // existing override untouched.
@@ -316,7 +321,7 @@ public class WorkItemsController : ControllerBase
         }
 
         var ok = await _workItemManager.UpdateAsync(
-            id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId,
+            user, id, request.Title, request.Description, request.Tags, overrideMode, overrideProviderId,
             request.BranchNameOverride, request.BaseBranchOverride, repositoryId);
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
@@ -693,6 +698,21 @@ public class WorkItemsController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// The person signed in to the UI, as the actor of the changes they make. Null
+    /// for a session whose user can no longer be resolved, which is refused as
+    /// unauthorized: a change nobody can be named for is not made.
+    /// </summary>
+    private WorkItemActor? SignedInUser => User.Identity?.Name is { Length: > 0 } name ? WorkItemActor.Human(name) : null;
+
+    [HttpGet("{id}/history")]
+    public Task<IActionResult> GetHistory(string id, CancellationToken cancellationToken)
+        => ForwardToWorkItemServerAsync(async () =>
+        {
+            var history = await _workItemManager.GetHistoryAsync(id, cancellationToken);
+            return history == null ? NotFound() : Ok(history);
+        });
+
     [HttpGet("{id}/attachments")]
     public Task<IActionResult> ListAttachments(string id, CancellationToken cancellationToken)
         => ForwardToWorkItemServerAsync(async () =>
@@ -734,13 +754,15 @@ public class WorkItemsController : ControllerBase
                 });
         }
 
+        if (SignedInUser is not { } user)
+            return Unauthorized();
         var uploads = new List<RemoteAttachmentUpload>(files.Count);
         foreach (var file in files)
             uploads.Add(new RemoteAttachmentUpload(
                 file.FileName, file.ContentType, await ReadExactlyAsync(file, cancellationToken)));
 
         return await ForwardToWorkItemServerAsync(async () => AttachmentHttpResult.ToActionResult(
-            await _workItemManager.AddAttachmentsAsync(id, uploads, cancellationToken)));
+            await _workItemManager.AddAttachmentsAsync(user, id, uploads, cancellationToken)));
     }
 
     [HttpGet("{id}/attachments/{attachmentId:guid}")]
@@ -758,9 +780,13 @@ public class WorkItemsController : ControllerBase
     [HttpDelete("{id}/attachments/{attachmentId:guid}")]
     public Task<IActionResult> DeleteAttachment(string id, Guid attachmentId, CancellationToken cancellationToken)
         => ForwardToWorkItemServerAsync(async () =>
-            await _workItemManager.DeleteAttachmentAsync(id, attachmentId, cancellationToken)
+        {
+            if (SignedInUser is not { } user)
+                return Unauthorized();
+            return await _workItemManager.DeleteAttachmentAsync(user, id, attachmentId, cancellationToken)
                 ? NoContent()
-                : (IActionResult)NotFound());
+                : NotFound();
+        });
 
     /// <summary>
     /// The file as one array of exactly its length. A <see cref="MemoryStream"/>
@@ -821,7 +847,9 @@ public class WorkItemsController : ControllerBase
         string id, Guid proposalId, [FromServices] IChatNotifier chatNotifier, CancellationToken cancellationToken)
         => ForwardToWorkItemServerAsync(async () =>
         {
-            var result = await _workItemManager.ApproveEditProposalAsync(id, proposalId, cancellationToken);
+            if (SignedInUser is not { } user)
+                return Unauthorized();
+            var result = await _workItemManager.ApproveEditProposalAsync(user, id, proposalId, cancellationToken);
             switch (result.Outcome)
             {
                 case EditProposalDecisionOutcome.Applied:
@@ -847,7 +875,9 @@ public class WorkItemsController : ControllerBase
         [FromServices] IChatNotifier chatNotifier, CancellationToken cancellationToken)
         => ForwardToWorkItemServerAsync(async () =>
         {
-            var result = await _workItemManager.RejectEditProposalAsync(id, proposalId, request.Reason, cancellationToken);
+            if (SignedInUser is not { } user)
+                return Unauthorized();
+            var result = await _workItemManager.RejectEditProposalAsync(user, id, proposalId, request.Reason, cancellationToken);
             if (result.Outcome != EditProposalDecisionOutcome.Rejected)
                 return DecisionRefused(result.Outcome, result.Proposal);
             await HintProposingChatsAsync(id, chatNotifier, cancellationToken);
@@ -887,14 +917,16 @@ public class WorkItemsController : ControllerBase
     {
         if (!Enum.TryParse<WorkItemStatus>(request.TargetStatus, true, out var target))
             return BadRequest(new { error = "Invalid target status" });
+        if (SignedInUser is not { } actor)
+            return Unauthorized();
         var ok = target switch
         {
-            WorkItemStatus.Backlog => await _workItemManager.TransitionToBacklogAsync(id),
-            WorkItemStatus.WorkQueue => await _workItemManager.TransitionToWorkQueueAsync(id),
-            WorkItemStatus.Ready => await _workItemManager.TransitionToReadyAsync(id),
-            WorkItemStatus.Running => await _workItemManager.TransitionToRunningAsync(id),
-            WorkItemStatus.HumanFeedback => await _workItemManager.TransitionToHumanFeedbackAsync(id, "manual"),
-            WorkItemStatus.Done => await _workItemManager.TransitionToDoneAsync(id),
+            WorkItemStatus.Backlog => await _workItemManager.TransitionToBacklogAsync(actor, id),
+            WorkItemStatus.WorkQueue => await _workItemManager.TransitionToWorkQueueAsync(actor, id),
+            WorkItemStatus.Ready => await _workItemManager.TransitionToReadyAsync(actor, id),
+            WorkItemStatus.Running => await _workItemManager.TransitionToRunningAsync(actor, id),
+            WorkItemStatus.HumanFeedback => await _workItemManager.TransitionToHumanFeedbackAsync(actor, id, "manual"),
+            WorkItemStatus.Done => await _workItemManager.TransitionToDoneAsync(actor, id),
             _ => false,
         };
         return ok ? Ok() : BadRequest(new { error = "Transition not allowed" });
@@ -914,9 +946,11 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/dependencies")]
     public async Task<IActionResult> AddDependency(string id, [FromBody] AddDependencyRequest request)
     {
+        if (SignedInUser is not { } user)
+            return Unauthorized();
         try
         {
-            var success = await _workItemManager.AddDependencyAsync(id, request.DependencyId);
+            var success = await _workItemManager.AddDependencyAsync(user, id, request.DependencyId);
             return success ? Ok() : BadRequest();
         }
         catch (InvalidOperationException ex)
@@ -928,7 +962,9 @@ public class WorkItemsController : ControllerBase
     [HttpDelete("{id}/dependencies/{depId}")]
     public async Task<IActionResult> RemoveDependency(string id, string depId)
     {
-        var ok = await _workItemManager.RemoveDependencyAsync(id, depId);
+        if (SignedInUser is not { } user)
+            return Unauthorized();
+        var ok = await _workItemManager.RemoveDependencyAsync(user, id, depId);
         return ok ? Ok() : NotFound();
     }
 
@@ -968,7 +1004,9 @@ public class WorkItemsController : ControllerBase
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
 
-        var ok = await _workItemManager.LinkPullRequestAsync(id, request.PrUrl);
+        if (SignedInUser is not { } user)
+            return Unauthorized();
+        var ok = await _workItemManager.LinkPullRequestAsync(user, id, request.PrUrl);
         return ok ? Ok() : NotFound();
     }
 
@@ -1048,20 +1086,26 @@ public class WorkItemsController : ControllerBase
     [HttpPost("{id}/cleanup-to-done")]
     public async Task<IActionResult> CleanupToDone(string id)
     {
-        var ok = await _workItemManager.CleanupToDoneAsync(id);
+        if (SignedInUser is not { } user)
+            return Unauthorized();
+        var ok = await _workItemManager.CleanupToDoneAsync(user, id);
         return ok ? Ok() : NotFound();
     }
 
     [HttpPost("{id}/cleanup-to-backlog")]
     public async Task<IActionResult> CleanupToBacklog(string id)
     {
-        var ok = await _workItemManager.CleanupToBacklogAsync(id);
+        if (SignedInUser is not { } user)
+            return Unauthorized();
+        var ok = await _workItemManager.CleanupToBacklogAsync(user, id);
         return ok ? Ok() : NotFound();
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id)
     {
+        if (SignedInUser is not { } user)
+            return Unauthorized();
         var dependents = await _workItemManager.GetDependentsAsync(id);
         var dependentList = dependents.ToList();
         if (dependentList.Count > 0)
@@ -1074,7 +1118,7 @@ public class WorkItemsController : ControllerBase
             });
         }
 
-        var ok = await _workItemManager.DeleteAsync(id);
+        var ok = await _workItemManager.DeleteAsync(user, id);
         return ok ? Ok() : NotFound();
     }
 }

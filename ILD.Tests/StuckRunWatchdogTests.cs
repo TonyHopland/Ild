@@ -155,7 +155,7 @@ public class StuckRunWatchdogTests
 
         // Finalized, not re-driven.
         recovery.Verify(r => r.RecoverRunAsync(It.IsAny<Guid>()), Times.Never);
-        workItems.Verify(w => w.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        workItems.Verify(w => w.TransitionAsync(It.IsAny<WorkItemActor>(), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
 
         var healed = db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id);
@@ -188,7 +188,7 @@ public class StuckRunWatchdogTests
             RecoveryReturning(true).Object, workItems.Object, events));
 
         Assert.Equal(LoopRunStatus.Failed, db.Fresh().LoopRuns.AsNoTracking().First(r => r.Id == run.Id).Status);
-        workItems.Verify(w => w.TransitionAsync(run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        workItems.Verify(w => w.TransitionAsync(It.IsAny<WorkItemActor>(), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(), It.IsAny<string?>(), run.Id, It.IsAny<string?>()), Times.Once);
     }
 
@@ -215,7 +215,7 @@ public class StuckRunWatchdogTests
         var workItems = new Mock<IWorkItemManager>();
         workItems.Setup(x => x.GetWorkItemAsync(It.IsAny<string>()))
             .ReturnsAsync((string id) => new WorkItemView { Id = id, Status = RemoteWorkItemStatus.Running });
-        workItems.Setup(x => x.TransitionAsync(stuck.WorkItemId, It.IsAny<RemoteWorkItemStatus>(),
+        workItems.Setup(x => x.TransitionAsync(It.IsAny<WorkItemActor>(), stuck.WorkItemId, It.IsAny<RemoteWorkItemStatus>(),
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ThrowsAsync(new InvalidOperationException("transition failed"));
 
@@ -392,7 +392,7 @@ public class StuckRunWatchdogTests
         services.AddSingleton(eventLog ?? new Mock<IEventLogService>().Object);
         var provider = services.BuildServiceProvider();
         var scopes = provider.GetRequiredService<IServiceScopeFactory>();
-        return new StuckRunWatchdog(scopes, engine, NullLogger<StuckRunWatchdog>.Instance);
+        return new StuckRunWatchdog(scopes, engine, TestActors.Instance, NullLogger<StuckRunWatchdog>.Instance);
     }
 
     private static Task InvokeSweepOnceAsync(StuckRunWatchdog watchdog) =>

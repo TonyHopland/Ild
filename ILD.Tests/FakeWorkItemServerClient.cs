@@ -2,6 +2,8 @@ using ILD.Core.Services.Remote;
 using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Dtos;
 using ILD.WorkItemServer.Services;
+using ILD.WorkItemServer;
+using WorkItemActor = ILD.Core.Services.Remote.WorkItemActor;
 
 namespace ILD.Tests;
 
@@ -9,16 +11,20 @@ namespace ILD.Tests;
 /// In-memory fake implementing <see cref="IWorkItemServerClient"/> by
 /// delegating to a real <see cref="IWorkItemService"/> instance. Tests get
 /// the full server semantics (atomic claims, dep validation, conversation
-/// appends, stale reclaim) without standing up an HTTP listener.
+/// appends, stale reclaim) without standing up an HTTP listener. Each mutation
+/// hands its actor to the shared DbContext, as the server's X-ILD-Actor
+/// middleware does for a request.
 /// </summary>
 public sealed class FakeWorkItemServerClient : IWorkItemServerClient
 {
     private readonly IWorkItemService _svc;
     private readonly IWorkItemAttachmentService _attachments;
     private readonly IWorkItemEditProposalService _proposals;
+    private readonly WorkItemServerDbContext _db;
 
-    public FakeWorkItemServerClient(IWorkItemService svc, IWorkItemAttachmentService attachments, IWorkItemEditProposalService proposals)
+    public FakeWorkItemServerClient(WorkItemServerDbContext db, IWorkItemService svc, IWorkItemAttachmentService attachments, IWorkItemEditProposalService proposals)
     {
+        _db = db;
         _svc = svc;
         _attachments = attachments;
         _proposals = proposals;
@@ -28,6 +34,10 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     private static RemoteWorkItemStatus MapBack(ILD.WorkItemServer.Domain.WorkItemStatus s) => (RemoteWorkItemStatus)(int)s;
     private static ILD.WorkItemServer.Domain.WorkItemPriority MapPri(RemoteWorkItemPriority p) => (ILD.WorkItemServer.Domain.WorkItemPriority)(int)p;
     private static RemoteWorkItemPriority MapPriBack(ILD.WorkItemServer.Domain.WorkItemPriority p) => (RemoteWorkItemPriority)(int)p;
+
+    private void ActAs(WorkItemActor actor)
+        => _db.HistoryActor = new ILD.WorkItemServer.Domain.WorkItemActor(
+            actor.Username, (WorkItemActorKind)(int)actor.Kind, actor.Detail, actor.WorkItemId);
 
     private static RemoteWorkItem ToRemote(WorkItemDto dto) => new()
     {
@@ -56,8 +66,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         PendingEditProposalCount = dto.PendingEditProposalCount,
     };
 
-    public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, CancellationToken ct = default)
+    public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default)
     {
+        ActAs(actor);
         var dto = await _svc.CreateAsync(new CreateWorkItemRequest
         {
             Title = req.Title,
@@ -88,8 +99,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         return list.Select(ToRemote).ToList();
     }
 
-    public async Task<RemoteWorkItem?> UpdateAsync(WorkItemServerOptions opts, string id, RemoteUpdateWorkItemRequest req, CancellationToken ct = default)
+    public async Task<RemoteWorkItem?> UpdateAsync(WorkItemServerOptions opts, string id, RemoteUpdateWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default)
     {
+        ActAs(actor);
         var dto = await _svc.UpdateAsync(id, new UpdateWorkItemRequest
         {
             Title = req.Title,
@@ -102,14 +114,20 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         return dto == null ? null : ToRemote(dto);
     }
 
-    public Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default) => _svc.DeleteAsync(id, ct);
-
-    public async Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, CancellationToken ct = default)
+    public Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, WorkItemActor actor, CancellationToken ct = default)
     {
+        ActAs(actor);
+        return _svc.DeleteAsync(id, ct);
+    }
+
+    public async Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
         var resp = await _svc.TransitionAsync(id, new TransitionRequest
         {
             TargetStatus = Map(req.TargetStatus),
             Actions = req.Actions,
+            Reason = req.Reason,
         }, ct);
         return new RemoteTransitionResponse
         {
@@ -119,24 +137,49 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         };
     }
 
-    public Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
-        => _svc.AddDependencyAsync(id, dependencyId, ct);
+    public Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
+        return _svc.AddDependencyAsync(id, dependencyId, ct);
+    }
 
-    public Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
-        => _svc.RemoveDependencyAsync(id, dependencyId, ct);
+    public Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
+        return _svc.RemoveDependencyAsync(id, dependencyId, ct);
+    }
 
     /// <summary>
     /// Mirrors the HTTP client, which reports success as the status code: only
     /// a recorded PR is a success, and every failure — 400/404/409 — is false.
     /// </summary>
-    public async Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default)
-        => await _svc.RecordPullRequestAsync(id, new RecordPullRequestRequest
+    public async Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
+        return await _svc.RecordPullRequestAsync(id, new RecordPullRequestRequest
         {
             Url = url,
             LoopRunId = loopRunId,
             Merged = merged,
             CreatedAt = createdAt,
         }, ct) == RecordPullRequestOutcome.Recorded;
+    }
+
+    public async Task<IReadOnlyList<RemoteWorkItemHistoryEntry>?> GetHistoryAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default)
+        => (await _svc.GetHistoryAsync(id, ct))?.Select(e => new RemoteWorkItemHistoryEntry
+        {
+            SaveId = e.SaveId,
+            Timestamp = e.Timestamp,
+            Kind = (RemoteWorkItemHistoryKind)(int)e.Kind,
+            Username = e.Username,
+            ActorKind = (RemoteWorkItemActorKind?)(int?)e.ActorKind,
+            ActorDetail = e.ActorDetail,
+            ActorWorkItemId = e.ActorWorkItemId,
+            Field = e.Field,
+            OldValue = e.OldValue,
+            NewValue = e.NewValue,
+            Reason = e.Reason,
+        }).ToList();
 
     public async Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default)
     {
@@ -148,8 +191,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     /// Mirrors the HTTP client's mapping of the server's answers: 404 for an
     /// unknown work item, and a 400 whose message says which limit was broken.
     /// </summary>
-    public async Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default)
+    public async Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, WorkItemActor actor, CancellationToken ct = default)
     {
+        ActAs(actor);
         var result = await _attachments.AddAsync(
             workItemId,
             files.Select(f => new IncomingAttachment(
@@ -171,8 +215,11 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         return stored == null ? null : (stored.Content, stored.ContentType, stored.FileName);
     }
 
-    public Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default)
-        => _attachments.DeleteAsync(workItemId, attachmentId, ct);
+    public Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
+        return _attachments.DeleteAsync(workItemId, attachmentId, ct);
+    }
 
     private static RemoteWorkItemAttachment ToRemote(WorkItemAttachmentDto dto)
         => new(dto.Id, dto.FileName, dto.ContentType, dto.SizeBytes, dto.CreatedAt);
@@ -183,8 +230,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
     /// unknown item, 400 for an invalid proposal and 409 past the pending cap,
     /// each carrying the server's reason.
     /// </summary>
-    public async Task<ILD.Core.Services.Remote.EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, CancellationToken ct = default)
+    public async Task<ILD.Core.Services.Remote.EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, WorkItemActor actor, CancellationToken ct = default)
     {
+        ActAs(actor);
         var result = await _proposals.CreateAsync(workItemId, new CreateEditProposalRequest
         {
             Title = req.Title,
@@ -218,19 +266,26 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
                 ct))
             .Select(ToRemote).ToList();
 
-    public async Task<ILD.Core.Services.Remote.EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, CancellationToken ct = default)
-        => ToRemote(await _proposals.ApproveAsync(workItemId, proposalId, ct));
+    public async Task<ILD.Core.Services.Remote.EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
+        return ToRemote(await _proposals.ApproveAsync(workItemId, proposalId, ct));
+    }
 
     /// <summary>The server refuses an over-long reason with a 400, which the HTTP client throws on.</summary>
-    public async Task<ILD.Core.Services.Remote.EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
+    public async Task<ILD.Core.Services.Remote.EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, WorkItemActor actor, CancellationToken ct = default)
     {
+        ActAs(actor);
         if (reason?.Trim().Length > WorkItemEditProposalService.MaxRejectionReasonLength)
             throw new HttpRequestException("The reject was refused: 400 Bad Request.", null, System.Net.HttpStatusCode.BadRequest);
         return ToRemote(await _proposals.RejectAsync(workItemId, proposalId, reason, ct));
     }
 
-    public Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, CancellationToken ct = default)
-        => _proposals.MarkDecisionsDeliveredAsync(proposalIds, ct);
+    public Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
+        return _proposals.MarkDecisionsDeliveredAsync(proposalIds, ct);
+    }
 
     private static ILD.Core.Services.Remote.EditProposalDecisionResult ToRemote(ILD.WorkItemServer.Services.EditProposalDecisionResult result)
         => new(
@@ -269,8 +324,9 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
 
     private static RemoteEditProposalDependency ToRemote(EditProposalDependencyDto dto) => new() { Id = dto.Id, Title = dto.Title };
 
-    public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
+    public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, WorkItemActor actor, CancellationToken ct = default)
     {
+        ActAs(actor);
         var resp = await _svc.PollAsync(activeIds, ct);
         return new RemotePollResponse
         {

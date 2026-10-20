@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { globalVariableService } from "../services/auth";
-import { DescriptionDiff } from "./EditProposalCard";
+import { DescriptionDiff } from "./FieldChanges";
 import ProposalDecision from "./ProposalDecision";
 import type { GlobalVariableProposal } from "../types";
 import "./ProposalCard.css";

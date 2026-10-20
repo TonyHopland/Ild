@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ILD.WorkItemServer.Domain;
 
 namespace ILD.WorkItemServer.Dtos;
@@ -123,6 +124,12 @@ public sealed class TransitionRequest
 {
     public WorkItemStatus TargetStatus { get; set; }
     public string? Actions { get; set; }
+
+    /// <summary>
+    /// Why the item moves, recorded on its history. Optional: a blank one is
+    /// none, and a long one is cut to fit rather than refused.
+    /// </summary>
+    public string? Reason { get; set; }
 }
 
 public sealed class TransitionResponse
@@ -185,6 +192,32 @@ public sealed class PollResponse
 {
     public IReadOnlyList<WorkItemDto> ActiveItems { get; set; } = Array.Empty<WorkItemDto>();
     public IReadOnlyList<WorkItemDto> ReadyItems { get; set; } = Array.Empty<WorkItemDto>();
+}
+
+/// <summary>
+/// One field of one save in a work item's history, with the value it replaced:
+/// the previous entry's value for the same field, null for the field's first
+/// entry and for an event such as <c>pullRequest.linked</c>.
+/// </summary>
+public sealed class WorkItemHistoryEntryDto
+{
+    public string SaveId { get; set; } = string.Empty;
+    public DateTime Timestamp { get; set; }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkItemHistoryKind>))]
+    public WorkItemHistoryKind Kind { get; set; }
+
+    public string? Username { get; set; }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<WorkItemActorKind>))]
+    public WorkItemActorKind? ActorKind { get; set; }
+
+    public string? ActorDetail { get; set; }
+    public string? ActorWorkItemId { get; set; }
+    public string Field { get; set; } = string.Empty;
+    public string? OldValue { get; set; }
+    public string? NewValue { get; set; }
+    public string? Reason { get; set; }
 }
 
 /// <summary>

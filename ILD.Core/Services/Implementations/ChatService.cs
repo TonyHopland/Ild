@@ -379,7 +379,7 @@ public sealed class ChatService : IChatService
         // Same rule for the proposal decisions: acknowledged only once they
         // reached an agent, so a failed launch announces them again next turn.
         if (decidedProposals.Count > 0 && boundThisTurn is not null)
-            await MarkProposalDecisionsDeliveredAsync(decidedProposals);
+            await MarkProposalDecisionsDeliveredAsync(WorkItemActor.Chat(session.UserId, chatSessionId), decidedProposals);
         if (boundThisTurn is not null)
         {
             await MarkDeliveredAsync(_db.GlobalVariableProposals, decidedSuggestions);
@@ -562,11 +562,11 @@ public sealed class ChatService : IChatService
     /// Best effort: an acknowledgement that does not land only means the same
     /// notice is sent once more.
     /// </summary>
-    private async Task MarkProposalDecisionsDeliveredAsync(IReadOnlyList<RemoteWorkItemEditProposal> delivered)
+    private async Task MarkProposalDecisionsDeliveredAsync(WorkItemActor chat, IReadOnlyList<RemoteWorkItemEditProposal> delivered)
     {
         try
         {
-            await _workItems!.MarkEditProposalDecisionsDeliveredAsync(
+            await _workItems!.MarkEditProposalDecisionsDeliveredAsync(chat,
                 delivered.Select(p => p.Id).ToList(), CancellationToken.None);
         }
         catch (Exception ex) when (IsWorkItemServerUnavailable(ex, CancellationToken.None))

@@ -319,6 +319,9 @@ public class LoopRunsController : ControllerBase
         if (run == null) return NotFound();
         if (run.Status == ILD.Data.Enums.LoopRunStatus.Running)
             return BadRequest(new { error = "Cannot delete a running loop. Cancel it first." });
+        if (User.Identity?.Name is not { Length: > 0 } username)
+            return Unauthorized();
+        var user = WorkItemActor.Human(username);
 
         // The row may only go once the git state it names is verifiably gone —
         // a deleted row would leave the leftovers orphaned with nothing
@@ -329,7 +332,7 @@ public class LoopRunsController : ControllerBase
         // Its pending edit proposals go with it, or nothing would ever decide them.
         try
         {
-            await _workItemManager.WithdrawPendingProposalsOfRunAsync(guid, cancellationToken);
+            await _workItemManager.WithdrawPendingProposalsOfRunAsync(user, guid, cancellationToken);
         }
         catch (HttpRequestException ex)
         {

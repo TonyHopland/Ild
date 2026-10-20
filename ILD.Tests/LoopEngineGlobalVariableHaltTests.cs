@@ -114,7 +114,7 @@ public class LoopEngineGlobalVariableHaltTests
         AssertParkedBeforeTheNode(h, executor);
         Assert.Null(h.ReloadRun().CurrentAiSessionId);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.Is<string?>(r => r != null && r.Contains("Rules", StringComparison.OrdinalIgnoreCase) && r.Contains(PagePath)),
             It.IsAny<string?>(), h.RunId, HumanFeedbackReasons.GlobalVariableMissing), Times.Once);
     }
@@ -138,7 +138,7 @@ public class LoopEngineGlobalVariableHaltTests
         Assert.DoesNotContain("Gamma", parked.Data!);
         Assert.Contains(PagePath, parked.Data!);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.Is<string?>(r => r != null && r.Contains("Alpha") && r.Contains("Beta") && !r.Contains("Gamma") && r.Contains(PagePath)),
             It.IsAny<string?>(), h.RunId, HumanFeedbackReasons.GlobalVariableMissing), Times.Once);
     }

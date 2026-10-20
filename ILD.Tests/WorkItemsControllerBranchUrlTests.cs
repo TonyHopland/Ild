@@ -107,10 +107,10 @@ public class WorkItemsControllerBranchUrlTests
             eventLog.Object,
             db.LoopRuns,
             db.ServerClient,
-            db.ServerOptions,
+            db.ServerOptions, TestActors.Instance,
             engine: new Mock<ILoopEngine>().Object);
 
-        var id = await mgr.CreateWorkItemAsync("Link me", "", repo.Id);
+        var id = await mgr.CreateWorkItemAsync(TestActors.Human, "Link me", "", repo.Id);
         var worktree = Path.Combine(Path.GetTempPath(), "ild-link-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(worktree);
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
@@ -130,7 +130,7 @@ public class WorkItemsControllerBranchUrlTests
         });
         db.Context.SaveChanges();
 
-        var controller = new WorkItemsController(
+        var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,
             new Mock<ILoopEngine>().Object,
             new Mock<IWorktreePreviewService>().Object,
@@ -140,7 +140,7 @@ public class WorkItemsControllerBranchUrlTests
             NoPackageFeeds.Resolver,
             new Mock<IBranchNameOverrideService>().Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
-            NullLogger<WorkItemsController>.Instance);
+            NullLogger<WorkItemsController>.Instance));
 
         return (controller, db, repoMgr, id, worktree);
     }

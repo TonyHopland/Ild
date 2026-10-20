@@ -31,7 +31,7 @@ public sealed class WorkItemAttachmentClientFileNameTests
         var bytes = Encoding.UTF8.GetBytes("the file itself is fine");
 
         var upload = await client.UploadAttachmentsAsync(
-            options, id, new[] { new RemoteAttachmentUpload(sent, "image/png", bytes) }, TestContext.Current.CancellationToken);
+            options, id, new[] { new RemoteAttachmentUpload(sent, "image/png", bytes) }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal("Created", upload.Outcome.ToString());
         Assert.Equal(stored, Assert.Single(upload.Created).FileName);

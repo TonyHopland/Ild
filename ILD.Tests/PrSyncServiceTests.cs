@@ -49,7 +49,7 @@ public class PrSyncServiceTests
         var workItems = new Mock<IWorkItemManager>();
         var engine = new Mock<ILoopEngine>();
 
-        var service = new PrSyncService(loopRuns.Object, events.Object, workItems.Object, engine.Object, Mock.Of<IPrStatusPoller>());
+        var service = new PrSyncService(loopRuns.Object, events.Object, workItems.Object, engine.Object, Mock.Of<IPrStatusPoller>(), TestActors.Instance);
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
 
@@ -86,7 +86,7 @@ public class PrSyncServiceTests
 
         var engine = new Mock<ILoopEngine>();
         var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogService>().Object,
-            new Mock<IWorkItemManager>().Object, engine.Object, Mock.Of<IPrStatusPoller>());
+            new Mock<IWorkItemManager>().Object, engine.Object, Mock.Of<IPrStatusPoller>(), TestActors.Instance);
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
 
@@ -115,13 +115,13 @@ public class PrSyncServiceTests
         loopRuns.Setup(s => s.GetRunNodesAsync(staleRun.Id)).ReturnsAsync(Array.Empty<LoopRunNode>());
 
         var workItems = new Mock<IWorkItemManager>();
-        var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogService>().Object, workItems.Object, new Mock<ILoopEngine>().Object, Mock.Of<IPrStatusPoller>());
+        var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogService>().Object, workItems.Object, new Mock<ILoopEngine>().Object, Mock.Of<IPrStatusPoller>(), TestActors.Instance);
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", staleRun.PrUrl, null, "merged"));
 
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.Id == staleRun.Id && r.IsPrMerged)), Times.Once);
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.Id == currentRun.Id)), Times.Never);
-        workItems.Verify(s => s.TransitionAsync(It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
+        workItems.Verify(s => s.TransitionAsync(It.IsAny<WorkItemActor>(), It.IsAny<string>(), It.IsAny<RemoteWorkItemStatus>(),
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
         Assert.False(currentRun.IsPrMerged);
     }
@@ -145,12 +145,12 @@ public class PrSyncServiceTests
         loopRuns.Setup(s => s.GetRunNodesAsync(run.Id)).ReturnsAsync(Array.Empty<LoopRunNode>());
 
         var workItems = new Mock<IWorkItemManager>();
-        var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogService>().Object, workItems.Object, new Mock<ILoopEngine>().Object, Mock.Of<IPrStatusPoller>());
+        var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogService>().Object, workItems.Object, new Mock<ILoopEngine>().Object, Mock.Of<IPrStatusPoller>(), TestActors.Instance);
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.merged", "repo-1", "7", run.PrUrl, null, "merged"));
 
         loopRuns.Verify(s => s.UpdateRunAsync(It.Is<LoopRun>(r => r.IsPrMerged)), Times.Once);
-        workItems.Verify(s => s.TransitionAsync("wi-1", RemoteWorkItemStatus.Done,
+        workItems.Verify(s => s.TransitionAsync(It.IsAny<WorkItemActor>(), "wi-1", RemoteWorkItemStatus.Done,
             It.IsAny<string?>(), It.IsAny<string?>(), run.Id, It.IsAny<string?>()), Times.Once);
     }
 
@@ -183,7 +183,7 @@ public class PrSyncServiceTests
         var workItems = new Mock<IWorkItemManager>();
         var engine = new Mock<ILoopEngine>();
 
-        var service = new PrSyncService(loopRuns.Object, events.Object, workItems.Object, engine.Object, Mock.Of<IPrStatusPoller>());
+        var service = new PrSyncService(loopRuns.Object, events.Object, workItems.Object, engine.Object, Mock.Of<IPrStatusPoller>(), TestActors.Instance);
 
         await service.HandleWebhookAsync(new WebhookPayload("pull_request.rejected", "repo-1", "7", run.PrUrl, "needs work", "changes_requested"));
 
@@ -225,7 +225,7 @@ public class PrSyncServiceTests
 
         var engine = new Mock<ILoopEngine>();
         var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogService>().Object,
-            new Mock<IWorkItemManager>().Object, engine.Object, Mock.Of<IPrStatusPoller>());
+            new Mock<IWorkItemManager>().Object, engine.Object, Mock.Of<IPrStatusPoller>(), TestActors.Instance);
 
         await service.HandleWebhookAsync(new WebhookPayload(
             "pull_request.rejected", "repo-1", "7", run.PrUrl, "rename the flag", "changes_requested"));
@@ -263,7 +263,7 @@ public class PrSyncServiceTests
 
         var engine = new Mock<ILoopEngine>();
         var service = new PrSyncService(loopRuns.Object, new Mock<IEventLogService>().Object,
-            new Mock<IWorkItemManager>().Object, engine.Object, Mock.Of<IPrStatusPoller>());
+            new Mock<IWorkItemManager>().Object, engine.Object, Mock.Of<IPrStatusPoller>(), TestActors.Instance);
 
         await service.HandleWebhookAsync(new WebhookPayload(
             "pull_request.closed", "repo-1", "7", run.PrUrl, null, "closed"));

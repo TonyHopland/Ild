@@ -29,7 +29,7 @@ public sealed class WorkItemTriageTests : IDisposable
             new Mock<IEventLogService>().Object,
             _db.LoopRuns,
             _db.ServerClient,
-            _db.ServerOptions);
+            _db.ServerOptions, TestActors.Instance);
     }
 
     public void Dispose() => _db.Dispose();

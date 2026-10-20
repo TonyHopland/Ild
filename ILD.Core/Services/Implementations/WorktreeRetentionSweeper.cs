@@ -36,10 +36,12 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<WorktreeRetentionSweeper> _log;
+    private readonly WorkItemActor _actor;
 
-    public WorktreeRetentionSweeper(IServiceScopeFactory scopes, ILogger<WorktreeRetentionSweeper> log)
+    public WorktreeRetentionSweeper(IServiceScopeFactory scopes, BootstrapCredentials instance, ILogger<WorktreeRetentionSweeper> log)
     {
         _scopes = scopes;
+        _actor = WorkItemActor.System(instance.Username, "run retention");
         _log = log;
     }
 
@@ -115,7 +117,7 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
 
             try
             {
-                await workItems.WithdrawPendingProposalsOfRunAsync(run.Id, ct);
+                await workItems.WithdrawPendingProposalsOfRunAsync(_actor, run.Id, ct);
             }
             catch (HttpRequestException ex)
             {

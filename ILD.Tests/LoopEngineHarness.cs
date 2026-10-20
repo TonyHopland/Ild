@@ -62,7 +62,7 @@ internal sealed class LoopEngineHarness : IDisposable
         WorkItemsMock.Setup(m => m.GetWorkItemAsync(It.IsAny<string>()))
             .ReturnsAsync((string id) => new WorkItemView { Id = id, RepositoryId = null });
         WorkItemsMock.Setup(m => m.TransitionAsync(
-                It.IsAny<string>(),
+                It.IsAny<ILD.Core.Services.Remote.WorkItemActor>(), It.IsAny<string>(),
                 It.IsAny<ILD.Core.Services.Remote.RemoteWorkItemStatus>(),
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .ReturnsAsync(true);
@@ -92,7 +92,7 @@ internal sealed class LoopEngineHarness : IDisposable
         services.AddSingleton<ISchedulerSettingsService>(new SchedulerSettingsService(Db.Settings));
         services.AddSingleton<ILoopEngine>(sp =>
         {
-            return new LoopEngine(sp, Registry, sp.GetRequiredService<IRunNotifier>(),
+            return new LoopEngine(sp, Registry, sp.GetRequiredService<IRunNotifier>(), TestActors.Instance,
                 logger ?? NullLogger<LoopEngine>.Instance, sp.GetRequiredService<IWorkItemNotifier>(),
                 progressBuffer: null, shutdown: shutdown);
         });

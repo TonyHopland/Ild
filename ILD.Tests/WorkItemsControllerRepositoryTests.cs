@@ -24,7 +24,7 @@ public class WorkItemsControllerRepositoryTests
     {
         var s = Setup();
         using var _db = s.Db;
-        var id = await s.Mgr.CreateWorkItemAsync("t", "", s.RepoA);
+        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
 
         var result = await s.Controller.Update(id, new WorkItemCreateRequest
         {
@@ -49,7 +49,7 @@ public class WorkItemsControllerRepositoryTests
     {
         var s = Setup();
         using var _db = s.Db;
-        var id = await s.Mgr.CreateWorkItemAsync("t", "", s.RepoA);
+        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
         SeedRun(s.Db, id, status, s.RepoA);
 
         var result = await s.Controller.Update(id, new WorkItemCreateRequest
@@ -75,7 +75,7 @@ public class WorkItemsControllerRepositoryTests
     {
         var s = Setup();
         using var _db = s.Db;
-        var id = await s.Mgr.CreateWorkItemAsync("t", "", s.RepoA);
+        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
 
         var result = await s.Controller.Update(id, new WorkItemCreateRequest
         {
@@ -96,7 +96,7 @@ public class WorkItemsControllerRepositoryTests
     {
         var s = Setup();
         using var _db = s.Db;
-        var id = await s.Mgr.CreateWorkItemAsync("t", "", s.RepoA);
+        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
 
         var result = await s.Controller.Update(id, new WorkItemCreateRequest
         {
@@ -117,7 +117,7 @@ public class WorkItemsControllerRepositoryTests
     {
         var s = Setup();
         using var _db = s.Db;
-        var id = await s.Mgr.CreateWorkItemAsync("t", "", s.RepoA);
+        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
         SeedRun(s.Db, id, LoopRunStatus.WaitingHuman, s.RepoA);
         await s.Controller.Update(id, new WorkItemCreateRequest { Title = "t", RepositoryId = s.RepoB.ToString() });
         Assert.Equal(s.RepoB, (await s.Mgr.GetWorkItemAsync(id))!.RepositoryId);
@@ -139,7 +139,7 @@ public class WorkItemsControllerRepositoryTests
         var repoA = s.Db.Context.Repositories.Single(r => r.Id == s.RepoA);
         repoA.KeepPreviewData = true;
         s.Db.Context.SaveChanges();
-        var id = await s.Mgr.CreateWorkItemAsync("t", "", s.RepoA);
+        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
         SeedRun(s.Db, id, LoopRunStatus.WaitingHuman, s.RepoA);
         await s.Controller.Update(id, new WorkItemCreateRequest { Title = "t", RepositoryId = s.RepoB.ToString() });
 
@@ -158,7 +158,7 @@ public class WorkItemsControllerRepositoryTests
     {
         var s = Setup();
         using var _db = s.Db;
-        var id = await s.Mgr.CreateWorkItemAsync("t", "", s.RepoA);
+        var id = await s.Mgr.CreateWorkItemAsync(TestActors.Human, "t", "", s.RepoA);
         SeedRun(s.Db, id, LoopRunStatus.WaitingHuman, s.RepoA);
         await s.Controller.Update(id, new WorkItemCreateRequest { Title = "t", RepositoryId = s.RepoB.ToString() });
         Assert.Equal(s.RepoB, (await s.Mgr.GetWorkItemAsync(id))!.RepositoryId);
@@ -224,7 +224,7 @@ public class WorkItemsControllerRepositoryTests
             eventLog.Object,
             db.LoopRuns,
             db.ServerClient,
-            db.ServerOptions,
+            db.ServerOptions, TestActors.Instance,
             engine: new Mock<ILoopEngine>().Object);
 
         var branchNames = new Mock<IBranchNameOverrideService>();
@@ -240,7 +240,7 @@ public class WorkItemsControllerRepositoryTests
         repoManager.Setup(r => r.ListWorktreeFilesAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<WorktreeDiffRange?>()))
             .ReturnsAsync(Array.Empty<WorktreeFileEntry>());
 
-        var controller = new WorkItemsController(
+        var controller = TestActors.SignedIn(new WorkItemsController(
             mgr,
             new Mock<ILoopEngine>().Object,
             preview.Object,
@@ -250,7 +250,7 @@ public class WorkItemsControllerRepositoryTests
             NoPackageFeeds.Resolver,
             branchNames.Object,
             ILD.Core.Services.Attachments.AttachmentLimits.FromEnvironment(),
-            NullLogger<WorkItemsController>.Instance);
+            NullLogger<WorkItemsController>.Instance));
 
         return new Harness(controller, mgr, db, repoA.Id, repoB.Id, preview, repoManager);
     }

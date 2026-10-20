@@ -13,15 +13,15 @@ namespace ILD.Core.Services.Remote;
 /// </summary>
 public interface IWorkItemServerClient
 {
-    Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, CancellationToken ct = default);
+    Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default);
     Task<RemoteWorkItem?> GetAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default);
     Task<IReadOnlyList<RemoteWorkItem>> ListAsync(WorkItemServerOptions opts, RemoteWorkItemStatus? status, IReadOnlyList<string>? tags, CancellationToken ct = default);
-    Task<RemoteWorkItem?> UpdateAsync(WorkItemServerOptions opts, string id, RemoteUpdateWorkItemRequest req, CancellationToken ct = default);
-    Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default);
+    Task<RemoteWorkItem?> UpdateAsync(WorkItemServerOptions opts, string id, RemoteUpdateWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default);
+    Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, WorkItemActor actor, CancellationToken ct = default);
 
-    Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, CancellationToken ct = default);
-    Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default);
-    Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default);
+    Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, WorkItemActor actor, CancellationToken ct = default);
+    Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default);
+    Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default);
 
     /// <summary>
     /// Record a PR against a work item on the server, keyed by URL — reporting
@@ -35,9 +35,15 @@ public interface IWorkItemServerClient
     /// busy with a competing writer (409). None of them is worth special-casing
     /// here: the caller reports the PR again on its next pass.
     /// </summary>
-    Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default);
+    Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, WorkItemActor actor, CancellationToken ct = default);
 
-    Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default);
+    Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, WorkItemActor actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// The work item's history, newest first, each entry paired with the value it
+    /// replaced. Null when there is no such work item.
+    /// </summary>
+    Task<IReadOnlyList<RemoteWorkItemHistoryEntry>?> GetHistoryAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default);
 
     /// <summary>The work item's attachments, metadata only. Null when there is no such work item.</summary>
     Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default);
@@ -48,19 +54,19 @@ public interface IWorkItemServerClient
     /// message rather than as the exception every other call here throws — see
     /// <see cref="AttachmentUploadResult"/>.
     /// </summary>
-    Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default);
+    Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, WorkItemActor actor, CancellationToken ct = default);
 
     /// <summary>The bytes of one attachment, with the content type to serve it as. Null when either id is unknown.</summary>
     Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default);
 
-    Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default);
+    Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, WorkItemActor actor, CancellationToken ct = default);
 
     /// <summary>
     /// Propose an edit to a work item. The server validates it and caps the
     /// pending proposals per item, and a refusal comes back as an outcome
     /// carrying its reason — see <see cref="EditProposalCreateResult"/>.
     /// </summary>
-    Task<EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, CancellationToken ct = default);
+    Task<EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, WorkItemActor actor, CancellationToken ct = default);
 
     /// <summary>The work item's proposals, newest first. Null when there is no such work item.</summary>
     Task<IReadOnlyList<RemoteWorkItemEditProposal>?> ListEditProposalsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default);
@@ -73,15 +79,15 @@ public interface IWorkItemServerClient
     /// snapshot, atomically on the server; otherwise it goes Stale and nothing
     /// is applied. A refusal is an outcome, not an exception.
     /// </summary>
-    Task<EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, CancellationToken ct = default);
+    Task<EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, WorkItemActor actor, CancellationToken ct = default);
 
-    Task<EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, CancellationToken ct = default);
+    Task<EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, WorkItemActor actor, CancellationToken ct = default);
 
     /// <summary>
     /// Record that the proposing chat has been told these decisions. Ids of
     /// proposals still pending are ignored.
     /// </summary>
-    Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, CancellationToken ct = default);
+    Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, WorkItemActor actor, CancellationToken ct = default);
 }
 
 public sealed class WorkItemServerClient : IWorkItemServerClient
@@ -101,6 +107,14 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         var msg = new HttpRequestMessage(method, $"{baseUrl}{relative}");
         if (!string.IsNullOrEmpty(opts.ApiKey))
             msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", opts.ApiKey);
+        return msg;
+    }
+
+    /// <summary>A request that changes a work item, naming who it is made for.</summary>
+    private HttpRequestMessage Build(WorkItemServerOptions opts, HttpMethod method, string relative, WorkItemActor actor)
+    {
+        var msg = Build(opts, method, relative);
+        msg.Headers.Add(WorkItemActor.HeaderName, actor.ToHeaderValue());
         return msg;
     }
 
@@ -127,9 +141,9 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
             statusCode: resp.StatusCode);
     }
 
-    public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, CancellationToken ct = default)
+    public async Task<RemoteWorkItem> CreateAsync(WorkItemServerOptions opts, RemoteCreateWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Post, "/workitems");
+        var msg = Build(opts, HttpMethod.Post, "/workitems", actor);
         msg.Content = JsonContent.Create(req, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         EnsureSuccess(resp, msg);
@@ -158,9 +172,9 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItem>>(JsonOpts, ct))!;
     }
 
-    public async Task<RemoteWorkItem?> UpdateAsync(WorkItemServerOptions opts, string id, RemoteUpdateWorkItemRequest req, CancellationToken ct = default)
+    public async Task<RemoteWorkItem?> UpdateAsync(WorkItemServerOptions opts, string id, RemoteUpdateWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Put, $"/workitems/{id}");
+        var msg = Build(opts, HttpMethod.Put, $"/workitems/{id}", actor);
         msg.Content = JsonContent.Create(req, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound) return null;
@@ -168,16 +182,16 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return await resp.Content.ReadFromJsonAsync<RemoteWorkItem>(JsonOpts, ct);
     }
 
-    public async Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}");
+        var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}", actor);
         using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, CancellationToken ct = default)
+    public async Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/transition");
+        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/transition", actor);
         msg.Content = JsonContent.Create(req, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -186,38 +200,47 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return (await resp.Content.ReadFromJsonAsync<RemoteTransitionResponse>(JsonOpts, ct))!;
     }
 
-    public async Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
+    public async Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/dependencies");
+        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/dependencies", actor);
         msg.Content = JsonContent.Create(new { dependencyId }, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, CancellationToken ct = default)
+    public async Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}/dependencies/{dependencyId}");
+        var msg = Build(opts, HttpMethod.Delete, $"/workitems/{id}/dependencies/{dependencyId}", actor);
         using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, CancellationToken ct = default)
+    public async Task<bool> RecordPullRequestAsync(WorkItemServerOptions opts, string id, string url, Guid? loopRunId, bool merged, DateTime? createdAt, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/pull-requests");
+        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/pull-requests", actor);
         msg.Content = JsonContent.Create(new { url, loopRunId, merged, createdAt }, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         return resp.IsSuccessStatusCode;
     }
 
-    public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, CancellationToken ct = default)
+    public async Task<RemotePollResponse> PollAsync(WorkItemServerOptions opts, IReadOnlyList<string> activeIds, WorkItemActor actor, CancellationToken ct = default)
     {
         var query = activeIds.Count == 0
             ? string.Empty
             : "?activeIds=" + Uri.EscapeDataString(string.Join(',', activeIds));
-        var msg = Build(opts, HttpMethod.Get, $"/workitems/poll{query}");
+        var msg = Build(opts, HttpMethod.Get, $"/workitems/poll{query}", actor);
         using var resp = await _http.SendAsync(msg, ct);
         EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemotePollResponse>(JsonOpts, ct))!;
+    }
+
+    public async Task<IReadOnlyList<RemoteWorkItemHistoryEntry>?> GetHistoryAsync(WorkItemServerOptions opts, string id, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Get, $"/workitems/{Uri.EscapeDataString(id)}/history");
+        using var resp = await _http.SendAsync(msg, ct);
+        if (resp.StatusCode == HttpStatusCode.NotFound) return null;
+        EnsureSuccess(resp, msg);
+        return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItemHistoryEntry>>(JsonOpts, ct))!;
     }
 
     public async Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(WorkItemServerOptions opts, string workItemId, CancellationToken ct = default)
@@ -229,9 +252,9 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItemAttachment>>(JsonOpts, ct))!;
     }
 
-    public async Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default)
+    public async Task<AttachmentUploadResult> UploadAttachmentsAsync(WorkItemServerOptions opts, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Post, AttachmentsPath(workItemId));
+        var msg = Build(opts, HttpMethod.Post, AttachmentsPath(workItemId), actor);
         using var body = new MultipartFormDataContent();
         foreach (var file in files)
         {
@@ -274,9 +297,9 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return (content, contentType, fileName);
     }
 
-    public async Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, CancellationToken ct = default)
+    public async Task<bool> DeleteAttachmentAsync(WorkItemServerOptions opts, string workItemId, Guid attachmentId, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Delete, $"{AttachmentsPath(workItemId)}/{attachmentId}");
+        var msg = Build(opts, HttpMethod.Delete, $"{AttachmentsPath(workItemId)}/{attachmentId}", actor);
         using var resp = await _http.SendAsync(msg, ct);
         // False means the attachment is not there. Anything else the server says
         // is a failure of the server, and reporting it as "already gone" would
@@ -287,9 +310,9 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return true;
     }
 
-    public async Task<EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, CancellationToken ct = default)
+    public async Task<EditProposalCreateResult> CreateEditProposalAsync(WorkItemServerOptions opts, string workItemId, RemoteCreateEditProposalRequest req, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Post, EditProposalsPath(workItemId));
+        var msg = Build(opts, HttpMethod.Post, EditProposalsPath(workItemId), actor);
         msg.Content = JsonContent.Create(req, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         switch (resp.StatusCode)
@@ -335,11 +358,11 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         return (await resp.Content.ReadFromJsonAsync<List<RemoteWorkItemEditProposal>>(JsonOpts, ct))!;
     }
 
-    public Task<EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, CancellationToken ct = default)
-        => DecideEditProposalAsync(opts, workItemId, proposalId, "approve", body: null, ct);
+    public Task<EditProposalDecisionResult> ApproveEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, WorkItemActor actor, CancellationToken ct = default)
+        => DecideEditProposalAsync(opts, workItemId, proposalId, "approve", body: null, actor, ct);
 
-    public Task<EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
-        => DecideEditProposalAsync(opts, workItemId, proposalId, "reject", new { reason }, ct);
+    public Task<EditProposalDecisionResult> RejectEditProposalAsync(WorkItemServerOptions opts, string workItemId, Guid proposalId, string? reason, WorkItemActor actor, CancellationToken ct = default)
+        => DecideEditProposalAsync(opts, workItemId, proposalId, "reject", new { reason }, actor, ct);
 
     /// <summary>
     /// The server answers a refused decision with a 409 whose body says why and
@@ -347,9 +370,9 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
     /// outcome rather than as the exception an outage is.
     /// </summary>
     private async Task<EditProposalDecisionResult> DecideEditProposalAsync(
-        WorkItemServerOptions opts, string workItemId, Guid proposalId, string action, object? body, CancellationToken ct)
+        WorkItemServerOptions opts, string workItemId, Guid proposalId, string action, object? body, WorkItemActor actor, CancellationToken ct)
     {
-        var msg = Build(opts, HttpMethod.Post, $"{EditProposalsPath(workItemId)}/{proposalId}/{action}");
+        var msg = Build(opts, HttpMethod.Post, $"{EditProposalsPath(workItemId)}/{proposalId}/{action}", actor);
         msg.Content = JsonContent.Create(body ?? new { }, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         if (resp.StatusCode == HttpStatusCode.NotFound)
@@ -368,9 +391,9 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         public RemoteWorkItem? WorkItem { get; set; }
     }
 
-    public async Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, CancellationToken ct = default)
+    public async Task MarkEditProposalDecisionsDeliveredAsync(WorkItemServerOptions opts, IReadOnlyList<Guid> proposalIds, WorkItemActor actor, CancellationToken ct = default)
     {
-        var msg = Build(opts, HttpMethod.Post, "/edit-proposals/delivered");
+        var msg = Build(opts, HttpMethod.Post, "/edit-proposals/delivered", actor);
         msg.Content = JsonContent.Create(new { ids = proposalIds }, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
         EnsureSuccess(resp, msg);

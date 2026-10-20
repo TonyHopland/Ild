@@ -41,7 +41,7 @@ public sealed class WorkItemAttachmentClientTests
         var bytes = Encoding.UTF8.GetBytes("a sketch, pretend");
 
         var upload = await client.UploadAttachmentsAsync(opts, id,
-            new[] { new RemoteAttachmentUpload("sketch.png", "image/png", bytes) }, TestContext.Current.CancellationToken);
+            new[] { new RemoteAttachmentUpload("sketch.png", "image/png", bytes) }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal("Created", upload.Outcome.ToString());
         var created = Assert.Single(upload.Created);
@@ -58,7 +58,7 @@ public sealed class WorkItemAttachmentClientTests
         Assert.Equal("image/png", content.Value.ContentType);
         Assert.Equal("sketch.png", content.Value.FileName);
 
-        Assert.True(await client.DeleteAttachmentAsync(opts, id, created.Id, TestContext.Current.CancellationToken));
+        Assert.True(await client.DeleteAttachmentAsync(opts, id, created.Id, TestActors.Human, TestContext.Current.CancellationToken));
         Assert.Empty((await client.ListAttachmentsAsync(opts, id, TestContext.Current.CancellationToken))!);
     }
 
@@ -71,7 +71,7 @@ public sealed class WorkItemAttachmentClientTests
         var id = await CreateWorkItemAsync(http);
 
         var upload = await client.UploadAttachmentsAsync(opts, id,
-            new[] { new RemoteAttachmentUpload("big.bin", "application/octet-stream", AttachmentUpload.Bytes(2 * 1024 * 1024)) }, TestContext.Current.CancellationToken);
+            new[] { new RemoteAttachmentUpload("big.bin", "application/octet-stream", AttachmentUpload.Bytes(2 * 1024 * 1024)) }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.NotEqual("Created", upload.Outcome.ToString());
         Assert.False(string.IsNullOrWhiteSpace(upload.Error));
@@ -86,11 +86,11 @@ public sealed class WorkItemAttachmentClientTests
         using var _ = http;
 
         var upload = await client.UploadAttachmentsAsync(opts, "999999",
-            new[] { new RemoteAttachmentUpload("x.txt", "text/plain", Encoding.UTF8.GetBytes("x")) }, TestContext.Current.CancellationToken);
+            new[] { new RemoteAttachmentUpload("x.txt", "text/plain", Encoding.UTF8.GetBytes("x")) }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal("NotFound", upload.Outcome.ToString());
         Assert.Null(await client.ListAttachmentsAsync(opts, "999999", TestContext.Current.CancellationToken));
         Assert.Null(await client.GetAttachmentAsync(opts, "999999", Guid.NewGuid(), TestContext.Current.CancellationToken));
-        Assert.False(await client.DeleteAttachmentAsync(opts, "999999", Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.False(await client.DeleteAttachmentAsync(opts, "999999", Guid.NewGuid(), TestActors.Human, TestContext.Current.CancellationToken));
     }
 }

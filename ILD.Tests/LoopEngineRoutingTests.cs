@@ -135,7 +135,7 @@ public class LoopEngineRoutingTests
         var run = h.ReloadRun();
         Assert.Equal(LoopRunStatus.Failed, run.Status);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.AtLeastOnce);
     }
 
@@ -273,7 +273,7 @@ public class LoopEngineRoutingTests
 
         Assert.Empty(h.ReloadRunNodes());
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.WaitingForIld,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.WaitingForIld,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
     }
 
@@ -476,7 +476,7 @@ public class LoopEngineRoutingTests
         await h.RunAsync();
 
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(),
             It.Is<string?>(actions => ListsExactly(actions, "OnSuccess", "OnFailure", "Rework")),
             It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);

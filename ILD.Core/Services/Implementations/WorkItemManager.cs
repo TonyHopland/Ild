@@ -26,6 +26,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IWorkItemNotifier _notifier;
     private readonly IWorkItemServerClient _server;
     private readonly IWorkItemServerOptionsResolver _options;
+    private readonly BootstrapCredentials _instance;
     private readonly IWorktreePreviewService _previewService;
     private readonly IWorkItemScheduler? _scheduler;
     private readonly ILoopEngine? _engine;
@@ -40,6 +41,7 @@ public class WorkItemManager : IWorkItemManager
         ILoopRunStore loopRunStore,
         IWorkItemServerClient server,
         IWorkItemServerOptionsResolver options,
+        BootstrapCredentials instance,
         IWorkItemNotifier? notifier = null,
         IWorktreePreviewService? previewService = null,
         IWorkItemScheduler? scheduler = null,
@@ -54,6 +56,7 @@ public class WorkItemManager : IWorkItemManager
         _loopRunStore = loopRunStore;
         _server = server;
         _options = options;
+        _instance = instance;
         _notifier = notifier ?? new NoopWorkItemNotifier();
         _previewService = previewService ?? new NoopPreviewService();
         _scheduler = scheduler;
@@ -152,10 +155,11 @@ public class WorkItemManager : IWorkItemManager
     // Create / Read / Update
     // ──────────────────────────────────────────────────────────────────
 
-    public Task<string> CreateWorkItemAsync(string title, string description, Guid? repositoryId)
-        => CreateWorkItemAsync(title, description, repositoryId, null, false);
+    public Task<string> CreateWorkItemAsync(WorkItemActor actor, string title, string description, Guid? repositoryId)
+        => CreateWorkItemAsync(actor, title, description, repositoryId, null, false);
 
     public async Task<string> CreateWorkItemAsync(
+        WorkItemActor actor,
         string title,
         string description,
         Guid? repositoryId,
@@ -192,7 +196,7 @@ public class WorkItemManager : IWorkItemManager
             RepositoryId = repositoryId,
             BranchNameOverride = branchNameOverride,
             BaseBranchOverride = baseBranchOverride,
-        });
+        }, actor);
 
         // Broadcast the creation so connected clients (e.g. the Taskboard) add
         // the new item live instead of only on a manual refresh. Creation has
@@ -604,7 +608,8 @@ public class WorkItemManager : IWorkItemManager
             bool written;
             try
             {
-                written = await _server.RecordPullRequestAsync(opts, remote.Id, run.PrUrl, run.Id, run.IsPrMerged, RunPrCreatedAt(run));
+                written = await _server.RecordPullRequestAsync(opts, remote.Id, run.PrUrl, run.Id, run.IsPrMerged, RunPrCreatedAt(run),
+                    WorkItemActor.System(_instance.Username, "pr record"));
             }
             catch (HttpRequestException) { written = false; }
             catch (InvalidOperationException) { return; /* No remote — local only. */ }
@@ -655,6 +660,7 @@ public class WorkItemManager : IWorkItemManager
     }
 
     public async Task<bool> UpdateAsync(
+        WorkItemActor actor,
         string workItemId,
         string title,
         string description,
@@ -676,7 +682,7 @@ public class WorkItemManager : IWorkItemManager
             BranchNameOverride = branchNameOverride,
             BaseBranchOverride = baseBranchOverride,
             RepositoryId = repositoryId,
-        });
+        }, actor);
         if (updated == null) return false;
 
         // Broadcast the edit so connected clients (e.g. the Taskboard) refresh
@@ -707,7 +713,7 @@ public class WorkItemManager : IWorkItemManager
     /// guards against. Stopping that run and resetting the item is
     /// <see cref="CleanupToBacklogAsync"/>, reached from the work-item modal.
     /// </summary>
-    public async Task<bool> TransitionToBacklogAsync(string workItemId)
+    public async Task<bool> TransitionToBacklogAsync(WorkItemActor actor, string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
@@ -716,34 +722,34 @@ public class WorkItemManager : IWorkItemManager
             or RemoteWorkItemStatus.HumanFeedback))
             return false;
         if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) != null) return false;
-        return await TransitionAsync(workItemId, RemoteWorkItemStatus.Backlog);
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Backlog);
     }
 
-    public async Task<bool> TransitionToWorkQueueAsync(string workItemId)
+    public async Task<bool> TransitionToWorkQueueAsync(WorkItemActor actor, string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
         if (wi.Status != RemoteWorkItemStatus.Backlog && wi.Status != RemoteWorkItemStatus.HumanFeedback)
             return false;
 
-        await TransitionAsync(workItemId, RemoteWorkItemStatus.WorkQueue);
+        await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.WorkQueue);
 
         if (await IsReadyAsync(workItemId))
-            await TransitionToReadyAsync(workItemId);
+            await TransitionToReadyAsync(actor, workItemId);
         return true;
     }
 
-    public async Task<bool> TransitionToReadyAsync(string workItemId)
+    public async Task<bool> TransitionToReadyAsync(WorkItemActor actor, string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
         if (!await IsReadyAsync(workItemId)) return false;
         if (wi.Status != RemoteWorkItemStatus.WorkQueue && wi.Status != RemoteWorkItemStatus.Backlog)
             return false;
-        return await TransitionAsync(workItemId, RemoteWorkItemStatus.Ready);
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Ready);
     }
 
-    public async Task<bool> TransitionToRunningAsync(string workItemId)
+    public async Task<bool> TransitionToRunningAsync(WorkItemActor actor, string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
@@ -753,7 +759,7 @@ public class WorkItemManager : IWorkItemManager
         // drive it, and the item would sit there until the server reclaimed it.
         if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) is null)
             return false;
-        return await TransitionAsync(workItemId, RemoteWorkItemStatus.Running);
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Running);
     }
 
     /// <summary>
@@ -761,19 +767,19 @@ public class WorkItemManager : IWorkItemManager
     /// live run when there is one, and is the item's own status reason when
     /// there is not — never onto a run that has already ended.
     /// </summary>
-    public async Task<bool> TransitionToHumanFeedbackAsync(string workItemId, string reason)
+    public async Task<bool> TransitionToHumanFeedbackAsync(WorkItemActor actor, string workItemId, string reason)
     {
         if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) is not { } active)
-            return await ParkWithoutRunAsync(workItemId, reason);
+            return await ParkWithoutRunAsync(actor, workItemId, reason);
 
         await TryRecordAsync(active.Id, EventType.RunParked, reason);
-        return await TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason,
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.HumanFeedback, reason,
             currentLoopRunId: active.Id);
     }
 
-    public async Task<bool> ParkWithoutRunAsync(string workItemId, string reason)
+    public async Task<bool> ParkWithoutRunAsync(WorkItemActor actor, string workItemId, string reason)
     {
-        if (!await TransitionAsync(workItemId, RemoteWorkItemStatus.HumanFeedback, reason)) return false;
+        if (!await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.HumanFeedback, reason)) return false;
         await _loopRunStore.SetWorkItemStatusReasonAsync(workItemId, reason);
         return true;
     }
@@ -791,15 +797,17 @@ public class WorkItemManager : IWorkItemManager
     /// The engine's own completion path is unaffected — it marks its run
     /// Completed and calls <see cref="TransitionAsync"/> directly.
     /// </summary>
-    public async Task<bool> TransitionToDoneAsync(string workItemId)
+    public async Task<bool> TransitionToDoneAsync(WorkItemActor actor, string workItemId)
     {
+        const string reason = "Work item marked Done";
         var currentRun = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
-        if (currentRun != null) await EndRunAsync(currentRun, "Work item marked Done");
-        return await TransitionAsync(workItemId, RemoteWorkItemStatus.Done,
+        if (currentRun != null) await EndRunAsync(currentRun, reason);
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Done, reason,
             currentLoopRunId: currentRun?.Id ?? Guid.Empty);
     }
 
     public async Task<bool> TransitionAsync(
+        WorkItemActor actor,
         string workItemId,
         RemoteWorkItemStatus targetStatus,
         string? reason = null,
@@ -816,7 +824,8 @@ public class WorkItemManager : IWorkItemManager
         {
             TargetStatus = targetStatus,
             Actions = actions,
-        });
+            Reason = reason,
+        }, actor);
 
         if (!resp.Success)
             return false;
@@ -874,11 +883,29 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
+    public async Task<IReadOnlyList<RemoteWorkItemHistoryEntry>?> GetHistoryAsync(string workItemId, CancellationToken ct = default)
+    {
+        var opts = await _options.ResolveForWorkItemAsync(workItemId, ct);
+        var history = await _server.GetHistoryAsync(opts, workItemId, ct);
+        if (history is null) return null;
+
+        // The migration that seeded Baselines could not see this instance's runs.
+        var unlinked = history.Where(e => e.Kind == RemoteWorkItemHistoryKind.Baseline && e.ActorWorkItemId is null).ToList();
+        if (unlinked.Count == 0) return history;
+        if ((await _server.GetAsync(opts, workItemId, ct))?.CreatedByLoopRunId is { } runId
+            && await _loopRunStore.GetByIdAsync(runId) is { } run)
+        {
+            foreach (var entry in unlinked)
+                entry.ActorWorkItemId = run.WorkItemId;
+        }
+        return history;
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Dependencies (server-only)
     // ──────────────────────────────────────────────────────────────────
 
-    public async Task<bool> AddDependencyAsync(string workItemId, string dependsOnWorkItemId)
+    public async Task<bool> AddDependencyAsync(WorkItemActor actor, string workItemId, string dependsOnWorkItemId)
     {
         if (workItemId == dependsOnWorkItemId)
             throw new InvalidOperationException(SelfDependencyError);
@@ -890,7 +917,7 @@ public class WorkItemManager : IWorkItemManager
             throw new InvalidOperationException(problem);
 
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
-        return await _server.AddDependencyAsync(opts, workItemId, dependsOnWorkItemId);
+        return await _server.AddDependencyAsync(opts, workItemId, dependsOnWorkItemId, actor);
     }
 
     private const string SelfDependencyError = "A work item cannot depend on itself.";
@@ -907,10 +934,10 @@ public class WorkItemManager : IWorkItemManager
         return null;
     }
 
-    public async Task<bool> RemoveDependencyAsync(string workItemId, string dependsOnWorkItemId)
+    public async Task<bool> RemoveDependencyAsync(WorkItemActor actor, string workItemId, string dependsOnWorkItemId)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
-        return await _server.RemoveDependencyAsync(opts, workItemId, dependsOnWorkItemId);
+        return await _server.RemoveDependencyAsync(opts, workItemId, dependsOnWorkItemId, actor);
     }
 
     public async Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId)
@@ -994,7 +1021,7 @@ public class WorkItemManager : IWorkItemManager
     // PR / cleanup (engine-only fields on LoopRun)
     // ──────────────────────────────────────────────────────────────────
 
-    public async Task<bool> LinkPullRequestAsync(string workItemId, string prUrl)
+    public async Task<bool> LinkPullRequestAsync(WorkItemActor actor, string workItemId, string prUrl)
     {
         var run = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
 
@@ -1009,23 +1036,23 @@ public class WorkItemManager : IWorkItemManager
             await _loopRunStore.UpdateRunAsync(run);
         }
 
-        return await RecordPullRequestAsync(workItemId, prUrl, run?.Id, merged: false,
+        return await RecordPullRequestAsync(actor, workItemId, prUrl, run?.Id, merged: false,
             createdAt: run is null ? null : RunPrCreatedAt(run));
     }
 
-    public async Task<bool> RecordPullRequestAsync(string workItemId, string prUrl, Guid? loopRunId, bool merged = false, DateTime? createdAt = null)
+    public async Task<bool> RecordPullRequestAsync(WorkItemActor actor, string workItemId, string prUrl, Guid? loopRunId, bool merged = false, DateTime? createdAt = null)
     {
         if (string.IsNullOrWhiteSpace(prUrl)) return false;
 
         try
         {
             var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            return await _server.RecordPullRequestAsync(opts, workItemId, prUrl, loopRunId, merged, createdAt);
+            return await _server.RecordPullRequestAsync(opts, workItemId, prUrl, loopRunId, merged, createdAt, actor);
         }
         catch (InvalidOperationException) { return false; /* No remote — local only. */ }
     }
 
-    public async Task<bool> CleanupToDoneAsync(string workItemId)
+    public async Task<bool> CleanupToDoneAsync(WorkItemActor actor, string workItemId)
     {
         var currentRun = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
         var wi = await GetWorkItemAsync(workItemId);
@@ -1034,22 +1061,24 @@ public class WorkItemManager : IWorkItemManager
         // The run stays inspectable until the row itself is deleted (manual
         // delete or the retention sweeper), which reclaims its worktree and
         // branch; the terminal timestamp is what makes it visible there.
-        if (currentRun != null) await EndRunAsync(currentRun, "Work item cleaned up to Done");
+        const string reason = "Work item cleaned up to Done";
+        if (currentRun != null) await EndRunAsync(currentRun, reason);
 
         // Drive the Done transition through the shared path so it clears the
         // run's feedback reason, notifies clients, and stops the worktree
         // preview — a finished item can no longer be stopped from the UI.
         try
         {
-            await TransitionAsync(workItemId, RemoteWorkItemStatus.Done, currentLoopRunId: currentRun?.Id ?? Guid.Empty);
+            await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Done, reason, currentLoopRunId: currentRun?.Id ?? Guid.Empty);
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
         return true;
     }
 
-    public async Task<bool> CleanupToBacklogAsync(string workItemId)
+    public async Task<bool> CleanupToBacklogAsync(WorkItemActor actor, string workItemId)
     {
+        const string reason = "Work item sent back to Backlog";
         var currentRun = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
 
         // Stop a still-active run but keep its worktree and branch for
@@ -1057,7 +1086,7 @@ public class WorkItemManager : IWorkItemManager
         // them together with the row. The next run gets its own branch and
         // worktree anyway (ADR-0008), so nothing here can leak into it.
         if (currentRun != null)
-            await StopRunIfActiveAsync(currentRun, "Work item sent back to Backlog");
+            await StopRunIfActiveAsync(currentRun, reason);
 
         try
         {
@@ -1065,7 +1094,8 @@ public class WorkItemManager : IWorkItemManager
             await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
             {
                 TargetStatus = RemoteWorkItemStatus.Backlog,
-            });
+                Reason = reason,
+            }, actor);
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
 
@@ -1080,7 +1110,7 @@ public class WorkItemManager : IWorkItemManager
             currentRun.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(currentRun);
             if (endedHere)
-                await TryRecordAsync(currentRun.Id, EventType.LoopRunCompleted, "Work item sent back to Backlog");
+                await TryRecordAsync(currentRun.Id, EventType.LoopRunCompleted, reason);
         }
 
         return true;
@@ -1393,7 +1423,7 @@ public class WorkItemManager : IWorkItemManager
         return new MergePullRequestResult(true, null, branchDeleted, branchWarning);
     }
 
-    public async Task<bool> DeleteAsync(string workItemId)
+    public async Task<bool> DeleteAsync(WorkItemActor actor, string workItemId)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
@@ -1401,7 +1431,7 @@ public class WorkItemManager : IWorkItemManager
         try
         {
             var opts = await _options.ResolveForWorkItemAsync(workItemId);
-            await _server.DeleteAsync(opts, workItemId);
+            await _server.DeleteAsync(opts, workItemId, actor);
         }
         catch (InvalidOperationException) { /* No remote — local only. */ }
         await _loopRunStore.ClearWorkItemStatusReasonAsync(workItemId);
@@ -1420,7 +1450,7 @@ public class WorkItemManager : IWorkItemManager
                 continue;
             try
             {
-                await WithdrawPendingProposalsOfRunAsync(run.Id);
+                await WithdrawPendingProposalsOfRunAsync(actor, run.Id);
             }
             catch (HttpRequestException) { continue; }
             await _loopRunStore.DeleteAsync(run.Id);
@@ -1435,14 +1465,14 @@ public class WorkItemManager : IWorkItemManager
     public async Task<IReadOnlyList<RemoteWorkItemAttachment>?> ListAttachmentsAsync(string workItemId, CancellationToken ct = default)
         => await _server.ListAttachmentsAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, ct);
 
-    public async Task<AttachmentUploadResult> AddAttachmentsAsync(string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default)
-        => await _server.UploadAttachmentsAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, files, ct);
+    public async Task<AttachmentUploadResult> AddAttachmentsAsync(WorkItemActor actor, string workItemId, IReadOnlyList<RemoteAttachmentUpload> files, CancellationToken ct = default)
+        => await _server.UploadAttachmentsAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, files, actor, ct);
 
     public async Task<(byte[] Content, string ContentType, string FileName)?> GetAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default)
         => await _server.GetAttachmentAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, attachmentId, ct);
 
-    public async Task<bool> DeleteAttachmentAsync(string workItemId, Guid attachmentId, CancellationToken ct = default)
-        => await _server.DeleteAttachmentAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, attachmentId, ct);
+    public async Task<bool> DeleteAttachmentAsync(WorkItemActor actor, string workItemId, Guid attachmentId, CancellationToken ct = default)
+        => await _server.DeleteAttachmentAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, attachmentId, actor, ct);
 
     // ──────────────────────────────────────────────────────────────────
     // Edit proposals
@@ -1453,9 +1483,9 @@ public class WorkItemManager : IWorkItemManager
 
     private const string WithdrawnProposalReason = "The loop run that proposed this edit was deleted.";
 
-    public async Task<EditProposalCreateResult> ProposeEditAsync(string workItemId, RemoteCreateEditProposalRequest request, CancellationToken ct = default)
+    public async Task<EditProposalCreateResult> ProposeEditAsync(WorkItemActor actor, string workItemId, RemoteCreateEditProposalRequest request, CancellationToken ct = default)
     {
-        var result = await _server.CreateEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, request, ct);
+        var result = await _server.CreateEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, request, actor, ct);
         if (result is { Outcome: EditProposalCreateOutcome.Created, Proposal: { } created })
         {
             await _notifier.WorkItemEditProposalsChangedAsync(workItemId);
@@ -1487,12 +1517,14 @@ public class WorkItemManager : IWorkItemManager
         return requested.OrderByDescending(p => p.CreatedAt).ToList();
     }
 
-    public async Task<EditProposalApproval> ApproveEditProposalAsync(string workItemId, Guid proposalId, CancellationToken ct = default)
+    public async Task<EditProposalApproval> ApproveEditProposalAsync(WorkItemActor approver, string workItemId, Guid proposalId, CancellationToken ct = default)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId, ct);
-        if (await RefuseDependencyAdditionsAsync(opts, workItemId, proposalId, ct) is { } refused)
+        var pending = (await _server.ListEditProposalsAsync(opts, workItemId, ct))?.FirstOrDefault(p => p.Id == proposalId);
+        if (pending is not null) pending = (await WithRequestersAsync([pending]))[0];
+        if (await RefuseDependencyAdditionsAsync(opts, workItemId, pending, ct) is { } refused)
             return refused;
-        var result = await _server.ApproveEditProposalAsync(opts, workItemId, proposalId, ct);
+        var result = await _server.ApproveEditProposalAsync(opts, workItemId, proposalId, ApprovalActor(approver, pending), ct);
         WorkItemView? updatedView = null;
         // An applied proposal is an edit like any other, so the board hears of it
         // the way UpdateAsync announces one.
@@ -1521,9 +1553,8 @@ public class WorkItemManager : IWorkItemManager
     /// the same as a human adding an edge.
     /// </summary>
     private async Task<EditProposalApproval?> RefuseDependencyAdditionsAsync(
-        WorkItemServerOptions opts, string workItemId, Guid proposalId, CancellationToken ct)
+        WorkItemServerOptions opts, string workItemId, RemoteWorkItemEditProposal? proposal, CancellationToken ct)
     {
-        var proposal = (await _server.ListEditProposalsAsync(opts, workItemId, ct))?.FirstOrDefault(p => p.Id == proposalId);
         if (proposal is not { Status: RemoteEditProposalStatus.Pending, Proposed.AddDependencies: { Count: > 0 } additions })
             return null;
         var item = await _server.GetAsync(opts, workItemId, ct);
@@ -1532,12 +1563,24 @@ public class WorkItemManager : IWorkItemManager
         foreach (var addition in additions)
         {
             if (await CheckNewDependencyAsync(workItemId, addition.Id) is { } problem)
-            {
-                var current = (await WithRequestersAsync([proposal]))[0];
-                return new EditProposalApproval(EditProposalDecisionOutcome.Refused, current, null, problem);
-            }
+                return new EditProposalApproval(EditProposalDecisionOutcome.Refused, proposal, null, problem);
         }
         return null;
+    }
+
+    /// <summary>
+    /// An applied proposal's history names both sides: the approving human is the
+    /// actor, and the detail names the proposal and who proposed it, with the work
+    /// item of a proposing loop run. A proposal that cannot be read names nothing
+    /// more, and the server decides it as not found or no longer pending.
+    /// </summary>
+    private static WorkItemActor ApprovalActor(WorkItemActor approver, RemoteWorkItemEditProposal? proposal)
+    {
+        if (proposal is null) return approver;
+        var proposer = proposal.CreatedByLoopRunId is { } run ? $" by run {run}"
+            : proposal.CreatedByChatSessionId is { } chat ? $" by chat {chat}"
+            : string.Empty;
+        return approver with { Detail = $"edit proposal {proposal.Id}{proposer}", WorkItemId = proposal.RequestedByWorkItemId };
     }
 
     private static bool StillMatchesSnapshot(RemoteWorkItem item, RemoteEditProposalFields snapshot)
@@ -1548,9 +1591,9 @@ public class WorkItemManager : IWorkItemManager
         && item.BaseBranchOverride == snapshot.BaseBranchOverride
         && (snapshot.Dependencies is null || item.Dependencies.ToHashSet().SetEquals(snapshot.Dependencies));
 
-    public async Task<EditProposalDecisionResult> RejectEditProposalAsync(string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
+    public async Task<EditProposalDecisionResult> RejectEditProposalAsync(WorkItemActor actor, string workItemId, Guid proposalId, string? reason, CancellationToken ct = default)
     {
-        var result = await _server.RejectEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, proposalId, reason, ct);
+        var result = await _server.RejectEditProposalAsync(await _options.ResolveForWorkItemAsync(workItemId, ct), workItemId, proposalId, reason, actor, ct);
         if (result.Proposal is null) return result;
         var proposal = (await WithRequestersAsync([result.Proposal]))[0];
         if (result.Outcome == EditProposalDecisionOutcome.Rejected)
@@ -1561,7 +1604,7 @@ public class WorkItemManager : IWorkItemManager
         return result with { Proposal = proposal };
     }
 
-    public async Task WithdrawPendingProposalsOfRunAsync(Guid runId, CancellationToken ct = default)
+    public async Task WithdrawPendingProposalsOfRunAsync(WorkItemActor actor, Guid runId, CancellationToken ct = default)
     {
         WorkItemServerOptions opts;
         try { opts = await _options.ResolveForRepositoryAsync(null, ct); }
@@ -1575,11 +1618,11 @@ public class WorkItemManager : IWorkItemManager
         // A proposal decided in the meantime comes back NotPending (or NotFound
         // once its item is gone), which leaves it as it is.
         foreach (var proposal in pending)
-            await RejectEditProposalAsync(proposal.WorkItemId, proposal.Id, WithdrawnProposalReason, ct);
+            await RejectEditProposalAsync(actor, proposal.WorkItemId, proposal.Id, WithdrawnProposalReason, ct);
     }
 
-    public async Task MarkEditProposalDecisionsDeliveredAsync(IReadOnlyList<Guid> proposalIds, CancellationToken ct = default)
-        => await _server.MarkEditProposalDecisionsDeliveredAsync(await _options.ResolveForRepositoryAsync(null, ct), proposalIds, ct);
+    public async Task MarkEditProposalDecisionsDeliveredAsync(WorkItemActor actor, IReadOnlyList<Guid> proposalIds, CancellationToken ct = default)
+        => await _server.MarkEditProposalDecisionsDeliveredAsync(await _options.ResolveForRepositoryAsync(null, ct), proposalIds, actor, ct);
 
     /// <summary>
     /// Names the work item whose loop run made each proposal, read from the run

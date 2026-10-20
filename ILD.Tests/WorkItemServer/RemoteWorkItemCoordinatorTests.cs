@@ -38,11 +38,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
         client.Setup(c => c.TransitionAsync(Opts, ready.Id,
                 It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.Running),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var engine = new Mock<ILoopEngine>();
@@ -50,7 +50,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns(), TestActors.Instance);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Claimed);
@@ -66,10 +66,10 @@ public sealed class RemoteWorkItemCoordinatorTests
         RemoteTransitionRequest? captured = null;
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
-        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
-              .Callback<WorkItemServerOptions, string, RemoteTransitionRequest, CancellationToken>((_, _, r, _) => captured = r)
+        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+              .Callback<WorkItemServerOptions, string, RemoteTransitionRequest, WorkItemActor, CancellationToken>((_, _, r, _, _) => captured = r)
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.HumanFeedback });
 
         var engine = new Mock<ILoopEngine>();
@@ -79,7 +79,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var runs = NoLiveRunsMock();
         var notifier = new Mock<IWorkItemNotifier>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object,
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object, TestActors.Instance,
             workItemNotifier: notifier.Object);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
@@ -97,10 +97,10 @@ public sealed class RemoteWorkItemCoordinatorTests
         RemoteTransitionRequest? captured = null;
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
-        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
-              .Callback<WorkItemServerOptions, string, RemoteTransitionRequest, CancellationToken>((_, _, r, _) => captured = r)
+        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+              .Callback<WorkItemServerOptions, string, RemoteTransitionRequest, WorkItemActor, CancellationToken>((_, _, r, _, _) => captured = r)
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.HumanFeedback });
 
         var engine = new Mock<ILoopEngine>();
@@ -109,7 +109,7 @@ public sealed class RemoteWorkItemCoordinatorTests
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Ambiguous, null, new[] { "build", "deploy" }));
 
         var runs = NoLiveRunsMock();
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runs.Object, TestActors.Instance);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.EscalatedToHumanFeedback);
@@ -124,11 +124,11 @@ public sealed class RemoteWorkItemCoordinatorTests
     {
         var ready = Item(NewId(), RemoteWorkItemStatus.Ready, "unknown");
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
         client.Setup(c => c.TransitionAsync(Opts, ready.Id,
                 It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Ready });
 
         var resolver = new Mock<ILoopTemplateResolver>();
@@ -137,7 +137,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var runs = NoLiveRunsMock();
         var notifier = new Mock<IWorkItemNotifier>();
         var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, new Mock<ILoopEngine>().Object,
-            runs.Object, workItemNotifier: notifier.Object);
+            runs.Object, TestActors.Instance, workItemNotifier: notifier.Object);
 
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
@@ -154,11 +154,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { waiting } });
         client.Setup(c => c.TransitionAsync(Opts, waiting.Id,
                 It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.Running),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var engine = new Mock<ILoopEngine>();
@@ -166,7 +166,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var runStore = NoLiveRunsMock();
         var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = waiting.Id, Status = LoopRunStatus.Running };
         runStore.Setup(s => s.GetActiveByWorkItemAsync(waiting.Id)).ReturnsAsync(run);
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runStore.Object);
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, runStore.Object, TestActors.Instance);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Resumed);
@@ -182,9 +182,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { waiting } });
-        client.Setup(c => c.TransitionAsync(Opts, waiting.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.TransitionAsync(Opts, waiting.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var runStore = NoLiveRunsMock();
@@ -193,13 +193,13 @@ public sealed class RemoteWorkItemCoordinatorTests
         var engine = new Mock<ILoopEngine>();
         var notifier = new Mock<IWorkItemNotifier>();
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, new Mock<ILoopTemplateResolver>().Object, engine.Object, runStore.Object,
+            client.Object, new Mock<ILoopTemplateResolver>().Object, engine.Object, runStore.Object, TestActors.Instance,
             workItemNotifier: notifier.Object);
 
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Empty(result.Resumed);
-        client.Verify(c => c.TransitionAsync(Opts, waiting.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        client.Verify(c => c.TransitionAsync(Opts, waiting.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()), Times.Never);
         notifier.Verify(n => n.WorkItemStateChangedAsync(waiting.Id, It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
         engine.Verify(e => e.ResumeRecoveredRunAsync(It.IsAny<Guid>()), Times.Never);
     }
@@ -211,9 +211,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         var ready2 = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready1, ready2 } });
-        client.Setup(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var engine = new Mock<ILoopEngine>();
@@ -221,7 +221,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns(), TestActors.Instance);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
         Assert.Single(result.Claimed);
@@ -234,9 +234,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
-        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Ready });
 
         var engine = new Mock<ILoopEngine>();
@@ -244,7 +244,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns(), TestActors.Instance);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.Empty(result.Claimed);
@@ -280,12 +280,12 @@ public sealed class RemoteWorkItemCoordinatorTests
         var hf = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.HumanFeedback);
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { hf } });
 
         var engine = new Mock<ILoopEngine>();
         var resolver = new Mock<ILoopTemplateResolver>();
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns(), TestActors.Instance);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
 
         Assert.True(result.HasActiveHumanFeedback);
@@ -297,9 +297,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
-        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var engine = new Mock<ILoopEngine>();
@@ -309,7 +309,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var notifier = new Mock<IWorkItemNotifier>();
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, resolver.Object, engine.Object, NoLiveRuns(),
+            client.Object, resolver.Object, engine.Object, NoLiveRuns(), TestActors.Instance,
             workItemNotifier: notifier.Object);
 
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
@@ -324,11 +324,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         var waiting = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.WaitingForIld);
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { waiting } });
         client.Setup(c => c.TransitionAsync(Opts, waiting.Id,
                 It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.Running),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var engine = new Mock<ILoopEngine>();
@@ -339,7 +339,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         runStore.Setup(s => s.GetActiveByWorkItemAsync(waiting.Id))
                 .ReturnsAsync(new LoopRun { Id = Guid.NewGuid(), WorkItemId = waiting.Id, Status = LoopRunStatus.Running });
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, resolver.Object, engine.Object, runStore.Object,
+            client.Object, resolver.Object, engine.Object, runStore.Object, TestActors.Instance,
             workItemNotifier: notifier.Object);
 
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
@@ -354,7 +354,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
 
         var engine = new Mock<ILoopEngine>();
@@ -362,13 +362,13 @@ public sealed class RemoteWorkItemCoordinatorTests
         resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
                 .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
 
-        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns());
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, engine.Object, NoLiveRuns(), TestActors.Instance);
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, claimReadyItems: false, ct: TestContext.Current.CancellationToken);
 
         Assert.Empty(result.Claimed);
         // Nothing should have been transitioned (no claim, no escalation) and no
         // run started — Ready items are left untouched for a human to promote.
-        client.Verify(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        client.Verify(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()), Times.Never);
         engine.Verify(e => e.StartRunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -416,7 +416,7 @@ public sealed class RemoteWorkItemCoordinatorTests
             new[] { waiting.Id, done.Id }.OrderBy(x => x, StringComparer.Ordinal),
             heartbeats[0].OrderBy(x => x, StringComparer.Ordinal));
         // The Ready item was never claimed, but the WaitingForIld resume still fired.
-        client.Verify(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        client.Verify(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -425,9 +425,9 @@ public sealed class RemoteWorkItemCoordinatorTests
         var ready = Item(Guid.NewGuid().ToString(), RemoteWorkItemStatus.Ready, "build");
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { ready } });
-        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.TransitionAsync(Opts, ready.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Ready });
 
         var engine = new Mock<ILoopEngine>();
@@ -437,7 +437,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var notifier = new Mock<IWorkItemNotifier>();
         var sut = new RemoteWorkItemCoordinator(
-            client.Object, resolver.Object, engine.Object, NoLiveRuns(),
+            client.Object, resolver.Object, engine.Object, NoLiveRuns(), TestActors.Instance,
             workItemNotifier: notifier.Object);
 
         await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
@@ -474,12 +474,12 @@ public sealed class RemoteWorkItemCoordinatorTests
         var queue = new Queue<RemotePollResponse>(passes);
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
-              .Callback<WorkItemServerOptions, IReadOnlyList<string>, CancellationToken>(
-                  (_, ids, _) => heartbeats.Add(ids.ToList()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+              .Callback<WorkItemServerOptions, IReadOnlyList<string>, WorkItemActor, CancellationToken>(
+                  (_, ids, _, _) => heartbeats.Add(ids.ToList()))
               .ReturnsAsync(() => queue.Count > 1 ? queue.Dequeue() : queue.Peek());
-        client.Setup(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<CancellationToken>()))
-              .ReturnsAsync((WorkItemServerOptions _, string _, RemoteTransitionRequest r, CancellationToken _) =>
+        client.Setup(c => c.TransitionAsync(Opts, It.IsAny<string>(), It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync((WorkItemServerOptions _, string _, RemoteTransitionRequest r, WorkItemActor _, CancellationToken _) =>
                   new RemoteTransitionResponse { Success = true, ActualStatus = r.TargetStatus });
 
         return (client, heartbeats);
@@ -514,7 +514,7 @@ public sealed class RemoteWorkItemCoordinatorTests
     private static RemoteWorkItemCoordinator Coordinator(
         Mock<IWorkItemServerClient> client, Mock<ILoopRunStore> runStore, Mock<ILoopEngine>? engine = null) =>
         new(client.Object, SingleTemplateResolver().Object, (engine ?? new Mock<ILoopEngine>()).Object,
-            runStore.Object);
+            runStore.Object, TestActors.Instance);
 
     [Fact]
     public async Task Claims_a_ready_item_after_earlier_claims_terminated_outside_done()
@@ -770,7 +770,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         // Handed back for review rather than left Running with no driver.
         client.Verify(c => c.TransitionAsync(Opts, doomed.Id,
             It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback),
-            It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()), Times.Once);
         runs.Verify(s => s.SetWorkItemStatusReasonAsync(doomed.Id, "Failed to start run: no start node"), Times.Once);
     }
 
@@ -782,7 +782,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var (client, _) = ScriptedClient(new RemotePollResponse { ReadyItems = new[] { doomed, next } });
         client.Setup(c => c.TransitionAsync(Opts, doomed.Id,
                 It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.HumanFeedback),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Running });
         var engine = new Mock<ILoopEngine>();
         engine.Setup(e => e.StartRunAsync(doomed.Id, It.IsAny<CancellationToken>()))
@@ -790,7 +790,7 @@ public sealed class RemoteWorkItemCoordinatorTests
         var runs = RunStoreWithActive(NoActiveRuns());
         var notifier = new Mock<IWorkItemNotifier>();
         var sut = new RemoteWorkItemCoordinator(client.Object, SingleTemplateResolver().Object, engine.Object,
-            runs.Object, workItemNotifier: notifier.Object);
+            runs.Object, TestActors.Instance, workItemNotifier: notifier.Object);
 
         var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 1, ct: TestContext.Current.CancellationToken);
 
@@ -869,11 +869,11 @@ public sealed class RemoteWorkItemCoordinatorTests
         };
 
         var client = new Mock<IWorkItemServerClient>();
-        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemotePollResponse { ActiveItems = new[] { waiting } });
         client.Setup(c => c.TransitionAsync(Opts, waiting.Id,
                 It.Is<RemoteTransitionRequest>(r => r.TargetStatus == RemoteWorkItemStatus.Running),
-                It.IsAny<CancellationToken>()))
+                It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
               .ReturnsAsync(new RemoteTransitionResponse { Success = true, ActualStatus = RemoteWorkItemStatus.Running });
 
         var runStore = new Mock<ILoopRunStore>();
@@ -887,7 +887,7 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         var sut = new RemoteWorkItemCoordinator(
             client.Object, new Mock<ILoopTemplateResolver>().Object, new Mock<ILoopEngine>().Object,
-            runStore.Object, providerStore: providerStore, aiTracker: concurrency);
+            runStore.Object, TestActors.Instance, providerStore: providerStore, aiTracker: concurrency);
 
         return (sut, waiting);
     }

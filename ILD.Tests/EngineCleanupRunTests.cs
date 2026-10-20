@@ -29,7 +29,7 @@ public class EngineCleanupRunTests
 
         // Work item should be transitioned to Done.
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.Done,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Done,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
     }
 

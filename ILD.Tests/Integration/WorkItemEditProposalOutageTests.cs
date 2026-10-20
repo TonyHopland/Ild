@@ -54,7 +54,7 @@ public class WorkItemEditProposalOutageTests
         };
         var client = new Mock<IWorkItemServerClient>();
         var applied = false;
-        client.Setup(c => c.ApproveEditProposalAsync(It.IsAny<WorkItemServerOptions>(), WorkItemId, proposal.Id, It.IsAny<CancellationToken>()))
+        client.Setup(c => c.ApproveEditProposalAsync(It.IsAny<WorkItemServerOptions>(), WorkItemId, proposal.Id, It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
             .Callback(() => applied = true)
             .ReturnsAsync(new EditProposalDecisionResult(
                 EditProposalDecisionOutcome.Applied, proposal, new RemoteWorkItem { Id = WorkItemId, Title = "Applied" }));
@@ -94,7 +94,7 @@ public class WorkItemEditProposalOutageTests
             .ThrowsAsync(Outage);
         client.Setup(c => c.ListEditProposalsAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(Outage);
-        client.Setup(c => c.RejectEditProposalAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.RejectEditProposalAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(Outage);
         await using var factory = new ApiFactory(configureServices: services =>
         {

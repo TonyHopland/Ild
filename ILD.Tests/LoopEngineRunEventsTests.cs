@@ -293,7 +293,7 @@ public class LoopEngineRunEventsTests
             new NodeOutcome.WaitingAction(HumanFeedbackReasons.HumanInputNeeded, "Does the plan hold up?")));
         h.SeedRun("human");
         LoopRunStatus? runWhenItemParked = null;
-        h.WorkItemsMock.Setup(m => m.TransitionAsync(h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        h.WorkItemsMock.Setup(m => m.TransitionAsync(It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .Callback(() => runWhenItemParked = h.ReloadRun().Status)
             .ReturnsAsync(true);
@@ -314,7 +314,7 @@ public class LoopEngineRunEventsTests
             new NodeOutcome.NodeStarting("ask"),
             new NodeOutcome.WaitingAction(HumanFeedbackReasons.HumanInputNeeded, "Does the plan hold up?")));
         h.SeedRun("human");
-        h.WorkItemsMock.Setup(m => m.TransitionAsync(h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        h.WorkItemsMock.Setup(m => m.TransitionAsync(It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
             .Returns(async () =>
             {

@@ -12,8 +12,9 @@ import ActionThread from "./ActionThread";
 import PendingEditProposals from "./PendingEditProposals";
 import EditPanel from "./EditPanel";
 import FilesPanel, { workItemKey } from "./FilesPanel";
+import HistoryPanel from "./HistoryPanel";
 
-type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal";
+type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal" | "history";
 
 /**
  * An item is awaiting human action when it is parked in HumanFeedback with a
@@ -53,8 +54,11 @@ interface WorkItemModalV2Props {
 
 /**
  * Near-fullscreen work item detail dialog: a horizontal tab bar (Overview,
- * Action, Runs, Files, Preview) over the full width, with run
- * history shown inline rather than on a separate page. The Action tab is one chat
+ * Action, Runs, Files, Preview, then Terminal when there is a worktree, and History
+ * last) over the full width, with run
+ * history shown inline rather than on a separate page. History is the record of
+ * what changed on the item, by whom and why, kept apart from the Action thread's
+ * dialogue with its runs. The Action tab is one chat
  * thread: the conversation, the live progress stream in the latest AI bubble,
  * and the human-feedback pane in the latest human bubble. It flags itself with an indicator
  * while the item waits on a human. An item opens on the Action tab while work on it
@@ -249,6 +253,7 @@ export default function WorkItemModalV2({
     ...(canUseTerminal
       ? [{ id: "terminal" as TabId, label: `Terminal${showTerminal ? " ●" : ""}` }]
       : []),
+    { id: "history", label: "History" },
   ];
 
   const showCleanupButtons =
@@ -388,6 +393,15 @@ export default function WorkItemModalV2({
           )}
         </section>
       )}
+      <section
+        role="tabpanel"
+        id="wiv2-panel-history"
+        aria-labelledby="wiv2-tab-history"
+        className="wiv2-tabpanel"
+        hidden={activeTab !== "history"}
+      >
+        <HistoryPanel key={workItem.id} workItem={workItem} active={activeTab === "history"} />
+      </section>
     </>
   );
 

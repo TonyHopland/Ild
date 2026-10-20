@@ -75,7 +75,7 @@ public class EngineFeedbackResumeTransitionTests
         // The single Running transition is the one the resume must perform; the
         // core loop itself never transitions a work item to Running.
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.Running,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Running,
             It.IsAny<string?>(), It.IsAny<string?>(), h.RunId, It.IsAny<string?>()), Times.Once);
     }
 
@@ -112,7 +112,7 @@ public class EngineFeedbackResumeTransitionTests
         await h.WaitUntilIdleAsync();
 
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.Running,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Running,
             It.IsAny<string?>(), It.IsAny<string?>(), h.RunId, It.IsAny<string?>()), Times.Once);
     }
 
@@ -137,7 +137,7 @@ public class EngineFeedbackResumeTransitionTests
         await h.WaitUntilIdleAsync();
         Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            It.IsAny<string>(), RemoteWorkItemStatus.Running,
+            It.IsAny<WorkItemActor>(), It.IsAny<string>(), RemoteWorkItemStatus.Running,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Never);
     }
 
@@ -181,7 +181,7 @@ public class EngineFeedbackResumeTransitionTests
         await h.WaitUntilIdleAsync();
 
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
-            h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+            It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(), LoopOutputs.OnCiFailed,
             It.IsAny<Guid?>(), It.IsAny<string?>()), Times.Once);
         var last = h.ReloadRunNodes().OrderBy(n => n.StartedAt).Last();

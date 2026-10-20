@@ -26,11 +26,11 @@ public class WorkItemAttachmentOutageTests
         var client = new Mock<IWorkItemServerClient>();
         client.Setup(c => c.ListAttachmentsAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(outage);
-        client.Setup(c => c.UploadAttachmentsAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<RemoteAttachmentUpload>>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.UploadAttachmentsAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<IReadOnlyList<RemoteAttachmentUpload>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(outage);
         client.Setup(c => c.GetAttachmentAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(outage);
-        client.Setup(c => c.DeleteAttachmentAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+        client.Setup(c => c.DeleteAttachmentAsync(It.IsAny<WorkItemServerOptions>(), It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(outage);
 
         return new ApiFactory(configureServices: services => services.ReplaceSingleton(client.Object));

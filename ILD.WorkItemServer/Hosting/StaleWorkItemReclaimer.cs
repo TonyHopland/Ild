@@ -1,3 +1,4 @@
+using ILD.WorkItemServer.Domain;
 using ILD.WorkItemServer.Services;
 
 namespace ILD.WorkItemServer.Hosting;
@@ -9,6 +10,8 @@ namespace ILD.WorkItemServer.Hosting;
 /// </summary>
 public sealed class StaleWorkItemReclaimer : BackgroundService
 {
+    private static readonly WorkItemActor Actor = new("system", WorkItemActorKind.System, "system: stale reclaim", null);
+
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<StaleWorkItemReclaimer> _logger;
     private readonly TimeSpan _interval;
@@ -34,6 +37,7 @@ public sealed class StaleWorkItemReclaimer : BackgroundService
             try
             {
                 using var scope = _scopes.CreateScope();
+                scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>().HistoryActor = Actor;
                 var svc = scope.ServiceProvider.GetRequiredService<IWorkItemService>();
                 var n = await svc.ReclaimStaleAsync(_timeout, stoppingToken);
                 if (n > 0) _logger.LogInformation("Reclaimed {Count} stale work item(s) to Ready", n);

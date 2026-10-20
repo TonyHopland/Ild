@@ -34,6 +34,7 @@ internal static class RunTimeline
         services.AddSingleton(db.Settings);
         services.AddSingleton(db.ServerClient);
         services.AddSingleton(db.ServerOptions);
+        services.AddSingleton(TestActors.Instance);
         configure?.Invoke(services);
         return services.BuildServiceProvider();
     }
@@ -47,7 +48,7 @@ internal static class RunTimeline
     /// </summary>
     public static WorkItemManager Manager(TestDb db, ILoopEngine? engine = null, IEventLogService? eventLog = null)
         => new(new Mock<IRepositoryManager>().Object, db.Providers, eventLog ?? EventLog(db), db.LoopRuns,
-            db.ServerClient, db.ServerOptions, engine: engine);
+            db.ServerClient, db.ServerOptions, TestActors.Instance, engine: engine);
 
     /// <summary>Every event of the run, oldest first.</summary>
     public static IReadOnlyList<EventLog> Events(TestDb db, Guid runId)

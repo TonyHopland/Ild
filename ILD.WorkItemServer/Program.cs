@@ -127,6 +127,7 @@ public sealed class WorkItemServerProgram
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
         app.MapGet("/health", () => Results.Ok(new { status = "ok", version }));
         app.UseMiddleware<ApiKeyMiddleware>();
+        app.UseMiddleware<ActorMiddleware>();
         app.MapControllers();
 
         return app;

@@ -85,6 +85,7 @@ internal static class BodySizeObservation
             ctx.Request.Method = method;
             ctx.Request.Path = path;
             if (bearerToken != null) ctx.Request.Headers["Authorization"] = "Bearer " + bearerToken;
+            ctx.Request.Headers[ILD.Core.Services.Remote.WorkItemActor.HeaderName] = TestActors.Human.ToHeaderValue();
             if (payload != null)
             {
                 ctx.Request.Body = payload;
