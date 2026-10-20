@@ -77,7 +77,13 @@ function renderPanel(detail: LoopRun, onReclaimRun = vi.fn().mockResolvedValue(u
   return { getById, onReclaimRun, onRunsChanged };
 }
 
-const cleanUpButton = () => screen.queryByRole("button", { name: /clean up worktree/i });
+/** Clean up worktree, an item behind the run header's ⋯ (opened here when it is shut). */
+const cleanUpButton = () => {
+  const menu = screen.queryByRole("button", { name: "Run actions" });
+  if (!menu) return null;
+  if (menu.getAttribute("aria-expanded") !== "true") fireEvent.click(menu);
+  return screen.queryByRole("menuitem", { name: /clean up worktree/i });
+};
 
 describe("RunsPanel cleanup action", () => {
   test("confirms, then frees the run's worktree and branch and refetches", async () => {
@@ -112,7 +118,7 @@ describe("RunsPanel cleanup action", () => {
 
   test("is not offered for a run that is still live", async () => {
     renderPanel(run({ status: LoopRunStatus.WaitingHuman, completedAt: null }));
-    await waitFor(() => expect(screen.getByText(/waitinghuman/i)).not.toBeNull());
+    await waitFor(() => expect(screen.getAllByText(/waiting for you/i).length).toBeGreaterThan(0));
     expect(cleanUpButton()).toBeNull();
   });
 
@@ -183,7 +189,18 @@ function renderActionPanel(
   return { server, getById, handlers, onRunsChanged };
 }
 
-const actionButton = (name: RegExp) => screen.queryByRole("button", { name });
+/**
+ * A run action: a button in the run header, or an item behind its ⋯ menu
+ * (opened here when it is shut). Null when the run does not offer it.
+ */
+const actionButton = (name: RegExp) => {
+  const direct = screen.queryByRole("button", { name });
+  if (direct) return direct;
+  const menu = screen.queryByRole("button", { name: "Run actions" });
+  if (!menu) return null;
+  if (menu.getAttribute("aria-expanded") !== "true") fireEvent.click(menu);
+  return screen.queryByRole("menuitem", { name });
+};
 const PAUSE = /pause run/i;
 const RESUME = /resume run/i;
 const CANCEL_RUN = /cancel run/i;
@@ -300,10 +317,10 @@ describe("RunsPanel run actions", () => {
       await waitFor(() => expect(handlers[handler]).toHaveBeenCalledWith(RUN_A));
       await waitFor(() => expect(onRunsChanged).toHaveBeenCalled());
       if (handler === "onPauseRun") {
-        await waitFor(() => expect(screen.getByText(/\(paused\)/i)).not.toBeNull());
+        await waitFor(() => expect(screen.getByText(/· paused/i)).not.toBeNull());
         expect(actionButton(RESUME)).not.toBeNull();
       } else if (handler === "onResumeRun") {
-        await waitFor(() => expect(screen.queryByText(/\(paused\)/i)).toBeNull());
+        await waitFor(() => expect(screen.queryByText(/· paused/i)).toBeNull());
         expect(actionButton(PAUSE)).not.toBeNull();
       } else {
         await waitFor(() => expect(actionButton(CANCEL_RUN)).toBeNull());
@@ -424,11 +441,9 @@ describe("RunsPanel run actions", () => {
       expect(handlers[handler]).toHaveBeenCalledWith(RUN_A);
       expect(runEntry(RUN_A)).not.toBeNull();
       expect(screen.getByText("Node of aaaaaaaa")).not.toBeNull();
-      const usable = screen.getAllByRole("button", {
-        name: handler === "onDeleteRun" ? /delete/i : name,
-      });
-      expect(usable.length).toBeGreaterThan(0);
-      for (const b of usable) expect(isDisabled(b)).toBe(false);
+      const usable = actionButton(handler === "onDeleteRun" ? DELETE_RUN : name);
+      expect(usable).not.toBeNull();
+      expect(isDisabled(usable)).toBe(false);
 
       fireEvent.click(within(screen.getByRole("alert")).getByRole("button"));
       expect(screen.queryByRole("alert")).toBeNull();
@@ -469,7 +484,7 @@ describe("RunsPanel run actions", () => {
     await waitFor(() => expect(handlers.onPauseRun).toHaveBeenCalledWith(RUN_A));
     expect(screen.getByText("Node of bbbbbbbb")).not.toBeNull();
     expect(screen.queryByText("Node of aaaaaaaa")).toBeNull();
-    expect(screen.queryByText(/\(paused\)/i)).toBeNull();
+    expect(screen.queryByText(/· paused/i)).toBeNull();
     expect(actionButton(PAUSE)).not.toBeNull();
   });
 });
@@ -1015,14 +1030,14 @@ describe("RunsPanel run scoping", () => {
     );
     getById.mockResolvedValue({ ...running, isPaused: true });
     fireEvent.click(actionButton(PAUSE)!);
-    await screen.findByText(/\(paused\)/i);
+    await screen.findByText(/· paused/i);
 
     await act(async () => {
       stale.resolve(running);
       await stale.promise;
     });
 
-    expect(screen.getByText(/\(paused\)/i)).not.toBeNull();
+    expect(screen.getByText(/· paused/i)).not.toBeNull();
     expect(actionButton(PAUSE)).toBeNull();
   });
 });
@@ -1466,5 +1481,50 @@ describe("RunsPanel retry", () => {
 
       expect((await screen.findByRole("alert")).textContent).toContain("History unavailable");
     });
+  });
+});
+
+describe("RunsPanel retry", () => {
+  const node = (
+    id: string,
+    label: string,
+    nodeType: string,
+    status = LoopRunNodeStatus.Succeeded,
+  ) => ({
+    id,
+    nodeId: `n-${id}`,
+    nodeLabel: label,
+    status,
+    effectiveInput: null,
+    output: null,
+    error: null,
+    startedAt: "2025-01-01T00:00:00Z",
+    completedAt: "2025-01-01T00:10:00Z",
+    executionCount: 1,
+    nodeType,
+  });
+
+  test("is never offered on Start or Cleanup, and stands out only on a failed node", async () => {
+    renderActionPanel([
+      run({
+        id: RUN_A,
+        status: LoopRunStatus.WaitingHuman,
+        completedAt: null,
+        nodes: [
+          node("s", "Start", "Start"),
+          node("d", "Developer", "AI"),
+          node("t", "Run tests", "Cmd", LoopRunNodeStatus.Failed),
+          node("c", "Cleanup", "Cleanup"),
+        ],
+      }),
+    ]);
+    await screen.findByText("Developer");
+
+    const retries = screen.getAllByRole("button", { name: "Retry from this node" });
+    // Developer and Run tests, not Start or Cleanup.
+    expect(retries).toHaveLength(2);
+    const [developer, failed] = retries;
+    expect(developer.classList.contains("btn-ghost")).toBe(true);
+    expect(failed.classList.contains("btn-primary")).toBe(true);
   });
 });

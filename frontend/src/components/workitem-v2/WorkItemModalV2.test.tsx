@@ -189,6 +189,28 @@ async function rerenderDialog(rerender: ReturnType<typeof render>["rerender"], w
 
 // "On a tab" means both halves: the tab is selected and the panel it controls
 // is the only one not hidden.
+/**
+ * A Runs-tab run action: a button in the run header, or an item behind its ⋯
+ * menu (opened here when it is shut).
+ */
+async function findRunAction(name: RegExp): Promise<HTMLElement> {
+  await screen.findByRole("button", { name: "Run actions" });
+  const direct = screen.queryByRole("button", { name });
+  if (direct) return direct;
+  const menu = screen.getByRole("button", { name: "Run actions" });
+  if (menu.getAttribute("aria-expanded") !== "true") fireEvent.click(menu);
+  return screen.getByRole("menuitem", { name });
+}
+
+/** The same, read synchronously (the run header is already on screen). */
+function runAction(name: RegExp): HTMLElement {
+  const direct = screen.queryByRole("button", { name });
+  if (direct) return direct;
+  const menu = screen.getByRole("button", { name: "Run actions" });
+  if (menu.getAttribute("aria-expanded") !== "true") fireEvent.click(menu);
+  return screen.getByRole("menuitem", { name });
+}
+
 function expectOnTab(name: string | RegExp) {
   const tab = screen.getByRole("tab", { name });
   expect(tab.getAttribute("aria-selected")).toBe("true");
@@ -374,7 +396,7 @@ describe("WorkItemModalV2", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText(/node executions/)).toBeTruthy();
+    expect(screen.getByText(/\d+ steps?/)).toBeTruthy();
     expect(screen.getByText("Implement")).toBeTruthy();
 
     // Expanding a node reveals its input and output.
@@ -2423,7 +2445,7 @@ describe("WorkItemModalV2 Runs tab run actions", () => {
       const getRunsSpy = vi.mocked(authServices.workItemService.getRuns);
       const workItemSpy = vi.mocked(authServices.workItemService.getById);
 
-      const button = await screen.findByRole("button", { name });
+      const button = await findRunAction(name);
       const runsBefore = getRunsSpy.mock.calls.length;
       const itemBefore = workItemSpy.mock.calls.length;
       await act(async () => {
@@ -2443,7 +2465,7 @@ describe("WorkItemModalV2 Runs tab run actions", () => {
     const deleteSpy = vi.spyOn(authServices.loopRunService, "delete").mockResolvedValue(undefined);
     const getRunsSpy = vi.mocked(authServices.workItemService.getRuns);
 
-    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    fireEvent.click(await findRunAction(/delete run/i));
     expect(deleteSpy).not.toHaveBeenCalled();
     getRunsSpy.mockResolvedValue([]);
     const runsBefore = getRunsSpy.mock.calls.length;
@@ -2470,7 +2492,7 @@ describe("WorkItemModalV2 Runs tab run actions", () => {
       message: "Could not reclaim the run's worktree/branch; the run was not deleted.",
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    fireEvent.click(await findRunAction(/delete run/i));
     const group = screen.getByRole("group", { name: /delete/i });
     const confirm = within(group)
       .getAllByRole("button")
@@ -2507,7 +2529,7 @@ describe("WorkItemModalV2 Runs tab run action refresh", () => {
     vi.spyOn(authServices.loopRunService, method).mockResolvedValue(undefined);
     const getRuns = vi.mocked(authServices.workItemService.getRuns);
 
-    fireEvent.click(await screen.findByRole("button", { name }));
+    fireEvent.click(await findRunAction(name));
     const before = getRuns.mock.calls.length;
     await act(async () => {
       if (label === "delete")
@@ -2551,13 +2573,13 @@ describe("WorkItemModalV2 one action at a time per run", () => {
       fireEvent.click(screen.getByRole("button", { name: "More actions" }));
     return screen.getByRole("menuitem", { name: "Clean up → Done" });
   };
-  const deleteRun = () => screen.getByRole("button", { name: /delete run/i });
+  const deleteRun = () => runAction(/delete run/i);
 
   test("a footer cleanup and a Runs-tab delete of the same run never overlap", async () => {
     await openRunsTab(makeRun(), {});
     const cleanupDone = settle();
     vi.spyOn(authServices.workItemService, "cleanupToDone").mockReturnValue(cleanupDone.promise);
-    await screen.findByRole("button", { name: /delete run/i });
+    await findRunAction(/delete run/i);
 
     // Opened outside act: an update inside an async act only lands when it ends.
     const cleanupItem = footerCleanup();
@@ -2600,7 +2622,7 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     const deletion = settle();
     vi.spyOn(authServices.loopRunService, "delete").mockReturnValue(deletion.promise);
 
-    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    fireEvent.click(await findRunAction(/delete run/i));
     const group = screen.getByRole("group", { name: /delete/i });
     await act(async () => {
       fireEvent.click(within(group).getByRole("button", { name: /confirm delete/i }));

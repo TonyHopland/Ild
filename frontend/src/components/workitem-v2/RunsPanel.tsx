@@ -28,6 +28,9 @@ import type { VersionGraph } from "./useWorkItemDetail";
 import { useRunActionLock, type RunAction, type RunActionLock } from "./useRunActionLock";
 import HaltSteerControls from "./HaltSteerControls";
 import RunCostSummary from "./RunCostSummary";
+import Icon from "../Icon";
+import MenuButton, { type MenuItem } from "../MenuButton";
+import { nodeStatusLabel, pillClass, runStatusLabel, runStatusTone } from "../../utils/labels";
 
 interface EffectiveInput {
   nodeType?: string;
@@ -220,23 +223,32 @@ function NodeRow({
             <span className="wiv2-node-count">×{node.executionCount}</span>
           )}
           <span className="wiv2-node-meta">
-            {status}
+            {nodeStatusLabel(status)}
             {duration ? ` · ${duration}` : ""}
           </span>
-          <span className="wiv2-node-chevron">{expanded ? "▾" : "▸"}</span>
+          <Icon
+            name="chevron"
+            className={`wiv2-chevron wiv2-node-chevron ${expanded ? "wiv2-chevron-open" : ""}`}
+          />
         </button>
-        {onRetry && status !== LoopRunNodeStatus.Running && (
-          <button
-            type="button"
-            className="wiv2-node-retry"
-            disabled={retryDisabled}
-            title="Retry from this node with the same input as last time"
-            aria-label="Retry from this node"
-            onClick={() => onRetry(node.id)}
-          >
-            ↻ Retry
-          </button>
-        )}
+        {/* Start and Cleanup cannot be meaningfully run again; a failed node is
+            where a retry usually belongs, so it is the one that stands out. */}
+        {onRetry &&
+          status !== LoopRunNodeStatus.Running &&
+          nodeType !== NodeType.Start &&
+          nodeType !== NodeType.Cleanup && (
+            <button
+              type="button"
+              className={`btn btn-sm ${status === LoopRunNodeStatus.Failed ? "btn-primary" : "btn-ghost"} wiv2-node-retry`}
+              disabled={retryDisabled}
+              title="Retry from this node with the same input as last time"
+              aria-label="Retry from this node"
+              onClick={() => onRetry(node.id)}
+            >
+              <Icon name="retry" size={14} />
+              Retry
+            </button>
+          )}
       </div>
       {expanded && (
         <div className="wiv2-node-body">
@@ -486,6 +498,35 @@ function RunDetail({
       runDetail.status === LoopRunStatus.Cancelled) &&
     !!runDetail.hasLocalGitState;
 
+  // The run's less frequent actions sit behind ⋯ so the header stays short.
+  // Cleaning up and deleting still ask to confirm, inline under the header.
+  const isRunning = runDetail.status === LoopRunStatus.Running;
+  const runMenu: MenuItem[] = [
+    ...(onReclaimRun && canReclaim
+      ? [{ label: "Clean up worktree", disabled: busy, onSelect: () => setConfirmingReclaim(true) }]
+      : []),
+    ...(isRunning && onCancelRun
+      ? [
+          {
+            label: "Cancel run",
+            danger: true,
+            disabled: busy,
+            onSelect: () => void actOnRun("cancel", onCancelRun, "Failed to cancel run."),
+          },
+        ]
+      : []),
+    ...(!isRunning && onDeleteRun
+      ? [
+          {
+            label: "Delete run",
+            danger: true,
+            disabled: busy,
+            onSelect: () => setConfirmingDelete(true),
+          },
+        ]
+      : []),
+  ];
+
   return (
     <>
       {errorText && (
@@ -497,18 +538,41 @@ function RunDetail({
         </div>
       )}
       <div className="wiv2-runs-detail-header">
-        <span className={`status-badge status-${runDetail.status.toLowerCase()}`}>
-          {runDetail.status}
-          {runDetail.isPaused && " (Paused)"}
+        <span className={`${pillClass(runStatusTone(runDetail.status))} pill-dot`}>
+          {runStatusLabel(runDetail.status)}
+          {runDetail.isPaused && " · paused"}
         </span>
         <span className="run-time">
           Started {new Date(runDetail.startedAt).toLocaleString()}
           {runDetail.completedAt &&
             ` · finished ${new Date(runDetail.completedAt).toLocaleString()}`}
         </span>
+        <span className="wiv2-runs-detail-spacer" />
+        {runDetail.status === LoopRunStatus.Running &&
+          (runDetail.isPaused
+            ? onResumeRun && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={busy}
+                  onClick={() => void actOnRun("resume", onResumeRun, "Failed to resume run.")}
+                >
+                  Resume run
+                </button>
+              )
+            : onPauseRun && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-secondary"
+                  disabled={busy}
+                  onClick={() => void actOnRun("pause", onPauseRun, "Failed to pause run.")}
+                >
+                  Pause run
+                </button>
+              ))}
         <button
           type="button"
-          className={`btn btn-sm ${runDetail.retain ? "btn-primary" : "btn-secondary"}`}
+          className={`btn btn-sm ${runDetail.retain ? "btn-secondary" : "btn-ghost"}`}
           aria-pressed={!!runDetail.retain}
           disabled={busy}
           onClick={() =>
@@ -526,111 +590,54 @@ function RunDetail({
         >
           {runDetail.retain ? "📌 Retained" : "Retain"}
         </button>
-        {onReclaimRun &&
-          canReclaim &&
-          (confirmingReclaim ? (
-            <span className="wiv2-abandon-confirm" role="group" aria-label="Confirm clean up run">
-              <span className="wiv2-abandon-prompt">
-                Delete this run&rsquo;s worktree and local branch? The run and its history are kept.
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm btn-danger"
-                onClick={() => void handleReclaim(onReclaimRun)}
-                disabled={busy}
-              >
-                {pending === "reclaim" ? "Cleaning up…" : "Confirm clean up"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-secondary"
-                onClick={() => setConfirmingReclaim(false)}
-                disabled={busy}
-              >
-                Cancel
-              </button>
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              onClick={() => setConfirmingReclaim(true)}
-              disabled={busy}
-              title="Free this run's worktree and local branch so a new run can reuse the branch name. The run and its history are kept."
-            >
-              Clean up worktree
-            </button>
-          ))}
-        {runDetail.status === LoopRunStatus.Running ? (
-          <>
-            {runDetail.isPaused
-              ? onResumeRun && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    disabled={busy}
-                    onClick={() => void actOnRun("resume", onResumeRun, "Failed to resume run.")}
-                  >
-                    Resume run
-                  </button>
-                )
-              : onPauseRun && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-secondary"
-                    disabled={busy}
-                    onClick={() => void actOnRun("pause", onPauseRun, "Failed to pause run.")}
-                  >
-                    Pause run
-                  </button>
-                )}
-            {onCancelRun && (
-              <button
-                type="button"
-                className="btn btn-sm btn-danger"
-                disabled={busy}
-                onClick={() => void actOnRun("cancel", onCancelRun, "Failed to cancel run.")}
-              >
-                Cancel run
-              </button>
-            )}
-          </>
-        ) : (
-          onDeleteRun &&
-          (confirmingDelete ? (
-            <span className="wiv2-abandon-confirm" role="group" aria-label="Confirm delete run">
-              <span className="wiv2-abandon-prompt">
-                Delete this loop run and all its event history?
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm btn-danger"
-                onClick={() => void handleDelete(onDeleteRun)}
-                disabled={busy}
-              >
-                {pending === "delete" ? "Deleting…" : "Confirm delete"}
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm btn-secondary"
-                onClick={() => setConfirmingDelete(false)}
-                disabled={busy}
-              >
-                Cancel
-              </button>
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              onClick={() => setConfirmingDelete(true)}
-              disabled={busy}
-            >
-              Delete run
-            </button>
-          ))
-        )}
+        <MenuButton label="Run actions" items={runMenu} placement="down" small />
       </div>
+      {confirmingReclaim && onReclaimRun && (
+        <div className="wiv2-abandon-confirm" role="group" aria-label="Confirm clean up run">
+          <span className="wiv2-abandon-prompt">
+            Delete this run&rsquo;s worktree and local branch? The run and its history are kept.
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm btn-danger"
+            onClick={() => void handleReclaim(onReclaimRun)}
+            disabled={busy}
+          >
+            {pending === "reclaim" ? "Cleaning up…" : "Confirm clean up"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => setConfirmingReclaim(false)}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {confirmingDelete && onDeleteRun && (
+        <div className="wiv2-abandon-confirm" role="group" aria-label="Confirm delete run">
+          <span className="wiv2-abandon-prompt">
+            Delete this loop run and all its event history?
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm btn-danger"
+            onClick={() => void handleDelete(onDeleteRun)}
+            disabled={busy}
+          >
+            {pending === "delete" ? "Deleting…" : "Confirm delete"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-secondary"
+            onClick={() => setConfirmingDelete(false)}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       <RunCostSummary run={runDetail} />
       <RunVariables variables={runDetail.availableVariables ?? []} />
       <RunSessions runId={runDetail.id} sessions={runDetail.availableSessions ?? []} />
@@ -721,12 +728,14 @@ export default function RunsPanel({ runs, runLock, ...detailProps }: RunsPanelPr
               className={`wiv2-run-item ${run.id === effectiveRunId ? "wiv2-run-item-active" : ""}`}
               onClick={() => setSelectedRunId(run.id)}
             >
-              <span className={`status-badge status-${status.toLowerCase()}`}>{status}</span>
+              <span className={`${pillClass(runStatusTone(status))} pill-dot`}>
+                {runStatusLabel(status)}
+              </span>
               <span className="wiv2-run-item-time">{new Date(run.startedAt).toLocaleString()}</span>
               <span className="wiv2-run-item-sub">
                 Run {run.id.slice(0, 8)} · {run.id === workItem.currentLoopRunId && "current · "}
                 {run.retain && "📌 "}
-                {run.nodeExecutionCount} node executions
+                {run.nodeExecutionCount} {run.nodeExecutionCount === 1 ? "step" : "steps"}
               </span>
             </button>
           );

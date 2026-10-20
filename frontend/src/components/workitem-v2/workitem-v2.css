@@ -930,8 +930,22 @@
 .wiv2-runs-detail-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-3);
   flex-wrap: wrap;
+  padding: var(--space-3) 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  margin-bottom: var(--space-3);
+}
+
+.wiv2-runs-detail-header .run-time {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.wiv2-runs-detail-spacer {
+  flex: 1;
 }
 
 .wiv2-collapsible-toggle {
