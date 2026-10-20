@@ -1,3 +1,4 @@
+using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data;
 using ILD.Data.DTOs;
@@ -20,14 +21,12 @@ public class ClaudeCodeAdapterForkTests
     [Fact]
     public async Task ExecuteAsync_forks_source_snapshot_under_new_id_leaving_source_unchanged()
     {
-        var home = Path.Combine(Path.GetTempPath(), $"ild-claude-fork-home-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(home);
-        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-claude-fork-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(worktreeDir);
-
-        var sourceJson = ClaudeCodeAdapter.WrapJsonl(
-            "source-sess",
-            "{\"session_id\":\"source-sess\",\"type\":\"assistant\",\"text\":\"hi\"}\n");
+        var ct = TestContext.Current.CancellationToken;
+        var home = Directory.CreateTempSubdirectory("ild-claude-fork-home-").FullName;
+        var worktreeDir = Directory.CreateTempSubdirectory("ild-claude-fork-").FullName;
+        const string sourceJsonl =
+            "{\"sessionId\":\"source-sess\",\"type\":\"user\",\"text\":\"go\"}\n" +
+            "{\"sessionId\":\"source-sess\",\"type\":\"assistant\",\"text\":\"hi\"}\n";
 
         var environment = new TestProcessEnvironment { { "HOME", home } };
         try
@@ -35,7 +34,11 @@ public class ClaudeCodeAdapterForkTests
             await using var harness = await CreateSessionHarnessAsync();
             var runId = Guid.NewGuid();
             await harness.SeedRunAsync(runId);
-            await harness.SeedSnapshotAsync(runId, "ClaudeCode", "source-sess", sourceJson);
+            var sourceKey = SessionSnapshotKey.ForRun(runId, "ClaudeCode", "source-sess");
+            var destKey = SessionSnapshotKey.ForRun(runId, "ClaudeCode", "fork-dest");
+            await harness.WithStoreAsync(store => SessionSnapshotTestSupport.SeedAsync(store, sourceKey, "claude-jsonl", sourceJsonl, ct));
+            var sourceBefore = await harness.WithStoreAsync(store => store.GetMetadataAsync(sourceKey, ct));
+            var sourceChunksBefore = await harness.ChunkDataAsync(sourceBefore!.Id);
 
             var adapter = new ClaudeCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>(), environment: environment);
             var ctx = BuildContext(
@@ -45,18 +48,18 @@ public class ClaudeCodeAdapterForkTests
                 sessionId: "fork-dest",
                 manageSession: true) with { ForkFromSessionId = "source-sess" };
 
-            await adapter.ExecuteAsync(ctx);
+            var result = await adapter.ExecuteAsync(ctx);
 
-            await using var verifyDb = harness.CreateDbContext();
-            // Source session is byte-for-byte unchanged after the fork.
-            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "ClaudeCode" && s.SessionId == "source-sess", TestContext.Current.CancellationToken);
-            Assert.NotNull(source);
-            Assert.Equal(sourceJson, source!.SessionJson);
-            // A copy now exists under the fork's id, retargeted to that id.
-            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "ClaudeCode" && s.SessionId == "fork-dest", TestContext.Current.CancellationToken);
-            Assert.NotNull(fork);
-            Assert.Contains("fork-dest", fork!.SessionJson);
-            Assert.DoesNotContain("source-sess", fork.SessionJson);
+            Assert.True(result.Success, result.Error);
+            var expectedFork = sourceJsonl.Replace("source-sess", "fork-dest", StringComparison.Ordinal);
+            Assert.Equal(expectedFork, await harness.WithStoreAsync(store => SessionSnapshotTestSupport.ReadAllTextAsync(store, destKey, ct)));
+            var restoredPath = ClaudeCodeAdapter.GetSessionFilePath(
+                worktreeDir, "fork-dest", AgentIsolation.AgentUser, AgentIsolation.AgentHome, environment)!;
+            Assert.Equal(expectedFork, File.ReadAllText(restoredPath));
+
+            Assert.Equal(sourceJsonl, await harness.WithStoreAsync(store => SessionSnapshotTestSupport.ReadAllTextAsync(store, sourceKey, ct)));
+            Assert.Equal(sourceBefore, await harness.WithStoreAsync(store => store.GetMetadataAsync(sourceKey, ct)));
+            Assert.Equal(sourceChunksBefore, await harness.ChunkDataAsync(sourceBefore.Id));
         }
         finally
         {
@@ -78,10 +81,9 @@ public class ClaudeCodeAdapterForkTests
             "echo '{\"type\":\"result\",\"subtype\":\"success\",\"session_id\":\"fork-dest\",\"is_error\":false,\"result\":\"ok\",\"total_cost_usd\":1.25,\"usage\":{\"input_tokens\":10,\"output_tokens\":4}}'\n");
         File.SetUnixFileMode(scriptPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
-        var sourceJson = ClaudeCodeAdapter.WrapJsonl(
-            "source-sess",
+        var sourceJsonl =
             "{\"type\":\"user\",\"sessionId\":\"source-sess\",\"message\":{\"role\":\"user\",\"content\":\"go\"}}\n" +
-            "{\"type\":\"cost-state\",\"sessionId\":\"source-sess\",\"totalCostUSD\":1.00,\"totalAPIDuration\":11774,\"modelUsage\":{}}\n");
+            "{\"type\":\"cost-state\",\"sessionId\":\"source-sess\",\"totalCostUSD\":1.00,\"totalAPIDuration\":11774,\"modelUsage\":{}}\n";
 
         var environment = new TestProcessEnvironment { { "HOME", home } };
         try
@@ -89,7 +91,8 @@ public class ClaudeCodeAdapterForkTests
             await using var harness = await CreateSessionHarnessAsync();
             var runId = Guid.NewGuid();
             await harness.SeedRunAsync(runId);
-            await harness.SeedSnapshotAsync(runId, "ClaudeCode", "source-sess", sourceJson);
+            await harness.WithStoreAsync(store => SessionSnapshotTestSupport.SeedAsync(
+                store, SessionSnapshotKey.ForRun(runId, "ClaudeCode", "source-sess"), "claude-jsonl", sourceJsonl, TestContext.Current.CancellationToken));
 
             var adapter = new ClaudeCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>(), environment: environment);
             var ctx = BuildContext(
@@ -185,17 +188,26 @@ public class ClaudeCodeAdapterForkTests
             return new AppDbContext(options);
         }
 
-        public async Task SeedSnapshotAsync(Guid runId, string adapterName, string sessionId, string sessionJson)
+        public async Task<T> WithStoreAsync<T>(Func<IAdapterSessionSnapshotStore, Task<T>> use)
+        {
+            await using var scope = _provider.CreateAsyncScope();
+            return await use(scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>());
+        }
+
+        public async Task WithStoreAsync(Func<IAdapterSessionSnapshotStore, Task> use)
+        {
+            await using var scope = _provider.CreateAsyncScope();
+            await use(scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>());
+        }
+
+        public async Task<List<byte[]>> ChunkDataAsync(Guid snapshotId)
         {
             await using var db = CreateDbContext();
-            db.AdapterSessionSnapshots.Add(new AdapterSessionSnapshot
-            {
-                LoopRunId = runId,
-                AdapterName = adapterName,
-                SessionId = sessionId,
-                SessionJson = sessionJson,
-            });
-            await db.SaveChangesAsync();
+            return await db.AdapterSessionSnapshotChunks
+                .Where(c => c.SnapshotId == snapshotId)
+                .OrderBy(c => c.Seq)
+                .Select(c => c.Data)
+                .ToListAsync();
         }
 
         public async Task SeedRunAsync(Guid runId)

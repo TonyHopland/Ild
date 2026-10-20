@@ -3,10 +3,13 @@ using ILD.Api.Services;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.EntityFrameworkCore;
 using Moq;
+using System.Text;
 
 namespace ILD.Tests;
 
@@ -129,9 +132,10 @@ public class LoopRunsControllerTests
         Assert.Equal("ild/wi-1-run-a", run.BranchName);
     }
 
-    private static LoopRunsController BuildController(Mock<ILoopRunStore> store, Mock<IRunReclaimer> reclaimer)
+    private static LoopRunsController BuildController(
+        Mock<ILoopRunStore> store, Mock<IRunReclaimer> reclaimer, IAdapterSessionSnapshotStore? snapshots = null)
         => TestActors.SignedIn(new LoopRunsController(new Mock<ILoopEngine>().Object, new Mock<IEventLogService>().Object, store.Object,
-            new Mock<IAdapterSessionSnapshotStore>().Object,
+            snapshots ?? new Mock<IAdapterSessionSnapshotStore>().Object,
             new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance),
             reclaimer.Object, new Mock<IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>()));
 
@@ -193,42 +197,23 @@ public class LoopRunsControllerTests
     [Fact]
     public async Task GetById_includes_available_sessions_for_run()
     {
-        var runId = Guid.NewGuid();
-        var run = new LoopRun
-        {
-            Id = runId,
-            WorkItemId = Guid.NewGuid().ToString(),
-            LoopTemplateVersionId = Guid.NewGuid(),
-            Status = LoopRunStatus.Running,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-            CreatedAt = DateTime.UtcNow,
-            StartedAt = DateTime.UtcNow,
-        };
+        var ct = TestContext.Current.CancellationToken;
+        using var db = new TestDb();
+        var run = await SeedRunAsync(db);
+        var runId = run.Id;
+        var snapshots = new AdapterSessionSnapshotStore(db.Context);
+        const string current = "{\"id\":\"ses_current\"}\n{\"n\":1}\n";
+        await SessionSnapshotTestSupport.SeedAsync(snapshots, SessionSnapshotKey.ForRun(runId, "OpenCode", "ses_current"), "opencode-json", current, ct);
+        await SessionSnapshotTestSupport.SeedAsync(snapshots, SessionSnapshotKey.ForRun(runId, "OpenCode", "ses_old"), "opencode-json", "{\"id\":\"ses_old\"}\n", ct);
+        await SetUpdatedAtAsync(db, runId, "ses_current", DateTime.UtcNow.AddMinutes(-5));
+        await SetUpdatedAtAsync(db, runId, "ses_old", DateTime.UtcNow.AddMinutes(-20));
+        var legacyId = await SessionSnapshotTestSupport.SeedLegacyAsync(
+            db.Context, runId, null, "ClaudeCode", "ses_legacy",
+            SessionSnapshotTestSupport.LegacyClaudeWrapper("ses_legacy", "{\"type\":\"user\"}"), ct);
 
         var store = new Mock<ILoopRunStore>();
         store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
         store.Setup(s => s.GetRunNodesWithNodeAsync(runId)).ReturnsAsync(Array.Empty<LoopRunNode>());
-        store.Setup(s => s.GetSessionSnapshotsAsync(runId)).ReturnsAsync(new[]
-        {
-            new AdapterSessionSnapshot
-            {
-                LoopRunId = runId,
-                AdapterName = "OpenCode",
-                SessionId = "ses_current",
-                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
-                UpdatedAt = DateTime.UtcNow.AddMinutes(-5),
-                SessionJson = "{}",
-            },
-            new AdapterSessionSnapshot
-            {
-                LoopRunId = runId,
-                AdapterName = "OpenCode",
-                SessionId = "ses_old",
-                CreatedAt = DateTime.UtcNow.AddMinutes(-30),
-                UpdatedAt = DateTime.UtcNow.AddMinutes(-20),
-                SessionJson = "{}",
-            },
-        });
         store.Setup(s => s.GetSessionBindingsAsync(runId)).ReturnsAsync(new[]
         {
             new LoopRunSessionBinding
@@ -241,25 +226,59 @@ public class LoopRunsControllerTests
         });
         store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunVariable>());
 
-        var engine = new Mock<ILoopEngine>();
-        var events = new Mock<IEventLogService>();
-        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
+        var result = await BuildController(store, new Mock<IRunReclaimer>(), snapshots).GetById(runId.ToString());
 
-        var result = await controller.GetById(runId.ToString());
-
-        Assert.IsType<OkObjectResult>(result);
-        var ok = (OkObjectResult)result;
-        var payload = ok.Value!;
+        var payload = Assert.IsType<OkObjectResult>(result).Value!;
         var sessions = (System.Collections.IEnumerable)payload.GetType().GetProperty("availableSessions")!.GetValue(payload)!;
         var items = sessions.Cast<object>().ToList();
-        Assert.Equal(2, items.Count());
+        object? Field(object item, string name) => item.GetType().GetProperty(name)!.GetValue(item);
+        // Newest first by UpdatedAt, falling back to CreatedAt for a row never updated.
+        Assert.Equal(new[] { "ses_legacy", "ses_current", "ses_old" }, items.Select(i => (string)Field(i, "sessionId")!));
 
-        var current = items.Single(i => (string)i.GetType().GetProperty("sessionId")!.GetValue(i)! == "ses_current");
-        Assert.Equal(true, current.GetType().GetProperty("isCurrent")!.GetValue(current));
-        var placeholders = (System.Collections.IEnumerable)current.GetType().GetProperty("placeholders")!.GetValue(current)!;
-        Assert.Equal("research", Assert.Single(placeholders.Cast<object>()));
+        var currentItem = items[1];
+        Assert.Equal("OpenCode", Field(currentItem, "adapterName"));
+        Assert.Equal(true, Field(currentItem, "isCurrent"));
+        Assert.Equal("research", Assert.Single(((System.Collections.IEnumerable)Field(currentItem, "placeholders")!).Cast<object>()));
+        Assert.NotNull(Field(currentItem, "createdAt"));
+        Assert.NotNull(Field(currentItem, "updatedAt"));
+        Assert.Equal("opencode-json", Field(currentItem, "format"));
+        Assert.Equal((long)Encoding.UTF8.GetByteCount(current), Convert.ToInt64(Field(currentItem, "byteLength")));
+        Assert.Equal(2, Convert.ToInt32(Field(currentItem, "eventCount")));
+        Assert.Equal(false, Field(items[2], "isCurrent"));
+
+        var legacy = items[0];
+        Assert.Equal("ClaudeCode", Field(legacy, "adapterName"));
+        Assert.Null(Field(legacy, "format"));
+        Assert.Null(Field(legacy, "byteLength"));
+        Assert.Null(Field(legacy, "eventCount"));
+        Assert.NotNull(await SessionSnapshotTestSupport.ReadLegacySessionJsonAsync(db.Fresh(), legacyId, ct));
     }
+
+    private static async Task<LoopRun> SeedRunAsync(TestDb db)
+    {
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"template-{Guid.NewGuid():N}" };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
+            LoopTemplateVersionId = version.Id,
+            Status = LoopRunStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+            CreatedAt = DateTime.UtcNow,
+            StartedAt = DateTime.UtcNow,
+        };
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.LoopRuns.Add(run);
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        return run;
+    }
+
+    private static Task SetUpdatedAtAsync(TestDb db, Guid runId, string sessionId, DateTime updatedAt)
+        => db.Context.AdapterSessionSnapshots
+            .Where(s => s.LoopRunId == runId && s.SessionId == sessionId)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.UpdatedAt, updatedAt), TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task GetById_includes_available_variables_for_run()
@@ -279,7 +298,6 @@ public class LoopRunsControllerTests
         var store = new Mock<ILoopRunStore>();
         store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
         store.Setup(s => s.GetRunNodesWithNodeAsync(runId)).ReturnsAsync(Array.Empty<LoopRunNode>());
-        store.Setup(s => s.GetSessionSnapshotsAsync(runId)).ReturnsAsync(Array.Empty<AdapterSessionSnapshot>());
         store.Setup(s => s.GetSessionBindingsAsync(runId)).ReturnsAsync(Array.Empty<LoopRunSessionBinding>());
         store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(new[]
         {
@@ -293,12 +311,9 @@ public class LoopRunsControllerTests
             },
         });
 
-        var engine = new Mock<ILoopEngine>();
-        var events = new Mock<IEventLogService>();
-        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
+        using var db = new TestDb();
 
-        var result = await controller.GetById(runId.ToString());
+        var result = await BuildController(store, new Mock<IRunReclaimer>(), new AdapterSessionSnapshotStore(db.Context)).GetById(runId.ToString());
 
         Assert.IsType<OkObjectResult>(result);
         var payload = ((OkObjectResult)result).Value!;
@@ -331,11 +346,12 @@ public class LoopRunsControllerTests
         var store = new Mock<ILoopRunStore>();
         store.Setup(s => s.GetByIdAsync(runId)).ReturnsAsync(run);
         store.Setup(s => s.GetRunNodesWithNodeAsync(runId)).ReturnsAsync(Array.Empty<LoopRunNode>());
-        store.Setup(s => s.GetSessionSnapshotsAsync(runId)).ReturnsAsync(Array.Empty<AdapterSessionSnapshot>());
         store.Setup(s => s.GetSessionBindingsAsync(runId)).ReturnsAsync(Array.Empty<LoopRunSessionBinding>());
         store.Setup(s => s.GetVariablesAsync(runId)).ReturnsAsync(Array.Empty<LoopRunVariable>());
 
-        var result = await BuildController(store, new Mock<IRunReclaimer>()).GetById(runId.ToString());
+        using var db = new TestDb();
+
+        var result = await BuildController(store, new Mock<IRunReclaimer>(), new AdapterSessionSnapshotStore(db.Context)).GetById(runId.ToString());
 
         var payload = Assert.IsType<OkObjectResult>(result).Value!;
         Assert.Equal(expected, payload.GetType().GetProperty("haltReason")!.GetValue(payload));
@@ -361,34 +377,5 @@ public class LoopRunsControllerTests
         var payload = (System.Collections.IEnumerable)Assert.IsType<OkObjectResult>(result).Value!;
         var item = Assert.Single(payload.Cast<object>());
         Assert.Equal("Throttled", item.GetType().GetProperty("haltReason")!.GetValue(item));
-    }
-
-    [Fact]
-    public async Task GetSessionPreview_returns_snapshot_json_for_session()
-    {
-        var runId = Guid.NewGuid();
-        var store = new Mock<ILoopRunStore>();
-        var snapshots = new Mock<IAdapterSessionSnapshotStore>();
-        snapshots.Setup(s => s.GetAsync(runId, "OpenCode", "ses_current", default))
-            .ReturnsAsync(new AdapterSessionSnapshot
-            {
-                LoopRunId = runId,
-                AdapterName = "OpenCode",
-                SessionId = "ses_current",
-                CreatedAt = DateTime.UtcNow.AddMinutes(-10),
-                UpdatedAt = DateTime.UtcNow.AddMinutes(-5),
-                SessionJson = "{\"id\":\"ses_current\",\"messages\":[]}",
-            });
-
-        var engine = new Mock<ILoopEngine>();
-        var events = new Mock<IEventLogService>();
-        var controller = new LoopRunsController(engine.Object, events.Object, store.Object, snapshots.Object, new InteractiveShellSessionService(NullLogger<InteractiveShellSessionService>.Instance), new Mock<ILD.Core.Services.Interfaces.IRunReclaimer>().Object, new Mock<ILD.Core.Services.Interfaces.IWorkItemManager>().Object, NoPackageFeeds.Resolver, new Mock<IRunConversationService>().Object, Mock.Of<ILoopTemplateStore>(), Mock.Of<IGlobalVariableStore>());
-
-        var result = await controller.GetSessionPreview(runId.ToString(), "OpenCode", "ses_current");
-
-        Assert.IsType<OkObjectResult>(result);
-        var ok = (OkObjectResult)result;
-        Assert.NotNull(ok.Value);
-        Assert.Equal("{\"id\":\"ses_current\",\"messages\":[]}", ok.Value!.GetType().GetProperty("sessionJson")!.GetValue(ok.Value));
     }
 }

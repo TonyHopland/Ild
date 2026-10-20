@@ -1,54 +1,66 @@
 using ILD.Core.Services.Implementations.Adapters;
+using ILD.Core.Services.Interfaces;
+using ILD.Data;
+using ILD.Data.DTOs;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ILD.Tests;
 
 /// <summary>
-/// Unit coverage for the shared fork primitive every CLI adapter inherits from
+/// The shared fork primitive every CLI adapter inherits from
 /// <see cref="CliAgentAdapterBase"/> — see ADR-0009 (adapter feature parity).
 /// </summary>
 public class CliAgentAdapterForkTests
 {
     [Fact]
-    public void RewriteSessionTranscript_retargets_every_session_id_reference()
+    public async Task Forking_a_session_with_no_snapshot_reports_false_and_writes_nothing()
     {
-        // Shape mirrors a claude wrapped snapshot: a top-level id plus per-event
-        // references, all of which must point at the new session after a fork.
-        var source =
-            "{\"format\":\"claude-jsonl\",\"sessionId\":\"src-1\",\"events\":[" +
-            "{\"session_id\":\"src-1\",\"text\":\"hello\"}," +
-            "{\"session_id\":\"src-1\",\"text\":\"world\"}]}";
+        var ct = TestContext.Current.CancellationToken;
+        using var db = new TestDb();
+        var runId = await SeedRunAsync(db);
+        var services = new ServiceCollection();
+        services.AddScoped<AppDbContext>(_ => db.OnOwnConnection());
+        services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
+        await using var provider = services.BuildServiceProvider();
+        var adapter = new ForkingAdapter(provider.GetRequiredService<IServiceScopeFactory>());
 
-        var forked = CliAgentAdapterBase.RewriteSessionTranscript(source, "src-1", "dst-2");
+        var forked = await adapter.ForkAsync(runId, "missing-source", "fork-dest", ct);
 
-        Assert.DoesNotContain("src-1", forked);
-        Assert.Equal(3, forked.Split("dst-2").Length - 1);
-        // Non-id content is preserved verbatim.
-        Assert.Contains("\"text\":\"hello\"", forked);
-        Assert.Contains("\"text\":\"world\"", forked);
+        Assert.False(forked);
+        Assert.Empty(await new AdapterSessionSnapshotStore(db.Fresh()).ListMetadataForRunAsync(runId, ct));
     }
 
-    [Fact]
-    public void RewriteSessionTranscript_rewrites_multiline_jsonl_header()
+    private static async Task<Guid> SeedRunAsync(TestDb db)
     {
-        // pi snapshots are raw multi-line JSONL; the textual rewrite must still
-        // retarget the session header id so pi's header-id lookup matches.
-        var source =
-            "{\"type\":\"session\",\"id\":\"pi-src\",\"cwd\":\"/w\"}\n" +
-            "{\"type\":\"message\",\"sessionId\":\"pi-src\"}\n";
-
-        var forked = CliAgentAdapterBase.RewriteSessionTranscript(source, "pi-src", "pi-dst");
-
-        Assert.DoesNotContain("pi-src", forked);
-        Assert.Contains("\"id\":\"pi-dst\"", forked);
-        Assert.Contains("\"sessionId\":\"pi-dst\"", forked);
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"template-{Guid.NewGuid():N}", RecoveryPolicy = RecoveryPolicy.AutoResume };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = Guid.NewGuid().ToString(),
+            LoopTemplateVersionId = version.Id,
+            Status = LoopRunStatus.Running,
+            RecoveryPolicy = RecoveryPolicy.AutoResume,
+        };
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        db.Context.LoopRuns.Add(run);
+        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
+        return run.Id;
     }
 
-    [Fact]
-    public void RewriteSessionTranscript_is_a_noop_for_blank_or_equal_ids()
+    private sealed class ForkingAdapter(IServiceScopeFactory scopes) : CliAgentAdapterBase(scopes)
     {
-        const string source = "{\"sessionId\":\"keep\"}";
+        public override string Name => "ClaudeCode";
+        public override string[] SupportedProviderTypes => ["claude-code"];
+        public override AgentAdapterTraits Traits => throw new NotSupportedException();
+        public override Task<NodeExecutionResult> ExecuteAsync(AgentExecutionContext context) => throw new NotSupportedException();
 
-        Assert.Equal(source, CliAgentAdapterBase.RewriteSessionTranscript(source, "", "dst"));
-        Assert.Equal(source, CliAgentAdapterBase.RewriteSessionTranscript(source, "keep", "keep"));
+        public Task<bool> ForkAsync(Guid runId, string source, string dest, CancellationToken ct)
+            => ForkSessionSnapshotAsync(runId, source, dest, ct);
     }
 }

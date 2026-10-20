@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
@@ -215,6 +216,64 @@ public class LoopRunsIntegrationTests
 
         Assert.Equal(new[] { "GAMMA" }, (await FromDetail(parkedId)).Missing);
         Assert.Equal(new[] { "GAMMA" }, await FromList(parkedId));
+    }
+
+    /// <summary>
+    /// A run's detail lists its saved sessions from their metadata alone: however
+    /// large a transcript is, and whether or not it has been converted yet, the
+    /// read never fetches its content.
+    /// </summary>
+    [Fact]
+    public async Task GetById_lists_sessions_without_reading_any_transcript_content()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sql = new SnapshotSqlRecorder();
+        await using var factory = new ApiFactory(configureServices: services =>
+        {
+            services.RemoveHostedService<ILD.Core.Services.Implementations.SessionSnapshotMigrationService>();
+            services.ConfigureDbContext<AppDbContext>(options => options.AddInterceptors(sql));
+        });
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var runId = SeedRun(factory, LoopRunStatus.Completed, branch: "feature/large-session");
+        var random = new Random(386);
+        var lines = Enumerable.Range(0, 9000)
+            .Select(n => $"{{\"type\":\"assistant\",\"n\":{n},\"text\":\"{new string(Enumerable.Range(0, 1000).Select(_ => (char)('a' + random.Next(26))).ToArray())}\"}}\n")
+            .ToList();
+        var raw = Encoding.UTF8.GetBytes(string.Concat(lines));
+        Guid legacyId;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<ILD.Data.Stores.Interfaces.IAdapterSessionSnapshotStore>();
+            await SessionSnapshotTestSupport.SeedAsync(
+                store, ILD.Data.Stores.Interfaces.SessionSnapshotKey.ForRun(runId, "ClaudeCode", "large"), "claude-jsonl", raw, ct);
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.True(await db.AdapterSessionSnapshotChunks.CountAsync(ct) > 1);
+            legacyId = await SessionSnapshotTestSupport.SeedLegacyAsync(
+                db, runId, null, "ClaudeCode", "legacy",
+                SessionSnapshotTestSupport.LegacyClaudeWrapper("legacy", "{\"type\":\"user\"}"), ct);
+        }
+        sql.Clear();
+
+        var response = await client.GetAsync($"/api/v1/loopruns/{runId}", ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotEmpty(sql.Commands);
+        Assert.DoesNotContain(sql.Commands, c => SnapshotSqlRecorder.TouchesChunks(c.Sql));
+        Assert.DoesNotContain(sql.Commands, c => SnapshotSqlRecorder.SelectsSessionJson(c.Sql));
+        var sessions = (await response.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("availableSessions").EnumerateArray().ToList();
+        var large = sessions.Single(s => s.GetProperty("sessionId").GetString() == "large");
+        Assert.Equal("claude-jsonl", large.GetProperty("format").GetString());
+        Assert.Equal(raw.LongLength, large.GetProperty("byteLength").GetInt64());
+        Assert.Equal(lines.Count, large.GetProperty("eventCount").GetInt32());
+        var legacy = sessions.Single(s => s.GetProperty("sessionId").GetString() == "legacy");
+        Assert.Equal(JsonValueKind.Null, legacy.GetProperty("format").ValueKind);
+        Assert.Equal(JsonValueKind.Null, legacy.GetProperty("byteLength").ValueKind);
+        Assert.Equal(JsonValueKind.Null, legacy.GetProperty("eventCount").ValueKind);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.NotNull(await SessionSnapshotTestSupport.ReadLegacySessionJsonAsync(db, legacyId, ct));
+        }
     }
 
     private static ApiFactory NewFactory(IRunReclaimer reclaimer)

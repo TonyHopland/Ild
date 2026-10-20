@@ -7,6 +7,8 @@ import {
   WorkItemStatus,
   WorkItemPriority,
   LoopRun,
+  LoopRunAvailableSession,
+  LoopRunSessionPreview,
   LoopRunStatus,
   LoopRunNodeStatus,
   NodeType,
@@ -725,28 +727,45 @@ describe("RunsPanel run details", () => {
     expect(screen.getByText("All done")).not.toBeNull();
   });
 
-  test("sessions stay collapsed until expanded, and a session previews inline", async () => {
-    const preview = vi.spyOn(loopRunService, "getSessionPreview").mockResolvedValue({
+  function sessionEntry(
+    sessionId: string,
+    overrides: Partial<LoopRunAvailableSession> = {},
+  ): LoopRunAvailableSession {
+    return {
+      adapterName: "claude",
+      sessionId,
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: null,
+      isCurrent: false,
+      placeholders: [],
+      format: "claude-jsonl",
+      byteLength: 2048,
+      eventCount: 42,
+      ...overrides,
+    };
+  }
+
+  function previewPage(overrides: Partial<LoopRunSessionPreview> = {}): LoopRunSessionPreview {
+    return {
       adapterName: "claude",
       sessionId: "sess-1",
       createdAt: "2025-01-01T00:00:00Z",
       updatedAt: null,
-      sessionJson: JSON.stringify({ messages: [{}, {}] }),
-    });
-    renderDetails(
-      twoNodeRun({
-        availableSessions: [
-          {
-            adapterName: "claude",
-            sessionId: "sess-1",
-            createdAt: "2025-01-01T00:00:00Z",
-            updatedAt: null,
-            isCurrent: true,
-            placeholders: [],
-          },
-        ],
-      }),
+      format: "claude-jsonl",
+      byteLength: 64,
+      eventCount: 3,
+      events: [],
+      fromOffset: 0,
+      nextOffset: null,
+      ...overrides,
+    };
+  }
+
+  test("sessions stay collapsed until expanded, and a session previews inline", async () => {
+    const preview = vi.spyOn(loopRunService, "getSessionPreview").mockResolvedValue(
+      previewPage({ events: ['{"type":"user","n":1}', "not json at all"] }),
     );
+    renderDetails(twoNodeRun({ availableSessions: [sessionEntry("sess-1", { isCurrent: true })] }));
     const section = await screen.findByRole("button", { name: /ai sessions \(1\)/i });
     expect(screen.queryByText("sess-1")).toBeNull();
 
@@ -754,10 +773,64 @@ describe("RunsPanel run details", () => {
     fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
 
     const region = await screen.findByRole("region", { name: /session preview/i });
-    expect(preview).toHaveBeenCalledWith(RUN_A, "claude", "sess-1");
-    expect(within(region).getByText("Messages: 2")).not.toBeNull();
+    expect(preview.mock.calls[0].slice(0, 3)).toEqual([RUN_A, "claude", "sess-1"]);
+    const summary = region.textContent ?? "";
+    expect(summary).toContain("Adapter: claude");
+    expect(summary).toContain("Session: sess-1");
+    expect(summary).toMatch(/Updated: /);
+    expect(summary).toContain("Format: claude-jsonl");
+    expect(summary).toMatch(/Size: \S/);
+    expect(summary).toContain("Events: 3");
+    expect(summary).toContain(JSON.stringify({ type: "user", n: 1 }, null, 2));
+    expect(summary).toContain("not json at all");
+    expect(within(region).queryByRole("button", { name: /load more/i })).toBeNull();
     fireEvent.click(within(region).getByRole("button", { name: /close/i }));
     expect(screen.queryByRole("region", { name: /session preview/i })).toBeNull();
+  });
+
+  test("the sessions list shows a session's size and events, and nothing for them when unknown", async () => {
+    renderDetails(
+      twoNodeRun({
+        availableSessions: [
+          sessionEntry("sess-known", { byteLength: 2048, eventCount: 42 }),
+          sessionEntry("sess-legacy", { format: null, byteLength: null, eventCount: null }),
+        ],
+      }),
+    );
+    const section = await screen.findByRole("button", { name: /ai sessions \(2\)/i });
+    fireEvent.click(section);
+
+    const list = section.parentElement!.textContent ?? "";
+    expect(list.match(/size/gi)).toHaveLength(1);
+    expect(list.match(/events/gi)).toHaveLength(1);
+    expect(list).toMatch(/\b42\b/);
+    expect(list).not.toMatch(/null|undefined|NaN/);
+  });
+
+  test("load more appends the next page until the end of the session", async () => {
+    const preview = vi
+      .spyOn(loopRunService, "getSessionPreview")
+      .mockImplementation(async (_run, _adapter, _session, fromOffset) =>
+        fromOffset
+          ? previewPage({ events: ['{"page":2}'], fromOffset, nextOffset: null })
+          : previewPage({ events: ['{"page":1}'], fromOffset: 0, nextOffset: 11 }),
+      );
+    renderDetails(twoNodeRun({ availableSessions: [sessionEntry("sess-1")] }));
+    fireEvent.click(await screen.findByRole("button", { name: /ai sessions \(1\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
+    const region = await screen.findByRole("region", { name: /session preview/i });
+
+    fireEvent.click(within(region).getByRole("button", { name: /load more/i }));
+
+    await waitFor(() =>
+      expect(region.textContent).toContain(JSON.stringify({ page: 2 }, null, 2)),
+    );
+    expect(preview).toHaveBeenLastCalledWith(RUN_A, "claude", "sess-1", 11);
+    expect(region.textContent).toContain(JSON.stringify({ page: 1 }, null, 2));
+    expect(region.textContent!.indexOf('"page": 1')).toBeLessThan(
+      region.textContent!.indexOf('"page": 2'),
+    );
+    expect(within(region).queryByRole("button", { name: /load more/i })).toBeNull();
   });
 
   test("a node's events are read only once expanded, and only its own", async () => {
@@ -1311,57 +1384,117 @@ describe("RunsPanel controls after an action", () => {
 });
 
 describe("RunsPanel session preview requests", () => {
-  test("a preview answered after the user closed the preview stays closed", async () => {
-    const second = deferred<{
-      adapterName: string;
-      sessionId: string;
-      createdAt: string;
-      updatedAt: string | null;
-      sessionJson: string;
-    }>();
-    vi.spyOn(loopRunService, "getSessionPreview").mockImplementation(async (_run, _a, id) =>
-      id === "sess-1"
-        ? {
-            adapterName: "claude",
-            sessionId: "sess-1",
-            createdAt: "2025-01-01T00:00:00Z",
-            updatedAt: null,
-            sessionJson: "{}",
-          }
-        : second.promise,
-    );
-    const session = (sessionId: string) => ({
-      adapterName: "claude",
-      sessionId,
-      createdAt: "2025-01-01T00:00:00Z",
-      updatedAt: null,
-      isCurrent: false,
-      placeholders: [],
-    });
+  const session = (sessionId: string): LoopRunAvailableSession => ({
+    adapterName: "claude",
+    sessionId,
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: null,
+    isCurrent: false,
+    placeholders: [],
+    format: "claude-jsonl",
+    byteLength: 100,
+    eventCount: 4,
+  });
+  const page = (
+    sessionId: string,
+    events: string[],
+    nextOffset: number | null,
+    fromOffset = 0,
+  ): LoopRunSessionPreview => ({
+    adapterName: "claude",
+    sessionId,
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: null,
+    format: "claude-jsonl",
+    byteLength: 100,
+    eventCount: 4,
+    events,
+    fromOffset,
+    nextOffset,
+  });
+
+  async function openSessions() {
     const detail = runWithNode(RUN_A, {
       availableSessions: [session("sess-1"), session("sess-2")],
     });
     vi.spyOn(loopRunService, "getById").mockResolvedValue(detail);
     render(<RunsPanel workItem={workItem()} runs={[detail]} progressText="" />);
     fireEvent.click(await screen.findByRole("button", { name: /ai sessions \(2\)/i }));
+  }
+
+  test("a preview answered after the user closed the preview stays closed", async () => {
+    const second = deferred<LoopRunSessionPreview>();
+    vi.spyOn(loopRunService, "getSessionPreview").mockImplementation(async (_run, _a, id) =>
+      id === "sess-1" ? page("sess-1", ["{}"], null) : second.promise,
+    );
+    await openSessions();
 
     fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
     const region = await screen.findByRole("region", { name: /session preview/i });
     fireEvent.click(screen.getByRole("button", { name: /preview session sess-2/i }));
     fireEvent.click(within(region).getByRole("button", { name: /close/i }));
     await act(async () => {
-      second.resolve({
-        adapterName: "claude",
-        sessionId: "sess-2",
-        createdAt: "2025-01-01T00:00:00Z",
-        updatedAt: null,
-        sessionJson: "{}",
-      });
+      second.resolve(page("sess-2", ["{}"], null));
       await second.promise;
     });
 
     expect(screen.queryByRole("region", { name: /session preview/i })).toBeNull();
     expect(isDisabled(screen.getByRole("button", { name: /preview session sess-2/i }))).toBe(false);
+  });
+
+  test("a next page answered after the preview was closed is dropped", async () => {
+    const more = deferred<LoopRunSessionPreview>();
+    vi.spyOn(loopRunService, "getSessionPreview").mockImplementation(
+      async (_run, _a, _id, fromOffset) =>
+        fromOffset ? more.promise : page("sess-1", ['{"page":1}'], 11),
+    );
+    await openSessions();
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
+    const region = await screen.findByRole("region", { name: /session preview/i });
+    fireEvent.click(within(region).getByRole("button", { name: /load more/i }));
+
+    fireEvent.click(within(region).getByRole("button", { name: /close/i }));
+    await act(async () => {
+      more.resolve(page("sess-1", ['{"page":2}'], null, 11));
+      await more.promise;
+    });
+
+    expect(screen.queryByRole("region", { name: /session preview/i })).toBeNull();
+    expect(isDisabled(screen.getByRole("button", { name: /preview session sess-1/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /preview session sess-2/i }))).toBe(false);
+  });
+
+  test("a next page answered after another session was opened never joins it", async () => {
+    const more = deferred<LoopRunSessionPreview>();
+    vi.spyOn(loopRunService, "getSessionPreview").mockImplementation(
+      async (_run, _a, id, fromOffset) =>
+        fromOffset
+          ? more.promise
+          : id === "sess-1"
+            ? page("sess-1", ['{"from":"one"}'], 11)
+            : page("sess-2", ['{"from":"two"}'], 11),
+    );
+    await openSessions();
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
+    const first = await screen.findByRole("region", { name: /session preview/i });
+    fireEvent.click(within(first).getByRole("button", { name: /load more/i }));
+
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-2/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: /session preview/i }).textContent,
+      ).toContain('"from": "two"'),
+    );
+    await act(async () => {
+      more.resolve(page("sess-1", ['{"stale":"page"}'], null, 11));
+      await more.promise;
+    });
+
+    const region = screen.getByRole("region", { name: /session preview/i });
+    expect(region.textContent).not.toContain("stale");
+    expect(region.textContent).not.toContain('"from": "one"');
+    expect(isDisabled(within(region).getByRole("button", { name: /load more/i }))).toBe(false);
+    expect(isDisabled(screen.getByRole("button", { name: /preview session sess-1/i }))).toBe(false);
   });
 });
 

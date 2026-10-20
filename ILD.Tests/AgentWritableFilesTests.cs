@@ -1,3 +1,4 @@
+using System.Text;
 using ILD.Core.Services.Implementations;
 
 namespace ILD.Tests;
@@ -264,6 +265,73 @@ public sealed class AgentWritableFilesTests : IDisposable
     {
         Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(Path.Combine(_dir, "missing"), "extensions/ild.ts", TestContext.Current.CancellationToken));
         Assert.True(await AgentWritableFiles.DeleteInSubdirectoriesAsync(_dir, "extensions/ild.ts", TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WriteFileAsync_from_a_stream_that_breaks_off_midway_leaves_nothing_behind(bool cancelled)
+    {
+        var path = Path.Combine(_dir, "session.jsonl");
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var content = new BreakingStream(Encoding.UTF8.GetBytes(new string('x', 512 * 1024)), breakAt: 256 * 1024,
+            onBreak: cancelled ? cts.Cancel : (Action?)null);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => AgentWritableFiles.WriteFileAsync(path, content, cts.Token));
+
+        Assert.False(Path.Exists(path));
+        Assert.Empty(Directory.GetFileSystemEntries(_dir));
+    }
+
+    [Fact]
+    public async Task WriteFileAsync_from_a_stream_writes_every_byte()
+    {
+        var path = Path.Combine(_dir, "session.jsonl");
+        var bytes = Enumerable.Range(0, 3 * 256 * 1024).Select(i => (byte)(i * 7)).ToArray();
+
+        await AgentWritableFiles.WriteFileAsync(path, new MemoryStream(bytes), TestContext.Current.CancellationToken);
+
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+        Assert.Single(Directory.GetFileSystemEntries(_dir));
+    }
+
+    /// <summary>Yields its bytes up to <c>breakAt</c>, then fails as a broken database read or a cancellation would.</summary>
+    private sealed class BreakingStream(byte[] bytes, int breakAt, Action? onBreak) : Stream
+    {
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (_position >= breakAt)
+            {
+                if (onBreak is null) throw new IOException("the source broke off");
+                onBreak();
+                throw new OperationCanceledException();
+            }
+            var n = Math.Min(buffer.Length, breakAt - _position);
+            bytes.AsSpan(_position, n).CopyTo(buffer);
+            _position += n;
+            return n;
+        }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Read(buffer.Span));
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => Task.FromResult(Read(buffer.AsSpan(offset, count)));
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>A directory at <paramref name="path"/> with a read-only folder inside, as an agent could leave.</summary>

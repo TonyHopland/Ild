@@ -7,7 +7,11 @@ using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -515,8 +519,9 @@ public sealed class CodexAdapterTests : IDisposable
     {
         const string threadId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
         const string rollout = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"" + threadId + "\"}}\n{\"type\":\"response_item\"}\n";
-        var store = new FakeSnapshotStore();
+        using var store = new SnapshotDb();
         var runId = Guid.NewGuid();
+        await store.AddRunAsync(runId);
         var script = WriteCodex(Success("ok", threadId: threadId),
             writeRollout: ($"2026/10/14/rollout-2026-10-14T10-00-00-{threadId}.jsonl", rollout));
 
@@ -528,7 +533,8 @@ public sealed class CodexAdapterTests : IDisposable
 
         Assert.True(result.Success, result.Error);
         Assert.Equal(threadId, result.SessionId);
-        Assert.Equal(rollout, store.Get(runId, threadId));
+        Assert.Equal(rollout, await store.GetAsync(runId, threadId));
+        Assert.Equal("codex-jsonl", (await store.MetadataAsync(runId, threadId))?.Format);
     }
 
     [Theory]
@@ -538,9 +544,9 @@ public sealed class CodexAdapterTests : IDisposable
     {
         const string sessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
         var snapshot = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"" + sessionId + "\"}}\n";
-        var store = new FakeSnapshotStore();
+        using var store = new SnapshotDb();
         var runId = Guid.NewGuid();
-        store.Seed(runId, sessionId, snapshot);
+        await store.SeedAsync(runId, sessionId, snapshot);
         var existing = Path.Combine(_home, ".codex", "sessions", "2026", "09", "01", $"rollout-2026-09-01T08-00-00-{sessionId}.jsonl");
         if (rolloutExists)
         {
@@ -578,9 +584,9 @@ public sealed class CodexAdapterTests : IDisposable
         const string source = "0199a213-81c0-7800-8aa1-000000000001";
         const string fork = "0199a213-81c0-7800-8aa1-000000000002";
         var sourceRollout = "{\"type\":\"session_meta\",\"payload\":{\"id\":\"" + source + "\"}}\n";
-        var store = new FakeSnapshotStore();
+        using var store = new SnapshotDb();
         var runId = Guid.NewGuid();
-        store.Seed(runId, source, sourceRollout);
+        await store.SeedAsync(runId, source, sourceRollout);
         var script = WriteCodex(Success("ok", threadId: fork));
 
         var result = await Adapter(store).ExecuteAsync(Context(script) with
@@ -592,7 +598,7 @@ public sealed class CodexAdapterTests : IDisposable
         });
 
         Assert.True(result.Success, result.Error);
-        Assert.Equal(sourceRollout, store.Get(runId, source));
+        Assert.Equal(sourceRollout, await store.GetAsync(runId, source));
         var restored = Assert.Single(RolloutsSeenByCodex());
         Assert.EndsWith($"-{fork}.jsonl", restored);
         var copy = File.ReadAllText(restored);
@@ -607,7 +613,8 @@ public sealed class CodexAdapterTests : IDisposable
         var script = WriteCodex(Success("ok", threadId: "0199a213-81c0-7800-8aa1-bbab2a035a53"),
             writeRollout: ("2026/10/14/rollout-2026-10-14T10-00-00-0199a213-81c0-7800-8aa1-bbab2a035a53.jsonl", "{}\n"));
 
-        var result = await Adapter(new FakeSnapshotStore { Broken = true }).ExecuteAsync(Context(script) with
+        using var broken = new SnapshotDb(broken: true);
+        var result = await Adapter(broken).ExecuteAsync(Context(script) with
         {
             SessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53",
             ManageSession = true,
@@ -622,7 +629,8 @@ public sealed class CodexAdapterTests : IDisposable
     {
         var script = WriteCodex(Success("ok", threadId: "0199a213-81c0-7800-8aa1-000000000002"));
 
-        var result = await Adapter(new FakeSnapshotStore { Broken = true }).ExecuteAsync(Context(script) with
+        using var broken = new SnapshotDb(broken: true);
+        var result = await Adapter(broken).ExecuteAsync(Context(script) with
         {
             SessionId = "0199a213-81c0-7800-8aa1-000000000002",
             ForkFromSessionId = "0199a213-81c0-7800-8aa1-000000000001",
@@ -643,7 +651,8 @@ public sealed class CodexAdapterTests : IDisposable
         const string fresh = "0199a213-81c0-7800-8aa1-0000000000aa";
         var script = WriteCodex(Success("ok", threadId: fresh));
 
-        var result = await Adapter(new FakeSnapshotStore()).ExecuteAsync(Context(script) with
+        using var store = new SnapshotDb();
+        var result = await Adapter(store).ExecuteAsync(Context(script) with
         {
             SessionId = fork,
             ForkFromSessionId = "0199a213-81c0-7800-8aa1-000000000001",
@@ -665,7 +674,8 @@ public sealed class CodexAdapterTests : IDisposable
         const string fresh = "0199a213-81c0-7800-8aa1-0000000000bb";
         var script = WriteCodex(Success("ok", threadId: fresh));
 
-        var result = await Adapter(managed ? new FakeSnapshotStore() : null).ExecuteAsync(Context(script) with
+        using var store = new SnapshotDb();
+        var result = await Adapter(managed ? store : null).ExecuteAsync(Context(script) with
         {
             SessionId = sessionId,
             ManageSession = managed,
@@ -678,14 +688,82 @@ public sealed class CodexAdapterTests : IDisposable
         Assert.Contains(_logger.Warnings, w => w.Contains(sessionId));
     }
 
+    [Fact]
+    public async Task A_turn_that_extends_the_rollout_stores_only_what_it_added_and_a_lost_rollout_comes_back_byte_identical()
+    {
+        const string threadId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+        using var store = new SnapshotDb();
+        var runId = Guid.NewGuid();
+        await store.AddRunAsync(runId);
+        var rollout = Path.Combine(_home, ".codex", "sessions", "2026", "10", "14", $"rollout-2026-10-14T10-00-00-{threadId}.jsonl");
+        var first = await Adapter(store).ExecuteAsync(Context(WriteCodex(Success("ok", threadId: threadId),
+            writeRollout: ($"2026/10/14/rollout-2026-10-14T10-00-00-{threadId}.jsonl",
+                "{\"type\":\"session_meta\",\"payload\":{\"id\":\"" + threadId + "\"}}\n"))) with
+        {
+            RunContext = RunContext(runId, _worktree),
+            ManageSession = true,
+        });
+        Assert.True(first.Success, first.Error);
+        var afterFirst = await store.MetadataAsync(runId, threadId);
+
+        var second = await Adapter(store).ExecuteAsync(Context(WriteCodex(Success("ok", threadId: threadId),
+            appendRollout: (rollout, Lines(TaskStarted, TokenCount(150, 15))))) with
+        {
+            RunContext = RunContext(runId, _worktree),
+            SessionId = threadId,
+            ManageSession = true,
+        });
+        Assert.True(second.Success, second.Error);
+        var afterSecond = await store.MetadataAsync(runId, threadId);
+        var whole = File.ReadAllBytes(rollout);
+
+        Assert.NotNull(afterFirst);
+        Assert.NotNull(afterSecond);
+        Assert.Equal("codex-jsonl", afterSecond!.Format);
+        Assert.Equal(afterFirst!.ChunkCount + 1, afterSecond.ChunkCount);
+        Assert.Equal(whole.Length, afterSecond.ByteLength);
+
+        File.Delete(rollout);
+        var third = await Adapter(store).ExecuteAsync(Context(WriteCodex(Success("ok", threadId: threadId))) with
+        {
+            RunContext = RunContext(runId, _worktree),
+            SessionId = threadId,
+            ManageSession = true,
+        });
+
+        Assert.True(third.Success, third.Error);
+        Assert.Equal(whole, File.ReadAllBytes(Assert.Single(RolloutsSeenByCodex())));
+    }
+
+    [Fact]
+    public async Task A_stored_snapshot_of_another_format_is_never_restored_as_a_rollout()
+    {
+        const string sessionId = "0199a213-81c0-7800-8aa1-bbab2a035a53";
+        const string fresh = "0199a213-81c0-7800-8aa1-0000000000cc";
+        using var store = new SnapshotDb();
+        var runId = Guid.NewGuid();
+        await store.SeedAsync(runId, sessionId, "{\"format\":\"claude-jsonl\",\"events\":[]}", format: "raw");
+
+        var result = await Adapter(store).ExecuteAsync(Context(WriteCodex(Success("ok", threadId: fresh))) with
+        {
+            RunContext = RunContext(runId, _worktree),
+            SessionId = sessionId,
+            ManageSession = true,
+        });
+
+        Assert.True(result.Success, result.Error);
+        Assert.Empty(RolloutsSeenByCodex());
+        Assert.DoesNotContain("resume", Argv());
+    }
+
     // ---- helpers ----
 
-    private CodexAdapter Adapter(FakeSnapshotStore? store = null)
+    private CodexAdapter Adapter(SnapshotDb? store = null)
     {
         if (store is null)
             return new CodexAdapter(_logger, _environment);
         var services = new ServiceCollection();
-        services.AddSingleton<IAdapterSessionSnapshotStore>(store);
+        store.Register(services);
         var provider = services.BuildServiceProvider();
         return new CodexAdapter(provider.GetRequiredService<IServiceScopeFactory>(), _logger, _environment);
     }
@@ -896,42 +974,71 @@ public sealed class CodexAdapterTests : IDisposable
         }
     }
 
-    /// <summary>The snapshot store for runs, in memory; <see cref="Broken"/> makes every call throw.</summary>
-    private sealed class FakeSnapshotStore : IAdapterSessionSnapshotStore
+    /// <summary>
+    /// The real snapshot store on an in-memory database. A broken one has no schema,
+    /// so every call the adapter makes fails.
+    /// </summary>
+    private sealed class SnapshotDb : IDisposable
     {
-        private readonly Dictionary<(Guid, string, string), string> _snapshots = new();
+        private readonly SqliteConnection _connection = new("Filename=:memory:");
 
-        public bool Broken { get; init; }
-
-        public void Seed(Guid runId, string sessionId, string json) => _snapshots[(runId, "Codex", sessionId)] = json;
-
-        public string? Get(Guid runId, string sessionId)
-            => _snapshots.TryGetValue((runId, "Codex", sessionId), out var json) ? json : null;
-
-        public Task<AdapterSessionSnapshot?> GetAsync(Guid loopRunId, string adapterName, string sessionId, CancellationToken cancellationToken = default)
+        public SnapshotDb(bool broken = false)
         {
-            ThrowIfBroken();
-            return Task.FromResult(_snapshots.TryGetValue((loopRunId, adapterName, sessionId), out var json)
-                ? new AdapterSessionSnapshot { LoopRunId = loopRunId, AdapterName = adapterName, SessionId = sessionId, SessionJson = json }
-                : null);
+            _connection.Open();
+            if (broken) return;
+            using var db = CreateContext();
+            db.Database.EnsureCreated();
         }
 
-        public Task UpsertAsync(Guid loopRunId, string adapterName, string sessionId, string sessionJson, CancellationToken cancellationToken = default)
+        public void Register(IServiceCollection services)
         {
-            ThrowIfBroken();
-            _snapshots[(loopRunId, adapterName, sessionId)] = sessionJson;
-            return Task.CompletedTask;
+            services.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection));
+            services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
         }
 
-        public Task<AdapterSessionSnapshot?> GetForChatAsync(Guid chatSessionId, string adapterName, string sessionId, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("these tests run loop runs only");
-
-        public Task UpsertForChatAsync(Guid chatSessionId, string adapterName, string sessionId, string sessionJson, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("these tests run loop runs only");
-
-        private void ThrowIfBroken()
+        public async Task AddRunAsync(Guid runId)
         {
-            if (Broken) throw new InvalidOperationException("snapshot store down");
+            await using var db = CreateContext();
+            var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"template-{runId:N}", RecoveryPolicy = RecoveryPolicy.AutoResume };
+            var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+            db.LoopTemplates.Add(template);
+            db.LoopTemplateVersions.Add(version);
+            db.LoopRuns.Add(new LoopRun
+            {
+                Id = runId,
+                WorkItemId = Guid.NewGuid().ToString(),
+                LoopTemplateVersionId = version.Id,
+                Status = LoopRunStatus.Running,
+                RecoveryPolicy = RecoveryPolicy.AutoResume,
+            });
+            await db.SaveChangesAsync(TestContext.Current.CancellationToken);
         }
+
+        public async Task SeedAsync(Guid runId, string sessionId, string content, string format = "codex-jsonl")
+        {
+            await AddRunAsync(runId);
+            await using var db = CreateContext();
+            await SessionSnapshotTestSupport.SeedAsync(
+                new AdapterSessionSnapshotStore(db), Key(runId, sessionId), format, content, TestContext.Current.CancellationToken);
+        }
+
+        public async Task<string?> GetAsync(Guid runId, string sessionId)
+        {
+            await using var db = CreateContext();
+            return await SessionSnapshotTestSupport.ReadAllTextAsync(
+                new AdapterSessionSnapshotStore(db), Key(runId, sessionId), TestContext.Current.CancellationToken);
+        }
+
+        public async Task<SessionSnapshotMetadata?> MetadataAsync(Guid runId, string sessionId)
+        {
+            await using var db = CreateContext();
+            return await new AdapterSessionSnapshotStore(db).GetMetadataAsync(Key(runId, sessionId), TestContext.Current.CancellationToken);
+        }
+
+        public void Dispose() => _connection.Dispose();
+
+        private static SessionSnapshotKey Key(Guid runId, string sessionId) => SessionSnapshotKey.ForRun(runId, "Codex", sessionId);
+
+        private AppDbContext CreateContext() => new(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connection).Options);
     }
 }

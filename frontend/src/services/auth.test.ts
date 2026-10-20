@@ -90,6 +90,19 @@ describe("loopRunService URL contract", () => {
     );
     expect(init?.method).toBe("GET");
   });
+
+  test("getSessionPreview asks for the page that starts at the given offset", async () => {
+    fetchSpy.mockResolvedValue(okJsonResponse({}));
+
+    await loopRunService.getSessionPreview("abc-123", "OpenCode", "ses_1", 4096);
+
+    const [url] = fetchSpy.mock.calls[0];
+    const query = new URL(String(url), "http://host").searchParams;
+    expect(String(url)).toMatch(/^\/api\/v1\/loopruns\/abc-123\/sessions\/preview\?/);
+    expect(query.get("adapterName")).toBe("OpenCode");
+    expect(query.get("sessionId")).toBe("ses_1");
+    expect(query.get("fromOffset")).toBe("4096");
+  });
 });
 
 describe("workItemService URL contract", () => {
