@@ -6,6 +6,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -290,16 +291,10 @@ public sealed class PiAdapter : CliAgentAdapterBase
         if (localSessionPath is not null)
             return ManagedSessionRestoreResult.Use(sessionId, localSessionPath);
 
-        if (ScopeFactory is null)
-            return ManagedSessionRestoreResult.StartFresh();
-
-        var snapshot = await GetSnapshotAsync(ctx, sessionId, ctx.Cancel);
-        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
-            return ManagedSessionRestoreResult.StartFresh();
-
         var restoredPath = BuildSnapshotPath(sessionDirectory, sessionId);
-        await AgentWritableFiles.WriteFileAsync(restoredPath, snapshot.SessionJson, ctx.Cancel);
-        return ManagedSessionRestoreResult.Use(sessionId, restoredPath);
+        return await RestoreSessionFileAsync(ctx, sessionId, restoredPath, SessionSnapshotFormats.PiJsonl)
+            ? ManagedSessionRestoreResult.Use(sessionId, restoredPath)
+            : ManagedSessionRestoreResult.StartFresh();
     }
 
     private async Task PersistManagedSessionAsync(string sessionDirectory, string sessionId, AgentExecutionContext ctx)
@@ -311,11 +306,7 @@ public sealed class PiAdapter : CliAgentAdapterBase
         if (sessionPath is null)
             return;
 
-        var sessionJson = await AgentWritableFiles.ReadFileAsync(sessionPath, ctx.Cancel);
-        if (sessionJson is null)
-            return;
-
-        await UpsertSnapshotAsync(ctx, sessionId, sessionJson, ctx.Cancel);
+        await PersistSessionFileAsync(ctx, sessionId, sessionPath, SessionSnapshotFormats.PiJsonl, _logger);
     }
 
     private static async Task<PiExecutionOutput> ReadStdoutAsync(StreamReader reader, Func<string, Task>? progressCallback, Action<string>? onSessionId, CancellationToken ct)

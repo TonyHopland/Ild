@@ -1,10 +1,12 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.DTOs;
-using ILD.Data.Entities;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ILD.Core.Services.Implementations.Adapters;
 
@@ -180,43 +182,126 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     }
 
     /// <summary>
-    /// Fetch the managed-session snapshot for this adapter, keyed by this adapter's
-    /// <see cref="Name"/> and the execution's owner — a Chat Session when
-    /// <see cref="AgentExecutionContext.ChatSessionId"/> is set, otherwise the
-    /// LoopRun. Returns <c>null</c> when no DI scope is available (unit tests) or no
-    /// snapshot exists. Store exceptions propagate to the caller, matching the
-    /// previous per-adapter behavior.
+    /// The snapshot key for this adapter's session in the execution's owner — a Chat
+    /// Session when <see cref="AgentExecutionContext.ChatSessionId"/> is set, otherwise
+    /// the LoopRun.
     /// </summary>
-    protected async Task<AdapterSessionSnapshot?> GetSnapshotAsync(AgentExecutionContext ctx, string sessionId, CancellationToken ct)
-    {
-        if (ScopeFactory is null) return null;
-        await using var scope = ScopeFactory.CreateAsyncScope();
-        var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        return ctx.ChatSessionId is { } chatId
-            ? await store.GetForChatAsync(chatId, Name, sessionId, ct)
-            : await store.GetAsync(ctx.RunContext.LoopRunId, Name, sessionId, ct);
-    }
+    protected SessionSnapshotKey SnapshotKey(AgentExecutionContext ctx, string sessionId)
+        => ctx.ChatSessionId is { } chatId
+            ? SessionSnapshotKey.ForChat(chatId, Name, sessionId)
+            : SessionSnapshotKey.ForRun(ctx.RunContext.LoopRunId, Name, sessionId);
 
-    /// <summary>Persist a managed-session snapshot for this adapter's execution owner. No-ops without a DI scope.</summary>
-    protected async Task UpsertSnapshotAsync(AgentExecutionContext ctx, string sessionId, string sessionJson, CancellationToken ct)
+    /// <summary>
+    /// Save the session file at <paramref name="path"/> after a turn. When what is stored
+    /// is a prefix of the file — the file is at least as long and its bytes just before the
+    /// stored length hash to the stored tail hash — only what the file gained is appended;
+    /// otherwise (nothing stored yet, another format, a shorter or rewritten file) the whole
+    /// file replaces it. An append that loses a race is decided again once against fresh
+    /// metadata. Saving is observational: a failure is logged and never fails the turn.
+    /// No-ops without a DI scope.
+    /// </summary>
+    protected async Task PersistSessionFileAsync(AgentExecutionContext ctx, string sessionId, string path, string format, ILogger logger)
     {
         if (ScopeFactory is null) return;
+        try
+        {
+            await using var scope = ScopeFactory.CreateAsyncScope();
+            var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
+            var key = SnapshotKey(ctx, sessionId);
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                if (await SaveSessionFileAsync(store, key, path, format, ctx.Cancel) == SessionSnapshotAppendResult.Appended) return;
+            }
+            logger.LogWarning("The {Adapter} session {SessionId} changed in the store while it was being saved twice running, so this turn's save was skipped", Name, sessionId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not save the {Adapter} session {SessionId}: {Reason}", Name, sessionId, ex.Message);
+        }
+    }
+
+    private static async Task<SessionSnapshotAppendResult> SaveSessionFileAsync(
+        IAdapterSessionSnapshotStore store, SessionSnapshotKey key, string path, string format, CancellationToken ct)
+    {
+        // The session file sits where the agent can write, so it is only measured and
+        // read as the agent (see AgentWritableFiles), never through a link.
+        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not { } length) return SessionSnapshotAppendResult.Appended;
+
+        var stored = await store.GetMetadataAsync(key, ct);
+        if (stored is not null
+            && stored.Format == format
+            && length >= stored.ByteLength
+            && await TailHashAsync(path, stored.ByteLength, ct) == stored.TailHash)
+        {
+            if (length == stored.ByteLength) return SessionSnapshotAppendResult.Appended;
+
+            var tailHash = await TailHashAsync(path, length, ct);
+            var result = SessionSnapshotAppendResult.Conflict;
+            await AgentWritableFiles.ReadFileRangeAsync(path, stored.ByteLength, length - stored.ByteLength,
+                async added => result = await store.AppendAsync(key, format, added, stored.ByteLength, tailHash, ct));
+            return result;
+        }
+
+        await AgentWritableFiles.ReadFileRangeAsync(path, 0, length, whole => store.ReplaceAsync(key, format, whole, ct));
+        return SessionSnapshotAppendResult.Appended;
+    }
+
+    /// <summary>The <see cref="SessionSnapshotFormats.TailHash"/> of the file's bytes just before <paramref name="end"/>.</summary>
+    private static async Task<string> TailHashAsync(string path, long end, CancellationToken ct)
+    {
+        var length = Math.Min(end, SessionSnapshotFormats.TailWindow);
+        using var tail = new MemoryStream((int)length);
+        await AgentWritableFiles.ReadFileRangeAsync(path, end - length, length, content => content.CopyToAsync(tail, ct));
+        return SessionSnapshotFormats.TailHash(tail.GetBuffer().AsSpan(0, (int)tail.Length));
+    }
+
+    /// <summary>
+    /// Write the stored session back to <paramref name="path"/>, streamed from the store, when
+    /// one of <paramref name="format"/> is stored with content. A restore that fails midway
+    /// leaves no file there. Returns whether it wrote the file; false without a DI scope.
+    /// </summary>
+    protected async Task<bool> RestoreSessionFileAsync(AgentExecutionContext ctx, string sessionId, string path, string format)
+    {
+        if (ScopeFactory is null) return false;
         await using var scope = ScopeFactory.CreateAsyncScope();
         var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        if (ctx.ChatSessionId is { } chatId)
-            await store.UpsertForChatAsync(chatId, Name, sessionId, sessionJson, ct);
-        else
-            await store.UpsertAsync(ctx.RunContext.LoopRunId, Name, sessionId, sessionJson, ct);
+        var key = SnapshotKey(ctx, sessionId);
+        var stored = await store.GetMetadataAsync(key, ctx.Cancel);
+        if (stored is null || stored.Format != format || stored.ByteLength == 0) return false;
+
+        await using var content = await store.OpenReadAsync(key, 0, ctx.Cancel);
+        if (content is null) return false;
+        await AgentWritableFiles.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
+        await AgentWritableFiles.WriteFileAsync(path, content, ctx.Cancel);
+        return true;
+    }
+
+    /// <summary>
+    /// What <paramref name="parse"/> makes of the session file at <paramref name="path"/>,
+    /// read line by line as the agent without holding the file whole; the default when
+    /// there is no regular file there.
+    /// </summary>
+    protected static async Task<T?> ParseSessionFileAsync<T>(string path, Func<TextReader, T> parse, CancellationToken ct)
+    {
+        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not { } length) return default;
+        T? result = default;
+        await AgentWritableFiles.ReadFileRangeAsync(path, 0, length, content =>
+        {
+            using var reader = new StreamReader(content, Encoding.UTF8);
+            result = parse(reader);
+            return Task.CompletedTask;
+        });
+        return result;
     }
 
     /// <summary>
     /// Fork primitive shared by every CLI adapter: materialize a copy of the
     /// <paramref name="sourceSessionId"/> snapshot under <paramref name="destSessionId"/>,
-    /// rewriting the transcript's embedded session ids to the destination so each
-    /// CLI accepts the copy as its own resumable session. The source snapshot is
-    /// only read, never written — leaving it byte-for-byte unchanged. After this
-    /// call the adapter's normal restore path (keyed by the destination id)
-    /// rehydrates the on-disk session and the CLI continues on the copy.
+    /// with the transcript's embedded session ids rewritten to the destination so each
+    /// CLI accepts the copy as its own resumable session. The store streams the copy a
+    /// chunk at a time; the source is only read, never written. After this call the
+    /// adapter's normal restore path (keyed by the destination id) rehydrates the
+    /// on-disk session and the CLI continues on the copy.
     /// </summary>
     /// <returns>
     /// <c>true</c> when a copy was materialized; <c>false</c> when there is no DI
@@ -228,30 +313,10 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         if (ScopeFactory is null) return false;
         await using var scope = ScopeFactory.CreateAsyncScope();
         var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
-        var source = await store.GetAsync(loopRunId, Name, sourceSessionId, ct);
-        if (source is null || string.IsNullOrWhiteSpace(source.SessionJson)) return false;
-
-        var copy = RewriteSessionTranscript(source.SessionJson, sourceSessionId, destSessionId);
-        await store.UpsertAsync(loopRunId, Name, destSessionId, copy, ct);
-        return true;
-    }
-
-    /// <summary>
-    /// Rewrite a session snapshot so every occurrence of the source session id
-    /// becomes the destination id. Session ids are opaque, unique tokens (GUIDs /
-    /// ULIDs), so a textual replace correctly retargets both the wrapping
-    /// metadata and the per-event/per-message references across every adapter's
-    /// snapshot format (claude wrapped JSONL, pi raw JSONL, opencode export JSON)
-    /// without parsing each shape. Returns the input unchanged when either id is
-    /// blank or they are equal.
-    /// </summary>
-    public static string RewriteSessionTranscript(string sessionJson, string sourceSessionId, string destSessionId)
-    {
-        if (string.IsNullOrEmpty(sessionJson)
-            || string.IsNullOrEmpty(sourceSessionId)
-            || string.Equals(sourceSessionId, destSessionId, StringComparison.Ordinal))
-            return sessionJson;
-        return sessionJson.Replace(sourceSessionId, destSessionId, StringComparison.Ordinal);
+        return await store.ForkAsync(
+            SessionSnapshotKey.ForRun(loopRunId, Name, sourceSessionId),
+            SessionSnapshotKey.ForRun(loopRunId, Name, destSessionId),
+            ct);
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 
 namespace ILD.Core.Services.Implementations;
@@ -56,6 +57,89 @@ public static class AgentWritableFiles
     /// </summary>
     public static Task WriteFileAsync(string path, string content, CancellationToken ct = default)
         => RunCheckedAsync($"""p="$1"; {Remove} && set -C && cat > "$p" """, [path], content, ct);
+
+    /// <summary>
+    /// Replace whatever is at <paramref name="path"/> with a file holding everything
+    /// <paramref name="content"/> yields. The bytes go to a new sibling file first, created
+    /// exclusively, which is renamed onto the path only once the stream has ended; a stream
+    /// that fails or is cancelled midway leaves nothing behind, not even a partial file.
+    /// </summary>
+    public static async Task WriteFileAsync(string path, Stream content, CancellationToken ct = default)
+    {
+        var temporary = $"{path}.ild-restore-{Guid.NewGuid():N}";
+        try
+        {
+            using (var process = Process.Start(BuildStartInfo(
+                       """set -C && exec cat > "$1" """, [temporary], AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
+                   ?? throw new IOException("could not start /bin/sh"))
+            {
+                var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
+                try
+                {
+                    await content.CopyToAsync(process.StandardInput.BaseStream, ct);
+                }
+                catch
+                {
+                    // cat then ends a partial file that is never renamed into place, and goes below.
+                    try { process.StandardInput.Close(); } catch (IOException) { }
+                    await process.WaitForExitAsync(CancellationToken.None);
+                    throw;
+                }
+                process.StandardInput.Close();
+                await process.WaitForExitAsync(ct);
+                if (process.ExitCode != 0)
+                    throw new IOException($"'{temporary}': {(await stderr).Trim()} (exit {process.ExitCode})");
+            }
+
+            await RunCheckedAsync($$"""p="$1"; {{Remove}} && exec mv -fT -- "$2" "$1" """, [path, temporary], stdin: null, ct);
+        }
+        catch
+        {
+            await DeleteAsync([temporary], CancellationToken.None);
+            throw;
+        }
+    }
+
+    /// <summary>The length of the regular file at <paramref name="path"/>, or null when there is none; a link is never followed.</summary>
+    public static async Task<long?> GetFileLengthAsync(string path, CancellationToken ct = default)
+    {
+        var result = await RunAsync("""[ -f "$1" ] && [ ! -L "$1" ] || exit 3; exec wc -c < "$1" """, [path], stdin: null, ct);
+        if (result.ExitCode == 3) return null;
+        if (result.ExitCode != 0 || !long.TryParse(result.Stdout.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var length))
+            throw new IOException($"'{path}': {result.Stderr.Trim()} (exit {result.ExitCode})");
+        return length;
+    }
+
+    /// <summary>
+    /// Hand <paramref name="consume"/> a stream of exactly <paramref name="count"/> bytes of the
+    /// regular file at <paramref name="path"/>, starting at <paramref name="offset"/>. A link is
+    /// never read through. The stream throws if the file is gone or ends before the range does,
+    /// so a consumer that reads it to the end never takes a short read for the whole range.
+    /// </summary>
+    public static async Task ReadFileRangeAsync(string path, long offset, long count, Func<Stream, Task> consume)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
+        using var process = Process.Start(BuildStartInfo(
+                """[ -f "$1" ] && [ ! -L "$1" ] || exit 3; tail -c "+$2" -- "$1" | head -c "$3" """,
+                [path, (offset + 1).ToString(CultureInfo.InvariantCulture), count.ToString(CultureInfo.InvariantCulture)],
+                AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
+            ?? throw new IOException("could not start /bin/sh");
+        process.StandardInput.Close();
+        var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        try
+        {
+            await consume(new ExactLengthStream(process.StandardOutput.BaseStream, count, path));
+        }
+        finally
+        {
+            // A consumer that stopped early leaves head writing to a pipe nobody reads;
+            // closing it ends head and tail without having to signal the agent's processes.
+            process.StandardOutput.Dispose();
+            await process.WaitForExitAsync(CancellationToken.None);
+            await stderr;
+        }
+    }
 
     /// <summary>Whether a regular file, not a link, is at <paramref name="path"/>.</summary>
     public static async Task<bool> FileExistsAsync(string path, CancellationToken ct = default)
@@ -186,5 +270,47 @@ public static class AgentWritableFiles
                 script, arguments, AgentIsolation.AgentUser, AgentIsolation.AgentGroup, AgentIsolation.AgentHome))
             ?? throw new IOException("could not start /bin/sh");
         return await AgentProcess.RunAsync(process, stdin, ct);
+    }
+
+    /// <summary>Exactly <c>length</c> bytes of a stream, failing if it ends sooner.</summary>
+    private sealed class ExactLengthStream(Stream inner, long length, string path) : Stream
+    {
+        private long _read;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => length;
+        public override long Position { get => _read; set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            if (_read == length || buffer.IsEmpty) return 0;
+            return Took(inner.Read(buffer[..(int)Math.Min(buffer.Length, length - _read)]));
+        }
+
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_read == length || buffer.IsEmpty) return 0;
+            return Took(await inner.ReadAsync(buffer[..(int)Math.Min(buffer.Length, length - _read)], cancellationToken));
+        }
+
+        private int Took(int read)
+        {
+            if (read == 0)
+                throw new IOException($"'{path}' ended {length - _read} byte(s) before the range read from it, or is gone.");
+            _read += read;
+            return read;
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

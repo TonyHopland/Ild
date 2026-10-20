@@ -5,6 +5,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -274,22 +275,33 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         if (ScopeFactory is null || string.IsNullOrEmpty(sessionId))
             return ManagedSessionRestoreResult.Use(sessionId);
 
-        var snapshot = await GetSnapshotAsync(ctx, sessionId, ctx.Cancel);
-        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson))
+        await using var scope = ScopeFactory.CreateAsyncScope();
+        var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
+        var key = SnapshotKey(ctx, sessionId);
+        var stored = await store.GetMetadataAsync(key, ctx.Cancel);
+        if (stored is null || stored.ByteLength == 0)
             return ManagedSessionRestoreResult.Use(sessionId);
 
         var localSession = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx, ["export", sessionId]);
         if (localSession.ExitCode == 0 && !string.IsNullOrWhiteSpace(localSession.Stdout))
             return ManagedSessionRestoreResult.Use(sessionId);
 
-        if (!IsValidJson(snapshot.SessionJson))
+        if (stored.Format != SessionSnapshotFormats.OpenCodeJson)
             return ManagedSessionRestoreResult.StartFresh();
 
+        // The store is the session's source of truth: its content is streamed into the
+        // file opencode imports, never held whole. A copy that does not import starts afresh.
         var tempFile = Path.Combine(Path.GetTempPath(), $"ild-opencode-session-{Guid.NewGuid():N}.json");
-        await File.WriteAllTextAsync(tempFile, snapshot.SessionJson, ctx.Cancel);
-
         try
         {
+            await using (var content = await store.OpenReadAsync(key, 0, ctx.Cancel))
+            {
+                if (content is null)
+                    return ManagedSessionRestoreResult.StartFresh();
+                await using var file = new FileStream(tempFile, FileMode.CreateNew, FileAccess.Write);
+                await content.CopyToAsync(file, ctx.Cancel);
+            }
+
             var importResult = await RunOpencodeCommandAsync(binaryPath, worktreePath, ctx, ["import", tempFile]);
             if (importResult.ExitCode != 0)
                 return ManagedSessionRestoreResult.StartFresh();
@@ -317,7 +329,12 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         if (!IsValidJson(sessionJson))
             return ($"[opencode-error] failed to export managed session '{sessionId}': invalid JSON returned ({sessionJson.Length} chars)", null);
 
-        await UpsertSnapshotAsync(ctx, sessionId, sessionJson, ctx.Cancel);
+        await using (var scope = ScopeFactory.CreateAsyncScope())
+        using (var content = new MemoryStream(Encoding.UTF8.GetBytes(sessionJson)))
+        {
+            await scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>()
+                .ReplaceAsync(SnapshotKey(ctx, sessionId), SessionSnapshotFormats.OpenCodeJson, content, ctx.Cancel);
+        }
         return (null, sessionJson);
     }
 

@@ -1,12 +1,11 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
-using ILD.Data.Stores.Interfaces;
+using ILD.Data.Stores;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -501,27 +500,14 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
         var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
         if (path is null || await AgentWritableFiles.FileExistsAsync(path, ctx.Cancel)) return;
 
-        AdapterSessionSnapshot? snapshot;
         try
         {
-            snapshot = await GetSnapshotAsync(ctx, sessionId, ctx.Cancel);
+            await RestoreSessionFileAsync(ctx, sessionId, path, SessionSnapshotFormats.ClaudeJsonl);
         }
-        catch
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return;
+            _logger.LogWarning(ex, "Could not restore Claude session {SessionId}, so it resumes without its saved history: {Reason}", sessionId, ex.Message);
         }
-
-        if (snapshot is null || string.IsNullOrWhiteSpace(snapshot.SessionJson)) return;
-
-        var jsonl = UnwrapJsonl(snapshot.SessionJson);
-        if (jsonl is null) return;
-
-        try
-        {
-            await AgentWritableFiles.CreateDirectoryAsync(Path.GetDirectoryName(path)!, ctx.Cancel);
-            await AgentWritableFiles.WriteFileAsync(path, jsonl, ctx.Cancel);
-        }
-        catch (IOException) { }
     }
 
     /// <summary>The cost the session's transcript says it reached, or zero when there is none or it cannot be read (logged).</summary>
@@ -532,7 +518,7 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
         try
         {
-            return AdapterUsageParser.ParseClaudeSessionCostBefore(await AgentWritableFiles.ReadFileAsync(path, ct), sessionId);
+            return await ParseSessionFileAsync(path, transcript => AdapterUsageParser.ParseClaudeSessionCostBefore(transcript, sessionId), ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -543,25 +529,10 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
 
     private async Task TryPersistSessionJsonlAsync(AgentExecutionContext ctx, string sessionId, string worktreePath)
     {
-        if (ScopeFactory is null) return;
-
         var path = GetSessionFilePath(worktreePath, sessionId, AgentIsolation.AgentUser, AgentIsolation.AgentHome, EnvironmentVariables);
         if (path is null) return;
 
-        var jsonl = await AgentWritableFiles.ReadFileAsync(path, ctx.Cancel);
-        if (jsonl is null) return;
-
-        var wrapped = WrapJsonl(sessionId, jsonl);
-
-        try
-        {
-            await UpsertSnapshotAsync(ctx, sessionId, wrapped, ctx.Cancel);
-        }
-        catch
-        {
-            // Snapshot persistence is observational — never fail a run because
-            // the UI-facing snapshot couldn't be written.
-        }
+        await PersistSessionFileAsync(ctx, sessionId, path, SessionSnapshotFormats.ClaudeJsonl, _logger);
     }
 
     // Claude keeps its sessions under the HOME it runs with, which under uid
@@ -589,54 +560,6 @@ public sealed class ClaudeCodeAdapter : CliAgentAdapterBase
     // snapshot persist/restore silently no-op'd. If Anthropic ever changes the
     // rule, restore/persist still no-op (path miss) rather than misbehave.
     public static string EncodeWorktreePath(string path) => path.Replace('/', '-').Replace('.', '-');
-
-    public static string WrapJsonl(string sessionId, string jsonl)
-    {
-        var events = new JsonArray();
-        using var reader = new StringReader(jsonl);
-        string? line;
-        while ((line = reader.ReadLine()) is not null)
-        {
-            line = line.Trim();
-            if (line.Length == 0) continue;
-            try
-            {
-                var node = JsonNode.Parse(line);
-                if (node is not null) events.Add(node);
-            }
-            catch (JsonException)
-            {
-                // Skip malformed lines; the wrapper is a UI-facing summary,
-                // not a faithful copy.
-            }
-        }
-
-        var obj = new JsonObject
-        {
-            ["format"] = "claude-jsonl",
-            ["sessionId"] = sessionId,
-            ["events"] = events,
-        };
-        return obj.ToJsonString();
-    }
-
-    public static string? UnwrapJsonl(string sessionJson)
-    {
-        if (string.IsNullOrWhiteSpace(sessionJson)) return null;
-        try
-        {
-            using var doc = JsonDocument.Parse(sessionJson);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
-            if (!doc.RootElement.TryGetProperty("events", out var events)
-                || events.ValueKind != JsonValueKind.Array) return null;
-
-            var sb = new StringBuilder();
-            foreach (var evt in events.EnumerateArray())
-                sb.AppendLine(evt.GetRawText());
-            return sb.ToString();
-        }
-        catch (JsonException) { return null; }
-    }
 
     private sealed record ClaudeStreamOutput(
         string RawStdout,

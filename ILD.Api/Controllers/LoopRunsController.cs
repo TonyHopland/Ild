@@ -149,7 +149,7 @@ public class LoopRunsController : ControllerBase
         // Eager-load the template node so the projection can surface each run
         // node's NodeType — the live-view Halt affordance is AI-node only.
         var runNodes = await _loopRunStore.GetRunNodesWithNodeAsync(guid);
-        var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
+        var sessionSnapshots = await _sessionSnapshotStore.ListMetadataForRunAsync(guid);
         var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
         var variables = await _loopRunStore.GetVariablesAsync(guid);
         var missingGlobals = await MissingGlobalVariablesAsync(run, new ParkReads(_templates, _globals));
@@ -208,6 +208,10 @@ public class LoopRunsController : ControllerBase
                 sessionId = s.SessionId,
                 createdAt = s.CreatedAt,
                 updatedAt = s.UpdatedAt,
+                // Unknown until the row's content is converted, so shown as nothing rather than guessed.
+                format = s.Unconverted ? null : s.Format,
+                byteLength = s.Unconverted ? (long?)null : s.ByteLength,
+                eventCount = s.Unconverted ? (int?)null : s.EventCount,
                 isCurrent = currentSessionIds.Contains($"{s.AdapterName}\n{s.SessionId}"),
                 placeholders = sessionBindings
                     .Where(b => b.AdapterName == s.AdapterName && b.SessionId == s.SessionId)
@@ -456,11 +460,22 @@ public class LoopRunsController : ControllerBase
         return Ok(new { runId = guid, messages = page.Messages, lastEventId = page.LastEventId });
     }
 
+    private const int DefaultPreviewEvents = 200;
+    private const int MaxPreviewEvents = 500;
+
+    /// <summary>
+    /// A page of a saved session's raw lines: up to <paramref name="limit"/> lines from the
+    /// raw byte offset <paramref name="fromOffset"/> (from the start by default), or the last
+    /// <paramref name="tail"/> lines. Only the chunks holding them are read.
+    /// </summary>
     [HttpGet("{id}/sessions/preview")]
     public async Task<IActionResult> GetSessionPreview(
         string id,
         [FromQuery] string adapterName,
-        [FromQuery] string sessionId)
+        [FromQuery] string sessionId,
+        [FromQuery] long? fromOffset = null,
+        [FromQuery] int? limit = null,
+        [FromQuery] int? tail = null)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
@@ -468,9 +483,23 @@ public class LoopRunsController : ControllerBase
         if (string.IsNullOrWhiteSpace(adapterName) || string.IsNullOrWhiteSpace(sessionId))
             return BadRequest(new { error = "adapterName and sessionId are required" });
 
-        var snapshot = await _sessionSnapshotStore.GetAsync(guid, adapterName, sessionId);
+        if (tail is not null && (fromOffset is not null || limit is not null))
+            return BadRequest(new { error = "tail cannot be combined with fromOffset or limit" });
+        if (tail is < 1 or > MaxPreviewEvents || limit is < 1 or > MaxPreviewEvents)
+            return BadRequest(new { error = $"limit and tail must be between 1 and {MaxPreviewEvents}" });
+        if (fromOffset < 0)
+            return BadRequest(new { error = "fromOffset must not be negative" });
+
+        var key = SessionSnapshotKey.ForRun(guid, adapterName, sessionId);
+        var snapshot = await _sessionSnapshotStore.GetMetadataAsync(key);
         if (snapshot == null)
             return NotFound(new { error = "Session snapshot not found" });
+        if (fromOffset > snapshot.ByteLength)
+            return BadRequest(new { error = "fromOffset is past the end of the session" });
+
+        var page = tail is { } lastLines
+            ? await _sessionSnapshotStore.ReadTailAsync(key, lastLines)
+            : await _sessionSnapshotStore.ReadRangeAsync(key, fromOffset ?? 0, limit ?? DefaultPreviewEvents);
 
         return Ok(new
         {
@@ -478,7 +507,12 @@ public class LoopRunsController : ControllerBase
             sessionId = snapshot.SessionId,
             createdAt = snapshot.CreatedAt,
             updatedAt = snapshot.UpdatedAt,
-            sessionJson = snapshot.SessionJson,
+            format = snapshot.Format,
+            byteLength = snapshot.ByteLength,
+            eventCount = snapshot.EventCount,
+            events = page.Events,
+            fromOffset = page.FromOffset,
+            nextOffset = page.NextOffset,
         });
     }
 
