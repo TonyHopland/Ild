@@ -51,6 +51,21 @@ it creates the cluster, and nothing connects as the superuser afterwards.
 Setting `ILD_SESSION_TOKEN_PEPPER` for the first time signs every device out once; that
 is expected and costs a re-login.
 
+The release that stores saved AI sessions in compressed chunks converts the existing
+ones in the background after startup, one at a time; the app is usable meanwhile. When
+the log shows `Session snapshot conversion finished: … none left`, give the space the
+old transcripts held back to the disk, since Postgres keeps it otherwise:
+
+```sh
+docker compose exec postgres psql -U ild_core -d IldCore -c 'VACUUM FULL "AdapterSessionSnapshots";'
+```
+
+`VACUUM FULL` locks the table while it runs, so saving and opening sessions waits for it;
+`pg_repack` does the same without the lock if you have it installed. If the line reports
+snapshots left unconverted, the warnings before it name them and the next start retries
+them; vacuum after a start that leaves none. A later release drops the old column once
+every installation has converted.
+
 ## Worktree preview proxy
 
 A [Worktree Preview](../CONTEXT.md) binds each of its services to a port picked at

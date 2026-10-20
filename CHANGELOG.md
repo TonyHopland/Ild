@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Opening a saved AI session shows it a page at a time, with its size and number of events.**
+
 - **Agents can propose a small loop template change without resending the whole template.**
 
 - **A work item's History tab shows who changed what on it, when and why.**
