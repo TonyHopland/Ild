@@ -127,16 +127,31 @@ function marks(el: Element) {
 }
 
 describe("WorkItemModalV2 History tab", () => {
-  test("History sits between Runs and Files", async () => {
-    mockServices(async () => []);
-    await renderDialog(makeWorkItem());
-
-    const names = screen.getAllByRole("tab").map((t) =>
+  const tabNames = () =>
+    screen.getAllByRole("tab").map((t) =>
       text(t)
         .replace(/\s*\(\d+\)/, "")
         .replace(/\s*●/, ""),
     );
-    expect(names).toEqual(["Overview", "Action", "Runs", "History", "Files", "Preview"]);
+
+  test("History is the last tab, after Terminal when there is one", async () => {
+    mockServices(async () => []);
+    const view = await renderDialog(makeWorkItem());
+    expect(tabNames()).toEqual(["Overview", "Action", "Runs", "Files", "Preview", "History"]);
+    view.unmount();
+
+    await renderDialog(
+      makeWorkItem({ id: "wi-2", currentLoopRunId: "run-1", worktreePath: "/worktrees/wi-2" }),
+    );
+    expect(tabNames()).toEqual([
+      "Overview",
+      "Action",
+      "Runs",
+      "Files",
+      "Preview",
+      "Terminal",
+      "History",
+    ]);
   });
 
   test("lists one group per save, newest first, with the actor, a relative time and each change", async () => {

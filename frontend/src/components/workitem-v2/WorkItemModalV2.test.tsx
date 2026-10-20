@@ -147,6 +147,7 @@ function mockServices(runs: LoopRun[] = [makeRun()]) {
   vi.spyOn(authServices.aiProviderService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getRuns").mockResolvedValue(runs);
   vi.spyOn(authServices.workItemService, "getDependencies").mockResolvedValue([]);
+  vi.spyOn(authServices.workItemService, "getHistory").mockResolvedValue([]);
   vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([]);
   vi.spyOn(authServices.loopRunService, "getById").mockResolvedValue(runs[0] ?? makeRun());
   vi.spyOn(authServices.loopRunService, "getConversation").mockImplementation(async (runId) => ({
@@ -329,12 +330,12 @@ describe("WorkItemModalV2", () => {
       fireEvent.keyDown(overview, { key: "End" });
       await Promise.resolve();
     });
-    const preview = screen.getByRole("tab", { name: /Preview/ });
-    expect(preview.getAttribute("aria-selected")).toBe("true");
-    expect(document.activeElement).toBe(preview);
+    const history = screen.getByRole("tab", { name: "History" });
+    expect(history.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(history);
 
     await act(async () => {
-      fireEvent.keyDown(preview, { key: "Home" });
+      fireEvent.keyDown(history, { key: "Home" });
       await Promise.resolve();
     });
     expect(screen.getByRole("tab", { name: "Overview" }).getAttribute("aria-selected")).toBe(
