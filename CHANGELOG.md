@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A work item's History tab shows who changed what on it, when and why.**
 
+### Fixed
+
+- **Previews and agents can send one plain-HTTP request after another through the network proxy, as a tool-calling chat with a local model does.**
+
 ## [0.18.0] - 2026-10-18
 
 ### Added

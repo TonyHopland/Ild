@@ -46,6 +46,12 @@ public sealed class EgressRelay
     /// that window closes the connection rather than completing a handshake the
     /// policy has already withdrawn.
     /// </para>
+    ///
+    /// <para>
+    /// <paramref name="copyRequest"/> and <paramref name="copyResponse"/> replace
+    /// the byte-for-byte copy of one direction (from, to, token) for a caller that
+    /// must look at what it relays; null copies untouched.
+    /// </para>
     /// </summary>
     public async Task RelayAsync(
         NetworkStream client,
@@ -54,7 +60,9 @@ public sealed class EgressRelay
         int port,
         Guid? aiProviderId,
         CancellationToken stoppingToken,
-        Func<CancellationToken, Task>? onOpen = null)
+        Func<CancellationToken, Task>? onOpen = null,
+        Func<NetworkStream, NetworkStream, CancellationToken, Task>? copyRequest = null,
+        Func<NetworkStream, NetworkStream, CancellationToken, Task>? copyResponse = null)
     {
         var id = Interlocked.Increment(ref _nextTunnelId);
         using var tunnel = new Tunnel(host, port, aiProviderId, stoppingToken);
@@ -69,8 +77,8 @@ public sealed class EgressRelay
             // passed on as a send-shutdown rather than ending the whole tunnel.
             // A failure (reset, cancellation) on either side ends both.
             await Task.WhenAll(
-                PumpAsync(client, upstream, tunnel),
-                PumpAsync(upstream, client, tunnel)).ConfigureAwait(false);
+                PumpAsync(client, upstream, tunnel, copyRequest),
+                PumpAsync(upstream, client, tunnel, copyResponse)).ConfigureAwait(false);
         }
         finally
         {
@@ -109,11 +117,15 @@ public sealed class EgressRelay
             tunnel.Reset();
     }
 
-    private static async Task PumpAsync(NetworkStream from, NetworkStream to, Tunnel tunnel)
+    private static async Task PumpAsync(NetworkStream from, NetworkStream to, Tunnel tunnel,
+        Func<NetworkStream, NetworkStream, CancellationToken, Task>? copy)
     {
         try
         {
-            await from.CopyToAsync(to, tunnel.Token).ConfigureAwait(false);
+            if (copy is null)
+                await from.CopyToAsync(to, tunnel.Token).ConfigureAwait(false);
+            else
+                await copy(from, to, tunnel.Token).ConfigureAwait(false);
             to.Socket.Shutdown(SocketShutdown.Send);
         }
         catch (Exception)
