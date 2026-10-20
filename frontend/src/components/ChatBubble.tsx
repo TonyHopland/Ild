@@ -22,6 +22,7 @@ import {
 import { useChatInbox } from "./ChatInbox";
 import { UnreadDot } from "./ChatRename";
 import ChatWorkspace from "./ChatWorkspace";
+import Icon from "./Icon";
 import "./ChatBubble.css";
 
 // Treat tiny pointer movements as a click, not a drag, so the icon still opens
@@ -241,7 +242,7 @@ export default function ChatBubble() {
                 aria-describedby={showUnreadBadge ? unreadBadgeId : undefined}
                 onClick={() => setSidebarOpen(!sidebarOpen)}
               >
-                ☰
+                <Icon name="menu" />
                 {showUnreadBadge && (
                   <span id={unreadBadgeId} className="chat-sidebar-badge">
                     {unreadCount}

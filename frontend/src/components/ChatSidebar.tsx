@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { chatService } from "../services/auth";
 import type { ChatSessionSummary } from "../types";
 import { formatRelativeTime } from "../utils/relativeTime";
+import Icon from "./Icon";
 import { RenameForm, UnreadDot, useTitleEdit, type RenameChat } from "./ChatRename";
 
 const SEARCH_DEBOUNCE_MS = 300;
@@ -151,7 +152,7 @@ function ChatSessionRow({
               aria-expanded={menuOpen}
               onClick={() => onMenu(chat.id, !menuOpen)}
             >
-              ⋯
+              <Icon name="dots" />
             </button>
             {menuOpen && (
               <div
