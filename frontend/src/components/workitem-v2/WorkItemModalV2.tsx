@@ -378,6 +378,7 @@ export default function WorkItemModalV2({
           feedbackPrompt={feedbackPrompt}
           active={activeTab === "action"}
           revealGlobalProposalId={revealGlobalProposalId}
+          onShowRuns={() => setActiveTab("runs")}
         />
       </section>
       <section
@@ -462,7 +463,15 @@ export default function WorkItemModalV2({
         className="wiv2-tabpanel"
         hidden={activeTab !== "history"}
       >
-        <HistoryPanel key={workItem.id} workItem={workItem} active={activeTab === "history"} />
+        <HistoryPanel
+          key={workItem.id}
+          workItem={workItem}
+          active={activeTab === "history"}
+          repositoryName={(id) =>
+            detail.repositories.find((r) => r.id === id)?.name ??
+            (detail.repositories.length > 0 ? "Unknown repository" : id)
+          }
+        />
       </section>
     </>
   );

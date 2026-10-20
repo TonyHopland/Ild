@@ -1165,6 +1165,48 @@ describe("WorkItemModalV2", () => {
     ]);
   });
 
+  test("a repository id that matches no repository reads Unknown repository, with the id on hover", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ repositoryId: "33b2fcb6-gone" }));
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    await waitFor(() => expect(within(overview).getByText("Unknown repository")).toBeTruthy());
+    expect(within(overview).getByText("Unknown repository").getAttribute("title")).toBe(
+      "33b2fcb6-gone",
+    );
+    expect(within(overview).queryByText("33b2fcb6-gone")).toBeNull();
+  });
+
+  test("a known repository is shown by name", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    await waitFor(() => expect(within(overview).getByText("my-repo")).toBeTruthy());
+  });
+
+  test("items waiting on this one are listed under Blocks, by title", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+      makeWorkItem({ id: "wi-9", title: "Waiting item" }),
+    ]);
+    await renderDialog(makeWorkItem({ dependentIds: ["wi-9", "wi-404"] }));
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    await waitFor(() => expect(within(overview).getByText("Blocks")).toBeTruthy());
+    expect(within(overview).getByRole("link", { name: "Waiting item" })).toBeTruthy();
+    // One not among the loaded items is shown by its number, not guessed at.
+    expect(within(overview).getByRole("link", { name: "#wi-404" })).toBeTruthy();
+  });
+
+  test("an item nothing waits on has no Blocks row", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    expect(within(overview).queryByText("Blocks")).toBeNull();
+  });
+
   test("an item that never had a PR still shows the empty state", async () => {
     mockServices();
     await renderDialog(

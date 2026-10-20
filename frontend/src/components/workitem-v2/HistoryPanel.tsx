@@ -96,8 +96,23 @@ function PullRequestLink({ url }: { url: string }) {
  * One field of a save: the change it made, or for a Created, Baseline or Deleted
  * save its value. An event has no earlier value to compare with.
  */
-function FieldChange({ entry }: { entry: WorkItemHistoryEntry }) {
+function FieldChange({
+  entry,
+  repositoryName,
+}: {
+  entry: WorkItemHistoryEntry;
+  repositoryName?: (id: string) => string;
+}) {
   const change = entry.kind === "Changed";
+  // A repository is recorded by id; it is shown by name, as the Overview does.
+  if (entry.field === "repository" && repositoryName) {
+    const name = (id: string | null) => (id ? repositoryName(id) : id);
+    return change ? (
+      <OldToNew before={name(entry.oldValue)} after={name(entry.newValue)} />
+    ) : (
+      <Value value={name(entry.newValue)} />
+    );
+  }
   if (isPullRequestEvent(entry.field)) return <PullRequestLink url={entry.newValue ?? ""} />;
   if (entry.field === "description")
     return change ? (
@@ -146,7 +161,15 @@ function describeChanges(entries: WorkItemHistoryEntry[]): string {
   return parts.join(" and ");
 }
 
-function SaveEvent({ save, now }: { save: Save; now: number }) {
+function SaveEvent({
+  save,
+  now,
+  repositoryName,
+}: {
+  save: Save;
+  now: number;
+  repositoryName?: (id: string) => string;
+}) {
   const first = save.entries[0];
   const shown = first.kind === "Changed" ? save.entries : save.entries.filter((e) => !isUnset(e));
   const what =
@@ -189,7 +212,7 @@ function SaveEvent({ save, now }: { save: Save; now: number }) {
           <div key={entry.field} className="wiv2-history-field">
             <dt>{fieldLabel(entry.field)}</dt>
             <dd>
-              <FieldChange entry={entry} />
+              <FieldChange entry={entry} repositoryName={repositoryName} />
               {entry.reason && <div className="wiv2-history-reason">{entry.reason}</div>}
             </dd>
           </div>
@@ -214,9 +237,12 @@ interface HistoryState {
 export default function HistoryPanel({
   workItem,
   active,
+  repositoryName,
 }: {
   workItem: WorkItem;
   active: boolean;
+  /** A repository id in words: its name, or "Unknown repository" once the list says it is none. */
+  repositoryName?: (id: string) => string;
 }) {
   const [opened, setOpened] = useState(active);
   if (active && !opened) setOpened(true);
@@ -263,7 +289,7 @@ export default function HistoryPanel({
       ) : (
         <ol className="wiv2-history-list">
           {groupBySave(state.entries).map((save) => (
-            <SaveEvent key={save.saveId} save={save} now={now} />
+            <SaveEvent key={save.saveId} save={save} now={now} repositoryName={repositoryName} />
           ))}
         </ol>
       )}

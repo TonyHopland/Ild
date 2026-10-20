@@ -154,6 +154,36 @@ describe("WorkItemModalV2 History tab", () => {
     ]);
   });
 
+  test("a repository change is shown by name, and an id that matches no repository as Unknown repository", async () => {
+    mockServices(async () => [
+      entry({
+        saveId: "save-1",
+        username: "bob",
+        field: "repository",
+        oldValue: "repo-gone",
+        newValue: "repo-1",
+      }),
+    ]);
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([
+      {
+        id: "repo-1",
+        name: "my-repo",
+        remoteProviderId: "rp-1",
+        cloneUrl: "",
+        defaultBranch: null,
+        worktreesPath: null,
+        defaultIntakeStatus: WorkItemStatus.Backlog,
+        createdAt: "2025-01-01T00:00:00Z",
+      },
+    ]);
+    await renderDialog(makeWorkItem());
+
+    const panel = await openHistory();
+    await waitFor(() => expect(panel.textContent).toContain("my-repo"));
+    expect(panel.textContent).toContain("Unknown repository");
+    expect(panel.textContent).not.toContain("repo-gone");
+  });
+
   test("lists one group per save, newest first, with the actor, a relative time and each change", async () => {
     const getHistory = mockServices(async () => [
       entry({

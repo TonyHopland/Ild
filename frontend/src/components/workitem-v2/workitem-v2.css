@@ -653,9 +653,16 @@
   flex-shrink: 0;
 }
 
-.wiv2-description {
+/* The description reads as prose, not as a field that looks editable. */
+.wiv2-description.markdown-container {
   max-height: none;
-  margin-top: 0.35rem;
+  margin-top: var(--space-2);
+  padding: 0;
+  background: none;
+  border: 0;
+  font-size: var(--fs-md);
+  color: var(--text);
+  max-width: 78ch;
 }
 
 /* ---------- pending edit proposals (decided where they were asked for) ---------- */
@@ -704,9 +711,11 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0;
-  border-bottom: 1px solid #2d2d44;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
 }
 
 .wiv2-meta-col {
@@ -715,7 +724,8 @@
 }
 
 .wiv2-meta-btn {
-  margin-top: 0.35rem;
+  margin-top: var(--space-1);
+  margin-left: calc(-1 * var(--space-2));
 }
 
 /* Every PR the item ever opened, newest first — one row each, so several runs'
@@ -754,7 +764,7 @@
 }
 
 .wiv2-meta-mono {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   word-break: break-all;
 }
@@ -1822,4 +1832,71 @@
   min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* A disclosure chevron: points right when shut, down when open. */
+.wiv2-chevron {
+  transition: transform 0.15s ease;
+  color: var(--text-3);
+}
+
+.wiv2-chevron-open {
+  transform: rotate(90deg);
+}
+
+/* ---------- action tab: a run stopped on a failed node ---------- */
+
+.wiv2-feedback-failed {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: linear-gradient(0deg, var(--danger-soft), var(--danger-soft)), var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: none;
+}
+
+.wiv2-failed-head {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  color: var(--danger-text);
+}
+
+.wiv2-failed-head .icon {
+  margin-top: 2px;
+}
+
+.wiv2-failed-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wiv2-failed-meta {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+.wiv2-section-label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: calc(-1 * var(--space-2));
+}
+
+.wiv2-failed-output {
+  margin: 0;
+  padding: 10px 12px;
+  background: #0e0e16;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: #f3c6c6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
 }

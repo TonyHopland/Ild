@@ -2,6 +2,8 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import {
   LoopRun,
+  LoopRunNode,
+  LoopRunNodeStatus,
   LoopRunStatus,
   Repository,
   RemotePrSnapshot,
@@ -20,6 +22,9 @@ import FeedbackActions from "../FeedbackActions";
 import { useSubmitDefaultOnEnter } from "../../hooks/useSubmitDefaultOnEnter";
 import AttachmentList from "./AttachmentList";
 import type { WorkItemDetail } from "./useWorkItemDetail";
+import Icon from "../Icon";
+import { feedbackReasonLabel } from "../../utils/labels";
+import { failureMessage } from "./RunDetailSections";
 
 /**
  * What the round is about to say on the pull request, and the chance to stop
@@ -177,6 +182,120 @@ export function feedbackFor(
   return run && !waitsForAnswer(run) ? null : { kind: "answer", reason, runId };
 }
 
+const NODE_FAILED = "Node Failed";
+
+/** The node that stopped the run: its last failed execution, if the run on screen has one. */
+function failedNodeOf(run: LoopRun | null): LoopRunNode | null {
+  if (!run) return null;
+  for (let i = run.nodes.length - 1; i >= 0; i--) {
+    if (run.nodes[i].status === LoopRunNodeStatus.Failed) return run.nodes[i];
+  }
+  return null;
+}
+
+/**
+ * A run stopped on a failed node: which node, what it recorded when it failed,
+ * and the ways on from here, so the human does not have to hunt for them on the
+ * Runs tab. Everything shown is what the run recorded; nothing is guessed.
+ */
+function FailedNodeCard({
+  workItem,
+  run,
+  node,
+  detail,
+  onShowRuns,
+}: {
+  workItem: WorkItem;
+  run: LoopRun;
+  node: LoopRunNode;
+  detail: WorkItemDetail;
+  onShowRuns?: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  // As on the Runs tab: a live or parked run can go back to a node; an ended one is not restarted.
+  const canRetry =
+    (run.status === LoopRunStatus.WaitingHuman || run.status === LoopRunStatus.Running) &&
+    !(run.status === LoopRunStatus.Running && !run.isPaused);
+  const busy = detail.runLock.pendingOf(run.id) !== null;
+  const recorded = node.error ?? node.output;
+  const failedAt = node.completedAt ? new Date(node.completedAt).toLocaleString() : null;
+
+  const retry = async () => {
+    setError(null);
+    try {
+      await detail.runLock.hold(run.id, "retry", () =>
+        loopRunService.retryFromNode(run.id, node.id),
+      );
+      detail.refreshRuns();
+    } catch (e) {
+      setError(failureMessage(e, "Failed to retry from node."));
+    }
+  };
+
+  return (
+    <div className="wiv2-feedback wiv2-feedback-failed">
+      <div className="wiv2-failed-head">
+        <Icon name="alert" size={18} />
+        <div>
+          <div className="wiv2-failed-title">“{node.nodeLabel}” failed</div>
+          <div className="wiv2-failed-meta">
+            {[node.nodeType ? `${node.nodeType} node` : null, failedAt && `failed ${failedAt}`]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+        </div>
+      </div>
+      {recorded ? (
+        <>
+          <div className="wiv2-section-label">Recorded error output</div>
+          <pre className="wiv2-failed-output">{recorded}</pre>
+        </>
+      ) : (
+        <div className="wiv2-failed-meta">The node recorded no output when it failed.</div>
+      )}
+      <div className="feedback-actions">
+        {canRetry && (
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            disabled={busy}
+            onClick={() => void retry()}
+          >
+            <Icon name="retry" />
+            Retry this node
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          disabled={busy}
+          onClick={() =>
+            void detail.runLock.hold(
+              workItem.currentLoopRunId,
+              "abandon",
+              detail.handleCleanupBacklog,
+            )
+          }
+        >
+          Clean up → Backlog
+        </button>
+        {onShowRuns && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onShowRuns}>
+            See it in the run timeline
+          </button>
+        )}
+      </div>
+      {canRetry && (
+        <div className="wiv2-failed-meta">
+          Retry runs “{node.nodeLabel}” again with the same input, in the same worktree. The run
+          keeps its history.
+        </div>
+      )}
+      {error && <div className="preview-message preview-error">{error}</div>}
+    </div>
+  );
+}
+
 /** Prominent feedback banner shown in the Action tab while the item waits on a human. */
 export function FeedbackBanner({
   workItem,
@@ -184,22 +303,36 @@ export function FeedbackBanner({
   run,
   detail,
   prompt,
+  onShowRuns,
 }: {
   workItem: WorkItem;
   runId: string | null;
   run: LoopRun | null;
   detail: WorkItemDetail;
   prompt: string | null;
+  /** Opens the Runs tab, offered from a failed node's card. */
+  onShowRuns?: () => void;
 }) {
   const submitDefaultOnEnter = useSubmitDefaultOnEnter();
   const feedback = feedbackFor(workItem, runId, run);
   if (!feedback) return null;
 
   if (feedback.kind === "reason") {
+    const failed = feedback.reason === NODE_FAILED && run ? failedNodeOf(run) : null;
+    if (failed && run)
+      return (
+        <FailedNodeCard
+          workItem={workItem}
+          run={run}
+          node={failed}
+          detail={detail}
+          onShowRuns={onShowRuns}
+        />
+      );
     return (
       <div className="wiv2-feedback">
         <div className="wiv2-feedback-title">Human Feedback</div>
-        <div className="feedback-reason">{feedback.reason}</div>
+        <div className="feedback-reason">{feedbackReasonLabel(feedback.reason)}</div>
       </div>
     );
   }
@@ -886,8 +1019,16 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   const [showAddDep, setShowAddDep] = useState(false);
   const [selectedDepId, setSelectedDepId] = useState("");
 
-  const repoName =
-    detail.repositories.find((r) => r.id === workItem.repositoryId)?.name ?? workItem.repositoryId;
+  // The repository by name. An id that matches none of the loaded repositories
+  // says so in words (the id is on hover), never as a bare GUID; until the list
+  // has loaded nothing is claimed either way.
+  const repo = detail.repositories.find((r) => r.id === workItem.repositoryId);
+  const repoName = repo?.name ?? (detail.repositories.length > 0 ? "Unknown repository" : "");
+  // Items waiting on this one, by title when it is one of the items loaded here.
+  const blocks = (workItem.dependentIds ?? []).map((id) => ({
+    id,
+    title: detail.allWorkItems.find((w) => w.id === id)?.title ?? null,
+  }));
   const tagList = parseTags(workItem);
   const isLoopTag = makeLoopTagMatcher(detail.templates.map((t) => t.name));
   const fmt = (d: string | null) => (d ? new Date(d).toLocaleString() : "—");
@@ -908,18 +1049,14 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   return (
     <div className="wiv2-meta">
       <div className="wiv2-meta-row">
-        <span className="detail-label">Status</span>
-        <span className={`status-badge status-${workItem.status.toLowerCase()}`}>
-          {workItem.status}
-        </span>
-      </div>
-      <div className="wiv2-meta-row">
         <span className="detail-label">Priority</span>
         <span className="detail-value">{workItem.priority}</span>
       </div>
       <div className="wiv2-meta-row">
         <span className="detail-label">Repository</span>
-        <span className="detail-value">{repoName}</span>
+        <span className="detail-value" title={repo ? undefined : workItem.repositoryId}>
+          {repoName}
+        </span>
       </div>
       {isRunning && loopName && (
         <div className="wiv2-meta-row">
@@ -999,9 +1136,10 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         ) : (
           <button
             type="button"
-            className="btn btn-sm btn-secondary wiv2-meta-btn"
+            className="btn btn-sm btn-ghost wiv2-meta-btn"
             onClick={() => setShowLinkPr(true)}
           >
+            <Icon name="plus" size={14} />
             Link PR
           </button>
         )}
@@ -1080,13 +1218,28 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         ) : (
           <button
             type="button"
-            className="btn btn-sm btn-secondary wiv2-meta-btn"
+            className="btn btn-sm btn-ghost wiv2-meta-btn"
             onClick={() => setShowAddDep(true)}
           >
+            <Icon name="plus" size={14} />
             Add Dependency
           </button>
         )}
       </div>
+      {blocks.length > 0 && (
+        <div className="wiv2-meta-row wiv2-meta-col">
+          <span className="detail-label">Blocks</span>
+          <div className="dependency-list">
+            {blocks.map((b) => (
+              <span key={b.id} className="dependency-tag">
+                <Link to={`/taskboard/${b.id}`} className="dependency-link">
+                  {b.title ?? `#${b.id}`}
+                </Link>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="wiv2-meta-row">
         <span className="detail-label">Created</span>
         <span className="detail-value wiv2-meta-date">{fmt(workItem.createdAt)}</span>
