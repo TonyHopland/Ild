@@ -637,6 +637,14 @@
   }
 }
 
+/* On a phone the dialog fills the screen and the icon sits over the bottom of
+   its content, so the content scrolls on past its last controls to clear it. */
+@media (max-width: 767px) {
+  body:has(.chat-bubble-fab) .wiv2-tabpanel {
+    padding-bottom: 88px;
+  }
+}
+
 /* Who wrote a message, and when. */
 .chat-msg-meta {
   font-size: 11px;

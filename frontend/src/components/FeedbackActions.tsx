@@ -206,11 +206,6 @@ export default function FeedbackActions({
       >
         {style && <span className="output-color-dot" aria-hidden="true" />}
         {labelOf(name)}
-        {needsConfirm?.(name) && (
-          <span className="feedback-confirm-mark" aria-hidden="true">
-            …
-          </span>
-        )}
         {name === enterTarget && (
           <kbd className="feedback-enter-mark" aria-hidden="true">
             ⏎

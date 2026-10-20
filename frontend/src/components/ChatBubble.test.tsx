@@ -982,6 +982,30 @@ describe("ChatBubble placement", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  test("on a phone the icon sits in its corner above the tab bar, whatever spot was saved, and does not drag", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    setPreference(FAB_POSITION_KEY, JSON.stringify({ x: 100, y: 100 }));
+    chatService.listHistory.mockResolvedValue([]);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+
+    renderBubble();
+    const fab = (await screen.findByLabelText("Open chat")) as HTMLElement;
+
+    // 1024×768 less the 60px tab bar: the corner is (952, 636).
+    expect([fab.style.left, fab.style.top]).toEqual(["952px", "636px"]);
+    fireEvent.pointerDown(fab, { clientX: 500, clientY: 500 });
+    fireEvent.pointerMove(window, { clientX: 450, clientY: 450 });
+    fireEvent.pointerUp(window, { clientX: 450, clientY: 450 });
+    expect([fab.style.left, fab.style.top]).toEqual(["952px", "636px"]);
+    expect(JSON.parse(getPreference(FAB_POSITION_KEY)!)).toEqual({ x: 100, y: 100 });
+    vi.unstubAllGlobals();
+  });
+
   test("dragging the icon moves it, persists the spot, and suppresses the open click", async () => {
     chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);

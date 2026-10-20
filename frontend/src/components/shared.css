@@ -439,6 +439,19 @@
   margin-top: var(--space-2);
 }
 
+/* An answer is a sentence as often as a word, and a node may offer many: each
+   button is as wide as its label, wraps onto more lines rather than cutting it
+   off, and the row wraps onto more rows. */
+.feedback-actions > .btn {
+  max-width: 100%;
+  height: auto;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
 /* Reject goes last, on its own at the far end of the row. */
 .feedback-actions > .btn-danger:last-child {
   margin-left: auto;
@@ -458,10 +471,6 @@
   background: var(--output-color);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--output-color) 25%, transparent);
   flex: none;
-}
-
-.feedback-confirm-mark {
-  color: var(--text-3);
 }
 
 .feedback-enter-mark {

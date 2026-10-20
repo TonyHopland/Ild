@@ -2,8 +2,10 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useMatch } from "react-router";
 import { useChatEnabled } from "../hooks/useChatEnabled";
 import { usePreferencesLoaded } from "../utils/userPreferences";
+import { useIsMobile } from "../hooks/useIsMobile";
 import {
   DEFAULT_PANEL_SIZE,
+  defaultFabPosition,
   clampFabPosition,
   clampPanelSize,
   loadFabPosition,
@@ -65,7 +67,11 @@ function ChatBubbleFrame() {
   // The panel's own position once the user drags its header; until then it stays
   // anchored to the icon (null).
   const [panelOverride, setPanelOverride] = useState<Point | null>(loadPanelPosition);
-  const fabPos = renderedFabPosition(chosenFab, vp);
+  // A phone keeps the icon in its corner above the tab bar: a spot dragged to on
+  // a wide screen, which the user's preferences carry here, would sit on the
+  // page's own controls.
+  const isMobile = useIsMobile();
+  const fabPos = isMobile ? defaultFabPosition(vp) : renderedFabPosition(chosenFab, vp);
   const panelSize = clampPanelSize(chosenSize, vp);
   // Set while a drag exceeds the threshold so the trailing click does not also
   // open the panel.
@@ -219,7 +225,7 @@ function ChatBubbleFrame() {
               className="chat-bubble-fab"
               aria-label="Open chat"
               style={{ left: fabPos.x, top: fabPos.y }}
-              onPointerDown={startDrag}
+              onPointerDown={isMobile ? undefined : startDrag}
               onClick={onFabClick}
             >
               💬{unreadCount > 0 && <UnreadDot />}

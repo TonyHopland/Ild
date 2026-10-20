@@ -454,7 +454,7 @@ describe("FeedbackActions — Enter in the feedback box", () => {
   const enter = (el: HTMLElement, init: Record<string, unknown> = {}) =>
     fireEvent.keyDown(el, { key: "Enter", code: "Enter", ...init });
 
-  /** The output button whose text, ignoring any ⏎ or confirm (…) marker, is `label`. */
+  /** The output button whose text, ignoring any ⏎ marker, is `label`. */
   const outputButton = (label: string) => {
     const found = screen
       .getAllByRole("button")
@@ -647,7 +647,7 @@ describe("FeedbackActions — order and the one primary", () => {
     expect(primaries().map((b) => b.textContent)).toEqual(["Approve"]);
   });
 
-  test("an output that asks to confirm is marked with …", () => {
+  test("an output that asks to confirm shows its label as it is, with nothing added that reads as cut off", () => {
     render(
       <FeedbackActions
         actions="OnSuccess,Park,OnFailure"
@@ -658,8 +658,7 @@ describe("FeedbackActions — order and the one primary", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Park" }).textContent).toContain("…");
-    expect(screen.getByRole("button", { name: "Approve" }).textContent).not.toContain("…");
+    expect(screen.getByRole("button", { name: "Park" }).textContent).toBe("Park");
   });
 
   test("with only named outputs and no default, the first in node order is the primary", () => {
