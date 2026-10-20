@@ -316,7 +316,7 @@ describe("WorkItemModalV2", () => {
     await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
 
     expectOnTab("Action");
-    expect(screen.queryByRole("tab", { name: "Action ●" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Action, needs you" })).toBeNull();
   });
 
   test("arrow keys move selection and focus along the tab strip", async () => {
@@ -892,7 +892,7 @@ describe("WorkItemModalV2", () => {
       }),
     );
 
-    expect(screen.getByRole("tab", { name: "Action ●" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Action, needs you" })).toBeTruthy();
   });
 
   test("Action tab has no indicator and shows an empty state when there is nothing in it", async () => {
@@ -900,7 +900,7 @@ describe("WorkItemModalV2", () => {
     await renderDialog(makeWorkItem());
 
     expect(screen.getByRole("tab", { name: "Action" })).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: "Action ●" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Action, needs you" })).toBeNull();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("tab", { name: "Action" }));
@@ -1189,19 +1189,45 @@ describe("WorkItemModalV2", () => {
     expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Test Work Item");
   });
 
-  test("Edit lives in the footer next to Close, and Delete is not in the detail view", async () => {
+  test("without a worktree Files and Preview stay in the strip but do not open", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    for (const name of ["Files", "Preview"]) {
+      const tab = screen.getByRole("tab", { name });
+      expect(tab.getAttribute("aria-disabled")).toBe("true");
+      expect(tab.getAttribute("title")).toMatch(/no worktree yet/i);
+      fireEvent.click(tab);
+      expectOnTab("Overview");
+    }
+  });
+
+  test("with a worktree Files and Preview open as usual", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ worktreePath: "/worktrees/repo/wi-1" }));
+
+    const files = screen.getByRole("tab", { name: "Files" });
+    expect(files.getAttribute("aria-disabled")).toBeNull();
+    await act(async () => {
+      fireEvent.click(files);
+      await Promise.resolve();
+    });
+    expectOnTab("Files");
+  });
+
+  test("Edit is the footer's one button, the header's × is the only close, and Delete is not in the detail view", async () => {
     mockServices();
     await renderDialog(makeWorkItem());
 
     const editButton = screen.getByRole("button", { name: "Edit" });
     const footer = editButton.closest(".wiv2-footer");
-    // Edit and Close share the footer; Delete has moved out of the detail view.
+    // With nothing behind ⋯, Edit is all the footer holds; closing is the header's ×.
     expect(footer).not.toBeNull();
-    expect(footer?.querySelector(".modal-close")).toBeNull();
     expect([...(footer?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual([
       "Edit",
-      "Close",
     ]);
+    expect(screen.getAllByRole("button", { name: "Close" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Close" }).closest(".wiv2-header")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
@@ -1379,12 +1405,17 @@ describe("WorkItemModalV2", () => {
       }),
     );
 
-    // Cleanup buttons render in the footer, but Delete does not.
+    // The cleanups sit behind the footer's ⋯, but Delete is not among them.
     const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    fireEvent.click(within(footer as HTMLElement).getByRole("button", { name: "More actions" }));
     expect(
-      within(footer as HTMLElement).getByRole("button", { name: /Cleanup -> Done/ }),
+      within(footer as HTMLElement).getByRole("menuitem", { name: "Clean up → Done" }),
+    ).toBeTruthy();
+    expect(
+      within(footer as HTMLElement).getByRole("menuitem", { name: "Clean up → Backlog" }),
     ).toBeTruthy();
     expect(within(footer as HTMLElement).queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(within(footer as HTMLElement).queryByRole("menuitem", { name: "Delete" })).toBeNull();
   });
 
   test("Escape closes immediately when there are no unsaved changes", async () => {
@@ -1733,7 +1764,7 @@ describe("WorkItemModalV2 creation", () => {
     mockServices();
     await renderCreateDialog();
 
-    expect(screen.getByText("New Work Item")).toBeTruthy();
+    expect(screen.getByText("New work item")).toBeTruthy();
     // A brand-new item has no runs/conversation/live state, so the tabbed detail
     // view is dropped entirely.
     expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
@@ -2472,7 +2503,12 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     });
   }
 
-  const footerCleanup = () => screen.getByRole("button", { name: "Cleanup -> Done" });
+  // The cleanup sits behind the footer's ⋯: open the menu if it is shut.
+  const footerCleanup = () => {
+    if (!screen.queryByRole("menuitem", { name: "Clean up → Done" }))
+      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    return screen.getByRole("menuitem", { name: "Clean up → Done" });
+  };
   const deleteRun = () => screen.getByRole("button", { name: /delete run/i });
 
   test("a footer cleanup and a Runs-tab delete of the same run never overlap", async () => {
@@ -2481,8 +2517,10 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     vi.spyOn(authServices.workItemService, "cleanupToDone").mockReturnValue(cleanupDone.promise);
     await screen.findByRole("button", { name: /delete run/i });
 
+    // Opened outside act: an update inside an async act only lands when it ends.
+    const cleanupItem = footerCleanup();
     await act(async () => {
-      fireEvent.click(footerCleanup());
+      fireEvent.click(cleanupItem);
       await Promise.resolve();
     });
     expect((deleteRun() as HTMLButtonElement).disabled).toBe(true);

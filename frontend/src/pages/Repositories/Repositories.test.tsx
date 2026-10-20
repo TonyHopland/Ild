@@ -1101,7 +1101,7 @@ function previewDataFetch(
       state.repos = state.repos.map((r) => (r.id === one[1] ? { ...r, ...sent, id: r.id } : r));
       return Promise.resolve(reply(state.repos.find((r) => r.id === one[1])));
     }
-    if (/\/repositories$/.test(url) && method === "POST") {
+    if (url.endsWith("/repositories") && method === "POST") {
       const created = { ...repo("repo-new", "new-repo"), ...JSON.parse(String(init?.body)) };
       state.repos = [...state.repos, created];
       return Promise.resolve(reply(created, 201));
@@ -1175,7 +1175,7 @@ describe("Repositories page — preview data", () => {
     fireEvent.click(screen.getByText("Create"));
     await waitFor(() => expect(screen.queryByText("New Repository")).toBeNull());
 
-    const post = sentBodies(fetchMock, "POST").find((c) => /\/repositories$/.test(c.url));
+    const post = sentBodies(fetchMock, "POST").find((c) => c.url.endsWith("/repositories"));
     expect(post?.body.keepPreviewData).toBe(true);
   });
 

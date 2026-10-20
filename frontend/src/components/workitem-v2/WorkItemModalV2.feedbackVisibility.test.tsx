@@ -137,7 +137,8 @@ const pane = () => document.querySelector(".wiv2-feedback") as HTMLElement;
 const buttons = () =>
   within(pane())
     .queryAllByRole("button")
-    .map((button) => button.textContent ?? "");
+    // The confirm marker (…) and the Enter marker are decoration, not the answer's name.
+    .map((button) => (button.textContent ?? "").replace(/[…⏎]/g, "").trim());
 
 function expectButtons(expected: string[]) {
   expect(buttons()).toHaveLength(expected.length);
@@ -339,14 +340,10 @@ describe("the feedback pane offers only the outputs the parked node shows", () =
       makeParkedWorkItem({ humanFeedbackActions: "OnSuccess,Needs work,Later,OnFailure" }),
     );
 
-    const cssColor = (color: string) => {
-      const probe = document.createElement("span");
-      probe.style.color = color;
-      return probe.style.color;
-    };
     const button = (name: string) => within(pane()).getByRole("button", { name });
-    expect(button("Approve").style.backgroundColor).toBe(cssColor("#7e22ce"));
-    expect(button("Needs work").style.backgroundColor).toBe(cssColor("#fde047"));
+    // A colour shows as a dot and border from --output-color.
+    expect(button("Approve").style.getPropertyValue("--output-color")).toBe("#7e22ce");
+    expect(button("Needs work").style.getPropertyValue("--output-color")).toBe("#fde047");
     expect(button("Reject").getAttribute("style")).toBeNull();
     expect(button("Later").getAttribute("style")).toBeNull();
 
