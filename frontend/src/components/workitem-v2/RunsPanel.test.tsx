@@ -762,9 +762,9 @@ describe("RunsPanel run details", () => {
   }
 
   test("sessions stay collapsed until expanded, and a session previews inline", async () => {
-    const preview = vi.spyOn(loopRunService, "getSessionPreview").mockResolvedValue(
-      previewPage({ events: ['{"type":"user","n":1}', "not json at all"] }),
-    );
+    const preview = vi
+      .spyOn(loopRunService, "getSessionPreview")
+      .mockResolvedValue(previewPage({ events: ['{"type":"user","n":1}', "not json at all"] }));
     renderDetails(twoNodeRun({ availableSessions: [sessionEntry("sess-1", { isCurrent: true })] }));
     const section = await screen.findByRole("button", { name: /ai sessions \(1\)/i });
     expect(screen.queryByText("sess-1")).toBeNull();
@@ -822,9 +822,7 @@ describe("RunsPanel run details", () => {
 
     fireEvent.click(within(region).getByRole("button", { name: /load more/i }));
 
-    await waitFor(() =>
-      expect(region.textContent).toContain(JSON.stringify({ page: 2 }, null, 2)),
-    );
+    await waitFor(() => expect(region.textContent).toContain(JSON.stringify({ page: 2 }, null, 2)));
     expect(preview).toHaveBeenLastCalledWith(RUN_A, "claude", "sess-1", 11);
     expect(region.textContent).toContain(JSON.stringify({ page: 1 }, null, 2));
     expect(region.textContent!.indexOf('"page": 1')).toBeLessThan(
@@ -1481,9 +1479,9 @@ describe("RunsPanel session preview requests", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /preview session sess-2/i }));
     await waitFor(() =>
-      expect(
-        screen.getByRole("region", { name: /session preview/i }).textContent,
-      ).toContain('"from": "two"'),
+      expect(screen.getByRole("region", { name: /session preview/i }).textContent).toContain(
+        '"from": "two"',
+      ),
     );
     await act(async () => {
       more.resolve(page("sess-1", ['{"stale":"page"}'], null, 11));
