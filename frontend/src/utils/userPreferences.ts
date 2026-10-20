@@ -22,9 +22,15 @@ export const PreferenceKeys = {
 } as const;
 
 /**
- * Where these were kept in the browser before they moved to the server. Read
- * once after the first load: a value the server does not have yet is carried
- * over, and the browser's copy is then removed either way.
+ * Where these were kept in the browser before they moved to the server. Read on
+ * every sign-in, after the server has answered: a value the server does not have
+ * yet is carried over and leaves the browser once saved; a browser copy of one
+ * the server already has is removed. With nothing left in a browser it does
+ * nothing there.
+ *
+ * Temporary: remove this map and carryOverFromBrowser in the release after the
+ * one that ships them (after 0.19.0), by 2027-01-31 at the latest, when every
+ * browser that will sign in again has done so.
  */
 const BROWSER_KEYS: Record<string, string> = {
   ild_notifications_enabled: PreferenceKeys.NotificationsEnabled,

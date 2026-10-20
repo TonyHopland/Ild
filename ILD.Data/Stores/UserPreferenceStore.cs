@@ -15,6 +15,9 @@ public sealed class UserPreferenceStore : IUserPreferenceStore
             .Where(p => p.UserId == userId)
             .ToDictionaryAsync(p => p.Key, p => p.Value, ct);
 
+    public async Task<bool> DeleteAsync(Guid userId, string key, CancellationToken ct = default)
+        => await _db.UserPreferences.Where(p => p.UserId == userId && p.Key == key).ExecuteDeleteAsync(ct) > 0;
+
     public async Task UpsertAsync(Guid userId, string key, string value, CancellationToken ct = default)
     {
         var existing = await _db.UserPreferences.FirstOrDefaultAsync(p => p.UserId == userId && p.Key == key, ct);

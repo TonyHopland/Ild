@@ -96,11 +96,10 @@ public sealed class PreferencesControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task A_missing_or_too_long_value_is_refused_and_an_empty_one_is_kept()
+    public async Task A_too_long_value_is_refused_and_an_empty_one_is_kept()
     {
         await AddUser("user-one");
 
-        Assert.IsType<BadRequestObjectResult>(await Put(As("user-one"), "k", null));
         Assert.IsType<BadRequestObjectResult>(
             await Put(As("user-one"), "k", new string('x', PreferencesController.MaxValueLength + 1)));
         Assert.IsType<OkObjectResult>(await Put(As("user-one"), "k", ""));
@@ -130,5 +129,43 @@ public sealed class PreferencesControllerTests : IDisposable
 
         using var after = _db.Fresh();
         Assert.Empty(after.UserPreferences);
+    }
+
+    [Fact]
+    public async Task A_user_keeps_at_most_the_cap_of_keys_and_can_still_change_the_ones_they_have()
+    {
+        await AddUser("user-one");
+        for (var i = 0; i < PreferencesController.MaxKeysPerUser; i++)
+            Assert.IsType<OkObjectResult>(await Put(As("user-one"), $"k{i}", "v"));
+
+        Assert.IsType<BadRequestObjectResult>(await Put(As("user-one"), "one-too-many", "v"));
+        Assert.IsType<OkObjectResult>(await Put(As("user-one"), "k0", "changed"));
+        Assert.Equal(PreferencesController.MaxKeysPerUser, Stated(await As("user-one").GetAll(default)).Count);
+    }
+
+    [Fact]
+    public async Task Delete_removes_one_of_the_callers_own_preferences_and_no_one_elses()
+    {
+        await AddUser("user-one");
+        await AddUser("user-two");
+        await Put(As("user-one"), "chat.enabled", "false");
+        await Put(As("user-one"), "taskboard.folded.done", "true");
+        await Put(As("user-two"), "chat.enabled", "false");
+
+        Assert.IsType<NoContentResult>(await As("user-one").Delete("chat.enabled", default));
+
+        Assert.Equal(["taskboard.folded.done"], Stated(await As("user-one").GetAll(default)).Keys);
+        Assert.Equal("false", Stated(await As("user-two").GetAll(default))["chat.enabled"]);
+    }
+
+    [Fact]
+    public async Task Deleting_a_preference_the_caller_does_not_have_is_not_found()
+    {
+        await AddUser("user-one");
+        await AddUser("user-two");
+        await Put(As("user-two"), "chat.enabled", "false");
+
+        Assert.IsType<NotFoundResult>(await As("user-one").Delete("chat.enabled", default));
+        Assert.IsType<UnauthorizedResult>(await As("ghost").Delete("chat.enabled", default));
     }
 }
