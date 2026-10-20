@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
 import UserSettings from "./UserSettings";
 import * as useAuthHook from "../../../hooks/useAuth";
 import * as authServices from "../../../services/auth";
+import {
+  setPreference,
+  getPreference,
+  PreferenceKeys,
+  clearPreferences,
+  seedPreferences,
+} from "../../../utils/userPreferences";
 
 afterEach(() => {
   cleanup();
@@ -185,15 +192,15 @@ describe("User settings preferences", () => {
     expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 
-  test("persists notification preference to localStorage when toggled off", () => {
+  test("persists notification preference to the preferences when toggled off", () => {
     render(<UserSettings />);
 
     fireEvent.click(screen.getByRole("checkbox", { name: /browser notifications/i }));
-    expect(localStorage.getItem("ild_notifications_enabled")).toBe("false");
+    expect(getPreference(PreferenceKeys.NotificationsEnabled)).toBe("false");
   });
 
-  test("reads notification preference from localStorage on mount", () => {
-    localStorage.setItem("ild_notifications_enabled", "false");
+  test("reads notification preference from the preferences on mount", () => {
+    setPreference(PreferenceKeys.NotificationsEnabled, "false");
 
     render(<UserSettings />);
 
@@ -208,12 +215,12 @@ describe("User settings preferences", () => {
     expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 
-  test("persists the chat preference to localStorage when toggled off", () => {
+  test("persists the chat preference to the preferences when toggled off", () => {
     render(<UserSettings />);
 
     const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
     fireEvent.click(toggle);
-    expect(localStorage.getItem("ild_chat_enabled")).toBe("false");
+    expect(getPreference(PreferenceKeys.ChatEnabled)).toBe("false");
     expect((toggle as HTMLInputElement).checked).toBe(false);
   });
 
@@ -226,16 +233,16 @@ describe("User settings preferences", () => {
     expect(toggle.checked).toBe(false);
 
     fireEvent.click(toggle);
-    expect(localStorage.getItem("ild_submit_default_on_enter")).toBe("true");
+    expect(getPreference(PreferenceKeys.SubmitDefaultOnEnter)).toBe("true");
     expect(toggle.checked).toBe(true);
 
     fireEvent.click(toggle);
-    expect(localStorage.getItem("ild_submit_default_on_enter")).toBe("false");
+    expect(getPreference(PreferenceKeys.SubmitDefaultOnEnter)).toBe("false");
     expect(toggle.checked).toBe(false);
   });
 
-  test("reads an enabled submit default on Enter preference from localStorage on mount", () => {
-    localStorage.setItem("ild_submit_default_on_enter", "true");
+  test("reads an enabled submit default on Enter preference from the preferences on mount", () => {
+    setPreference(PreferenceKeys.SubmitDefaultOnEnter, "true");
 
     render(<UserSettings />);
 
@@ -243,12 +250,24 @@ describe("User settings preferences", () => {
     expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 
-  test("reads a disabled chat preference from localStorage on mount", () => {
-    localStorage.setItem("ild_chat_enabled", "false");
+  test("reads a disabled chat preference from the preferences on mount", () => {
+    setPreference(PreferenceKeys.ChatEnabled, "false");
 
     render(<UserSettings />);
 
     const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+  });
+});
+
+describe("User settings preferences before they load", () => {
+  test("shows no preference switch until the preferences are read", () => {
+    clearPreferences();
+    render(<UserSettings />);
+
+    expect(screen.queryByRole("checkbox", { name: /browser notifications/i })).toBeNull();
+    act(() => seedPreferences({ [PreferenceKeys.NotificationsEnabled]: "false" }));
+    const toggle = screen.getByRole("checkbox", { name: /browser notifications/i });
     expect((toggle as HTMLInputElement).checked).toBe(false);
   });
 });

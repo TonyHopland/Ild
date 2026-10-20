@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import Taskboard from "./index";
+import {
+  PreferenceKeys,
+  clearPreferences,
+  getPreference,
+  seedPreferences,
+  setPreference,
+} from "../../utils/userPreferences";
 import { mockTaskboardServer, pressEscapeUntil } from "../../test-support";
 import {
   NodeType,
@@ -25,10 +32,7 @@ beforeEach(() => {
   localStorage.clear();
   // Done starts folded; these tests read the cards in every column, so this
   // user has opened it.
-  vi.spyOn(authServices.preferencesService, "getAll").mockResolvedValue({
-    "taskboard.folded": JSON.stringify({ Done: false }),
-  });
-  vi.spyOn(authServices.preferencesService, "put").mockResolvedValue();
+  seedPreferences({ [PreferenceKeys.TaskboardFolded]: JSON.stringify({ Done: false }) });
 });
 
 function LocationDisplay() {
@@ -573,7 +577,7 @@ describe("Taskboard SignalR", () => {
   });
 
   test("skips notification when notifications disabled in settings", async () => {
-    localStorage.setItem("ild_notifications_enabled", "false");
+    setPreference(PreferenceKeys.NotificationsEnabled, "false");
 
     const notificationCalls: Array<[string, NotificationOptions]> = [];
     class MockNotification {
@@ -1713,10 +1717,7 @@ describe("Taskboard folded columns", () => {
   });
 
   test("opens each column as the user left it, and saves a fold to their preferences", async () => {
-    vi.spyOn(authServices.preferencesService, "getAll").mockResolvedValue({
-      "taskboard.folded": JSON.stringify({ Backlog: true }),
-    });
-    const put = vi.spyOn(authServices.preferencesService, "put").mockResolvedValue();
+    seedPreferences({ [PreferenceKeys.TaskboardFolded]: JSON.stringify({ Backlog: true }) });
     mockTaskboardServer([
       makeItem({ id: "wi-1", title: "Not started", status: WorkItemStatus.Backlog }),
       makeItem({ id: "wi-2", title: "Shipped", status: WorkItemStatus.Done }),
@@ -1732,16 +1733,14 @@ describe("Taskboard folded columns", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Done: 1 item. Show column" }));
     expect(screen.getByText("Shipped")).toBeTruthy();
-    await waitFor(() =>
-      expect(put).toHaveBeenCalledWith(
-        "taskboard.folded",
-        JSON.stringify({ Backlog: true, Done: false }),
-      ),
-    );
+    expect(JSON.parse(getPreference(PreferenceKeys.TaskboardFolded)!)).toEqual({
+      Backlog: true,
+      Done: false,
+    });
   });
 
-  test("shows no columns until the preferences have answered", async () => {
-    vi.spyOn(authServices.preferencesService, "getAll").mockReturnValue(new Promise(() => {}));
+  test("shows no columns until the preferences are loaded", async () => {
+    clearPreferences();
     mockTaskboardServer([makeItem({ id: "wi-1", title: "Not started" })]);
     renderTaskboard();
 

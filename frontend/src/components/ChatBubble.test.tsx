@@ -10,7 +10,6 @@ import {
   type ChatHubEvents,
 } from "../test-support";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
-import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
 // Hoisted so the vi.mock factories (which are hoisted to the top) can reference
 // them without a temporal-dead-zone error.
@@ -72,6 +71,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
+import { setPreference, getPreference, PreferenceKeys } from "../utils/userPreferences";
 
 // The bubble reads the open work item from the route (useMatch), so every render
 // must sit inside a Router. `initialPath` lets a test simulate having a work item
@@ -974,7 +974,7 @@ describe("ChatBubble", () => {
 
 describe("ChatBubble placement", () => {
   test("renders nothing when chat is disabled in settings", () => {
-    localStorage.setItem(CHAT_ENABLED_KEY, "false");
+    setPreference(PreferenceKeys.ChatEnabled, "false");
     chatService.listHistory.mockResolvedValue([]);
 
     const { container } = renderBubble();
@@ -997,7 +997,7 @@ describe("ChatBubble placement", () => {
     // lands at (902, 646), still inside the viewport.
     expect((fab as HTMLElement).style.left).toBe("902px");
     expect((fab as HTMLElement).style.top).toBe("646px");
-    expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 902, y: 646 });
+    expect(JSON.parse(getPreference(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 902, y: 646 });
 
     // The click that ends the drag must not open the panel.
     fireEvent.click(fab);
@@ -1022,14 +1022,14 @@ describe("ChatBubble placement", () => {
     // Default size is 384×512; +100/+80 grows it to 484×592.
     expect((panel as HTMLElement).style.width).toBe("484px");
     expect((panel as HTMLElement).style.height).toBe("592px");
-    expect(JSON.parse(localStorage.getItem(PANEL_SIZE_KEY) ?? "{}")).toEqual({
+    expect(JSON.parse(getPreference(PANEL_SIZE_KEY) ?? "{}")).toEqual({
       width: 484,
       height: 592,
     });
   });
 
   test("a window resize draws the icon in view but keeps the spot the user chose", async () => {
-    localStorage.setItem(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
+    setPreference(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
     chatService.listHistory.mockResolvedValue([]);
 
     renderBubble();
@@ -1046,7 +1046,7 @@ describe("ChatBubble placement", () => {
     expect((fab as HTMLElement).style.left).toBe("328px");
     expect((fab as HTMLElement).style.top).toBe("328px");
     // The spot the user chose is not overwritten by a window that is small for a moment…
-    expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 900, y: 700 });
+    expect(JSON.parse(getPreference(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 900, y: 700 });
 
     act(() => {
       window.innerWidth = 1024;
@@ -1080,7 +1080,7 @@ describe("ChatBubble placement", () => {
     // -80/-60 from the (620, 236) anchor lands at (540, 176), still on-screen.
     expect((panel as HTMLElement).style.left).toBe("540px");
     expect((panel as HTMLElement).style.top).toBe("176px");
-    expect(JSON.parse(localStorage.getItem(PANEL_POSITION_KEY) ?? "{}")).toEqual({
+    expect(JSON.parse(getPreference(PANEL_POSITION_KEY) ?? "{}")).toEqual({
       x: 540,
       y: 176,
     });
@@ -1099,7 +1099,7 @@ describe("ChatBubble placement", () => {
 
     expect((panel as HTMLElement).style.left).toBe("620px");
     expect((panel as HTMLElement).style.top).toBe("236px");
-    expect(localStorage.getItem(PANEL_POSITION_KEY)).toBeNull();
+    expect(getPreference(PANEL_POSITION_KEY)).toBeUndefined();
 
     // …and the button still does its job, showing the chat list.
     fireEvent.click(chatList);

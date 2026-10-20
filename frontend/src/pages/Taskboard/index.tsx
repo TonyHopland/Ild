@@ -9,6 +9,7 @@ import Icon from "../../components/Icon";
 import Sheet from "../../components/Sheet";
 import { useIsMobile } from "../../hooks/useIsMobile";
 import { useFoldedColumns } from "../../hooks/useFoldedColumns";
+import { PreferenceKeys, getPreference } from "../../utils/userPreferences";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
@@ -139,7 +140,7 @@ export default function Taskboard() {
       syncWorkItem(workItemId, { itemChanged: true });
       delayedTimers.push(setTimeout(() => syncWorkItem(workItemId, { itemChanged: false }), 500));
 
-      const notificationsEnabled = localStorage.getItem("ild_notifications_enabled") !== "false";
+      const notificationsEnabled = getPreference(PreferenceKeys.NotificationsEnabled) !== "false";
       if (
         notificationsEnabled &&
         typeof Notification !== "undefined" &&

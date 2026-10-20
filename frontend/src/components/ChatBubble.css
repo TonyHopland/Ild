@@ -628,10 +628,13 @@
   color: #a5b4fc;
 }
 
-/* A dialog owns the screen while it is open: the icon steps aside so it never
-   covers the dialog's own buttons (Close, Create, Delete). */
-body:has(.modal-overlay) .chat-bubble-fab {
-  display: none;
+/* The chat stays on top of a dialog, since it can be asked about the work item
+   open in it. In its default corner the icon would sit on the dialog's footer,
+   so the footer keeps that corner clear. */
+@media (min-width: 768px) {
+  body:has(.chat-bubble-fab) .wiv2-footer {
+    padding-right: 88px;
+  }
 }
 
 /* Who wrote a message, and when. */

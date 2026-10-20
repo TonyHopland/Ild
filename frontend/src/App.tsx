@@ -1,10 +1,11 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router";
 import { AuthContext, useProvideAuth, useAuth } from "./hooks/useAuth";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
 import MobileTabBar from "./components/MobileNav";
 import { useIsMobile } from "./hooks/useIsMobile";
+import { clearPreferences, loadPreferences } from "./utils/userPreferences";
 import ChatBubble from "./components/ChatBubble";
 import { ChatInboxProvider } from "./components/ChatInbox";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -30,6 +31,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
   const isMobile = useIsMobile();
+
+  // The signed-in user's preferences are read once per sign-in and forgotten on
+  // sign-out, so the next user to sign in here starts from their own.
+  useEffect(() => {
+    if (isLoading) return;
+    if (isAuthenticated) void loadPreferences();
+    else clearPreferences();
+  }, [isAuthenticated, isLoading]);
 
   if (isLoading) {
     return (

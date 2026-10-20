@@ -148,6 +148,9 @@ export default function WorkItemModalV2({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The chat stays usable over the dialog, so an Escape typed in it is the
+      // chat's, not a request to close the work item.
+      if (e.target instanceof Element && e.target.closest(".chat-panel")) return;
       if (e.key === "Escape") requestClose();
     };
     document.addEventListener("keydown", onKey);

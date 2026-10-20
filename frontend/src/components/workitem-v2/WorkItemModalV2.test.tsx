@@ -1519,6 +1519,23 @@ describe("WorkItemModalV2", () => {
     expect(within(footer as HTMLElement).queryByRole("menuitem", { name: "Delete" })).toBeNull();
   });
 
+  test("an Escape typed in the chat over the dialog is the chat's, and leaves the work item open", async () => {
+    mockServices();
+    const onClose = vi.fn();
+    await renderDialog(makeWorkItem(), { onClose });
+    const chat = document.createElement("div");
+    chat.className = "chat-panel";
+    chat.innerHTML = `<textarea aria-label="Chat message"></textarea>`;
+    document.body.appendChild(chat);
+
+    fireEvent.keyDown(screen.getByLabelText("Chat message"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    chat.remove();
+  });
+
   test("Escape closes immediately when there are no unsaved changes", async () => {
     mockServices();
     const onClose = vi.fn();

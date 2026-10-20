@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useMatch } from "react-router";
 import { useChatEnabled } from "../hooks/useChatEnabled";
+import { usePreferencesLoaded } from "../utils/userPreferences";
 import {
+  DEFAULT_PANEL_SIZE,
   clampFabPosition,
   clampPanelSize,
   loadFabPosition,
@@ -40,6 +42,13 @@ const DRAG_THRESHOLD_PX = 4;
  * it comes back as it was left, on the chat the tab had open.
  */
 export default function ChatBubble() {
+  // Where the icon sits, how big the panel is and whether it shows at all are
+  // the user's preferences: nothing is drawn until they are read, so the icon
+  // never shows in the default corner only to jump to the user's spot.
+  return usePreferencesLoaded() ? <ChatBubbleFrame /> : null;
+}
+
+function ChatBubbleFrame() {
   const onChatTab = useMatch("/chat/*") !== null;
   const [open, setOpen] = useState(false);
   const { loaded, unreadCount, activeChatId } = useChatInbox();
@@ -83,7 +92,8 @@ export default function ChatBubble() {
     if (chosenFab) saveFabPosition(chosenFab);
   }, [chosenFab]);
   useEffect(() => {
-    savePanelSize(chosenSize);
+    // The default size is not a choice, so a bubble never resized stores nothing.
+    if (chosenSize !== DEFAULT_PANEL_SIZE) savePanelSize(chosenSize);
   }, [chosenSize]);
   useEffect(() => {
     if (panelOverride) savePanelPosition(panelOverride);
