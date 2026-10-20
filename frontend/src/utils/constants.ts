@@ -1,12 +1,13 @@
 export const APP_NAME = "ILD";
 
+// The board's columns, left to right, named as utils/labels.ts names each status.
 export const WORK_ITEM_STATUSES = [
   { value: "Backlog", label: "Backlog" },
-  { value: "WorkQueue", label: "Work Queue" },
+  { value: "WorkQueue", label: "Work queue" },
   { value: "Ready", label: "Ready" },
   { value: "Running", label: "Running" },
-  { value: "HumanFeedback", label: "Human Feedback" },
-  { value: "WaitingForIld", label: "Waiting For Ild" },
+  { value: "HumanFeedback", label: "Needs you" },
+  { value: "WaitingForIld", label: "Waiting for ILD" },
   { value: "Done", label: "Done" },
 ] as const;
 

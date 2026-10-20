@@ -70,7 +70,7 @@ describe("Ild settings", () => {
     });
   });
 
-  test("reads the scheduler pause and writes it back", async () => {
+  test("reads whether the scheduler is running (on means running) and writes it back", async () => {
     vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
       key,
       value: key === authServices.SchedulerSettingKeys.IsPaused ? "true" : "5",
@@ -81,13 +81,16 @@ describe("Ild settings", () => {
 
     render(<IldSettings />);
 
-    const toggle = screen.getByRole("checkbox", { name: /pause the scheduler/i });
-    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
+    const toggle = screen.getByRole("checkbox", { name: "Scheduler running" });
+    // Paused on the server, so the switch is off once it has been read.
+    await waitFor(() => expect((toggle as HTMLInputElement).disabled).toBe(false));
+    expect((toggle as HTMLInputElement).checked).toBe(false);
 
     fireEvent.click(toggle);
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.IsPaused, "false"),
     );
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
   });
 
   test("reads the automatic throttle resume, including a value stored in another casing", async () => {
@@ -153,7 +156,7 @@ describe("Ild settings", () => {
     });
   });
 
-  test("puts the pause back when the save fails", async () => {
+  test("keeps the scheduler switch where it was when the save fails", async () => {
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
       key: authServices.SchedulerSettingKeys.IsPaused,
       value: "false",
@@ -162,11 +165,12 @@ describe("Ild settings", () => {
 
     render(<IldSettings />);
 
-    const toggle = screen.getByRole("checkbox", { name: /pause the scheduler/i });
+    const toggle = screen.getByRole("checkbox", { name: "Scheduler running" });
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
     fireEvent.click(toggle);
 
     expect(await screen.findByText("database down")).toBeTruthy();
-    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 });
 

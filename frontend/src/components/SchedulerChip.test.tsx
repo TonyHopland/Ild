@@ -1,0 +1,87 @@
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import SchedulerChip from "./SchedulerChip";
+import * as authServices from "../services/auth";
+import * as signalRHook from "../hooks/useSignalR";
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+function mockHub() {
+  const handlers: Record<string, ((msg: { payload: { isPaused: boolean } }) => void)[]> = {};
+  vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+    on: vi.fn((type: string, handler: (msg: { payload: { isPaused: boolean } }) => void) => {
+      (handlers[type] ??= []).push(handler);
+    }),
+    off: vi.fn(),
+    invoke: vi.fn(),
+    connectionState: "connected",
+  } as unknown as ReturnType<typeof signalRHook.useSignalR>);
+  return handlers;
+}
+
+describe("SchedulerChip", () => {
+  test("says nothing until the server has said whether the scheduler runs", () => {
+    mockHub();
+    vi.spyOn(authServices.settingsService, "get").mockReturnValue(new Promise(() => {}));
+    render(<SchedulerChip />);
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
+
+  test("reads Running, and a click pauses the scheduler", async () => {
+    mockHub();
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: authServices.SchedulerSettingKeys.IsPaused,
+      value: "false",
+    });
+    const put = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockResolvedValue({ key: authServices.SchedulerSettingKeys.IsPaused, value: "true" });
+    render(<SchedulerChip />);
+
+    const chip = await screen.findByRole("switch", { name: "Scheduler running" });
+    expect(chip.getAttribute("aria-checked")).toBe("true");
+    expect(chip.textContent).toContain("Running");
+
+    fireEvent.click(chip);
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.IsPaused, "true"),
+    );
+    await waitFor(() => expect(chip.textContent).toContain("Paused"));
+    expect(chip.getAttribute("aria-checked")).toBe("false");
+  });
+
+  test("follows a change made elsewhere, as the hub announces it", async () => {
+    const handlers = mockHub();
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: authServices.SchedulerSettingKeys.IsPaused,
+      value: "false",
+    });
+    render(<SchedulerChip />);
+    const chip = await screen.findByRole("switch", { name: "Scheduler running" });
+
+    act(() => {
+      for (const h of handlers["SchedulerStateChanged"] ?? []) h({ payload: { isPaused: true } });
+    });
+
+    expect(chip.textContent).toContain("Paused");
+  });
+
+  test("a failed change says so and leaves the chip as it was", async () => {
+    mockHub();
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: authServices.SchedulerSettingKeys.IsPaused,
+      value: "false",
+    });
+    vi.spyOn(authServices.settingsService, "put").mockRejectedValue(new Error("database down"));
+    render(<SchedulerChip />);
+    const chip = await screen.findByRole("switch", { name: "Scheduler running" });
+
+    fireEvent.click(chip);
+
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect(chip.textContent).toContain("Running");
+  });
+});

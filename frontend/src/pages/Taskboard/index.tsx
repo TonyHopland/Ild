@@ -2,15 +2,10 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { Repository, WorkItem, WorkItemStatus } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
-import {
-  workItemService,
-  settingsService,
-  repositoryService,
-  loopTemplateService,
-  SchedulerSettingKeys,
-} from "../../services/auth";
+import { workItemService, repositoryService, loopTemplateService } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
+import Icon from "../../components/Icon";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
@@ -38,8 +33,6 @@ export default function Taskboard() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<WorkItem | null>(null);
   const [errorText, setErrorText] = useState("");
-  const [isPaused, setIsPaused] = useState(false);
-  const [pauseBusy, setPauseBusy] = useState(false);
   const [repositories, setRepositories] = useState<Repository[]>([]);
   const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [tagOptions, setTagOptions] = useState<string[]>([]);
@@ -82,7 +75,6 @@ export default function Taskboard() {
   const hasConnectedRef = useRef(false);
 
   useEffect(() => {
-    void loadSchedulerPaused();
     requestTagsRefresh();
     void repositoryService
       .getEvery()
@@ -179,15 +171,10 @@ export default function Taskboard() {
       syncWorkItem(message.payload.workItemId, { itemChanged: false });
     };
 
-    const onSchedulerStateChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {
-      setIsPaused(message.payload.isPaused);
-    };
-
     on("HumanFeedbackRequired", onHumanFeedback);
     on("WorkItemStateChanged", onWorkItemStateChanged);
     on("PreviewStateChanged", onPreviewStateChanged);
     on("WorkItemRunProgressed", onRunProgressed);
-    on("SchedulerStateChanged", onSchedulerStateChanged);
     on("WorkItemEditProposalsChanged", onEditProposalsChanged);
 
     return () => {
@@ -195,7 +182,6 @@ export default function Taskboard() {
       off("WorkItemStateChanged", onWorkItemStateChanged);
       off("PreviewStateChanged", onPreviewStateChanged);
       off("WorkItemRunProgressed", onRunProgressed);
-      off("SchedulerStateChanged", onSchedulerStateChanged);
       off("WorkItemEditProposalsChanged", onEditProposalsChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };
@@ -216,7 +202,6 @@ export default function Taskboard() {
     }
     reloadAll({ windowed: true });
     if (openWorkItemId) syncWorkItem(openWorkItemId, { itemChanged: false });
-    void loadSchedulerPaused();
     requestTagsRefresh();
   }, [connectionState]);
 
@@ -253,15 +238,6 @@ export default function Taskboard() {
       cancelled = true;
     };
   }, [openWorkItemId, boardItem, editingItemId, isInitialLoading, navigate]);
-
-  const loadSchedulerPaused = async () => {
-    try {
-      const setting = await settingsService.get(SchedulerSettingKeys.IsPaused);
-      setIsPaused(setting.value === "true");
-    } catch {
-      // Leave the toggle on its last-known state if the fetch fails.
-    }
-  };
 
   // The tags in use, re-read from the server after every change that may add or
   // drop one: at most one read in flight, and one more if asked meanwhile, so
@@ -387,7 +363,7 @@ export default function Taskboard() {
           <input
             type="search"
             className="taskboard-filter-search"
-            placeholder="Search work items..."
+            placeholder="Search title or #id"
             aria-label="Search work items"
             value={filter.search}
             onChange={(e) => setFilter((prev) => ({ ...prev, search: e.target.value }))}
@@ -420,6 +396,7 @@ export default function Taskboard() {
                     aria-pressed={active}
                     onClick={() => toggleTagFilter(tag)}
                   >
+                    {loop && <Icon name="loop" size={12} />}
                     {tag}
                   </button>
                 );
@@ -436,35 +413,10 @@ export default function Taskboard() {
             </button>
           )}
         </div>
-        <label
-          className={`scheduler-pause-toggle${isPaused ? "" : " is-running"}`}
-          title="Toggle the scheduler — when paused, Ready items stay queued until resumed."
-        >
-          <input
-            type="checkbox"
-            className="scheduler-pause-toggle-input"
-            checked={!isPaused}
-            disabled={pauseBusy}
-            aria-label="Scheduler running"
-            onChange={async (e) => {
-              const running = e.target.checked;
-              const next = !running;
-              setPauseBusy(true);
-              try {
-                await settingsService.put(SchedulerSettingKeys.IsPaused, next ? "true" : "false");
-                setIsPaused(next);
-              } catch (err) {
-                setErrorText(errorMessage(err, "Failed to update scheduler state."));
-              } finally {
-                setPauseBusy(false);
-              }
-            }}
-          />
-          <span className="scheduler-pause-toggle-track" aria-hidden="true">
-            <span className="scheduler-pause-toggle-thumb" />
-          </span>
-          <span className="scheduler-pause-toggle-label">{isPaused ? "Paused" : "Running"}</span>
-        </label>
+        <button type="button" className="btn btn-primary taskboard-new" onClick={openCreateModal}>
+          <Icon name="plus" />
+          New work item
+        </button>
       </div>
       <div role="status" aria-live="polite" className="taskboard-live-region">
         {announcement}
@@ -483,7 +435,6 @@ export default function Taskboard() {
               onWorkItemClick={handleCardClick}
               onError={(msg) => setErrorText(msg)}
               onMoveWorkItem={handleMoveWorkItem}
-              onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
               loopTemplateNames={loopTemplateNames}
               repositoryNames={repositoryNames}
               onLoadMore={() => loadMore(status.value as WorkItemStatus)}
@@ -526,83 +477,14 @@ export default function Taskboard() {
           align-items: center;
           gap: 0.75rem 1rem;
           margin-bottom: 1rem;
-          padding: 0.6rem 0.75rem;
-          background-color: #23233b;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.5rem;
-        }
-
-        /* Push the running toggle to the trailing edge of the toolbar, leaving
-           the filter controls flush left. */
-        .taskboard-toolbar .scheduler-pause-toggle {
-          margin-left: auto;
-        }
-
-        .scheduler-pause-toggle {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.5rem;
-          font-size: 0.9rem;
-          color: var(--text-secondary, #555);
-          cursor: pointer;
-          user-select: none;
-        }
-
-        .scheduler-pause-toggle-input {
-          position: absolute;
-          width: 1px;
-          height: 1px;
           padding: 0;
-          margin: -1px;
-          overflow: hidden;
-          clip: rect(0 0 0 0);
-          white-space: nowrap;
+          background: none;
           border: 0;
         }
 
-        .scheduler-pause-toggle-track {
-          position: relative;
-          display: inline-block;
-          width: 36px;
-          height: 20px;
-          border-radius: 999px;
-          background: var(--border-color, #ccc);
-          transition: background 0.2s ease;
-          flex-shrink: 0;
-        }
-
-        .scheduler-pause-toggle.is-running .scheduler-pause-toggle-track {
-          background: var(--success-color, #2e9e5b);
-        }
-
-        .scheduler-pause-toggle-thumb {
-          position: absolute;
-          top: 2px;
-          left: 2px;
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: #fff;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-          transition: transform 0.2s ease;
-        }
-
-        .scheduler-pause-toggle.is-running .scheduler-pause-toggle-thumb {
-          transform: translateX(16px);
-        }
-
-        .scheduler-pause-toggle-input:focus-visible + .scheduler-pause-toggle-track {
-          outline: 2px solid var(--focus-color, #3b82f6);
-          outline-offset: 2px;
-        }
-
-        .scheduler-pause-toggle-input:disabled ~ .scheduler-pause-toggle-track,
-        .scheduler-pause-toggle-input:disabled ~ .scheduler-pause-toggle-label {
-          opacity: 0.5;
-        }
-
-        .scheduler-pause-toggle-label {
-          font-variant-numeric: tabular-nums;
+        /* New work item sits at the trailing edge, the filters flush left. */
+        .taskboard-toolbar .taskboard-new {
+          margin-left: auto;
         }
 
         .taskboard-filter {
@@ -642,34 +524,27 @@ export default function Taskboard() {
         }
 
         .taskboard-filter-tag {
-          font-size: 0.7rem;
-          padding: 0.2rem 0.5rem;
-          background-color: #2d2d44;
-          border: 1px solid #3a3a5c;
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          min-height: 30px;
+          font-size: var(--fs-xs);
+          padding: 0 12px;
+          background-color: var(--surface-2);
+          border: 1px solid var(--border);
           border-radius: 999px;
-          color: #a0a0b0;
+          color: var(--text-2);
           cursor: pointer;
         }
 
-        .taskboard-filter-tag.is-active {
-          background-color: #3b82f6;
-          border-color: #3b82f6;
-          color: #fff;
-        }
-
-        /* Loop tags carry the same purple identity here as on the cards, so the
-           filter bar distinguishes them from free-form tags. Rules follow the
-           base is-active rule so the active loop variant wins on equal
-           specificity. */
+        /* Loop tags carry the loop icon, as on the cards. */
         .taskboard-filter-tag--loop {
-          background-color: #4c1d95;
-          border-color: #5b21b6;
-          color: #ddd6fe;
+          color: #c7c8fb;
         }
 
-        .taskboard-filter-tag--loop.is-active {
-          background-color: #7c3aed;
-          border-color: #7c3aed;
+        .taskboard-filter-tag.is-active {
+          background-color: var(--accent);
+          border-color: var(--accent);
           color: #fff;
         }
 

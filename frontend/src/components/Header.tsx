@@ -4,6 +4,7 @@ import { useAuth } from "../hooks/useAuth";
 import { NAV_ITEMS, APP_NAME, ROUTES } from "../utils/constants";
 import { useChatInbox } from "./ChatInbox";
 import { usePendingGlobalVariableProposalCount } from "../hooks/usePendingGlobalVariableProposalCount";
+import SchedulerChip from "./SchedulerChip";
 
 export default function Header() {
   const { user, logout } = useAuth();
@@ -49,6 +50,7 @@ export default function Header() {
           })}
         </nav>
         <div className="header-user">
+          <SchedulerChip />
           <span className="user-name">{user?.username}</span>
           <button className="btn btn-logout" onClick={logout}>
             Logout
@@ -62,8 +64,8 @@ export default function Header() {
           left: 0;
           right: 0;
           z-index: 100;
-          background-color: #1a1a2e;
-          border-bottom: 1px solid #2d2d44;
+          background-color: var(--surface);
+          border-bottom: 1px solid var(--border);
           height: 4rem;
         }
 
@@ -162,6 +164,62 @@ export default function Header() {
         .user-name {
           font-size: 0.875rem;
           color: #a0a0b0;
+        }
+
+        .scheduler-chip-wrap {
+          position: relative;
+          display: inline-flex;
+        }
+
+        .scheduler-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          height: 32px;
+          padding: 0 12px;
+          border-radius: 999px;
+          border: 1px solid var(--border);
+          background: var(--surface-2);
+          color: var(--text-2);
+          font-size: var(--fs-xs);
+          cursor: pointer;
+          white-space: nowrap;
+        }
+
+        .scheduler-chip:hover:not(:disabled) {
+          border-color: var(--border-strong);
+        }
+
+        .scheduler-chip strong {
+          color: var(--text);
+          font-weight: 600;
+        }
+
+        .scheduler-chip-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: var(--success);
+          box-shadow: 0 0 0 3px var(--success-soft);
+        }
+
+        .scheduler-chip.is-paused .scheduler-chip-dot {
+          background: var(--attention);
+          box-shadow: 0 0 0 3px var(--attention-soft);
+        }
+
+        .scheduler-chip-error {
+          position: absolute;
+          top: calc(100% + 6px);
+          right: 0;
+          padding: 6px 10px;
+          border-radius: var(--radius-sm);
+          background: var(--surface-3);
+          border: 1px solid var(--danger);
+          color: var(--danger-text);
+          font-size: var(--fs-xs);
+          white-space: nowrap;
+          cursor: pointer;
         }
 
         .btn-logout {

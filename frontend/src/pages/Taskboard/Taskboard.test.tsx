@@ -244,7 +244,7 @@ describe("Taskboard SignalR", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("PR Awaiting Merge")).toBeTruthy();
+      expect(screen.getByText("PR awaiting merge")).toBeTruthy();
     });
   });
 
@@ -284,7 +284,7 @@ describe("Taskboard SignalR", () => {
 
     await waitFor(() => {
       expect(getByIdSpy).toHaveBeenCalledWith("wi-1");
-      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+      expect(screen.getByText("Human input needed")).toBeTruthy();
     });
   });
 
@@ -328,7 +328,7 @@ describe("Taskboard SignalR", () => {
     await waitFor(() => {
       expect(getByIdSpy).toHaveBeenCalledWith("wi-new");
       expect(screen.getByText("Fresh Item")).toBeTruthy();
-      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+      expect(screen.getByText("Human input needed")).toBeTruthy();
     });
   });
 
@@ -423,7 +423,7 @@ describe("Taskboard SignalR", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+      expect(screen.getByText("Human input needed")).toBeTruthy();
     });
 
     // The earlier fetch finally returns its stale Running snapshot.
@@ -432,7 +432,7 @@ describe("Taskboard SignalR", () => {
     });
 
     // It must not revert the card back to Running.
-    expect(screen.queryByText("Human Input Needed")).toBeTruthy();
+    expect(screen.queryByText("Human input needed")).toBeTruthy();
   });
 
   test("refreshes a running card's current step on WorkItemRunProgressed", async () => {
@@ -624,7 +624,7 @@ describe("Taskboard reconnect", () => {
     );
   }
 
-  test("a reconnect reloads each column's loaded window from the top, the scheduler state and the tags", async () => {
+  test("a reconnect reloads each column's loaded window from the top and the tags", async () => {
     let connectionState: "connected" | "reconnecting" | "disconnected" = "connected";
     vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({
       on: vi.fn(),
@@ -636,16 +636,16 @@ describe("Taskboard reconnect", () => {
       ...Array.from({ length: 45 }, (_, n) => boardItem(`b${n}`, n)),
       boardItem("r0", 0, WorkItemStatus.Ready),
     ]);
-    const settingsSpy = vi
-      .spyOn(authServices.settingsService, "get")
-      .mockResolvedValue({ key: "scheduler.isPaused", value: "false" });
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: "scheduler.isPaused",
+      value: "false",
+    });
 
     const { rerender } = render(taskboardTree());
 
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
     fireEvent.click(within(columnEl("Backlog")).getByRole("button", { name: "Load more" }));
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(40));
-    expect(settingsSpy).toHaveBeenCalledTimes(1);
     const pagesBefore = server.getPage.mock.calls.length;
     const tagsBefore = server.getTags.mock.calls.length;
 
@@ -670,7 +670,6 @@ describe("Taskboard reconnect", () => {
       expect(q.skip).toBe(0);
       expect(q.take).toBe(q.status === WorkItemStatus.Backlog ? 40 : 20);
     }
-    await waitFor(() => expect(settingsSpy).toHaveBeenCalledTimes(2));
     expect(server.getTags.mock.calls.length).toBeGreaterThan(tagsBefore);
     expect(server.getAll).not.toHaveBeenCalled();
   });
@@ -997,14 +996,10 @@ describe("Taskboard toolbar", () => {
     });
   }
 
-  test("drops the page heading and groups the filter with the running toggle in one toolbar", async () => {
+  test("drops the page heading and puts search and New work item in one toolbar", async () => {
     mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
     mockTaskboardServer([makeItem()]);
-    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
-      key: "scheduler.isPaused",
-      value: "false",
-    });
 
     const { container } = renderTaskboard();
 
@@ -1012,41 +1007,15 @@ describe("Taskboard toolbar", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    // The heading is gone entirely.
     expect(screen.queryByRole("heading", { name: "Taskboard" })).toBeNull();
-
-    // The search field and the running toggle now share a single toolbar.
     const toolbar = container.querySelector(".taskboard-toolbar");
     expect(toolbar).toBeTruthy();
     expect(within(toolbar as HTMLElement).getByLabelText("Search work items")).toBeTruthy();
-    expect(within(toolbar as HTMLElement).getByLabelText("Scheduler running")).toBeTruthy();
-  });
-
-  test("the running toggle still flips the scheduler from its toolbar home", async () => {
-    mockSignalR();
-    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    mockTaskboardServer([makeItem()]);
-    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
-      key: "scheduler.isPaused",
-      value: "false",
-    });
-    const putSpy = vi
-      .spyOn(authServices.settingsService, "put")
-      .mockResolvedValue({ key: "scheduler.isPaused", value: "true" });
-
-    renderTaskboard();
-
-    const toggle = await screen.findByLabelText("Scheduler running");
-    expect((toggle as HTMLInputElement).checked).toBe(true);
-
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(putSpy).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.IsPaused, "true");
-    });
-    await waitFor(() => {
-      expect(screen.getByText("Paused")).toBeTruthy();
-    });
+    expect(
+      within(toolbar as HTMLElement).getByRole("button", { name: "New work item" }),
+    ).toBeTruthy();
+    // The scheduler switch lives in the header now, on every page.
+    expect(within(toolbar as HTMLElement).queryByLabelText("Scheduler running")).toBeNull();
   });
 });
 
@@ -1368,7 +1337,7 @@ describe("Taskboard live changes keep server order", () => {
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
     expect(badge("Backlog")).toBe("25");
 
-    fireEvent.click(within(columnEl("Backlog")).getByRole("button", { name: "New item" }));
+    fireEvent.click(screen.getByRole("button", { name: "New work item" }));
     await within(await screen.findByRole("dialog")).findByRole("option", { name: "Repo One" });
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Brand new" } });
