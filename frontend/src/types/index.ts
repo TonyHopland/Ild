@@ -139,7 +139,7 @@ export interface WorkItem {
   pendingEditProposalCount?: number;
 }
 
-export type WorkItemHistoryKind = "Created" | "Baseline" | "Changed";
+export type WorkItemHistoryKind = "Created" | "Baseline" | "Changed" | "Deleted";
 
 export type WorkItemActorKind = "Human" | "Agent" | "Chat" | "System";
 
@@ -162,7 +162,7 @@ export interface WorkItemHistoryEntry {
   /** The work item the acting loop run was working on. */
   actorWorkItemId?: string | null;
   field: string;
-  /** Null for a field's first entry, and always for the pullRequest event. */
+  /** Null for a field's first entry, and always for an event (pullRequest.linked, pullRequest.merged, deleted). */
   oldValue: string | null;
   newValue: string | null;
   reason?: string | null;

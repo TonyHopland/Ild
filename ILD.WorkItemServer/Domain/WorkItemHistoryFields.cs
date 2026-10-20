@@ -5,8 +5,8 @@ namespace ILD.WorkItemServer.Domain;
 /// <summary>
 /// The work item fields history tracks, by the names history rows carry, and the
 /// one way their values are written down: enums by name, Guids in lowercase "D"
-/// form, the JSON columns as stored, unset as null. The baseline seed in
-/// <see cref="WorkItemHistoryBaseline"/> writes the same encoding in SQL.
+/// form, the JSON columns as stored, unset as null. The baseline seed in the
+/// migration that added history writes the same encoding in SQL.
 /// </summary>
 public static class WorkItemHistoryFields
 {
@@ -22,14 +22,17 @@ public static class WorkItemHistoryFields
     public const string BranchNameOverride = "branchNameOverride";
     public const string BaseBranchOverride = "baseBranchOverride";
 
-    /// <summary>
-    /// An event, not a field: a PR linked to the item, or seen merged. Its value is
-    /// the PR's URL and is never paired with an old value.
-    /// </summary>
-    public const string PullRequest = "pullRequest";
+    /// <summary>An event, not a field: a PR linked to the item. Its value is the PR's URL.</summary>
+    public const string PullRequestLinked = "pullRequest.linked";
 
-    public const string PullRequestLinked = "linked";
-    public const string PullRequestMerged = "merged";
+    /// <summary>An event, not a field: a PR of the item seen merged. Its value is the PR's URL.</summary>
+    public const string PullRequestMerged = "pullRequest.merged";
+
+    /// <summary>An event, not a field: the item was deleted. Its value is the item's title at the time.</summary>
+    public const string Deleted = "deleted";
+
+    /// <summary>An event records that something happened, so its value never replaced an earlier one.</summary>
+    public static bool IsEvent(string field) => field is PullRequestLinked or PullRequestMerged or Deleted;
 
     public const int MaxReasonLength = 2000;
 

@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import type { WorkItem, WorkItemHistoryEntry } from "../../types";
 import { workItemService } from "../../services/auth";
 import { formatRelativeTime } from "../../utils/relativeTime";
-import { DescriptionDiff, TagsChange } from "../EditProposalCard";
+import { DescriptionDiff, TagsChange } from "../FieldChanges";
 import "./HistoryPanel.css";
 
 const FIELD_LABELS: Record<string, string> = {
@@ -18,8 +18,19 @@ const FIELD_LABELS: Record<string, string> = {
   aiProviderOverrideId: "AI provider",
   branchNameOverride: "Branch name",
   baseBranchOverride: "Base branch",
-  pullRequest: "Pull request",
+  "pullRequest.linked": "Pull request linked",
+  "pullRequest.merged": "Pull request merged",
+  deleted: "Title",
 };
+
+/** Events say what happened, not which field changed. */
+const EVENT_PHRASES: Record<string, string> = {
+  "pullRequest.linked": "linked a pull request",
+  "pullRequest.merged": "merged a pull request",
+};
+
+const isPullRequestEvent = (field: string) =>
+  field === "pullRequest.linked" || field === "pullRequest.merged";
 
 /** A field this view has no name for, from a tracker that keeps more, reads as its own name. */
 const fieldLabel = (field: string) => FIELD_LABELS[field] ?? field;
@@ -67,26 +78,23 @@ function OldToNew({ before, after }: { before: string | null; after: string | nu
   );
 }
 
-function PullRequestEvent({ entry }: { entry: WorkItemHistoryEntry }) {
-  const url = entry.newValue ?? "";
-  return (
-    <span className="wiv2-history-values">
-      <span>{entry.reason === "merged" ? "Merged" : "Linked"}</span>{" "}
-      {/^https?:\/\//i.test(url) ? (
-        <a href={url} target="_blank" rel="noopener noreferrer">
-          {url}
-        </a>
-      ) : (
-        <span>{url}</span>
-      )}
-    </span>
+function PullRequestLink({ url }: { url: string }) {
+  return /^https?:\/\//i.test(url) ? (
+    <a href={url} target="_blank" rel="noopener noreferrer">
+      {url}
+    </a>
+  ) : (
+    <span>{url}</span>
   );
 }
 
-/** One field of a save: the change it made, or for a Created or Baseline save its value. */
+/**
+ * One field of a save: the change it made, or for a Created, Baseline or Deleted
+ * save its value. An event has no earlier value to compare with.
+ */
 function FieldChange({ entry }: { entry: WorkItemHistoryEntry }) {
   const change = entry.kind === "Changed";
-  if (entry.field === "pullRequest") return <PullRequestEvent entry={entry} />;
+  if (isPullRequestEvent(entry.field)) return <PullRequestLink url={entry.newValue ?? ""} />;
   if (entry.field === "description")
     return change ? (
       <DescriptionDiff before={entry.oldValue ?? ""} after={entry.newValue ?? ""} />
@@ -122,6 +130,18 @@ function groupBySave(entries: WorkItemHistoryEntry[]): Save[] {
   return [...saves.values()];
 }
 
+/** "changed title, description and linked a pull request": the fields first, then the events. */
+function describeChanges(entries: WorkItemHistoryEntry[]): string {
+  const fields = entries.filter((e) => !EVENT_PHRASES[e.field]);
+  const parts = [
+    ...(fields.length > 0
+      ? [`changed ${fields.map((e) => fieldLabel(e.field).toLowerCase()).join(", ")}`]
+      : []),
+    ...entries.flatMap((e) => (EVENT_PHRASES[e.field] ? [EVENT_PHRASES[e.field]] : [])),
+  ];
+  return parts.join(" and ");
+}
+
 function SaveEvent({ save, now }: { save: Save; now: number }) {
   const first = save.entries[0];
   const shown = first.kind === "Changed" ? save.entries : save.entries.filter((e) => !isUnset(e));
@@ -132,7 +152,9 @@ function SaveEvent({ save, now }: { save: Save; now: number }) {
         : "State at history start"
       : first.kind === "Created"
         ? "created the item"
-        : `changed ${shown.map((e) => fieldLabel(e.field).toLowerCase()).join(", ")}`;
+        : first.kind === "Deleted"
+          ? "deleted the item"
+          : describeChanges(shown);
   return (
     <li className={`wiv2-history-save wiv2-history-save--${first.kind.toLowerCase()}`}>
       <div className="wiv2-history-head">
@@ -164,9 +186,7 @@ function SaveEvent({ save, now }: { save: Save; now: number }) {
             <dt>{fieldLabel(entry.field)}</dt>
             <dd>
               <FieldChange entry={entry} />
-              {entry.reason && entry.field !== "pullRequest" && (
-                <div className="wiv2-history-reason">{entry.reason}</div>
-              )}
+              {entry.reason && <div className="wiv2-history-reason">{entry.reason}</div>}
             </dd>
           </div>
         ))}

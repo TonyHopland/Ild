@@ -287,7 +287,7 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
     {
         { "a given reason", WorkItemStatus.Done, "Shipped in the release", null, "Shipped in the release" },
         { "no reason", WorkItemStatus.Backlog, null, null, null },
-        { "HumanFeedback actions stand in for a missing reason", WorkItemStatus.HumanFeedback, null, "approve,reject", "approve,reject" },
+        { "HumanFeedback actions are routing, not a reason", WorkItemStatus.HumanFeedback, null, "approve,reject", null },
         { "an over-long reason is cut to 2000", WorkItemStatus.Done, new string('r', 2500), null, new string('r', 2000) },
     };
 
@@ -387,12 +387,12 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         var events = await RowsAfterAsync(dto.Id, before);
         Assert.All(events, e =>
         {
-            Assert.Equal("pullRequest", e.Field);
             Assert.Equal(url, e.Value);
+            Assert.Null(e.Reason);
             Assert.Equal(WorkItemHistoryKind.Changed, e.Kind);
             Assert.Equal("alice", e.Username);
         });
-        Assert.Equal(new[] { "linked", "merged" }, events.Select(e => e.Reason));
+        Assert.Equal(new[] { "pullRequest.linked", "pullRequest.merged" }, events.Select(e => e.Field));
         Assert.Equal(2, events.Select(e => e.SaveId).Distinct().Count());
     }
 
@@ -527,7 +527,20 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
             Assert.Equal("bob", r.Username);
             Assert.False(string.IsNullOrWhiteSpace(r.Reason));
         });
-        Assert.Equal(depHistory, (await RowsAsync(dep.Id)).Count);
+        var kept = await RowsAsync(dep.Id);
+        Assert.Equal(depHistory + 1, kept.Count);
+        var deleted = kept[^1];
+        Assert.Equal(WorkItemHistoryKind.Deleted, deleted.Kind);
+        Assert.Equal("deleted", deleted.Field);
+        Assert.Equal("dep", deleted.Value);
+        Assert.Equal("bob", deleted.Username);
+        Assert.Equal(WorkItemActorKind.Human, deleted.ActorKind);
+
+        var history = await _svc.GetHistoryAsync(dep.Id, Ct);
+        Assert.NotNull(history);
+        Assert.Equal(kept.Count, history!.Count);
+        Assert.Equal(WorkItemHistoryKind.Deleted, history[0].Kind);
+        Assert.Null(history[0].OldValue);
     }
 
     public static TheoryData<string, string> BackgroundServices => new()

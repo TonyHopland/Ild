@@ -210,13 +210,13 @@ public sealed class WorkItemServerHistoryApiTests : IAsyncLifetime
         var stamps = history.Select(e => e.GetProperty("timestamp").GetDateTime()).ToList();
         Assert.Equal(stamps.OrderByDescending(t => t), stamps);
         Assert.Equal(
-            new[] { "pullRequest", "title", "status" },
+            new[] { "pullRequest.linked", "title", "status" },
             history.Take(3).Select(e => Str(e, "field")));
 
         var pr = history[0];
         Assert.Equal("https://forge.example/acme/widgets/pulls/3", Str(pr, "newValue"));
         Assert.Null(Str(pr, "oldValue"));
-        Assert.Equal("linked", Str(pr, "reason"));
+        Assert.Null(Str(pr, "reason"));
 
         var titles = history.Where(e => Str(e, "field") == "title").ToList();
         Assert.Equal(
@@ -263,7 +263,17 @@ public sealed class WorkItemServerHistoryApiTests : IAsyncLifetime
 
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<WorkItemServerDbContext>();
-        Assert.Equal(before.Length, await db.WorkItemHistoryEntries.CountAsync(e => e.WorkItemId == id, Ct));
+        Assert.Equal(before.Length + 1, await db.WorkItemHistoryEntries.CountAsync(e => e.WorkItemId == id, Ct));
+
+        // Still readable, and the newest entry says who deleted it.
+        var after = await HistoryAsync(id);
+        Assert.Equal(before.Length + 1, after.Length);
+        Assert.Equal("Deleted", Str(after[0], "kind"));
+        Assert.Equal("deleted", Str(after[0], "field"));
+        Assert.Equal("An item", Str(after[0], "newValue"));
+        Assert.Null(Str(after[0], "oldValue"));
+        Assert.Equal("alice", Str(after[0], "username"));
+        Assert.Equal("Human", Str(after[0], "actorKind"));
     }
 
     // ── The typed client ───────────────────────────────────────────────────

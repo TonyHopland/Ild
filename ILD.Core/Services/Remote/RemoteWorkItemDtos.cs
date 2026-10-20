@@ -200,6 +200,7 @@ public enum RemoteWorkItemHistoryKind
     Created = 0,
     Baseline = 1,
     Changed = 2,
+    Deleted = 3,
 }
 
 /// <summary>

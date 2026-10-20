@@ -14,6 +14,9 @@ public enum WorkItemHistoryKind
     Baseline = 1,
 
     Changed = 2,
+
+    /// <summary>The item was deleted; its history stays readable.</summary>
+    Deleted = 3,
 }
 
 public enum WorkItemActorKind

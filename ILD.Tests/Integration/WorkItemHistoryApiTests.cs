@@ -322,6 +322,28 @@ public class WorkItemHistoryApiTests
         Assert.True(title.GetProperty("timestamp").TryGetDateTime(out _));
     }
 
+    [Fact]
+    public async Task A_deleted_items_history_stays_readable_and_names_who_deleted_it()
+    {
+        await using var host = await new Host().StartAsync();
+        var id = await CreateAsHumanAsync(host, "Soon gone");
+
+        Assert.Equal(HttpStatusCode.OK, (await host.Human.DeleteAsync($"/api/v1/workitems/{id}", Ct)).StatusCode);
+
+        var history = await HistoryAsync(host, id);
+        var deleted = history[0];
+        Assert.Equal("Deleted", Str(deleted, "kind"));
+        Assert.Equal("Soon gone", Str(deleted, "newValue"));
+        AssertActor(deleted, host.Factory.AdminUsername, "Human", null, null);
+        Assert.Equal(11, history.Count(e => Str(e, "kind") == "Created"));
+
+        var agent = host.Agent();
+        var asked = await agent.GetAsync($"/api/v1/agent/workitems/{id}?includeHistory=true", Ct);
+        Assert.Equal(HttpStatusCode.NotFound, asked.StatusCode);
+        Assert.Equal("Deleted", Str((await ReadJsonAsync(asked)).GetProperty("history")[0], "kind"));
+        Assert.Equal(HttpStatusCode.NotFound, (await agent.GetAsync($"/api/v1/agent/workitems/{id}", Ct)).StatusCode);
+    }
+
     [Theory]
     [InlineData(true, "true")]
     [InlineData(false, "false")]

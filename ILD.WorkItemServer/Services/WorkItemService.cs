@@ -51,7 +51,8 @@ public interface IWorkItemService
 
     /// <summary>
     /// The item's history, newest first, each entry paired with the value it
-    /// replaced. Null when there is no such work item.
+    /// replaced. A deleted item's history stays readable; null only when there is
+    /// neither history nor an item with this id.
     /// </summary>
     Task<IReadOnlyList<WorkItemHistoryEntryDto>?> GetHistoryAsync(string id, CancellationToken ct = default);
 }
@@ -219,12 +220,9 @@ public sealed class WorkItemService : IWorkItemService
         if (w == null)
             return new TransitionResponse { Success = false, ActualStatus = WorkItemStatus.Backlog, Reason = "Not found" };
 
-        var reason = WorkItemHistoryFields.NormalizeReason(req.Reason)
-            ?? (req.TargetStatus == WorkItemStatus.HumanFeedback ? req.Actions : null);
-
         // Running is the only validated transition: dependency check + atomic claim.
         if (req.TargetStatus == WorkItemStatus.Running)
-            return await ClaimRunningAsync(w, reason, ct);
+            return await ClaimRunningAsync(w, req.Reason, ct);
 
         var now = _clock.GetUtcNow().UtcDateTime;
         w.Status = req.TargetStatus;
@@ -238,7 +236,7 @@ public sealed class WorkItemService : IWorkItemService
         if (req.TargetStatus == WorkItemStatus.Done || req.TargetStatus == WorkItemStatus.Ready)
             w.LastHeartbeatAt = null;
 
-        _db.SetHistoryReason(w, reason);
+        _db.SetHistoryReason(w, req.Reason);
         await _db.SaveChangesAsync(ct);
 
         // Once an item is Done, any WorkQueue item that was waiting on it may now
@@ -489,7 +487,7 @@ public sealed class WorkItemService : IWorkItemService
 
             if (historyEvent is not null)
             {
-                _db.AddHistorySave(id, WorkItemHistoryKind.Changed, [(WorkItemHistoryFields.PullRequest, req.Url)], historyEvent);
+                _db.AddHistorySave(id, WorkItemHistoryKind.Changed, [(historyEvent, req.Url)], reason: null);
                 await _db.SaveChangesAsync(ct);
             }
             await transaction.CommitAsync(ct);
@@ -556,19 +554,20 @@ public sealed class WorkItemService : IWorkItemService
 
     public async Task<IReadOnlyList<WorkItemHistoryEntryDto>?> GetHistoryAsync(string id, CancellationToken ct = default)
     {
-        if (!await _db.WorkItems.AnyAsync(w => w.Id == id, ct)) return null;
-
+        // Ordered by Id, the order the rows were written in: a timestamp is taken
+        // before its write lands, so two writers can stamp out of order.
         var rows = await _db.WorkItemHistoryEntries.AsNoTracking()
             .Where(e => e.WorkItemId == id)
-            .OrderBy(e => e.Timestamp).ThenBy(e => e.Id)
+            .OrderBy(e => e.Id)
             .ToListAsync(ct);
+        if (rows.Count == 0 && !await _db.WorkItems.AnyAsync(w => w.Id == id, ct)) return null;
 
         var latest = new Dictionary<string, string?>(StringComparer.Ordinal);
         var history = new List<WorkItemHistoryEntryDto>(rows.Count);
         foreach (var row in rows)
         {
             string? old = null;
-            if (row.Field != WorkItemHistoryFields.PullRequest)
+            if (!WorkItemHistoryFields.IsEvent(row.Field))
             {
                 latest.TryGetValue(row.Field, out old);
                 latest[row.Field] = row.Value;

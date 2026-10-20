@@ -83,8 +83,9 @@ public sealed class WorkItemServerDbContext : DbContext
 
     /// <summary>
     /// One Changed save for every modified work item whose tracked fields changed,
-    /// all sharing one save id. Added items are left to their creator, which only
-    /// knows the id the rows are keyed by after the insert.
+    /// and one Deleted save for every deleted one, all sharing one save id. Added
+    /// items are left to their creator, which only knows the id the rows are keyed
+    /// by after the insert.
     /// </summary>
     private void CaptureHistory()
     {
@@ -92,8 +93,14 @@ public sealed class WorkItemServerDbContext : DbContext
         {
             ChangeTracker.DetectChanges();
             var changes = ChangeTracker.Entries<WorkItem>()
-                .Where(e => e.State == EntityState.Modified)
-                .Select(e => (Item: e.Entity, Fields: WorkItemHistoryFields.Changed(e.OriginalValues, e.CurrentValues)))
+                .Select(e => e.State switch
+                {
+                    EntityState.Modified => (Item: e.Entity, Kind: WorkItemHistoryKind.Changed,
+                        Fields: WorkItemHistoryFields.Changed(e.OriginalValues, e.CurrentValues)),
+                    EntityState.Deleted => (Item: e.Entity, Kind: WorkItemHistoryKind.Deleted,
+                        Fields: [(WorkItemHistoryFields.Deleted, e.Entity.Title)]),
+                    _ => (Item: e.Entity, Kind: WorkItemHistoryKind.Changed, Fields: []),
+                })
                 .Where(c => c.Fields.Count > 0)
                 .ToList();
             if (changes.Count == 0) return;
@@ -101,8 +108,8 @@ public sealed class WorkItemServerDbContext : DbContext
             var actor = RequireActor();
             var saveId = NewSaveId();
             var now = _clock.GetUtcNow().UtcDateTime;
-            foreach (var (item, fields) in changes)
-                AddHistoryRows(actor, saveId, now, item.Id, WorkItemHistoryKind.Changed, fields, _historyReasons.GetValueOrDefault(item));
+            foreach (var (item, kind, fields) in changes)
+                AddHistoryRows(actor, saveId, now, item.Id, kind, fields, _historyReasons.GetValueOrDefault(item));
         }
         finally
         {

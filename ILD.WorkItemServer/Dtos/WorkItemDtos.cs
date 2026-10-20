@@ -197,7 +197,7 @@ public sealed class PollResponse
 /// <summary>
 /// One field of one save in a work item's history, with the value it replaced:
 /// the previous entry's value for the same field, null for the field's first
-/// entry and for an event such as <c>pullRequest</c>.
+/// entry and for an event such as <c>pullRequest.linked</c>.
 /// </summary>
 public sealed class WorkItemHistoryEntryDto
 {

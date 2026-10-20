@@ -280,7 +280,13 @@ public class AgentController : ControllerBase
         [FromQuery] bool includeHistory = false)
     {
         var wi = await _workItems.GetWorkItemAsync(id);
-        if (wi == null) return NotFound();
+        if (wi == null)
+        {
+            // A deleted item's history outlives it, and says who deleted it.
+            if (includeHistory && await _workItems.GetHistoryAsync(id) is { } deletedHistory)
+                return NotFound(new { error = $"Work item {id} has been deleted.", history = deletedHistory });
+            return NotFound();
+        }
         var deps = await _workItems.GetDependenciesAsync(id);
         // Reverse edges: the items that depend on this one ("blocks"). Resolved
         // here, one item at a time, so the lightweight list never pays for it.

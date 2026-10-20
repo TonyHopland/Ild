@@ -39,14 +39,19 @@ public sealed class WorkItemHistoryBaselineTests : IAsyncLifetime
 
     public async ValueTask DisposeAsync() => await _conn.DisposeAsync();
 
-    /// <summary>The seed the migration runs, found by name so the test does not depend on its namespace.</summary>
-    private static string SeedSql()
+    /// <summary>The migration that adds the history table, found by the table it creates.</summary>
+    private static IReadOnlyList<MigrationOperation> HistoryMigrationUp()
     {
-        var holder = Assert.Single(typeof(WorkItemServerDbContext).Assembly.GetTypes(), t => t.Name == "WorkItemHistoryBaseline");
-        var field = holder.GetField("SeedSql");
-        Assert.NotNull(field);
-        return Assert.IsType<string>(field!.GetRawConstantValue());
+        var migrations = typeof(WorkItemServerDbContext).Assembly.GetTypes()
+            .Where(t => typeof(Migration).IsAssignableFrom(t) && !t.IsAbstract)
+            .Select(t => (Migration)Activator.CreateInstance(t)!)
+            .Where(m => m.UpOperations.OfType<CreateTableOperation>().Any(c => c.Name == "WorkItemHistoryEntries"))
+            .ToList();
+        return Assert.Single(migrations).UpOperations;
     }
+
+    /// <summary>The seed exactly as that migration runs it, frozen in the migration itself.</summary>
+    private static string SeedSql() => Assert.Single(HistoryMigrationUp().OfType<SqlOperation>()).Sql;
 
     private async Task<WorkItem> InsertItemAsync(Action<WorkItem> shape)
     {
@@ -142,11 +147,11 @@ public sealed class WorkItemHistoryBaselineTests : IAsyncLifetime
     {
         var expected = new List<(string Id, string Field, string Name)>();
         foreach (var status in Enum.GetValues<WorkItemStatus>())
-            expected.Add(((await InsertItemAsync(w => w.Status = status)).Id, "status", status.ToString()));
+            expected.Add(((await InsertItemAsync(w => w.Status = status)).Id, "status", WorkItemHistoryFields.Encode(status)!));
         foreach (var priority in Enum.GetValues<WorkItemPriority>())
-            expected.Add(((await InsertItemAsync(w => w.Priority = priority)).Id, "priority", priority.ToString()));
+            expected.Add(((await InsertItemAsync(w => w.Priority = priority)).Id, "priority", WorkItemHistoryFields.Encode(priority)!));
         foreach (var mode in Enum.GetValues<AiProviderOverrideMode>())
-            expected.Add(((await InsertItemAsync(w => w.AiProviderOverride = mode)).Id, "aiProviderOverride", mode.ToString()));
+            expected.Add(((await InsertItemAsync(w => w.AiProviderOverride = mode)).Id, "aiProviderOverride", WorkItemHistoryFields.Encode(mode)!));
 
         var rows = await SeedAndReadAsync();
 
@@ -188,20 +193,14 @@ public sealed class WorkItemHistoryBaselineTests : IAsyncLifetime
     [Fact]
     public void The_migration_that_adds_the_table_runs_the_seed_and_ties_history_to_no_work_item_row()
     {
-        var migrations = typeof(WorkItemServerDbContext).Assembly.GetTypes()
-            .Where(t => typeof(Migration).IsAssignableFrom(t) && !t.IsAbstract)
-            .Select(t => (Migration)Activator.CreateInstance(t)!)
-            .Where(m => m.UpOperations.OfType<CreateTableOperation>().Any(c => c.Name == "WorkItemHistoryEntries"))
-            .ToList();
-
-        var operations = Assert.Single(migrations).UpOperations;
+        var operations = HistoryMigrationUp();
         var create = operations.OfType<CreateTableOperation>().Single(c => c.Name == "WorkItemHistoryEntries");
         Assert.Empty(create.ForeignKeys);
         Assert.Contains(operations.OfType<CreateIndexOperation>(), i =>
             i.Table == "WorkItemHistoryEntries" && i.Columns.SequenceEqual(new[] { "WorkItemId", "Field", "Timestamp" }));
-        var seed = operations.OfType<SqlOperation>().Where(s => s.Sql == SeedSql()).ToList();
-        Assert.Single(seed);
-        Assert.True(operations.ToList().IndexOf(seed[0]) > operations.ToList().IndexOf(create),
+        var seed = Assert.Single(operations.OfType<SqlOperation>());
+        Assert.StartsWith("INSERT INTO \"WorkItemHistoryEntries\"", seed.Sql.Trim());
+        Assert.True(operations.ToList().IndexOf(seed) > operations.ToList().IndexOf(create),
             "the seed has to run after the table exists");
     }
 }

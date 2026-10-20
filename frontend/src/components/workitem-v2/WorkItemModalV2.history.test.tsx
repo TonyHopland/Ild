@@ -331,4 +331,35 @@ describe("WorkItemModalV2 History tab", () => {
     await waitFor(() => expect(panel.textContent).toContain("After the edit"));
     expect(panel.textContent).not.toContain("Before the edit");
   });
+  test("a deletion and a linked pull request each read as what happened", async () => {
+    mockServices(async () => [
+      entry({
+        saveId: "save-2",
+        kind: "Deleted",
+        username: "alice",
+        actorKind: "Human",
+        field: "deleted",
+        newValue: "The item as it was named",
+      }),
+      entry({
+        saveId: "save-1",
+        timestamp: new Date(Date.now() - 5 * HOUR).toISOString(),
+        username: "instance-user",
+        field: "pullRequest.linked",
+        newValue: "https://forge.example/acme/widgets/pulls/7",
+      }),
+    ]);
+    await renderDialog(makeWorkItem());
+
+    const panel = await openHistory();
+    await waitFor(() => expect(panel.textContent).toContain("deleted the item"));
+
+    const all = text(panel);
+    expect(all).toContain("The item as it was named");
+    expect(all).toContain("linked a pull request");
+    expect(
+      panel.querySelector('a[href="https://forge.example/acme/widgets/pulls/7"]'),
+    ).not.toBeNull();
+    expect(all).not.toMatch(/pullRequest|\bnull\b/);
+  });
 });
