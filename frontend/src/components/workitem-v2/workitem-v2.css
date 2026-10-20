@@ -1946,3 +1946,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* In the thread the bubble draws the card's frame: red for a failed node. */
+.wiv2-bubble-human:has(.wiv2-feedback-failed) {
+  border-color: rgba(239, 68, 68, 0.6);
+  background: linear-gradient(0deg, var(--danger-soft), var(--danger-soft)), var(--surface-2);
+}

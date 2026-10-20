@@ -63,7 +63,7 @@ type Tone = "btn-primary" | "btn-secondary" | "btn-danger";
  * empty. An output the node hides has no button.
  *
  * However many there are, one is primary: the node's default output, else
- * Merge, else Approve. The default comes first and Reject last. A colour set on
+ * Merge, else Approve, else the first named output in node order. The default comes first and Reject last. A colour set on
  * an output in the loop editor shows as a dot and border, so the primary stays
  * the obvious choice. An output that asks to confirm is marked "…" and, when
  * pressed, swaps the buttons for an inline confirmation.
@@ -109,7 +109,8 @@ export default function FeedbackActions({
     defaultOutput !== null && actionList.includes(defaultOutput) ? defaultOutput : null;
   const enterTarget = submitDefaultOnEnter ? shownDefault : null;
   const primary: string | null =
-    shownDefault ?? (onMerge ? "Merge" : actionList.includes("OnSuccess") ? "OnSuccess" : null);
+    shownDefault ??
+    (onMerge ? "Merge" : actionList.includes("OnSuccess") ? "OnSuccess" : (customNames[0] ?? null));
 
   const toneOf = (name: string): Tone =>
     name === primary ? "btn-primary" : name === "OnFailure" ? "btn-danger" : "btn-secondary";

@@ -661,4 +661,20 @@ describe("FeedbackActions — order and the one primary", () => {
     expect(screen.getByRole("button", { name: "Park" }).textContent).toContain("…");
     expect(screen.getByRole("button", { name: "Approve" }).textContent).not.toContain("…");
   });
+
+  test("with only named outputs and no default, the first in node order is the primary", () => {
+    render(
+      <FeedbackActions
+        actions="approve,reject"
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onEdge={vi.fn()}
+      />,
+    );
+
+    expect(primaries().map((b) => b.textContent)).toEqual(["approve"]);
+    expect(screen.getByRole("button", { name: "reject" }).classList.contains("btn-secondary")).toBe(
+      true,
+    );
+  });
 });
