@@ -51,33 +51,64 @@ public sealed class WorkItemServerDbContext : DbContext
     /// in one transaction.
     /// </summary>
     public void AddHistorySave(string workItemId, WorkItemHistoryKind kind, IEnumerable<(string Field, string? Value)> fields, string? reason)
-        => AddHistoryRows(RequireActor(), NewSaveId(), _clock.GetUtcNow().UtcDateTime, workItemId, kind, fields, reason);
+        => WorkItemHistoryEntries.AddRange(
+            HistoryRows(RequireActor(), NewSaveId(), _clock.GetUtcNow().UtcDateTime, workItemId, kind, fields, reason));
 
+    // A save that changes work items writes them first and its history rows after,
+    // in one transaction: an update takes the item's row lock, so the history of
+    // two writers to one item is numbered in the order their changes landed, which
+    // is the order old values are paired in.
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
-        CaptureHistory();
+        var history = CaptureHistory();
+        var transaction = history.Count > 0 && Database.CurrentTransaction is null ? Database.BeginTransaction() : null;
         try
         {
-            return base.SaveChanges(acceptAllChangesOnSuccess);
+            var written = base.SaveChanges(acceptAllChangesOnSuccess);
+            if (history.Count > 0)
+            {
+                WorkItemHistoryEntries.AddRange(history);
+                written += base.SaveChanges(acceptAllChangesOnSuccess);
+            }
+            transaction?.Commit();
+            return written;
         }
         catch
         {
             DetachUnsavedHistory();
             throw;
+        }
+        finally
+        {
+            transaction?.Dispose();
         }
     }
 
     public override async Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
-        CaptureHistory();
+        var history = CaptureHistory();
+        var transaction = history.Count > 0 && Database.CurrentTransaction is null
+            ? await Database.BeginTransactionAsync(cancellationToken)
+            : null;
         try
         {
-            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+            var written = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+            if (history.Count > 0)
+            {
+                WorkItemHistoryEntries.AddRange(history);
+                written += await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+            }
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+            return written;
         }
         catch
         {
             DetachUnsavedHistory();
             throw;
+        }
+        finally
+        {
+            if (transaction is not null) await transaction.DisposeAsync();
         }
     }
 
@@ -87,7 +118,7 @@ public sealed class WorkItemServerDbContext : DbContext
     /// items are left to their creator, which only knows the id the rows are keyed
     /// by after the insert.
     /// </summary>
-    private void CaptureHistory()
+    private List<WorkItemHistoryEntry> CaptureHistory()
     {
         try
         {
@@ -103,13 +134,14 @@ public sealed class WorkItemServerDbContext : DbContext
                 })
                 .Where(c => c.Fields.Count > 0)
                 .ToList();
-            if (changes.Count == 0) return;
+            if (changes.Count == 0) return [];
 
             var actor = RequireActor();
             var saveId = NewSaveId();
             var now = _clock.GetUtcNow().UtcDateTime;
-            foreach (var (item, kind, fields) in changes)
-                AddHistoryRows(actor, saveId, now, item.Id, kind, fields, _historyReasons.GetValueOrDefault(item));
+            return changes
+                .SelectMany(c => HistoryRows(actor, saveId, now, c.Item.Id, c.Kind, c.Fields, _historyReasons.GetValueOrDefault(c.Item)))
+                .ToList();
         }
         finally
         {
@@ -117,11 +149,10 @@ public sealed class WorkItemServerDbContext : DbContext
         }
     }
 
-    private void AddHistoryRows(
+    private static List<WorkItemHistoryEntry> HistoryRows(
         WorkItemActor actor, string saveId, DateTime timestamp, string workItemId, WorkItemHistoryKind kind,
         IEnumerable<(string Field, string? Value)> fields, string? reason)
-    {
-        var rows = fields.Select(f => new WorkItemHistoryEntry
+        => fields.Select(f => new WorkItemHistoryEntry
         {
             WorkItemId = workItemId,
             Timestamp = timestamp,
@@ -135,8 +166,6 @@ public sealed class WorkItemServerDbContext : DbContext
             Value = f.Value,
             Reason = WorkItemHistoryFields.NormalizeReason(reason),
         }).ToList();
-        WorkItemHistoryEntries.AddRange(rows);
-    }
 
     private WorkItemActor RequireActor()
         => HistoryActor ?? throw new InvalidOperationException(

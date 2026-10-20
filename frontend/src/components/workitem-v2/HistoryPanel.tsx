@@ -33,7 +33,11 @@ const isPullRequestEvent = (field: string) =>
   field === "pullRequest.linked" || field === "pullRequest.merged";
 
 /** A field this view has no name for, from a tracker that keeps more, reads as its own name. */
-const fieldLabel = (field: string) => FIELD_LABELS[field] ?? field;
+/** A tracker may name a field anything, `constructor` included, so only own keys count. */
+const lookup = (table: Record<string, string>, key: string) =>
+  Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+
+const fieldLabel = (field: string) => lookup(FIELD_LABELS, field) ?? field;
 
 /** A JSON array of strings, or null when the value is not one, which is then shown as it is. */
 function parseList(value: string | null): string[] | null {
@@ -132,12 +136,12 @@ function groupBySave(entries: WorkItemHistoryEntry[]): Save[] {
 
 /** "changed title, description and linked a pull request": the fields first, then the events. */
 function describeChanges(entries: WorkItemHistoryEntry[]): string {
-  const fields = entries.filter((e) => !EVENT_PHRASES[e.field]);
+  const fields = entries.filter((e) => !lookup(EVENT_PHRASES, e.field));
   const parts = [
     ...(fields.length > 0
       ? [`changed ${fields.map((e) => fieldLabel(e.field).toLowerCase()).join(", ")}`]
       : []),
-    ...entries.flatMap((e) => (EVENT_PHRASES[e.field] ? [EVENT_PHRASES[e.field]] : [])),
+    ...entries.flatMap((e) => lookup(EVENT_PHRASES, e.field) ?? []),
   ];
   return parts.join(" and ");
 }
