@@ -239,17 +239,25 @@ function ChatBubbleFrame() {
 
         return (
           <div
-            className="chat-panel"
+            // A phone shows the chat as a full-screen sheet that neither moves nor resizes.
+            className={`chat-panel${isMobile ? " chat-panel--sheet" : ""}`}
             role="dialog"
             aria-label="AI chat"
-            style={{
-              left: panelPos.x,
-              top: panelPos.y,
-              width: panelSize.width,
-              height: panelSize.height,
-            }}
+            style={
+              isMobile
+                ? undefined
+                : {
+                    left: panelPos.x,
+                    top: panelPos.y,
+                    width: panelSize.width,
+                    height: panelSize.height,
+                  }
+            }
           >
-            <div className="chat-panel-header" onPointerDown={startHeaderDrag}>
+            <div
+              className="chat-panel-header"
+              onPointerDown={isMobile ? undefined : startHeaderDrag}
+            >
               <button
                 type="button"
                 className="chat-link-btn chat-sidebar-toggle"
@@ -291,13 +299,15 @@ function ChatBubbleFrame() {
               </div>
             )}
 
-            <div
-              className="chat-resize-handle"
-              role="button"
-              tabIndex={-1}
-              aria-label="Resize chat"
-              onPointerDown={startResize}
-            />
+            {!isMobile && (
+              <div
+                className="chat-resize-handle"
+                role="button"
+                tabIndex={-1}
+                aria-label="Resize chat"
+                onPointerDown={startResize}
+              />
+            )}
           </div>
         );
       }}

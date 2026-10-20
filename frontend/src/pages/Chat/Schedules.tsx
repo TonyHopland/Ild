@@ -588,7 +588,7 @@ export default function Schedules({ onShowList }: { onShowList?: () => void } = 
       <header className="chat-page-header chat-schedules-header">
         {onShowList && <ChatsBackButton onClick={onShowList} />}
         <h1 className="chat-page-title">Schedules</h1>
-        <button type="button" className="chat-primary-btn" onClick={() => openForm(null)}>
+        <button type="button" className="btn btn-primary" onClick={() => openForm(null)}>
           New schedule
         </button>
       </header>

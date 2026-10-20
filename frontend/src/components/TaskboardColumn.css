@@ -21,12 +21,12 @@
 
 /* Needs you: the column with something waiting on a person. */
 .taskboard-column--needs {
-  border-color: rgba(245, 158, 11, 0.45);
+  border-color: var(--attention-border);
 }
 
 .taskboard-column--needs .taskboard-column-count {
   background-color: var(--attention);
-  color: #1a1205;
+  color: var(--on-attention);
   font-weight: 700;
 }
 
@@ -87,8 +87,8 @@
 }
 
 .taskboard-column.drag-over {
-  outline: 2px dashed #6366f1;
-  background-color: #252540;
+  outline: 2px dashed var(--accent);
+  background-color: var(--accent-soft);
 }
 
 .taskboard-column-header {
@@ -130,25 +130,4 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-}
-
-.taskboard-column-load-more {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #c0c0d0;
-  background-color: #2d2d44;
-  border: 1px solid #3a3a55;
-  padding: 0.4rem 0.55rem;
-  border-radius: 0.375rem;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-}
-
-.taskboard-column-load-more:hover {
-  background-color: #353553;
-}
-
-.taskboard-column-load-more:disabled {
-  opacity: 0.6;
-  cursor: default;
 }

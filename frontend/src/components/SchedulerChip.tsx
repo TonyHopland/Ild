@@ -1,4 +1,5 @@
 import { useSchedulerState } from "../hooks/useSchedulerState";
+import "./SchedulerChip.css";
 
 /**
  * The scheduler's state in the header, on every page: "Scheduler: Running" or

@@ -1940,7 +1940,7 @@
 /* ---------- action tab: a run stopped on a failed node ---------- */
 
 .wiv2-feedback-failed {
-  border-color: rgba(239, 68, 68, 0.55);
+  border-color: var(--danger-border);
   background: linear-gradient(0deg, var(--danger-soft), var(--danger-soft)), var(--surface-2);
   display: flex;
   flex-direction: column;
@@ -1982,12 +1982,12 @@
 .wiv2-failed-output {
   margin: 0;
   padding: 10px 12px;
-  background: #0e0e16;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 12.5px;
-  color: #f3c6c6;
+  color: var(--danger-text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 240px;
@@ -2018,7 +2018,7 @@
 
 /* In the thread the bubble draws the card's frame: red for a failed node. */
 .wiv2-bubble-human:has(.wiv2-feedback-failed) {
-  border-color: rgba(239, 68, 68, 0.6);
+  border-color: var(--danger-border);
   background: linear-gradient(0deg, var(--danger-soft), var(--danger-soft)), var(--surface-2);
 }
 
@@ -2053,7 +2053,7 @@
 
   .wiv2-tabbar {
     padding: 0 var(--space-2);
-    mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+    mask-image: linear-gradient(to right, black calc(100% - 32px), transparent);
   }
 
   .wiv2-tab {

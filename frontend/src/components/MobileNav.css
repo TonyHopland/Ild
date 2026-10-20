@@ -57,7 +57,7 @@
   padding: 0 5px;
   border-radius: 999px;
   background: var(--attention);
-  color: #1a1205;
+  color: var(--on-attention);
   font-size: 10px;
   font-weight: 700;
   line-height: 16px;

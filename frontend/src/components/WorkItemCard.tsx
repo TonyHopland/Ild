@@ -311,7 +311,7 @@ export default function WorkItemCard({
            so they read as "runs this loop" without a legend. */
         .work-item-tag--loop {
           background-color: var(--accent-soft);
-          color: #c7c8fb;
+          color: var(--loop-tag-text);
         }
 
         .qa-active-dot {

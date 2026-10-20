@@ -133,7 +133,7 @@ function ChatConversation({
             </svg>
           </button>
         )}
-        <button type="submit" className="chat-primary-btn" disabled={!draft.trim()}>
+        <button type="submit" className="btn btn-primary" disabled={!draft.trim()}>
           Send
         </button>
       </form>
@@ -911,7 +911,7 @@ export default function ChatWorkspace({
             ))}
           </div>
 
-          <button type="button" className="chat-primary-btn" onClick={() => void startChat()}>
+          <button type="button" className="btn btn-primary" onClick={() => void startChat()}>
             Start chat
           </button>
         </div>

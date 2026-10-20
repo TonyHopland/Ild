@@ -63,7 +63,7 @@ export default function Header() {
           top: 0;
           left: 0;
           right: 0;
-          z-index: 100;
+          z-index: var(--z-header);
           background-color: var(--surface);
           border-bottom: 1px solid var(--border);
           height: 4rem;
@@ -166,62 +166,6 @@ export default function Header() {
           color: #a0a0b0;
         }
 
-        .scheduler-chip-wrap {
-          position: relative;
-          display: inline-flex;
-        }
-
-        .scheduler-chip {
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          height: 32px;
-          padding: 0 12px;
-          border-radius: 999px;
-          border: 1px solid var(--border);
-          background: var(--surface-2);
-          color: var(--text-2);
-          font-size: var(--fs-xs);
-          cursor: pointer;
-          white-space: nowrap;
-        }
-
-        .scheduler-chip:hover:not(:disabled) {
-          border-color: var(--border-strong);
-        }
-
-        .scheduler-chip strong {
-          color: var(--text);
-          font-weight: 600;
-        }
-
-        .scheduler-chip-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: var(--success);
-          box-shadow: 0 0 0 3px var(--success-soft);
-        }
-
-        .scheduler-chip.is-paused .scheduler-chip-dot {
-          background: var(--attention);
-          box-shadow: 0 0 0 3px var(--attention-soft);
-        }
-
-        .scheduler-chip-error {
-          position: absolute;
-          top: calc(100% + 6px);
-          right: 0;
-          padding: 6px 10px;
-          border-radius: var(--radius-sm);
-          background: var(--surface-3);
-          border: 1px solid var(--danger);
-          color: var(--danger-text);
-          font-size: var(--fs-xs);
-          white-space: nowrap;
-          cursor: pointer;
-        }
-
         .btn-logout {
           background-color: transparent;
           color: #a0a0b0;
@@ -243,13 +187,8 @@ export default function Header() {
 
           .header-nav,
           .user-name,
-          .btn-logout,
-          .scheduler-chip-label {
+          .btn-logout {
             display: none;
-          }
-
-          .scheduler-chip {
-            height: 36px;
           }
         }
       `}</style>

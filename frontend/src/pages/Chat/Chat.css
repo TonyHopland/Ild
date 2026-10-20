@@ -216,7 +216,7 @@
     font-size: var(--fs-md);
   }
 
-  .chat-schedules-header .chat-primary-btn {
+  .chat-schedules-header .btn {
     flex: none;
   }
 

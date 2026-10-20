@@ -170,7 +170,7 @@ export default function TaskboardColumn({
         {hasMore && (
           <button
             type="button"
-            className="taskboard-column-load-more"
+            className="btn btn-secondary btn-sm taskboard-column-load-more"
             onClick={onLoadMore}
             disabled={loadingMore}
           >

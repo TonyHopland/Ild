@@ -291,7 +291,7 @@ export default function ChatSidebar({
 
   return (
     <aside className={`chat-sidebar${full ? " chat-sidebar-full" : ""}`} aria-label="Chats">
-      <button type="button" className="chat-primary-btn" onClick={onNewChat}>
+      <button type="button" className="btn btn-primary" onClick={onNewChat}>
         New chat
       </button>
       {extras}

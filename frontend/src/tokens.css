@@ -52,6 +52,33 @@
 
   --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
 
+  /* Text on a filled background: the accent, danger or a badge; and on attention amber. */
+  --on-fill: #fff;
+  --on-attention: #1a1205;
+
+  /* A loop tag's text: the accent, lightened to read on a dark chip. */
+  --loop-tag-text: #c7c8fb;
+
+  /* Borders that mark something in a status tone, without filling it. */
+  --attention-border: rgba(245, 158, 11, 0.45);
+  --danger-border: rgba(239, 68, 68, 0.55);
+
+  /* A raised control on hover, a faint hover tint, what dims the page behind
+     a sheet, and the colour of shadows. */
+  --surface-hover: #34344f;
+  --tint-hover: rgba(255, 255, 255, 0.04);
+  --scrim: rgba(5, 5, 12, 0.6);
+  --shadow-color: rgba(0, 0, 0, 0.45);
+
+  /* Stacking, lowest first: a menu over its own panel, the fixed header, a
+     dialog, the chat over a dialog, the chat as a phone sheet, a bottom sheet. */
+  --z-menu: 20;
+  --z-header: 100;
+  --z-modal: 200;
+  --z-chat: 1000;
+  --z-chat-sheet: 1100;
+  --z-sheet: 1200;
+
   /* Minimum height of an interactive control. */
   --control-h: 32px;
   --control-h-sm: 26px;
