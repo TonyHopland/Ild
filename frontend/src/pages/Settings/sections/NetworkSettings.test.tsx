@@ -573,7 +573,7 @@ describe("Network settings", () => {
     await waitFor(() => expect(input.value).toBe("30"));
 
     fireEvent.change(input, { target: { value: "7" } });
-    fireEvent.click(input.parentElement!.querySelector("button")!);
+    fireEvent.blur(input);
 
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith(services.NetworkSettingKeys.LogRetentionDays, "7"),
@@ -589,7 +589,7 @@ describe("Network settings", () => {
     await waitFor(() => expect(input.value).toBe("30"));
 
     fireEvent.change(input, { target: { value: "3651" } });
-    fireEvent.click(input.parentElement!.querySelector("button")!);
+    fireEvent.blur(input);
 
     expect(await screen.findByText(/between 0 \(disabled\) and 3650/i)).toBeTruthy();
     expect(put).not.toHaveBeenCalled();

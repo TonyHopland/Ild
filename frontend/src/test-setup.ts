@@ -1,3 +1,6 @@
+import { beforeEach } from "vite-plus/test";
+import { seedPreferences } from "./utils/userPreferences";
+
 // Global test setup. Runs once per test file before any tests.
 //
 // React Flow (@xyflow/react) instantiates ResizeObserver asynchronously, which
@@ -20,3 +23,9 @@ class ResizeObserverStub {
 }
 
 globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+
+// Every test starts signed in with no preferences set: each setting at its
+// default, and nothing sent to the server. A test that needs a choice seeds it.
+beforeEach(() => {
+  seedPreferences();
+});

@@ -1652,3 +1652,16 @@
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+
+/* Phone: a note in place of the palette, and a canvas tall enough to read. */
+.loop-editor-phone-note {
+  margin: 0 0 8px;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 767px) {
+  .loop-canvas-container {
+    min-height: 60vh;
+  }
+}

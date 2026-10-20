@@ -18,12 +18,12 @@ describe("Ild settings", () => {
     // 0 is the floor for run retention but below the scheduler's minimum of 1.
     const concurrent = (await screen.findByLabelText(/max concurrent/i)) as HTMLInputElement;
     fireEvent.change(concurrent, { target: { value: "0" } });
-    fireEvent.click(concurrent.parentElement!.querySelector("button")!);
+    fireEvent.blur(concurrent);
     await screen.findByText("Must be an integer between 1 and 1000.");
 
     const retention = screen.getByLabelText(/delete finished runs after/i) as HTMLInputElement;
     fireEvent.change(retention, { target: { value: "0" } });
-    fireEvent.click(retention.parentElement!.querySelector("button")!);
+    fireEvent.blur(retention);
 
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.RunRetentionDays, "0");
@@ -37,11 +37,11 @@ describe("Ild settings", () => {
 
     const steps = (await screen.findByLabelText(/max ai steps/i)) as HTMLInputElement;
     fireEvent.change(steps, { target: { value: "0" } });
-    fireEvent.click(steps.parentElement!.querySelector("button")!);
+    fireEvent.blur(steps);
     await screen.findByText("Must be an integer between 1 and 1000.");
 
     fireEvent.change(steps, { target: { value: "40" } });
-    fireEvent.click(steps.parentElement!.querySelector("button")!);
+    fireEvent.blur(steps);
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.MaxAiTraversals, "40");
     });
@@ -59,18 +59,18 @@ describe("Ild settings", () => {
     expect(limit.value).toBe("4000");
 
     fireEvent.change(limit, { target: { value: "8193" } });
-    fireEvent.click(limit.parentElement!.querySelector("button")!);
+    fireEvent.blur(limit);
     await screen.findByText("Must be an integer between 1 and 8192.");
     expect(put).not.toHaveBeenCalledWith("globalVariables.maxLength", "8193");
 
     fireEvent.change(limit, { target: { value: "2000" } });
-    fireEvent.click(limit.parentElement!.querySelector("button")!);
+    fireEvent.blur(limit);
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith("globalVariables.maxLength", "2000");
     });
   });
 
-  test("reads the scheduler pause and writes it back", async () => {
+  test("reads whether the scheduler is running (on means running) and writes it back", async () => {
     vi.spyOn(authServices.settingsService, "get").mockImplementation(async (key: string) => ({
       key,
       value: key === authServices.SchedulerSettingKeys.IsPaused ? "true" : "5",
@@ -81,13 +81,16 @@ describe("Ild settings", () => {
 
     render(<IldSettings />);
 
-    const toggle = screen.getByRole("checkbox", { name: /pause the scheduler/i });
-    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
+    const toggle = screen.getByRole("checkbox", { name: "Scheduler running" });
+    // Paused on the server, so the switch is off once it has been read.
+    await waitFor(() => expect((toggle as HTMLInputElement).disabled).toBe(false));
+    expect((toggle as HTMLInputElement).checked).toBe(false);
 
     fireEvent.click(toggle);
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.IsPaused, "false"),
     );
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
   });
 
   test("reads the automatic throttle resume, including a value stored in another casing", async () => {
@@ -133,7 +136,7 @@ describe("Ild settings", () => {
 
     const wait = (await screen.findByLabelText(/wait between attempts/i)) as HTMLInputElement;
     fireEvent.change(wait, { target: { value: "90" } });
-    fireEvent.click(wait.parentElement!.querySelector("button")!);
+    fireEvent.blur(wait);
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith(
         authServices.SchedulerSettingKeys.ThrottleRetryDelayMinutes,
@@ -143,17 +146,17 @@ describe("Ild settings", () => {
 
     const attempts = screen.getByLabelText(/attempts before asking you/i) as HTMLInputElement;
     fireEvent.change(attempts, { target: { value: "0" } });
-    fireEvent.click(attempts.parentElement!.querySelector("button")!);
+    fireEvent.blur(attempts);
     await screen.findByText("Must be an integer between 1 and 100.");
 
     fireEvent.change(attempts, { target: { value: "3" } });
-    fireEvent.click(attempts.parentElement!.querySelector("button")!);
+    fireEvent.blur(attempts);
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.ThrottleMaxRetries, "3");
     });
   });
 
-  test("puts the pause back when the save fails", async () => {
+  test("keeps the scheduler switch where it was when the save fails", async () => {
     vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
       key: authServices.SchedulerSettingKeys.IsPaused,
       value: "false",
@@ -162,11 +165,12 @@ describe("Ild settings", () => {
 
     render(<IldSettings />);
 
-    const toggle = screen.getByRole("checkbox", { name: /pause the scheduler/i });
+    const toggle = screen.getByRole("checkbox", { name: "Scheduler running" });
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(true));
     fireEvent.click(toggle);
 
     expect(await screen.findByText("database down")).toBeTruthy();
-    expect((toggle as HTMLInputElement).checked).toBe(false);
+    expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 });
 

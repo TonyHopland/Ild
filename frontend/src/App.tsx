@@ -1,8 +1,12 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router";
 import { AuthContext, useProvideAuth, useAuth } from "./hooks/useAuth";
 import Header from "./components/Header";
 import Footer from "./components/Footer";
+import MobileTabBar from "./components/MobileNav";
+import { useIsMobile } from "./hooks/useIsMobile";
+import { WorkItemHubProvider } from "./hooks/useWorkItemHub";
+import { clearPreferences, loadPreferences } from "./utils/userPreferences";
 import ChatBubble from "./components/ChatBubble";
 import { ChatInboxProvider } from "./components/ChatInbox";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -27,6 +31,15 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function AppRoutes() {
   const { isAuthenticated, isLoading } = useAuth();
+  const isMobile = useIsMobile();
+
+  // The signed-in user's preferences are read once per sign-in and forgotten on
+  // sign-out, so the next user to sign in here starts from their own.
+  useEffect(() => {
+    if (isLoading) return;
+    if (isAuthenticated) void loadPreferences();
+    else clearPreferences();
+  }, [isAuthenticated, isLoading]);
 
   if (isLoading) {
     return (
@@ -47,142 +60,145 @@ function AppRoutes() {
 
   return (
     <ChatInboxProvider>
-      <div className="app">
-        <Header />
-        <main className="app-main">
-          <Routes>
-            <Route path="/" element={<Navigate to="/taskboard" replace />} />
-            <Route
-              path="/taskboard"
-              element={
-                <ProtectedRoute>
-                  <Taskboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/taskboard/:workItemId"
-              element={
-                <ProtectedRoute>
-                  <Taskboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/loop-editor"
-              element={
-                <ProtectedRoute>
-                  <Suspense
-                    fallback={
-                      <div className="page-container">
-                        <p>Loading...</p>
-                      </div>
-                    }
-                  >
-                    <LoopEditor />
-                  </Suspense>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/loop-editor/:templateId"
-              element={
-                <ProtectedRoute>
-                  <Suspense
-                    fallback={
-                      <div className="page-container">
-                        <p>Loading...</p>
-                      </div>
-                    }
-                  >
-                    <LoopEditor />
-                  </Suspense>
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/analytics"
-              element={
-                <ProtectedRoute>
-                  <Analytics />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/chat"
-              element={
-                <ProtectedRoute>
-                  <Chat />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/chat/schedules"
-              element={
-                <ProtectedRoute>
-                  <Chat view="schedules" />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/chat/:chatId"
-              element={
-                <ProtectedRoute>
-                  <Chat />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/settings"
-              element={
-                <ProtectedRoute>
-                  <Settings />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/settings/:section"
-              element={
-                <ProtectedRoute>
-                  <Settings />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/repositories"
-              element={
-                <ProtectedRoute>
-                  <Repositories />
-                </ProtectedRoute>
-              }
-            />
-            <Route path="/remote-providers" element={<Navigate to="/repositories" replace />} />
-            <Route
-              path="/ai-providers"
-              element={
-                <ProtectedRoute>
-                  <AiProviders />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/global-variables"
-              element={
-                <ProtectedRoute>
-                  <GlobalVariables />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/work-item-server"
-              element={<Navigate to="/settings/work-item-server" replace />}
-            />
-            <Route path="*" element={<Navigate to="/taskboard" replace />} />
-          </Routes>
-        </main>
-        <Footer />
-        <ChatBubble />
-      </div>
+      <WorkItemHubProvider>
+        <div className="app">
+          <Header />
+          <main className="app-main">
+            <Routes>
+              <Route path="/" element={<Navigate to="/taskboard" replace />} />
+              <Route
+                path="/taskboard"
+                element={
+                  <ProtectedRoute>
+                    <Taskboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/taskboard/:workItemId"
+                element={
+                  <ProtectedRoute>
+                    <Taskboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/loop-editor"
+                element={
+                  <ProtectedRoute>
+                    <Suspense
+                      fallback={
+                        <div className="page-container">
+                          <p>Loading...</p>
+                        </div>
+                      }
+                    >
+                      <LoopEditor />
+                    </Suspense>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/loop-editor/:templateId"
+                element={
+                  <ProtectedRoute>
+                    <Suspense
+                      fallback={
+                        <div className="page-container">
+                          <p>Loading...</p>
+                        </div>
+                      }
+                    >
+                      <LoopEditor />
+                    </Suspense>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/analytics"
+                element={
+                  <ProtectedRoute>
+                    <Analytics />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/chat"
+                element={
+                  <ProtectedRoute>
+                    <Chat />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/chat/schedules"
+                element={
+                  <ProtectedRoute>
+                    <Chat view="schedules" />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/chat/:chatId"
+                element={
+                  <ProtectedRoute>
+                    <Chat />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <ProtectedRoute>
+                    <Settings />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/settings/:section"
+                element={
+                  <ProtectedRoute>
+                    <Settings />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/repositories"
+                element={
+                  <ProtectedRoute>
+                    <Repositories />
+                  </ProtectedRoute>
+                }
+              />
+              <Route path="/remote-providers" element={<Navigate to="/repositories" replace />} />
+              <Route
+                path="/ai-providers"
+                element={
+                  <ProtectedRoute>
+                    <AiProviders />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/global-variables"
+                element={
+                  <ProtectedRoute>
+                    <GlobalVariables />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/work-item-server"
+                element={<Navigate to="/settings/work-item-server" replace />}
+              />
+              <Route path="*" element={<Navigate to="/taskboard" replace />} />
+            </Routes>
+          </main>
+          {/* A phone navigates by the tab bar and has no room for the footer. */}
+          {isMobile ? <MobileTabBar /> : <Footer />}
+          <ChatBubble />
+        </div>
+      </WorkItemHubProvider>
     </ChatInboxProvider>
   );
 }

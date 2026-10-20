@@ -291,9 +291,9 @@ describe("edit proposals in the detail view", () => {
       }),
     );
     await waitFor(() => expect(action().textContent).toContain("Loose card"));
-    await waitFor(() => expect(action().textContent).toContain("Human Feedback"));
+    await waitFor(() => expect(action().textContent).toContain("Needs you"));
 
-    const expected = ["Done.", "Step card", "Halted step card", "Human Feedback", "Loose card"];
+    const expected = ["Done.", "Step card", "Halted step card", "Needs you", "Loose card"];
     expect(documentOrder(inAction(expected))).toEqual(expected);
   });
 

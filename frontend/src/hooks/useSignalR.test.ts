@@ -220,6 +220,16 @@ describe("useSignalR", () => {
   });
 });
 
+describe("the connection object useSignalR returns", () => {
+  test("stays the same object across renders while its state is unchanged, so a context handing it down does not re-render its readers", () => {
+    const { result, rerender } = renderHook(() => useSignalR(null));
+    const first = result.current;
+    rerender();
+    rerender();
+    expect(result.current).toBe(first);
+  });
+});
+
 describe("useSignalR after the hub has closed", () => {
   let visibility: DocumentVisibilityState = "visible";
 

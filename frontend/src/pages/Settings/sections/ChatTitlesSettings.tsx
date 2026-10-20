@@ -146,7 +146,6 @@ export default function ChatTitlesSettings() {
         max={10}
         fallback={3}
         disabled={off}
-        saveLabel="Save title attempts"
       >
         Try again after each reply until the chat has this many messages.
       </NumericSettingField>

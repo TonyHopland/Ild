@@ -1,6 +1,26 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import TaskboardColumn from "./TaskboardColumn";
+import { useState, type ComponentProps } from "react";
+import BoardColumn from "./TaskboardColumn";
+
+type ColumnProps = ComponentProps<typeof BoardColumn>;
+
+/** The column as the board drives it, holding the fold choice the board would keep. */
+function TaskboardColumn(
+  props: Omit<ColumnProps, "foldChoice" | "onFoldChange"> & Partial<ColumnProps>,
+) {
+  const [choice, setChoice] = useState<boolean | null>(props.foldChoice ?? null);
+  return (
+    <BoardColumn
+      {...props}
+      foldChoice={choice}
+      onFoldChange={(folded) => {
+        setChoice(folded);
+        props.onFoldChange?.(folded);
+      }}
+    />
+  );
+}
 import WorkItemCard from "./WorkItemCard";
 import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
 import * as authServices from "../services/auth";
@@ -77,6 +97,8 @@ describe("TaskboardColumn", () => {
   test("Done column cards keep showing their PR history", () => {
     const { container } = render(
       <TaskboardColumn
+        // Done starts folded; this one has been opened.
+        foldChoice={false}
         status={WorkItemStatus.Done}
         label="Done"
         workItems={[
@@ -104,8 +126,8 @@ describe("TaskboardColumn", () => {
     );
     render(
       <TaskboardColumn
-        status={WorkItemStatus.Done}
-        label="Done"
+        status={WorkItemStatus.Backlog}
+        label="Backlog"
         workItems={items}
         total={30}
         onWorkItemUpdate={() => {}}
@@ -235,7 +257,7 @@ describe("WorkItemCard", () => {
     });
     render(<WorkItemCard workItem={item} />);
 
-    expect(screen.getByText("PR Awaiting Merge")).toBeTruthy();
+    expect(screen.getByText("PR awaiting merge")).toBeTruthy();
   });
 
   test("hides badge when no reason is set", () => {
@@ -245,23 +267,117 @@ describe("WorkItemCard", () => {
     });
     render(<WorkItemCard workItem={item} />);
 
-    expect(screen.queryByText("PR Awaiting Merge")).toBeFalsy();
-    expect(screen.queryByText("Node Failed")).toBeFalsy();
-    expect(screen.queryByText("Rebase Conflict")).toBeFalsy();
-    expect(screen.queryByText("Human Input Needed")).toBeFalsy();
+    expect(screen.queryByText("PR awaiting merge")).toBeFalsy();
+    expect(screen.queryByText("Node failed")).toBeFalsy();
+    expect(screen.queryByText("Rebase conflict")).toBeFalsy();
+    expect(screen.queryByText("Human input needed")).toBeFalsy();
   });
 
-  test("displays correct badge for each reason type", () => {
-    const reasons = ["Node Failed", "Rebase Conflict", "Human Input Needed"];
+  test("displays each reason in words, in its tone", () => {
+    const reasons = [
+      ["Node Failed", "Node failed", "pill-danger"],
+      ["Rebase Conflict", "Rebase conflict", "pill-attention"],
+      ["Human Input Needed", "Human input needed", "pill-attention"],
+    ] as const;
 
-    for (const reason of reasons) {
+    for (const [reason, label, tone] of reasons) {
       const item = makeItem({
         id: reason,
         status: WorkItemStatus.HumanFeedback,
         humanFeedbackReason: reason,
       });
       render(<WorkItemCard workItem={item} />);
-      expect(screen.getByText(reason)).toBeTruthy();
+      expect(screen.getByText(label).classList.contains(tone)).toBe(true);
     }
+  });
+});
+
+describe("TaskboardColumn folding and Needs you", () => {
+  const column = (status: WorkItemStatus, label: string, items: WorkItem[]) =>
+    render(
+      <TaskboardColumn
+        status={status}
+        label={label}
+        workItems={items}
+        total={items.length}
+        onWorkItemUpdate={vi.fn()}
+      />,
+    );
+
+  test("an empty column folds to a strip and opens, with a hint, when clicked", () => {
+    column(WorkItemStatus.WorkQueue, "Work queue", []);
+
+    const strip = screen.getByRole("button", { name: "Work queue: empty. Show column" });
+    expect(strip.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(strip);
+    expect(screen.getByText(/Move a backlog item here/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Fold Work queue" }));
+    expect(screen.getByRole("button", { name: "Work queue: empty. Show column" })).toBeTruthy();
+  });
+
+  test("a column with cards starts open, folds to a strip that counts them, and opens again", () => {
+    column(WorkItemStatus.Ready, "Ready", [
+      makeItem({ id: "a", title: "One", status: WorkItemStatus.Ready }),
+      makeItem({ id: "b", title: "Two", status: WorkItemStatus.Ready }),
+    ]);
+    expect(screen.getByText("One")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fold Ready" }));
+    expect(screen.queryByText("One")).toBeNull();
+    const strip = screen.getByRole("button", { name: "Ready: 2 items. Show column" });
+    expect(strip.textContent).toContain("2");
+
+    fireEvent.click(strip);
+    expect(screen.getByText("One")).toBeTruthy();
+  });
+
+  test("Done starts folded even with cards in it", () => {
+    column(WorkItemStatus.Done, "Done", [
+      makeItem({ title: "Shipped", status: WorkItemStatus.Done }),
+    ]);
+    expect(screen.queryByText("Shipped")).toBeNull();
+    expect(screen.getByRole("button", { name: "Done: 1 item. Show column" })).toBeTruthy();
+  });
+
+  test("Running starts open even when empty, so what starts is seen at once", () => {
+    column(WorkItemStatus.Running, "Running", []);
+    expect(screen.queryByRole("button", { name: /Running: empty. Show column/ })).toBeNull();
+    expect(screen.getByText("Ready items start here while the scheduler is running.")).toBeTruthy();
+  });
+
+  test("a choice handed in wins over the column's own rule, and a fold is handed back out", () => {
+    const onFoldChange = vi.fn();
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Done}
+        label="Done"
+        workItems={[makeItem({ title: "Shipped", status: WorkItemStatus.Done })]}
+        total={1}
+        onWorkItemUpdate={vi.fn()}
+        foldChoice={false}
+        onFoldChange={onFoldChange}
+      />,
+    );
+    expect(screen.getByText("Shipped")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Fold Done" }));
+    expect(onFoldChange).toHaveBeenCalledWith(true);
+  });
+
+  test("a folded Needs you with something waiting is still marked", () => {
+    const { container } = column(WorkItemStatus.HumanFeedback, "Needs you", [
+      makeItem({ status: WorkItemStatus.HumanFeedback }),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Fold Needs you" }));
+    expect(
+      container.querySelector(".taskboard-column--collapsed.taskboard-column--needs"),
+    ).not.toBeNull();
+  });
+
+  test("Needs you is marked while something waits in it", () => {
+    const { container } = column(WorkItemStatus.HumanFeedback, "Needs you", [
+      makeItem({ status: WorkItemStatus.HumanFeedback }),
+    ]);
+    expect(container.querySelector(".taskboard-column--needs")).not.toBeNull();
   });
 });

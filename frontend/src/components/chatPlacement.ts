@@ -1,9 +1,12 @@
 // Persisted placement for the chat bubble: where the user dragged the floating
-// icon and how large they resized the panel. Both are kept per-browser in
-// localStorage and clamped to the current viewport so a bubble dragged to a
-// corner — or a panel sized on a wide monitor — can never end up stranded
-// off-screen after the window shrinks. Whether the chat list is open is kept
-// here too.
+// icon and how large they resized the panel. Both are kept among the user's
+// preferences exactly as the user chose them, and clamped to the viewport only
+// when drawn: a bubble dragged to a corner, or a panel sized on a wide monitor,
+// stays on-screen while the window is small and goes back to where it was put
+// when the window grows again. Whether the chat list is open is kept here too.
+
+import { MOBILE_QUERY } from "../hooks/useIsMobile";
+import { PreferenceKeys, getPreference, setPreference } from "../utils/userPreferences";
 
 export interface Point {
   x: number;
@@ -21,9 +24,9 @@ export const VIEWPORT_MARGIN = 20; // 1.25rem — matches the original fixed ins
 export const DEFAULT_PANEL_SIZE: Size = { width: 384, height: 512 }; // 24rem × 32rem
 export const MIN_PANEL_SIZE: Size = { width: 280, height: 320 };
 
-export const FAB_POSITION_KEY = "ild_chat_fab_pos";
-export const PANEL_SIZE_KEY = "ild_chat_panel_size";
-export const PANEL_POSITION_KEY = "ild_chat_panel_pos";
+export const FAB_POSITION_KEY = PreferenceKeys.ChatFabPosition;
+export const PANEL_SIZE_KEY = PreferenceKeys.ChatPanelSize;
+export const PANEL_POSITION_KEY = PreferenceKeys.ChatPanelPosition;
 
 function clamp(value: number, min: number, max: number): number {
   // When the available range is empty (tiny viewport) fall back to the lower
@@ -32,12 +35,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-/** Current viewport size, or zeros when there is no `window` (SSR/tests). */
+/**
+ * The phone tab bar's height, without the safe-area inset: the one source for
+ * the bar itself (MobileNav) and for the chat icon, which stays above it.
+ */
+export const MOBILE_TABBAR_HEIGHT = 60;
+
+/**
+ * The area the icon and panel may use, or zeros when there is no `window`
+ * (SSR/tests): the viewport, less the tab bar on a phone.
+ */
 export function viewportSize(): Size {
-  return {
-    width: typeof window === "undefined" ? 0 : window.innerWidth,
-    height: typeof window === "undefined" ? 0 : window.innerHeight,
-  };
+  if (typeof window === "undefined") return { width: 0, height: 0 };
+  const tabBar = window.matchMedia?.(MOBILE_QUERY).matches ? MOBILE_TABBAR_HEIGHT : 0;
+  return { width: window.innerWidth, height: window.innerHeight - tabBar };
 }
 
 /** Keep the floating icon fully inside the viewport, honouring the edge margin. */
@@ -81,7 +92,7 @@ export function panelPosition(anchor: Point, size: Size, vp: Size): Point {
 
 function readJson(key: string): unknown {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = getPreference(key);
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
@@ -98,26 +109,32 @@ function readPair(value: unknown, a: string, b: string): [number, number] | null
   return [first, second];
 }
 
-/** Load the stored icon position (clamped), or fall back to the default corner. */
-export function loadFabPosition(): Point {
-  const vp = viewportSize();
+/**
+ * The icon position the user dragged it to, unclamped, or `null` when it was
+ * never moved and sits in the default corner.
+ */
+export function loadFabPosition(): Point | null {
   const pair = readPair(readJson(FAB_POSITION_KEY), "x", "y");
-  return pair ? clampFabPosition({ x: pair[0], y: pair[1] }, vp) : defaultFabPosition(vp);
+  return pair ? { x: pair[0], y: pair[1] } : null;
+}
+
+/** Where the icon is drawn: the chosen spot pulled into view, or the default corner. */
+export function renderedFabPosition(chosen: Point | null, vp: Size): Point {
+  return chosen ? clampFabPosition(chosen, vp) : defaultFabPosition(vp);
 }
 
 export function saveFabPosition(pos: Point): void {
-  localStorage.setItem(FAB_POSITION_KEY, JSON.stringify(pos));
+  setPreference(FAB_POSITION_KEY, JSON.stringify(pos));
 }
 
-/** Load the stored panel size (clamped), or fall back to the default size. */
+/** The panel size the user chose, unclamped, or the default size. Clamp it when drawing. */
 export function loadPanelSize(): Size {
-  const vp = viewportSize();
   const pair = readPair(readJson(PANEL_SIZE_KEY), "width", "height");
-  return clampPanelSize(pair ? { width: pair[0], height: pair[1] } : DEFAULT_PANEL_SIZE, vp);
+  return pair ? { width: pair[0], height: pair[1] } : DEFAULT_PANEL_SIZE;
 }
 
 export function savePanelSize(size: Size): void {
-  localStorage.setItem(PANEL_SIZE_KEY, JSON.stringify(size));
+  setPreference(PANEL_SIZE_KEY, JSON.stringify(size));
 }
 
 /**
@@ -130,7 +147,7 @@ export function loadPanelPosition(): Point | null {
 }
 
 export function savePanelPosition(pos: Point): void {
-  localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify(pos));
+  setPreference(PANEL_POSITION_KEY, JSON.stringify(pos));
 }
 
 /**
@@ -138,7 +155,7 @@ export function savePanelPosition(pos: Point): void {
  * width plus the default panel's. Below it an open list fills the whole panel.
  */
 export const SIDEBAR_SIDE_BY_SIDE_MIN_WIDTH = 640;
-export const SIDEBAR_OPEN_KEY = "ild_chat_sidebar_open";
+export const SIDEBAR_OPEN_KEY = PreferenceKeys.ChatSidebarOpen;
 
 /** Whether the chat list was left open; until the user says, open only beside a chat. */
 export function loadSidebarOpen(panelWidth: number): boolean {
@@ -147,5 +164,5 @@ export function loadSidebarOpen(panelWidth: number): boolean {
 }
 
 export function saveSidebarOpen(open: boolean): void {
-  localStorage.setItem(SIDEBAR_OPEN_KEY, JSON.stringify(open));
+  setPreference(SIDEBAR_OPEN_KEY, JSON.stringify(open));
 }

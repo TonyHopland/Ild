@@ -92,14 +92,30 @@ function ChatConversation({
           const content = draft.trim();
           if (!content) return;
           setDraft("");
+          // The box grew with the message; sent, it goes back to one line.
+          const box = e.currentTarget.querySelector<HTMLTextAreaElement>("textarea.chat-input");
+          if (box) box.style.height = "";
           onSend(content);
         }}
       >
-        <input
+        {/* Grows with what is typed. Enter sends, Shift+Enter adds a line, as
+            in a run's feedback box. */}
+        <textarea
           className="chat-input"
           placeholder="Message…"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          rows={1}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            e.target.style.height = "auto";
+            e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+          }}
+          onKeyDown={(e) => {
+            const composing = e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
+            if (e.key !== "Enter" || e.shiftKey || composing) return;
+            e.preventDefault();
+            e.currentTarget.form?.requestSubmit();
+          }}
           aria-label="Chat message"
         />
         {/* Only offered while a turn is in flight — the same window the
@@ -117,7 +133,7 @@ function ChatConversation({
             </svg>
           </button>
         )}
-        <button type="submit" className="chat-primary-btn" disabled={!draft.trim()}>
+        <button type="submit" className="btn btn-primary" disabled={!draft.trim()}>
           Send
         </button>
       </form>
@@ -895,7 +911,7 @@ export default function ChatWorkspace({
             ))}
           </div>
 
-          <button type="button" className="chat-primary-btn" onClick={() => void startChat()}>
+          <button type="button" className="btn btn-primary" onClick={() => void startChat()}>
             Start chat
           </button>
         </div>

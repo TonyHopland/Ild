@@ -2,6 +2,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import Taskboard from "./index";
+import { foldedColumnKey } from "../../hooks/useFoldedColumns";
+import {
+  PreferenceKeys,
+  clearPreferences,
+  getPreference,
+  seedPreferences,
+  setPreference,
+} from "../../utils/userPreferences";
 import { mockTaskboardServer, pressEscapeUntil } from "../../test-support";
 import {
   NodeType,
@@ -23,6 +31,9 @@ afterEach(() => {
 
 beforeEach(() => {
   localStorage.clear();
+  // Done starts folded; these tests read the cards in every column, so this
+  // user has opened it.
+  seedPreferences({ [foldedColumnKey(WorkItemStatus.Done)]: "false" });
 });
 
 function LocationDisplay() {
@@ -244,7 +255,7 @@ describe("Taskboard SignalR", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("PR Awaiting Merge")).toBeTruthy();
+      expect(screen.getByText("PR awaiting merge")).toBeTruthy();
     });
   });
 
@@ -284,7 +295,7 @@ describe("Taskboard SignalR", () => {
 
     await waitFor(() => {
       expect(getByIdSpy).toHaveBeenCalledWith("wi-1");
-      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+      expect(screen.getByText("Human input needed")).toBeTruthy();
     });
   });
 
@@ -328,7 +339,7 @@ describe("Taskboard SignalR", () => {
     await waitFor(() => {
       expect(getByIdSpy).toHaveBeenCalledWith("wi-new");
       expect(screen.getByText("Fresh Item")).toBeTruthy();
-      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+      expect(screen.getByText("Human input needed")).toBeTruthy();
     });
   });
 
@@ -423,7 +434,7 @@ describe("Taskboard SignalR", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Human Input Needed")).toBeTruthy();
+      expect(screen.getByText("Human input needed")).toBeTruthy();
     });
 
     // The earlier fetch finally returns its stale Running snapshot.
@@ -432,7 +443,7 @@ describe("Taskboard SignalR", () => {
     });
 
     // It must not revert the card back to Running.
-    expect(screen.queryByText("Human Input Needed")).toBeTruthy();
+    expect(screen.queryByText("Human input needed")).toBeTruthy();
   });
 
   test("refreshes a running card's current step on WorkItemRunProgressed", async () => {
@@ -567,7 +578,7 @@ describe("Taskboard SignalR", () => {
   });
 
   test("skips notification when notifications disabled in settings", async () => {
-    localStorage.setItem("ild_notifications_enabled", "false");
+    setPreference(PreferenceKeys.NotificationsEnabled, "false");
 
     const notificationCalls: Array<[string, NotificationOptions]> = [];
     class MockNotification {
@@ -624,7 +635,7 @@ describe("Taskboard reconnect", () => {
     );
   }
 
-  test("a reconnect reloads each column's loaded window from the top, the scheduler state and the tags", async () => {
+  test("a reconnect reloads each column's loaded window from the top and the tags", async () => {
     let connectionState: "connected" | "reconnecting" | "disconnected" = "connected";
     vi.spyOn(signalRHook, "useSignalR").mockImplementation(() => ({
       on: vi.fn(),
@@ -636,16 +647,16 @@ describe("Taskboard reconnect", () => {
       ...Array.from({ length: 45 }, (_, n) => boardItem(`b${n}`, n)),
       boardItem("r0", 0, WorkItemStatus.Ready),
     ]);
-    const settingsSpy = vi
-      .spyOn(authServices.settingsService, "get")
-      .mockResolvedValue({ key: "scheduler.isPaused", value: "false" });
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: "scheduler.isPaused",
+      value: "false",
+    });
 
     const { rerender } = render(taskboardTree());
 
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
     fireEvent.click(within(columnEl("Backlog")).getByRole("button", { name: "Load more" }));
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(40));
-    expect(settingsSpy).toHaveBeenCalledTimes(1);
     const pagesBefore = server.getPage.mock.calls.length;
     const tagsBefore = server.getTags.mock.calls.length;
 
@@ -670,7 +681,6 @@ describe("Taskboard reconnect", () => {
       expect(q.skip).toBe(0);
       expect(q.take).toBe(q.status === WorkItemStatus.Backlog ? 40 : 20);
     }
-    await waitFor(() => expect(settingsSpy).toHaveBeenCalledTimes(2));
     expect(server.getTags.mock.calls.length).toBeGreaterThan(tagsBefore);
     expect(server.getAll).not.toHaveBeenCalled();
   });
@@ -758,7 +768,7 @@ describe("Taskboard reconnect with a work item open", () => {
     const feedbackBox = () => document.querySelector(".wiv2-feedback");
 
     const { rerender } = render(tree());
-    await waitFor(() => expect(feedbackBox()?.textContent).toContain("PR Feedback"));
+    await waitFor(() => expect(feedbackBox()?.textContent).toContain("PR feedback"));
 
     // The phone sleeps; the hub drops, and the run moves on meanwhile.
     connectionState = "disconnected";
@@ -997,14 +1007,10 @@ describe("Taskboard toolbar", () => {
     });
   }
 
-  test("drops the page heading and groups the filter with the running toggle in one toolbar", async () => {
+  test("drops the page heading and puts search and New work item in one toolbar", async () => {
     mockSignalR();
     vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
     mockTaskboardServer([makeItem()]);
-    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
-      key: "scheduler.isPaused",
-      value: "false",
-    });
 
     const { container } = renderTaskboard();
 
@@ -1012,41 +1018,15 @@ describe("Taskboard toolbar", () => {
       expect(screen.getByText("Test Item")).toBeTruthy();
     });
 
-    // The heading is gone entirely.
     expect(screen.queryByRole("heading", { name: "Taskboard" })).toBeNull();
-
-    // The search field and the running toggle now share a single toolbar.
     const toolbar = container.querySelector(".taskboard-toolbar");
     expect(toolbar).toBeTruthy();
     expect(within(toolbar as HTMLElement).getByLabelText("Search work items")).toBeTruthy();
-    expect(within(toolbar as HTMLElement).getByLabelText("Scheduler running")).toBeTruthy();
-  });
-
-  test("the running toggle still flips the scheduler from its toolbar home", async () => {
-    mockSignalR();
-    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
-    mockTaskboardServer([makeItem()]);
-    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
-      key: "scheduler.isPaused",
-      value: "false",
-    });
-    const putSpy = vi
-      .spyOn(authServices.settingsService, "put")
-      .mockResolvedValue({ key: "scheduler.isPaused", value: "true" });
-
-    renderTaskboard();
-
-    const toggle = await screen.findByLabelText("Scheduler running");
-    expect((toggle as HTMLInputElement).checked).toBe(true);
-
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(putSpy).toHaveBeenCalledWith(authServices.SchedulerSettingKeys.IsPaused, "true");
-    });
-    await waitFor(() => {
-      expect(screen.getByText("Paused")).toBeTruthy();
-    });
+    expect(
+      within(toolbar as HTMLElement).getByRole("button", { name: "New work item" }),
+    ).toBeTruthy();
+    // The scheduler switch lives in the header now, on every page.
+    expect(within(toolbar as HTMLElement).queryByLabelText("Scheduler running")).toBeNull();
   });
 });
 
@@ -1368,7 +1348,7 @@ describe("Taskboard live changes keep server order", () => {
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
     expect(badge("Backlog")).toBe("25");
 
-    fireEvent.click(within(columnEl("Backlog")).getByRole("button", { name: "New item" }));
+    fireEvent.click(screen.getByRole("button", { name: "New work item" }));
     await within(await screen.findByRole("dialog")).findByRole("option", { name: "Repo One" });
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Brand new" } });
@@ -1650,5 +1630,120 @@ describe("Taskboard direct link", () => {
     expect(cardTitles("Backlog")).toHaveLength(20);
     expect(cardTitles("Backlog")).not.toContain("b0");
     expect(badge("Backlog")).toBe("25");
+  });
+});
+
+describe("Taskboard on a phone", () => {
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([makeRepo()]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const items = [
+    makeItem({ id: "wi-1", title: "Waiting on me", status: WorkItemStatus.HumanFeedback }),
+    makeItem({ id: "wi-2", title: "Not started", status: WorkItemStatus.Backlog }),
+  ];
+
+  test("shows one column at a time, picked above the board, opening on Needs you", async () => {
+    mockTaskboardServer(items);
+    renderTaskboard();
+
+    expect(await screen.findByText("Waiting on me")).toBeTruthy();
+    expect(screen.queryByText("Not started")).toBeNull();
+
+    const picker = within(screen.getByRole("tablist", { name: "Columns" }));
+    const needsYou = picker.getByRole("tab", { name: /Needs you/ });
+    expect(needsYou.getAttribute("aria-selected")).toBe("true");
+    expect(needsYou.textContent).toBe("Needs you1");
+
+    fireEvent.click(picker.getByRole("tab", { name: /Backlog/ }));
+    expect(await screen.findByText("Not started")).toBeTruthy();
+    expect(screen.queryByText("Waiting on me")).toBeNull();
+  });
+
+  test("an empty column says what lands there instead of folding to a strip", async () => {
+    mockTaskboardServer(items);
+    renderTaskboard();
+    await screen.findByText("Waiting on me");
+
+    fireEvent.click(screen.getByRole("tab", { name: /Running/ }));
+    expect(screen.getByText("Ready items start here while the scheduler is running.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Show column/ })).toBeNull();
+  });
+
+  test("the repository and tag filters move into a Filters sheet, and New work item is an icon", async () => {
+    mockTaskboardServer(items);
+    renderTaskboard();
+    await screen.findByText("Waiting on me");
+
+    expect(screen.queryByLabelText("Filter by repository")).toBeNull();
+    expect(screen.getByRole("button", { name: "New work item" }).textContent).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Filters" }));
+    const sheet = within(screen.getByRole("dialog", { name: "Filters" }));
+    fireEvent.change(sheet.getByLabelText("Filter by repository"), {
+      target: { value: "repo-1" },
+    });
+    fireEvent.click(sheet.getByRole("button", { name: "Show results" }));
+
+    expect(screen.queryByRole("dialog", { name: "Filters" })).toBeNull();
+    expect(screen.getByRole("button", { name: /Filters/ }).textContent).toBe("Filters1 on");
+  });
+});
+
+describe("Taskboard folded columns", () => {
+  beforeEach(() => {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+  });
+
+  test("opens each column as the user left it, and saves a fold to their preferences", async () => {
+    seedPreferences({ [foldedColumnKey(WorkItemStatus.Backlog)]: "true" });
+    mockTaskboardServer([
+      makeItem({ id: "wi-1", title: "Not started", status: WorkItemStatus.Backlog }),
+      makeItem({ id: "wi-2", title: "Shipped", status: WorkItemStatus.Done }),
+    ]);
+    renderTaskboard();
+
+    expect(
+      await screen.findByRole("button", { name: "Backlog: 1 item. Show column" }),
+    ).toBeTruthy();
+    // Done has no choice of its own, so it folds by its rule.
+    expect(screen.getByRole("button", { name: "Done: 1 item. Show column" })).toBeTruthy();
+    expect(screen.queryByText("Not started")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done: 1 item. Show column" }));
+    expect(screen.getByText("Shipped")).toBeTruthy();
+    expect(getPreference(foldedColumnKey(WorkItemStatus.Done))).toBe("false");
+  });
+
+  test("shows no columns until the preferences are loaded", async () => {
+    clearPreferences();
+    mockTaskboardServer([makeItem({ id: "wi-1", title: "Not started" })]);
+    renderTaskboard();
+
+    await settle();
+    expect(screen.getByText("Loading taskboard...")).toBeTruthy();
+    expect(screen.queryByText("Not started")).toBeNull();
   });
 });

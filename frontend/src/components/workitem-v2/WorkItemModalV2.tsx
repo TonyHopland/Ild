@@ -13,6 +13,17 @@ import PendingEditProposals from "./PendingEditProposals";
 import EditPanel from "./EditPanel";
 import FilesPanel, { workItemKey } from "./FilesPanel";
 import HistoryPanel from "./HistoryPanel";
+import MenuButton, { type MenuItem } from "../MenuButton";
+import Icon from "../Icon";
+import { errorMessage } from "../../utils/errorMessage";
+import {
+  feedbackReasonLabel,
+  feedbackReasonTone,
+  pillClass,
+  workItemStatusLabel,
+  workItemStatusTone,
+} from "../../utils/labels";
+import { repositoryName } from "../../utils/repositoryName";
 
 type TabId = "overview" | "action" | "runs" | "files" | "preview" | "terminal" | "history";
 
@@ -89,6 +100,23 @@ export default function WorkItemModalV2({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
+  // Backlog to Work queue without dragging the card, which a phone cannot do.
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  // A refusal was about the item as it was: once it has moved or changed state,
+  // the message no longer applies.
+  useEffect(() => setMoveError(null), [workItem?.id, workItem?.status]);
+  const moveToWorkQueue = async () => {
+    setMoving(true);
+    setMoveError(null);
+    try {
+      onSave(await workItemService.moveTo(workItem!.id, WorkItemStatus.WorkQueue));
+    } catch (error) {
+      setMoveError(errorMessage(error, "Could not move it to the work queue."));
+    } finally {
+      setMoving(false);
+    }
+  };
 
   // Leaving the edit view without saving discards the files staged in it.
   const clearStaged = detail.editAttachments.clear;
@@ -113,16 +141,20 @@ export default function WorkItemModalV2({
     // would land files the human is in the middle of discarding — the save that
     // is still running would upload them. Closing waits for whatever the dialog
     // is doing, not for the uploading part of it alone.
-    if (detail.busy) return;
+    // A move in flight is such a write too: its answer updates this item.
+    if (detail.busy || moving) return;
     if (hasUnsavedChanges) {
       setShowCloseConfirm(true);
     } else {
       onClose();
     }
-  }, [detail.busy, hasUnsavedChanges, onClose]);
+  }, [detail.busy, moving, hasUnsavedChanges, onClose]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // The chat stays usable over the dialog, so an Escape typed in it is the
+      // chat's, not a request to close the work item.
+      if (e.target instanceof Element && e.target.closest(".chat-panel")) return;
       if (e.key === "Escape") requestClose();
     };
     document.addEventListener("keydown", onKey);
@@ -154,6 +186,14 @@ export default function WorkItemModalV2({
     if (activeTab === "terminal" && !canUseTerminal)
       setActiveTab((tab) => (tab === "terminal" ? "overview" : tab));
   }, [activeTab, canUseTerminal]);
+
+  // Files and Preview are disabled without a worktree; one reclaimed while either
+  // is open sends the dialog back to Overview the same way.
+  const worktreeGone = !workItem?.worktreePath;
+  useEffect(() => {
+    if (worktreeGone && (activeTab === "files" || activeTab === "preview"))
+      setActiveTab((tab) => (tab === "files" || tab === "preview" ? "overview" : tab));
+  }, [activeTab, worktreeGone]);
 
   // Rendered prompt for the currently-suspended Human/PR node, same as classic.
   const runId = workItem?.currentLoopRunId ?? undefined;
@@ -195,7 +235,7 @@ export default function WorkItemModalV2({
       <>
         <div className="modal-overlay" onMouseDown={requestClose}>
           <div
-            className="wiv2-dialog"
+            className="wiv2-dialog wiv2-dialog-form"
             onMouseDown={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -204,12 +244,17 @@ export default function WorkItemModalV2({
             <div className="wiv2-header">
               <div className="wiv2-header-copy">
                 <div className="wiv2-header-title-row">
-                  <h2>New Work Item</h2>
+                  <h2>New work item</h2>
                 </div>
               </div>
               <div className="wiv2-header-actions">
-                <button className="modal-close" onClick={requestClose} aria-label="Close">
-                  &times;
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-icon"
+                  onClick={requestClose}
+                  aria-label="Close"
+                >
+                  <Icon name="close" size={18} />
                 </button>
               </div>
             </div>
@@ -244,17 +289,28 @@ export default function WorkItemModalV2({
   // Preview tab uses for a running preview.
   const actionRequired = awaitingHumanAction(workItem);
 
-  const tabs: { id: TabId; label: string }[] = [
+  // Files and Preview read the run's worktree; without one they stay in the
+  // strip, disabled with a reason, instead of opening onto an empty panel.
+  const hasWorktree = Boolean(workItem.worktreePath);
+  const noWorktree = "No worktree yet: available once a run has started";
+  // A tab's dot says what is going on there; screen readers hear it in words.
+  const tabs: { id: TabId; label: string; dot?: string | false; disabledReason?: string }[] = [
     { id: "overview", label: "Overview" },
-    { id: "action", label: `Action${actionRequired ? " ●" : ""}` },
+    { id: "action", label: "Action", dot: actionRequired && "needs you" },
     { id: "runs", label: `Runs${detail.runs.length > 0 ? ` (${detail.runs.length})` : ""}` },
-    { id: "files", label: "Files" },
-    { id: "preview", label: `Preview${detail.preview?.state === "running" ? " ●" : ""}` },
+    { id: "files", label: "Files", disabledReason: hasWorktree ? undefined : noWorktree },
+    {
+      id: "preview",
+      label: "Preview",
+      dot: detail.preview?.state === "running" && "running",
+      disabledReason: hasWorktree ? undefined : noWorktree,
+    },
     ...(canUseTerminal
-      ? [{ id: "terminal" as TabId, label: `Terminal${showTerminal ? " ●" : ""}` }]
+      ? [{ id: "terminal" as TabId, label: "Terminal", dot: showTerminal && "open" }]
       : []),
     { id: "history", label: "History" },
   ];
+  const enabledTabs = tabs.filter((t) => !t.disabledReason);
 
   const showCleanupButtons =
     workItem.status === WorkItemStatus.HumanFeedback &&
@@ -263,16 +319,47 @@ export default function WorkItemModalV2({
   // The footer's cleanup acts on the current run, so it waits for any other
   // action on that run, wherever in the dialog that was started.
   const currentRunBlocked = detail.runLock.pendingOf(workItem.currentLoopRunId) !== null;
+  // Secondary actions live behind ⋯ so the footer keeps one obvious button. The
+  // header's × is the only close.
+  const footerMenu: MenuItem[] = showCleanupButtons
+    ? [
+        {
+          id: "cleanup-done",
+          label: "Clean up → Done",
+          disabled: currentRunBlocked,
+          onSelect: () =>
+            void detail.runLock.hold(
+              workItem.currentLoopRunId,
+              "abandon",
+              detail.handleCleanupDone,
+            ),
+        },
+        {
+          id: "cleanup-backlog",
+          label: "Clean up → Backlog",
+          disabled: currentRunBlocked,
+          onSelect: () =>
+            void detail.runLock.hold(
+              workItem.currentLoopRunId,
+              "abandon",
+              detail.handleCleanupBacklog,
+            ),
+        },
+      ]
+    : [];
 
-  const handleTabKeyDown = (e: React.KeyboardEvent, index: number) => {
+  // Arrow keys move between the tabs that can be opened, skipping disabled ones.
+  const handleTabKeyDown = (e: React.KeyboardEvent, id: TabId) => {
+    const index = enabledTabs.findIndex((t) => t.id === id);
+    const count = enabledTabs.length;
     let nextIndex: number | null = null;
-    if (e.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;
-    else if (e.key === "ArrowLeft") nextIndex = (index - 1 + tabs.length) % tabs.length;
+    if (e.key === "ArrowRight") nextIndex = (index + 1) % count;
+    else if (e.key === "ArrowLeft") nextIndex = (index - 1 + count) % count;
     else if (e.key === "Home") nextIndex = 0;
-    else if (e.key === "End") nextIndex = tabs.length - 1;
+    else if (e.key === "End") nextIndex = count - 1;
     if (nextIndex === null) return;
     e.preventDefault();
-    const next = tabs[nextIndex];
+    const next = enabledTabs[nextIndex];
     setActiveTab(next.id);
     const nextTab = document.getElementById(`wiv2-tab-${next.id}`);
     nextTab?.focus();
@@ -316,6 +403,7 @@ export default function WorkItemModalV2({
           feedbackPrompt={feedbackPrompt}
           active={activeTab === "action"}
           revealGlobalProposalId={revealGlobalProposalId}
+          onShowRuns={() => setActiveTab("runs")}
         />
       </section>
       <section
@@ -381,10 +469,21 @@ export default function WorkItemModalV2({
             />
           ) : (
             <div className="wiv2-terminal-empty">
-              <p>Open a shell in {workItem.worktreePath}</p>
+              <p>Open a shell in this worktree</p>
+              <div className="wiv2-terminal-path">
+                <code title={workItem.worktreePath ?? undefined}>{workItem.worktreePath}</code>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => void navigator.clipboard?.writeText(workItem.worktreePath ?? "")}
+                >
+                  <Icon name="copy" size={14} />
+                  Copy path
+                </button>
+              </div>
               <button
                 type="button"
-                className="btn btn-sm btn-secondary"
+                className="btn btn-primary"
                 onClick={() => setShowTerminal(true)}
               >
                 Open Terminal
@@ -400,14 +499,21 @@ export default function WorkItemModalV2({
         className="wiv2-tabpanel"
         hidden={activeTab !== "history"}
       >
-        <HistoryPanel key={workItem.id} workItem={workItem} active={activeTab === "history"} />
+        <HistoryPanel
+          key={workItem.id}
+          workItem={workItem}
+          active={activeTab === "history"}
+          repositoryName={(id) =>
+            repositoryName(id, detail.repositories, detail.repositoriesLoaded)
+          }
+        />
       </section>
     </>
   );
 
   const tabBar = (
     <div className="wiv2-tabbar" role="tablist" aria-label="Work item sections">
-      {tabs.map((tab, i) => (
+      {tabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
@@ -415,12 +521,22 @@ export default function WorkItemModalV2({
           id={`wiv2-tab-${tab.id}`}
           aria-selected={activeTab === tab.id}
           aria-controls={`wiv2-panel-${tab.id}`}
+          aria-disabled={tab.disabledReason ? true : undefined}
+          title={tab.disabledReason}
           tabIndex={activeTab === tab.id ? 0 : -1}
           className={`wiv2-tab ${activeTab === tab.id ? "wiv2-tab-active" : ""}`}
-          onClick={() => setActiveTab(tab.id)}
-          onKeyDown={(e) => handleTabKeyDown(e, i)}
+          onClick={() => {
+            if (!tab.disabledReason) setActiveTab(tab.id);
+          }}
+          onKeyDown={(e) => handleTabKeyDown(e, tab.id)}
         >
           {tab.label}
+          {tab.dot && (
+            <>
+              <span className="wiv2-tab-dot" aria-hidden="true" />
+              <span className="sr-only">, {tab.dot}</span>
+            </>
+          )}
         </button>
       ))}
     </div>
@@ -439,17 +555,27 @@ export default function WorkItemModalV2({
           <div className="wiv2-header">
             <div className="wiv2-header-copy">
               <div className="modal-work-item-id">#{workItem.id}</div>
-              <div className="wiv2-header-title-row">
-                <h2>{workItem.title}</h2>
-                <span className={`status-badge status-${workItem.status.toLowerCase()}`}>
-                  {workItem.status}
+              <h2 className="wiv2-title">{workItem.title}</h2>
+              <div className="wiv2-header-pills">
+                <span className={`${pillClass(workItemStatusTone(workItem.status))} pill-dot`}>
+                  {workItemStatusLabel(workItem.status)}
                 </span>
-                <span className="wiv2-priority">{workItem.priority}</span>
+                {actionRequired && workItem.humanFeedbackReason && (
+                  <span className={pillClass(feedbackReasonTone(workItem.humanFeedbackReason))}>
+                    {feedbackReasonLabel(workItem.humanFeedbackReason)}
+                  </span>
+                )}
+                <span className={pillClass("muted")}>{workItem.priority} priority</span>
               </div>
             </div>
             <div className="wiv2-header-actions">
-              <button className="modal-close" onClick={requestClose} aria-label="Close">
-                &times;
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon"
+                onClick={requestClose}
+                aria-label="Close"
+              >
+                <Icon name="close" size={18} />
               </button>
             </div>
           </div>
@@ -472,42 +598,16 @@ export default function WorkItemModalV2({
                 <div className="wiv2-content">{renderPanels()}</div>
               </div>
               <div className="wiv2-footer">
-                {showCleanupButtons && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-warning"
-                      onClick={() =>
-                        void detail.runLock.hold(
-                          workItem.currentLoopRunId,
-                          "abandon",
-                          detail.handleCleanupDone,
-                        )
-                      }
-                      disabled={currentRunBlocked}
-                    >
-                      Cleanup -&gt; Done
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={() =>
-                        void detail.runLock.hold(
-                          workItem.currentLoopRunId,
-                          "abandon",
-                          detail.handleCleanupBacklog,
-                        )
-                      }
-                      disabled={currentRunBlocked}
-                    >
-                      Cleanup -&gt; Backlog
-                    </button>
-                  </>
+                <MenuButton label="More actions" items={footerMenu} />
+                {moveError && (
+                  <span className="wiv2-footer-error" role="alert">
+                    {moveError}
+                  </span>
                 )}
                 <span className="wiv2-footer-spacer" />
                 <button
                   type="button"
-                  className="btn btn-sm btn-edit"
+                  className="btn btn-secondary"
                   onClick={() => setEditMode(true)}
                   // Leaving an edit discards its staged files; an edit started
                   // on top of another write could discard them mid-upload.
@@ -515,9 +615,16 @@ export default function WorkItemModalV2({
                 >
                   Edit
                 </button>
-                <button type="button" className="btn btn-secondary" onClick={requestClose}>
-                  Close
-                </button>
+                {workItem.status === WorkItemStatus.Backlog && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void moveToWorkQueue()}
+                    disabled={moving || detail.busy}
+                  >
+                    Move to Work queue
+                  </button>
+                )}
               </div>
             </>
           )}

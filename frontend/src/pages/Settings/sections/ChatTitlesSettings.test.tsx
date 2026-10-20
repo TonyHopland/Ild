@@ -397,17 +397,15 @@ describe("Title attempts", () => {
     render(<ChatTitlesSettings />);
 
     const attempts = screen.getByLabelText("Title attempts") as HTMLInputElement;
-    const save = () =>
-      screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement;
     await waitFor(() => expect(attempts.value).toBe("3"));
     expect(attempts.disabled).toBe(true);
-    expect(save().disabled).toBe(true);
 
     fireEvent.click(screen.getByRole("checkbox", { name: /smart session titles/i }));
     await waitFor(() => expect(attempts.disabled).toBe(false));
 
     fireEvent.change(attempts, { target: { value: "5" } });
-    fireEvent.click(save());
+    // The field saves as it is left.
+    fireEvent.blur(attempts);
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.TitleMaxAttempts, "5"),
     );
@@ -435,7 +433,7 @@ describe("Title attempts", () => {
     const attempts = screen.getByLabelText("Title attempts") as HTMLInputElement;
     await waitFor(() => expect(attempts.disabled).toBe(false));
     fireEvent.change(attempts, { target: { value: "5" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save title attempts" }));
+    fireEvent.blur(attempts);
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.TitleMaxAttempts, "5"),
     );
@@ -443,9 +441,10 @@ describe("Title attempts", () => {
     await act(async () => answer());
 
     expect(attempts.value).toBe("5");
-    expect(
-      (screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    // Nothing left to save: leaving the field again sends nothing.
+    put.mockClear();
+    fireEvent.blur(attempts);
+    expect(put).not.toHaveBeenCalled();
   });
 
   function attemptsReadHeld() {
@@ -464,8 +463,11 @@ describe("Title attempts", () => {
     return (value: string) => answer(value);
   }
 
-  test("still learn the stored value from a late first read when typed in, so Save can tell them apart", async () => {
+  test("still learn the stored value from a late first read when typed in, so leaving the field can tell them apart", async () => {
     const answer = attemptsReadHeld();
+    const put = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockImplementation(async (key: string, value: string) => ({ key, value }));
 
     render(<ChatTitlesSettings />);
 
@@ -477,28 +479,32 @@ describe("Title attempts", () => {
     await act(async () => answer("5"));
 
     expect(attempts.value).toBe("3");
-    expect(
-      (screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement).disabled,
-    ).toBe(false);
+    // 3 differs from the 5 that is stored, so leaving the field saves it.
+    fireEvent.blur(attempts);
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(authServices.ChatTitleSettingKeys.TitleMaxAttempts, "3"),
+    );
   });
 
   test("learn the stored value from a late first read after a save that failed", async () => {
     const answer = attemptsReadHeld();
-    vi.spyOn(authServices.settingsService, "put").mockRejectedValue(new Error("database down"));
+    const put = vi
+      .spyOn(authServices.settingsService, "put")
+      .mockRejectedValue(new Error("database down"));
 
     render(<ChatTitlesSettings />);
 
     const attempts = screen.getByLabelText("Title attempts") as HTMLInputElement;
     await waitFor(() => expect(attempts.disabled).toBe(false));
     fireEvent.change(attempts, { target: { value: "4" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save title attempts" }));
+    fireEvent.blur(attempts);
     await screen.findByText(/database down/);
     // The server holds what the box shows, so there is nothing to save.
     await act(async () => answer("4"));
 
     expect(attempts.value).toBe("4");
-    expect(
-      (screen.getByRole("button", { name: "Save title attempts" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    put.mockClear();
+    fireEvent.blur(attempts);
+    expect(put).not.toHaveBeenCalled();
   });
 });

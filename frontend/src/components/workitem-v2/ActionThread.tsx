@@ -11,6 +11,7 @@ import { placeActionProposals } from "../editProposalPlacement";
 import MarkdownRenderer from "../MarkdownRenderer";
 import LiveStream from "../NodeTimeline/LiveStream";
 import HaltSteerControls from "./HaltSteerControls";
+import Icon from "../Icon";
 import { FeedbackBanner, PrView, QueuedPrWrites, feedbackFor } from "./panels";
 import { variablesSetByTurn } from "./turnVariables";
 import { useRunView } from "./useRunView";
@@ -134,15 +135,18 @@ function PrDetails({
   runId: string | null;
   onOpen: (panel: HTMLElement) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  // null until the user opens or shuts it: the panel then starts open while
+  // replies are queued, since the feedback asks the human to read them first.
+  const [chosen, setChosen] = useState<boolean | null>(null);
   const panelRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (open && panelRef.current) onOpen(panelRef.current);
+    if (chosen && panelRef.current) onOpen(panelRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [chosen]);
   const run = currentRunIf(detail, runId);
   const snapshot = run?.prSnapshot ?? null;
   const pending = run?.prQueuedWrites?.length ?? 0;
+  const open = chosen ?? pending > 0;
   if (!hasPrDetails(workItem, detail, runId)) return null;
   return (
     <section ref={panelRef} className="wiv2-pr-details">
@@ -151,9 +155,9 @@ function PrDetails({
           type="button"
           className="wiv2-pr-details-toggle"
           aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => setChosen(!open)}
         >
-          <span className="wiv2-pr-details-chevron">{open ? "▾" : "▸"}</span>
+          <Icon name="chevron" className={`wiv2-chevron ${open ? "wiv2-chevron-open" : ""}`} />
           PR details
           {pending > 0 && <span className="wiv2-pr-details-pending">{pending} pending</span>}
         </button>
@@ -210,6 +214,8 @@ interface ActionThreadProps {
   active: boolean;
   /** The global variable suggestion a link points at, scrolled to once its card shows. */
   revealGlobalProposalId?: string | null;
+  /** Opens the Runs tab, where a failed node sits in its run's timeline. */
+  onShowRuns?: () => void;
 }
 
 /**
@@ -232,6 +238,7 @@ function RunThread({
   feedbackPrompt,
   active,
   revealGlobalProposalId,
+  onShowRuns,
 }: ActionThreadProps & { runId: string | null }) {
   const view = useRunView(runId, detail.runLock.settledOf(runId), {
     isCurrent: !!runId && workItem.currentLoopRunId === runId,
@@ -388,6 +395,7 @@ function RunThread({
         run={view.run}
         detail={detail}
         prompt={feedbackPrompt}
+        onShowRuns={onShowRuns}
       />
     </Bubble>,
     ...cards(end),

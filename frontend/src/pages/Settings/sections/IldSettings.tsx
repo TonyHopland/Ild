@@ -1,8 +1,41 @@
 import { useEffect, useState } from "react";
 import { GlobalVariableSettingKeys, SchedulerSettingKeys } from "../../../services/auth";
-import { NumericSettingField, SettingRow, ToggleSettingField } from "../controls";
+import { NumericSettingField, SettingRow, Switch, ToggleSettingField } from "../controls";
+import { useSchedulerState } from "../../../hooks/useSchedulerState";
 import ChatRetentionSettings from "./ChatRetentionSettings";
 import ChatTitlesSettings from "./ChatTitlesSettings";
+
+/**
+ * The scheduler on or off, with on meaning running: the same switch, and the
+ * same live state, as the chip in the header.
+ */
+function SchedulerRunningField() {
+  const { running, busy, error, set } = useSchedulerState();
+  return (
+    <SettingRow
+      label="Scheduler running"
+      help={
+        <>
+          When off, nothing new starts. Runs already going carry on to their next node. Same switch
+          as the chip in the header.
+          {error && (
+            <span className="settings-error" role="alert">
+              {" "}
+              {error}
+            </span>
+          )}
+        </>
+      }
+    >
+      <Switch
+        checked={running ?? false}
+        onChange={(v) => void set(v)}
+        label="Scheduler running"
+        disabled={busy || running === null}
+      />
+    </SettingRow>
+  );
+}
 
 /**
  * How the loop engine behaves: how much it runs at once, how far it goes on its
@@ -21,7 +54,7 @@ export default function IldSettings() {
   return (
     <>
       <div className="settings-pane-header">
-        <h2>Ild</h2>
+        <h2>General</h2>
         <p>Scheduling, autonomy and retention for the loop engine.</p>
       </div>
 
@@ -29,9 +62,7 @@ export default function IldSettings() {
         <div className="settings-card-header">
           <h3 className="settings-card-title">Scheduler</h3>
         </div>
-        <ToggleSettingField settingKey={SchedulerSettingKeys.IsPaused} label="Pause the scheduler">
-          Nothing new starts while this is on. Runs already going carry on to their next node.
-        </ToggleSettingField>
+        <SchedulerRunningField />
         <NumericSettingField
           settingKey={SchedulerSettingKeys.MaxConcurrent}
           label="Max concurrent running work items"
@@ -58,7 +89,7 @@ export default function IldSettings() {
           How many AI nodes a run may execute before it stops and asks you whether to carry on. The
           count resets every time you interact with the run, so a back-and-forth between you and the
           AI never reaches it — only a loop running on its own does. At the cap the run waits in
-          Human Feedback.
+          Needs you.
         </NumericSettingField>
         <NumericSettingField
           settingKey={SchedulerSettingKeys.PrHeartbeatSeconds}
@@ -83,8 +114,8 @@ export default function IldSettings() {
           label="Resume throttled runs automatically"
         >
           When the AI provider stops a step — a usage or session limit, a busy provider — the run
-          waits in Human Feedback for you to click <strong>Resume</strong>. Turn this on to have ILD
-          try the resume for you instead, never before the reset time the provider named. When the
+          waits in Needs you for you to click <strong>Resume</strong>. Turn this on to have ILD try
+          the resume for you instead, never before the reset time the provider named. When the
           attempts below run out it leaves the run for you; resuming it yourself gives it a fresh
           set.
         </ToggleSettingField>

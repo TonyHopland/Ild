@@ -167,16 +167,66 @@
   margin-bottom: 0.5rem;
 }
 
-/* Too narrow for the list beside the chat: the list goes above it instead. */
-@media (max-width: 720px) {
-  .chat-page {
+.chat-page-back {
+  display: none;
+}
+
+/* Phone: the list or the chat, each the full height of the page between the
+   header and the tab bar, edge to edge. Only the messages scroll, with the
+   message box pinned under them. */
+@media (max-width: 767px) {
+  .chat-page,
+  .chat-page:has(.chat-sidebar) {
     flex-direction: column;
+    height: calc(100% + 24px);
+    margin: -12px;
+    border: 0;
+    border-radius: 0;
   }
 
   .chat-page .chat-sidebar {
     width: auto;
-    max-height: 40%;
-    border-right: none;
-    border-bottom: 1px solid #2d2d44;
+    max-height: none;
+    flex: 1;
+    border: 0;
+  }
+
+  .chat-page:not(.chat-page--list) > .chat-sidebar,
+  .chat-page--list > .chat-page-chat {
+    display: none;
+  }
+
+  .chat-page-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 52px;
+    padding: 4px 12px 4px 4px;
+  }
+
+  .chat-page-back {
+    display: inline-flex;
+    flex: none;
+    min-height: 44px;
+  }
+
+  .chat-page-title {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-md);
+  }
+
+  .chat-schedules-header .btn {
+    flex: none;
+  }
+
+  .chat-page .chat-history-row,
+  .chat-page .chat-history-open {
+    min-height: 48px;
+  }
+
+  .chat-page .chat-row-menu-btn {
+    min-width: 40px;
+    min-height: 40px;
   }
 }

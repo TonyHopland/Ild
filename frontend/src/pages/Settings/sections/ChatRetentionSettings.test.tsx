@@ -25,7 +25,6 @@ describe("Delete inactive chats", () => {
     })) as HTMLInputElement;
     const card = within(toggle.closest(".settings-card")!);
     const days = card.getByRole("spinbutton") as HTMLInputElement;
-    const saveDays = days.parentElement!.querySelector("button")!;
     await waitFor(() =>
       expect(authServices.settingsService.get).toHaveBeenCalledWith("chat.autoDeleteInactiveDays"),
     );
@@ -38,13 +37,15 @@ describe("Delete inactive chats", () => {
 
     for (const outOfRange of ["0", "3651"]) {
       fireEvent.change(days, { target: { value: outOfRange } });
-      fireEvent.click(saveDays);
+      // The field saves as it is left.
+      fireEvent.blur(days);
       await card.findByText("Must be an integer between 1 and 3650.");
       expect(put).not.toHaveBeenCalledWith("chat.autoDeleteInactiveDays", outOfRange);
     }
 
     fireEvent.change(days, { target: { value: "30" } });
-    fireEvent.click(saveDays);
+    fireEvent.blur(days);
     await waitFor(() => expect(put).toHaveBeenCalledWith("chat.autoDeleteInactiveDays", "30"));
+    expect(await card.findByText("Saved")).toBeTruthy();
   });
 });

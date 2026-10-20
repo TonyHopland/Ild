@@ -13,7 +13,7 @@ import {
   type TaskboardColumns,
 } from "../../utils/taskboardColumns";
 
-const STATUSES = WORK_ITEM_STATUSES.map((s) => s.value as WorkItemStatus);
+const STATUSES = WORK_ITEM_STATUSES.map((s) => s.value);
 /** The most one page request returns. */
 const MAX_READ = 500;
 

@@ -63,6 +63,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
 import { showChatActions } from "../test-support";
+import { setPreference, getPreference, seedPreferences } from "../utils/userPreferences";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -193,7 +194,7 @@ afterEach(() => {
 
 /** A panel wide enough for the list and the chat side by side (jsdom's viewport is 1024×768). */
 function widePanel() {
-  localStorage.setItem(PANEL_SIZE_KEY, JSON.stringify({ width: 800, height: 600 }));
+  setPreference(PANEL_SIZE_KEY, JSON.stringify({ width: 800, height: 600 }));
 }
 // Without a stored size the panel takes its 384px default: narrow.
 
@@ -387,7 +388,7 @@ describe("chat sidebar layout", () => {
 
     expect(panel.style.left).toBe(left);
     expect(panel.style.top).toBe(top);
-    expect(localStorage.getItem(PANEL_POSITION_KEY)).toBeNull();
+    expect(getPreference(PANEL_POSITION_KEY)).toBeUndefined();
   });
 
   const DEFAULT_CASES: { name: string; wide: boolean; stored: () => void; open: boolean }[] = [
@@ -396,13 +397,13 @@ describe("chat sidebar layout", () => {
     {
       name: "garbage stored, wide",
       wide: true,
-      stored: () => localStorage.setItem(SIDEBAR_OPEN_KEY, "{not json"),
+      stored: () => setPreference(SIDEBAR_OPEN_KEY, "{not json"),
       open: true,
     },
     {
       name: "garbage stored, narrow",
       wide: false,
-      stored: () => localStorage.setItem(SIDEBAR_OPEN_KEY, '"yes"'),
+      stored: () => setPreference(SIDEBAR_OPEN_KEY, '"yes"'),
       open: false,
     },
     { name: "closed stored, wide", wide: true, stored: () => saveSidebarOpen(false), open: false },
@@ -436,7 +437,8 @@ describe("chat sidebar layout", () => {
 
     // Narrow and stored open: picking a chat closes it, and that is stored too.
     cleanup();
-    localStorage.removeItem(PANEL_SIZE_KEY);
+    // Back to the default (narrow) panel size.
+    seedPreferences();
     saveSidebarOpen(true);
     render(bubble());
     await openPanel();

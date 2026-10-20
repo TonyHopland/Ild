@@ -8,12 +8,14 @@ import {
   loadFabPosition,
   loadPanelPosition,
   loadPanelSize,
+  renderedFabPosition,
   MIN_PANEL_SIZE,
   PANEL_POSITION_KEY,
   PANEL_SIZE_KEY,
   panelPosition,
   VIEWPORT_MARGIN,
 } from "./chatPlacement";
+import { setPreference } from "../utils/userPreferences";
 
 const VP = { width: 1000, height: 800 };
 
@@ -80,20 +82,24 @@ describe("panelPosition", () => {
 });
 
 describe("load helpers", () => {
-  test("loadFabPosition returns the default corner when nothing is stored", () => {
+  test("loadFabPosition returns null when the icon was never moved, and it is drawn in the default corner", () => {
+    expect(loadFabPosition()).toBeNull();
     // jsdom defaults to 1024×768.
-    expect(loadFabPosition()).toEqual(defaultFabPosition({ width: 1024, height: 768 }));
+    const vp = { width: 1024, height: 768 };
+    expect(renderedFabPosition(null, vp)).toEqual(defaultFabPosition(vp));
   });
 
-  test("loadFabPosition clamps a stored but now-off-screen position", () => {
-    localStorage.setItem(FAB_POSITION_KEY, JSON.stringify({ x: 99999, y: 99999 }));
-    const pos = loadFabPosition();
+  test("loadFabPosition returns the chosen spot as stored, and only drawing clamps it", () => {
+    setPreference(FAB_POSITION_KEY, JSON.stringify({ x: 99999, y: 99999 }));
+    const chosen = loadFabPosition();
+    expect(chosen).toEqual({ x: 99999, y: 99999 });
+    const pos = renderedFabPosition(chosen, { width: 1024, height: 768 });
     expect(pos.x).toBe(1024 - FAB_SIZE - VIEWPORT_MARGIN);
     expect(pos.y).toBe(768 - FAB_SIZE - VIEWPORT_MARGIN);
   });
 
   test("loadPanelSize ignores corrupt JSON and uses the default", () => {
-    localStorage.setItem(PANEL_SIZE_KEY, "not json");
+    setPreference(PANEL_SIZE_KEY, "not json");
     expect(loadPanelSize()).toEqual({ width: 384, height: 512 });
   });
 
@@ -102,12 +108,12 @@ describe("load helpers", () => {
   });
 
   test("loadPanelPosition returns the stored position", () => {
-    localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify({ x: 120, y: 90 }));
+    setPreference(PANEL_POSITION_KEY, JSON.stringify({ x: 120, y: 90 }));
     expect(loadPanelPosition()).toEqual({ x: 120, y: 90 });
   });
 
   test("loadPanelPosition ignores a malformed stored value", () => {
-    localStorage.setItem(PANEL_POSITION_KEY, JSON.stringify({ x: "nope" }));
+    setPreference(PANEL_POSITION_KEY, JSON.stringify({ x: "nope" }));
     expect(loadPanelPosition()).toBeNull();
   });
 });

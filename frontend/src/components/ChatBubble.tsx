@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useMatch } from "react-router";
 import { useChatEnabled } from "../hooks/useChatEnabled";
+import { usePreferencesLoaded } from "../utils/userPreferences";
+import { useIsMobile } from "../hooks/useIsMobile";
 import {
+  DEFAULT_PANEL_SIZE,
+  defaultFabPosition,
   clampFabPosition,
   clampPanelSize,
   loadFabPosition,
@@ -9,6 +13,7 @@ import {
   loadPanelSize,
   loadSidebarOpen,
   panelPosition,
+  renderedFabPosition,
   saveFabPosition,
   savePanelPosition,
   savePanelSize,
@@ -21,6 +26,7 @@ import {
 import { useChatInbox } from "./ChatInbox";
 import { UnreadDot } from "./ChatRename";
 import ChatWorkspace from "./ChatWorkspace";
+import Icon from "./Icon";
 import "./ChatBubble.css";
 
 // Treat tiny pointer movements as a click, not a drag, so the icon still opens
@@ -38,23 +44,40 @@ const DRAG_THRESHOLD_PX = 4;
  * it comes back as it was left, on the chat the tab had open.
  */
 export default function ChatBubble() {
+  // Where the icon sits, how big the panel is and whether it shows at all are
+  // the user's preferences: nothing is drawn until they are read, so the icon
+  // never shows in the default corner only to jump to the user's spot.
+  return usePreferencesLoaded() ? <ChatBubbleFrame /> : null;
+}
+
+function ChatBubbleFrame() {
   const onChatTab = useMatch("/chat/*") !== null;
   const [open, setOpen] = useState(false);
   const { loaded, unreadCount, activeChatId } = useChatInbox();
 
-  // Placement: a draggable icon position and a resizable panel size, both
-  // persisted and kept inside the viewport.
+  // Placement: a draggable icon position and a resizable panel size. State holds
+  // what the user chose and only a drag or resize changes it; what is drawn is
+  // that choice clamped to the current viewport, so a window that shrinks for a
+  // moment never overwrites it.
   const chatEnabled = useChatEnabled();
-  const [fabPos, setFabPos] = useState<Point>(loadFabPosition);
-  const [panelSize, setPanelSize] = useState<Size>(loadPanelSize);
+  const [vp, setVp] = useState<Size>(viewportSize);
+  // null until the user drags the icon: it then sits in the default corner.
+  const [chosenFab, setChosenFab] = useState<Point | null>(loadFabPosition);
+  const [chosenSize, setChosenSize] = useState<Size>(loadPanelSize);
   // The panel's own position once the user drags its header; until then it stays
   // anchored to the icon (null).
   const [panelOverride, setPanelOverride] = useState<Point | null>(loadPanelPosition);
+  // A phone keeps the icon in its corner above the tab bar: a spot dragged to on
+  // a wide screen, which the user's preferences carry here, would sit on the
+  // page's own controls.
+  const isMobile = useIsMobile();
+  const fabPos = isMobile ? defaultFabPosition(vp) : renderedFabPosition(chosenFab, vp);
+  const panelSize = clampPanelSize(chosenSize, vp);
   // Set while a drag exceeds the threshold so the trailing click does not also
   // open the panel.
   const draggedRef = useRef(false);
-  // Latest panel size, so the window-resize handler can re-clamp the panel
-  // position without re-subscribing on every size change.
+  // Latest drawn panel size, read by callbacks that should not re-subscribe on
+  // every size change.
   const panelSizeRef = useRef(panelSize);
   panelSizeRef.current = panelSize;
 
@@ -70,23 +93,19 @@ export default function ChatBubble() {
   const unreadBadgeId = useId();
   const chatCovered = sidebarOpen && !wide;
 
-  // Persist placement changes and re-clamp into view whenever the window resizes.
+  // Persist what the user chose; a window resize only redraws.
   useEffect(() => {
-    saveFabPosition(fabPos);
-  }, [fabPos]);
+    if (chosenFab) saveFabPosition(chosenFab);
+  }, [chosenFab]);
   useEffect(() => {
-    savePanelSize(panelSize);
-  }, [panelSize]);
+    // The default size is not a choice, so a bubble never resized stores nothing.
+    if (chosenSize !== DEFAULT_PANEL_SIZE) savePanelSize(chosenSize);
+  }, [chosenSize]);
   useEffect(() => {
     if (panelOverride) savePanelPosition(panelOverride);
   }, [panelOverride]);
   useEffect(() => {
-    const onResize = () => {
-      const vp = viewportSize();
-      setFabPos((p) => clampFabPosition(p, vp));
-      setPanelSize((s) => clampPanelSize(s, vp));
-      setPanelOverride((p) => (p ? panelPosition(p, panelSizeRef.current, vp) : p));
-    };
+    const onResize = () => setVp(viewportSize());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -101,7 +120,7 @@ export default function ChatBubble() {
         if (Math.abs(dx) > DRAG_THRESHOLD_PX || Math.abs(dy) > DRAG_THRESHOLD_PX) {
           draggedRef.current = true;
         }
-        setFabPos(clampFabPosition({ x: origin.ox + dx, y: origin.oy + dy }, viewportSize()));
+        setChosenFab(clampFabPosition({ x: origin.ox + dx, y: origin.oy + dy }, viewportSize()));
       };
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
@@ -118,17 +137,17 @@ export default function ChatBubble() {
       e.preventDefault();
       const origin = { px: e.clientX, py: e.clientY, w: panelSize.width, h: panelSize.height };
       const onMove = (ev: PointerEvent) => {
-        const vp = viewportSize();
+        const now = viewportSize();
         const next = clampPanelSize(
           {
             width: origin.w + (ev.clientX - origin.px),
             height: origin.h + (ev.clientY - origin.py),
           },
-          vp,
+          now,
         );
-        setPanelSize(next);
+        setChosenSize(next);
         // Keep a moved panel on-screen as it grows toward the viewport edge.
-        setPanelOverride((p) => (p ? panelPosition(p, next, vp) : p));
+        setPanelOverride((p) => (p ? panelPosition(p, next, now) : p));
       };
       const onUp = () => {
         window.removeEventListener("pointermove", onMove);
@@ -206,7 +225,7 @@ export default function ChatBubble() {
               className="chat-bubble-fab"
               aria-label="Open chat"
               style={{ left: fabPos.x, top: fabPos.y }}
-              onPointerDown={startDrag}
+              onPointerDown={isMobile ? undefined : startDrag}
               onClick={onFabClick}
             >
               💬{unreadCount > 0 && <UnreadDot />}
@@ -214,23 +233,31 @@ export default function ChatBubble() {
           );
         }
 
-        const panelPos = panelPosition(panelOverride ?? fabPos, panelSize, viewportSize());
+        const panelPos = panelPosition(panelOverride ?? fabPos, panelSize, vp);
         // The button's name stays "Chat list"; the badge reaches screen readers as its description.
         const showUnreadBadge = !sidebarOpen && unreadCount > 0;
 
         return (
           <div
-            className="chat-panel"
+            // A phone shows the chat as a full-screen sheet that neither moves nor resizes.
+            className={`chat-panel${isMobile ? " chat-panel--sheet" : ""}`}
             role="dialog"
             aria-label="AI chat"
-            style={{
-              left: panelPos.x,
-              top: panelPos.y,
-              width: panelSize.width,
-              height: panelSize.height,
-            }}
+            style={
+              isMobile
+                ? undefined
+                : {
+                    left: panelPos.x,
+                    top: panelPos.y,
+                    width: panelSize.width,
+                    height: panelSize.height,
+                  }
+            }
           >
-            <div className="chat-panel-header" onPointerDown={startHeaderDrag}>
+            <div
+              className="chat-panel-header"
+              onPointerDown={isMobile ? undefined : startHeaderDrag}
+            >
               <button
                 type="button"
                 className="chat-link-btn chat-sidebar-toggle"
@@ -239,7 +266,7 @@ export default function ChatBubble() {
                 aria-describedby={showUnreadBadge ? unreadBadgeId : undefined}
                 onClick={() => setSidebarOpen(!sidebarOpen)}
               >
-                ☰
+                <Icon name="menu" />
                 {showUnreadBadge && (
                   <span id={unreadBadgeId} className="chat-sidebar-badge">
                     {unreadCount}
@@ -272,13 +299,15 @@ export default function ChatBubble() {
               </div>
             )}
 
-            <div
-              className="chat-resize-handle"
-              role="button"
-              tabIndex={-1}
-              aria-label="Resize chat"
-              onPointerDown={startResize}
-            />
+            {!isMobile && (
+              <div
+                className="chat-resize-handle"
+                role="button"
+                tabIndex={-1}
+                aria-label="Resize chat"
+                onPointerDown={startResize}
+              />
+            )}
           </div>
         );
       }}

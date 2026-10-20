@@ -110,6 +110,31 @@ const sampleTemplate = {
 };
 
 describe("Loop Editor canvas", () => {
+  test("on a phone the palette gives way to a note that the loop is for viewing", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)" || query === "(max-width: 900px)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    const fetchMock = mockFetch(null);
+    fetchMock.mockReturnValueOnce(
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify([sampleTemplate])),
+      }),
+    );
+
+    renderPage(fetchMock);
+
+    await waitFor(() => {
+      expect(screen.getByText("Dev Loop")).toBeTruthy();
+    });
+    expect(screen.queryByText("Drag & Drop")).toBeNull();
+    expect(screen.getByText("Viewing only: building a loop needs a wider screen.")).toBeTruthy();
+  });
+
   test("collapsing the loop menu keeps the drag palette visible", async () => {
     const fetchMock = mockFetch(null);
     fetchMock.mockReturnValueOnce(

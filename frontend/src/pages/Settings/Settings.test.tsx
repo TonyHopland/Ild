@@ -56,12 +56,12 @@ describe("Settings sections", () => {
   test("opens on Ild when no section is named, and says so in the menu", () => {
     renderAt("/settings");
 
-    expect(screen.getByRole("heading", { level: 2, name: "Ild" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "General" })).toBeTruthy();
     expect(screen.getByLabelText(/max concurrent/i)).toBeTruthy();
     // The URL names no section, so nothing but the page itself knows Ild is the
     // one on screen: what is highlighted has to be announced as current too.
     const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
-    expect(nav.getByRole("link", { name: "Ild" }).getAttribute("aria-current")).toBe("page");
+    expect(nav.getByRole("link", { name: "General" }).getAttribute("aria-current")).toBe("page");
     expect(nav.getByRole("link", { name: "Logging" }).getAttribute("aria-current")).toBeNull();
   });
 
@@ -72,16 +72,16 @@ describe("Settings sections", () => {
     const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
     expect(nav.getByRole("link", { name: "Logging" }).className).toContain("active");
     expect(nav.getByRole("link", { name: "Logging" }).getAttribute("aria-current")).toBe("page");
-    expect(nav.getByRole("link", { name: "Ild" }).className).not.toContain("active");
-    expect(nav.getByRole("link", { name: "Ild" }).getAttribute("aria-current")).toBeNull();
+    expect(nav.getByRole("link", { name: "General" }).className).not.toContain("active");
+    expect(nav.getByRole("link", { name: "General" }).getAttribute("aria-current")).toBeNull();
   });
 
   test("falls back to the first section for an unknown one", () => {
     renderAt("/settings/nonsense");
 
-    expect(screen.getByRole("heading", { level: 2, name: "Ild" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "General" })).toBeTruthy();
     const nav = within(screen.getByRole("navigation", { name: /settings sections/i }));
-    expect(nav.getByRole("link", { name: "Ild" }).getAttribute("aria-current")).toBe("page");
+    expect(nav.getByRole("link", { name: "General" }).getAttribute("aria-current")).toBe("page");
   });
 
   test("shows the WorkItem Server section at its own URL and marks only it current", async () => {

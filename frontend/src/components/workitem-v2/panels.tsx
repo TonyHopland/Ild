@@ -2,6 +2,8 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
 import {
   LoopRun,
+  LoopRunNode,
+  LoopRunNodeStatus,
   LoopRunStatus,
   Repository,
   RemotePrSnapshot,
@@ -20,6 +22,11 @@ import FeedbackActions from "../FeedbackActions";
 import { useSubmitDefaultOnEnter } from "../../hooks/useSubmitDefaultOnEnter";
 import AttachmentList from "./AttachmentList";
 import type { WorkItemDetail } from "./useWorkItemDetail";
+import Icon from "../Icon";
+import { feedbackReasonLabel, pillClass, type Tone } from "../../utils/labels";
+import { failureMessage } from "./RunDetailSections";
+import { repositoryName } from "../../utils/repositoryName";
+import { nodeTakesRetry, runTakesRetryNow } from "./retry";
 
 /**
  * What the round is about to say on the pull request, and the chance to stop
@@ -177,6 +184,118 @@ export function feedbackFor(
   return run && !waitsForAnswer(run) ? null : { kind: "answer", reason, runId };
 }
 
+const NODE_FAILED = "Node Failed";
+
+/** The node that stopped the run: its last failed execution, if the run on screen has one. */
+function failedNodeOf(run: LoopRun | null): LoopRunNode | null {
+  if (!run) return null;
+  for (let i = run.nodes.length - 1; i >= 0; i--) {
+    if (run.nodes[i].status === LoopRunNodeStatus.Failed) return run.nodes[i];
+  }
+  return null;
+}
+
+/**
+ * A run stopped on a failed node: which node, what it recorded when it failed,
+ * and the ways on from here, so the human does not have to hunt for them on the
+ * Runs tab. Everything shown is what the run recorded; nothing is guessed.
+ */
+function FailedNodeCard({
+  workItem,
+  run,
+  node,
+  detail,
+  onShowRuns,
+}: {
+  workItem: WorkItem;
+  run: LoopRun;
+  node: LoopRunNode;
+  detail: WorkItemDetail;
+  onShowRuns?: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  // The same rule as the Runs tab.
+  const canRetry = runTakesRetryNow(run) && nodeTakesRetry(node.status, node.nodeType);
+  const busy = detail.runLock.pendingOf(run.id) !== null;
+  const recorded = node.error ?? node.output;
+  const failedAt = node.completedAt ? new Date(node.completedAt).toLocaleString() : null;
+
+  const retry = async () => {
+    setError(null);
+    try {
+      await detail.runLock.hold(run.id, "retry", () =>
+        loopRunService.retryFromNode(run.id, node.id),
+      );
+      detail.refreshRuns();
+    } catch (e) {
+      setError(failureMessage(e, "Failed to retry from node."));
+    }
+  };
+
+  return (
+    <div className="wiv2-feedback wiv2-feedback-failed">
+      <div className="wiv2-failed-head">
+        <Icon name="alert" size={18} />
+        <div>
+          <div className="wiv2-failed-title">“{node.nodeLabel}” failed</div>
+          <div className="wiv2-failed-meta">
+            {[node.nodeType ? `${node.nodeType} node` : null, failedAt && `failed ${failedAt}`]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+        </div>
+      </div>
+      {recorded ? (
+        <>
+          <div className="wiv2-section-label">Recorded error output</div>
+          <pre className="wiv2-failed-output">{recorded}</pre>
+        </>
+      ) : (
+        <div className="wiv2-failed-meta">The node recorded no output when it failed.</div>
+      )}
+      <div className="feedback-actions">
+        {canRetry && (
+          <button
+            type="button"
+            className="btn btn-sm btn-primary"
+            disabled={busy}
+            onClick={() => void retry()}
+          >
+            <Icon name="retry" />
+            Retry this node
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          disabled={busy}
+          onClick={() =>
+            void detail.runLock.hold(
+              workItem.currentLoopRunId,
+              "abandon",
+              detail.handleCleanupBacklog,
+            )
+          }
+        >
+          Clean up → Backlog
+        </button>
+        {onShowRuns && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onShowRuns}>
+            See it in the run timeline
+          </button>
+        )}
+      </div>
+      {canRetry && (
+        <div className="wiv2-failed-meta">
+          Retry runs “{node.nodeLabel}” again with the same input, in the same worktree. The run
+          keeps its history.
+        </div>
+      )}
+      {error && <div className="preview-message preview-error">{error}</div>}
+    </div>
+  );
+}
+
 /** Prominent feedback banner shown in the Action tab while the item waits on a human. */
 export function FeedbackBanner({
   workItem,
@@ -184,22 +303,36 @@ export function FeedbackBanner({
   run,
   detail,
   prompt,
+  onShowRuns,
 }: {
   workItem: WorkItem;
   runId: string | null;
   run: LoopRun | null;
   detail: WorkItemDetail;
   prompt: string | null;
+  /** Opens the Runs tab, offered from a failed node's card. */
+  onShowRuns?: () => void;
 }) {
   const submitDefaultOnEnter = useSubmitDefaultOnEnter();
   const feedback = feedbackFor(workItem, runId, run);
   if (!feedback) return null;
 
   if (feedback.kind === "reason") {
+    const failed = feedback.reason === NODE_FAILED && run ? failedNodeOf(run) : null;
+    if (failed && run)
+      return (
+        <FailedNodeCard
+          workItem={workItem}
+          run={run}
+          node={failed}
+          detail={detail}
+          onShowRuns={onShowRuns}
+        />
+      );
     return (
       <div className="wiv2-feedback">
-        <div className="wiv2-feedback-title">Human Feedback</div>
-        <div className="feedback-reason">{feedback.reason}</div>
+        <div className="wiv2-feedback-title">Needs you</div>
+        <div className="feedback-reason">{feedbackReasonLabel(feedback.reason)}</div>
       </div>
     );
   }
@@ -213,7 +346,7 @@ export function FeedbackBanner({
 
   return (
     <div className="wiv2-feedback">
-      <div className="wiv2-feedback-title">{isPr ? "PR Feedback" : "Human Feedback"}</div>
+      <div className="wiv2-feedback-title">{isPr ? "PR feedback" : "Needs you"}</div>
       {prompt && (
         <div className="feedback-scroll">
           <div className="markdown-container">
@@ -307,11 +440,20 @@ export function PrView({ snapshot }: { snapshot: RemotePrSnapshot }) {
 }
 
 /** Maps a service's raw status to the State column's Stopped/Running/Error label. */
-function serviceState(status: string): { label: "Stopped" | "Running" | "Error"; tone: string } {
-  if (status === "running") return { label: "Running", tone: "running" };
+function serviceState(status: string): { label: "Stopped" | "Running" | "Error"; tone: Tone } {
+  if (status === "running") return { label: "Running", tone: "success" };
   if (status === "exited" || status === "failed" || status === "error")
-    return { label: "Error", tone: "error" };
-  return { label: "Stopped", tone: "stopped" };
+    return { label: "Error", tone: "danger" };
+  return { label: "Stopped", tone: "muted" };
+}
+
+/** The preview as a whole, as the server names its state, in words and a tone. */
+function previewStatePill(state: string): { label: string; tone: Tone } {
+  if (state === "running") return { label: "Running", tone: "success" };
+  if (state === "stopped") return { label: "Stopped", tone: "muted" };
+  if (state === "starting") return { label: "Starting", tone: "accent" };
+  if (state === "error" || state === "failed") return { label: "Error", tone: "danger" };
+  return { label: state.charAt(0).toUpperCase() + state.slice(1), tone: "muted" };
 }
 
 /**
@@ -484,17 +626,15 @@ function PreviewServiceTable({
           const config = configs[service.name];
           return (
             <Fragment key={service.name}>
-              <tr>
-                <td>
-                  <span className={`preview-state preview-state--${state.tone}`}>
-                    {state.label}
-                  </span>
+              <tr className="preview-service-row">
+                <td data-label="State">
+                  <span className={pillClass(state.tone)}>{state.label}</span>
                   {service.exitCode != null && (
                     <span className="preview-exit-code"> (exit {service.exitCode})</span>
                   )}
                 </td>
                 <td className="preview-cell-name">{service.name}</td>
-                <td>
+                <td data-label="Port">
                   {running ? (
                     <span className="detail-value">{service.port ?? "—"}</span>
                   ) : (
@@ -508,7 +648,7 @@ function PreviewServiceTable({
                     />
                   )}
                 </td>
-                <td>
+                <td data-label="Link">
                   {service.publicUrl ? (
                     <a
                       href={service.publicUrl}
@@ -522,11 +662,11 @@ function PreviewServiceTable({
                     <span className="detail-value">—</span>
                   )}
                 </td>
-                <td>
+                <td className="preview-cell-actions">
                   <div className="preview-row-actions">
                     <button
                       type="button"
-                      className={`btn btn-sm ${running ? "btn-warning" : "btn-primary"}`}
+                      className="btn btn-sm btn-secondary"
                       onClick={() =>
                         running
                           ? void detail.handleStopService(service.name)
@@ -538,7 +678,7 @@ function PreviewServiceTable({
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-secondary"
+                      className="btn btn-sm btn-ghost"
                       aria-expanded={openConfig === service.name}
                       onClick={() => toggleConfig(service.name)}
                     >
@@ -546,7 +686,7 @@ function PreviewServiceTable({
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-secondary"
+                      className="btn btn-sm btn-ghost"
                       aria-expanded={openLog === service.name}
                       onClick={() => toggleLog(service.name)}
                     >
@@ -808,9 +948,14 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
   return (
     <div className="wiv2-preview">
       <div className="preview-summary">
-        <span className="detail-value">
-          {previewLoading ? "Checking preview..." : (preview?.state ?? "stopped")}
-        </span>
+        {previewLoading ? (
+          <span className="detail-value">Checking preview...</span>
+        ) : (
+          (() => {
+            const pill = previewStatePill(preview?.state ?? "stopped");
+            return <span className={`${pillClass(pill.tone)} pill-dot`}>{pill.label}</span>;
+          })()
+        )}
         {preview?.profileName && <span className="run-time">profile: {preview.profileName}</span>}
       </div>
       {previewError && <div className="preview-message preview-error">{previewError}</div>}
@@ -828,7 +973,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
       <div className="feedback-actions">
         <button
           type="button"
-          className="btn btn-sm btn-secondary"
+          className="btn btn-sm btn-ghost"
           onClick={() => void detail.refreshPreview()}
           disabled={previewLoading}
         >
@@ -839,7 +984,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
             href={primaryPreviewUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="btn btn-sm btn-primary preview-open-link"
+            className="btn btn-sm btn-secondary preview-open-link"
           >
             Open App
           </a>
@@ -857,7 +1002,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
         {anyStarted && (
           <button
             type="button"
-            className="btn btn-sm btn-warning"
+            className="btn btn-sm btn-secondary"
             onClick={() => void detail.handleStopPreview()}
             disabled={previewLoading}
           >
@@ -886,8 +1031,16 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   const [showAddDep, setShowAddDep] = useState(false);
   const [selectedDepId, setSelectedDepId] = useState("");
 
+  // The repository by name. An id that matches none of the loaded repositories
+  // says so in words (the id is on hover), never as a bare GUID; until the list
+  // has loaded nothing is claimed either way.
   const repoName =
-    detail.repositories.find((r) => r.id === workItem.repositoryId)?.name ?? workItem.repositoryId;
+    repositoryName(workItem.repositoryId, detail.repositories, detail.repositoriesLoaded) ?? "";
+  // Items waiting on this one, by title when it is one of the items loaded here.
+  const blocks = (workItem.dependentIds ?? []).map((id) => ({
+    id,
+    title: detail.allWorkItems.find((w) => w.id === id)?.title ?? null,
+  }));
   const tagList = parseTags(workItem);
   const isLoopTag = makeLoopTagMatcher(detail.templates.map((t) => t.name));
   const fmt = (d: string | null) => (d ? new Date(d).toLocaleString() : "—");
@@ -908,18 +1061,21 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
   return (
     <div className="wiv2-meta">
       <div className="wiv2-meta-row">
-        <span className="detail-label">Status</span>
-        <span className={`status-badge status-${workItem.status.toLowerCase()}`}>
-          {workItem.status}
-        </span>
-      </div>
-      <div className="wiv2-meta-row">
         <span className="detail-label">Priority</span>
         <span className="detail-value">{workItem.priority}</span>
       </div>
       <div className="wiv2-meta-row">
         <span className="detail-label">Repository</span>
-        <span className="detail-value">{repoName}</span>
+        <span
+          className="detail-value"
+          title={
+            detail.repositories.some((r) => r.id === workItem.repositoryId)
+              ? undefined
+              : workItem.repositoryId
+          }
+        >
+          {repoName}
+        </span>
       </div>
       {isRunning && loopName && (
         <div className="wiv2-meta-row">
@@ -999,9 +1155,10 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         ) : (
           <button
             type="button"
-            className="btn btn-sm btn-secondary wiv2-meta-btn"
+            className="btn btn-sm btn-ghost wiv2-meta-btn"
             onClick={() => setShowLinkPr(true)}
           >
+            <Icon name="plus" size={14} />
             Link PR
           </button>
         )}
@@ -1080,13 +1237,28 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
         ) : (
           <button
             type="button"
-            className="btn btn-sm btn-secondary wiv2-meta-btn"
+            className="btn btn-sm btn-ghost wiv2-meta-btn"
             onClick={() => setShowAddDep(true)}
           >
+            <Icon name="plus" size={14} />
             Add Dependency
           </button>
         )}
       </div>
+      {blocks.length > 0 && (
+        <div className="wiv2-meta-row wiv2-meta-col">
+          <span className="detail-label">Blocks</span>
+          <div className="dependency-list">
+            {blocks.map((b) => (
+              <span key={b.id} className="dependency-tag">
+                <Link to={`/taskboard/${b.id}`} className="dependency-link">
+                  {b.title ?? `#${b.id}`}
+                </Link>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="wiv2-meta-row">
         <span className="detail-label">Created</span>
         <span className="detail-value wiv2-meta-date">{fmt(workItem.createdAt)}</span>

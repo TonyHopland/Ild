@@ -10,7 +10,6 @@ import {
   type ChatHubEvents,
 } from "../test-support";
 import { FAB_POSITION_KEY, PANEL_POSITION_KEY, PANEL_SIZE_KEY } from "./chatPlacement";
-import { CHAT_ENABLED_KEY } from "../hooks/useChatEnabled";
 
 // Hoisted so the vi.mock factories (which are hoisted to the top) can reference
 // them without a temporal-dead-zone error.
@@ -72,6 +71,7 @@ vi.mock("../services/chatSessionStore", () => ({ setCurrentChatSessionId }));
 
 import ChatBubble from "./ChatBubble";
 import { ChatInboxProvider } from "./ChatInbox";
+import { setPreference, getPreference, PreferenceKeys } from "../utils/userPreferences";
 
 // The bubble reads the open work item from the route (useMatch), so every render
 // must sit inside a Router. `initialPath` lets a test simulate having a work item
@@ -283,6 +283,37 @@ describe("ChatBubble", () => {
         workItemId,
         liveLoop ? JSON.stringify(liveLoop) : null,
       ),
+    );
+  });
+
+  test("the message box goes back to one line once its message is sent", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    await openResumed(chatSession(), "/taskboard");
+
+    const input = (await screen.findByLabelText("Chat message")) as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "a\nlong\nmessage" } });
+    input.style.height = "120px";
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(chatService.sendMessage).toHaveBeenCalled());
+    expect(input.style.height).toBe("");
+  });
+
+  test("Enter sends the message and Shift+Enter does not", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    await openResumed(chatSession(), "/taskboard");
+
+    const input = await screen.findByLabelText("Chat message");
+    expect(input.tagName).toBe("TEXTAREA");
+    fireEvent.change(input, { target: { value: "line one" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(chatService.sendMessage).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "line one", null, null),
     );
   });
 
@@ -957,12 +988,36 @@ describe("ChatBubble", () => {
 
 describe("ChatBubble placement", () => {
   test("renders nothing when chat is disabled in settings", () => {
-    localStorage.setItem(CHAT_ENABLED_KEY, "false");
+    setPreference(PreferenceKeys.ChatEnabled, "false");
     chatService.listHistory.mockResolvedValue([]);
 
     const { container } = renderBubble();
     expect(screen.queryByLabelText("Open chat")).toBeNull();
     expect(container.firstChild).toBeNull();
+  });
+
+  test("on a phone the icon sits in its corner above the tab bar, whatever spot was saved, and does not drag", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    setPreference(FAB_POSITION_KEY, JSON.stringify({ x: 100, y: 100 }));
+    chatService.listHistory.mockResolvedValue([]);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+
+    renderBubble();
+    const fab = (await screen.findByLabelText("Open chat")) as HTMLElement;
+
+    // 1024×768 less the 60px tab bar: the corner is (952, 636).
+    expect([fab.style.left, fab.style.top]).toEqual(["952px", "636px"]);
+    fireEvent.pointerDown(fab, { clientX: 500, clientY: 500 });
+    fireEvent.pointerMove(window, { clientX: 450, clientY: 450 });
+    fireEvent.pointerUp(window, { clientX: 450, clientY: 450 });
+    expect([fab.style.left, fab.style.top]).toEqual(["952px", "636px"]);
+    expect(JSON.parse(getPreference(FAB_POSITION_KEY)!)).toEqual({ x: 100, y: 100 });
+    vi.unstubAllGlobals();
   });
 
   test("dragging the icon moves it, persists the spot, and suppresses the open click", async () => {
@@ -980,7 +1035,7 @@ describe("ChatBubble placement", () => {
     // lands at (902, 646), still inside the viewport.
     expect((fab as HTMLElement).style.left).toBe("902px");
     expect((fab as HTMLElement).style.top).toBe("646px");
-    expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 902, y: 646 });
+    expect(JSON.parse(getPreference(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 902, y: 646 });
 
     // The click that ends the drag must not open the panel.
     fireEvent.click(fab);
@@ -1005,14 +1060,14 @@ describe("ChatBubble placement", () => {
     // Default size is 384×512; +100/+80 grows it to 484×592.
     expect((panel as HTMLElement).style.width).toBe("484px");
     expect((panel as HTMLElement).style.height).toBe("592px");
-    expect(JSON.parse(localStorage.getItem(PANEL_SIZE_KEY) ?? "{}")).toEqual({
+    expect(JSON.parse(getPreference(PANEL_SIZE_KEY) ?? "{}")).toEqual({
       width: 484,
       height: 592,
     });
   });
 
-  test("a window resize clamps a now-off-screen icon back into view", async () => {
-    localStorage.setItem(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
+  test("a window resize draws the icon in view but keeps the spot the user chose", async () => {
+    setPreference(FAB_POSITION_KEY, JSON.stringify({ x: 900, y: 700 }));
     chatService.listHistory.mockResolvedValue([]);
 
     renderBubble();
@@ -1028,7 +1083,18 @@ describe("ChatBubble placement", () => {
     // (400 - 52 - 20) = 328 is the furthest the icon can sit.
     expect((fab as HTMLElement).style.left).toBe("328px");
     expect((fab as HTMLElement).style.top).toBe("328px");
-    expect(JSON.parse(localStorage.getItem(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 328, y: 328 });
+    // The spot the user chose is not overwritten by a window that is small for a moment…
+    expect(JSON.parse(getPreference(FAB_POSITION_KEY) ?? "{}")).toEqual({ x: 900, y: 700 });
+
+    act(() => {
+      window.innerWidth = 1024;
+      window.innerHeight = 768;
+      window.dispatchEvent(new Event("resize"));
+    });
+
+    // …so the icon goes back to it when the window grows again.
+    expect((fab as HTMLElement).style.left).toBe("900px");
+    expect((fab as HTMLElement).style.top).toBe("696px");
   });
 
   test("dragging the window header moves and persists the panel position", async () => {
@@ -1052,7 +1118,7 @@ describe("ChatBubble placement", () => {
     // -80/-60 from the (620, 236) anchor lands at (540, 176), still on-screen.
     expect((panel as HTMLElement).style.left).toBe("540px");
     expect((panel as HTMLElement).style.top).toBe("176px");
-    expect(JSON.parse(localStorage.getItem(PANEL_POSITION_KEY) ?? "{}")).toEqual({
+    expect(JSON.parse(getPreference(PANEL_POSITION_KEY) ?? "{}")).toEqual({
       x: 540,
       y: 176,
     });
@@ -1071,7 +1137,7 @@ describe("ChatBubble placement", () => {
 
     expect((panel as HTMLElement).style.left).toBe("620px");
     expect((panel as HTMLElement).style.top).toBe("236px");
-    expect(localStorage.getItem(PANEL_POSITION_KEY)).toBeNull();
+    expect(getPreference(PANEL_POSITION_KEY)).toBeUndefined();
 
     // …and the button still does its job, showing the chat list.
     fireEvent.click(chatList);

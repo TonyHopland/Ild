@@ -3,6 +3,13 @@ import { WorkItem, WorkItemStatus } from "../types";
 import { makeLoopTagMatcher, parseTags } from "../utils/workItemJson";
 import { formatDurationMs } from "../utils/duration";
 import { prStatusBadges } from "../utils/prStatusBadges";
+import Icon from "./Icon";
+import {
+  feedbackReasonLabel,
+  feedbackReasonTone,
+  pillClass,
+  workItemStatusLabel,
+} from "../utils/labels";
 
 interface WorkItemCardProps {
   workItem: WorkItem;
@@ -12,13 +19,6 @@ interface WorkItemCardProps {
   loopTemplateNames?: string[];
   repositoryName?: string;
 }
-
-const REASON_STYLES: Record<string, { bg: string; color: string; border: string }> = {
-  "PR Awaiting Merge": { bg: "#1a2744", color: "#60a5fa", border: "#2563eb" },
-  "Node Failed": { bg: "#2d1a1a", color: "#f87171", border: "#dc2626" },
-  "Rebase Conflict": { bg: "#2d2a1a", color: "#fbbf24", border: "#d97706" },
-  "Human Input Needed": { bg: "#1a2d2a", color: "#34d399", border: "#059669" },
-};
 
 export default function WorkItemCard({
   workItem,
@@ -64,14 +64,6 @@ export default function WorkItemCard({
   const elapsed = startedAtMs !== null ? formatDurationMs(now - startedAtMs) : null;
   const showRunningMeta = isRunning && (Boolean(workItem.currentNodeLabel) || elapsed !== null);
 
-  const reasonStyle = workItem.humanFeedbackReason
-    ? (REASON_STYLES[workItem.humanFeedbackReason] ?? {
-        bg: "#2d2d44",
-        color: "#a0a0b0",
-        border: "#6366f1",
-      })
-    : null;
-
   // While parked at a PR node, surface the same CI/review/merge tags the detail
   // dialog's PR view shows so the board gives a fast read on the PR's state.
   const prBadges =
@@ -98,7 +90,7 @@ export default function WorkItemCard({
       onKeyDown={handleKeyDown}
       role="button"
       tabIndex={0}
-      aria-label={`${workItem.title}, status ${workItem.status}. Use left and right arrow keys to move between columns.`}
+      aria-label={`${workItem.title}, status ${workItemStatusLabel(workItem.status)}. Use left and right arrow keys to move between columns.`}
     >
       {workItem.isPreviewRunning && (
         <span className="qa-active-dot" aria-label="QA preview is active" />
@@ -112,16 +104,15 @@ export default function WorkItemCard({
         )}
       </div>
       <h4 className="work-item-title">{workItem.title}</h4>
-      {reasonStyle && workItem.humanFeedbackReason && (
-        <div
-          className="human-feedback-badge"
-          style={{
-            backgroundColor: reasonStyle.bg,
-            color: reasonStyle.color,
-            borderLeft: `3px solid ${reasonStyle.border}`,
-          }}
-        >
-          {workItem.humanFeedbackReason}
+      {/* Why the item waits on a person, in the same words and colours as the
+          work item dialog: amber needs input, red failed, blue awaits a merge. */}
+      {workItem.humanFeedbackReason && (
+        <div className="human-feedback-badge">
+          <span
+            className={`${pillClass(feedbackReasonTone(workItem.humanFeedbackReason))} pill-dot`}
+          >
+            {feedbackReasonLabel(workItem.humanFeedbackReason)}
+          </span>
         </div>
       )}
       {prBadges.length > 0 && (
@@ -167,20 +158,26 @@ export default function WorkItemCard({
           <span
             key={label}
             className={`work-item-tag${isLoopTag(label) ? " work-item-tag--loop" : ""}`}
+            title={isLoopTag(label) ? `Runs the ${label} loop` : undefined}
           >
+            {isLoopTag(label) && <Icon name="loop" size={11} />}
             {label}
           </span>
         ))}
       </div>
       <style href="work-item-card" precedence="default">{`
         .work-item-card {
-          background-color: #2a2a40;
-          border-radius: 0.375rem;
-          padding: 0.75rem;
+          background-color: var(--surface-2);
+          border-radius: var(--radius);
+          padding: 10px 12px;
           cursor: grab;
-          transition: transform 0.1s ease, box-shadow 0.1s ease;
-          border: 1px solid #3a3a5c;
+          transition: transform 0.1s ease, box-shadow 0.1s ease, border-color 0.1s ease;
+          border: 1px solid var(--border);
           position: relative;
+        }
+
+        .work-item-card:hover {
+          border-color: var(--border-strong);
         }
 
         .work-item-card:hover {
@@ -221,13 +218,7 @@ export default function WorkItemCard({
         }
 
         .human-feedback-badge {
-          font-size: 0.7rem;
-          font-weight: 600;
-          padding: 0.2rem 0.5rem;
-          border-radius: 0.25rem;
           margin-bottom: 0.375rem;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
         }
 
         .work-item-pr-badges {
@@ -306,18 +297,21 @@ export default function WorkItemCard({
         }
 
         .work-item-tag {
-          font-size: 0.675rem;
-          padding: 0.1rem 0.4rem;
-          background-color: #2d2d44;
-          border-radius: 0.25rem;
-          color: #a0a0b0;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          font-size: var(--fs-xs);
+          padding: 1px 8px;
+          background-color: var(--surface-3);
+          border-radius: 999px;
+          color: var(--text-2);
         }
 
-        /* Tags that resolve to a loop template get a purple background so they
-           stand out from ordinary free-form labels. */
+        /* Tags that name a loop template carry the loop icon and the accent tint,
+           so they read as "runs this loop" without a legend. */
         .work-item-tag--loop {
-          background-color: #4c1d95;
-          color: #ddd6fe;
+          background-color: var(--accent-soft);
+          color: var(--loop-tag-text);
         }
 
         .qa-active-dot {

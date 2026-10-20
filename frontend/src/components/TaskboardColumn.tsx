@@ -3,6 +3,19 @@ import { WorkItem, WorkItemStatus } from "../types";
 import { workItemService } from "../services/auth";
 import WorkItemCard from "./WorkItemCard";
 import { errorMessage } from "../utils/errorMessage";
+import Icon from "./Icon";
+import "./TaskboardColumn.css";
+
+/** What an empty column says: what lands there and how, once it is opened. */
+const EMPTY_HINT: Record<WorkItemStatus, string> = {
+  [WorkItemStatus.Backlog]: "New work items land here.",
+  [WorkItemStatus.WorkQueue]: "Move a backlog item here to have the scheduler pick it up.",
+  [WorkItemStatus.Ready]: "Queued items whose dependencies are done show up here.",
+  [WorkItemStatus.Running]: "Ready items start here while the scheduler is running.",
+  [WorkItemStatus.HumanFeedback]: "Runs that stop for a decision show up here.",
+  [WorkItemStatus.WaitingForIld]: "Items wait here while ILD finishes something on its own.",
+  [WorkItemStatus.Done]: "Finished items end up here.",
+};
 
 interface TaskboardColumnProps {
   status: WorkItemStatus;
@@ -15,15 +28,21 @@ interface TaskboardColumnProps {
   onWorkItemClick?: (workItem: WorkItem) => void;
   onError?: (message: string) => void;
   onMoveWorkItem?: (workItem: WorkItem, direction: "prev" | "next") => void;
-  onAddItem?: () => void;
   // Fetches the column's next page; offered while fewer cards are loaded than
   // the total.
   onLoadMore?: () => void;
   loadingMore?: boolean;
   // Loop template names, forwarded to each card so loop tags are highlighted.
   loopTemplateNames?: string[];
-  // Repository names by id, so each card can show which repository it is on.
-  repositoryNames?: ReadonlyMap<string, string>;
+  // A repository id in words, so each card can show which repository it is on.
+  repositoryName?: (id: string) => string | null;
+  // Shown on its own, as on a phone, where a picker above names the column and
+  // counts it: no header, and an empty column says what lands there instead of folding.
+  alone?: boolean;
+  // Whether the user chose to fold this column (true) or open it (false), or
+  // null before they have; the board keeps it among their preferences.
+  foldChoice: boolean | null;
+  onFoldChange: (folded: boolean) => void;
 }
 
 export default function TaskboardColumn({
@@ -35,13 +54,25 @@ export default function TaskboardColumn({
   onWorkItemClick,
   onError,
   onMoveWorkItem,
-  onAddItem,
   onLoadMore,
   loadingMore = false,
   loopTemplateNames,
-  repositoryNames,
+  repositoryName,
+  alone = false,
+  foldChoice,
+  onFoldChange,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
+  // Any column folds to a strip and opens again from it. Until the user
+  // chooses, Done and the empty columns other than Running start folded, so the
+  // busy ones get the room. A folded column opens while a card is dragged over it.
+  // Empty means no card on screen and none counted: a card a live update just
+  // added shows even before the count catches up.
+  const empty = total === 0 && workItems.length === 0;
+  const foldedByDefault =
+    status === WorkItemStatus.Done || (empty && status !== WorkItemStatus.Running);
+  const collapsed = (foldChoice ?? foldedByDefault) && !dragOver && !alone;
+  const needsYou = status === WorkItemStatus.HumanFeedback && !empty;
   const hasMore = onLoadMore !== undefined && workItems.length < total;
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -65,9 +96,7 @@ export default function TaskboardColumn({
     if (existingItem?.status === status) return;
 
     try {
-      await workItemService.transition(workItemId, status);
-      const updated = await workItemService.getById(workItemId);
-      onWorkItemUpdate(updated);
+      onWorkItemUpdate(await workItemService.moveTo(workItemId, status));
     } catch (error) {
       const msg = errorMessage(error, "Failed to update work item status.");
       if (onError) onError(msg);
@@ -75,31 +104,58 @@ export default function TaskboardColumn({
     }
   };
 
+  if (collapsed) {
+    const summary = empty ? "empty" : `${total} ${total === 1 ? "item" : "items"}`;
+    return (
+      <div
+        className={`taskboard-column taskboard-column--collapsed${needsYou ? " taskboard-column--needs" : ""}`}
+        data-status={status}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <button
+          type="button"
+          className="taskboard-column-strip"
+          aria-expanded={false}
+          aria-label={`${label}: ${summary}. Show column`}
+          title={`${label}: ${summary}`}
+          onClick={() => onFoldChange(false)}
+        >
+          <span className="taskboard-column-count">{total}</span>
+          <h3 className="taskboard-column-title">{label}</h3>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
-      className={`taskboard-column ${dragOver ? "drag-over" : ""}`}
+      className={`taskboard-column ${dragOver ? "drag-over" : ""}${needsYou ? " taskboard-column--needs" : ""}${alone ? " taskboard-column--alone" : ""}`}
+      data-status={status}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <div className="taskboard-column-header">
-        <h3 className="taskboard-column-title">{label}</h3>
-        <div className="taskboard-column-header-end">
-          <span className="taskboard-column-count">{total}</span>
-          {onAddItem && (
+      {!alone && (
+        <div className="taskboard-column-header">
+          <h3 className="taskboard-column-title">{label}</h3>
+          <div className="taskboard-column-header-end">
+            <span className="taskboard-column-count">{total}</span>
             <button
               type="button"
-              className="taskboard-column-add"
-              onClick={onAddItem}
-              title="New item"
-              aria-label="New item"
+              className="taskboard-column-fold"
+              aria-label={`Fold ${label}`}
+              title="Fold column"
+              onClick={() => onFoldChange(true)}
             >
-              + New
+              <Icon name="back" size={14} />
             </button>
-          )}
+          </div>
         </div>
-      </div>
+      )}
       <div className="taskboard-column-body">
+        {empty && <p className="taskboard-column-empty">{EMPTY_HINT[status]}</p>}
         {workItems.map((item) => (
           <WorkItemCard
             key={item.id}
@@ -107,13 +163,13 @@ export default function TaskboardColumn({
             onClick={onWorkItemClick}
             onMove={onMoveWorkItem}
             loopTemplateNames={loopTemplateNames}
-            repositoryName={repositoryNames?.get(item.repositoryId)}
+            repositoryName={repositoryName?.(item.repositoryId) ?? undefined}
           />
         ))}
         {hasMore && (
           <button
             type="button"
-            className="taskboard-column-load-more"
+            className="btn btn-secondary btn-sm taskboard-column-load-more"
             onClick={onLoadMore}
             disabled={loadingMore}
           >
@@ -121,100 +177,6 @@ export default function TaskboardColumn({
           </button>
         )}
       </div>
-      <style>{`
-        .taskboard-column {
-          flex: 1 1 0;
-          min-width: 0;
-          min-height: 0;
-          background-color: #1e1e30;
-          border-radius: 0.5rem;
-          display: flex;
-          flex-direction: column;
-        }
-
-        .taskboard-column.drag-over {
-          outline: 2px dashed #6366f1;
-          background-color: #252540;
-        }
-
-        .taskboard-column-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 0.75rem 1rem;
-          border-bottom: 1px solid #2d2d44;
-        }
-
-        .taskboard-column-title {
-          font-size: 0.875rem;
-          font-weight: 600;
-          color: #c0c0d0;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-
-        .taskboard-column-header-end {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-        }
-
-        .taskboard-column-count {
-          font-size: 0.75rem;
-          color: #707090;
-          background-color: #2d2d44;
-          padding: 0.125rem 0.5rem;
-          border-radius: 9999px;
-        }
-
-        .taskboard-column-add {
-          font-size: 0.75rem;
-          font-weight: 600;
-          color: #c0c0d0;
-          background-color: #6366f1;
-          border: none;
-          padding: 0.2rem 0.55rem;
-          border-radius: 0.375rem;
-          cursor: pointer;
-          line-height: 1.2;
-          white-space: nowrap;
-          transition: background-color 0.15s ease;
-        }
-
-        .taskboard-column-add:hover {
-          background-color: #4f52d4;
-        }
-
-        .taskboard-column-body {
-          flex: 1;
-          overflow-y: auto;
-          padding: 0.5rem;
-          display: flex;
-          flex-direction: column;
-          gap: 0.5rem;
-        }
-
-        .taskboard-column-load-more {
-          font-size: 0.75rem;
-          font-weight: 600;
-          color: #c0c0d0;
-          background-color: #2d2d44;
-          border: 1px solid #3a3a55;
-          padding: 0.4rem 0.55rem;
-          border-radius: 0.375rem;
-          cursor: pointer;
-          transition: background-color 0.15s ease;
-        }
-
-        .taskboard-column-load-more:hover {
-          background-color: #353553;
-        }
-
-        .taskboard-column-load-more:disabled {
-          opacity: 0.6;
-          cursor: default;
-        }
-      `}</style>
     </div>
   );
 }

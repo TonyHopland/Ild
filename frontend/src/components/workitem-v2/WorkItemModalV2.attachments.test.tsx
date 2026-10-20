@@ -398,7 +398,7 @@ describe("staged files belong to one work item and one act", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText("New Work Item")).toBeTruthy();
+    expect(screen.getByText("New work item")).toBeTruthy();
     expect(form().textContent).not.toContain("staged-on-wi-1.png");
   });
 });

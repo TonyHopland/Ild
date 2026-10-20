@@ -29,7 +29,7 @@ function Icon({ path }: { path: string }) {
 const SECTIONS = [
   {
     id: "ild",
-    label: "Ild",
+    label: "General",
     icon: "M12 3v3m0 12v3m9-9h-3M6 12H3m14.5-6.5-2 2m-7 7-2 2m0-11 2 2m7 7 2 2M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z",
     Component: IldSettings,
   },

@@ -7,6 +7,12 @@ import {
 } from "../../../hooks/useSubmitDefaultOnEnter";
 import { authService, SessionSettingKeys } from "../../../services/auth";
 import { UserSession } from "../../../types";
+import {
+  PreferenceKeys,
+  setPreference,
+  usePreference,
+  usePreferencesLoaded,
+} from "../../../utils/userPreferences";
 import { NumericSettingField, SettingRow, Switch } from "../controls";
 
 /**
@@ -36,14 +42,19 @@ export function describeDevice(userAgent: string | null | undefined): string {
   return browser ?? platform ?? userAgent.slice(0, 40);
 }
 
+/** How many signed-in devices show before "Show all". */
+const SESSIONS_SHOWN = 5;
+
 /** Who you are signed in as, on what, and the preferences that follow you around. */
 export default function UserSettings() {
   const { user } = useAuth();
   const chatEnabled = useChatEnabled();
   const submitDefaultOnEnter = useSubmitDefaultOnEnter();
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const preferencesLoaded = usePreferencesLoaded();
+  const notificationsEnabled = usePreference(PreferenceKeys.NotificationsEnabled) !== "false";
   const [sessions, setSessions] = useState<UserSession[]>([]);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [showAllSessions, setShowAllSessions] = useState(false);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -57,13 +68,6 @@ export default function UserSettings() {
   useEffect(() => {
     void refreshSessions();
   }, [refreshSessions]);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("ild_notifications_enabled");
-    if (stored !== null) {
-      setNotificationsEnabled(stored !== "false");
-    }
-  }, []);
 
   const revokeSession = async (id: string) => {
     try {
@@ -86,20 +90,23 @@ export default function UserSettings() {
   };
 
   const toggleNotifications = (val: boolean) => {
-    setNotificationsEnabled(val);
-    localStorage.setItem("ild_notifications_enabled", val ? "true" : "false");
+    setPreference(PreferenceKeys.NotificationsEnabled, val ? "true" : "false");
     if (val && typeof Notification !== "undefined" && Notification.permission === "default") {
       void Notification.requestPermission();
     }
   };
 
   const otherDevices = sessions.filter((s) => !s.isCurrent).length;
+  // Every sign-in adds a row, so the list starts at this device and the most
+  // recent others, with the rest a click away.
+  const ordered = [...sessions.filter((s) => s.isCurrent), ...sessions.filter((s) => !s.isCurrent)];
+  const shownSessions = showAllSessions ? ordered : ordered.slice(0, SESSIONS_SHOWN);
 
   return (
     <>
       <div className="settings-pane-header">
         <h2>User</h2>
-        <p>Your account, your devices, and the preferences kept in this browser.</p>
+        <p>Your account, your devices, and your preferences, which follow you to every device.</p>
       </div>
 
       <section className="settings-card">
@@ -111,44 +118,47 @@ export default function UserSettings() {
         </SettingRow>
       </section>
 
-      <section className="settings-card">
-        <div className="settings-card-header">
-          <h3 className="settings-card-title">Preferences</h3>
-        </div>
-        <SettingRow
-          label="Browser notifications"
-          help="Notify this browser when a run needs you. Asks for permission the first time you turn it on."
-        >
-          <Switch
-            checked={notificationsEnabled}
-            onChange={toggleNotifications}
-            label="Enable browser notifications"
-          />
-        </SettingRow>
-        <SettingRow
-          label="AI chat bubble"
-          help="Shows the floating chat bubble in the lower corner. Turn it off to hide the bubble entirely so it cannot obstruct the view."
-        >
-          <Switch checked={chatEnabled} onChange={setChatEnabled} label="Enable AI chat bubble" />
-        </SettingRow>
-        <SettingRow
-          label="Submit default on Enter"
-          help="In a run's feedback box, Enter takes the node's default output and Shift+Enter adds a new line. Turn it off to have Enter always add a new line."
-        >
-          <Switch
-            checked={submitDefaultOnEnter}
-            onChange={setSubmitDefaultOnEnter}
-            label="Enable submit default on Enter"
-          />
-        </SettingRow>
-      </section>
+      {/* Shown once your preferences are read, so no switch shows a default first. */}
+      {preferencesLoaded && (
+        <section className="settings-card">
+          <div className="settings-card-header">
+            <h3 className="settings-card-title">Preferences</h3>
+          </div>
+          <SettingRow
+            label="Browser notifications"
+            help="Get a notification when a run needs you. This follows you to every device, but each browser still has to grant permission: it asks the first time you turn this on there."
+          >
+            <Switch
+              checked={notificationsEnabled}
+              onChange={toggleNotifications}
+              label="Enable browser notifications"
+            />
+          </SettingRow>
+          <SettingRow
+            label="AI chat bubble"
+            help="Shows the floating chat bubble in the lower corner. Turn it off to hide the bubble entirely so it cannot obstruct the view."
+          >
+            <Switch checked={chatEnabled} onChange={setChatEnabled} label="Enable AI chat bubble" />
+          </SettingRow>
+          <SettingRow
+            label="Submit default on Enter"
+            help="In a run's feedback box, Enter takes the node's default output and Shift+Enter adds a new line. Turn it off to have Enter always add a new line."
+          >
+            <Switch
+              checked={submitDefaultOnEnter}
+              onChange={setSubmitDefaultOnEnter}
+              label="Enable submit default on Enter"
+            />
+          </SettingRow>
+        </section>
+      )}
 
       <section className="settings-card">
         <div className="settings-card-header">
           <h3 className="settings-card-title">Signed-in devices</h3>
           <button
             type="button"
-            className="btn"
+            className="btn btn-sm btn-secondary"
             onClick={() => void revokeOtherSessions()}
             disabled={otherDevices === 0}
           >
@@ -157,7 +167,7 @@ export default function UserSettings() {
         </div>
         {sessionsError && <div className="settings-error">{sessionsError}</div>}
         <ul className="settings-sessions">
-          {sessions.map((session) => (
+          {shownSessions.map((session) => (
             <li key={session.id} className="settings-session">
               <div>
                 <span className="settings-row-label" title={session.userAgent ?? undefined}>
@@ -172,7 +182,7 @@ export default function UserSettings() {
               {!session.isCurrent && (
                 <button
                   type="button"
-                  className="btn"
+                  className="btn btn-sm btn-ghost"
                   onClick={() => void revokeSession(session.id)}
                   aria-label={`Sign out ${describeDevice(session.userAgent)}`}
                 >
@@ -182,6 +192,15 @@ export default function UserSettings() {
             </li>
           ))}
         </ul>
+        {sessions.length > SESSIONS_SHOWN && (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost settings-sessions-more"
+            onClick={() => setShowAllSessions((v) => !v)}
+          >
+            {showAllSessions ? "Show fewer" : `Show all ${sessions.length} devices`}
+          </button>
+        )}
       </section>
 
       <section className="settings-card">

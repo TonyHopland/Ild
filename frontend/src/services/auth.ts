@@ -382,6 +382,12 @@ export const workItemService = {
     return api.post<void>(`/workitems/${id}/transition`, { targetStatus });
   },
 
+  /** Moves an item to a status and reads it back as the server now holds it. */
+  moveTo: async (id: string, targetStatus: string): Promise<WorkItem> => {
+    await workItemService.transition(id, targetStatus);
+    return workItemService.getById(id);
+  },
+
   getDependencies: async (
     id: string,
     opts?: { skip?: number; take?: number },
@@ -1115,6 +1121,19 @@ export const SessionSettingKeys = {
 export const GlobalVariableSettingKeys = {
   MaxLength: "globalVariables.maxLength",
 } as const;
+
+/**
+ * The signed-in user's own UI preferences, kept on the server so they follow the
+ * user to every device: one text value per key, which the UI defines.
+ */
+export const preferencesService = {
+  getAll: async (): Promise<Record<string, string>> => {
+    return api.get<Record<string, string>>("/preferences");
+  },
+  put: async (key: string, value: string): Promise<void> => {
+    await api.put(`/preferences/${encodeURIComponent(key)}`, { value });
+  },
+};
 
 export const settingsService = {
   getAll: async (): Promise<AppSetting[]> => {

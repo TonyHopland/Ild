@@ -321,24 +321,6 @@ export default function GlobalVariables() {
           color: #a5b4fc;
         }
 
-        .btn-danger {
-          background-color: #7f1d1d;
-          color: #fecaca;
-        }
-
-        .btn-small {
-          padding: 0.35rem 0.7rem;
-          font-size: 0.78rem;
-        }
-
-        .btn-close {
-          background: none;
-          border: none;
-          color: #a0a0b0;
-          font-size: 1.25rem;
-          cursor: pointer;
-        }
-
         .gv-value-input {
           font-family: inherit;
           resize: vertical;

@@ -189,6 +189,28 @@ async function rerenderDialog(rerender: ReturnType<typeof render>["rerender"], w
 
 // "On a tab" means both halves: the tab is selected and the panel it controls
 // is the only one not hidden.
+/**
+ * A Runs-tab run action: a button in the run header, or an item behind its ⋯
+ * menu (opened here when it is shut).
+ */
+async function findRunAction(name: RegExp): Promise<HTMLElement> {
+  await screen.findByRole("button", { name: "Run actions" });
+  const direct = screen.queryByRole("button", { name });
+  if (direct) return direct;
+  const menu = screen.getByRole("button", { name: "Run actions" });
+  if (menu.getAttribute("aria-expanded") !== "true") fireEvent.click(menu);
+  return screen.getByRole("menuitem", { name });
+}
+
+/** The same, read synchronously (the run header is already on screen). */
+function runAction(name: RegExp): HTMLElement {
+  const direct = screen.queryByRole("button", { name });
+  if (direct) return direct;
+  const menu = screen.getByRole("button", { name: "Run actions" });
+  if (menu.getAttribute("aria-expanded") !== "true") fireEvent.click(menu);
+  return screen.getByRole("menuitem", { name });
+}
+
 function expectOnTab(name: string | RegExp) {
   const tab = screen.getByRole("tab", { name });
   expect(tab.getAttribute("aria-selected")).toBe("true");
@@ -316,7 +338,7 @@ describe("WorkItemModalV2", () => {
     await renderDialog(makeWorkItem({ status: WorkItemStatus.Running, currentLoopRunId: "run-1" }));
 
     expectOnTab("Action");
-    expect(screen.queryByRole("tab", { name: "Action ●" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Action, needs you" })).toBeNull();
   });
 
   test("arrow keys move selection and focus along the tab strip", async () => {
@@ -374,7 +396,7 @@ describe("WorkItemModalV2", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByText(/node executions/)).toBeTruthy();
+    expect(screen.getByText(/\d+ steps?/)).toBeTruthy();
     expect(screen.getByText("Implement")).toBeTruthy();
 
     // Expanding a node reveals its input and output.
@@ -869,7 +891,7 @@ describe("WorkItemModalV2", () => {
     const actionPanel = document.getElementById("wiv2-panel-action");
     expect(actionPanel).not.toBeNull();
     expect((actionPanel as HTMLElement).hasAttribute("hidden")).toBe(false);
-    expect(within(actionPanel as HTMLElement).getByText("Human Feedback")).toBeTruthy();
+    expect(within(actionPanel as HTMLElement).getByText("Needs you")).toBeTruthy();
     expect(
       await within(actionPanel as HTMLElement).findByRole("button", { name: "Approve" }),
     ).toBeTruthy();
@@ -878,7 +900,7 @@ describe("WorkItemModalV2", () => {
     expect((actionPanel as HTMLElement).querySelector('input[type="file"]')).toBeNull();
 
     // The feedback card closes the thread, on the human side.
-    const card = within(actionPanel as HTMLElement).getByText("Human Feedback");
+    const card = within(actionPanel as HTMLElement).getByText("Needs you");
     expect(card.closest(".wiv2-bubble-row-human")).not.toBeNull();
   });
 
@@ -892,7 +914,7 @@ describe("WorkItemModalV2", () => {
       }),
     );
 
-    expect(screen.getByRole("tab", { name: "Action ●" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Action, needs you" })).toBeTruthy();
   });
 
   test("Action tab has no indicator and shows an empty state when there is nothing in it", async () => {
@@ -900,7 +922,7 @@ describe("WorkItemModalV2", () => {
     await renderDialog(makeWorkItem());
 
     expect(screen.getByRole("tab", { name: "Action" })).toBeTruthy();
-    expect(screen.queryByRole("tab", { name: "Action ●" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Action, needs you" })).toBeNull();
 
     await act(async () => {
       fireEvent.click(screen.getByRole("tab", { name: "Action" }));
@@ -1165,6 +1187,48 @@ describe("WorkItemModalV2", () => {
     ]);
   });
 
+  test("a repository id that matches no repository reads Unknown repository, with the id on hover", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ repositoryId: "33b2fcb6-gone" }));
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    await waitFor(() => expect(within(overview).getByText("Unknown repository")).toBeTruthy());
+    expect(within(overview).getByText("Unknown repository").getAttribute("title")).toBe(
+      "33b2fcb6-gone",
+    );
+    expect(within(overview).queryByText("33b2fcb6-gone")).toBeNull();
+  });
+
+  test("a known repository is shown by name", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    await waitFor(() => expect(within(overview).getByText("my-repo")).toBeTruthy());
+  });
+
+  test("items waiting on this one are listed under Blocks, by title", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "getAll").mockResolvedValue([
+      makeWorkItem({ id: "wi-9", title: "Waiting item" }),
+    ]);
+    await renderDialog(makeWorkItem({ dependentIds: ["wi-9", "wi-404"] }));
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    await waitFor(() => expect(within(overview).getByText("Blocks")).toBeTruthy());
+    expect(within(overview).getByRole("link", { name: "Waiting item" })).toBeTruthy();
+    // One not among the loaded items is shown by its number, not guessed at.
+    expect(within(overview).getByRole("link", { name: "#wi-404" })).toBeTruthy();
+  });
+
+  test("an item nothing waits on has no Blocks row", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    const overview = document.getElementById("wiv2-panel-overview") as HTMLElement;
+    expect(within(overview).queryByText("Blocks")).toBeNull();
+  });
+
   test("an item that never had a PR still shows the empty state", async () => {
     mockServices();
     await renderDialog(
@@ -1189,19 +1253,45 @@ describe("WorkItemModalV2", () => {
     expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("Test Work Item");
   });
 
-  test("Edit lives in the footer next to Close, and Delete is not in the detail view", async () => {
+  test("without a worktree Files and Preview stay in the strip but do not open", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem());
+
+    for (const name of ["Files", "Preview"]) {
+      const tab = screen.getByRole("tab", { name });
+      expect(tab.getAttribute("aria-disabled")).toBe("true");
+      expect(tab.getAttribute("title")).toMatch(/no worktree yet/i);
+      fireEvent.click(tab);
+      expectOnTab("Overview");
+    }
+  });
+
+  test("with a worktree Files and Preview open as usual", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ worktreePath: "/worktrees/repo/wi-1" }));
+
+    const files = screen.getByRole("tab", { name: "Files" });
+    expect(files.getAttribute("aria-disabled")).toBeNull();
+    await act(async () => {
+      fireEvent.click(files);
+      await Promise.resolve();
+    });
+    expectOnTab("Files");
+  });
+
+  test("Edit is the footer's one button, the header's × is the only close, and Delete is not in the detail view", async () => {
     mockServices();
     await renderDialog(makeWorkItem());
 
     const editButton = screen.getByRole("button", { name: "Edit" });
     const footer = editButton.closest(".wiv2-footer");
-    // Edit and Close share the footer; Delete has moved out of the detail view.
+    // With nothing behind ⋯, Edit is all the footer holds; closing is the header's ×.
     expect(footer).not.toBeNull();
-    expect(footer?.querySelector(".modal-close")).toBeNull();
     expect([...(footer?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual([
       "Edit",
-      "Close",
     ]);
+    expect(screen.getAllByRole("button", { name: "Close" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Close" }).closest(".wiv2-header")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
@@ -1369,6 +1459,78 @@ describe("WorkItemModalV2", () => {
     expect(updateSpy.mock.calls[0][1]).toMatchObject({ baseBranchOverride: "" });
   });
 
+  test("a Backlog item moves to the Work queue from the footer, which a phone cannot drag", async () => {
+    mockServices();
+    const transition = vi
+      .spyOn(authServices.workItemService, "transition")
+      .mockResolvedValue(undefined as never);
+    const moved = makeWorkItem({ status: WorkItemStatus.WorkQueue });
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(moved);
+    const onSave = vi.fn();
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Backlog }), { onSave });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Move to Work queue" }));
+      await Promise.resolve();
+    });
+
+    expect(transition).toHaveBeenCalledWith("wi-1", WorkItemStatus.WorkQueue);
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(moved));
+  });
+
+  test("the dialog stays open while a move is on its way, and a refusal clears once the item changes", async () => {
+    mockServices();
+    let finish!: () => void;
+    vi.spyOn(authServices.workItemService, "transition").mockReturnValue(
+      new Promise<void>((_, reject) => (finish = () => reject(new Error("Not allowed.")))),
+    );
+    const onClose = vi.fn();
+    const item = makeWorkItem({ status: WorkItemStatus.Backlog });
+    const { rerender } = await renderDialog(item, { onClose });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Move to Work queue" }));
+      await Promise.resolve();
+    });
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => finish());
+    expect((await screen.findByRole("alert")).textContent).toBe("Not allowed.");
+
+    await act(async () => {
+      rerender(
+        <MemoryRouter>
+          <WorkItemModalV2
+            workItem={{ ...item, status: WorkItemStatus.WorkQueue }}
+            onClose={onClose}
+            onSave={vi.fn()}
+          />
+        </MemoryRouter>,
+      );
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("Not allowed.")).toBeNull();
+  });
+
+  test("a refused move says so in the footer, and only Backlog items offer it", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "transition").mockRejectedValue(
+      new Error("Not allowed."),
+    );
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Backlog }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Move to Work queue" }));
+      await Promise.resolve();
+    });
+    expect((await screen.findByRole("alert")).textContent).toBe("Not allowed.");
+    cleanup();
+
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Ready }));
+    expect(screen.queryByRole("button", { name: "Move to Work queue" })).toBeNull();
+  });
+
   test("Delete stays out of the footer even when cleanup buttons are present", async () => {
     mockServices();
     await renderDialog(
@@ -1379,12 +1541,34 @@ describe("WorkItemModalV2", () => {
       }),
     );
 
-    // Cleanup buttons render in the footer, but Delete does not.
+    // The cleanups sit behind the footer's ⋯, but Delete is not among them.
     const footer = screen.getByRole("button", { name: "Edit" }).closest(".wiv2-footer");
+    fireEvent.click(within(footer as HTMLElement).getByRole("button", { name: "More actions" }));
     expect(
-      within(footer as HTMLElement).getByRole("button", { name: /Cleanup -> Done/ }),
+      within(footer as HTMLElement).getByRole("menuitem", { name: "Clean up → Done" }),
+    ).toBeTruthy();
+    expect(
+      within(footer as HTMLElement).getByRole("menuitem", { name: "Clean up → Backlog" }),
     ).toBeTruthy();
     expect(within(footer as HTMLElement).queryByRole("button", { name: "Delete" })).toBeNull();
+    expect(within(footer as HTMLElement).queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
+  test("an Escape typed in the chat over the dialog is the chat's, and leaves the work item open", async () => {
+    mockServices();
+    const onClose = vi.fn();
+    await renderDialog(makeWorkItem(), { onClose });
+    const chat = document.createElement("div");
+    chat.className = "chat-panel";
+    chat.innerHTML = `<textarea aria-label="Chat message"></textarea>`;
+    document.body.appendChild(chat);
+
+    fireEvent.keyDown(screen.getByLabelText("Chat message"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    chat.remove();
   });
 
   test("Escape closes immediately when there are no unsaved changes", async () => {
@@ -1733,7 +1917,7 @@ describe("WorkItemModalV2 creation", () => {
     mockServices();
     await renderCreateDialog();
 
-    expect(screen.getByText("New Work Item")).toBeTruthy();
+    expect(screen.getByText("New work item")).toBeTruthy();
     // A brand-new item has no runs/conversation/live state, so the tabbed detail
     // view is dropped entirely.
     expect(screen.queryByRole("tab", { name: "Overview" })).toBeNull();
@@ -1742,6 +1926,34 @@ describe("WorkItemModalV2 creation", () => {
     expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  test("Create without a title or repository says so beside each and creates nothing", async () => {
+    mockServices();
+    const createSpy = vi.spyOn(authServices.workItemService, "create");
+    await renderCreateDialog();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    });
+
+    expect(screen.getByText("Give it a title.")).toBeTruthy();
+    expect(screen.getByText("Pick the repository it is for.")).toBeTruthy();
+    expect(screen.getByLabelText("Title").getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(screen.getByLabelText("Title"));
+    expect(createSpy).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Something" } });
+    expect(screen.queryByText("Give it a title.")).toBeNull();
+  });
+
+  test("the rarely used fields start folded under Advanced", async () => {
+    mockServices();
+    await renderCreateDialog();
+
+    const advanced = screen.getByText(/^Advanced/).closest("details")!;
+    expect(advanced.open).toBe(false);
+    expect(advanced.contains(screen.getByLabelText("Branch name (optional)"))).toBe(true);
   });
 
   test("submitting the form creates the work item, reports it and closes", async () => {
@@ -2350,7 +2562,7 @@ describe("WorkItemModalV2 Runs tab run actions", () => {
       const getRunsSpy = vi.mocked(authServices.workItemService.getRuns);
       const workItemSpy = vi.mocked(authServices.workItemService.getById);
 
-      const button = await screen.findByRole("button", { name });
+      const button = await findRunAction(name);
       const runsBefore = getRunsSpy.mock.calls.length;
       const itemBefore = workItemSpy.mock.calls.length;
       await act(async () => {
@@ -2370,7 +2582,7 @@ describe("WorkItemModalV2 Runs tab run actions", () => {
     const deleteSpy = vi.spyOn(authServices.loopRunService, "delete").mockResolvedValue(undefined);
     const getRunsSpy = vi.mocked(authServices.workItemService.getRuns);
 
-    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    fireEvent.click(await findRunAction(/delete run/i));
     expect(deleteSpy).not.toHaveBeenCalled();
     getRunsSpy.mockResolvedValue([]);
     const runsBefore = getRunsSpy.mock.calls.length;
@@ -2397,7 +2609,7 @@ describe("WorkItemModalV2 Runs tab run actions", () => {
       message: "Could not reclaim the run's worktree/branch; the run was not deleted.",
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    fireEvent.click(await findRunAction(/delete run/i));
     const group = screen.getByRole("group", { name: /delete/i });
     const confirm = within(group)
       .getAllByRole("button")
@@ -2434,7 +2646,7 @@ describe("WorkItemModalV2 Runs tab run action refresh", () => {
     vi.spyOn(authServices.loopRunService, method).mockResolvedValue(undefined);
     const getRuns = vi.mocked(authServices.workItemService.getRuns);
 
-    fireEvent.click(await screen.findByRole("button", { name }));
+    fireEvent.click(await findRunAction(name));
     const before = getRuns.mock.calls.length;
     await act(async () => {
       if (label === "delete")
@@ -2472,17 +2684,24 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     });
   }
 
-  const footerCleanup = () => screen.getByRole("button", { name: "Cleanup -> Done" });
-  const deleteRun = () => screen.getByRole("button", { name: /delete run/i });
+  // The cleanup sits behind the footer's ⋯: open the menu if it is shut.
+  const footerCleanup = () => {
+    if (!screen.queryByRole("menuitem", { name: "Clean up → Done" }))
+      fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    return screen.getByRole("menuitem", { name: "Clean up → Done" });
+  };
+  const deleteRun = () => runAction(/delete run/i);
 
   test("a footer cleanup and a Runs-tab delete of the same run never overlap", async () => {
     await openRunsTab(makeRun(), {});
     const cleanupDone = settle();
     vi.spyOn(authServices.workItemService, "cleanupToDone").mockReturnValue(cleanupDone.promise);
-    await screen.findByRole("button", { name: /delete run/i });
+    await findRunAction(/delete run/i);
 
+    // Opened outside act: an update inside an async act only lands when it ends.
+    const cleanupItem = footerCleanup();
     await act(async () => {
-      fireEvent.click(footerCleanup());
+      fireEvent.click(cleanupItem);
       await Promise.resolve();
     });
     expect((deleteRun() as HTMLButtonElement).disabled).toBe(true);
@@ -2520,7 +2739,7 @@ describe("WorkItemModalV2 one action at a time per run", () => {
     const deletion = settle();
     vi.spyOn(authServices.loopRunService, "delete").mockReturnValue(deletion.promise);
 
-    fireEvent.click(await screen.findByRole("button", { name: /delete run/i }));
+    fireEvent.click(await findRunAction(/delete run/i));
     const group = screen.getByRole("group", { name: /delete/i });
     await act(async () => {
       fireEvent.click(within(group).getByRole("button", { name: /confirm delete/i }));

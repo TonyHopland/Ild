@@ -876,84 +876,6 @@ export default function AiProviders() {
           user-select: none;
         }
 
-        .btn {
-          padding: 0.5rem 1rem;
-          border: none;
-          border-radius: 0.375rem;
-          cursor: pointer;
-          font-size: 0.875rem;
-        }
-
-        .btn-primary {
-          background-color: #6366f1;
-          color: #fff;
-        }
-
-        .btn-secondary {
-          background-color: #2d2d44;
-          color: #a0a0b0;
-        }
-
-        .btn-small {
-          padding: 0.25rem 0.5rem;
-          font-size: 0.75rem;
-        }
-
-        .btn:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-        }
-
-        .modal-overlay {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background-color: rgba(0, 0, 0, 0.6);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 1000;
-        }
-
-        .modal-content {
-          background-color: #1e1e30;
-          border-radius: 0.5rem;
-          border: 1px solid #2d2d44;
-          width: 100%;
-          max-width: 480px;
-          padding: 1rem;
-        }
-
-        .modal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 1rem;
-        }
-
-        .modal-header h2 {
-          font-size: 1rem;
-          color: #e0e0e0;
-          margin: 0;
-        }
-
-        .btn-close {
-          background: none;
-          border: none;
-          color: #a0a0b0;
-          font-size: 1.25rem;
-          cursor: pointer;
-        }
-
-        .modal-body {
-          display: flex;
-          flex-direction: column;
-          gap: 0.75rem;
-          margin-bottom: 1rem;
-        }
-
         .modal-body .form-group {
           display: flex;
           flex-direction: column;
@@ -1008,12 +930,6 @@ export default function AiProviders() {
           align-items: center;
           gap: 0.5rem;
           cursor: pointer;
-        }
-
-        .modal-footer {
-          display: flex;
-          justify-content: flex-end;
-          gap: 0.5rem;
         }
 
         .ap-cli-note {

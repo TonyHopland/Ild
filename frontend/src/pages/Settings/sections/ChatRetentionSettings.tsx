@@ -23,7 +23,6 @@ export default function ChatRetentionSettings() {
         max={3650}
         fallback={14}
         unit="days"
-        saveLabel="Save inactive chat days"
       >
         Used while the switch above is on; set it before turning that on. Counted from a chat&apos;s
         newest message, or from when it was started if it has none. Renaming, starring or reading a

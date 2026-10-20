@@ -32,6 +32,7 @@ public class AppDbContext : DbContext
     public DbSet<AiProviderTag> AiProviderTags => Set<AiProviderTag>();
     public DbSet<User> Users => Set<User>();
     public DbSet<UserSession> UserSessions => Set<UserSession>();
+    public DbSet<UserPreference> UserPreferences => Set<UserPreference>();
     public DbSet<AppSetting> AppSettings => Set<AppSetting>();
     public DbSet<ChatSession> ChatSessions => Set<ChatSession>();
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
@@ -342,6 +343,13 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<AppSetting>(e =>
         {
             e.HasIndex(s => s.Key).IsUnique();
+        });
+
+        modelBuilder.Entity<UserPreference>(e =>
+        {
+            // One value per user and key; a deleted user takes their preferences along.
+            e.HasIndex(p => new { p.UserId, p.Key }).IsUnique();
+            e.HasOne(p => p.User).WithMany().HasForeignKey(p => p.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<NetworkPolicyEntry>(e =>

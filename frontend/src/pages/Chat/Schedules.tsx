@@ -15,6 +15,7 @@ import type {
 import { ROUTES } from "../../utils/constants";
 import { CRON_PRESETS, describeCron } from "../../utils/cronText";
 import { Switch } from "../Settings/controls";
+import ChatsBackButton from "./ChatsBackButton";
 
 const SCOPES: { value: ChatScheduleRepositoryScope; label: string }[] = [
   { value: "All", label: "All repositories, including ones added later" },
@@ -486,7 +487,7 @@ function ScheduleForm({
  * The signed-in user's chat schedules, in the Chat tab beside the chat list. The
  * server's list is the state; hub events only say when to read it again.
  */
-export default function Schedules() {
+export default function Schedules({ onShowList }: { onShowList?: () => void } = {}) {
   const [list, setList] = useState<ChatScheduleList | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [repositories, setRepositories] = useState<Repository[] | null>(null);
@@ -585,8 +586,9 @@ export default function Schedules() {
   return (
     <section className="chat-page-chat chat-schedules">
       <header className="chat-page-header chat-schedules-header">
+        {onShowList && <ChatsBackButton onClick={onShowList} />}
         <h1 className="chat-page-title">Schedules</h1>
-        <button type="button" className="chat-primary-btn" onClick={() => openForm(null)}>
+        <button type="button" className="btn btn-primary" onClick={() => openForm(null)}>
           New schedule
         </button>
       </header>

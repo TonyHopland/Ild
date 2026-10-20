@@ -670,6 +670,18 @@ describe("FilesPanel diff rendering", () => {
     expect(screen.getByText("+world")).toBeTruthy();
   });
 
+  test("Wrap wraps long lines instead of scrolling them sideways, and unticking it scrolls again", async () => {
+    await showDiff(["diff --git a/a.ts b/a.ts", "@@ -1,1 +1,1 @@", "-a", "+b"].join("\n"));
+    const content = () => document.querySelector(".wiv2-files-content")!;
+    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(false);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Wrap" }));
+    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(true);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Wrap" }));
+    expect(content().classList.contains("wiv2-files-content-wrap")).toBe(false);
+  });
+
   test("shows original and current line numbers beside each line, blank where absent", async () => {
     const lines = [
       "diff --git a/a.ts b/a.ts",
@@ -687,11 +699,9 @@ describe("FilesPanel diff rendering", () => {
     ];
     const rows = await showDiff(lines.join("\n"));
 
-    // Every row, file line or not, carries both columns so the text lines up.
+    // The preamble before the first hunk is not shown; every row, file line
+    // or not, carries both columns so the text lines up.
     expect(rows.map(gutters)).toEqual([
-      ["", ""],
-      ["", ""],
-      ["", ""],
       ["", ""],
       ["9", "9"],
       ["10", ""],
@@ -713,12 +723,9 @@ describe("FilesPanel diff rendering", () => {
       expect(newCol.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(text.querySelector(".wiv2-diff-gutter")).toBeNull();
     }
-    expect(rows.map((row) => textCell(row).textContent)).toEqual(lines);
+    expect(rows.map((row) => textCell(row).textContent)).toEqual(lines.slice(3));
     // Shading still comes from the row's kind.
     expect(rows.map((row) => row.className)).toEqual([
-      "wiv2-diff-line wiv2-diff-ctx",
-      "wiv2-diff-line wiv2-diff-del",
-      "wiv2-diff-line wiv2-diff-add",
       "wiv2-diff-line wiv2-diff-hunk",
       "wiv2-diff-line wiv2-diff-ctx",
       "wiv2-diff-line wiv2-diff-del",
@@ -2066,7 +2073,7 @@ describe("FilesPanel diff range", () => {
     expect(screen.getByRole("button", { name: /Changes \(1\)/ })).toBeTruthy();
     const tree = () => within(document.querySelector<HTMLElement>(".wiv2-files-tree")!);
     expect(tree().getByText("b.ts").closest("button")!.textContent).toBe("b.ts");
-    expect(tree().getByText("a.ts").closest("button")!.textContent).toContain("M");
+    expect(tree().getByText("a.ts").closest("button")!.textContent).toContain("modified");
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Changes \(1\)/ }));
@@ -2270,5 +2277,49 @@ describe("FilesPanel diff range", () => {
     expect(disabled(pendingBox())).toBe(true);
     expect(commitsUnavailableMessage()).toBeTruthy();
     expect(getFiles.mock.lastCall).toEqual(["wi-1"]);
+  });
+});
+
+describe("FilesPanel on a phone", () => {
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("shows the list or the open file, and Back returns to the list with the file still open", async () => {
+    vi.spyOn(authServices.workItemService, "getFiles").mockResolvedValue({
+      worktreePath: "/tmp/wt",
+      files: [{ path: "a.ts", changeStatus: "modified" }],
+    });
+    vi.spyOn(authServices.workItemService, "getFileContent").mockResolvedValue({
+      path: "a.ts",
+      changeStatus: "modified",
+      content: "const a = 1;",
+      diff: null,
+      isBinary: false,
+      imageMimeType: null,
+      imageBase64: null,
+    });
+    await renderPanel(makeWorkItem());
+    const panel = () => document.querySelector(".wiv2-files")!;
+    expect(panel().classList.contains("wiv2-files--viewing")).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("a.ts"));
+      await Promise.resolve();
+    });
+    expect(panel().classList.contains("wiv2-files--viewing")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to files" }));
+    expect(panel().classList.contains("wiv2-files--viewing")).toBe(false);
+    expect(document.querySelector(".wiv2-files-viewer-path")?.textContent).toBe("a.ts");
   });
 });

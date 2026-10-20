@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
 import UserSettings from "./UserSettings";
 import * as useAuthHook from "../../../hooks/useAuth";
 import * as authServices from "../../../services/auth";
+import {
+  setPreference,
+  getPreference,
+  PreferenceKeys,
+  clearPreferences,
+  seedPreferences,
+} from "../../../utils/userPreferences";
 
 afterEach(() => {
   cleanup();
@@ -48,6 +55,20 @@ describe("User settings signed-in devices", () => {
     expect(await screen.findByText("Chrome on macOS")).toBeTruthy();
     expect(screen.getByText("Safari on iPhone")).toBeTruthy();
     expect(screen.getByText("This device")).toBeTruthy();
+  });
+
+  test("shows this device and the four most recent others, with the rest a click away", async () => {
+    const others = Array.from({ length: 6 }, (_, i) => ({ ...otherDevice, id: `o${i}` }));
+    vi.spyOn(authServices.authService, "getSessions").mockResolvedValue([...others, thisDevice]);
+
+    render(<UserSettings />);
+
+    await screen.findByText("Chrome on macOS");
+    expect(screen.getAllByRole("listitem")).toHaveLength(5);
+    expect(screen.getAllByRole("listitem")[0].textContent).toContain("This device");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all 7 devices" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(7);
   });
 
   test("offers no sign-out button for the current device", async () => {
@@ -123,11 +144,40 @@ describe("User settings signed-in devices", () => {
     const input = (await screen.findByLabelText(/sign out after inactivity/i)) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("30"));
     fireEvent.change(input, { target: { value: "7" } });
-    fireEvent.click(input.parentElement!.querySelector("button")!);
+    fireEvent.blur(input);
 
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith(authServices.SessionSettingKeys.IdleDays, "7");
     });
+  });
+
+  test("Enter saves once, the blur after it sends nothing more, and the field keeps focus", async () => {
+    vi.spyOn(authServices.authService, "getSessions").mockResolvedValue([thisDevice]);
+    let land!: () => void;
+    const put = vi.spyOn(authServices.settingsService, "put").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          land = () => resolve({ key: authServices.SessionSettingKeys.IdleDays, value: "7" });
+        }),
+    );
+
+    render(<UserSettings />);
+
+    const input = (await screen.findByLabelText(/sign out after inactivity/i)) as HTMLInputElement;
+    input.focus();
+    fireEvent.change(input, { target: { value: "7" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.blur(input);
+
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(input.readOnly).toBe(true);
+    expect(input.disabled).toBe(false);
+    input.focus();
+    expect(document.activeElement).toBe(input);
+    await act(async () => land());
+    expect(input.readOnly).toBe(false);
+    fireEvent.blur(input);
+    expect(put).toHaveBeenCalledTimes(1);
   });
 
   test("saves the absolute expiry setting independently of the idle one", async () => {
@@ -140,7 +190,7 @@ describe("User settings signed-in devices", () => {
 
     const input = (await screen.findByLabelText(/however active/i)) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "180" } });
-    fireEvent.click(input.parentElement!.querySelector("button")!);
+    fireEvent.blur(input);
 
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith(authServices.SessionSettingKeys.MaxDays, "180");
@@ -156,7 +206,7 @@ describe("User settings signed-in devices", () => {
 
     const input = (await screen.findByLabelText(/sign out after inactivity/i)) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "-1" } });
-    fireEvent.click(input.parentElement!.querySelector("button")!);
+    fireEvent.blur(input);
 
     await screen.findByText(/must be an integer between 0/i);
     expect(put).not.toHaveBeenCalled();
@@ -171,15 +221,15 @@ describe("User settings preferences", () => {
     expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 
-  test("persists notification preference to localStorage when toggled off", () => {
+  test("persists notification preference to the preferences when toggled off", () => {
     render(<UserSettings />);
 
     fireEvent.click(screen.getByRole("checkbox", { name: /browser notifications/i }));
-    expect(localStorage.getItem("ild_notifications_enabled")).toBe("false");
+    expect(getPreference(PreferenceKeys.NotificationsEnabled)).toBe("false");
   });
 
-  test("reads notification preference from localStorage on mount", () => {
-    localStorage.setItem("ild_notifications_enabled", "false");
+  test("reads notification preference from the preferences on mount", () => {
+    setPreference(PreferenceKeys.NotificationsEnabled, "false");
 
     render(<UserSettings />);
 
@@ -194,12 +244,12 @@ describe("User settings preferences", () => {
     expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 
-  test("persists the chat preference to localStorage when toggled off", () => {
+  test("persists the chat preference to the preferences when toggled off", () => {
     render(<UserSettings />);
 
     const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
     fireEvent.click(toggle);
-    expect(localStorage.getItem("ild_chat_enabled")).toBe("false");
+    expect(getPreference(PreferenceKeys.ChatEnabled)).toBe("false");
     expect((toggle as HTMLInputElement).checked).toBe(false);
   });
 
@@ -212,16 +262,16 @@ describe("User settings preferences", () => {
     expect(toggle.checked).toBe(false);
 
     fireEvent.click(toggle);
-    expect(localStorage.getItem("ild_submit_default_on_enter")).toBe("true");
+    expect(getPreference(PreferenceKeys.SubmitDefaultOnEnter)).toBe("true");
     expect(toggle.checked).toBe(true);
 
     fireEvent.click(toggle);
-    expect(localStorage.getItem("ild_submit_default_on_enter")).toBe("false");
+    expect(getPreference(PreferenceKeys.SubmitDefaultOnEnter)).toBe("false");
     expect(toggle.checked).toBe(false);
   });
 
-  test("reads an enabled submit default on Enter preference from localStorage on mount", () => {
-    localStorage.setItem("ild_submit_default_on_enter", "true");
+  test("reads an enabled submit default on Enter preference from the preferences on mount", () => {
+    setPreference(PreferenceKeys.SubmitDefaultOnEnter, "true");
 
     render(<UserSettings />);
 
@@ -229,12 +279,24 @@ describe("User settings preferences", () => {
     expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 
-  test("reads a disabled chat preference from localStorage on mount", () => {
-    localStorage.setItem("ild_chat_enabled", "false");
+  test("reads a disabled chat preference from the preferences on mount", () => {
+    setPreference(PreferenceKeys.ChatEnabled, "false");
 
     render(<UserSettings />);
 
     const toggle = screen.getByRole("checkbox", { name: /enable ai chat bubble/i });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+  });
+});
+
+describe("User settings preferences before they load", () => {
+  test("shows no preference switch until the preferences are read", () => {
+    clearPreferences();
+    render(<UserSettings />);
+
+    expect(screen.queryByRole("checkbox", { name: /browser notifications/i })).toBeNull();
+    act(() => seedPreferences({ [PreferenceKeys.NotificationsEnabled]: "false" }));
+    const toggle = screen.getByRole("checkbox", { name: /browser notifications/i });
     expect((toggle as HTMLInputElement).checked).toBe(false);
   });
 });

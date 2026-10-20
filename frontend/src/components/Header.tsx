@@ -4,6 +4,7 @@ import { useAuth } from "../hooks/useAuth";
 import { NAV_ITEMS, APP_NAME, ROUTES } from "../utils/constants";
 import { useChatInbox } from "./ChatInbox";
 import { usePendingGlobalVariableProposalCount } from "../hooks/usePendingGlobalVariableProposalCount";
+import SchedulerChip from "./SchedulerChip";
 
 export default function Header() {
   const { user, logout } = useAuth();
@@ -49,6 +50,7 @@ export default function Header() {
           })}
         </nav>
         <div className="header-user">
+          <SchedulerChip />
           <span className="user-name">{user?.username}</span>
           <button className="btn btn-logout" onClick={logout}>
             Logout
@@ -61,9 +63,9 @@ export default function Header() {
           top: 0;
           left: 0;
           right: 0;
-          z-index: 100;
-          background-color: #1a1a2e;
-          border-bottom: 1px solid #2d2d44;
+          z-index: var(--z-header);
+          background-color: var(--surface);
+          border-bottom: 1px solid var(--border);
           height: 4rem;
         }
 
@@ -164,15 +166,6 @@ export default function Header() {
           color: #a0a0b0;
         }
 
-        .btn {
-          padding: 0.375rem 0.75rem;
-          border-radius: 0.375rem;
-          border: none;
-          cursor: pointer;
-          font-size: 0.875rem;
-          transition: all 0.15s ease;
-        }
-
         .btn-logout {
           background-color: transparent;
           color: #a0a0b0;
@@ -182,6 +175,21 @@ export default function Header() {
         .btn-logout:hover {
           background-color: #2d2d44;
           color: #e0e0e0;
+        }
+
+        /* Phone: the tab bar and its More menu carry the navigation, the user
+           and Log out, so the header keeps the brand and the scheduler. */
+        @media (max-width: 767px) {
+          .header {
+            height: calc(3.5rem + env(safe-area-inset-top));
+            padding-top: env(safe-area-inset-top);
+          }
+
+          .header-nav,
+          .user-name,
+          .btn-logout {
+            display: none;
+          }
         }
       `}</style>
     </header>

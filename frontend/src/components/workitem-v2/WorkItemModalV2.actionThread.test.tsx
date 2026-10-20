@@ -388,7 +388,7 @@ describe("the Action tab thread", () => {
       }),
     );
 
-    const card = row(await within(panel).findByText("Human Feedback"));
+    const card = row(await within(panel).findByText("Needs you"));
     expect(card.classList.contains("wiv2-bubble-row-human")).toBe(true);
     const rows = [...panel.querySelectorAll(".wiv2-bubble-row")];
     expect(rows[rows.length - 1]).toBe(card);
@@ -945,18 +945,19 @@ describe("PR details", () => {
     expect(within(panel).queryByText("PR details")).toBeNull();
   });
 
-  test("starts collapsed, counting what is waiting to be posted", async () => {
+  test("starts open while replies are queued, counting what is waiting to be posted", async () => {
     mockServices(makeRun({ prSnapshot: snapshot(), prQueuedWrites: queued }));
     const panel = await openActionTab(makeWorkItem({ prUrl: "https://git.example/pr/1" }));
 
     const toggle = within(panel).getByRole("button", { name: /PR details/ });
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(within(toggle).getByText("2 pending")).toBeTruthy();
-    expect(within(panel).queryByText("250 ms feels sluggish.")).toBeNull();
-    expect(within(panel).queryByText("Dropped it to 150 ms.")).toBeNull();
+    // The pull request's thread and the replies waiting to go out are on screen.
+    expect(within(panel).getByText("250 ms feels sluggish.")).toBeTruthy();
+    expect(within(panel).getByText("Dropped it to 150 ms.")).toBeTruthy();
   });
 
-  test("expanded, shows the pull request's thread and the replies waiting to go out", async () => {
+  test("shutting it hides the thread and the replies, and it stays shut", async () => {
     mockServices(makeRun({ prSnapshot: snapshot(), prQueuedWrites: queued }));
     const panel = await openActionTab(makeWorkItem({ prUrl: "https://git.example/pr/1" }));
 
@@ -964,8 +965,24 @@ describe("PR details", () => {
       fireEvent.click(within(panel).getByRole("button", { name: /PR details/ }));
     });
 
-    expect(within(panel).getByText("250 ms feels sluggish.")).toBeTruthy();
-    expect(within(panel).getByText("Dropped it to 150 ms.")).toBeTruthy();
+    expect(
+      within(panel)
+        .getByRole("button", { name: /PR details/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+    expect(within(panel).queryByText("250 ms feels sluggish.")).toBeNull();
+    expect(within(panel).queryByText("Dropped it to 150 ms.")).toBeNull();
+  });
+
+  test("starts shut when nothing is queued", async () => {
+    mockServices(makeRun({ prSnapshot: snapshot(), prQueuedWrites: [] }));
+    const panel = await openActionTab(makeWorkItem({ prUrl: "https://git.example/pr/1" }));
+
+    expect(
+      within(panel)
+        .getByRole("button", { name: /PR details/ })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
   });
 
   test("a reply can be dropped from inside it", async () => {
@@ -973,9 +990,6 @@ describe("PR details", () => {
     const drop = vi.spyOn(authServices.loopRunService, "dropQueuedPrWrite").mockResolvedValue();
     const panel = await openActionTab(makeWorkItem({ prUrl: "https://git.example/pr/1" }));
 
-    await act(async () => {
-      fireEvent.click(within(panel).getByRole("button", { name: /PR details/ }));
-    });
     await act(async () => {
       fireEvent.click(within(panel).getAllByRole("button", { name: "Drop" })[0]);
     });
@@ -1084,5 +1098,64 @@ describe("reading the shown run's detail", () => {
     await flush();
 
     await within(panel).findByRole("button", { name: "Approve" });
+  });
+});
+
+describe("a run stopped on a failed node", () => {
+  const failedRun = (overrides: Partial<LoopRun> = {}) =>
+    makeRun({
+      nodes: [
+        execution("exec-1", "Developer", "2026-09-24T09:00:00Z", "2026-09-24T09:10:00Z"),
+        {
+          ...execution("exec-2", "Run tests", "2026-09-24T09:10:00Z", "2026-09-24T09:11:00Z"),
+          status: LoopRunNodeStatus.Failed,
+          error: "AssertionError: expected 3 to be 2",
+          nodeType: "Cmd",
+        },
+      ],
+      ...overrides,
+    });
+  const failedItem = () =>
+    makeWorkItem({ status: WorkItemStatus.HumanFeedback, humanFeedbackReason: "Node Failed" });
+
+  test("names the failed node and shows the error it recorded", async () => {
+    mockServices(failedRun());
+    const panel = await openActionTab(failedItem());
+
+    expect(within(panel).getByText("“Run tests” failed")).toBeTruthy();
+    expect(within(panel).getByText(/Cmd node/)).toBeTruthy();
+    expect(within(panel).getByText("AssertionError: expected 3 to be 2")).toBeTruthy();
+  });
+
+  test("Retry this node retries that execution of the run", async () => {
+    mockServices(failedRun());
+    const retry = vi.spyOn(authServices.loopRunService, "retryFromNode").mockResolvedValue();
+    const panel = await openActionTab(failedItem());
+
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole("button", { name: "Retry this node" }));
+    });
+
+    expect(retry).toHaveBeenCalledWith("run-1", "exec-2");
+  });
+
+  test("an ended run offers no retry, only the ways on from it", async () => {
+    mockServices(failedRun({ status: LoopRunStatus.Failed }));
+    const panel = await openActionTab(failedItem());
+
+    expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
+    expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "See it in the run timeline" })).toBeTruthy();
+  });
+
+  test("See it in the run timeline opens the Runs tab", async () => {
+    mockServices(failedRun());
+    const panel = await openActionTab(failedItem());
+
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole("button", { name: "See it in the run timeline" }));
+    });
+
+    expect(screen.getByRole("tab", { name: /Runs/ }).getAttribute("aria-selected")).toBe("true");
   });
 });

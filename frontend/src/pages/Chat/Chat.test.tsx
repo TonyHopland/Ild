@@ -921,3 +921,53 @@ describe("The open chat and what is shown", () => {
     expect(screen.queryByText("Could not reach the server.")).toBeNull();
   });
 });
+
+describe("the Chat tab on a phone", () => {
+  beforeEach(() => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+  });
+
+  const page = () => document.querySelector(".chat-page")!;
+  const listShown = () => page().classList.contains("chat-page--list");
+
+  test("the tab opens on the chat list; picking a chat shows it, and Chats goes back", async () => {
+    seedTwoChats();
+    renderShell("/chat");
+
+    await waitFor(() => expect(currentPath()).toBe("/chat/s1"));
+    await waitFor(() => expect(listShown()).toBe(true));
+
+    fireEvent.click(
+      within(screen.getByRole("complementary", { name: "Chats" })).getByText("Second"),
+    );
+    await waitFor(() => expect(currentPath()).toBe("/chat/s2"));
+    expect(listShown()).toBe(false);
+    expect(await screen.findByText("s2 reply")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Chats" }));
+    expect(listShown()).toBe(true);
+  });
+
+  test("a link to one chat shows that chat, not the list", async () => {
+    seedTwoChats();
+    renderShell("/chat/s2");
+
+    expect(await screen.findByText("s2 reply")).toBeTruthy();
+    expect(listShown()).toBe(false);
+  });
+
+  test("New chat from the list shows the start form", async () => {
+    seedTwoChats();
+    renderShell("/chat");
+    await waitFor(() => expect(listShown()).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "New chat" }));
+    await waitFor(() => expect(currentPath()).toBe("/chat"));
+    expect(listShown()).toBe(false);
+  });
+});

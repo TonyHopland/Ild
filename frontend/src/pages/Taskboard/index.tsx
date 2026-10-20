@@ -1,19 +1,19 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import { Repository, WorkItem, WorkItemStatus } from "../../types";
 import type { TypedSignalRMessage } from "../../types/signalr";
-import {
-  workItemService,
-  settingsService,
-  repositoryService,
-  loopTemplateService,
-  SchedulerSettingKeys,
-} from "../../services/auth";
+import { workItemService, repositoryService, loopTemplateService } from "../../services/auth";
 import TaskboardColumn from "../../components/TaskboardColumn";
 import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
+import Icon from "../../components/Icon";
+import Sheet from "../../components/Sheet";
+import { useIsMobile } from "../../hooks/useIsMobile";
+import { useFoldedColumns } from "../../hooks/useFoldedColumns";
+import { PreferenceKeys, getPreference } from "../../utils/userPreferences";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
+import { WORK_ITEM_STATUS_ORDER, workItemStatusLabel } from "../../utils/labels";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
 import { errorMessage } from "../../utils/errorMessage";
 import { makeLoopTagMatcher } from "../../utils/workItemJson";
@@ -26,6 +26,8 @@ import {
 } from "../../utils/taskboardFilter";
 import { findLoadedItem } from "../../utils/taskboardColumns";
 import { useTaskboardColumns } from "./useTaskboardColumns";
+import { repositoryName } from "../../utils/repositoryName";
+import "./Taskboard.css";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -38,13 +40,20 @@ export default function Taskboard() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<WorkItem | null>(null);
   const [errorText, setErrorText] = useState("");
-  const [isPaused, setIsPaused] = useState(false);
-  const [pauseBusy, setPauseBusy] = useState(false);
   const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [repositoriesLoaded, setRepositoriesLoaded] = useState(false);
   const [loopTemplateNames, setLoopTemplateNames] = useState<string[]>([]);
   const [tagOptions, setTagOptions] = useState<string[]>([]);
   const tagsRefreshRef = useRef({ inFlight: false, dirty: false });
   const [filter, setFilter] = useState<TaskboardFilter>(EMPTY_TASKBOARD_FILTER);
+  // A phone shows one column at a time, picked above the board; it opens on
+  // Needs you, the column a person looks at the board for.
+  const isMobile = useIsMobile();
+  const [mobileStatus, setMobileStatus] = useState<WorkItemStatus>(WorkItemStatus.HumanFeedback);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const foldedColumns = useFoldedColumns();
+  const closeFilters = useCallback(() => setFiltersOpen(false), []);
+  const pickerRef = useRef<HTMLDivElement>(null);
   // Search reaches the server once typing pauses; the repository and tags at once.
   const [appliedSearch, setAppliedSearch] = useState(filter.search);
   const {
@@ -82,11 +91,13 @@ export default function Taskboard() {
   const hasConnectedRef = useRef(false);
 
   useEffect(() => {
-    void loadSchedulerPaused();
     requestTagsRefresh();
     void repositoryService
       .getEvery()
-      .then(setRepositories)
+      .then((repos) => {
+        setRepositories(repos);
+        setRepositoriesLoaded(true);
+      })
       .catch(() => {});
     void loopTemplateService
       .getEvery()
@@ -136,7 +147,7 @@ export default function Taskboard() {
       syncWorkItem(workItemId, { itemChanged: true });
       delayedTimers.push(setTimeout(() => syncWorkItem(workItemId, { itemChanged: false }), 500));
 
-      const notificationsEnabled = localStorage.getItem("ild_notifications_enabled") !== "false";
+      const notificationsEnabled = getPreference(PreferenceKeys.NotificationsEnabled) !== "false";
       if (
         notificationsEnabled &&
         typeof Notification !== "undefined" &&
@@ -179,15 +190,10 @@ export default function Taskboard() {
       syncWorkItem(message.payload.workItemId, { itemChanged: false });
     };
 
-    const onSchedulerStateChanged = (message: TypedSignalRMessage<"SchedulerStateChanged">) => {
-      setIsPaused(message.payload.isPaused);
-    };
-
     on("HumanFeedbackRequired", onHumanFeedback);
     on("WorkItemStateChanged", onWorkItemStateChanged);
     on("PreviewStateChanged", onPreviewStateChanged);
     on("WorkItemRunProgressed", onRunProgressed);
-    on("SchedulerStateChanged", onSchedulerStateChanged);
     on("WorkItemEditProposalsChanged", onEditProposalsChanged);
 
     return () => {
@@ -195,7 +201,6 @@ export default function Taskboard() {
       off("WorkItemStateChanged", onWorkItemStateChanged);
       off("PreviewStateChanged", onPreviewStateChanged);
       off("WorkItemRunProgressed", onRunProgressed);
-      off("SchedulerStateChanged", onSchedulerStateChanged);
       off("WorkItemEditProposalsChanged", onEditProposalsChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };
@@ -216,7 +221,6 @@ export default function Taskboard() {
     }
     reloadAll({ windowed: true });
     if (openWorkItemId) syncWorkItem(openWorkItemId, { itemChanged: false });
-    void loadSchedulerPaused();
     requestTagsRefresh();
   }, [connectionState]);
 
@@ -253,15 +257,6 @@ export default function Taskboard() {
       cancelled = true;
     };
   }, [openWorkItemId, boardItem, editingItemId, isInitialLoading, navigate]);
-
-  const loadSchedulerPaused = async () => {
-    try {
-      const setting = await settingsService.get(SchedulerSettingKeys.IsPaused);
-      setIsPaused(setting.value === "true");
-    } catch {
-      // Leave the toggle on its last-known state if the fetch fails.
-    }
-  };
 
   // The tags in use, re-read from the server after every change that may add or
   // drop one: at most one read in flight, and one more if asked meanwhile, so
@@ -336,17 +331,15 @@ export default function Taskboard() {
   const [announcement, setAnnouncement] = useState("");
 
   const handleMoveWorkItem = async (workItem: WorkItem, direction: "prev" | "next") => {
-    const order = WORK_ITEM_STATUSES.map((s) => s.value);
+    const order = WORK_ITEM_STATUS_ORDER;
     const currentIndex = order.indexOf(workItem.status);
     if (currentIndex < 0) return;
     const nextIndex = direction === "next" ? currentIndex + 1 : currentIndex - 1;
     if (nextIndex < 0 || nextIndex >= order.length) return;
-    const target = order[nextIndex] as WorkItemStatus;
+    const target = order[nextIndex];
     try {
-      await workItemService.transition(workItem.id, target);
-      const updated = await workItemService.getById(workItem.id);
-      handleWorkItemUpdate(updated);
-      setAnnouncement(`${workItem.title} moved to ${target}`);
+      handleWorkItemUpdate(await workItemService.moveTo(workItem.id, target));
+      setAnnouncement(`${workItem.title} moved to ${workItemStatusLabel(target)}`);
     } catch (error) {
       setErrorText(errorMessage(error, "Failed to move work item."));
     }
@@ -361,8 +354,16 @@ export default function Taskboard() {
     }));
   };
 
+  // Centres the picked column's tab. The picker first renders once both the
+  // board and the folds have loaded, so each of those re-runs it too.
+  useEffect(() => {
+    pickerRef.current
+      ?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView?.({ inline: "center", block: "nearest" });
+  }, [mobileStatus, isMobile, isInitialLoading, foldedColumns.loaded]);
+
   const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
-  const repositoryNames = new Map(repositories.map((repo) => [repo.id, repo.name]));
+  const repositoryNameOf = (id: string) => repositoryName(id, repositories, repositoriesLoaded);
   // A selected tag keeps its chip after its last use is gone, so it can still be unselected.
   const tagChips = [
     ...tagOptions,
@@ -370,8 +371,59 @@ export default function Taskboard() {
   ].sort(compareTags);
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const filterActive = isFilterActive(filter);
+  const activeFilterCount = (filter.repositoryId ? 1 : 0) + filter.tags.length;
+  // The repository and tag filters: inline on a wide screen, in a sheet on a phone.
+  const filterControls = (
+    <>
+      <select
+        className="taskboard-filter-repo"
+        aria-label="Filter by repository"
+        value={filter.repositoryId}
+        onChange={(e) => setFilter((prev) => ({ ...prev, repositoryId: e.target.value }))}
+      >
+        <option value="">All repositories</option>
+        {repositoryOptions.map((repo) => (
+          <option key={repo.id} value={repo.id}>
+            {repo.name}
+          </option>
+        ))}
+      </select>
+      {tagChips.length > 0 && (
+        <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
+          {tagChips.map((tag) => {
+            const active = filter.tags.some((selected) => sameTag(selected, tag));
+            const loop = isLoopTag(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                className={`taskboard-filter-tag${loop ? " taskboard-filter-tag--loop" : ""}${
+                  active ? " is-active" : ""
+                }`}
+                aria-pressed={active}
+                onClick={() => toggleTagFilter(tag)}
+              >
+                {loop && <Icon name="loop" size={12} />}
+                {tag}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {filterActive && (
+        <button
+          type="button"
+          className="taskboard-filter-clear"
+          onClick={() => setFilter(EMPTY_TASKBOARD_FILTER)}
+        >
+          Clear filters
+        </button>
+      )}
+    </>
+  );
 
-  if (isInitialLoading) {
+  // The folds wait for the user's preferences too, so no column opens only to fold again.
+  if (isInitialLoading || !foldedColumns.loaded) {
     return (
       <div className="page-container">
         <p>Loading taskboard...</p>
@@ -387,111 +439,108 @@ export default function Taskboard() {
           <input
             type="search"
             className="taskboard-filter-search"
-            placeholder="Search work items..."
+            placeholder="Search title or #id"
             aria-label="Search work items"
             value={filter.search}
             onChange={(e) => setFilter((prev) => ({ ...prev, search: e.target.value }))}
           />
-          <select
-            className="taskboard-filter-repo"
-            aria-label="Filter by repository"
-            value={filter.repositoryId}
-            onChange={(e) => setFilter((prev) => ({ ...prev, repositoryId: e.target.value }))}
-          >
-            <option value="">All repositories</option>
-            {repositoryOptions.map((repo) => (
-              <option key={repo.id} value={repo.id}>
-                {repo.name}
-              </option>
-            ))}
-          </select>
-          {tagChips.length > 0 && (
-            <div className="taskboard-filter-tags" role="group" aria-label="Filter by tag">
-              {tagChips.map((tag) => {
-                const active = filter.tags.some((selected) => sameTag(selected, tag));
-                const loop = isLoopTag(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    className={`taskboard-filter-tag${loop ? " taskboard-filter-tag--loop" : ""}${
-                      active ? " is-active" : ""
-                    }`}
-                    aria-pressed={active}
-                    onClick={() => toggleTagFilter(tag)}
-                  >
-                    {tag}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {filterActive && (
+          {isMobile ? (
             <button
               type="button"
-              className="taskboard-filter-clear"
-              onClick={() => setFilter(EMPTY_TASKBOARD_FILTER)}
+              className="btn btn-secondary taskboard-filters-button"
+              aria-haspopup="dialog"
+              aria-expanded={filtersOpen}
+              onClick={() => setFiltersOpen(true)}
             >
-              Clear filters
+              <Icon name="filter" />
+              Filters
+              {activeFilterCount > 0 && (
+                <span className="taskboard-filters-count">
+                  {activeFilterCount}
+                  <span className="sr-only"> on</span>
+                </span>
+              )}
             </button>
+          ) : (
+            filterControls
           )}
         </div>
-        <label
-          className={`scheduler-pause-toggle${isPaused ? "" : " is-running"}`}
-          title="Toggle the scheduler — when paused, Ready items stay queued until resumed."
+        <button
+          type="button"
+          className={`btn btn-primary taskboard-new${isMobile ? " btn-icon" : ""}`}
+          aria-label={isMobile ? "New work item" : undefined}
+          onClick={openCreateModal}
         >
-          <input
-            type="checkbox"
-            className="scheduler-pause-toggle-input"
-            checked={!isPaused}
-            disabled={pauseBusy}
-            aria-label="Scheduler running"
-            onChange={async (e) => {
-              const running = e.target.checked;
-              const next = !running;
-              setPauseBusy(true);
-              try {
-                await settingsService.put(SchedulerSettingKeys.IsPaused, next ? "true" : "false");
-                setIsPaused(next);
-              } catch (err) {
-                setErrorText(errorMessage(err, "Failed to update scheduler state."));
-              } finally {
-                setPauseBusy(false);
-              }
-            }}
-          />
-          <span className="scheduler-pause-toggle-track" aria-hidden="true">
-            <span className="scheduler-pause-toggle-thumb" />
-          </span>
-          <span className="scheduler-pause-toggle-label">{isPaused ? "Paused" : "Running"}</span>
-        </label>
+          <Icon name="plus" />
+          {!isMobile && "New work item"}
+        </button>
       </div>
       <div role="status" aria-live="polite" className="taskboard-live-region">
         {announcement}
       </div>
-      <div className="taskboard">
-        {WORK_ITEM_STATUSES.map((status) => {
-          const column = columns[status.value as WorkItemStatus];
-          return (
-            <TaskboardColumn
-              key={status.value}
-              status={status.value as WorkItemStatus}
-              label={status.label}
-              workItems={column.items}
-              total={column.total}
-              onWorkItemUpdate={handleWorkItemUpdate}
-              onWorkItemClick={handleCardClick}
-              onError={(msg) => setErrorText(msg)}
-              onMoveWorkItem={handleMoveWorkItem}
-              onAddItem={status.value === "Backlog" ? openCreateModal : undefined}
-              loopTemplateNames={loopTemplateNames}
-              repositoryNames={repositoryNames}
-              onLoadMore={() => loadMore(status.value as WorkItemStatus)}
-              loadingMore={column.loadingMore}
-            />
-          );
-        })}
+      {isMobile && (
+        <div className="taskboard-picker" role="tablist" aria-label="Columns" ref={pickerRef}>
+          {WORK_ITEM_STATUSES.map((status) => {
+            const value = status.value;
+            const total = columns[value].total;
+            const picked = value === mobileStatus;
+            return (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={picked}
+                className={`taskboard-picker-tab${
+                  value === WorkItemStatus.HumanFeedback && total > 0 ? " is-needs" : ""
+                }`}
+                onClick={() => setMobileStatus(value)}
+              >
+                {status.label}
+                <span className="taskboard-picker-count">{total}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <div className={`taskboard${isMobile ? " taskboard--one" : ""}`}>
+        {WORK_ITEM_STATUSES.filter((status) => !isMobile || status.value === mobileStatus).map(
+          (status) => {
+            const column = columns[status.value];
+            return (
+              <TaskboardColumn
+                key={status.value}
+                status={status.value}
+                label={status.label}
+                workItems={column.items}
+                total={column.total}
+                onWorkItemUpdate={handleWorkItemUpdate}
+                onWorkItemClick={handleCardClick}
+                onError={(msg) => setErrorText(msg)}
+                onMoveWorkItem={handleMoveWorkItem}
+                loopTemplateNames={loopTemplateNames}
+                repositoryName={repositoryNameOf}
+                onLoadMore={() => loadMore(status.value)}
+                loadingMore={column.loadingMore}
+                alone={isMobile}
+                foldChoice={foldedColumns.choices[status.value] ?? null}
+                onFoldChange={(folded) => foldedColumns.setFolded(status.value, folded)}
+              />
+            );
+          },
+        )}
       </div>
+      {isMobile && filtersOpen && (
+        <Sheet title="Filters" onClose={closeFilters}>
+          <div className="taskboard-filter taskboard-filter--sheet">{filterControls}</div>
+          <button
+            type="button"
+            className="btn btn-primary taskboard-filters-done"
+            onClick={closeFilters}
+          >
+            Show results
+          </button>
+        </Sheet>
+      )}
       {/* Existing items open in the tabbed detail dialog, keyed by the URL so the
           link matches the open item; a new item opens the same dialog with no
           work item, which renders its creation form. */}
@@ -519,215 +568,6 @@ export default function Taskboard() {
           onDelete={handleDeleted}
         />
       )}
-      <style>{`
-        .taskboard-toolbar {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 0.75rem 1rem;
-          margin-bottom: 1rem;
-          padding: 0.6rem 0.75rem;
-          background-color: #23233b;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.5rem;
-        }
-
-        /* Push the running toggle to the trailing edge of the toolbar, leaving
-           the filter controls flush left. */
-        .taskboard-toolbar .scheduler-pause-toggle {
-          margin-left: auto;
-        }
-
-        .scheduler-pause-toggle {
-          display: inline-flex;
-          align-items: center;
-          gap: 0.5rem;
-          font-size: 0.9rem;
-          color: var(--text-secondary, #555);
-          cursor: pointer;
-          user-select: none;
-        }
-
-        .scheduler-pause-toggle-input {
-          position: absolute;
-          width: 1px;
-          height: 1px;
-          padding: 0;
-          margin: -1px;
-          overflow: hidden;
-          clip: rect(0 0 0 0);
-          white-space: nowrap;
-          border: 0;
-        }
-
-        .scheduler-pause-toggle-track {
-          position: relative;
-          display: inline-block;
-          width: 36px;
-          height: 20px;
-          border-radius: 999px;
-          background: var(--border-color, #ccc);
-          transition: background 0.2s ease;
-          flex-shrink: 0;
-        }
-
-        .scheduler-pause-toggle.is-running .scheduler-pause-toggle-track {
-          background: var(--success-color, #2e9e5b);
-        }
-
-        .scheduler-pause-toggle-thumb {
-          position: absolute;
-          top: 2px;
-          left: 2px;
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: #fff;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-          transition: transform 0.2s ease;
-        }
-
-        .scheduler-pause-toggle.is-running .scheduler-pause-toggle-thumb {
-          transform: translateX(16px);
-        }
-
-        .scheduler-pause-toggle-input:focus-visible + .scheduler-pause-toggle-track {
-          outline: 2px solid var(--focus-color, #3b82f6);
-          outline-offset: 2px;
-        }
-
-        .scheduler-pause-toggle-input:disabled ~ .scheduler-pause-toggle-track,
-        .scheduler-pause-toggle-input:disabled ~ .scheduler-pause-toggle-label {
-          opacity: 0.5;
-        }
-
-        .scheduler-pause-toggle-label {
-          font-variant-numeric: tabular-nums;
-        }
-
-        .taskboard-filter {
-          display: flex;
-          flex: 1 1 auto;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 0.5rem;
-        }
-
-        .taskboard-filter-search,
-        .taskboard-filter-repo {
-          background-color: #2a2a40;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.375rem;
-          color: #e0e0e0;
-          padding: 0.4rem 0.6rem;
-          font-size: 0.85rem;
-        }
-
-        .taskboard-filter-search {
-          min-width: 16rem;
-          flex: 1 1 16rem;
-          max-width: 24rem;
-        }
-
-        .taskboard-filter-search:focus-visible,
-        .taskboard-filter-repo:focus-visible {
-          outline: 2px solid var(--focus-color, #3b82f6);
-          outline-offset: 1px;
-        }
-
-        .taskboard-filter-tags {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 0.25rem;
-        }
-
-        .taskboard-filter-tag {
-          font-size: 0.7rem;
-          padding: 0.2rem 0.5rem;
-          background-color: #2d2d44;
-          border: 1px solid #3a3a5c;
-          border-radius: 999px;
-          color: #a0a0b0;
-          cursor: pointer;
-        }
-
-        .taskboard-filter-tag.is-active {
-          background-color: #3b82f6;
-          border-color: #3b82f6;
-          color: #fff;
-        }
-
-        /* Loop tags carry the same purple identity here as on the cards, so the
-           filter bar distinguishes them from free-form tags. Rules follow the
-           base is-active rule so the active loop variant wins on equal
-           specificity. */
-        .taskboard-filter-tag--loop {
-          background-color: #4c1d95;
-          border-color: #5b21b6;
-          color: #ddd6fe;
-        }
-
-        .taskboard-filter-tag--loop.is-active {
-          background-color: #7c3aed;
-          border-color: #7c3aed;
-          color: #fff;
-        }
-
-        .taskboard-filter-clear {
-          font-size: 0.8rem;
-          padding: 0.3rem 0.6rem;
-          background: none;
-          border: 1px solid #3a3a5c;
-          border-radius: 0.375rem;
-          color: #a0a0b0;
-          cursor: pointer;
-        }
-
-        .taskboard-filter-clear:hover {
-          color: #e0e0e0;
-        }
-
-        .taskboard-live-region {
-          position: absolute;
-          width: 1px;
-          height: 1px;
-          padding: 0;
-          margin: -1px;
-          overflow: hidden;
-          clip: rect(0, 0, 0, 0);
-          white-space: nowrap;
-          border: 0;
-        }
-
-        /* Fill the main area so the column row, not the window, owns the
-           vertical space — the page never grows past the viewport. */
-        .taskboard-page {
-          height: 100%;
-          display: flex;
-          flex-direction: column;
-          min-height: 0;
-        }
-
-        .taskboard {
-          flex: 1;
-          min-height: 0;
-          display: flex;
-          gap: 1rem;
-          overflow-x: auto;
-          padding-bottom: 1rem;
-        }
-
-        @media (max-width: 640px) {
-          .taskboard {
-            flex-direction: column;
-            overflow-y: auto;
-          }
-
-          .taskboard-column {
-            min-height: 200px;
-          }
-        }
-      `}</style>
     </div>
   );
 }
