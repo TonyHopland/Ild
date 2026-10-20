@@ -1,5 +1,6 @@
 using ILD.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace ILD.Data.Stores;
 
@@ -8,7 +9,8 @@ internal sealed record SessionSnapshotChunkHeader(int Seq, long RawOffset, int R
 
 /// <summary>
 /// A snapshot's raw content from a given offset, fetching and decompressing one chunk
-/// at a time and only when the reader gets to it. Lives as long as the context it reads through.
+/// at a time and only when the reader gets to it. Lives as long as the context it reads through,
+/// and ends the read transaction it is given when it is disposed.
 /// </summary>
 internal sealed class SessionSnapshotContentStream : Stream
 {
@@ -16,16 +18,19 @@ internal sealed class SessionSnapshotContentStream : Stream
     private readonly Guid _snapshotId;
     private readonly IReadOnlyList<SessionSnapshotChunkHeader> _chunks;
     private readonly long _fromOffset;
+    private readonly IDbContextTransaction? _ownedTransaction;
     private int _next;
     private byte[] _current = [];
     private int _position;
 
-    public SessionSnapshotContentStream(AppDbContext db, Guid snapshotId, IReadOnlyList<SessionSnapshotChunkHeader> chunks, long fromOffset)
+    public SessionSnapshotContentStream(AppDbContext db, Guid snapshotId, IReadOnlyList<SessionSnapshotChunkHeader> chunks, long fromOffset,
+        IDbContextTransaction? ownedTransaction)
     {
         _db = db;
         _snapshotId = snapshotId;
         _chunks = chunks;
         _fromOffset = fromOffset;
+        _ownedTransaction = ownedTransaction;
     }
 
     public override bool CanRead => true;
@@ -79,6 +84,18 @@ internal sealed class SessionSnapshotContentStream : Stream
         _current.AsSpan(_position, count).CopyTo(buffer);
         _position += count;
         return count;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _ownedTransaction?.Dispose();
+        base.Dispose(disposing);
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        if (_ownedTransaction is not null) await _ownedTransaction.DisposeAsync();
+        GC.SuppressFinalize(this);
     }
 
     public override void Flush() { }

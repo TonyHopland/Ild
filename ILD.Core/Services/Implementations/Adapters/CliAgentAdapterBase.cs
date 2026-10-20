@@ -225,7 +225,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     {
         // The session file sits where the agent can write, so it is only measured and
         // read as the agent (see AgentWritableFiles), never through a link.
-        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not { } length) return SessionSnapshotAppendResult.Appended;
+        // An empty file holds nothing to keep, and must not replace a history stored earlier.
+        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not ({ } length and > 0)) return SessionSnapshotAppendResult.Appended;
 
         var stored = await store.GetMetadataAsync(key, ct);
         if (stored is not null

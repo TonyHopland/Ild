@@ -78,11 +78,13 @@ public static class AgentWritableFiles
                 {
                     await content.CopyToAsync(process.StandardInput.BaseStream, ct);
                 }
-                catch
+                catch (Exception ex)
                 {
                     // cat then ends a partial file that is never renamed into place, and goes below.
                     try { process.StandardInput.Close(); } catch (IOException) { }
                     await process.WaitForExitAsync(CancellationToken.None);
+                    if (ex is IOException && process.ExitCode != 0)
+                        throw new IOException($"'{temporary}': {(await stderr).Trim()} (exit {process.ExitCode})", ex);
                     throw;
                 }
                 process.StandardInput.Close();
@@ -127,9 +129,18 @@ public static class AgentWritableFiles
             ?? throw new IOException("could not start /bin/sh");
         process.StandardInput.Close();
         var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        var range = new ExactLengthStream(process.StandardOutput.BaseStream, count, path);
         try
         {
-            await consume(new ExactLengthStream(process.StandardOutput.BaseStream, count, path));
+            await consume(range);
+        }
+        catch (IOException ex) when (range.EndedEarly)
+        {
+            // Say why tail or head stopped, when one of them failed rather than the file being gone or short.
+            await process.WaitForExitAsync(CancellationToken.None);
+            if (process.ExitCode is not (0 or 3))
+                throw new IOException($"'{path}': {(await stderr).Trim()} (exit {process.ExitCode})", ex);
+            throw;
         }
         finally
         {
@@ -277,6 +288,8 @@ public static class AgentWritableFiles
     {
         private long _read;
 
+        public bool EndedEarly { get; private set; }
+
         public override bool CanRead => true;
         public override bool CanSeek => false;
         public override bool CanWrite => false;
@@ -303,7 +316,10 @@ public static class AgentWritableFiles
         private int Took(int read)
         {
             if (read == 0)
+            {
+                EndedEarly = true;
                 throw new IOException($"'{path}' ended {length - _read} byte(s) before the range read from it, or is gone.");
+            }
             _read += read;
             return read;
         }

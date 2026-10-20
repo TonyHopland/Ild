@@ -29,11 +29,14 @@ public static class SessionSnapshotContentMigrator
 {
     /// <summary>The next row still holding legacy content, leaving out <paramref name="skip"/>; null when none is left.</summary>
     public static async Task<Guid?> FindNextAsync(AppDbContext db, IReadOnlyCollection<Guid> skip, CancellationToken ct = default)
-        => await db.AdapterSessionSnapshots
-            .Where(s => EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn) != null && !skip.Contains(s.Id))
+    {
+        var skipped = skip.ToArray();
+        return await db.AdapterSessionSnapshots
+            .Where(s => EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn) != null && !skipped.Contains(s.Id))
             .OrderBy(s => s.Id)
             .Select(s => (Guid?)s.Id)
             .FirstOrDefaultAsync(ct);
+    }
 
     /// <summary>Converts one row. False when it holds no legacy content (any more).</summary>
     public static async Task<bool> ConvertRowAsync(AppDbContext db, Guid snapshotId, CancellationToken ct = default)
@@ -56,6 +59,9 @@ public static class SessionSnapshotContentMigrator
                 .SetProperty(s => s.TailHash, chunker.TailHash)
                 .SetProperty(s => EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn), (string?)null), ct);
         if (claimed == 0) return false;
+        // A row never holds chunks beside legacy content; clearing any lets one that somehow
+        // does convert cleanly instead of failing every read that converts it.
+        await db.AdapterSessionSnapshotChunks.Where(c => c.SnapshotId == snapshotId).ExecuteDeleteAsync(ct);
 
         foreach (var chunk in chunks)
         {

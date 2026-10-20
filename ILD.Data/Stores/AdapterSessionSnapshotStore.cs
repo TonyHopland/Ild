@@ -1,9 +1,11 @@
+using System.Data;
 using System.Linq.Expressions;
 using System.Text;
 using ILD.Data.Entities;
 using ILD.Data.Migrations;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace ILD.Data.Stores;
 
@@ -24,6 +26,9 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         s.CreatedAt,
         s.UpdatedAt,
         EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn) != null);
+
+    /// <summary>The raw line bytes a page holds at most, beyond its first line.</summary>
+    private const int PageByteBudget = 1024 * 1024;
 
     private readonly AppDbContext _db;
 
@@ -119,7 +124,13 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
     public async Task ReplaceAsync(SessionSnapshotKey key, string format, Stream fullRaw, CancellationToken cancellationToken = default)
     {
         await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+        await ReplaceWithinAsync(key, format, fullRaw, cancellationToken);
+        await tx.CommitAsync(cancellationToken);
+    }
 
+    /// <summary>The body of <see cref="ReplaceAsync"/>, inside a transaction the caller owns.</summary>
+    private async Task ReplaceWithinAsync(SessionSnapshotKey key, string format, Stream fullRaw, CancellationToken cancellationToken)
+    {
         var id = await Snapshots(key).Select(s => (Guid?)s.Id).FirstOrDefaultAsync(cancellationToken);
         if (id is null)
         {
@@ -151,35 +162,51 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
                 .SetProperty(s => s.TailHash, chunker.TailHash)
                 .SetProperty(s => EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn), (string?)null)
                 .SetProperty(s => s.UpdatedAt, DateTime.UtcNow), cancellationToken);
-        await tx.CommitAsync(cancellationToken);
     }
 
     public async Task<Stream?> OpenReadAsync(SessionSnapshotKey key, long fromRawOffset = 0, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(fromRawOffset);
-        var metadata = await GetMetadataAsync(key, cancellationToken);
-        return metadata is null ? null : await OpenContentAsync(metadata.Id, fromRawOffset, cancellationToken);
+        var tx = await BeginConsistentReadAsync(key, cancellationToken);
+        if (tx is null) return null;
+        try
+        {
+            return await OpenContentAsync(tx.Value.Metadata.Id, fromRawOffset, tx.Value.Transaction, cancellationToken);
+        }
+        catch
+        {
+            await tx.Value.Transaction.DisposeAsync();
+            throw;
+        }
     }
 
     public async Task<SessionSnapshotPage> ReadRangeAsync(SessionSnapshotKey key, long fromRawOffset, int maxEvents, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(fromRawOffset);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
-        var metadata = await GetMetadataAsync(key, cancellationToken);
-        if (metadata is null || fromRawOffset >= metadata.ByteLength)
+        if (await BeginConsistentReadAsync(key, cancellationToken) is not ({ } tx, { } metadata))
+            return new SessionSnapshotPage([], fromRawOffset, null);
+        await using var _ = tx;
+        if (fromRawOffset >= metadata.ByteLength)
             return new SessionSnapshotPage([], fromRawOffset, null);
 
-        await using var content = await OpenContentAsync(metadata.Id, fromRawOffset, cancellationToken);
+        await using var content = await OpenContentAsync(metadata.Id, fromRawOffset, ownedTransaction: null, cancellationToken);
         var events = new List<string>();
         var line = new MemoryStream();
-        var consumed = 0L;
+        var pageBytes = 0L;
+        var next = fromRawOffset;
         var block = new byte[81920];
-        while (events.Count < maxEvents)
+        var full = false;
+        while (!full && events.Count < maxEvents)
         {
             var read = await content.ReadAsync(block, cancellationToken);
             if (read == 0)
             {
-                if (line.Length > 0) events.Add(Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length));
+                if (line.Length > 0)
+                {
+                    events.Add(Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length));
+                    next += line.Length;
+                }
                 break;
             }
 
@@ -187,29 +214,32 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
             while (events.Count < maxEvents)
             {
                 var newline = span.IndexOf((byte)'\n');
-                if (newline < 0)
+                var part = newline < 0 ? span : span[..newline];
+                if (events.Count > 0 && pageBytes + line.Length + part.Length > PageByteBudget)
                 {
-                    line.Write(span);
-                    consumed += span.Length;
+                    full = true;
                     break;
                 }
-                line.Write(span[..newline]);
+                line.Write(part);
+                if (newline < 0) break;
+
                 events.Add(Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length));
+                pageBytes += line.Length;
+                next += line.Length + 1;
                 line.SetLength(0);
-                consumed += newline + 1;
                 span = span[(newline + 1)..];
             }
         }
 
-        var next = fromRawOffset + consumed;
         return new SessionSnapshotPage(events, fromRawOffset, next < metadata.ByteLength ? next : null);
     }
 
     public async Task<SessionSnapshotPage> ReadTailAsync(SessionSnapshotKey key, int maxEvents, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
-        var metadata = await GetMetadataAsync(key, cancellationToken);
-        if (metadata is null) return new SessionSnapshotPage([], 0, null);
+        if (await BeginConsistentReadAsync(key, cancellationToken) is not ({ } tx, { } metadata))
+            return new SessionSnapshotPage([], 0, null);
+        await using var _ = tx;
 
         var chunks = await ChunkHeadersAsync(metadata.Id, 0, cancellationToken);
         var tail = Array.Empty<byte>();
@@ -227,15 +257,26 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
             // A chunk can start mid-line when the write before it did not end on one, so
             // the first line of what has been read is only whole once the start is reached.
             var whole = LineStarts(tail).Count - (i > 0 ? 1 : 0);
-            if (whole >= maxEvents) break;
+            if (whole >= maxEvents || (whole > 0 && tail.Length >= PageByteBudget)) break;
         }
 
         var starts = LineStarts(tail);
-        var first = Math.Max(0, starts.Count - maxEvents);
+        var lineEnd = tail.Length > 0 && tail[^1] == (byte)'\n' ? tail.Length - 1 : tail.Length;
+        var first = starts.Count;
+        var pageBytes = 0L;
+        while (first > 0 && starts.Count - first < maxEvents)
+        {
+            var end = first < starts.Count ? starts[first] - 1 : lineEnd;
+            var length = end - starts[first - 1];
+            if (first < starts.Count && pageBytes + length > PageByteBudget) break;
+            pageBytes += length;
+            first--;
+        }
+
         var events = new List<string>(starts.Count - first);
         for (var n = first; n < starts.Count; n++)
         {
-            var end = n + 1 < starts.Count ? starts[n + 1] - 1 : (tail.Length > 0 && tail[^1] == (byte)'\n' ? tail.Length - 1 : tail.Length);
+            var end = n + 1 < starts.Count ? starts[n + 1] - 1 : lineEnd;
             events.Add(Encoding.UTF8.GetString(tail, starts[n], end - starts[n]));
         }
         return new SessionSnapshotPage(events, tailOffset + (first < starts.Count ? starts[first] : tail.Length), null);
@@ -258,19 +299,45 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
 
     public async Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default)
     {
-        var metadata = await GetMetadataAsync(source, cancellationToken);
-        if (metadata is null) return false;
+        if (await BeginConsistentReadAsync(source, cancellationToken) is not ({ } tx, { } metadata)) return false;
+        await using var _ = tx;
         if (source == destination) return true;
 
-        await using var content = await OpenContentAsync(metadata.Id, 0, cancellationToken);
+        await using var content = await OpenContentAsync(metadata.Id, 0, ownedTransaction: null, cancellationToken);
         await using var rewritten = new LineWiseReplacingStream(
             content, Encoding.UTF8.GetBytes(source.SessionId), Encoding.UTF8.GetBytes(destination.SessionId));
-        await ReplaceAsync(destination, metadata.Format, rewritten, cancellationToken);
+        await ReplaceWithinAsync(destination, metadata.Format, rewritten, cancellationToken);
+        await tx.CommitAsync(cancellationToken);
         return true;
     }
 
-    private async Task<Stream> OpenContentAsync(Guid snapshotId, long fromRawOffset, CancellationToken ct)
-        => new SessionSnapshotContentStream(_db, snapshotId, await ChunkHeadersAsync(snapshotId, fromRawOffset, ct), fromRawOffset);
+    /// <summary>
+    /// A repeatable-read transaction and the snapshot's metadata as of it, converting a
+    /// legacy row first; null when there is no snapshot. Every chunk read inside it sees the
+    /// content the metadata describes, even while a replace swaps that content out.
+    /// </summary>
+    private async Task<(IDbContextTransaction Transaction, SessionSnapshotMetadata Metadata)?> BeginConsistentReadAsync(
+        SessionSnapshotKey key, CancellationToken ct)
+    {
+        if (await GetMetadataAsync(key, ct) is null) return null;
+
+        var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);
+        try
+        {
+            var metadata = await Snapshots(key).Select(ToMetadata).FirstOrDefaultAsync(ct);
+            if (metadata is not null) return (tx, metadata);
+        }
+        catch
+        {
+            await tx.DisposeAsync();
+            throw;
+        }
+        await tx.DisposeAsync();
+        return null;
+    }
+
+    private async Task<Stream> OpenContentAsync(Guid snapshotId, long fromRawOffset, IDbContextTransaction? ownedTransaction, CancellationToken ct)
+        => new SessionSnapshotContentStream(_db, snapshotId, await ChunkHeadersAsync(snapshotId, fromRawOffset, ct), fromRawOffset, ownedTransaction);
 
     private async Task<IReadOnlyList<SessionSnapshotChunkHeader>> ChunkHeadersAsync(Guid snapshotId, long fromRawOffset, CancellationToken ct)
         => await _db.AdapterSessionSnapshotChunks
