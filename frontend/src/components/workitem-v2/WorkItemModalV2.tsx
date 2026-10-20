@@ -444,10 +444,21 @@ export default function WorkItemModalV2({
             />
           ) : (
             <div className="wiv2-terminal-empty">
-              <p>Open a shell in {workItem.worktreePath}</p>
+              <p>Open a shell in this worktree</p>
+              <div className="wiv2-terminal-path">
+                <code title={workItem.worktreePath ?? undefined}>{workItem.worktreePath}</code>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => void navigator.clipboard?.writeText(workItem.worktreePath ?? "")}
+                >
+                  <Icon name="copy" size={14} />
+                  Copy path
+                </button>
+              </div>
               <button
                 type="button"
-                className="btn btn-sm btn-secondary"
+                className="btn btn-primary"
                 onClick={() => setShowTerminal(true)}
               >
                 Open Terminal

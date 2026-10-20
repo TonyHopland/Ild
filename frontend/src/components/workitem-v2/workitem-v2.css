@@ -1467,14 +1467,15 @@
 .wiv2-file-row {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 6px;
   width: 100%;
+  min-height: 30px;
   background: none;
   border: none;
-  color: #c0c0d0;
-  font-size: 0.82rem;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
   text-align: left;
-  padding: 0.15rem 0.5rem;
+  padding: 0 var(--space-2);
   cursor: pointer;
 }
 
@@ -1487,11 +1488,12 @@
   color: #fff;
 }
 
+/* Folders show a chevron here; files keep the slot empty so names line up. */
 .wiv2-file-caret {
-  width: 0.8rem;
+  width: 12px;
   flex-shrink: 0;
-  color: #8080a0;
-  font-size: 0.7rem;
+  display: inline-flex;
+  color: var(--text-3);
 }
 
 .wiv2-file-name {
@@ -1504,26 +1506,25 @@
   color: #d0d0e0;
 }
 
+/* A changed file's dot: green added, amber modified, red deleted. */
 .wiv2-file-badge {
   margin-left: auto;
   flex-shrink: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.68rem;
-  font-weight: 700;
-  width: 1rem;
-  text-align: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
 .wiv2-file-badge-added {
-  color: #4ec97a;
+  background: var(--success);
 }
 
 .wiv2-file-badge-modified {
-  color: #e0a030;
+  background: var(--attention);
 }
 
 .wiv2-file-badge-deleted {
-  color: #e05252;
+  background: var(--danger);
 }
 
 .wiv2-files-content {
@@ -1636,26 +1637,35 @@
 
 .wiv2-files-edit {
   flex-shrink: 0;
-  background: none;
-  border: 1px solid #3a3a5c;
-  border-radius: 0.25rem;
-  color: #a0a0b0;
-  font-size: 0.78rem;
-  padding: 0.2rem 0.6rem;
+}
+
+/* Wrap long lines in the viewer instead of scrolling sideways. */
+.wiv2-files-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
   cursor: pointer;
 }
 
-.wiv2-files-edit:hover:not(:disabled) {
-  color: #e0e0e0;
+.wiv2-files-content-wrap .wiv2-code,
+.wiv2-files-content-wrap .wiv2-diff {
+  min-width: 0;
 }
 
-.wiv2-files-edit-primary {
-  background-color: #6366f1;
-  border-color: #6366f1;
-  color: #fff;
+.wiv2-files-content-wrap .wiv2-code-line,
+.wiv2-files-content-wrap .wiv2-diff-line {
+  width: auto;
 }
 
-.wiv2-files-edit:disabled,
+.wiv2-files-content-wrap .wiv2-code-text,
+.wiv2-files-content-wrap .wiv2-diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
 .wiv2-toggle:disabled {
   opacity: 0.55;
   cursor: default;
@@ -1913,4 +1923,26 @@
   overflow-wrap: anywhere;
   max-height: 240px;
   overflow: auto;
+}
+
+/* The worktree path, whole on hover, cut in the middle of the line otherwise. */
+.wiv2-terminal-path {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: min(720px, 100%);
+}
+
+.wiv2-terminal-path code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

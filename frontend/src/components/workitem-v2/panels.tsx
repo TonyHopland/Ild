@@ -23,7 +23,7 @@ import { useSubmitDefaultOnEnter } from "../../hooks/useSubmitDefaultOnEnter";
 import AttachmentList from "./AttachmentList";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 import Icon from "../Icon";
-import { feedbackReasonLabel } from "../../utils/labels";
+import { feedbackReasonLabel, pillClass, type Tone } from "../../utils/labels";
 import { failureMessage } from "./RunDetailSections";
 
 /**
@@ -440,11 +440,20 @@ export function PrView({ snapshot }: { snapshot: RemotePrSnapshot }) {
 }
 
 /** Maps a service's raw status to the State column's Stopped/Running/Error label. */
-function serviceState(status: string): { label: "Stopped" | "Running" | "Error"; tone: string } {
-  if (status === "running") return { label: "Running", tone: "running" };
+function serviceState(status: string): { label: "Stopped" | "Running" | "Error"; tone: Tone } {
+  if (status === "running") return { label: "Running", tone: "success" };
   if (status === "exited" || status === "failed" || status === "error")
-    return { label: "Error", tone: "error" };
-  return { label: "Stopped", tone: "stopped" };
+    return { label: "Error", tone: "danger" };
+  return { label: "Stopped", tone: "muted" };
+}
+
+/** The preview as a whole, as the server names its state, in words and a tone. */
+function previewStatePill(state: string): { label: string; tone: Tone } {
+  if (state === "running") return { label: "Running", tone: "success" };
+  if (state === "stopped") return { label: "Stopped", tone: "muted" };
+  if (state === "starting") return { label: "Starting", tone: "accent" };
+  if (state === "error" || state === "failed") return { label: "Error", tone: "danger" };
+  return { label: state.charAt(0).toUpperCase() + state.slice(1), tone: "muted" };
 }
 
 /**
@@ -619,9 +628,7 @@ function PreviewServiceTable({
             <Fragment key={service.name}>
               <tr>
                 <td>
-                  <span className={`preview-state preview-state--${state.tone}`}>
-                    {state.label}
-                  </span>
+                  <span className={pillClass(state.tone)}>{state.label}</span>
                   {service.exitCode != null && (
                     <span className="preview-exit-code"> (exit {service.exitCode})</span>
                   )}
@@ -659,7 +666,7 @@ function PreviewServiceTable({
                   <div className="preview-row-actions">
                     <button
                       type="button"
-                      className={`btn btn-sm ${running ? "btn-warning" : "btn-primary"}`}
+                      className="btn btn-sm btn-secondary"
                       onClick={() =>
                         running
                           ? void detail.handleStopService(service.name)
@@ -671,7 +678,7 @@ function PreviewServiceTable({
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-secondary"
+                      className="btn btn-sm btn-ghost"
                       aria-expanded={openConfig === service.name}
                       onClick={() => toggleConfig(service.name)}
                     >
@@ -679,7 +686,7 @@ function PreviewServiceTable({
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-secondary"
+                      className="btn btn-sm btn-ghost"
                       aria-expanded={openLog === service.name}
                       onClick={() => toggleLog(service.name)}
                     >
@@ -941,9 +948,14 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
   return (
     <div className="wiv2-preview">
       <div className="preview-summary">
-        <span className="detail-value">
-          {previewLoading ? "Checking preview..." : (preview?.state ?? "stopped")}
-        </span>
+        {previewLoading ? (
+          <span className="detail-value">Checking preview...</span>
+        ) : (
+          (() => {
+            const pill = previewStatePill(preview?.state ?? "stopped");
+            return <span className={`${pillClass(pill.tone)} pill-dot`}>{pill.label}</span>;
+          })()
+        )}
         {preview?.profileName && <span className="run-time">profile: {preview.profileName}</span>}
       </div>
       {previewError && <div className="preview-message preview-error">{previewError}</div>}
@@ -961,7 +973,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
       <div className="feedback-actions">
         <button
           type="button"
-          className="btn btn-sm btn-secondary"
+          className="btn btn-sm btn-ghost"
           onClick={() => void detail.refreshPreview()}
           disabled={previewLoading}
         >
@@ -972,7 +984,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
             href={primaryPreviewUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="btn btn-sm btn-primary preview-open-link"
+            className="btn btn-sm btn-secondary preview-open-link"
           >
             Open App
           </a>
@@ -990,7 +1002,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
         {anyStarted && (
           <button
             type="button"
-            className="btn btn-sm btn-warning"
+            className="btn btn-sm btn-secondary"
             onClick={() => void detail.handleStopPreview()}
             disabled={previewLoading}
           >

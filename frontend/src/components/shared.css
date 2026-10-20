@@ -627,9 +627,9 @@
 
 .preview-table th,
 .preview-table td {
-  padding: 0.4rem 0.5rem;
+  padding: var(--space-2);
   text-align: left;
-  border-bottom: 1px solid #2a2a3a;
+  border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
 
@@ -674,8 +674,21 @@
   color: #f87171;
 }
 
+/* Port inputs use the app's input look, not the browser's white default. */
 .preview-port-input {
   max-width: 6rem;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.preview-port-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .preview-log-row td {

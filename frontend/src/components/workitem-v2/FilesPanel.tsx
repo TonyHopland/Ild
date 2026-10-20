@@ -25,11 +25,13 @@ import {
 import { parseUnifiedDiff } from "../../utils/unifiedDiff";
 import { highlightLines } from "../../utils/syntaxHighlight";
 import MarkdownRenderer from "../MarkdownRenderer";
+import Icon from "../Icon";
 
-const STATUS_BADGE: Record<Exclude<WorktreeFileChangeStatus, "none">, string> = {
-  added: "A",
-  modified: "M",
-  deleted: "D",
+/** A changed file is marked with a coloured dot; this is what it says in words. */
+const STATUS_LABEL: Record<Exclude<WorktreeFileChangeStatus, "none">, string> = {
+  added: "added",
+  modified: "modified",
+  deleted: "deleted",
 };
 
 /**
@@ -175,6 +177,8 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
   // file's button, and one the user asked for still saves after they move on.
   const [downloading, setDownloading] = useState<ReadonlySet<string>>(new Set());
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  // Long lines wrap instead of scrolling sideways, when the reader asks.
+  const [wrap, setWrap] = useState(false);
 
   const [selection, setSelection] = useState<DiffSelection>(ALL_CHANGES);
   const [commits, setCommits] = useState<WorktreeCommits | null>(null);
@@ -447,7 +451,13 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               onClick={() => toggleFolder(node.path)}
               aria-expanded={isExpanded}
             >
-              <span className="wiv2-file-caret">{isExpanded ? "▾" : "▸"}</span>
+              <span className="wiv2-file-caret" aria-hidden="true">
+                <Icon
+                  name="chevron"
+                  size={12}
+                  className={`wiv2-chevron ${isExpanded ? "wiv2-chevron-open" : ""}`}
+                />
+              </span>
               <span className="wiv2-file-name">{node.name}</span>
             </button>
             {isExpanded && renderNodes(node.children, depth + 1)}
@@ -465,10 +475,15 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
           style={indent}
           onClick={() => selectFile(node.path)}
         >
+          {/* An empty caret slot, so file names line up with folder names. */}
+          <span className="wiv2-file-caret" aria-hidden="true" />
           <span className="wiv2-file-name">{node.name}</span>
           {status !== "none" && (
-            <span className={`wiv2-file-badge wiv2-file-badge-${status}`}>
-              {STATUS_BADGE[status]}
+            <span
+              className={`wiv2-file-badge wiv2-file-badge-${status}`}
+              title={STATUS_LABEL[status]}
+            >
+              <span className="sr-only">{STATUS_LABEL[status]}</span>
             </span>
           )}
         </button>
@@ -543,11 +558,17 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               ))}
             </div>
           )}
+          {selectedPath && draft === null && (
+            <label className="wiv2-files-wrap">
+              <input type="checkbox" checked={wrap} onChange={(e) => setWrap(e.target.checked)} />
+              Wrap
+            </label>
+          )}
           {draft !== null ? (
             <>
               <button
                 type="button"
-                className="wiv2-files-edit wiv2-files-edit-primary"
+                className="btn btn-sm btn-primary wiv2-files-edit wiv2-files-edit-primary"
                 onClick={() => void save()}
                 disabled={saving || !idle}
               >
@@ -555,7 +576,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
               </button>
               <button
                 type="button"
-                className="wiv2-files-edit"
+                className="btn btn-sm btn-ghost wiv2-files-edit"
                 onClick={() => {
                   setDraft(null);
                   setSaveError(null);
@@ -573,7 +594,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
             editable && (
               <button
                 type="button"
-                className="wiv2-files-edit"
+                className="btn btn-sm btn-ghost wiv2-files-edit"
                 onClick={() => setDraft(content?.content ?? "")}
               >
                 Edit
@@ -585,7 +606,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
           {downloadable && (
             <button
               type="button"
-              className="wiv2-files-edit"
+              className="btn btn-sm btn-ghost wiv2-files-edit"
               onClick={() => void download()}
               disabled={draft !== null || downloadingThis}
             >
@@ -604,7 +625,7 @@ export default function FilesPanel({ workItem }: { workItem: WorkItem }) {
         )}
         {saveError && <div className="preview-message preview-error">{saveError}</div>}
         {downloadError && <div className="preview-message preview-error">{downloadError}</div>}
-        <div className="wiv2-files-content">
+        <div className={`wiv2-files-content${wrap ? " wiv2-files-content-wrap" : ""}`}>
           <FileViewer
             selectedPath={selectedPath}
             content={content}
@@ -896,7 +917,11 @@ function CodeEditor({
  */
 function DiffView({ diff }: { diff: string }) {
   const { rows, gutterDigits } = useMemo(() => {
-    const parsed = parseUnifiedDiff(diff);
+    // The patch preamble (diff --git, index, ---/+++) only repeats the file name
+    // already in the toolbar; the view starts at the first hunk.
+    const all = parseUnifiedDiff(diff);
+    const firstHunk = all.findIndex((row) => row.kind === "hunk");
+    const parsed = firstHunk > 0 ? all.slice(firstHunk) : all;
     const widest = parsed.reduce(
       (max, row) => Math.max(max, row.oldLine ?? 0, row.newLine ?? 0),
       0,
