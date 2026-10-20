@@ -237,7 +237,8 @@ export default function Header() {
            and Log out, so the header keeps the brand and the scheduler. */
         @media (max-width: 767px) {
           .header {
-            height: 3.5rem;
+            height: calc(3.5rem + env(safe-area-inset-top));
+            padding-top: env(safe-area-inset-top);
           }
 
           .header-nav,

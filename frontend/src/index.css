@@ -58,3 +58,19 @@ a:hover {
     font-size: 1.1rem;
   }
 }
+
+/* Phone: the app is pinned to the visible screen and the document never
+   scrolls. 100vh on a phone is the height with the browser bars hidden, taller
+   than what shows, so a page that size scrolled as a whole and carried the tab
+   bar up off the bottom. Only the page area between the header and the tab bar
+   scrolls, and it does not hand its scroll on to the document. */
+@media (max-width: 767px) {
+  html:has(.app),
+  html:has(.app) body,
+  html:has(.app) #root {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+}
