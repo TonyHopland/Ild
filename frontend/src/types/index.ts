@@ -586,14 +586,25 @@ export interface LoopRunAvailableSession {
   updatedAt: string | null;
   isCurrent: boolean;
   placeholders: string[];
+  /** Snapshot metadata; all null for a snapshot not yet converted to the current format. */
+  format: string | null;
+  byteLength: number | null;
+  eventCount: number | null;
 }
 
+/** One page of a saved session snapshot: raw event lines starting at fromOffset. */
 export interface LoopRunSessionPreview {
   adapterName: string;
   sessionId: string;
   createdAt: string;
   updatedAt: string | null;
-  sessionJson: string;
+  format: string | null;
+  byteLength: number | null;
+  eventCount: number | null;
+  events: string[];
+  fromOffset: number;
+  /** Where the next page starts; null once the last event has been returned. */
+  nextOffset: number | null;
 }
 
 export interface LoopRunVariable {

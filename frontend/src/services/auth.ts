@@ -676,8 +676,10 @@ export const loopRunService = {
     runId: string,
     adapterName: string,
     sessionId: string,
+    fromOffset?: number,
   ): Promise<LoopRunSessionPreview> => {
     const params = new URLSearchParams({ adapterName, sessionId });
+    if (fromOffset !== undefined) params.set("fromOffset", String(fromOffset));
     return api.get<LoopRunSessionPreview>(`/loopruns/${runId}/sessions/preview?${params}`);
   },
 };
