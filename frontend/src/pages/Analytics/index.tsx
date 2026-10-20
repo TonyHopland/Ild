@@ -280,7 +280,7 @@ export default function Analytics() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [granularity, setGranularity] = useState<AnalyticsGranularity>("Day");
+  const [granularity, setGranularity] = useState<AnalyticsGranularity>("Week");
   const [provider, setProvider] = useState<string>(ALL_PROVIDERS);
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");

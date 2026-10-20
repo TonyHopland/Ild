@@ -116,14 +116,15 @@ describe("Analytics page", () => {
     expect(screen.getAllByText("claude").length).toBeGreaterThan(0);
   });
 
-  test("changing granularity refetches with the granularity query param", async () => {
+  test("opens by week, and changing granularity refetches with the granularity query param", async () => {
     const fetchFn = mockFetch(overview);
     renderPage(fetchFn);
     await waitFor(() => expect(screen.getAllByText("coder-loop").length).toBeGreaterThan(0));
+    expect(lastFetchUrl(fetchFn)).toContain("granularity=Week");
 
-    fireEvent.click(screen.getByRole("button", { name: "Week" }));
+    fireEvent.click(screen.getByRole("button", { name: "Day" }));
 
-    await waitFor(() => expect(lastFetchUrl(fetchFn)).toContain("granularity=Week"));
+    await waitFor(() => expect(lastFetchUrl(fetchFn)).toContain("granularity=Day"));
   });
 
   test("selecting a provider refetches with the provider query param", async () => {

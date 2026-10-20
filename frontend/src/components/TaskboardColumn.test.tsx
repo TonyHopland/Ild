@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import TaskboardColumn from "./TaskboardColumn";
+import TaskboardColumn, { FOLDED_COLUMNS_KEY } from "./TaskboardColumn";
 import WorkItemCard from "./WorkItemCard";
 import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
 import * as authServices from "../services/auth";
@@ -10,6 +10,7 @@ afterEach(() => {
   // Service spies are per-test; without this a spy's calls leak into the next
   // test that spies on the same method.
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
@@ -75,6 +76,8 @@ describe("TaskboardColumn", () => {
   // PR badge in Human Feedback loses it the moment it is dragged across. The
   // column has to keep surfacing the PR history its cards carry.
   test("Done column cards keep showing their PR history", () => {
+    // Done starts folded; this one has been opened.
+    localStorage.setItem(FOLDED_COLUMNS_KEY, JSON.stringify({ Done: false }));
     const { container } = render(
       <TaskboardColumn
         status={WorkItemStatus.Done}
@@ -104,8 +107,8 @@ describe("TaskboardColumn", () => {
     );
     render(
       <TaskboardColumn
-        status={WorkItemStatus.Done}
-        label="Done"
+        status={WorkItemStatus.Backlog}
+        label="Backlog"
         workItems={items}
         total={30}
         onWorkItemUpdate={() => {}}
@@ -294,9 +297,58 @@ describe("TaskboardColumn folding and Needs you", () => {
     expect(screen.getByRole("button", { name: "Work queue: empty. Show column" })).toBeTruthy();
   });
 
-  test("a column with cards does not fold", () => {
-    column(WorkItemStatus.Ready, "Ready", [makeItem({ status: WorkItemStatus.Ready })]);
-    expect(screen.queryByRole("button", { name: /empty. Show column/ })).toBeNull();
+  test("a column with cards starts open, folds to a strip that counts them, and opens again", () => {
+    column(WorkItemStatus.Ready, "Ready", [
+      makeItem({ id: "a", title: "One", status: WorkItemStatus.Ready }),
+      makeItem({ id: "b", title: "Two", status: WorkItemStatus.Ready }),
+    ]);
+    expect(screen.getByText("One")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fold Ready" }));
+    expect(screen.queryByText("One")).toBeNull();
+    const strip = screen.getByRole("button", { name: "Ready: 2 items. Show column" });
+    expect(strip.textContent).toContain("2");
+
+    fireEvent.click(strip);
+    expect(screen.getByText("One")).toBeTruthy();
+  });
+
+  test("Done starts folded even with cards in it", () => {
+    column(WorkItemStatus.Done, "Done", [
+      makeItem({ title: "Shipped", status: WorkItemStatus.Done }),
+    ]);
+    expect(screen.queryByText("Shipped")).toBeNull();
+    expect(screen.getByRole("button", { name: "Done: 1 item. Show column" })).toBeTruthy();
+  });
+
+  test("a fold or an open is kept in this browser, so the board comes back as it was left", () => {
+    const first = column(WorkItemStatus.Done, "Done", [
+      makeItem({ title: "Shipped", status: WorkItemStatus.Done }),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Done: 1 item. Show column" }));
+    first.unmount();
+
+    const second = column(WorkItemStatus.Done, "Done", [
+      makeItem({ title: "Shipped", status: WorkItemStatus.Done }),
+    ]);
+    expect(screen.getByText("Shipped")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Fold Done" }));
+    second.unmount();
+
+    column(WorkItemStatus.Done, "Done", [
+      makeItem({ title: "Shipped", status: WorkItemStatus.Done }),
+    ]);
+    expect(screen.queryByText("Shipped")).toBeNull();
+  });
+
+  test("a folded Needs you with something waiting is still marked", () => {
+    const { container } = column(WorkItemStatus.HumanFeedback, "Needs you", [
+      makeItem({ status: WorkItemStatus.HumanFeedback }),
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Fold Needs you" }));
+    expect(
+      container.querySelector(".taskboard-column--collapsed.taskboard-column--needs"),
+    ).not.toBeNull();
   });
 
   test("Needs you is marked while something waits in it", () => {

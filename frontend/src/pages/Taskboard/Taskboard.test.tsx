@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import Taskboard from "./index";
+import { FOLDED_COLUMNS_KEY } from "../../components/TaskboardColumn";
 import { mockTaskboardServer, pressEscapeUntil } from "../../test-support";
 import {
   NodeType,
@@ -23,6 +24,8 @@ afterEach(() => {
 
 beforeEach(() => {
   localStorage.clear();
+  // Done starts folded; these tests read the cards in every column.
+  localStorage.setItem(FOLDED_COLUMNS_KEY, JSON.stringify({ Done: false }));
 });
 
 function LocationDisplay() {

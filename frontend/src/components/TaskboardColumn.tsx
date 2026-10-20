@@ -3,11 +3,36 @@ import { WorkItem, WorkItemStatus } from "../types";
 import { workItemService } from "../services/auth";
 import WorkItemCard from "./WorkItemCard";
 import { errorMessage } from "../utils/errorMessage";
+import Icon from "./Icon";
 
-/**
- * What an empty column says: what lands there and how. Shown when the column
- * is opened; until then an empty column folds to a narrow strip.
- */
+/** Where the columns a person folded or opened are kept, by status, in this browser. */
+export const FOLDED_COLUMNS_KEY = "ild_taskboard_folded";
+
+function readFoldChoice(status: WorkItemStatus): boolean | null {
+  try {
+    const stored = JSON.parse(localStorage.getItem(FOLDED_COLUMNS_KEY) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    return typeof stored[status] === "boolean" ? stored[status] : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveFoldChoice(status: WorkItemStatus, folded: boolean) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(FOLDED_COLUMNS_KEY) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    localStorage.setItem(FOLDED_COLUMNS_KEY, JSON.stringify({ ...stored, [status]: folded }));
+  } catch {
+    // A choice that cannot be kept still applies until the page is left.
+  }
+}
+
+/** What an empty column says: what lands there and how, once it is opened. */
 const EMPTY_HINT: Record<WorkItemStatus, string> = {
   [WorkItemStatus.Backlog]: "New work items land here.",
   [WorkItemStatus.WorkQueue]: "Move a backlog item here to have the scheduler pick it up.",
@@ -60,13 +85,20 @@ export default function TaskboardColumn({
   alone = false,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
-  // An empty column folds to a strip so the busy ones get the room; it opens
-  // when clicked, or while a card is dragged over it.
-  const [opened, setOpened] = useState(false);
+  // Any column folds to a strip and opens again from it, and the choice is kept
+  // in this browser. Until a person chooses, an empty column and Done start
+  // folded so the busy ones get the room. A folded column opens while a card is
+  // dragged over it.
+  const [foldChoice, setFoldChoice] = useState<boolean | null>(() => readFoldChoice(status));
+  const fold = (folded: boolean) => {
+    setFoldChoice(folded);
+    saveFoldChoice(status, folded);
+  };
   // Empty means no card on screen and none counted: a card a live update just
   // added shows even before the count catches up.
   const empty = total === 0 && workItems.length === 0;
-  const collapsed = empty && !opened && !dragOver && !alone;
+  const foldedByDefault = empty || status === WorkItemStatus.Done;
+  const collapsed = (foldChoice ?? foldedByDefault) && !dragOver && !alone;
   const needsYou = status === WorkItemStatus.HumanFeedback && !empty;
   const hasMore = onLoadMore !== undefined && workItems.length < total;
 
@@ -102,9 +134,10 @@ export default function TaskboardColumn({
   };
 
   if (collapsed) {
+    const summary = empty ? "empty" : `${total} ${total === 1 ? "item" : "items"}`;
     return (
       <div
-        className="taskboard-column taskboard-column--collapsed"
+        className={`taskboard-column taskboard-column--collapsed${needsYou ? " taskboard-column--needs" : ""}`}
         data-status={status}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -114,11 +147,11 @@ export default function TaskboardColumn({
           type="button"
           className="taskboard-column-strip"
           aria-expanded={false}
-          aria-label={`${label}: empty. Show column`}
-          title={`${label}: empty`}
-          onClick={() => setOpened(true)}
+          aria-label={`${label}: ${summary}. Show column`}
+          title={`${label}: ${summary}`}
+          onClick={() => fold(false)}
         >
-          <span className="taskboard-column-count">0</span>
+          <span className="taskboard-column-count">{total}</span>
           <h3 className="taskboard-column-title">{label}</h3>
         </button>
       </div>
@@ -149,16 +182,15 @@ export default function TaskboardColumn({
                 + New
               </button>
             )}
-            {empty && opened && (
-              <button
-                type="button"
-                className="taskboard-column-fold"
-                aria-label={`Fold ${label}`}
-                onClick={() => setOpened(false)}
-              >
-                ×
-              </button>
-            )}
+            <button
+              type="button"
+              className="taskboard-column-fold"
+              aria-label={`Fold ${label}`}
+              title="Fold column"
+              onClick={() => fold(true)}
+            >
+              <Icon name="back" size={14} />
+            </button>
           </div>
         </div>
       )}
@@ -218,7 +250,7 @@ export default function TaskboardColumn({
           font-weight: 700;
         }
 
-        /* An empty column folded to a strip: its name runs up the side. */
+        /* A folded column is a strip: its count on top, its name up the side. */
         .taskboard-column--collapsed {
           flex: 0 0 44px;
         }
@@ -256,12 +288,22 @@ export default function TaskboardColumn({
         }
 
         .taskboard-column-fold {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          height: 24px;
+          padding: 0;
           background: none;
           border: none;
+          border-radius: var(--radius-sm);
           color: var(--text-3);
           cursor: pointer;
-          font-size: 1rem;
-          line-height: 1;
+        }
+
+        .taskboard-column-fold:hover {
+          background: var(--surface-3);
+          color: var(--text);
         }
 
         .taskboard-column.drag-over {
