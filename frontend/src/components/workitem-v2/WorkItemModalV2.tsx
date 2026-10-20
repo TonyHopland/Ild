@@ -15,6 +15,7 @@ import FilesPanel, { workItemKey } from "./FilesPanel";
 import HistoryPanel from "./HistoryPanel";
 import MenuButton, { type MenuItem } from "../MenuButton";
 import Icon from "../Icon";
+import { errorMessage } from "../../utils/errorMessage";
 import {
   feedbackReasonLabel,
   feedbackReasonTone,
@@ -98,6 +99,21 @@ export default function WorkItemModalV2({
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
+  // Backlog to Work queue without dragging the card, which a phone cannot do.
+  const [moving, setMoving] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const moveToWorkQueue = async () => {
+    setMoving(true);
+    setMoveError(null);
+    try {
+      await workItemService.transition(workItem!.id, WorkItemStatus.WorkQueue);
+      onSave(await workItemService.getById(workItem!.id));
+    } catch (error) {
+      setMoveError(errorMessage(error, "Could not move it to the work queue."));
+    } finally {
+      setMoving(false);
+    }
+  };
 
   // Leaving the edit view without saving discards the files staged in it.
   const clearStaged = detail.editAttachments.clear;
@@ -575,6 +591,11 @@ export default function WorkItemModalV2({
               </div>
               <div className="wiv2-footer">
                 <MenuButton label="More actions" items={footerMenu} />
+                {moveError && (
+                  <span className="wiv2-footer-error" role="alert">
+                    {moveError}
+                  </span>
+                )}
                 <span className="wiv2-footer-spacer" />
                 <button
                   type="button"
@@ -586,6 +607,16 @@ export default function WorkItemModalV2({
                 >
                   Edit
                 </button>
+                {workItem.status === WorkItemStatus.Backlog && (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => void moveToWorkQueue()}
+                    disabled={moving || detail.busy}
+                  >
+                    Move to Work queue
+                  </button>
+                )}
               </div>
             </>
           )}

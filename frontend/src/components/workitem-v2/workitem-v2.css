@@ -2199,3 +2199,9 @@
     grid-template-columns: 1fr;
   }
 }
+
+.wiv2-footer-error {
+  min-width: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-xs);
+}

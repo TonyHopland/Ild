@@ -1459,6 +1459,43 @@ describe("WorkItemModalV2", () => {
     expect(updateSpy.mock.calls[0][1]).toMatchObject({ baseBranchOverride: "" });
   });
 
+  test("a Backlog item moves to the Work queue from the footer, which a phone cannot drag", async () => {
+    mockServices();
+    const transition = vi
+      .spyOn(authServices.workItemService, "transition")
+      .mockResolvedValue(undefined as never);
+    const moved = makeWorkItem({ status: WorkItemStatus.WorkQueue });
+    vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(moved);
+    const onSave = vi.fn();
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Backlog }), { onSave });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Move to Work queue" }));
+      await Promise.resolve();
+    });
+
+    expect(transition).toHaveBeenCalledWith("wi-1", WorkItemStatus.WorkQueue);
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith(moved));
+  });
+
+  test("a refused move says so in the footer, and only Backlog items offer it", async () => {
+    mockServices();
+    vi.spyOn(authServices.workItemService, "transition").mockRejectedValue(
+      new Error("Not allowed."),
+    );
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Backlog }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Move to Work queue" }));
+      await Promise.resolve();
+    });
+    expect((await screen.findByRole("alert")).textContent).toBe("Not allowed.");
+    cleanup();
+
+    await renderDialog(makeWorkItem({ status: WorkItemStatus.Ready }));
+    expect(screen.queryByRole("button", { name: "Move to Work queue" })).toBeNull();
+  });
+
   test("Delete stays out of the footer even when cleanup buttons are present", async () => {
     mockServices();
     await renderDialog(
