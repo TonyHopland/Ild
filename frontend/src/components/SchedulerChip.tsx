@@ -1,4 +1,8 @@
+import { useEffect } from "react";
 import { useSchedulerState } from "../hooks/useSchedulerState";
+import Icon from "./Icon";
+
+const ERROR_SHOWN_MS = 6000;
 import "./SchedulerChip.css";
 
 /**
@@ -8,6 +12,13 @@ import "./SchedulerChip.css";
  */
 export default function SchedulerChip() {
   const { running, busy, error, set, clearError } = useSchedulerState();
+  // The message is about the change just tried: it goes by itself after a while,
+  // or at once with its Dismiss button.
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(clearError, ERROR_SHOWN_MS);
+    return () => clearTimeout(t);
+  }, [error, clearError]);
   if (running === null) return null;
 
   return (
@@ -31,8 +42,16 @@ export default function SchedulerChip() {
         <strong>{running ? "Running" : "Paused"}</strong>
       </button>
       {error && (
-        <span className="scheduler-chip-error" role="alert" onClick={clearError}>
+        <span className="scheduler-chip-error" role="alert">
           {error}
+          <button
+            type="button"
+            className="scheduler-chip-error-dismiss"
+            aria-label="Dismiss"
+            onClick={clearError}
+          >
+            <Icon name="close" size={12} />
+          </button>
         </span>
       )}
     </span>

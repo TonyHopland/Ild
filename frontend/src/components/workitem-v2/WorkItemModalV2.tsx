@@ -324,6 +324,7 @@ export default function WorkItemModalV2({
   const footerMenu: MenuItem[] = showCleanupButtons
     ? [
         {
+          id: "cleanup-done",
           label: "Clean up → Done",
           disabled: currentRunBlocked,
           onSelect: () =>
@@ -334,6 +335,7 @@ export default function WorkItemModalV2({
             ),
         },
         {
+          id: "cleanup-backlog",
           label: "Clean up → Backlog",
           disabled: currentRunBlocked,
           onSelect: () =>

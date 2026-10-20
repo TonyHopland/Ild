@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import SchedulerChip from "./SchedulerChip";
 import * as authServices from "../services/auth";
 import * as signalRHook from "../hooks/useSignalR";
@@ -92,5 +92,24 @@ describe("SchedulerChip", () => {
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(chip.textContent).toContain("Running");
+  });
+
+  test("a failed change's message can be dismissed from the keyboard", async () => {
+    mockHub();
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: authServices.SchedulerSettingKeys.IsPaused,
+      value: "false",
+    });
+    vi.spyOn(authServices.settingsService, "put").mockRejectedValue(new Error("database down"));
+    render(<SchedulerChip />);
+    fireEvent.click(await screen.findByRole("switch", { name: "Scheduler running" }));
+
+    const dismiss = within(await screen.findByRole("alert")).getByRole("button", {
+      name: "Dismiss",
+    });
+    dismiss.focus();
+    expect(document.activeElement).toBe(dismiss);
+    fireEvent.click(dismiss);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

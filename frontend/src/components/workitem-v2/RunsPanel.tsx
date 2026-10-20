@@ -498,11 +498,19 @@ function RunDetail({
   const isRunning = runDetail.status === LoopRunStatus.Running;
   const runMenu: MenuItem[] = [
     ...(onReclaimRun && canReclaim
-      ? [{ label: "Clean up worktree", disabled: busy, onSelect: () => setConfirmingReclaim(true) }]
+      ? [
+          {
+            id: "reclaim",
+            label: "Clean up worktree",
+            disabled: busy,
+            onSelect: () => setConfirmingReclaim(true),
+          },
+        ]
       : []),
     ...(isRunning && onCancelRun
       ? [
           {
+            id: "cancel",
             label: "Cancel run",
             danger: true,
             disabled: busy,
@@ -513,6 +521,7 @@ function RunDetail({
     ...(!isRunning && onDeleteRun
       ? [
           {
+            id: "delete",
             label: "Delete run",
             danger: true,
             disabled: busy,

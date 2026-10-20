@@ -59,5 +59,6 @@ export function useSchedulerState(hub?: SignalRConnection) {
     }
   }, []);
 
-  return { running, busy, error, set, clearError: () => setError(null) };
+  const clearError = useCallback(() => setError(null), []);
+  return { running, busy, error, set, clearError };
 }
