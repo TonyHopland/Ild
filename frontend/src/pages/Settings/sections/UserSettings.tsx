@@ -37,6 +37,9 @@ export function describeDevice(userAgent: string | null | undefined): string {
 }
 
 /** Who you are signed in as, on what, and the preferences that follow you around. */
+/** How many signed-in devices show before "Show all". */
+const SESSIONS_SHOWN = 5;
+
 export default function UserSettings() {
   const { user } = useAuth();
   const chatEnabled = useChatEnabled();
@@ -44,6 +47,7 @@ export default function UserSettings() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [sessions, setSessions] = useState<UserSession[]>([]);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const [showAllSessions, setShowAllSessions] = useState(false);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -94,6 +98,10 @@ export default function UserSettings() {
   };
 
   const otherDevices = sessions.filter((s) => !s.isCurrent).length;
+  // Every sign-in adds a row, so the list starts at this device and the most
+  // recent others, with the rest a click away.
+  const ordered = [...sessions.filter((s) => s.isCurrent), ...sessions.filter((s) => !s.isCurrent)];
+  const shownSessions = showAllSessions ? ordered : ordered.slice(0, SESSIONS_SHOWN);
 
   return (
     <>
@@ -148,7 +156,7 @@ export default function UserSettings() {
           <h3 className="settings-card-title">Signed-in devices</h3>
           <button
             type="button"
-            className="btn"
+            className="btn btn-sm btn-secondary"
             onClick={() => void revokeOtherSessions()}
             disabled={otherDevices === 0}
           >
@@ -157,7 +165,7 @@ export default function UserSettings() {
         </div>
         {sessionsError && <div className="settings-error">{sessionsError}</div>}
         <ul className="settings-sessions">
-          {sessions.map((session) => (
+          {shownSessions.map((session) => (
             <li key={session.id} className="settings-session">
               <div>
                 <span className="settings-row-label" title={session.userAgent ?? undefined}>
@@ -172,7 +180,7 @@ export default function UserSettings() {
               {!session.isCurrent && (
                 <button
                   type="button"
-                  className="btn"
+                  className="btn btn-sm btn-ghost"
                   onClick={() => void revokeSession(session.id)}
                   aria-label={`Sign out ${describeDevice(session.userAgent)}`}
                 >
@@ -182,6 +190,15 @@ export default function UserSettings() {
             </li>
           ))}
         </ul>
+        {sessions.length > SESSIONS_SHOWN && (
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost settings-sessions-more"
+            onClick={() => setShowAllSessions((v) => !v)}
+          >
+            {showAllSessions ? "Show fewer" : `Show all ${sessions.length} devices`}
+          </button>
+        )}
       </section>
 
       <section className="settings-card">

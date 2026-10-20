@@ -190,8 +190,6 @@ interface NumericSettingFieldProps {
   /** Help text beside the field. */
   children?: React.ReactNode;
   disabled?: boolean;
-  /** The Save button's accessible name, where a card holds more than one Save. */
-  saveLabel?: string;
 }
 
 /**
@@ -211,12 +209,18 @@ export function NumericSettingField({
   unit,
   children,
   disabled = false,
-  saveLabel,
 }: NumericSettingFieldProps) {
   const [saved, setSaved] = useState<number>(fallback);
   const [draft, setDraft] = useState<string>(String(fallback));
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // "Saved" shows for a moment after a change lands, then goes.
+  const [justSaved, setJustSaved] = useState(false);
+  useEffect(() => {
+    if (!justSaved) return;
+    const t = setTimeout(() => setJustSaved(false), 2000);
+    return () => clearTimeout(t);
+  }, [justSaved]);
   // A first read still on its way is the stored value until a save of ours lands,
   // after which it is older than what is stored; it fills the box only while the
   // user has not typed in it.
@@ -242,7 +246,10 @@ export function NumericSettingField({
     };
   }, [settingKey]);
 
+  // Saves as the user finishes with the field (leaving it, or Enter), like every
+  // other setting; nothing is sent while the box still holds what is stored.
   const save = async () => {
+    if (draft === String(saved)) return;
     const n = parseInt(draft, 10);
     if (Number.isNaN(n) || n < min || n > max) {
       setError(`Must be an integer between ${minLabel ?? min} and ${max}.`);
@@ -254,6 +261,7 @@ export function NumericSettingField({
       await settingsService.put(settingKey, String(n));
       savedRef.current = true;
       setSaved(n);
+      setJustSaved(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
@@ -282,20 +290,19 @@ export function NumericSettingField({
         onChange={(e) => {
           editedRef.current = true;
           setDraft(e.target.value);
+          setJustSaved(false);
         }}
-        disabled={disabled}
+        onBlur={() => void save()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void save();
+        }}
+        disabled={disabled || saving}
         style={{ width: "5rem" }}
       />
       {unit && <span className="settings-row-help">{unit}</span>}
-      <button
-        type="button"
-        className="btn btn-primary"
-        aria-label={saveLabel}
-        onClick={() => void save()}
-        disabled={disabled || saving || draft === String(saved)}
-      >
-        Save
-      </button>
+      <span className={`settings-saved${justSaved ? " is-shown" : ""}`} aria-live="polite">
+        {justSaved ? "Saved" : ""}
+      </span>
     </SettingRow>
   );
 }

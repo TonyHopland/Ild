@@ -50,6 +50,20 @@ describe("User settings signed-in devices", () => {
     expect(screen.getByText("This device")).toBeTruthy();
   });
 
+  test("shows this device and the four most recent others, with the rest a click away", async () => {
+    const others = Array.from({ length: 6 }, (_, i) => ({ ...otherDevice, id: `o${i}` }));
+    vi.spyOn(authServices.authService, "getSessions").mockResolvedValue([...others, thisDevice]);
+
+    render(<UserSettings />);
+
+    await screen.findByText("Chrome on macOS");
+    expect(screen.getAllByRole("listitem")).toHaveLength(5);
+    expect(screen.getAllByRole("listitem")[0].textContent).toContain("This device");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all 7 devices" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(7);
+  });
+
   test("offers no sign-out button for the current device", async () => {
     vi.spyOn(authServices.authService, "getSessions").mockResolvedValue([thisDevice, otherDevice]);
 
@@ -123,7 +137,7 @@ describe("User settings signed-in devices", () => {
     const input = (await screen.findByLabelText(/sign out after inactivity/i)) as HTMLInputElement;
     await waitFor(() => expect(input.value).toBe("30"));
     fireEvent.change(input, { target: { value: "7" } });
-    fireEvent.click(input.parentElement!.querySelector("button")!);
+    fireEvent.blur(input);
 
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith(authServices.SessionSettingKeys.IdleDays, "7");
@@ -140,7 +154,7 @@ describe("User settings signed-in devices", () => {
 
     const input = (await screen.findByLabelText(/however active/i)) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "180" } });
-    fireEvent.click(input.parentElement!.querySelector("button")!);
+    fireEvent.blur(input);
 
     await waitFor(() => {
       expect(put).toHaveBeenCalledWith(authServices.SessionSettingKeys.MaxDays, "180");
@@ -156,7 +170,7 @@ describe("User settings signed-in devices", () => {
 
     const input = (await screen.findByLabelText(/sign out after inactivity/i)) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "-1" } });
-    fireEvent.click(input.parentElement!.querySelector("button")!);
+    fireEvent.blur(input);
 
     await screen.findByText(/must be an integer between 0/i);
     expect(put).not.toHaveBeenCalled();

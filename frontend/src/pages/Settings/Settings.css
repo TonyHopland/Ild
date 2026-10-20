@@ -370,3 +370,16 @@
     display: none;
   }
 }
+
+/* "Saved", beside a field for a moment after its change has landed. */
+.settings-saved {
+  min-width: 3.5rem;
+  font-size: var(--fs-xs);
+  color: var(--success-text);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.settings-saved.is-shown {
+  opacity: 1;
+}
