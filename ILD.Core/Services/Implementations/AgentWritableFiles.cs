@@ -156,13 +156,6 @@ public static class AgentWritableFiles
     public static async Task<bool> FileExistsAsync(string path, CancellationToken ct = default)
         => (await RunAsync("""[ -f "$1" ] && [ ! -L "$1" ]""", [path], stdin: null, ct)).ExitCode == 0;
 
-    /// <summary>The content of the regular file at <paramref name="path"/>, or null when there is none; a link is never read through.</summary>
-    public static async Task<string?> ReadFileAsync(string path, CancellationToken ct = default)
-    {
-        var result = await RunAsync("""[ -f "$1" ] && [ ! -L "$1" ] && exec cat -- "$1" """, [path], stdin: null, ct);
-        return result.ExitCode == 0 ? result.Stdout : null;
-    }
-
     /// <summary>
     /// Every regular file below <paramref name="directory"/> whose name matches
     /// <paramref name="namePattern"/>, with its first line. Links are not followed.

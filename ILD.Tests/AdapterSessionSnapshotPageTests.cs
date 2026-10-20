@@ -1,5 +1,3 @@
-using ILD.Data.Entities;
-using ILD.Data.Enums;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 
@@ -15,7 +13,7 @@ public sealed class AdapterSessionSnapshotPageTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var db = new TestDb();
-        var key = SessionSnapshotKey.ForRun(await SeedRunAsync(db), "ClaudeCode", "sess-1");
+        var key = SessionSnapshotKey.ForRun(await TestRuns.SeedAsync(db), "ClaudeCode", "sess-1");
         string[] lines = [Line('a'), Line('b'), Line('c')];
         await SessionSnapshotTestSupport.SeedAsync(
             new AdapterSessionSnapshotStore(db.Fresh()), key, SessionSnapshotFormats.ClaudeJsonl, string.Concat(lines.Select(l => l + "\n")), ct);
@@ -30,23 +28,4 @@ public sealed class AdapterSessionSnapshotPageTests
     }
 
     private static string Line(char fill) => new(fill, LineBytes);
-
-    private static async Task<Guid> SeedRunAsync(TestDb db)
-    {
-        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"template-{Guid.NewGuid():N}", RecoveryPolicy = RecoveryPolicy.AutoResume };
-        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
-        var run = new LoopRun
-        {
-            Id = Guid.NewGuid(),
-            WorkItemId = Guid.NewGuid().ToString(),
-            LoopTemplateVersionId = version.Id,
-            Status = LoopRunStatus.Running,
-            RecoveryPolicy = RecoveryPolicy.AutoResume,
-        };
-        db.Context.LoopTemplates.Add(template);
-        db.Context.LoopTemplateVersions.Add(version);
-        db.Context.LoopRuns.Add(run);
-        await db.Context.SaveChangesAsync(TestContext.Current.CancellationToken);
-        return run.Id;
-    }
 }

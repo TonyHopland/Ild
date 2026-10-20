@@ -197,16 +197,22 @@ public sealed class AgentWritableFilesTests : IDisposable
     }
 
     [Fact]
-    public async Task ReadFileAsync_reads_a_regular_file_but_never_through_a_link()
+    public async Task GetFileLengthAsync_and_ReadFileRangeAsync_read_a_regular_file_but_never_through_a_link()
     {
+        var ct = TestContext.Current.CancellationToken;
         var file = Path.Combine(_dir, "session.jsonl");
-        File.WriteAllText(file, "{\"type\":\"session\"}\n");
+        File.WriteAllText(file, "0123456789");
         var link = Path.Combine(_dir, "other.jsonl");
         File.CreateSymbolicLink(link, file);
+        var read = new MemoryStream();
 
-        Assert.Equal("{\"type\":\"session\"}\n", await AgentWritableFiles.ReadFileAsync(file, TestContext.Current.CancellationToken));
-        Assert.Null(await AgentWritableFiles.ReadFileAsync(link, TestContext.Current.CancellationToken));
-        Assert.Null(await AgentWritableFiles.ReadFileAsync(Path.Combine(_dir, "missing.jsonl"), TestContext.Current.CancellationToken));
+        await AgentWritableFiles.ReadFileRangeAsync(file, 3, 4, range => range.CopyToAsync(read, ct));
+
+        Assert.Equal(10, await AgentWritableFiles.GetFileLengthAsync(file, ct));
+        Assert.Null(await AgentWritableFiles.GetFileLengthAsync(link, ct));
+        Assert.Null(await AgentWritableFiles.GetFileLengthAsync(Path.Combine(_dir, "missing.jsonl"), ct));
+        Assert.Equal("3456", Encoding.UTF8.GetString(read.ToArray()));
+        await Assert.ThrowsAsync<IOException>(() => AgentWritableFiles.ReadFileRangeAsync(link, 0, 10, range => range.CopyToAsync(Stream.Null, ct)));
     }
 
     [Fact]
