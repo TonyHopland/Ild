@@ -69,6 +69,12 @@ export default function ChatTranscript({
   for (const m of messages) {
     entries.push(
       <div key={`message:${m.id}`} className={`chat-msg chat-msg-${m.role}`}>
+        <div className="chat-msg-meta">
+          {m.role === "user" ? "You" : "AI"} ·{" "}
+          <time dateTime={m.createdAt} title={new Date(m.createdAt).toLocaleString()}>
+            {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+          </time>
+        </div>
         <MarkdownRenderer content={m.content} className="chat-msg-content" />
         {m.interrupted && <span className="chat-interrupted">interrupted</span>}
       </div>,

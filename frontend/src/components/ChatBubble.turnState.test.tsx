@@ -638,7 +638,9 @@ describe("ChatBubble turn state", () => {
       );
     });
 
-    const rendered = [...document.querySelectorAll(".chat-msg")].map((n) => n.textContent);
+    const rendered = [...document.querySelectorAll(".chat-msg")].map(
+      (n) => (n.querySelector(".chat-msg-content") ?? n).textContent,
+    );
     expect(rendered).toHaveLength(history.length + 2);
     expect(rendered).toEqual([...history.map((m) => m.content), "arrived meanwhile", "body 61"]);
     expect(screen.getAllByText("body 5")).toHaveLength(1);

@@ -286,6 +286,23 @@ describe("ChatBubble", () => {
     );
   });
 
+  test("Enter sends the message and Shift+Enter does not", async () => {
+    chatService.sendMessage.mockResolvedValue(undefined);
+    aiProviderService.getAll.mockResolvedValue([provider]);
+    await openResumed(chatSession(), "/taskboard");
+
+    const input = await screen.findByLabelText("Chat message");
+    expect(input.tagName).toBe("TEXTAREA");
+    fireEvent.change(input, { target: { value: "line one" } });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(chatService.sendMessage).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(chatService.sendMessage).toHaveBeenCalledWith("s1", "line one", null, null),
+    );
+  });
+
   test("starting a chat locks in the session and reveals the input box", async () => {
     chatService.listHistory.mockResolvedValue([]);
     aiProviderService.getAll.mockResolvedValue([provider]);

@@ -95,11 +95,24 @@ function ChatConversation({
           onSend(content);
         }}
       >
-        <input
+        {/* Grows with what is typed. Enter sends, Shift+Enter adds a line, as
+            in a run's feedback box. */}
+        <textarea
           className="chat-input"
           placeholder="Message…"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          rows={1}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            e.target.style.height = "auto";
+            e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+          }}
+          onKeyDown={(e) => {
+            const composing = e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229;
+            if (e.key !== "Enter" || e.shiftKey || composing) return;
+            e.preventDefault();
+            e.currentTarget.form?.requestSubmit();
+          }}
           aria-label="Chat message"
         />
         {/* Only offered while a turn is in flight — the same window the
