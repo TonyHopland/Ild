@@ -1116,6 +1116,19 @@ export const GlobalVariableSettingKeys = {
   MaxLength: "globalVariables.maxLength",
 } as const;
 
+/**
+ * The signed-in user's own UI preferences, kept on the server so they follow the
+ * user to every device: one text value per key, which the UI defines.
+ */
+export const preferencesService = {
+  getAll: async (): Promise<Record<string, string>> => {
+    return api.get<Record<string, string>>("/preferences");
+  },
+  put: async (key: string, value: string): Promise<void> => {
+    await api.put(`/preferences/${encodeURIComponent(key)}`, { value });
+  },
+};
+
 export const settingsService = {
   getAll: async (): Promise<AppSetting[]> => {
     return api.get<AppSetting[]>("/settings");

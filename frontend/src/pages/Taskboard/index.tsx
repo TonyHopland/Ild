@@ -8,6 +8,7 @@ import WorkItemModalV2 from "../../components/workitem-v2/WorkItemModalV2";
 import Icon from "../../components/Icon";
 import Sheet from "../../components/Sheet";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import { useFoldedColumns } from "../../hooks/useFoldedColumns";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
@@ -45,6 +46,7 @@ export default function Taskboard() {
   const isMobile = useIsMobile();
   const [mobileStatus, setMobileStatus] = useState<WorkItemStatus>(WorkItemStatus.HumanFeedback);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const foldedColumns = useFoldedColumns();
   const closeFilters = useCallback(() => setFiltersOpen(false), []);
   const pickerRef = useRef<HTMLDivElement>(null);
   // Search reaches the server once typing pauses; the repository and tags at once.
@@ -412,7 +414,8 @@ export default function Taskboard() {
     </>
   );
 
-  if (isInitialLoading) {
+  // The folds wait for the user's preferences too, so no column opens only to fold again.
+  if (isInitialLoading || !foldedColumns.loaded) {
     return (
       <div className="page-container">
         <p>Loading taskboard...</p>
@@ -511,6 +514,10 @@ export default function Taskboard() {
                 onLoadMore={() => loadMore(status.value as WorkItemStatus)}
                 loadingMore={column.loadingMore}
                 alone={isMobile}
+                foldChoice={foldedColumns.choices[status.value as WorkItemStatus] ?? null}
+                onFoldChange={(folded) =>
+                  foldedColumns.setFolded(status.value as WorkItemStatus, folded)
+                }
               />
             );
           },

@@ -5,33 +5,6 @@ import WorkItemCard from "./WorkItemCard";
 import { errorMessage } from "../utils/errorMessage";
 import Icon from "./Icon";
 
-/** Where the columns a person folded or opened are kept, by status, in this browser. */
-export const FOLDED_COLUMNS_KEY = "ild_taskboard_folded";
-
-function readFoldChoice(status: WorkItemStatus): boolean | null {
-  try {
-    const stored = JSON.parse(localStorage.getItem(FOLDED_COLUMNS_KEY) ?? "{}") as Record<
-      string,
-      unknown
-    >;
-    return typeof stored[status] === "boolean" ? stored[status] : null;
-  } catch {
-    return null;
-  }
-}
-
-function saveFoldChoice(status: WorkItemStatus, folded: boolean) {
-  try {
-    const stored = JSON.parse(localStorage.getItem(FOLDED_COLUMNS_KEY) ?? "{}") as Record<
-      string,
-      unknown
-    >;
-    localStorage.setItem(FOLDED_COLUMNS_KEY, JSON.stringify({ ...stored, [status]: folded }));
-  } catch {
-    // A choice that cannot be kept still applies until the page is left.
-  }
-}
-
 /** What an empty column says: what lands there and how, once it is opened. */
 const EMPTY_HINT: Record<WorkItemStatus, string> = {
   [WorkItemStatus.Backlog]: "New work items land here.",
@@ -66,6 +39,11 @@ interface TaskboardColumnProps {
   // Shown on its own, as on a phone, where a picker above names the column and
   // counts it: no header, and an empty column says what lands there instead of folding.
   alone?: boolean;
+  // Whether the user chose to fold this column (true) or open it (false), or
+  // null before they have; the board keeps it among their preferences. Left
+  // out, the column keeps the choice itself.
+  foldChoice?: boolean | null;
+  onFoldChange?: (folded: boolean) => void;
 }
 
 export default function TaskboardColumn({
@@ -83,22 +61,22 @@ export default function TaskboardColumn({
   loopTemplateNames,
   repositoryNames,
   alone = false,
+  foldChoice,
+  onFoldChange,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
-  // Any column folds to a strip and opens again from it, and the choice is kept
-  // in this browser. Until a person chooses, an empty column and Done start
-  // folded so the busy ones get the room. A folded column opens while a card is
-  // dragged over it.
-  const [foldChoice, setFoldChoice] = useState<boolean | null>(() => readFoldChoice(status));
-  const fold = (folded: boolean) => {
-    setFoldChoice(folded);
-    saveFoldChoice(status, folded);
-  };
+  // Any column folds to a strip and opens again from it. Until the user
+  // chooses, Done and the empty columns other than Running start folded, so the
+  // busy ones get the room. A folded column opens while a card is dragged over it.
+  const [ownChoice, setOwnChoice] = useState<boolean | null>(null);
+  const choice = foldChoice !== undefined ? foldChoice : ownChoice;
+  const fold = (folded: boolean) => (onFoldChange ? onFoldChange(folded) : setOwnChoice(folded));
   // Empty means no card on screen and none counted: a card a live update just
   // added shows even before the count catches up.
   const empty = total === 0 && workItems.length === 0;
-  const foldedByDefault = empty || status === WorkItemStatus.Done;
-  const collapsed = (foldChoice ?? foldedByDefault) && !dragOver && !alone;
+  const foldedByDefault =
+    status === WorkItemStatus.Done || (empty && status !== WorkItemStatus.Running);
+  const collapsed = (choice ?? foldedByDefault) && !dragOver && !alone;
   const needsYou = status === WorkItemStatus.HumanFeedback && !empty;
   const hasMore = onLoadMore !== undefined && workItems.length < total;
 

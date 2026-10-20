@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import TaskboardColumn, { FOLDED_COLUMNS_KEY } from "./TaskboardColumn";
+import TaskboardColumn from "./TaskboardColumn";
 import WorkItemCard from "./WorkItemCard";
 import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
 import * as authServices from "../services/auth";
@@ -10,7 +10,6 @@ afterEach(() => {
   // Service spies are per-test; without this a spy's calls leak into the next
   // test that spies on the same method.
   vi.restoreAllMocks();
-  localStorage.clear();
 });
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
@@ -76,10 +75,10 @@ describe("TaskboardColumn", () => {
   // PR badge in Human Feedback loses it the moment it is dragged across. The
   // column has to keep surfacing the PR history its cards carry.
   test("Done column cards keep showing their PR history", () => {
-    // Done starts folded; this one has been opened.
-    localStorage.setItem(FOLDED_COLUMNS_KEY, JSON.stringify({ Done: false }));
     const { container } = render(
       <TaskboardColumn
+        // Done starts folded; this one has been opened.
+        foldChoice={false}
         status={WorkItemStatus.Done}
         label="Done"
         workItems={[
@@ -321,24 +320,28 @@ describe("TaskboardColumn folding and Needs you", () => {
     expect(screen.getByRole("button", { name: "Done: 1 item. Show column" })).toBeTruthy();
   });
 
-  test("a fold or an open is kept in this browser, so the board comes back as it was left", () => {
-    const first = column(WorkItemStatus.Done, "Done", [
-      makeItem({ title: "Shipped", status: WorkItemStatus.Done }),
-    ]);
-    fireEvent.click(screen.getByRole("button", { name: "Done: 1 item. Show column" }));
-    first.unmount();
+  test("Running starts open even when empty, so what starts is seen at once", () => {
+    column(WorkItemStatus.Running, "Running", []);
+    expect(screen.queryByRole("button", { name: /Running: empty. Show column/ })).toBeNull();
+    expect(screen.getByText("Ready items start here while the scheduler is running.")).toBeTruthy();
+  });
 
-    const second = column(WorkItemStatus.Done, "Done", [
-      makeItem({ title: "Shipped", status: WorkItemStatus.Done }),
-    ]);
+  test("a choice handed in wins over the column's own rule, and a fold is handed back out", () => {
+    const onFoldChange = vi.fn();
+    render(
+      <TaskboardColumn
+        status={WorkItemStatus.Done}
+        label="Done"
+        workItems={[makeItem({ title: "Shipped", status: WorkItemStatus.Done })]}
+        total={1}
+        onWorkItemUpdate={vi.fn()}
+        foldChoice={false}
+        onFoldChange={onFoldChange}
+      />,
+    );
     expect(screen.getByText("Shipped")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Fold Done" }));
-    second.unmount();
-
-    column(WorkItemStatus.Done, "Done", [
-      makeItem({ title: "Shipped", status: WorkItemStatus.Done }),
-    ]);
-    expect(screen.queryByText("Shipped")).toBeNull();
+    expect(onFoldChange).toHaveBeenCalledWith(true);
   });
 
   test("a folded Needs you with something waiting is still marked", () => {

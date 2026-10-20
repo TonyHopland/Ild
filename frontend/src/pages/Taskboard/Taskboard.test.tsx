@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/tes
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router";
 import Taskboard from "./index";
-import { FOLDED_COLUMNS_KEY } from "../../components/TaskboardColumn";
 import { mockTaskboardServer, pressEscapeUntil } from "../../test-support";
 import {
   NodeType,
@@ -24,8 +23,12 @@ afterEach(() => {
 
 beforeEach(() => {
   localStorage.clear();
-  // Done starts folded; these tests read the cards in every column.
-  localStorage.setItem(FOLDED_COLUMNS_KEY, JSON.stringify({ Done: false }));
+  // Done starts folded; these tests read the cards in every column, so this
+  // user has opened it.
+  vi.spyOn(authServices.preferencesService, "getAll").mockResolvedValue({
+    "taskboard.folded": JSON.stringify({ Done: false }),
+  });
+  vi.spyOn(authServices.preferencesService, "put").mockResolvedValue();
 });
 
 function LocationDisplay() {
@@ -1695,5 +1698,55 @@ describe("Taskboard on a phone", () => {
 
     expect(screen.queryByRole("dialog", { name: "Filters" })).toBeNull();
     expect(screen.getByRole("button", { name: /Filters/ }).textContent).toBe("Filters1 on");
+  });
+});
+
+describe("Taskboard folded columns", () => {
+  beforeEach(() => {
+    vi.spyOn(signalRHook, "useSignalR").mockReturnValue({
+      on: vi.fn(),
+      off: vi.fn(),
+      invoke: vi.fn(),
+      connectionState: "connected",
+    });
+    vi.spyOn(authServices.repositoryService, "getAll").mockResolvedValue([]);
+  });
+
+  test("opens each column as the user left it, and saves a fold to their preferences", async () => {
+    vi.spyOn(authServices.preferencesService, "getAll").mockResolvedValue({
+      "taskboard.folded": JSON.stringify({ Backlog: true }),
+    });
+    const put = vi.spyOn(authServices.preferencesService, "put").mockResolvedValue();
+    mockTaskboardServer([
+      makeItem({ id: "wi-1", title: "Not started", status: WorkItemStatus.Backlog }),
+      makeItem({ id: "wi-2", title: "Shipped", status: WorkItemStatus.Done }),
+    ]);
+    renderTaskboard();
+
+    expect(
+      await screen.findByRole("button", { name: "Backlog: 1 item. Show column" }),
+    ).toBeTruthy();
+    // Done has no choice of its own, so it folds by its rule.
+    expect(screen.getByRole("button", { name: "Done: 1 item. Show column" })).toBeTruthy();
+    expect(screen.queryByText("Not started")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done: 1 item. Show column" }));
+    expect(screen.getByText("Shipped")).toBeTruthy();
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(
+        "taskboard.folded",
+        JSON.stringify({ Backlog: true, Done: false }),
+      ),
+    );
+  });
+
+  test("shows no columns until the preferences have answered", async () => {
+    vi.spyOn(authServices.preferencesService, "getAll").mockReturnValue(new Promise(() => {}));
+    mockTaskboardServer([makeItem({ id: "wi-1", title: "Not started" })]);
+    renderTaskboard();
+
+    await settle();
+    expect(screen.getByText("Loading taskboard...")).toBeTruthy();
+    expect(screen.queryByText("Not started")).toBeNull();
   });
 });
