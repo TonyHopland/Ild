@@ -183,14 +183,6 @@ public class LoopRunStore : ILoopRunStore
             .OrderBy(rn => rn.CreatedAt)
             .ToListAsync();
 
-    public async Task<IReadOnlyList<AdapterSessionSnapshot>> GetSessionSnapshotsAsync(Guid runId)
-        => await _db.AdapterSessionSnapshots
-            .Where(s => s.LoopRunId == runId)
-            .OrderByDescending(s => s.UpdatedAt ?? s.CreatedAt)
-            .ThenBy(s => s.AdapterName)
-            .ThenBy(s => s.SessionId)
-            .ToListAsync();
-
     public async Task<IReadOnlyList<LoopRunSessionBinding>> GetSessionBindingsAsync(Guid runId)
         => await _db.LoopRunSessionBindings
             .Where(s => s.LoopRunId == runId)

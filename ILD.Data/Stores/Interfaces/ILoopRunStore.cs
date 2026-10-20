@@ -126,7 +126,6 @@ public interface ILoopRunStore
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesAsync(Guid runId);
     /// <summary>Run nodes for a run with their <c>LoopNode</c> eager-loaded (left join — may be null if the template node was since removed).</summary>
     Task<IReadOnlyList<LoopRunNode>> GetRunNodesWithNodeAsync(Guid runId);
-    Task<IReadOnlyList<AdapterSessionSnapshot>> GetSessionSnapshotsAsync(Guid runId);
     Task<IReadOnlyList<LoopRunSessionBinding>> GetSessionBindingsAsync(Guid runId);
     Task<LoopRunSessionBinding?> GetSessionBindingAsync(Guid runId, string adapterName, string placeholderId);
     Task UpsertSessionBindingAsync(Guid runId, string adapterName, string placeholderId, string sessionId);

@@ -33,13 +33,32 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
+                    b.Property<long>("ByteLength")
+                        .HasColumnType("bigint");
+
                     b.Property<Guid?>("ChatSessionId")
                         .HasColumnType("uuid");
+
+                    b.Property<int>("ChunkCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Compression")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
 
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
                         .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+                    b.Property<int>("EventCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
 
                     b.Property<Guid?>("LoopRunId")
                         .HasColumnType("uuid");
@@ -50,8 +69,11 @@ namespace ILD.Data.Migrations
                         .HasColumnType("character varying(256)");
 
                     b.Property<string>("SessionJson")
-                        .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<string>("TailHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -65,6 +87,29 @@ namespace ILD.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("AdapterSessionSnapshots");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.AdapterSessionSnapshotChunk", b =>
+                {
+                    b.Property<Guid>("SnapshotId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Seq")
+                        .HasColumnType("integer");
+
+                    b.Property<byte[]>("Data")
+                        .IsRequired()
+                        .HasColumnType("bytea");
+
+                    b.Property<int>("RawLength")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("RawOffset")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("SnapshotId", "Seq");
+
+                    b.ToTable("AdapterSessionSnapshotChunks");
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.AiProvider", b =>
@@ -1651,6 +1696,15 @@ namespace ILD.Data.Migrations
                     b.Navigation("ChatSession");
 
                     b.Navigation("LoopRun");
+                });
+
+            modelBuilder.Entity("ILD.Data.Entities.AdapterSessionSnapshotChunk", b =>
+                {
+                    b.HasOne("ILD.Data.Entities.AdapterSessionSnapshot", null)
+                        .WithMany()
+                        .HasForeignKey("SnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ILD.Data.Entities.AiProviderTag", b =>
