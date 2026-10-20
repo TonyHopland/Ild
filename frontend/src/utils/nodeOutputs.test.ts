@@ -13,7 +13,6 @@ import {
   outputColorOf,
   outputConfirmationOf,
   defaultOutputOf,
-  readableTextOn,
   withColor,
   outputVisibilityOf,
   readFixedOutputs,
@@ -573,21 +572,6 @@ describe("applyOutputChoices with a colour", () => {
       { name: "OnFailure", color: "#16a34a" },
       { name: "on_merged", reserved: true, visible: true, color: "#7e22ce" },
     ]);
-  });
-});
-
-describe("readableTextOn", () => {
-  test.each([
-    ["#ffffff", "#000"],
-    ["#000000", "#fff"],
-    ["#fde047", "#000"],
-    ["#7e22ce", "#fff"],
-    ["#ff0000", "#000"],
-    ["#0000ff", "#fff"],
-    ["#767676", "#000"],
-    ["#757575", "#fff"],
-  ])("on %s the text with the higher WCAG contrast is %s", (color, text) => {
-    expect(readableTextOn(color)).toBe(text);
   });
 });
 

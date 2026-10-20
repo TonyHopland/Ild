@@ -43,34 +43,34 @@ public sealed class PreferencesControllerTests : IDisposable
     [Fact]
     public async Task A_user_with_none_set_has_no_preferences()
     {
-        await AddUser("tony");
+        await AddUser("user-one");
 
-        Assert.Empty(Stated(await As("tony").GetAll(default)));
+        Assert.Empty(Stated(await As("user-one").GetAll(default)));
     }
 
     [Fact]
     public async Task A_preference_set_is_read_back_and_setting_it_again_replaces_it()
     {
-        await AddUser("tony");
+        await AddUser("user-one");
 
-        Assert.IsType<OkObjectResult>(await Put(As("tony"), "taskboard.folded", """{"Done":true}"""));
-        Assert.IsType<OkObjectResult>(await Put(As("tony"), "taskboard.folded", """{"Done":false}"""));
+        Assert.IsType<OkObjectResult>(await Put(As("user-one"), "taskboard.folded", """{"Done":true}"""));
+        Assert.IsType<OkObjectResult>(await Put(As("user-one"), "taskboard.folded", """{"Done":false}"""));
 
-        var stated = Stated(await As("tony").GetAll(default));
+        var stated = Stated(await As("user-one").GetAll(default));
         Assert.Equal("""{"Done":false}""", Assert.Single(stated).Value);
     }
 
     [Fact]
     public async Task Each_user_reads_only_their_own_preferences()
     {
-        await AddUser("tony");
-        await AddUser("alice");
+        await AddUser("user-one");
+        await AddUser("user-two");
 
-        await Put(As("tony"), "taskboard.folded", "tony's");
-        await Put(As("alice"), "taskboard.folded", "alice's");
+        await Put(As("user-one"), "taskboard.folded", "user-one's");
+        await Put(As("user-two"), "taskboard.folded", "user-two's");
 
-        Assert.Equal("tony's", Stated(await As("tony").GetAll(default))["taskboard.folded"]);
-        Assert.Equal("alice's", Stated(await As("alice").GetAll(default))["taskboard.folded"]);
+        Assert.Equal("user-one's", Stated(await As("user-one").GetAll(default))["taskboard.folded"]);
+        Assert.Equal("user-two's", Stated(await As("user-two").GetAll(default))["taskboard.folded"]);
     }
 
     [Theory]
@@ -80,32 +80,32 @@ public sealed class PreferencesControllerTests : IDisposable
     [InlineData("a/b")]
     public async Task A_key_outside_the_allowed_shape_is_refused_and_stores_nothing(string key)
     {
-        await AddUser("tony");
+        await AddUser("user-one");
 
-        Assert.IsType<BadRequestObjectResult>(await Put(As("tony"), key, "v"));
-        Assert.Empty(Stated(await As("tony").GetAll(default)));
+        Assert.IsType<BadRequestObjectResult>(await Put(As("user-one"), key, "v"));
+        Assert.Empty(Stated(await As("user-one").GetAll(default)));
     }
 
     [Fact]
     public async Task A_key_longer_than_64_characters_is_refused()
     {
-        await AddUser("tony");
+        await AddUser("user-one");
 
-        Assert.IsType<BadRequestObjectResult>(await Put(As("tony"), new string('a', 65), "v"));
-        Assert.IsType<OkObjectResult>(await Put(As("tony"), new string('a', 64), "v"));
+        Assert.IsType<BadRequestObjectResult>(await Put(As("user-one"), new string('a', 65), "v"));
+        Assert.IsType<OkObjectResult>(await Put(As("user-one"), new string('a', 64), "v"));
     }
 
     [Fact]
     public async Task A_missing_or_too_long_value_is_refused_and_an_empty_one_is_kept()
     {
-        await AddUser("tony");
+        await AddUser("user-one");
 
-        Assert.IsType<BadRequestObjectResult>(await Put(As("tony"), "k", null));
+        Assert.IsType<BadRequestObjectResult>(await Put(As("user-one"), "k", null));
         Assert.IsType<BadRequestObjectResult>(
-            await Put(As("tony"), "k", new string('x', PreferencesController.MaxValueLength + 1)));
-        Assert.IsType<OkObjectResult>(await Put(As("tony"), "k", ""));
+            await Put(As("user-one"), "k", new string('x', PreferencesController.MaxValueLength + 1)));
+        Assert.IsType<OkObjectResult>(await Put(As("user-one"), "k", ""));
 
-        Assert.Equal("", Stated(await As("tony").GetAll(default))["k"]);
+        Assert.Equal("", Stated(await As("user-one").GetAll(default))["k"]);
     }
 
     [Fact]
@@ -119,8 +119,8 @@ public sealed class PreferencesControllerTests : IDisposable
     [Fact]
     public async Task A_deleted_user_takes_their_preferences_along()
     {
-        var id = await AddUser("tony");
-        await Put(As("tony"), "k", "v");
+        var id = await AddUser("user-one");
+        await Put(As("user-one"), "k", "v");
 
         using (var ctx = _db.Fresh())
         {

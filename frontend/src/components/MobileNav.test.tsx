@@ -82,9 +82,11 @@ describe("the phone tab bar", () => {
   test("shows no count when the counts cannot be read", async () => {
     mockHub();
     stubCounts({ needsYou: null });
+    // The failed read is logged as it settles: once it has been, the badge has had its answer.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     renderTabBar();
 
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => expect(logged).toHaveBeenCalled());
     expect(tabBar().getByRole("link", { name: /Taskboard/ }).textContent).toBe("Taskboard");
   });
 

@@ -42,10 +42,10 @@ export function describeDevice(userAgent: string | null | undefined): string {
   return browser ?? platform ?? userAgent.slice(0, 40);
 }
 
-/** Who you are signed in as, on what, and the preferences that follow you around. */
 /** How many signed-in devices show before "Show all". */
 const SESSIONS_SHOWN = 5;
 
+/** Who you are signed in as, on what, and the preferences that follow you around. */
 export default function UserSettings() {
   const { user } = useAuth();
   const chatEnabled = useChatEnabled();

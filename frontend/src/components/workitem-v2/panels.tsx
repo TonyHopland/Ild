@@ -331,7 +331,7 @@ export function FeedbackBanner({
       );
     return (
       <div className="wiv2-feedback">
-        <div className="wiv2-feedback-title">Human Feedback</div>
+        <div className="wiv2-feedback-title">Needs you</div>
         <div className="feedback-reason">{feedbackReasonLabel(feedback.reason)}</div>
       </div>
     );
@@ -346,7 +346,7 @@ export function FeedbackBanner({
 
   return (
     <div className="wiv2-feedback">
-      <div className="wiv2-feedback-title">{isPr ? "PR Feedback" : "Human Feedback"}</div>
+      <div className="wiv2-feedback-title">{isPr ? "PR feedback" : "Needs you"}</div>
       {prompt && (
         <div className="feedback-scroll">
           <div className="markdown-container">

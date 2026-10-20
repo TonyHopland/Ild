@@ -28,7 +28,6 @@ interface TaskboardColumnProps {
   onWorkItemClick?: (workItem: WorkItem) => void;
   onError?: (message: string) => void;
   onMoveWorkItem?: (workItem: WorkItem, direction: "prev" | "next") => void;
-  onAddItem?: () => void;
   // Fetches the column's next page; offered while fewer cards are loaded than
   // the total.
   onLoadMore?: () => void;
@@ -41,10 +40,9 @@ interface TaskboardColumnProps {
   // counts it: no header, and an empty column says what lands there instead of folding.
   alone?: boolean;
   // Whether the user chose to fold this column (true) or open it (false), or
-  // null before they have; the board keeps it among their preferences. Left
-  // out, the column keeps the choice itself.
-  foldChoice?: boolean | null;
-  onFoldChange?: (folded: boolean) => void;
+  // null before they have; the board keeps it among their preferences.
+  foldChoice: boolean | null;
+  onFoldChange: (folded: boolean) => void;
 }
 
 export default function TaskboardColumn({
@@ -56,7 +54,6 @@ export default function TaskboardColumn({
   onWorkItemClick,
   onError,
   onMoveWorkItem,
-  onAddItem,
   onLoadMore,
   loadingMore = false,
   loopTemplateNames,
@@ -69,15 +66,13 @@ export default function TaskboardColumn({
   // Any column folds to a strip and opens again from it. Until the user
   // chooses, Done and the empty columns other than Running start folded, so the
   // busy ones get the room. A folded column opens while a card is dragged over it.
-  const [ownChoice, setOwnChoice] = useState<boolean | null>(null);
-  const choice = foldChoice !== undefined ? foldChoice : ownChoice;
-  const fold = (folded: boolean) => (onFoldChange ? onFoldChange(folded) : setOwnChoice(folded));
+  const fold = onFoldChange;
   // Empty means no card on screen and none counted: a card a live update just
   // added shows even before the count catches up.
   const empty = total === 0 && workItems.length === 0;
   const foldedByDefault =
     status === WorkItemStatus.Done || (empty && status !== WorkItemStatus.Running);
-  const collapsed = (choice ?? foldedByDefault) && !dragOver && !alone;
+  const collapsed = (foldChoice ?? foldedByDefault) && !dragOver && !alone;
   const needsYou = status === WorkItemStatus.HumanFeedback && !empty;
   const hasMore = onLoadMore !== undefined && workItems.length < total;
 
@@ -148,17 +143,6 @@ export default function TaskboardColumn({
           <h3 className="taskboard-column-title">{label}</h3>
           <div className="taskboard-column-header-end">
             <span className="taskboard-column-count">{total}</span>
-            {onAddItem && (
-              <button
-                type="button"
-                className="taskboard-column-add"
-                onClick={onAddItem}
-                title="New item"
-                aria-label="New item"
-              >
-                + New
-              </button>
-            )}
             <button
               type="button"
               className="taskboard-column-fold"

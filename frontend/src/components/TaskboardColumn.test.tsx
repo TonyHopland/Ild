@@ -1,6 +1,26 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
-import TaskboardColumn from "./TaskboardColumn";
+import { useState, type ComponentProps } from "react";
+import BoardColumn from "./TaskboardColumn";
+
+type ColumnProps = ComponentProps<typeof BoardColumn>;
+
+/** The column as the board drives it, holding the fold choice the board would keep. */
+function TaskboardColumn(
+  props: Omit<ColumnProps, "foldChoice" | "onFoldChange"> & Partial<ColumnProps>,
+) {
+  const [choice, setChoice] = useState<boolean | null>(props.foldChoice ?? null);
+  return (
+    <BoardColumn
+      {...props}
+      foldChoice={choice}
+      onFoldChange={(folded) => {
+        setChoice(folded);
+        props.onFoldChange?.(folded);
+      }}
+    />
+  );
+}
 import WorkItemCard from "./WorkItemCard";
 import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
 import * as authServices from "../services/auth";

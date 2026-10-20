@@ -768,7 +768,7 @@ describe("Taskboard reconnect with a work item open", () => {
     const feedbackBox = () => document.querySelector(".wiv2-feedback");
 
     const { rerender } = render(tree());
-    await waitFor(() => expect(feedbackBox()?.textContent).toContain("PR Feedback"));
+    await waitFor(() => expect(feedbackBox()?.textContent).toContain("PR feedback"));
 
     // The phone sleeps; the hub drops, and the run moves on meanwhile.
     connectionState = "disconnected";

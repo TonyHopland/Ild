@@ -458,7 +458,7 @@ describe("FeedbackActions — Enter in the feedback box", () => {
   const outputButton = (label: string) => {
     const found = screen
       .getAllByRole("button")
-      .filter((button) => (button.textContent ?? "").replace(/[⏎…]/g, "").trim() === label);
+      .filter((button) => (button.textContent ?? "").replace(/⏎/g, "").trim() === label);
     expect(found, label).toHaveLength(1);
     return found[0];
   };
@@ -611,7 +611,7 @@ describe("FeedbackActions — Enter in the feedback box", () => {
 
 describe("FeedbackActions — order and the one primary", () => {
   const names = () =>
-    screen.getAllByRole("button").map((b) => (b.textContent ?? "").replace(/[⏎…]/g, "").trim());
+    screen.getAllByRole("button").map((b) => (b.textContent ?? "").replace(/⏎/g, "").trim());
   const primaries = () =>
     screen.getAllByRole("button").filter((b) => b.classList.contains("btn-primary"));
 

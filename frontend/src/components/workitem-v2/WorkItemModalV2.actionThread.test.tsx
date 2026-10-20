@@ -388,7 +388,7 @@ describe("the Action tab thread", () => {
       }),
     );
 
-    const card = row(await within(panel).findByText("Human Feedback"));
+    const card = row(await within(panel).findByText("Needs you"));
     expect(card.classList.contains("wiv2-bubble-row-human")).toBe(true);
     const rows = [...panel.querySelectorAll(".wiv2-bubble-row")];
     expect(rows[rows.length - 1]).toBe(card);

@@ -1482,9 +1482,7 @@ describe("RunsPanel retry", () => {
       expect((await screen.findByRole("alert")).textContent).toContain("History unavailable");
     });
   });
-});
 
-describe("RunsPanel retry", () => {
   const node = (
     id: string,
     label: string,

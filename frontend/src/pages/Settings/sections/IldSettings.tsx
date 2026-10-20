@@ -89,7 +89,7 @@ export default function IldSettings() {
           How many AI nodes a run may execute before it stops and asks you whether to carry on. The
           count resets every time you interact with the run, so a back-and-forth between you and the
           AI never reaches it — only a loop running on its own does. At the cap the run waits in
-          Human Feedback.
+          Needs you.
         </NumericSettingField>
         <NumericSettingField
           settingKey={SchedulerSettingKeys.PrHeartbeatSeconds}
@@ -114,8 +114,8 @@ export default function IldSettings() {
           label="Resume throttled runs automatically"
         >
           When the AI provider stops a step — a usage or session limit, a busy provider — the run
-          waits in Human Feedback for you to click <strong>Resume</strong>. Turn this on to have ILD
-          try the resume for you instead, never before the reset time the provider named. When the
+          waits in Needs you for you to click <strong>Resume</strong>. Turn this on to have ILD try
+          the resume for you instead, never before the reset time the provider named. When the
           attempts below run out it leaves the run for you; resuming it yourself gives it a fresh
           set.
         </ToggleSettingField>

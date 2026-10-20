@@ -5,9 +5,10 @@ import {
   usePreference,
 } from "../utils/userPreferences";
 
-// Whether Enter in a run's feedback box takes the parked node's default output:
-// one of the user's preferences, off unless they turned it on.
-
+/**
+ * Whether Enter in a run's feedback box takes the parked node's default output:
+ * one of the user's preferences, off unless they turned it on.
+ */
 export function isSubmitDefaultOnEnter(): boolean {
   return getPreference(PreferenceKeys.SubmitDefaultOnEnter) === "true";
 }

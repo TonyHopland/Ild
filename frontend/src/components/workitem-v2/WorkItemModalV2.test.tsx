@@ -891,7 +891,7 @@ describe("WorkItemModalV2", () => {
     const actionPanel = document.getElementById("wiv2-panel-action");
     expect(actionPanel).not.toBeNull();
     expect((actionPanel as HTMLElement).hasAttribute("hidden")).toBe(false);
-    expect(within(actionPanel as HTMLElement).getByText("Human Feedback")).toBeTruthy();
+    expect(within(actionPanel as HTMLElement).getByText("Needs you")).toBeTruthy();
     expect(
       await within(actionPanel as HTMLElement).findByRole("button", { name: "Approve" }),
     ).toBeTruthy();
@@ -900,7 +900,7 @@ describe("WorkItemModalV2", () => {
     expect((actionPanel as HTMLElement).querySelector('input[type="file"]')).toBeNull();
 
     // The feedback card closes the thread, on the human side.
-    const card = within(actionPanel as HTMLElement).getByText("Human Feedback");
+    const card = within(actionPanel as HTMLElement).getByText("Needs you");
     expect(card.closest(".wiv2-bubble-row-human")).not.toBeNull();
   });
 

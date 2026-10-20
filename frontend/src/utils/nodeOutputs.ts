@@ -208,21 +208,6 @@ export function outputColorOf(
   };
 }
 
-/** The relative luminance of a "#rrggbb" colour, as WCAG 2 defines it. */
-function luminanceOf(color: string): number {
-  const [r, g, b] = [1, 3, 5].map((start) => {
-    const channel = parseInt(color.slice(start, start + 2), 16) / 255;
-    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-  });
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-/** Black or white, whichever has the higher WCAG contrast on a "#rrggbb" background. */
-export function readableTextOn(color: string): "#000" | "#fff" {
-  const luminance = luminanceOf(color);
-  return (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) ? "#000" : "#fff";
-}
-
 /**
  * A choice made in the node settings for an output that has no row of its
  * own. A `color` of null chooses the default; left out, the colour is untouched.

@@ -26,7 +26,6 @@ const PATHS = {
       <path d="M5 15V5a2 2 0 0 1 2-2h10" />
     </>
   ),
-  check: <path d="M20 6 9 17l-5-5" />,
   alert: (
     <>
       <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
@@ -39,7 +38,6 @@ const PATHS = {
       <path d="M4 21a8 8 0 0 1 16 0" />
     </>
   ),
-  play: <path d="m6 4 14 8-14 8z" />,
   plus: <path d="M12 5v14M5 12h14" />,
   loop: (
     <>
@@ -49,13 +47,6 @@ const PATHS = {
       <path d="M21 13v2a3 3 0 0 1-3 3H3" />
     </>
   ),
-  file: (
-    <>
-      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
-      <path d="M14 3v6h6" />
-    </>
-  ),
-  folder: <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />,
   menu: <path d="M4 6h16M4 12h16M4 18h16" />,
   filter: <path d="M3 5h18l-7 8v6l-4-2v-4z" />,
   board: (
