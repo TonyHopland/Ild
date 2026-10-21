@@ -136,6 +136,20 @@ public class LoopEngineFailedNodeParkTests
     }
 
     [Fact]
+    public async Task An_executor_throwing_mid_node_parks_the_run_as_that_node_failing()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.AI, "Agent");
+        h.Registry.Register(new ThrowingMidNodeExecutor(NodeType.AI, "adapter blew up"));
+        h.SeedRun("a");
+
+        await h.LaunchAsync();
+        await h.WaitUntilIdleAsync();
+
+        AssertParkedOnFailedNode(h, "a", Assert.Single(h.ReloadRunNodes()), "adapter blew up");
+    }
+
+    [Fact]
     public async Task A_crash_mid_node_parks_the_run_on_that_execution_and_retrying_it_runs_the_node_again()
     {
         using var h = new LoopEngineHarness(new CrashOnFirstNodeStartNotifier("adapter blew up"));
@@ -310,6 +324,19 @@ public class LoopEngineFailedNodeParkTests
         Assert.True(await EventLog(h).HasRunEndedAsync(h.RunId));
         Assert.Equal(0, agent.Invocations);
         Assert.DoesNotContain(h.WorkItemsMock.Invocations, i => i.Method.Name == nameof(IWorkItemManager.TransitionAsync));
+    }
+
+    /// <summary>Starts the node, then throws, as an executor whose adapter blows up does.</summary>
+    private sealed class ThrowingMidNodeExecutor(NodeType type, string message) : INodeExecutor
+    {
+        public NodeType NodeType { get; } = type;
+
+        public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
+        {
+            yield return new NodeOutcome.NodeStarting("work");
+            await Task.Yield();
+            throw new InvalidOperationException(message);
+        }
     }
 
     /// <summary>
