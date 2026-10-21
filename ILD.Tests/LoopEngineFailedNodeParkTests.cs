@@ -233,6 +233,29 @@ public class LoopEngineFailedNodeParkTests
         Assert.True(names.IndexOf("Run reopened") > failedAt, string.Join(", ", names));
     }
 
+    [Fact]
+    public async Task A_retry_the_work_item_server_cannot_record_still_runs_the_node()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.AI, "Agent");
+        var agent = new ScriptedExecutor(NodeType.AI,
+            new NodeOutcome.NodeStarting("work"),
+            new NodeOutcome.Terminal("implemented it"));
+        h.Registry.Register(agent);
+        var failed = await SeedRunThatEndedOnAFailedNodeAsync(h, "a");
+        ItemIs(h, RemoteWorkItemStatus.HumanFeedback);
+        h.WorkItemsMock.Setup(m => m.TransitionAsync(
+                It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Running,
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+            .ThrowsAsync(new HttpRequestException("work item server unreachable"));
+
+        await h.Engine.RetryFromNodeAsync(h.RunId, failed.Id);
+        await h.WaitUntilIdleAsync();
+
+        Assert.Equal(1, agent.Invocations);
+        Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+    }
+
     public enum EndedRun
     {
         Completed,

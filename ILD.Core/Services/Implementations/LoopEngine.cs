@@ -665,15 +665,17 @@ public sealed class LoopEngine : ILoopEngine
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run is null) return;
         var oldStatus = run.Status;
-        if (!IsAlive(run.Status) || await eventLog.HasRunEndedAsync(runId))
-        {
-            if (!await ReopenToRetryAsync(run, runNodeId, loopRunStore, workItems, eventLog))
-                throw new InvalidOperationException(RetryOfEndedRunRefused);
-        }
-        else if (run.Status == LoopRunStatus.Running && !run.IsPaused)
+        var ended = !IsAlive(run.Status) || await eventLog.HasRunEndedAsync(runId);
+        if (ended && !EndedOnFailedNode(run))
+            throw new InvalidOperationException(RetryOfEndedRunRefused);
+        if (!ended && run.Status == LoopRunStatus.Running && !run.IsPaused)
             throw new InvalidOperationException("Cannot retry while run is actively executing");
         var target = await loopRunStore.GetRunNodeByIdAsync(runNodeId);
-        if (target is null || target.LoopRunId != runId) return;
+        if (target is null || target.LoopRunId != runId)
+        {
+            if (ended) throw new InvalidOperationException(RetryOfEndedRunRefused);
+            return;
+        }
 
         // Walk the chain to find the predecessor's output to use as PreviousNodeOutput.
         string? prevOutput = null;
@@ -682,6 +684,33 @@ public sealed class LoopEngine : ILoopEngine
             var prev = await loopRunStore.GetRunNodeByIdAsync(prevId);
             prevOutput = prev?.Output;
         }
+
+        if (ended)
+            await ReopenToRetryAsync(run, target, prevOutput, loopRunStore, workItems, eventLog);
+        else
+        {
+            PrepareRetry(run, target, prevOutput);
+            await loopRunStore.UpdateRunAsync(run);
+        }
+        try
+        {
+            await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
+                reason: $"Retried from {target.NodeLabel ?? "a step"}", currentLoopRunId: run.Id);
+        }
+        catch (Exception ex)
+        {
+            // The run is Running again: it is driven either way, and the item
+            // catches up on the run's next transition.
+            _logger.LogWarning(ex, "Run {RunId} retried, but work item {WorkItemId} could not be moved to Running",
+                runId, run.WorkItemId);
+        }
+        await _notifier.RunStateChangedAsync(runId, oldStatus, LoopRunStatus.Running);
+        _ = LaunchAfterAwaitAsync(runId);
+    }
+
+    /// <summary>Point <paramref name="run"/> back at <paramref name="target"/>'s node, with the input it had, and set it Running.</summary>
+    private static void PrepareRetry(LoopRun run, LoopRunNode target, string? prevOutput)
+    {
         run.CurrentNodeId = target.LoopNodeId;
         run.PreviousNodeOutput = prevOutput;
         run.ExternalActionResult = null;
@@ -699,33 +728,26 @@ public sealed class LoopEngine : ILoopEngine
         ResetUnattendedCounters(run);
         run.Status = LoopRunStatus.Running;
         run.IsPaused = false;
-        await loopRunStore.UpdateRunAsync(run);
-        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId), run.WorkItemId, RemoteWorkItemStatus.Running,
-            reason: $"Retried from {target.NodeLabel ?? "a step"}", currentLoopRunId: run.Id);
-        await _notifier.RunStateChangedAsync(runId, oldStatus, LoopRunStatus.Running);
-        _ = LaunchAfterAwaitAsync(runId);
     }
 
     private const string RetryOfEndedRunRefused = "Cannot retry a node of a run that has ended; start a new run instead";
 
     /// <summary>
     /// Reopen a run that ended on a failed node before such a failure parked the
-    /// run instead — Failed with "Node Failed" — so that node can be retried.
-    /// Only the work item's latest run, with no other live run, while the item
-    /// still waits on a person; any other ended run stays ended and this returns
-    /// false. The reopen is recorded under the run's lock together with the
-    /// status change, so a concurrent end or second reopen cannot split them.
+    /// run instead — Failed with "Node Failed" — and set it up to retry
+    /// <paramref name="target"/>. Only the work item's latest run, with no other
+    /// live run, while the item still waits on a person; any other ended run is
+    /// refused and stays ended. The reopen event and the whole retry are written
+    /// together under the run's lock, so a concurrent end or second reopen cannot
+    /// split them and a run is never left reopened but not retried.
     /// </summary>
-    private static async Task<bool> ReopenToRetryAsync(
-        LoopRun run, Guid runNodeId, ILoopRunStore store, IWorkItemManager workItems, IEventLogService eventLog)
+    private static async Task ReopenToRetryAsync(LoopRun run, LoopRunNode target, string? prevOutput,
+        ILoopRunStore store, IWorkItemManager workItems, IEventLogService eventLog)
     {
-        if (!EndedOnFailedNode(run)) return false;
-        var target = await store.GetRunNodeByIdAsync(runNodeId);
-        if (target is null || target.LoopRunId != run.Id) return false;
         if ((await store.GetLatestByWorkItemAsync(run.WorkItemId))?.Id != run.Id
             || await store.GetActiveByWorkItemAsync(run.WorkItemId) is not null
             || (await workItems.GetWorkItemAsync(run.WorkItemId))?.Status != RemoteWorkItemStatus.HumanFeedback)
-            return false;
+            throw new InvalidOperationException(RetryOfEndedRunRefused);
 
         await eventLog.AppendAlongsideAsync(run.Id, EventType.RunReopened,
             $"Reopened to retry {target.NodeLabel ?? "a step"}", target.LoopNodeId, target.Id, edgeName: null,
@@ -734,11 +756,10 @@ public sealed class LoopEngine : ILoopEngine
                 await store.ReloadAsync(run);
                 if (!EndedOnFailedNode(run))
                     throw new InvalidOperationException(RetryOfEndedRunRefused);
-                run.Status = LoopRunStatus.Running;
+                PrepareRetry(run, target, prevOutput);
                 run.CompletedAt = null;
                 await store.UpdateRunAsync(run);
             });
-        return true;
     }
 
     private static bool EndedOnFailedNode(LoopRun run)
