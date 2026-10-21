@@ -466,7 +466,8 @@ public class LoopRunsController : ControllerBase
     /// <summary>
     /// A page of a saved session's raw lines: up to <paramref name="limit"/> lines from the
     /// raw byte offset <paramref name="fromOffset"/> (from the start by default), or the last
-    /// <paramref name="tail"/> lines. Only the chunks holding them are read.
+    /// <paramref name="tail"/> lines before <paramref name="beforeOffset"/> (the end by default),
+    /// which is how a reader pages back from the latest events. Only the chunks holding them are read.
     /// </summary>
     [HttpGet("{id}/sessions/preview")]
     public async Task<IActionResult> GetSessionPreview(
@@ -475,7 +476,8 @@ public class LoopRunsController : ControllerBase
         [FromQuery] string sessionId,
         [FromQuery] long? fromOffset = null,
         [FromQuery] int? limit = null,
-        [FromQuery] int? tail = null)
+        [FromQuery] int? tail = null,
+        [FromQuery] long? beforeOffset = null)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
@@ -485,20 +487,22 @@ public class LoopRunsController : ControllerBase
 
         if (tail is not null && (fromOffset is not null || limit is not null))
             return BadRequest(new { error = "tail cannot be combined with fromOffset or limit" });
+        if (beforeOffset is not null && tail is null)
+            return BadRequest(new { error = "beforeOffset is only read with tail" });
         if (tail is < 1 or > MaxPreviewEvents || limit is < 1 or > MaxPreviewEvents)
             return BadRequest(new { error = $"limit and tail must be between 1 and {MaxPreviewEvents}" });
-        if (fromOffset < 0)
-            return BadRequest(new { error = "fromOffset must not be negative" });
+        if (fromOffset < 0 || beforeOffset < 0)
+            return BadRequest(new { error = "fromOffset and beforeOffset must not be negative" });
 
         var key = SessionSnapshotKey.ForRun(guid, adapterName, sessionId);
         var snapshot = await _sessionSnapshotStore.GetMetadataAsync(key);
         if (snapshot == null)
             return NotFound(new { error = "Session snapshot not found" });
-        if (fromOffset > snapshot.ByteLength)
-            return BadRequest(new { error = "fromOffset is past the end of the session" });
+        if (fromOffset > snapshot.ByteLength || beforeOffset > snapshot.ByteLength)
+            return BadRequest(new { error = "fromOffset and beforeOffset must not be past the end of the session" });
 
         var page = tail is { } lastLines
-            ? await _sessionSnapshotStore.ReadTailAsync(key, lastLines)
+            ? await _sessionSnapshotStore.ReadTailAsync(key, lastLines, beforeOffset)
             : await _sessionSnapshotStore.ReadRangeAsync(key, fromOffset ?? 0, limit ?? DefaultPreviewEvents);
 
         return Ok(new
@@ -513,6 +517,8 @@ public class LoopRunsController : ControllerBase
             events = page.Events,
             fromOffset = page.FromOffset,
             nextOffset = page.NextOffset,
+            previousOffset = page.PreviousOffset,
+            truncated = page.Truncated,
         });
     }
 

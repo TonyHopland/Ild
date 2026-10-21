@@ -27,7 +27,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         s.UpdatedAt,
         EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn) != null);
 
-    /// <summary>The raw line bytes a page holds at most, beyond its first line.</summary>
+    /// <summary>The raw line bytes a page holds at most; a single longer line is cut off at it.</summary>
     private const int PageByteBudget = 1024 * 1024;
 
     private readonly AppDbContext _db;
@@ -37,19 +37,14 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         _db = db;
     }
 
-    public Task<IReadOnlyList<SessionSnapshotMetadata>> ListMetadataForRunAsync(Guid loopRunId, CancellationToken cancellationToken = default)
-        => ListAsync(_db.AdapterSessionSnapshots.Where(s => s.LoopRunId == loopRunId), cancellationToken);
-
-    public Task<IReadOnlyList<SessionSnapshotMetadata>> ListMetadataForChatAsync(Guid chatSessionId, CancellationToken cancellationToken = default)
-        => ListAsync(_db.AdapterSessionSnapshots.Where(s => s.ChatSessionId == chatSessionId), cancellationToken);
-
-    private static async Task<IReadOnlyList<SessionSnapshotMetadata>> ListAsync(IQueryable<AdapterSessionSnapshot> snapshots, CancellationToken ct)
-        => await snapshots
+    public async Task<IReadOnlyList<SessionSnapshotMetadata>> ListMetadataForRunAsync(Guid loopRunId, CancellationToken cancellationToken = default)
+        => await _db.AdapterSessionSnapshots
+            .Where(s => s.LoopRunId == loopRunId)
             .OrderByDescending(s => s.UpdatedAt ?? s.CreatedAt)
             .ThenBy(s => s.AdapterName)
             .ThenBy(s => s.SessionId)
             .Select(ToMetadata)
-            .ToListAsync(ct);
+            .ToListAsync(cancellationToken);
 
     public async Task<SessionSnapshotMetadata?> GetMetadataAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default)
     {
@@ -185,27 +180,43 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         ArgumentOutOfRangeException.ThrowIfNegative(fromRawOffset);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
         if (await BeginConsistentReadAsync(key, cancellationToken) is not ({ } tx, { } metadata))
-            return new SessionSnapshotPage([], fromRawOffset, null);
+            return Page([], fromRawOffset, null, truncated: false);
         await using var _ = tx;
         if (fromRawOffset >= metadata.ByteLength)
-            return new SessionSnapshotPage([], fromRawOffset, null);
+            return Page([], fromRawOffset, null, truncated: false);
 
         await using var content = await OpenContentAsync(metadata.Id, fromRawOffset, ownedTransaction: null, cancellationToken);
         var events = new List<string>();
         var line = new MemoryStream();
+        var lineLength = 0L;
         var pageBytes = 0L;
         var next = fromRawOffset;
+        var truncated = false;
         var block = new byte[81920];
         var full = false;
+
+        string TakeLine()
+        {
+            var kept = (int)line.Length;
+            var cut = lineLength > kept;
+            if (cut) kept = WholeUtf8Length(line.GetBuffer().AsSpan(0, kept));
+            truncated |= cut;
+            pageBytes += line.Length;
+            var text = Encoding.UTF8.GetString(line.GetBuffer(), 0, kept);
+            line.SetLength(0);
+            lineLength = 0;
+            return text;
+        }
+
         while (!full && events.Count < maxEvents)
         {
             var read = await content.ReadAsync(block, cancellationToken);
             if (read == 0)
             {
-                if (line.Length > 0)
+                if (lineLength > 0)
                 {
-                    events.Add(Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length));
-                    next += line.Length;
+                    next += lineLength;
+                    events.Add(TakeLine());
                 }
                 break;
             }
@@ -215,100 +226,148 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
             {
                 var newline = span.IndexOf((byte)'\n');
                 var part = newline < 0 ? span : span[..newline];
-                if (events.Count > 0 && pageBytes + line.Length + part.Length > PageByteBudget)
+                if (events.Count > 0 && pageBytes + lineLength + part.Length > PageByteBudget)
                 {
                     full = true;
                     break;
                 }
-                line.Write(part);
+                // Only a page's first line can outgrow the budget; it is kept up to the budget.
+                line.Write(part[..(int)Math.Min(part.Length, PageByteBudget - line.Length)]);
+                lineLength += part.Length;
                 if (newline < 0) break;
 
-                events.Add(Encoding.UTF8.GetString(line.GetBuffer(), 0, (int)line.Length));
-                pageBytes += line.Length;
-                next += line.Length + 1;
-                line.SetLength(0);
+                next += lineLength + 1;
+                events.Add(TakeLine());
                 span = span[(newline + 1)..];
             }
         }
 
-        return new SessionSnapshotPage(events, fromRawOffset, next < metadata.ByteLength ? next : null);
+        return Page(events, fromRawOffset, next < metadata.ByteLength ? next : null, truncated);
     }
 
-    public async Task<SessionSnapshotPage> ReadTailAsync(SessionSnapshotKey key, int maxEvents, CancellationToken cancellationToken = default)
+    public async Task<SessionSnapshotPage> ReadTailAsync(
+        SessionSnapshotKey key, int maxEvents, long? beforeRawOffset, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
+        if (beforeRawOffset is { } requested) ArgumentOutOfRangeException.ThrowIfNegative(requested);
         if (await BeginConsistentReadAsync(key, cancellationToken) is not ({ } tx, { } metadata))
-            return new SessionSnapshotPage([], 0, null);
+            return Page([], 0, null, truncated: false);
         await using var _ = tx;
+        var before = Math.Min(beforeRawOffset ?? metadata.ByteLength, metadata.ByteLength);
+        var next = before < metadata.ByteLength ? before : (long?)null;
 
+        // Walk back a chunk at a time, keeping each chunk once. A line is only returned once
+        // its start has been read: the newline before it, or the start of the content.
         var chunks = await ChunkHeadersAsync(metadata.Id, 0, cancellationToken);
-        var tail = Array.Empty<byte>();
-        var tailOffset = metadata.ByteLength;
+        var read = new List<(long Offset, byte[] Data, int Length)>();
+        var newlines = new List<long>();
+        var startsAfterNewlines = 0;
+        var regionStart = before;
         for (var i = chunks.Count - 1; i >= 0; i--)
         {
             var chunk = chunks[i];
-            var data = await _db.AdapterSessionSnapshotChunks
-                .Where(c => c.SnapshotId == metadata.Id && c.Seq == chunk.Seq)
-                .Select(c => c.Data)
-                .SingleAsync(cancellationToken);
-            tail = [.. SessionSnapshotChunker.Decompress(data, chunk.RawLength), .. tail];
-            tailOffset = chunk.RawOffset;
+            if (chunk.RawOffset >= before) continue;
+            var data = SessionSnapshotChunker.Decompress(await ChunkDataAsync(metadata.Id, chunk.Seq, cancellationToken), chunk.RawLength);
+            var length = (int)Math.Min(chunk.RawLength, before - chunk.RawOffset);
+            read.Add((chunk.RawOffset, data, length));
+            for (var at = data.AsSpan(0, length).LastIndexOf((byte)'\n'); at >= 0; at = data.AsSpan(0, at).LastIndexOf((byte)'\n'))
+            {
+                newlines.Add(chunk.RawOffset + at);
+                if (chunk.RawOffset + at + 1 < before) startsAfterNewlines++;
+            }
+            regionStart = chunk.RawOffset;
 
-            // A chunk can start mid-line when the write before it did not end on one, so
-            // the first line of what has been read is only whole once the start is reached.
-            var whole = LineStarts(tail).Count - (i > 0 ? 1 : 0);
-            if (whole >= maxEvents || (whole > 0 && tail.Length >= PageByteBudget)) break;
+            var starts = startsAfterNewlines + (regionStart == 0 ? 1 : 0);
+            if (starts >= maxEvents || (starts > 0 && before - regionStart >= PageByteBudget)) break;
         }
 
-        var starts = LineStarts(tail);
-        var lineEnd = tail.Length > 0 && tail[^1] == (byte)'\n' ? tail.Length - 1 : tail.Length;
-        var first = starts.Count;
+        newlines.Reverse();
+        var lineStarts = new List<long>();
+        if (regionStart == 0 && before > 0) lineStarts.Add(0);
+        lineStarts.AddRange(newlines.Where(n => n + 1 < before).Select(n => n + 1));
+        var lastLineEnd = newlines.Count > 0 && newlines[^1] == before - 1 ? before - 1 : before;
+        long End(int n) => n + 1 < lineStarts.Count ? lineStarts[n + 1] - 1 : lastLineEnd;
+
+        var first = lineStarts.Count;
         var pageBytes = 0L;
-        while (first > 0 && starts.Count - first < maxEvents)
+        while (first > 0 && lineStarts.Count - first < maxEvents)
         {
-            var end = first < starts.Count ? starts[first] - 1 : lineEnd;
-            var length = end - starts[first - 1];
-            if (first < starts.Count && pageBytes + length > PageByteBudget) break;
+            var length = End(first - 1) - lineStarts[first - 1];
+            if (first < lineStarts.Count && pageBytes + length > PageByteBudget) break;
             pageBytes += length;
             first--;
         }
 
-        var events = new List<string>(starts.Count - first);
-        for (var n = first; n < starts.Count; n++)
+        var events = new List<string>(lineStarts.Count - first);
+        var truncated = false;
+        for (var n = first; n < lineStarts.Count; n++)
         {
-            var end = n + 1 < starts.Count ? starts[n + 1] - 1 : lineEnd;
-            events.Add(Encoding.UTF8.GetString(tail, starts[n], end - starts[n]));
+            var length = End(n) - lineStarts[n];
+            var bytes = Copy(read, lineStarts[n], (int)Math.Min(length, PageByteBudget));
+            var kept = bytes.Length;
+            if (length > PageByteBudget)
+            {
+                truncated = true;
+                kept = WholeUtf8Length(bytes);
+            }
+            events.Add(Encoding.UTF8.GetString(bytes, 0, kept));
         }
-        return new SessionSnapshotPage(events, tailOffset + (first < starts.Count ? starts[first] : tail.Length), null);
+        return Page(events, first < lineStarts.Count ? lineStarts[first] : before, next, truncated);
     }
 
-    /// <summary>Where each line in <paramref name="content"/> starts; a trailing newline starts no line.</summary>
-    private static List<int> LineStarts(byte[] content)
+    /// <summary>The raw bytes <c>[offset, offset + length)</c> out of chunks read in reverse order.</summary>
+    private static byte[] Copy(List<(long Offset, byte[] Data, int Length)> read, long offset, int length)
     {
-        var starts = new List<int>();
-        var position = 0;
-        while (position < content.Length)
+        var bytes = new byte[length];
+        foreach (var (chunkOffset, data, chunkLength) in read)
         {
-            starts.Add(position);
-            var newline = content.AsSpan(position).IndexOf((byte)'\n');
-            if (newline < 0) break;
-            position += newline + 1;
+            var from = Math.Max(offset, chunkOffset);
+            var to = Math.Min(offset + length, chunkOffset + chunkLength);
+            if (from < to)
+                data.AsSpan((int)(from - chunkOffset), (int)(to - from)).CopyTo(bytes.AsSpan((int)(from - offset)));
         }
-        return starts;
+        return bytes;
     }
+
+    /// <summary>How much of <paramref name="bytes"/> holds whole UTF-8 characters, leaving out one cut off at the end.</summary>
+    private static int WholeUtf8Length(ReadOnlySpan<byte> bytes)
+    {
+        var lead = bytes.Length - 1;
+        while (lead >= 0 && lead >= bytes.Length - 4 && (bytes[lead] & 0xC0) == 0x80) lead--;
+        if (lead < 0) return bytes.Length;
+        var width = bytes[lead] switch { < 0x80 => 1, >= 0xF0 => 4, >= 0xE0 => 3, >= 0xC0 => 2, _ => 1 };
+        return lead + width > bytes.Length ? lead : bytes.Length;
+    }
+
+    /// <summary>A page whose previous page ends where it starts, unless it starts the content.</summary>
+    private static SessionSnapshotPage Page(IReadOnlyList<string> events, long fromOffset, long? nextOffset, bool truncated)
+        => new(events, fromOffset, nextOffset, fromOffset > 0 ? fromOffset : null, truncated);
 
     public async Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default)
     {
-        if (await BeginConsistentReadAsync(source, cancellationToken) is not ({ } tx, { } metadata)) return false;
-        await using var _ = tx;
-        if (source == destination) return true;
+        if (source == destination) return await Snapshots(source).AnyAsync(cancellationToken);
 
-        await using var content = await OpenContentAsync(metadata.Id, 0, ownedTransaction: null, cancellationToken);
-        await using var rewritten = new LineWiseReplacingStream(
-            content, Encoding.UTF8.GetBytes(source.SessionId), Encoding.UTF8.GetBytes(destination.SessionId));
-        await ReplaceWithinAsync(destination, metadata.Format, rewritten, cancellationToken);
-        await tx.CommitAsync(cancellationToken);
-        return true;
+        // One repeatable-read transaction reads the source and writes the copy, so the copy is
+        // of one version of the source. A write to the destination that lands meanwhile makes
+        // Postgres refuse ours rather than wait; the copy is then made again, once.
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                if (await BeginConsistentReadAsync(source, cancellationToken) is not ({ } tx, { } metadata)) return false;
+                await using var _ = tx;
+                await using var content = await OpenContentAsync(metadata.Id, 0, ownedTransaction: null, cancellationToken);
+                await using var rewritten = new LineWiseReplacingStream(
+                    content, Encoding.UTF8.GetBytes(source.SessionId), Encoding.UTF8.GetBytes(destination.SessionId));
+                await ReplaceWithinAsync(destination, metadata.Format, rewritten, cancellationToken);
+                await tx.CommitAsync(cancellationToken);
+                return true;
+            }
+            catch (Exception ex) when (attempt == 1 && DbErrors.IsSerializationFailure(ex))
+            {
+                _db.ChangeTracker.Clear();
+            }
+        }
     }
 
     /// <summary>
@@ -338,6 +397,12 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
 
     private async Task<Stream> OpenContentAsync(Guid snapshotId, long fromRawOffset, IDbContextTransaction? ownedTransaction, CancellationToken ct)
         => new SessionSnapshotContentStream(_db, snapshotId, await ChunkHeadersAsync(snapshotId, fromRawOffset, ct), fromRawOffset, ownedTransaction);
+
+    private Task<byte[]> ChunkDataAsync(Guid snapshotId, int seq, CancellationToken ct)
+        => _db.AdapterSessionSnapshotChunks
+            .Where(c => c.SnapshotId == snapshotId && c.Seq == seq)
+            .Select(c => c.Data)
+            .SingleAsync(ct);
 
     private async Task<IReadOnlyList<SessionSnapshotChunkHeader>> ChunkHeadersAsync(Guid snapshotId, long fromRawOffset, CancellationToken ct)
         => await _db.AdapterSessionSnapshotChunks

@@ -605,6 +605,10 @@ export interface LoopRunSessionPreview {
   fromOffset: number;
   /** Where the next page starts; null once the last event has been returned. */
   nextOffset: number | null;
+  /** Where the page before this one ends; null when this page starts the session. */
+  previousOffset: number | null;
+  /** Whether the page's one event was longer than a page may be and is cut off. */
+  truncated: boolean;
 }
 
 export interface LoopRunVariable {

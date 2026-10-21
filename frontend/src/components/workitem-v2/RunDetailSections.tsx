@@ -209,9 +209,10 @@ export function RunSessions({
 }
 
 /**
- * One opened session preview and the pages loaded into it. Its owner keys it
- * by the opening, so a page still loading when the preview is closed or
- * replaced settles an instance that is gone and is never shown.
+ * One opened session preview and the pages loaded into it, newest page first
+ * on opening and earlier pages put above it. Its owner keys it by the opening,
+ * so a page still loading when the preview is closed or replaced settles an
+ * instance that is gone and is never shown.
  */
 function SessionPreview({
   runId,
@@ -222,27 +223,27 @@ function SessionPreview({
   firstPage: LoopRunSessionPreview;
   onClose: () => void;
 }) {
-  const [events, setEvents] = useState(firstPage.events);
-  const [nextOffset, setNextOffset] = useState(firstPage.nextOffset);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [events, setEvents] = useState(() => previewEvents(firstPage));
+  const [previousOffset, setPreviousOffset] = useState(firstPage.previousOffset);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [errorText, setErrorText] = useState("");
 
-  const loadMore = async (fromOffset: number) => {
+  const loadEarlier = async (beforeOffset: number) => {
     setErrorText("");
-    setLoadingMore(true);
+    setLoadingEarlier(true);
     try {
       const page = await loopRunService.getSessionPreview(
         runId,
         firstPage.adapterName,
         firstPage.sessionId,
-        fromOffset,
+        beforeOffset,
       );
-      setEvents((shown) => [...shown, ...page.events]);
-      setNextOffset(page.nextOffset);
+      setEvents((shown) => [...previewEvents(page), ...shown]);
+      setPreviousOffset(page.previousOffset);
     } catch (error) {
-      setErrorText(failureMessage(error, "Failed to load more of the session."));
+      setErrorText(failureMessage(error, "Failed to load earlier events of the session."));
     } finally {
-      setLoadingMore(false);
+      setLoadingEarlier(false);
     }
   };
 
@@ -259,11 +260,16 @@ function SessionPreview({
           <li key={line}>{line}</li>
         ))}
       </ul>
-      {events.map((line, index) => (
-        <pre key={index} className="wiv2-node-pre">
-          {formatSessionEvent(line)}
-        </pre>
-      ))}
+      {previousOffset !== null && (
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() => void loadEarlier(previousOffset)}
+          disabled={loadingEarlier}
+        >
+          {loadingEarlier ? "Loading…" : "Load earlier"}
+        </button>
+      )}
       {errorText && (
         <div className="wiv2-error" role="alert">
           {errorText}
@@ -272,18 +278,26 @@ function SessionPreview({
           </button>
         </div>
       )}
-      {nextOffset !== null && (
-        <button
-          type="button"
-          className="btn btn-sm btn-secondary"
-          onClick={() => void loadMore(nextOffset)}
-          disabled={loadingMore}
-        >
-          {loadingMore ? "Loading…" : "Load more"}
-        </button>
-      )}
+      {events.map((event) => (
+        <pre key={event.offset} className="wiv2-node-pre">
+          {formatSessionEvent(event.text)}
+          {event.truncated && "\n(truncated)"}
+        </pre>
+      ))}
     </div>
   );
+}
+
+/**
+ * A page's events. A page is only cut off when its one event is longer than a
+ * page may be, so that event is the one marked truncated.
+ */
+function previewEvents(page: LoopRunSessionPreview) {
+  return page.events.map((text, index) => ({
+    offset: `${page.fromOffset}:${index}`,
+    text,
+    truncated: page.truncated && index === page.events.length - 1,
+  }));
 }
 
 async function readRunEvents(runId: string, cancelled: () => boolean): Promise<EventLogEntry[]> {

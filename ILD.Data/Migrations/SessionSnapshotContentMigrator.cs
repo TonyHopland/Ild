@@ -1,10 +1,7 @@
-using System.Data;
-using System.Data.Common;
 using System.Text;
 using ILD.Data.Entities;
 using ILD.Data.Stores;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 
 namespace ILD.Data.Migrations;
 
@@ -12,7 +9,8 @@ namespace ILD.Data.Migrations;
 /// Moves a session snapshot written before the metadata/content split out of the legacy
 /// <c>SessionJson</c> column into compressed chunks, one row at a time.
 ///
-/// The legacy text is streamed, never held whole: Claude Code's wrapper
+/// The legacy text is read a slice at a time and each chunk is written as soon as it is
+/// cut, so neither is ever held whole: Claude Code's wrapper
 /// (<c>{"format":"claude-jsonl","sessionId":…,"events":[…]}</c>) is unwrapped back into
 /// the raw JSONL it was built from, each event's JSON text followed by a newline; pi,
 /// codex and opencode content is kept verbatim. Content that cannot be read as what its
@@ -38,116 +36,109 @@ public static class SessionSnapshotContentMigrator
             .FirstOrDefaultAsync(ct);
     }
 
-    /// <summary>Converts one row. False when it holds no legacy content (any more).</summary>
+    /// <summary>
+    /// Converts one row in one transaction that claims it, writes each chunk as soon as it is
+    /// cut and then empties the legacy column. The legacy text is read a slice at a time, so no
+    /// more than one slice and one chunk are held. A Claude wrapper is checked by a first pass
+    /// that writes nothing, and only then unwrapped. False when the row holds no legacy content
+    /// (any more).
+    /// </summary>
     public static async Task<bool> ConvertRowAsync(AppDbContext db, Guid snapshotId, CancellationToken ct = default)
     {
-        var converted = await ReadAsync(db, snapshotId, unwrap: true, ct);
-        if (converted is { Format: null })
-            converted = await ReadAsync(db, snapshotId, unwrap: false, ct);
-        if (converted is null) return false;
-
-        var (format, chunks, chunker) = (converted.Format!, converted.Chunks, converted.Chunker);
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         var claimed = await db.AdapterSessionSnapshots
             .Where(s => s.Id == snapshotId && EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn) != null)
+            .ExecuteUpdateAsync(set => set.SetProperty(s => s.Compression, SessionSnapshotFormats.Brotli), ct);
+        if (claimed == 0) return false;
+
+        var row = await db.AdapterSessionSnapshots
+            .Where(s => s.Id == snapshotId)
+            .Select(s => new { s.AdapterName, Length = EF.Property<string>(s, AdapterSessionSnapshot.LegacySessionJsonColumn).Length })
+            .SingleAsync(ct);
+        // A row never holds chunks beside legacy content; clearing any lets one that somehow
+        // does convert cleanly instead of failing every read that converts it.
+        await db.AdapterSessionSnapshotChunks.Where(c => c.SnapshotId == snapshotId).ExecuteDeleteAsync(ct);
+
+        LegacyText Text() => new(db, snapshotId, row.Length);
+        var format = row.AdapterName switch
+        {
+            "ClaudeCode" => await new ClaudeWrapperScanner(Text(), output: null).TryUnwrapAsync(ct)
+                ? SessionSnapshotFormats.ClaudeJsonl
+                : SessionSnapshotFormats.Raw,
+            "Pi" => SessionSnapshotFormats.PiJsonl,
+            "Codex" => SessionSnapshotFormats.CodexJsonl,
+            "OpenCode" => SessionSnapshotFormats.OpenCodeJson,
+            _ => SessionSnapshotFormats.Raw,
+        };
+
+        var chunker = new SessionSnapshotChunker(snapshotId, 0, 0, (chunk, token) => InsertAsync(db, chunk, token));
+        var output = new Utf8Output(chunker);
+        if (format == SessionSnapshotFormats.ClaudeJsonl)
+            await new ClaudeWrapperScanner(Text(), output).TryUnwrapAsync(ct);
+        else
+            await output.CopyAsync(Text(), ct);
+        await output.FlushAsync(ct);
+        await chunker.CompleteAsync(ct);
+
+        await db.AdapterSessionSnapshots
+            .Where(s => s.Id == snapshotId)
             .ExecuteUpdateAsync(set => set
                 .SetProperty(s => s.Format, format)
-                .SetProperty(s => s.Compression, SessionSnapshotFormats.Brotli)
                 .SetProperty(s => s.ByteLength, chunker.BytesWritten)
                 .SetProperty(s => s.ChunkCount, chunker.ChunksWritten)
                 .SetProperty(s => s.EventCount, chunker.LinesWritten)
                 .SetProperty(s => s.TailHash, chunker.TailHash)
                 .SetProperty(s => EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn), (string?)null), ct);
-        if (claimed == 0) return false;
-        // A row never holds chunks beside legacy content; clearing any lets one that somehow
-        // does convert cleanly instead of failing every read that converts it.
-        await db.AdapterSessionSnapshotChunks.Where(c => c.SnapshotId == snapshotId).ExecuteDeleteAsync(ct);
-
-        foreach (var chunk in chunks)
-        {
-            db.AdapterSessionSnapshotChunks.Add(chunk);
-            try
-            {
-                await db.SaveChangesAsync(ct);
-            }
-            finally
-            {
-                db.Entry(chunk).State = EntityState.Detached;
-            }
-        }
         await tx.CommitAsync(ct);
         return true;
     }
 
-    /// <summary>
-    /// The row's content cut into compressed chunks, held until the reader is closed since
-    /// no other command can run on the connection while it is open. Null when the row holds
-    /// no legacy content; a null <see cref="Conversion.Format"/> when unwrapping failed.
-    /// </summary>
-    private static async Task<Conversion?> ReadAsync(AppDbContext db, Guid snapshotId, bool unwrap, CancellationToken ct)
+    private static async Task InsertAsync(AppDbContext db, AdapterSessionSnapshotChunk chunk, CancellationToken ct)
     {
-        var connection = db.Database.GetDbConnection();
-        var opened = connection.State != ConnectionState.Open;
-        if (opened)
-            await db.Database.OpenConnectionAsync(ct);
+        db.AdapterSessionSnapshotChunks.Add(chunk);
         try
         {
-            await using var command = connection.CreateCommand();
-            command.Transaction = db.Database.CurrentTransaction?.GetDbTransaction();
-            command.CommandText =
-                """SELECT "AdapterName", "SessionJson" FROM "AdapterSessionSnapshots" WHERE "Id" = @id AND "SessionJson" IS NOT NULL""";
-            command.Parameters.Add(IdParameter(db, command, snapshotId));
-
-            await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, ct);
-            if (!await reader.ReadAsync(ct)) return null;
-
-            var chunks = new List<AdapterSessionSnapshotChunk>();
-            var chunker = new SessionSnapshotChunker(snapshotId, 0, 0, (chunk, _) =>
-            {
-                chunks.Add(chunk);
-                return Task.CompletedTask;
-            });
-            var adapterName = reader.GetString(0);
-            using var text = reader.GetTextReader(1);
-            var output = new Utf8Output(chunker);
-
-            string? format;
-            if (adapterName == "ClaudeCode" && unwrap)
-            {
-                format = await new ClaudeWrapperScanner(text, output).TryUnwrapAsync(ct) ? SessionSnapshotFormats.ClaudeJsonl : null;
-            }
-            else
-            {
-                await output.CopyAsync(text, ct);
-                format = adapterName switch
-                {
-                    "Pi" => SessionSnapshotFormats.PiJsonl,
-                    "Codex" => SessionSnapshotFormats.CodexJsonl,
-                    "OpenCode" => SessionSnapshotFormats.OpenCodeJson,
-                    _ => SessionSnapshotFormats.Raw,
-                };
-            }
-            if (format is null) return new Conversion(null, chunks, chunker);
-
-            await output.FlushAsync(ct);
-            await chunker.CompleteAsync(ct);
-            return new Conversion(format, chunks, chunker);
+            await db.SaveChangesAsync(ct);
         }
         finally
         {
-            if (opened)
-                await db.Database.CloseConnectionAsync();
+            db.Entry(chunk).State = EntityState.Detached;
         }
     }
 
-    /// <summary>An id parameter typed the way the provider stores the key column.</summary>
-    private static DbParameter IdParameter(AppDbContext db, DbCommand command, Guid snapshotId)
-        => db.Model.FindEntityType(typeof(AdapterSessionSnapshot))!
-            .FindProperty(nameof(AdapterSessionSnapshot.Id))!
-            .GetRelationalTypeMapping()
-            .CreateParameter(command, "id", snapshotId);
+    /// <summary>
+    /// A row's legacy text, fetched a slice of characters at a time by its own query, so no
+    /// reader stays open between slices and other commands can run on the connection.
+    /// </summary>
+    private sealed class LegacyText(AppDbContext db, Guid snapshotId, int length) : TextReader
+    {
+        public const int SliceChars = 1024 * 1024;
 
-    private sealed record Conversion(string? Format, List<AdapterSessionSnapshotChunk> Chunks, SessionSnapshotChunker Chunker);
+        private string _slice = string.Empty;
+        private int _position;
+        private int _nextStart = 1;
+
+        public override async ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_position == _slice.Length)
+            {
+                if (_nextStart > length) return 0;
+                var count = Math.Min(SliceChars, length - _nextStart + 1);
+                var slices = await db.Database
+                    .SqlQuery<string>($"""SELECT substr("SessionJson", {_nextStart}, {count}) AS "Value" FROM "AdapterSessionSnapshots" WHERE "Id" = {snapshotId}""")
+                    .ToListAsync(cancellationToken);
+                _slice = slices.Single();
+                _position = 0;
+                _nextStart += count;
+                if (_slice.Length == 0) return 0;
+            }
+
+            var taken = Math.Min(buffer.Length, _slice.Length - _position);
+            _slice.AsMemory(_position, taken).CopyTo(buffer);
+            _position += taken;
+            return taken;
+        }
+    }
 
     /// <summary>Text encoded as UTF-8 into a chunker, a block at a time.</summary>
     private sealed class Utf8Output(SessionSnapshotChunker chunker)
@@ -185,15 +176,18 @@ public static class SessionSnapshotContentMigrator
 
     /// <summary>
     /// Walks the old Claude wrapper object as it streams in and writes each element of its
-    /// root <c>events</c> array, exactly as it appears in the text, followed by a newline.
+    /// root <c>events</c> array, exactly as it appears in the text, followed by a newline;
+    /// without an output it only checks that the text is one.
     /// Fails on anything that is not one well-formed wrapper object: no root object, no
     /// <c>events</c> array, unbalanced brackets or strings, or text after the object.
     /// </summary>
-    private sealed class ClaudeWrapperScanner(TextReader text, Utf8Output output)
+    private sealed class ClaudeWrapperScanner(TextReader text, Utf8Output? output)
     {
         private readonly char[] _buffer = new char[16384];
         private int _position;
         private int _length;
+
+        private ValueTask EmitAsync(char c, CancellationToken ct) => output?.WriteAsync(c, ct) ?? ValueTask.CompletedTask;
 
         public async Task<bool> TryUnwrapAsync(CancellationToken ct)
         {
@@ -241,7 +235,7 @@ public static class SessionSnapshotContentMigrator
             {
                 await PeekNonSpaceAsync(ct);
                 if (!await ValueAsync(emit: true, ct)) return false;
-                await output.WriteAsync('\n', ct);
+                await EmitAsync('\n', ct);
 
                 var separator = await NextNonSpaceAsync(ct);
                 if (separator == ']') return true;
@@ -261,14 +255,14 @@ public static class SessionSnapshotContentMigrator
                 {
                     var c = await NextAsync(ct);
                     if (c == -1) return false;
-                    if (emit) await output.WriteAsync((char)c, ct);
+                    if (emit) await EmitAsync((char)c, ct);
                     if (inString)
                     {
                         if (c == '\\')
                         {
                             var escaped = await NextAsync(ct);
                             if (escaped == -1) return false;
-                            if (emit) await output.WriteAsync((char)escaped, ct);
+                            if (emit) await EmitAsync((char)escaped, ct);
                         }
                         else if (c == '"')
                         {
@@ -293,7 +287,7 @@ public static class SessionSnapshotContentMigrator
             while (await PeekAsync(ct) is var c && c != -1 && c is not (',' or '}' or ']') && !char.IsWhiteSpace((char)c))
             {
                 await NextAsync(ct);
-                if (emit) await output.WriteAsync((char)c, ct);
+                if (emit) await EmitAsync((char)c, ct);
                 length++;
             }
             return length > 0;

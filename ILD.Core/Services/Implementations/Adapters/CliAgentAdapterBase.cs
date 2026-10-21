@@ -197,7 +197,8 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
     /// stored length hash to the stored tail hash — only what the file gained is appended;
     /// otherwise (nothing stored yet, another format, a shorter or rewritten file) the whole
     /// file replaces it. An append that loses a race is decided again once against fresh
-    /// metadata. Saving is observational: a failure is logged and never fails the turn.
+    /// metadata. Saving is observational: a failure is logged, and neither a failure nor a
+    /// cancellation fails the turn.
     /// No-ops without a DI scope.
     /// </summary>
     protected async Task PersistSessionFileAsync(AgentExecutionContext ctx, string sessionId, string path, string format, ILogger logger)
@@ -214,9 +215,14 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             }
             logger.LogWarning("The {Adapter} session {SessionId} changed in the store while it was being saved twice running, so this turn's save was skipped", Name, sessionId);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Could not save the {Adapter} session {SessionId}: {Reason}", Name, sessionId, ex.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            // A cancelled turn is not a failed save, and stopping the save must not fail the turn either.
+            logger.LogInformation("Stopped saving the {Adapter} session {SessionId} because the turn was cancelled", Name, sessionId);
         }
     }
 
