@@ -3,7 +3,9 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -233,6 +235,60 @@ public class WorktreeRetentionSweeperTests
 
         Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
         workItems.Verify(x => x.WithdrawPendingProposalsOfRunAsync(It.IsAny<WorkItemActor>(), run.Id, It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task Sweep_rereads_each_run_from_the_database_so_a_pin_made_mid_pass_holds()
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var workItemId = Guid.NewGuid().ToString();
+        var first = SeedRun(db, version.Id, workItemId, LoopRunStatus.Completed,
+            completedAt: DateTime.UtcNow.AddDays(-2), worktree: "/tmp/wt/first", branch: "ild/wi-x-run-first");
+        var second = SeedRun(db, version.Id, workItemId, LoopRunStatus.Completed,
+            completedAt: DateTime.UtcNow.AddDays(-1), worktree: "/tmp/wt/second", branch: "ild/wi-x-run-second");
+
+        // The user pins the second run while the sweep reclaims the first.
+        var reclaimer = new Mock<IRunReclaimer>();
+        reclaimer.Setup(r => r.ReclaimLocalStateAsync(It.IsAny<LoopRun>())).Returns(async (LoopRun run) =>
+        {
+            if (run.Id == first.Id)
+            {
+                await using var user = db.Fresh();
+                (await user.LoopRuns.SingleAsync(r => r.Id == second.Id)).Retain = true;
+                await user.SaveChangesAsync();
+            }
+            return true;
+        });
+
+        // Wired per scope as in production: looking up the work item loads, and
+        // tracks, all of its runs in the scope's context, as WorkItemManager does.
+        var settings = new Mock<ISchedulerSettingsService>();
+        settings.Setup(s => s.GetRunRetentionDaysAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        var services = new ServiceCollection();
+        services.AddScoped(_ => db.Fresh());
+        services.AddScoped<ILoopRunStore>(sp => new LoopRunStore(sp.GetRequiredService<AppDbContext>()));
+        services.AddScoped(sp =>
+        {
+            var store = sp.GetRequiredService<ILoopRunStore>();
+            var m = new Mock<IWorkItemManager>();
+            m.Setup(x => x.GetWorkItemAsync(workItemId)).Returns(async () =>
+            {
+                await store.GetAllByWorkItemAsync(workItemId);
+                return new WorkItemView { Id = workItemId, Status = RemoteWorkItemStatus.Done };
+            });
+            return m.Object;
+        });
+        services.AddSingleton(reclaimer.Object);
+        services.AddSingleton(settings.Object);
+        var scopes = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+
+        await InvokeSweepOnceAsync(new WorktreeRetentionSweeper(scopes, TestActors.Instance, NullLogger<WorktreeRetentionSweeper>.Instance));
+
+        await using var check = db.Fresh();
+        Assert.False(await check.LoopRuns.AnyAsync(r => r.Id == first.Id));
+        Assert.True(await check.LoopRuns.AnyAsync(r => r.Id == second.Id && r.Retain));
+        reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == second.Id)), Times.Never);
     }
 
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
