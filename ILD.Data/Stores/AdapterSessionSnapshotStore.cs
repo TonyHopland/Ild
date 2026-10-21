@@ -239,6 +239,12 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
                 next += lineLength + 1;
                 events.Add(TakeLine());
                 span = span[(newline + 1)..];
+                // A line cut off at the budget fills its page on its own.
+                if (truncated)
+                {
+                    full = true;
+                    break;
+                }
             }
         }
 

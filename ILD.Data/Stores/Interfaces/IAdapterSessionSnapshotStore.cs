@@ -35,10 +35,6 @@ public interface IAdapterSessionSnapshotStore
     /// <summary>The raw content from <paramref name="fromRawOffset"/> on, read a chunk at a time; null when there is no snapshot.</summary>
     Task<Stream?> OpenReadAsync(SessionSnapshotKey key, long fromRawOffset = 0, CancellationToken cancellationToken = default);
 
-    /// <summary>The last <paramref name="maxEvents"/> lines; see the overload taking an end offset.</summary>
-    Task<SessionSnapshotPage> ReadTailAsync(SessionSnapshotKey key, int maxEvents, CancellationToken cancellationToken = default)
-        => ReadTailAsync(key, maxEvents, null, cancellationToken);
-
     /// <summary>
     /// Up to <paramref name="maxEvents"/> lines ending at <paramref name="beforeRawOffset"/> (the end of
     /// the content when null), reading only the chunks they are in and never a line whose start it has

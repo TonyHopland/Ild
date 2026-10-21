@@ -246,7 +246,7 @@ public sealed class SessionSnapshotContentMigratorTests : IAsyncLifetime
                     Assert.Equal("{\"n\":1}\n{\"n\":2}\n", await SessionSnapshotTestSupport.ReadAllTextAsync(store, key, Ct));
                     break;
                 case "tail":
-                    Assert.Equal(new[] { "{\"n\":1}", "{\"n\":2}" }, (await store.ReadTailAsync(key, 10, Ct)).Events);
+                    Assert.Equal(new[] { "{\"n\":1}", "{\"n\":2}" }, (await store.ReadTailAsync(key, 10, null, Ct)).Events);
                     break;
                 case "range":
                     Assert.Equal(new[] { "{\"n\":1}", "{\"n\":2}" }, (await store.ReadRangeAsync(key, 0, 10, Ct)).Events);

@@ -418,14 +418,14 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
         }
 
         _sql.Clear();
-        var lastTwo = await Store().ReadTailAsync(Key(), 2, Ct);
+        var lastTwo = await Store().ReadTailAsync(Key(), 2, null, Ct);
         Assert.Equal(new[] { "{\"n\":7}", "{\"n\":8}" }, lastTwo.Events);
         Assert.Equal(7 * 8, lastTwo.FromOffset);
         Assert.Null(lastTwo.NextOffset);
         Assert.Equal(1, _sql.ChunkDataReads);
 
         _sql.Clear();
-        var lastFour = await Store().ReadTailAsync(Key(), 4, Ct);
+        var lastFour = await Store().ReadTailAsync(Key(), 4, null, Ct);
         Assert.Equal(new[] { "{\"n\":5}", "{\"n\":6}", "{\"n\":7}", "{\"n\":8}" }, lastFour.Events);
         Assert.Equal(5 * 8, lastFour.FromOffset);
         Assert.Equal(2, _sql.ChunkDataReads);
