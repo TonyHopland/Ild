@@ -59,9 +59,9 @@ public class EngineNodeStartingContractTests
         // No LoopRunNode should exist because NodeStarting was never yielded.
         Assert.Empty(h.ReloadRunNodes());
 
-        // The run should fail because there's no OnFailure edge.
+        // With no OnFailure edge the run parks on the failed node for a human.
         var run = h.ReloadRun();
-        Assert.Equal(LoopRunStatus.Failed, run.Status);
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
     }
 
     [Fact]

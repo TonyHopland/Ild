@@ -25,7 +25,7 @@ public interface IEventLogService
     Task<long> AppendAlongsideAsync(Guid runId, EventType eventType, string message,
         Guid? nodeId, Guid? runNodeId, string? edgeName, Func<Task> alongside);
 
-    /// <summary>Whether the run's run-ending event has been written.</summary>
+    /// <summary>Whether the run's run-ending event has been written and no reopen has followed it.</summary>
     Task<bool> HasRunEndedAsync(Guid runId);
 
     Task<IEnumerable<EventLogEntry>> GetByRunIdAsync(Guid runId, int? limit = null);

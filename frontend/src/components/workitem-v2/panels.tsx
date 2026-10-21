@@ -26,7 +26,7 @@ import Icon from "../Icon";
 import { feedbackReasonLabel, pillClass, type Tone } from "../../utils/labels";
 import { failureMessage } from "./RunDetailSections";
 import { repositoryName } from "../../utils/repositoryName";
-import { nodeTakesRetry, runTakesRetryNow } from "./retry";
+import { NODE_FAILED, nodeTakesRetry, runReopensOnRetry, runTakesRetryNow } from "./retry";
 
 /**
  * What the round is about to say on the pull request, and the chance to stop
@@ -184,15 +184,14 @@ export function feedbackFor(
   return run && !waitsForAnswer(run) ? null : { kind: "answer", reason, runId };
 }
 
-const NODE_FAILED = "Node Failed";
-
-/** The node that stopped the run: its last failed execution, if the run on screen has one. */
+/**
+ * The node that stopped the run: its last execution, when that one failed. An
+ * earlier failure is not it — a run stopped by an unwired output stopped after
+ * a node that succeeded.
+ */
 function failedNodeOf(run: LoopRun | null): LoopRunNode | null {
-  if (!run) return null;
-  for (let i = run.nodes.length - 1; i >= 0; i--) {
-    if (run.nodes[i].status === LoopRunNodeStatus.Failed) return run.nodes[i];
-  }
-  return null;
+  const last = run?.nodes[run.nodes.length - 1];
+  return last?.status === LoopRunNodeStatus.Failed ? last : null;
 }
 
 /**
@@ -214,8 +213,10 @@ function FailedNodeCard({
   onShowRuns?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  // The same rule as the Runs tab.
-  const canRetry = runTakesRetryNow(run) && nodeTakesRetry(node.status, node.nodeType);
+  // The same rule as the Runs tab, plus a run that ended on this node.
+  const canRetry =
+    (runTakesRetryNow(run) || runReopensOnRetry(run, workItem)) &&
+    nodeTakesRetry(node.status, node.nodeType);
   const busy = detail.runLock.pendingOf(run.id) !== null;
   const recorded = node.error ?? node.output;
   const failedAt = node.completedAt ? new Date(node.completedAt).toLocaleString() : null;

@@ -81,7 +81,7 @@ public class LoopEngineConversationLinkTests
     }
 
     [Fact]
-    public async Task A_node_failure_names_the_execution_that_failed()
+    public async Task A_node_failure_park_names_the_execution_that_failed()
     {
         using var h = new LoopEngineHarness();
         h.AddNode("ai", NodeType.AI, "Developer");
@@ -93,13 +93,13 @@ public class LoopEngineConversationLinkTests
         await h.RunAsync();
 
         var failed = Assert.Single(h.ReloadRunNodes());
-        Assert.Equal(failed.Id, Single(h, EventType.LoopRunFailed).RunNodeId);
+        Assert.Equal(failed.Id, Single(h, EventType.RunParked).RunNodeId);
     }
 
     [Fact]
     public async Task A_missing_edge_after_a_successful_turn_does_not_claim_that_turn()
     {
-        // The execution succeeded and recorded its own turn; the failure that
+        // The execution succeeded and recorded its own turn; the park that
         // follows must not show that turn's variables a second time.
         using var h = new LoopEngineHarness();
         h.AddNode("ai", NodeType.AI, "Developer");
@@ -110,7 +110,7 @@ public class LoopEngineConversationLinkTests
         h.SeedRun("ai");
         await h.RunAsync();
 
-        Assert.Null(Single(h, EventType.LoopRunFailed).RunNodeId);
+        Assert.Null(Single(h, EventType.RunParked).RunNodeId);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class LoopEngineConversationLinkTests
         await h.WaitUntilIdleAsync();
 
         var crashed = Assert.Single(h.ReloadRunNodes());
-        Assert.Equal(crashed.Id, Single(h, EventType.LoopRunFailed).RunNodeId);
+        Assert.Equal(crashed.Id, Single(h, EventType.RunParked).RunNodeId);
     }
 
     private sealed class ThrowingExecutor(NodeType type) : INodeExecutor
