@@ -213,6 +213,67 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task A_save_that_loses_a_race_to_another_writer_re_reads_and_still_stores_the_session_file()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(SessionPath)!);
+        File.WriteAllText(SessionPath, "{\"session_id\":\"claude-sess\",\"turn\":1}\n");
+        await RunAsync();
+        File.AppendAllText(SessionPath, "{\"session_id\":\"claude-sess\",\"turn\":2}\n");
+
+        // Another writer lands between this turn's metadata read and its append.
+        var racing = new ServiceCollection();
+        racing.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection));
+        racing.AddScoped<IAdapterSessionSnapshotStore>(sp => new RacingSnapshotStore(
+            new AdapterSessionSnapshotStore(sp.GetRequiredService<AppDbContext>()), AppendFromAnotherWriterAsync));
+        await using var racingServices = racing.BuildServiceProvider();
+
+        await RunAsync(services: racingServices);
+
+        Assert.Equal(File.ReadAllBytes(SessionPath), await StoredAsync());
+    }
+
+    private async Task AppendFromAnotherWriterAsync()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var stored = (await StoredAsync())!;
+        var added = Encoding.UTF8.GetBytes("{\"session_id\":\"claude-sess\",\"writer\":\"another\"}\n");
+        var whole = stored.Concat(added).ToArray();
+        await using var db = CreateDbContext();
+        var result = await new AdapterSessionSnapshotStore(db).AppendAsync(
+            Key, SessionSnapshotFormats.ClaudeJsonl, new MemoryStream(added), stored.Length,
+            SessionSnapshotFormats.TailHash(whole.AsSpan(Math.Max(0, whole.Length - SessionSnapshotFormats.TailWindow))), ct);
+        Assert.Equal(SessionSnapshotAppendResult.Appended, result);
+    }
+
+    /// <summary>The real store, with <c>race</c> run once just before the first append reaches it.</summary>
+    private sealed class RacingSnapshotStore(IAdapterSessionSnapshotStore inner, Func<Task> race) : IAdapterSessionSnapshotStore
+    {
+        private Func<Task>? _race = race;
+
+        public async Task<SessionSnapshotAppendResult> AppendAsync(
+            SessionSnapshotKey key, string format, Stream newRaw, long expectedByteLength, string newTailHash, CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Exchange(ref _race, null) is { } race) await race();
+            return await inner.AppendAsync(key, format, newRaw, expectedByteLength, newTailHash, cancellationToken);
+        }
+
+        public Task<IReadOnlyList<SessionSnapshotMetadata>> ListMetadataForRunAsync(Guid loopRunId, CancellationToken cancellationToken = default)
+            => inner.ListMetadataForRunAsync(loopRunId, cancellationToken);
+        public Task<SessionSnapshotMetadata?> GetMetadataAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default)
+            => inner.GetMetadataAsync(key, cancellationToken);
+        public Task ReplaceAsync(SessionSnapshotKey key, string format, Stream fullRaw, CancellationToken cancellationToken = default)
+            => inner.ReplaceAsync(key, format, fullRaw, cancellationToken);
+        public Task<Stream?> OpenReadAsync(SessionSnapshotKey key, long fromRawOffset = 0, CancellationToken cancellationToken = default)
+            => inner.OpenReadAsync(key, fromRawOffset, cancellationToken);
+        public Task<SessionSnapshotPage> ReadTailAsync(SessionSnapshotKey key, int maxEvents, long? beforeRawOffset, CancellationToken cancellationToken = default)
+            => inner.ReadTailAsync(key, maxEvents, beforeRawOffset, cancellationToken);
+        public Task<SessionSnapshotPage> ReadRangeAsync(SessionSnapshotKey key, long fromRawOffset, int maxEvents, CancellationToken cancellationToken = default)
+            => inner.ReadRangeAsync(key, fromRawOffset, maxEvents, cancellationToken);
+        public Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default)
+            => inner.ForkAsync(source, destination, cancellationToken);
+    }
+
+    [Fact]
     public async Task A_save_the_database_refuses_never_fails_the_turn()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(SessionPath)!);
@@ -285,9 +346,9 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         Assert.Equal(File.ReadAllBytes(SessionPath), await StoredAsync());
     }
 
-    private async Task RunAsync(bool requireSuccess = true)
+    private async Task RunAsync(bool requireSuccess = true, IServiceProvider? services = null)
     {
-        var adapter = new ClaudeCodeAdapter(_services.GetRequiredService<IServiceScopeFactory>(), environment: _environment);
+        var adapter = new ClaudeCodeAdapter((services ?? _services).GetRequiredService<IServiceScopeFactory>(), environment: _environment);
         var result = await adapter.ExecuteAsync(new AgentExecutionContext(
             Provider: new AiProvider
             {
