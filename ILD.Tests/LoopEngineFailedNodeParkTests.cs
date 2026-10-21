@@ -138,11 +138,16 @@ public class LoopEngineFailedNodeParkTests
     [Fact]
     public async Task A_crash_mid_node_parks_the_run_on_that_execution_and_retrying_it_runs_the_node_again()
     {
-        using var h = new LoopEngineHarness();
+        using var h = new LoopEngineHarness(new CrashOnFirstNodeStartNotifier("adapter blew up"));
         h.AddNode("a", NodeType.AI, "Agent");
         h.AddNode("b", NodeType.Cmd, "Tests");
         h.AddEdge("a", "b", EdgeType.OnSuccess);
-        var agent = new CrashOnceExecutor(NodeType.AI, "adapter blew up");
+        var agent = new ScriptedExecutor(NodeType.AI,
+                new NodeOutcome.NodeStarting("work"),
+                new NodeOutcome.Success(EdgeType.OnSuccess, "implemented it"))
+            .Then(
+                new NodeOutcome.NodeStarting("work"),
+                new NodeOutcome.Success(EdgeType.OnSuccess, "implemented it"));
         h.Registry.Register(agent);
         h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
             new NodeOutcome.NodeStarting("dotnet test"),
@@ -284,20 +289,29 @@ public class LoopEngineFailedNodeParkTests
         Assert.DoesNotContain(h.WorkItemsMock.Invocations, i => i.Method.Name == nameof(IWorkItemManager.TransitionAsync));
     }
 
-    /// <summary>Starts the node and throws on its first run, as an executor whose adapter blows up does; succeeds on the next.</summary>
-    private sealed class CrashOnceExecutor(NodeType type, string crash) : INodeExecutor
+    /// <summary>
+    /// Throws from the engine's first report that a node is running, after the
+    /// execution row exists: an exception in the run loop itself, which reaches
+    /// the crash handler. An executor that throws does not — the engine turns
+    /// that into the node failing.
+    /// </summary>
+    private sealed class CrashOnFirstNodeStartNotifier(string crash) : IRunNotifier
     {
-        public NodeType NodeType { get; } = type;
-        public int Invocations { get; private set; }
+        private int _starts;
 
-        public async IAsyncEnumerable<NodeOutcome> ExecuteAsync(NodeExecutionContext ctx)
-        {
-            var first = ++Invocations == 1;
-            yield return new NodeOutcome.NodeStarting("work");
-            await Task.Yield();
-            if (first) throw new InvalidOperationException(crash);
-            yield return new NodeOutcome.Success(EdgeType.OnSuccess, "implemented it");
-        }
+        public Task NodeStateChangedAsync(Guid runId, Guid nodeId, LoopRunNodeStatus oldStatus, LoopRunNodeStatus newStatus)
+            => newStatus == LoopRunNodeStatus.Running && Interlocked.Increment(ref _starts) == 1
+                ? throw new InvalidOperationException(crash)
+                : Task.CompletedTask;
+
+        public Task RunStateChangedAsync(Guid runId, LoopRunStatus oldStatus, LoopRunStatus newStatus) => Task.CompletedTask;
+        public Task EventLoggedAsync(Guid runId, long eventId, string eventType, Guid? nodeId, Guid? runNodeId, DateTime timestamp) => Task.CompletedTask;
+        public Task PausedAsync(Guid runId) => Task.CompletedTask;
+        public Task ResumedAsync(Guid runId) => Task.CompletedTask;
+        public Task HaltedAsync(Guid runId) => Task.CompletedTask;
+        public Task NodeProgressAsync(Guid runId, Guid nodeId, string line, long seq) => Task.CompletedTask;
+        public Task PrSnapshotChangedAsync(Guid runId) => Task.CompletedTask;
+        public Task PrQueueChangedAsync(Guid runId) => Task.CompletedTask;
     }
 
     private sealed class RunStateRecorder : IRunNotifier
