@@ -2,8 +2,8 @@ packages:
   - frontend
 
 catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@0.3.3
-  vite-plus: ^0.3.3
+  vite: npm:@voidzero-dev/vite-plus-core@1.3.0
+  vite-plus: 1.3.0
 overrides:
   vite: "catalog:"
   "vite@>=8.0.0 <8.0.16": "^8.0.16"
