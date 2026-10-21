@@ -79,16 +79,30 @@ describe("loopRunService URL contract", () => {
     expect(JSON.parse(init?.body as string)).toEqual({ note: null });
   });
 
-  test("getSessionPreview calls GET /api/v1/loopruns/:id/sessions/preview", async () => {
+  test("getSessionPreview calls GET /api/v1/loopruns/:id/sessions/preview for the latest page", async () => {
     fetchSpy.mockResolvedValue(okJsonResponse({}));
 
     await loopRunService.getSessionPreview("abc-123", "OpenCode", "ses_1");
 
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe(
-      "/api/v1/loopruns/abc-123/sessions/preview?adapterName=OpenCode&sessionId=ses_1",
+      "/api/v1/loopruns/abc-123/sessions/preview?adapterName=OpenCode&sessionId=ses_1&tail=200",
     );
     expect(init?.method).toBe("GET");
+  });
+
+  test("getSessionPreview asks for the page that ends at the given offset", async () => {
+    fetchSpy.mockResolvedValue(okJsonResponse({}));
+
+    await loopRunService.getSessionPreview("abc-123", "OpenCode", "ses_1", 4096);
+
+    const [url] = fetchSpy.mock.calls[0];
+    const query = new URL(String(url), "http://host").searchParams;
+    expect(String(url)).toMatch(/^\/api\/v1\/loopruns\/abc-123\/sessions\/preview\?/);
+    expect(query.get("adapterName")).toBe("OpenCode");
+    expect(query.get("sessionId")).toBe("ses_1");
+    expect(query.get("tail")).toBe("200");
+    expect(query.get("beforeOffset")).toBe("4096");
   });
 });
 

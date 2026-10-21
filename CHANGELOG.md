@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Opening a saved AI session shows it a page at a time, with its size and number of events.**
+
 - **The header shows the ILD logo beside the title.**
 
 - **Agents can propose a small loop template change without resending the whole template.**
@@ -16,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A work item's History tab shows who changed what on it, when and why.**
 
 ### Fixed
+
+- **The first message of a new OpenCode chat no longer fails when its AI provider is named like one of OpenCode's own, such as "OpenCode".**
 
 - **Previews and agents can send one plain-HTTP request after another through the network proxy, as a tool-calling chat with a local model does.**
 

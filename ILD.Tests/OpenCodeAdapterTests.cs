@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
@@ -436,6 +438,35 @@ public class OpenCodeAdapterTests
 
             Assert.True(result.Success);
             Assert.Contains("test-secret-key-123", result.Output);
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("test-provider", "test-provider/test-model")]
+    [InlineData("OpenCode", "opencode/test-model")]
+    public async Task ExecuteAsync_points_the_model_and_the_small_model_at_the_configured_model(string providerName, string modelRef)
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "env.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var ctx = BuildContext(binaryPath: scriptPath, prompt: "ignored", worktreePath: worktreeDir, executionCount: 1);
+            ctx.Provider.Name = providerName;
+
+            var result = await new OpenCodeAdapter().ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            using var config = JsonDocument.Parse(Assert.IsType<string>(result.Output));
+            Assert.Equal(modelRef, config.RootElement.GetProperty("model").GetString());
+            Assert.Equal(modelRef, config.RootElement.GetProperty("small_model").GetString());
         }
         finally
         {
@@ -1104,10 +1135,8 @@ public class OpenCodeAdapterTests
             Assert.True(result.Success);
             Assert.Equal("managed-session", result.SessionId);
 
-            await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "managed-session", TestContext.Current.CancellationToken);
-            Assert.NotNull(snapshot);
-            Assert.Equal("{\"id\":\"managed-session\",\"messages\":[1]}", snapshot!.SessionJson);
+            Assert.Equal("opencode-json", (await harness.SnapshotMetadataAsync(runId, "managed-session"))?.Format);
+            Assert.Equal("{\"id\":\"managed-session\",\"messages\":[1]}", Encoding.UTF8.GetString((await harness.SnapshotContentAsync(runId, "managed-session"))!));
 
             Assert.Contains("export managed-session", File.ReadAllText(logPath));
         }
@@ -1119,7 +1148,7 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_persists_large_managed_session_snapshot_without_truncation()
+    public async Task ExecuteAsync_persists_large_managed_session_snapshot_byte_for_byte()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
@@ -1139,12 +1168,12 @@ public class OpenCodeAdapterTests
                         new
                         {
                             type = "text",
-                            text = new string('x', 80_000),
+                            text = new string('x', 80_000) + " café ✓ 🙂",
                         },
                     },
                 },
             },
-        });
+        }, new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         File.WriteAllText(exportPath, exportJson);
         File.WriteAllText(scriptPath,
             "#!/bin/sh\n" +
@@ -1188,11 +1217,11 @@ public class OpenCodeAdapterTests
             Assert.True(result.Success);
             Assert.Equal("large-session", result.SessionId);
 
-            await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "large-session", TestContext.Current.CancellationToken);
-            Assert.NotNull(snapshot);
-            Assert.Equal(exportJson, snapshot!.SessionJson);
-            Assert.Equal(exportJson.Length, snapshot.SessionJson.Length);
+            var exportBytes = File.ReadAllBytes(exportPath);
+            var metadata = await harness.SnapshotMetadataAsync(runId, "large-session");
+            Assert.Equal("opencode-json", metadata?.Format);
+            Assert.Equal(exportBytes.LongLength, metadata!.ByteLength);
+            Assert.Equal(exportBytes, await harness.SnapshotContentAsync(runId, "large-session"));
 
             Assert.Contains("export large-session", File.ReadAllText(logPath));
         }
@@ -1252,9 +1281,7 @@ public class OpenCodeAdapterTests
             Assert.Equal("hello", result.Output);
             Assert.Equal("managed-session", result.SessionId);
 
-            await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "managed-session", TestContext.Current.CancellationToken);
-            Assert.Null(snapshot);
+            Assert.Null(await harness.SnapshotMetadataAsync(runId, "managed-session"));
         }
         finally
         {
@@ -1264,7 +1291,7 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_imports_managed_session_snapshot_before_resuming_run()
+    public async Task ExecuteAsync_imports_the_stored_session_when_the_local_one_is_missing()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
@@ -1306,7 +1333,8 @@ public class OpenCodeAdapterTests
             await using var harness = await CreateSessionHarnessAsync();
             var runId = Guid.NewGuid();
             await harness.SeedRunAsync(runId);
-            await harness.SeedSnapshotAsync(runId, "OpenCode", "resume-session", "{\"id\":\"resume-session\",\"messages\":[1]}");
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "resume-session", "{\"id\":\"resume-session\",\"messages\":[\"café ✓ 🙂\"]}");
+            var stored = await harness.SnapshotContentAsync(runId, "resume-session");
 
             var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
             var result = await adapter.ExecuteAsync(BuildContext(
@@ -1320,17 +1348,15 @@ public class OpenCodeAdapterTests
 
             Assert.True(result.Success);
             Assert.Equal("resume-session", result.SessionId);
-            Assert.Equal("{\"id\":\"resume-session\",\"messages\":[1]}", File.ReadAllText(importedPath));
+            Assert.Equal(stored, File.ReadAllBytes(importedPath));
 
-            var log = File.ReadAllText(logPath);
-            Assert.Contains("import ", log);
-            Assert.Contains("run --dir", log);
-            Assert.Contains("--session resume-session", log);
+            var log = File.ReadAllLines(logPath);
+            var importedFile = Assert.Single(log, line => line.StartsWith("import ", StringComparison.Ordinal))["import ".Length..];
+            Assert.False(File.Exists(importedFile), "the import temp file is deleted afterwards");
+            Assert.Contains(log, line => line.StartsWith("run --dir", StringComparison.Ordinal) && line.Contains("--session resume-session"));
             Assert.Contains("export resume-session", log);
 
-            await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "resume-session", TestContext.Current.CancellationToken);
-            Assert.Equal("{\"id\":\"resume-session\",\"messages\":[2]}", snapshot!.SessionJson);
+            Assert.Equal("{\"id\":\"resume-session\",\"messages\":[2]}", Encoding.UTF8.GetString((await harness.SnapshotContentAsync(runId, "resume-session"))!));
         }
         finally
         {
@@ -1342,7 +1368,7 @@ public class OpenCodeAdapterTests
     }
 
     [Fact]
-    public async Task ExecuteAsync_starts_fresh_when_stored_managed_session_snapshot_is_invalid_json()
+    public async Task ExecuteAsync_starts_fresh_when_the_stored_session_fails_to_import()
     {
         var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
         Directory.CreateDirectory(worktreeDir);
@@ -1397,19 +1423,72 @@ public class OpenCodeAdapterTests
             Assert.Equal("fresh-session", result.SessionId);
 
             var log = File.ReadAllText(logPath);
-            Assert.DoesNotContain("import ", log);
+            Assert.Contains("import ", log);
             Assert.Contains("run --dir", log);
             Assert.DoesNotContain("--session resume-session", log);
             Assert.Contains("export fresh-session", log);
 
-            await using var verifyDb = harness.CreateDbContext();
-            var snapshot = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "fresh-session", TestContext.Current.CancellationToken);
-            Assert.Equal("{\"id\":\"fresh-session\",\"messages\":[1]}", snapshot!.SessionJson);
+            Assert.Equal("{\"id\":\"fresh-session\",\"messages\":[1]}", Encoding.UTF8.GetString((await harness.SnapshotContentAsync(runId, "fresh-session"))!));
         }
         finally
         {
             Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
             Environment.SetEnvironmentVariable("ILD_TEST_READY", previousReady);
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_never_imports_a_stored_session_of_another_format()
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-managed-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "managed.sh");
+        var logPath = Path.Combine(worktreeDir, "opencode.log");
+        var previousLog = Environment.GetEnvironmentVariable("ILD_TEST_LOG");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cmd=\"$1\"\n" +
+            "shift\n" +
+            "case \"$cmd\" in\n" +
+            "  import)\n" +
+            "    printf 'import %s\\n' \"$1\" >> \"$ILD_TEST_LOG\"\n" +
+            "    ;;\n" +
+            "  run)\n" +
+            "    printf 'run %s\\n' \"$*\" >> \"$ILD_TEST_LOG\"\n" +
+            "    echo '{\"text\":\"hello\"}'\n" +
+            "    ;;\n" +
+            "  export)\n" +
+            "    exit 1\n" +
+            "    ;;\n" +
+            "esac\n");
+        MakeExecutable(scriptPath);
+        Environment.SetEnvironmentVariable("ILD_TEST_LOG", logPath);
+
+        try
+        {
+            await using var harness = await CreateSessionHarnessAsync();
+            var runId = Guid.NewGuid();
+            await harness.SeedRunAsync(runId);
+            await harness.SeedSnapshotAsync(runId, "OpenCode", "resume-session", "{\"id\":\"resume-session\",\"messages\":[1]}", format: "raw");
+
+            var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            var result = await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath,
+                prompt: "ignored",
+                worktreePath: worktreeDir,
+                sessionId: "resume-session",
+                executionCount: 1,
+                runId: runId,
+                manageSession: true));
+
+            Assert.True(result.Success);
+            Assert.Contains("run ", File.ReadAllText(logPath));
+            Assert.DoesNotContain("import ", File.ReadAllText(logPath));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ILD_TEST_LOG", previousLog);
             Directory.Delete(worktreeDir, true);
         }
     }
@@ -1502,16 +1581,10 @@ public class OpenCodeAdapterTests
 
             await adapter.ExecuteAsync(ctx);
 
-            await using var verifyDb = harness.CreateDbContext();
-            // Source session is byte-for-byte unchanged after the fork.
-            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "source-sess", TestContext.Current.CancellationToken);
-            Assert.NotNull(source);
-            Assert.Equal(sourceJson, source!.SessionJson);
-            // A copy now exists under the fork's id, retargeted to that id.
-            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "OpenCode" && s.SessionId == "fork-dest", TestContext.Current.CancellationToken);
-            Assert.NotNull(fork);
-            Assert.Contains("fork-dest", fork!.SessionJson);
-            Assert.DoesNotContain("source-sess", fork.SessionJson);
+            Assert.Equal(sourceJson, Encoding.UTF8.GetString((await harness.SnapshotContentAsync(runId, "source-sess"))!));
+            var fork = Encoding.UTF8.GetString((await harness.SnapshotContentAsync(runId, "fork-dest"))!);
+            Assert.Contains("fork-dest", fork);
+            Assert.DoesNotContain("source-sess", fork);
         }
         finally
         {
@@ -1817,17 +1890,27 @@ public class OpenCodeAdapterTests
             return new AppDbContext(options);
         }
 
-        public async Task SeedSnapshotAsync(Guid runId, string adapterName, string sessionId, string sessionJson)
+        public async Task SeedSnapshotAsync(Guid runId, string adapterName, string sessionId, string content, string format = "opencode-json")
         {
-            await using var db = CreateDbContext();
-            db.AdapterSessionSnapshots.Add(new AdapterSessionSnapshot
-            {
-                LoopRunId = runId,
-                AdapterName = adapterName,
-                SessionId = sessionId,
-                SessionJson = sessionJson,
-            });
-            await db.SaveChangesAsync();
+            await using var scope = _provider.CreateAsyncScope();
+            await SessionSnapshotTestSupport.SeedAsync(
+                scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>(),
+                SessionSnapshotKey.ForRun(runId, adapterName, sessionId), format, content, CancellationToken.None);
+        }
+
+        public async Task<SessionSnapshotMetadata?> SnapshotMetadataAsync(Guid runId, string sessionId)
+        {
+            await using var scope = _provider.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>()
+                .GetMetadataAsync(SessionSnapshotKey.ForRun(runId, "OpenCode", sessionId), CancellationToken.None);
+        }
+
+        public async Task<byte[]?> SnapshotContentAsync(Guid runId, string sessionId)
+        {
+            await using var scope = _provider.CreateAsyncScope();
+            return await SessionSnapshotTestSupport.ReadAllAsync(
+                scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>(),
+                SessionSnapshotKey.ForRun(runId, "OpenCode", sessionId), CancellationToken.None);
         }
 
         public async Task SeedRunAsync(Guid runId)

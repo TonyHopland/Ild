@@ -23,6 +23,7 @@ public class AppDbContext : DbContext
     public DbSet<LoopRunNode> LoopRunNodes => Set<LoopRunNode>();
     public DbSet<LoopRunAnalyticsBucket> LoopRunAnalyticsBuckets => Set<LoopRunAnalyticsBucket>();
     public DbSet<AdapterSessionSnapshot> AdapterSessionSnapshots => Set<AdapterSessionSnapshot>();
+    public DbSet<AdapterSessionSnapshotChunk> AdapterSessionSnapshotChunks => Set<AdapterSessionSnapshotChunk>();
     public DbSet<LoopRunSessionBinding> LoopRunSessionBindings => Set<LoopRunSessionBinding>();
     public DbSet<LoopRunVariable> LoopRunVariables => Set<LoopRunVariable>();
     public DbSet<LoopRunVariableWrite> LoopRunVariableWrites => Set<LoopRunVariableWrite>();
@@ -252,6 +253,17 @@ public class AppDbContext : DbContext
             e.HasIndex(s => new { s.ChatSessionId, s.AdapterName, s.SessionId })
                 .IsUnique()
                 .HasFilter(null);
+            // Legacy (remove with migration B): dropped once every deployment has converted its rows.
+            e.Property<string?>(AdapterSessionSnapshot.LegacySessionJsonColumn);
+        });
+
+        modelBuilder.Entity<AdapterSessionSnapshotChunk>(e =>
+        {
+            e.HasKey(c => new { c.SnapshotId, c.Seq });
+            e.HasOne<AdapterSessionSnapshot>()
+                .WithMany()
+                .HasForeignKey(c => c.SnapshotId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ChatSession>(e =>

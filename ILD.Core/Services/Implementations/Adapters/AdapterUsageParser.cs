@@ -61,7 +61,7 @@ public static class AdapterUsageParser
     /// restores on <c>--resume</c>. Zero when there is none, as Claude then restores
     /// nothing; so should Claude change this ledger, its totals are recorded as they are.
     /// </summary>
-    public static decimal ParseClaudeSessionCostBefore(string? transcriptJsonl, string sessionId)
+    public static decimal ParseClaudeSessionCostBefore(TextReader transcriptJsonl, string sessionId)
     {
         var before = 0m;
         ForEachJsonObject(transcriptJsonl, root =>
@@ -174,7 +174,7 @@ public static class AdapterUsageParser
     /// opens every turn (zero when the turn was the session's first). Null when
     /// there is no rollout or no turn in it.
     /// </summary>
-    public static TokenUsage? ParseCodexTotalBeforeLastTurn(string? rolloutJsonl)
+    public static TokenUsage? ParseCodexTotalBeforeLastTurn(TextReader rolloutJsonl)
     {
         var total = new TokenUsage(0, 0, null);
         TokenUsage? beforeLastTurn = null;
@@ -204,8 +204,12 @@ public static class AdapterUsageParser
     /// <paramref name="lineMustContain"/> is given, lines without that text.
     /// </summary>
     private static void ForEachJsonObject(string? jsonl, Action<JsonElement> onObject, string? lineMustContain = null)
+        => ForEachJsonObject(new StringReader(jsonl ?? ""), onObject, lineMustContain);
+
+    /// <summary>As above, reading the lines one at a time so a long transcript is never held whole.</summary>
+    private static void ForEachJsonObject(TextReader jsonl, Action<JsonElement> onObject, string? lineMustContain = null)
     {
-        foreach (var rawLine in (jsonl ?? "").Split('\n'))
+        while (jsonl.ReadLine() is { } rawLine)
         {
             var line = rawLine.Trim();
             if (line.Length == 0) continue;

@@ -7,6 +7,7 @@ import {
   LoopRunVariable,
 } from "../../types";
 import { loopRunService } from "../../services/auth";
+import { formatBytes } from "../../utils/attachments";
 import MarkdownRenderer from "../MarkdownRenderer";
 import NodeEventsSection from "../NodeTimeline/NodeEventsSection";
 
@@ -20,12 +21,19 @@ function formatTimestamp(ts: string | null): string {
   return ts ? new Date(ts).toLocaleString() : "Unknown";
 }
 
-function formatSessionJson(sessionJson: string): string {
+function formatSessionEvent(line: string): string {
   try {
-    return JSON.stringify(JSON.parse(sessionJson), null, 2);
+    return JSON.stringify(JSON.parse(line), null, 2);
   } catch {
-    return sessionJson;
+    return line;
   }
+}
+
+function sessionSize(session: LoopRunAvailableSession): string {
+  const parts: string[] = [];
+  if (session.byteLength !== null) parts.push(`Size ${formatBytes(session.byteLength)}`);
+  if (session.eventCount !== null) parts.push(`${session.eventCount} events`);
+  return parts.join(" · ");
 }
 
 function buildSessionSummary(preview: LoopRunSessionPreview): string[] {
@@ -34,15 +42,9 @@ function buildSessionSummary(preview: LoopRunSessionPreview): string[] {
     `Session: ${preview.sessionId}`,
     `Updated: ${formatTimestamp(preview.updatedAt ?? preview.createdAt)}`,
   ];
-  try {
-    const parsed = JSON.parse(preview.sessionJson) as Record<string, unknown>;
-    if (Array.isArray(parsed.messages)) lines.push(`Messages: ${parsed.messages.length}`);
-    if (typeof parsed.id === "string") lines.push(`Snapshot Id: ${parsed.id}`);
-    if (Array.isArray(parsed.tools)) lines.push(`Tools: ${parsed.tools.length}`);
-    lines.push(`Root: ${Array.isArray(parsed) ? "array" : typeof parsed}`);
-  } catch {
-    lines.push("Root: raw text");
-  }
+  if (preview.format !== null) lines.push(`Format: ${preview.format}`);
+  if (preview.byteLength !== null) lines.push(`Size: ${formatBytes(preview.byteLength)}`);
+  if (preview.eventCount !== null) lines.push(`Events: ${preview.eventCount}`);
   return lines;
 }
 
@@ -111,7 +113,10 @@ export function RunSessions({
   runId: string;
   sessions: LoopRunAvailableSession[];
 }) {
-  const [preview, setPreview] = useState<LoopRunSessionPreview | null>(null);
+  const [preview, setPreview] = useState<{
+    generation: number;
+    firstPage: LoopRunSessionPreview;
+  } | null>(null);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [errorText, setErrorText] = useState("");
   // Opening a preview and closing it each start a new generation; only the
@@ -131,7 +136,7 @@ export function RunSessions({
         session.adapterName,
         session.sessionId,
       );
-      if (request === generation.current) setPreview(read);
+      if (request === generation.current) setPreview({ generation: request, firstPage: read });
     } catch (error) {
       if (request === generation.current)
         setErrorText(failureMessage(error, "Failed to load session preview."));
@@ -162,6 +167,7 @@ export function RunSessions({
       )}
       {sessions.map((session) => {
         const key = `${session.adapterName}:${session.sessionId}`;
+        const size = sessionSize(session);
         return (
           <div key={key} className="wiv2-run-entry">
             <div className="wiv2-run-entry-head">
@@ -170,6 +176,7 @@ export function RunSessions({
               <span className="wiv2-run-entry-meta">
                 Updated: {formatTimestamp(session.updatedAt ?? session.createdAt)}
               </span>
+              {size && <span className="wiv2-run-entry-meta">{size}</span>}
               <button
                 type="button"
                 className="btn btn-sm btn-secondary"
@@ -190,23 +197,113 @@ export function RunSessions({
         );
       })}
       {preview && (
-        <div className="wiv2-session-preview" role="region" aria-label="Session preview">
-          <div className="wiv2-run-entry-head">
-            <span className="wiv2-run-entry-name">Session preview</span>
-            <button type="button" className="btn btn-sm btn-secondary" onClick={closePreview}>
-              Close
-            </button>
-          </div>
-          <ul className="wiv2-session-summary">
-            {buildSessionSummary(preview).map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-          <pre className="wiv2-node-pre">{formatSessionJson(preview.sessionJson)}</pre>
-        </div>
+        <SessionPreview
+          key={preview.generation}
+          runId={runId}
+          firstPage={preview.firstPage}
+          onClose={closePreview}
+        />
       )}
     </Collapsible>
   );
+}
+
+/**
+ * One opened session preview and the pages loaded into it, newest page first
+ * on opening and earlier pages put above it. Its owner keys it by the opening,
+ * so a page still loading when the preview is closed or replaced settles an
+ * instance that is gone and is never shown.
+ */
+function SessionPreview({
+  runId,
+  firstPage,
+  onClose,
+}: {
+  runId: string;
+  firstPage: LoopRunSessionPreview;
+  onClose: () => void;
+}) {
+  const [events, setEvents] = useState(() => previewEvents(firstPage));
+  const [previousOffset, setPreviousOffset] = useState(firstPage.previousOffset);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [errorText, setErrorText] = useState("");
+
+  const loadEarlier = async (beforeOffset: number) => {
+    setErrorText("");
+    setLoadingEarlier(true);
+    try {
+      const page = await loopRunService.getSessionPreview(
+        runId,
+        firstPage.adapterName,
+        firstPage.sessionId,
+        beforeOffset,
+      );
+      setEvents((shown) => [...previewEvents(page), ...shown]);
+      setPreviousOffset(page.previousOffset);
+    } catch (error) {
+      setErrorText(failureMessage(error, "Failed to load earlier events of the session."));
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
+
+  return (
+    <div className="wiv2-session-preview" role="region" aria-label="Session preview">
+      <div className="wiv2-run-entry-head">
+        <span className="wiv2-run-entry-name">Session preview</span>
+        <button type="button" className="btn btn-sm btn-secondary" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      <ul className="wiv2-session-summary">
+        {buildSessionSummary(firstPage).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      {/* Legacy (remove with migration B): a session the background conversion has not reached. */}
+      {firstPage.converting && (
+        <div className="wiv2-run-hint" role="status">
+          This session is still being converted, try again shortly.
+        </div>
+      )}
+      {previousOffset !== null && (
+        <button
+          type="button"
+          className="btn btn-sm btn-secondary"
+          onClick={() => void loadEarlier(previousOffset)}
+          disabled={loadingEarlier}
+        >
+          {loadingEarlier ? "Loading…" : "Load earlier"}
+        </button>
+      )}
+      {errorText && (
+        <div className="wiv2-error" role="alert">
+          {errorText}
+          <button type="button" className="wiv2-error-close" onClick={() => setErrorText("")}>
+            ✕
+          </button>
+        </div>
+      )}
+      {events.map((event) => (
+        <pre key={event.offset} className="wiv2-node-pre">
+          {formatSessionEvent(event.text)}
+          {event.truncated && "\n(truncated)"}
+        </pre>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A page's events. A page is only cut off when its one event is longer than a
+ * page may be, so that event is the one marked truncated.
+ */
+function previewEvents(page: LoopRunSessionPreview) {
+  return page.events.map((text, index) => ({
+    offset: `${page.fromOffset}:${index}`,
+    text,
+    truncated: page.truncated && index === page.events.length - 1,
+  }));
 }
 
 async function readRunEvents(runId: string, cancelled: () => boolean): Promise<EventLogEntry[]> {

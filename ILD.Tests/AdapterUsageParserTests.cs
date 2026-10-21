@@ -185,23 +185,22 @@ public class AdapterUsageParserTests
             "{\"type\":\"cost-state\",\"sessionId\":\"s1\",\"totalCostUSD\":",
             "not json");
 
-        Assert.Equal(3.50m, AdapterUsageParser.ParseClaudeSessionCostBefore(transcript, "s1"));
-        Assert.Equal(9.75m, AdapterUsageParser.ParseClaudeSessionCostBefore(transcript, "other"));
+        Assert.Equal(3.50m, AdapterUsageParser.ParseClaudeSessionCostBefore(new StringReader(transcript), "s1"));
+        Assert.Equal(9.75m, AdapterUsageParser.ParseClaudeSessionCostBefore(new StringReader(transcript), "other"));
     }
 
     [Fact]
     public void Claude_session_cost_before_is_zero_when_the_transcript_restores_nothing_for_that_session()
     {
-        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore(null, "s1"));
-        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore("", "s1"));
-        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore("  \n ", "s1"));
-        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore(ClaudeCostState("other", "3.50"), "s1"));
-        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore(string.Join('\n',
+        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore(new StringReader(""), "s1"));
+        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore(new StringReader("  \n "), "s1"));
+        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore(new StringReader(ClaudeCostState("other", "3.50")), "s1"));
+        Assert.Equal(0m, AdapterUsageParser.ParseClaudeSessionCostBefore(new StringReader(string.Join('\n',
             "{\"type\":\"user\",\"sessionId\":\"s1\",\"totalCostUSD\":3.5}",
             "{\"type\":\"cost-state\",\"sessionId\":\"s1\",\"totalCostUSD\":\"3.5\"}",
             "{\"type\":\"cost-state\",\"sessionId\":\"s1\",\"totalCostUSD\":null}",
             "{\"type\":\"cost-state\",\"sessionId\":\"s1\",\"totalCostUSD\":3.5",
-            "not json"), "s1"));
+            "not json")), "s1"));
     }
 
     [Fact]

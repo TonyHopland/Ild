@@ -126,7 +126,7 @@ public sealed class PackageFeedAgentLaunchTests : IDisposable
 
         await using var harness = await SessionHarness.CreateAsync();
         var runId = Guid.NewGuid();
-        await harness.SeedRunWithSnapshotAsync(runId, "OpenCode", "resume-session", "{\"id\":\"resume-session\",\"messages\":[1]}");
+        await harness.SeedRunWithSnapshotAsync(runId, "OpenCode", "resume-session", "opencode-json", "{\"id\":\"resume-session\",\"messages\":[1]}");
         var adapter = new OpenCodeAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
 
         var result = await adapter.ExecuteAsync(Context("opencode", cli, runId, sessionId: "resume-session", manageSession: true));
@@ -165,7 +165,7 @@ public sealed class PackageFeedAgentLaunchTests : IDisposable
             return new SessionHarness(provider, connection);
         }
 
-        public async Task SeedRunWithSnapshotAsync(Guid runId, string adapterName, string sessionId, string sessionJson)
+        public async Task SeedRunWithSnapshotAsync(Guid runId, string adapterName, string sessionId, string format, string content)
         {
             await using var scope = _provider.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -181,14 +181,10 @@ public sealed class PackageFeedAgentLaunchTests : IDisposable
                 Status = LoopRunStatus.Running,
                 RecoveryPolicy = RecoveryPolicy.AutoResume,
             });
-            db.AdapterSessionSnapshots.Add(new AdapterSessionSnapshot
-            {
-                LoopRunId = runId,
-                AdapterName = adapterName,
-                SessionId = sessionId,
-                SessionJson = sessionJson,
-            });
             await db.SaveChangesAsync();
+            await SessionSnapshotTestSupport.SeedAsync(
+                scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>(),
+                SessionSnapshotKey.ForRun(runId, adapterName, sessionId), format, content, CancellationToken.None);
         }
 
         public async ValueTask DisposeAsync()

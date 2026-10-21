@@ -7,6 +7,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.DTOs;
 using ILD.Data.Entities;
+using ILD.Data.Stores;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -101,8 +102,7 @@ public sealed class CodexAdapter : CliAgentAdapterBase
                     }
                 }
                 if (sessionsDirectory is not null)
-                    await TrySnapshotStepAsync("restore", ctx.SessionId!,
-                        () => RestoreRolloutAsync(ctx, sessionsDirectory, ctx.SessionId!));
+                    await TryRestoreRolloutAsync(ctx, sessionsDirectory, ctx.SessionId!);
             }
 
             var resumeId = await ResumableSessionAsync(ctx.SessionId, sessionsDirectory, ctx.Cancel);
@@ -175,17 +175,15 @@ public sealed class CodexAdapter : CliAgentAdapterBase
             var store = ctx.ManageSession && ScopeFactory is not null;
             var resumed = resumeId is not null && (stdout.ThreadId is null || stdout.ThreadId == resumeId);
 
-            // One read of the rollout serves both the snapshot and, for a resumed
-            // thread, the total it had before this turn (null when unreadable).
             var rollout = (store || resumed) && IsSessionId(sessionId) && sessionsDirectory is not null
-                ? await TryReadRolloutAsync(sessionsDirectory, sessionId!, ctx.Cancel)
+                ? await TryFindRolloutAsync(sessionsDirectory, sessionId!, ctx.Cancel)
                 : null;
-            if (store && rollout is { Length: > 0 })
-                await TrySnapshotStepAsync("store", sessionId!, () => UpsertSnapshotAsync(ctx, sessionId!, rollout, ctx.Cancel));
+            if (store && rollout is not null)
+                await PersistSessionFileAsync(ctx, sessionId!, rollout, SessionSnapshotFormats.CodexJsonl, _logger);
 
             // A new thread counts from zero; a resumed one counts on from its earlier total.
             var usage = !resumed ? AdapterUsageParser.ParseCodex(stdout.RawStdout, NoUsage)
-                : AdapterUsageParser.ParseCodexTotalBeforeLastTurn(rollout) is { } totalBefore
+                : await TryReadTotalBeforeLastTurnAsync(rollout, sessionId!, ctx.Cancel) is { } totalBefore
                     ? AdapterUsageParser.ParseCodex(stdout.RawStdout, totalBefore)
                     : null;
 
@@ -567,14 +565,12 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         return null;
     }
 
-    /// <summary>The rollout of <paramref name="sessionId"/>, or null when there is none or it cannot be read (logged).</summary>
-    private async Task<string?> TryReadRolloutAsync(string sessionsDirectory, string sessionId, CancellationToken ct)
+    /// <summary>The rollout file of <paramref name="sessionId"/>, or null when there is none or it cannot be looked for (logged).</summary>
+    private async Task<string?> TryFindRolloutAsync(string sessionsDirectory, string sessionId, CancellationToken ct)
     {
         try
         {
-            return await FindRolloutAsync(sessionsDirectory, sessionId, ct) is { } path
-                ? await AgentWritableFiles.ReadFileAsync(path, ct)
-                : null;
+            return await FindRolloutAsync(sessionsDirectory, sessionId, ct);
         }
         catch (Exception ex)
         {
@@ -583,38 +579,43 @@ public sealed class CodexAdapter : CliAgentAdapterBase
         }
     }
 
-    private async Task RestoreRolloutAsync(AgentExecutionContext ctx, string sessionsDirectory, string sessionId)
+    /// <summary>The total the thread had before this turn, read from its rollout; null when there is none or it cannot be read (logged).</summary>
+    private async Task<TokenUsage?> TryReadTotalBeforeLastTurnAsync(string? rollout, string sessionId, CancellationToken ct)
     {
-        if (await FindRolloutAsync(sessionsDirectory, sessionId, ctx.Cancel) is not null) return;
-
-        var snapshot = await GetSnapshotAsync(ctx, sessionId, ctx.Cancel);
-        if (string.IsNullOrWhiteSpace(snapshot?.SessionJson)) return;
-
-        // codex resumes only a rollout named the way it names them.
-        var now = DateTime.UtcNow;
-        var directory = Path.Combine(sessionsDirectory, now.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture));
-        await AgentWritableFiles.CreateDirectoryAsync(directory, ctx.Cancel);
-        await AgentWritableFiles.WriteFileAsync(
-            Path.Combine(directory, $"rollout-{now.ToString("yyyy-MM-dd'T'HH-mm-ss", CultureInfo.InvariantCulture)}-{sessionId}.jsonl"),
-            snapshot.SessionJson, ctx.Cancel);
-    }
-
-    /// <summary>
-    /// Run a session snapshot step that must not decide the turn: restoring, where
-    /// a missing rollout then starts a new thread, and storing a finished turn,
-    /// whose output failing would throw away. A step that fails, or is cancelled,
-    /// is logged and the turn goes on; a cancelled turn still stops at codex's own
-    /// wait, which kills it.
-    /// </summary>
-    private async Task TrySnapshotStepAsync(string step, string sessionId, Func<Task> run)
-    {
+        if (rollout is null) return null;
         try
         {
-            await run();
+            return await ParseSessionFileAsync(rollout, AdapterUsageParser.ParseCodexTotalBeforeLastTurn, ct);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not {Step} the codex session {SessionId}: {Reason}", step, sessionId, ex.Message);
+            _logger.LogWarning(ex, "Could not read the codex session {SessionId}: {Reason}", sessionId, ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Write the stored rollout back when codex has none, so `resume` finds it. This must
+    /// not decide the turn: a restore that fails, or is cancelled, is logged and a new
+    /// thread starts; a cancelled turn still stops at codex's own wait, which kills it.
+    /// </summary>
+    private async Task TryRestoreRolloutAsync(AgentExecutionContext ctx, string sessionsDirectory, string sessionId)
+    {
+        try
+        {
+            if (await FindRolloutAsync(sessionsDirectory, sessionId, ctx.Cancel) is not null) return;
+
+            // codex resumes only a rollout named the way it names them.
+            var now = DateTime.UtcNow;
+            var rollout = Path.Combine(
+                sessionsDirectory,
+                now.ToString("yyyy/MM/dd", CultureInfo.InvariantCulture),
+                $"rollout-{now.ToString("yyyy-MM-dd'T'HH-mm-ss", CultureInfo.InvariantCulture)}-{sessionId}.jsonl");
+            await RestoreSessionFileAsync(ctx, sessionId, rollout, SessionSnapshotFormats.CodexJsonl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not restore the codex session {SessionId}: {Reason}", sessionId, ex.Message);
         }
     }
 

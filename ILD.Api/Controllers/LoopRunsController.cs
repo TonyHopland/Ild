@@ -8,6 +8,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -149,7 +150,7 @@ public class LoopRunsController : ControllerBase
         // Eager-load the template node so the projection can surface each run
         // node's NodeType — the live-view Halt affordance is AI-node only.
         var runNodes = await _loopRunStore.GetRunNodesWithNodeAsync(guid);
-        var sessionSnapshots = await _loopRunStore.GetSessionSnapshotsAsync(guid);
+        var sessionSnapshots = await _sessionSnapshotStore.ListMetadataForRunAsync(guid);
         var sessionBindings = await _loopRunStore.GetSessionBindingsAsync(guid);
         var variables = await _loopRunStore.GetVariablesAsync(guid);
         var missingGlobals = await MissingGlobalVariablesAsync(run, new ParkReads(_templates, _globals));
@@ -208,6 +209,11 @@ public class LoopRunsController : ControllerBase
                 sessionId = s.SessionId,
                 createdAt = s.CreatedAt,
                 updatedAt = s.UpdatedAt,
+                // Legacy (remove with migration B): unknown until the row's content is converted, so
+                // shown as nothing rather than guessed.
+                format = s.Unconverted ? null : s.Format,
+                byteLength = s.Unconverted ? (long?)null : s.ByteLength,
+                eventCount = s.Unconverted ? (int?)null : s.EventCount,
                 isCurrent = currentSessionIds.Contains($"{s.AdapterName}\n{s.SessionId}"),
                 placeholders = sessionBindings
                     .Where(b => b.AdapterName == s.AdapterName && b.SessionId == s.SessionId)
@@ -456,11 +462,23 @@ public class LoopRunsController : ControllerBase
         return Ok(new { runId = guid, messages = page.Messages, lastEventId = page.LastEventId });
     }
 
+    private const int DefaultPreviewEvents = 200;
+    private const int MaxPreviewEvents = 500;
+
+    /// <summary>
+    /// A page of a saved session: of a JSONL session, the last <paramref name="tail"/> lines before
+    /// <paramref name="beforeOffset"/> (the end by default), which is how a reader pages back from
+    /// the latest events, reading only the chunks that hold them; of a session that is one
+    /// document, its start as a single event. A session still in the legacy column is not
+    /// converted here: the page is empty and says it is converting.
+    /// </summary>
     [HttpGet("{id}/sessions/preview")]
     public async Task<IActionResult> GetSessionPreview(
         string id,
         [FromQuery] string adapterName,
-        [FromQuery] string sessionId)
+        [FromQuery] string sessionId,
+        [FromQuery] int tail = DefaultPreviewEvents,
+        [FromQuery] long? beforeOffset = null)
     {
         if (!Guid.TryParse(id, out var guid))
             return BadRequest(new { error = "Invalid GUID" });
@@ -468,17 +486,54 @@ public class LoopRunsController : ControllerBase
         if (string.IsNullOrWhiteSpace(adapterName) || string.IsNullOrWhiteSpace(sessionId))
             return BadRequest(new { error = "adapterName and sessionId are required" });
 
-        var snapshot = await _sessionSnapshotStore.GetAsync(guid, adapterName, sessionId);
+        if (tail is < 1 or > MaxPreviewEvents)
+            return BadRequest(new { error = $"tail must be between 1 and {MaxPreviewEvents}" });
+        if (beforeOffset < 0)
+            return BadRequest(new { error = "beforeOffset must not be negative" });
+
+        // Legacy (remove with migration B): found in the listing, which never converts, rather
+        // than through GetMetadataAsync, which would.
+        var snapshot = (await _sessionSnapshotStore.ListMetadataForRunAsync(guid))
+            .FirstOrDefault(s => s.AdapterName == adapterName && s.SessionId == sessionId);
         if (snapshot == null)
             return NotFound(new { error = "Session snapshot not found" });
+
+        // Legacy (remove with migration B): converting a long session takes seconds, so a preview
+        // leaves it to the background migration and says so; a converted row never goes back.
+        // The page carries the metadata it was read with, so a turn saved meanwhile cannot
+        // describe one version and show another.
+        SessionSnapshotPage? page = null;
+        if (!snapshot.Unconverted)
+        {
+            var lines = SessionSnapshotFormats.IsLines(snapshot.Format);
+            if (beforeOffset is not null && !lines)
+                return BadRequest(new { error = "beforeOffset only applies to a session of lines" });
+            if (beforeOffset > snapshot.ByteLength)
+                return BadRequest(new { error = "beforeOffset must not be past the end of the session" });
+
+            var key = SessionSnapshotKey.ForRun(guid, adapterName, sessionId);
+            page = lines
+                ? await _sessionSnapshotStore.ReadTailAsync(key, tail, beforeOffset)
+                : await _sessionSnapshotStore.ReadHeadAsync(key);
+            if (page == null)
+                return NotFound(new { error = "Session snapshot not found" });
+        }
 
         return Ok(new
         {
             adapterName = snapshot.AdapterName,
             sessionId = snapshot.SessionId,
             createdAt = snapshot.CreatedAt,
-            updatedAt = snapshot.UpdatedAt,
-            sessionJson = snapshot.SessionJson,
+            updatedAt = page?.Snapshot.UpdatedAt ?? snapshot.UpdatedAt,
+            // Legacy (remove with migration B): null while converting, as in the sessions list.
+            format = page?.Snapshot.Format,
+            byteLength = page?.Snapshot.ByteLength,
+            eventCount = page?.Snapshot.EventCount,
+            events = page?.Events ?? [],
+            fromOffset = page?.FromOffset ?? 0,
+            previousOffset = page?.PreviousOffset,
+            truncated = page?.Truncated ?? false,
+            converting = page is null,
         });
     }
 

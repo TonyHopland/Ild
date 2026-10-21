@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
@@ -302,7 +303,8 @@ public class PiAdapterTests
             "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
         System.Diagnostics.Process.Start("chmod", "+x " + scriptPath).WaitForExit();
 
-        await harness.SeedSnapshotAsync(runId, "Pi", "pi-session-restore", "{\"type\":\"session\",\"id\":\"pi-session-restore\"}\n");
+        const string stored = "{\"type\":\"session\",\"id\":\"pi-session-restore\"}\n{\"type\":\"message\",\"text\":\"héllo\"}";
+        await harness.SeedSnapshotAsync(runId, "Pi", "pi-session-restore", stored);
 
         try
         {
@@ -319,11 +321,89 @@ public class PiAdapterTests
             Assert.True(result.Success);
             var restoredSessionPath = Path.Combine(Path.GetTempPath(), "ild-pi-sessions", runId.ToString("N"), "pi-session-restore.jsonl");
             Assert.True(File.Exists(restoredSessionPath));
-            Assert.Contains("pi-session-restore", (await File.ReadAllTextAsync(restoredSessionPath, TestContext.Current.CancellationToken)));
+            Assert.Equal(Encoding.UTF8.GetBytes(stored), await File.ReadAllBytesAsync(restoredSessionPath, TestContext.Current.CancellationToken));
         }
         finally
         {
             Directory.Delete(worktreeDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task A_turn_that_extends_the_session_file_stores_only_the_new_lines_and_restores_byte_identical()
+    {
+        await using var harness = await CreateSessionHarnessAsync();
+        var runId = Guid.NewGuid();
+        await harness.SeedRunAsync(runId);
+        const string sessionId = "pi-session-append";
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-append-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = WriteTurnPi(worktreeDir, sessionId);
+        var sessionPath = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", runId.ToString("N"), $"{sessionId}.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(sessionPath)!);
+        var firstTurn = Encoding.UTF8.GetBytes($"{{\"type\":\"session\",\"version\":3,\"id\":\"{sessionId}\",\"cwd\":\"/w\"}}\n{{\"type\":\"message\",\"text\":\"one\"}}\n");
+        var secondTurn = Encoding.UTF8.GetBytes("{\"type\":\"message\",\"text\":\"two ✓\"}\n");
+
+        try
+        {
+            var adapter = new PiAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            AgentExecutionContext Turn(int count) => BuildContext(
+                binaryPath: scriptPath, prompt: "prompt", worktreePath: worktreeDir, runId: runId,
+                sessionId: sessionId, executionCount: count, manageSession: true);
+
+            await File.WriteAllBytesAsync(sessionPath, firstTurn, TestContext.Current.CancellationToken);
+            Assert.True((await adapter.ExecuteAsync(Turn(1))).Success);
+            var afterFirst = await harness.GetMetadataAsync(runId, "Pi", sessionId);
+
+            await using (var file = new FileStream(sessionPath, FileMode.Append))
+                await file.WriteAsync(secondTurn, TestContext.Current.CancellationToken);
+            Assert.True((await adapter.ExecuteAsync(Turn(2))).Success);
+            var afterSecond = await harness.GetMetadataAsync(runId, "Pi", sessionId);
+
+            Assert.NotNull(afterFirst);
+            Assert.NotNull(afterSecond);
+            Assert.Equal("pi-jsonl", afterSecond!.Format);
+            Assert.Equal(afterFirst!.ChunkCount + 1, afterSecond.ChunkCount);
+            Assert.Equal(firstTurn.Length + secondTurn.Length, afterSecond.ByteLength);
+
+            File.Delete(sessionPath);
+            Assert.True((await adapter.ExecuteAsync(Turn(3))).Success);
+
+            Assert.Equal(firstTurn.Concat(secondTurn).ToArray(), await File.ReadAllBytesAsync(sessionPath, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+            CleanUpRunScratch(runId);
+        }
+    }
+
+    [Fact]
+    public async Task A_stored_snapshot_of_another_format_is_never_restored_as_the_session_file()
+    {
+        await using var harness = await CreateSessionHarnessAsync();
+        var runId = Guid.NewGuid();
+        await harness.SeedRunAsync(runId);
+        const string sessionId = "pi-session-foreign";
+        await harness.SeedSnapshotAsync(runId, "Pi", sessionId, "{\"format\":\"claude-jsonl\",\"events\":[]}", format: "raw");
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-pi-foreign-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = WriteTurnPi(worktreeDir, sessionId);
+        var sessionPath = Path.Combine(AgentIsolation.ScratchRoot, "ild-pi-sessions", runId.ToString("N"), $"{sessionId}.jsonl");
+
+        try
+        {
+            var adapter = new PiAdapter(harness.Services.GetRequiredService<IServiceScopeFactory>());
+            await adapter.ExecuteAsync(BuildContext(
+                binaryPath: scriptPath, prompt: "prompt", worktreePath: worktreeDir, runId: runId,
+                sessionId: sessionId, executionCount: 1, manageSession: true));
+
+            Assert.False(File.Exists(sessionPath));
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+            CleanUpRunScratch(runId);
         }
     }
 
@@ -357,16 +437,12 @@ public class PiAdapterTests
                 executionCount: 1,
                 manageSession: true) with { ForkFromSessionId = "source-sess" });
 
-            await using var verifyDb = harness.CreateDbContext();
             // Source session is byte-for-byte unchanged after the fork.
-            var source = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "Pi" && s.SessionId == "source-sess", TestContext.Current.CancellationToken);
-            Assert.NotNull(source);
-            Assert.Equal(sourceJson, source!.SessionJson);
+            Assert.Equal(Encoding.UTF8.GetBytes(sourceJson), await harness.ReadSnapshotAsync(runId, "Pi", "source-sess"));
             // A copy now exists under the fork's id, retargeted to that id.
-            var fork = await verifyDb.AdapterSessionSnapshots.FirstOrDefaultAsync(s => s.LoopRunId == runId && s.AdapterName == "Pi" && s.SessionId == "fork-dest", TestContext.Current.CancellationToken);
-            Assert.NotNull(fork);
-            Assert.Contains("fork-dest", fork!.SessionJson);
-            Assert.DoesNotContain("source-sess", fork.SessionJson);
+            var fork = Encoding.UTF8.GetString(Assert.IsType<byte[]>(await harness.ReadSnapshotAsync(runId, "Pi", "fork-dest")));
+            Assert.Contains("fork-dest", fork);
+            Assert.DoesNotContain("source-sess", fork);
         }
         finally
         {
@@ -1004,6 +1080,22 @@ public class PiAdapterTests
         return scriptPath;
     }
 
+    /// <summary>
+    /// A stand-in pi that completes a turn on <paramref name="sessionId"/> and leaves
+    /// the session file as the test wrote it.
+    /// </summary>
+    private static string WriteTurnPi(string worktreeDir, string sessionId)
+    {
+        var scriptPath = Path.Combine(worktreeDir, "turn.sh");
+        File.WriteAllText(scriptPath,
+            "#!/bin/sh\n" +
+            "cat >/dev/null\n" +
+            $"echo '{{\"type\":\"session\",\"version\":3,\"id\":\"{sessionId}\",\"cwd\":\"/w\"}}'\n" +
+            "echo '{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"text\":\"ok\"}]}}'\n");
+        MakeExecutable(scriptPath);
+        return scriptPath;
+    }
+
     private static string ExtensionArgument(string worktreeDir)
     {
         var argv = File.ReadAllLines(Path.Combine(worktreeDir, "argv.txt"));
@@ -1065,17 +1157,25 @@ public class PiAdapterTests
             return new AppDbContext(options);
         }
 
-        public async Task SeedSnapshotAsync(Guid runId, string adapterName, string sessionId, string sessionJson)
+        public async Task SeedSnapshotAsync(Guid runId, string adapterName, string sessionId, string content, string format = "pi-jsonl")
         {
             await using var db = CreateDbContext();
-            db.AdapterSessionSnapshots.Add(new AdapterSessionSnapshot
-            {
-                LoopRunId = runId,
-                AdapterName = adapterName,
-                SessionId = sessionId,
-                SessionJson = sessionJson,
-            });
-            await db.SaveChangesAsync();
+            await SessionSnapshotTestSupport.SeedAsync(
+                new AdapterSessionSnapshotStore(db), SessionSnapshotKey.ForRun(runId, adapterName, sessionId), format, content, TestContext.Current.CancellationToken);
+        }
+
+        public async Task<byte[]?> ReadSnapshotAsync(Guid runId, string adapterName, string sessionId)
+        {
+            await using var db = CreateDbContext();
+            return await SessionSnapshotTestSupport.ReadAllAsync(
+                new AdapterSessionSnapshotStore(db), SessionSnapshotKey.ForRun(runId, adapterName, sessionId), TestContext.Current.CancellationToken);
+        }
+
+        public async Task<SessionSnapshotMetadata?> GetMetadataAsync(Guid runId, string adapterName, string sessionId)
+        {
+            await using var db = CreateDbContext();
+            return await new AdapterSessionSnapshotStore(db).GetMetadataAsync(
+                SessionSnapshotKey.ForRun(runId, adapterName, sessionId), TestContext.Current.CancellationToken);
         }
 
         public async Task SeedRunAsync(Guid runId)

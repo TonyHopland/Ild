@@ -6,6 +6,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -912,7 +913,9 @@ public sealed class ChatServiceTests : IDisposable
 
         // Bind a snapshot to the chat session so we can prove the cascade.
         var snapshots = new AdapterSessionSnapshotStore(_db.Context);
-        await snapshots.UpsertForChatAsync(started.Id, "fake", "sess-1", "{\"events\":[]}", TestContext.Current.CancellationToken);
+        await SessionSnapshotTestSupport.SeedAsync(
+            snapshots, SessionSnapshotKey.ForChat(started.Id, "fake", "sess-1"), "raw", "{\"type\":\"user\"}\n", TestContext.Current.CancellationToken);
+        Assert.NotEmpty(_db.Context.AdapterSessionSnapshotChunks);
         var scratchPath = _db.Context.ChatSessions.Single().ScratchPath;
         Assert.True(Directory.Exists(scratchPath));
 
@@ -926,6 +929,7 @@ public sealed class ChatServiceTests : IDisposable
         Assert.Empty(_db.Context.ChatSessions);
         Assert.Empty(_db.Context.ChatMessages);
         Assert.Empty(_db.Context.AdapterSessionSnapshots);
+        Assert.Empty(_db.Context.AdapterSessionSnapshotChunks);
         Assert.False(Directory.Exists(scratchPath), "scratch directory should be removed");
     }
 

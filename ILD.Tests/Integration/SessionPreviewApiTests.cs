@@ -1,0 +1,243 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using ILD.Core.Services.Implementations;
+using ILD.Data;
+using ILD.Data.Entities;
+using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace ILD.Tests.Integration;
+
+/// <summary>
+/// GET /api/v1/loopruns/{id}/sessions/preview serves a saved JSONL session a page of raw
+/// lines at a time, back from its end by raw byte offset, and a session that is one document
+/// as its start.
+/// </summary>
+public sealed class SessionPreviewApiTests : IClassFixture<SessionPreviewApiTests.Host>
+{
+    private static readonly string[] ShortLines =
+        ["{\"n\":0}", "{\"n\":1}", "plain text line", "{\"n\":3}", "{\"n\":4}", "{\"n\":5}", "{\"n\":6}"];
+
+    private static readonly string[] LongLines = Enumerable.Range(0, 250).Select(n => $"{{\"line\":{n}}}").ToArray();
+
+    private const int PageBudget = 1024 * 1024;
+
+    private static readonly string SingleLine = "{\"info\":\"" + new string('x', 3 * PageBudget) + "\"}";
+
+    private const string Document = "{\n  \"id\": \"document\",\n  \"messages\": [\n    { \"role\": \"user\" }\n  ]\n}\n";
+
+    private readonly Host _host;
+
+    public SessionPreviewApiTests(Host host) => _host = host;
+
+    [Fact]
+    public async Task The_latest_page_describes_the_session_and_reaches_its_start()
+    {
+        var page = await PreviewAsync("adapterName=Pi&sessionId=short");
+
+        Assert.Equal("Pi", page.GetProperty("adapterName").GetString());
+        Assert.Equal("short", page.GetProperty("sessionId").GetString());
+        Assert.Equal(JsonValueKind.String, page.GetProperty("createdAt").ValueKind);
+        Assert.True(page.TryGetProperty("updatedAt", out _));
+        Assert.Equal("pi-jsonl", page.GetProperty("format").GetString());
+        Assert.Equal(Offset(ShortLines, ShortLines.Length), page.GetProperty("byteLength").GetInt64());
+        Assert.Equal(ShortLines.Length, page.GetProperty("eventCount").GetInt32());
+        Assert.Equal(ShortLines, Events(page));
+        Assert.Equal(0, page.GetProperty("fromOffset").GetInt64());
+        Assert.Equal(JsonValueKind.Null, page.GetProperty("previousOffset").ValueKind);
+        Assert.False(page.GetProperty("converting").GetBoolean());
+        Assert.False(page.TryGetProperty("nextOffset", out _));
+    }
+
+    [Fact]
+    public async Task A_page_holds_the_last_200_lines_unless_asked_for_up_to_500()
+    {
+        var byDefault = await PreviewAsync("adapterName=Pi&sessionId=long");
+        Assert.Equal(LongLines[50..], Events(byDefault));
+        Assert.Equal(Offset(LongLines, 50), byDefault.GetProperty("previousOffset").GetInt64());
+
+        var widest = await PreviewAsync("adapterName=Pi&sessionId=long&tail=500");
+        Assert.Equal(LongLines, Events(widest));
+        Assert.Equal(JsonValueKind.Null, widest.GetProperty("previousOffset").ValueKind);
+    }
+
+    [Fact]
+    public async Task A_page_asked_for_before_the_start_is_empty_and_first()
+    {
+        var page = await PreviewAsync("adapterName=Pi&sessionId=short&beforeOffset=0");
+
+        Assert.Empty(Events(page));
+        Assert.Equal(JsonValueKind.Null, page.GetProperty("previousOffset").ValueKind);
+    }
+
+    [Theory]
+    [InlineData(2, 5)]
+    [InlineData(500, 0)]
+    public async Task Tail_returns_the_last_lines_and_where_they_start(int tail, int firstLine)
+    {
+        var page = await PreviewAsync($"adapterName=Pi&sessionId=short&tail={tail}");
+
+        Assert.Equal(ShortLines[firstLine..], Events(page));
+        Assert.Equal(Offset(ShortLines, firstLine), page.GetProperty("fromOffset").GetInt64());
+    }
+
+    [Fact]
+    public async Task Tail_pages_carry_where_the_page_before_them_ends_back_to_the_start()
+    {
+        var latest = await PreviewAsync("adapterName=Pi&sessionId=long&tail=200");
+        Assert.Equal(LongLines[50..], Events(latest));
+        Assert.Equal(Offset(LongLines, 50), latest.GetProperty("previousOffset").GetInt64());
+
+        var earlier = await PreviewAsync($"adapterName=Pi&sessionId=long&tail=200&beforeOffset={Offset(LongLines, 50)}");
+        Assert.Equal(LongLines[..50], Events(earlier));
+        Assert.Equal(0, earlier.GetProperty("fromOffset").GetInt64());
+        Assert.Equal(JsonValueKind.Null, earlier.GetProperty("previousOffset").ValueKind);
+    }
+
+    [Fact]
+    public async Task A_session_that_is_one_document_comes_back_whole_as_one_event()
+    {
+        var page = await PreviewAsync("adapterName=OpenCode&sessionId=document");
+
+        Assert.Equal("opencode-json", page.GetProperty("format").GetString());
+        Assert.Equal(new[] { Document }, Events(page));
+        Assert.False(page.GetProperty("truncated").GetBoolean());
+        Assert.Equal(0, page.GetProperty("fromOffset").GetInt64());
+        Assert.Equal(JsonValueKind.Null, page.GetProperty("previousOffset").ValueKind);
+    }
+
+    [Fact]
+    public async Task A_document_longer_than_the_page_budget_comes_back_cut_off_within_it()
+    {
+        foreach (var query in new[] { "adapterName=OpenCode&sessionId=single", "adapterName=OpenCode&sessionId=single&tail=1" })
+        {
+            var response = await _host.Client.GetAsync($"/api/v1/loopruns/{_host.RunId}/sessions/preview?{query}", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+            Assert.True(body.Length < PageBudget + 4096, $"{body.Length} bytes for {query}");
+            var page = JsonSerializer.Deserialize<JsonElement>(body);
+            Assert.True(page.GetProperty("truncated").GetBoolean());
+            Assert.StartsWith(Assert.Single(Events(page)), SingleLine, StringComparison.Ordinal);
+            Assert.Equal(SingleLine.Length, page.GetProperty("byteLength").GetInt64());
+        }
+    }
+
+    [Theory]
+    [InlineData("run", "adapterName=Pi&sessionId=short&tail=0")]
+    [InlineData("run", "adapterName=Pi&sessionId=short&tail=501")]
+    [InlineData("run", "adapterName=Pi&sessionId=short&tail=2&beforeOffset=-1")]
+    [InlineData("run", "adapterName=Pi&sessionId=short&tail=2&beforeOffset=PAST_END")]
+    [InlineData("run", "adapterName=OpenCode&sessionId=document&beforeOffset=0")]
+    [InlineData("run", "sessionId=short")]
+    [InlineData("run", "adapterName=Pi")]
+    [InlineData("not-a-guid", "adapterName=Pi&sessionId=short")]
+    public async Task A_malformed_request_is_refused(string run, string query)
+    {
+        var id = run == "run" ? _host.RunId.ToString() : run;
+        query = query.Replace("PAST_END", (Offset(ShortLines, ShortLines.Length) + 1).ToString());
+
+        var response = await _host.Client.GetAsync($"/api/v1/loopruns/{id}/sessions/preview?{query}", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task An_unknown_session_is_not_found()
+    {
+        var response = await _host.Client.GetAsync(
+            $"/api/v1/loopruns/{_host.RunId}/sessions/preview?adapterName=Pi&sessionId=missing", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_session_still_in_the_legacy_column_is_left_to_the_migration_and_said_to_be_converting()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var wrapper = SessionSnapshotTestSupport.LegacyClaudeWrapper("legacy-preview", "{\"type\":\"user\",\"message\":\"hi\"}");
+        Guid legacyId;
+        using (var scope = _host.Factory.Services.CreateScope())
+        {
+            legacyId = await SessionSnapshotTestSupport.SeedLegacyAsync(
+                scope.ServiceProvider.GetRequiredService<AppDbContext>(), _host.RunId, null, "ClaudeCode", "legacy-preview", wrapper, ct);
+        }
+
+        var page = await PreviewAsync("adapterName=ClaudeCode&sessionId=legacy-preview");
+
+        Assert.True(page.GetProperty("converting").GetBoolean());
+        Assert.Empty(Events(page));
+        Assert.Equal(JsonValueKind.Null, page.GetProperty("format").ValueKind);
+        Assert.Equal(JsonValueKind.Null, page.GetProperty("byteLength").ValueKind);
+        Assert.Equal(JsonValueKind.Null, page.GetProperty("previousOffset").ValueKind);
+        using (var scope = _host.Factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            Assert.Equal(wrapper, await SessionSnapshotTestSupport.ReadLegacySessionJsonAsync(db, legacyId, ct));
+            Assert.Empty(db.AdapterSessionSnapshotChunks.Where(c => c.SnapshotId == legacyId));
+        }
+    }
+
+    private async Task<JsonElement> PreviewAsync(string query)
+    {
+        var response = await _host.Client.GetAsync(
+            $"/api/v1/loopruns/{_host.RunId}/sessions/preview?{query}", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+    }
+
+    private static string[] Events(JsonElement page)
+        => page.GetProperty("events").EnumerateArray().Select(e => e.GetString()!).ToArray();
+
+    /// <summary>The raw byte offset at which line <paramref name="index"/> starts.</summary>
+    private static long Offset(string[] lines, int index)
+        => lines.Take(index).Sum(l => (long)Encoding.UTF8.GetByteCount(l) + 1);
+
+    public sealed class Host : IAsyncLifetime
+    {
+        public ApiFactory Factory { get; } = new(configureServices: services =>
+            services.RemoveHostedService<SessionSnapshotMigrationService>());
+
+        public HttpClient Client { get; private set; } = null!;
+
+        public Guid RunId { get; } = Guid.NewGuid();
+
+        public async ValueTask InitializeAsync()
+        {
+            Client = await Factory.CreateAuthenticatedClientAsync();
+            using var scope = Factory.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"preview-{RunId:N}" };
+            var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1, CreatedAt = DateTime.UtcNow };
+            db.LoopTemplates.Add(template);
+            db.LoopTemplateVersions.Add(version);
+            db.LoopRuns.Add(new LoopRun
+            {
+                Id = RunId,
+                WorkItemId = "wi-preview",
+                LoopTemplateVersionId = version.Id,
+                Status = LoopRunStatus.Completed,
+                StartedAt = DateTime.UtcNow,
+            });
+            await db.SaveChangesAsync();
+
+            var store = scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>();
+            await SessionSnapshotTestSupport.SeedAsync(
+                store, SessionSnapshotKey.ForRun(RunId, "Pi", "short"), "pi-jsonl", string.Concat(ShortLines.Select(l => l + "\n")), default);
+            await SessionSnapshotTestSupport.SeedAsync(
+                store, SessionSnapshotKey.ForRun(RunId, "Pi", "long"), "pi-jsonl", string.Concat(LongLines.Select(l => l + "\n")), default);
+            await SessionSnapshotTestSupport.SeedAsync(
+                store, SessionSnapshotKey.ForRun(RunId, "OpenCode", "single"), "opencode-json", SingleLine, default);
+            await SessionSnapshotTestSupport.SeedAsync(
+                store, SessionSnapshotKey.ForRun(RunId, "OpenCode", "document"), "opencode-json", Document, default);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            Client.Dispose();
+            await Factory.DisposeAsync();
+        }
+    }
+}

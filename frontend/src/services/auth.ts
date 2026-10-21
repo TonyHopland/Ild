@@ -611,6 +611,9 @@ export const loopTemplateService = {
   },
 };
 
+/** Events per session preview page: the latest ones first, then earlier ones on request. */
+const SESSION_PREVIEW_PAGE = 200;
+
 export const loopRunService = {
   getById: async (id: string): Promise<LoopRun> => {
     return api.get<LoopRun>(`/loopruns/${id}`);
@@ -676,8 +679,14 @@ export const loopRunService = {
     runId: string,
     adapterName: string,
     sessionId: string,
+    beforeOffset?: number,
   ): Promise<LoopRunSessionPreview> => {
-    const params = new URLSearchParams({ adapterName, sessionId });
+    const params = new URLSearchParams({
+      adapterName,
+      sessionId,
+      tail: String(SESSION_PREVIEW_PAGE),
+    });
+    if (beforeOffset !== undefined) params.set("beforeOffset", String(beforeOffset));
     return api.get<LoopRunSessionPreview>(`/loopruns/${runId}/sessions/preview?${params}`);
   },
 };

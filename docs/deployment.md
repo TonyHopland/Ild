@@ -51,6 +51,45 @@ it creates the cluster, and nothing connects as the superuser afterwards.
 Setting `ILD_SESSION_TOKEN_PEPPER` for the first time signs every device out once; that
 is expected and costs a re-login.
 
+The release that stores saved AI sessions in compressed chunks converts the existing
+ones in the background after startup, one at a time; the app is usable meanwhile, and a
+session previewed before its turn says it is still being converted. When
+the log shows `Session snapshot conversion finished: … none left`, give the space the
+old transcripts held back to the disk, since Postgres keeps it otherwise:
+
+```sh
+docker compose exec postgres psql -U ild_core -d IldCore -c 'VACUUM FULL "AdapterSessionSnapshots";'
+```
+
+`VACUUM FULL` locks the table while it runs, so saving and opening sessions waits for it;
+`pg_repack` does the same without the lock if you have it installed. If the line reports
+snapshots left unconverted, the warnings before it name them and the next start retries
+them; vacuum after a start that leaves none. A later release drops the old column once
+every installation has converted.
+
+Do not roll back to a release from before the conversion once it has run: the old column
+is emptied as each session converts, and older releases read only that column.
+
+### Migration B: dropping the old session column
+
+Once every installation has logged `Session snapshot conversion finished: … none left`, a
+later release adds an EF migration that drops `AdapterSessionSnapshots.SessionJson` and
+removes the code that only exists for unconverted rows. Each such place carries the marker
+`Legacy (remove with migration B)`, so `grep -rn "Legacy (remove with migration B)"` lists
+them:
+
+- `AdapterSessionSnapshot.LegacySessionJsonColumn` and its mapping in `AppDbContext`
+- `SessionSnapshotContentMigrator`, `SessionSnapshotMigrationService` and its registration
+- in `AdapterSessionSnapshotStore`: the conversion in `GetMetadataAsync`, the old-column check
+  in `AppendAsync`, emptying the old column in `ReplaceWithinAsync`, and `Unconverted` in
+  `ToMetadata`
+- `SessionSnapshotMetadata.Unconverted`
+- the `Unconverted` handling in `LoopRunsController` (the sessions list and the preview's
+  `converting` response), and in the frontend the `converting` field, its message and the
+  nullable session metadata
+- the test helpers that seed legacy rows (`SessionSnapshotTestSupport.SeedLegacyAsync` and
+  those beside it) and the tests that use them
+
 ## Worktree preview proxy
 
 A [Worktree Preview](../CONTEXT.md) binds each of its services to a port picked at
