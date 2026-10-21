@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The header shows the ILD logo beside the title.**
+
 - **Agents can propose a small loop template change without resending the whole template.**
 
 - **A work item's History tab shows who changed what on it, when and why.**

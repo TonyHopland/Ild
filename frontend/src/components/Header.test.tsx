@@ -87,3 +87,14 @@ describe("Header nav items", () => {
     );
   });
 });
+
+describe("Header brand", () => {
+  test("shows the logo inside the brand link, which keeps the name ILD", () => {
+    renderHeader();
+
+    const brand = screen.getByRole("link", { name: "ILD" });
+    const logo = brand.querySelector("img");
+    expect(logo?.getAttribute("src")).toBe("/ild.svg");
+    expect(logo?.getAttribute("alt")).toBe("");
+  });
+});
