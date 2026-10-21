@@ -757,6 +757,8 @@ describe("RunsPanel run details", () => {
       events: [],
       fromOffset: 0,
       nextOffset: null,
+      previousOffset: null,
+      truncated: false,
       ...overrides,
     };
   }
@@ -783,7 +785,7 @@ describe("RunsPanel run details", () => {
     expect(summary).toContain("Events: 3");
     expect(summary).toContain(JSON.stringify({ type: "user", n: 1 }, null, 2));
     expect(summary).toContain("not json at all");
-    expect(within(region).queryByRole("button", { name: /load more/i })).toBeNull();
+    expect(within(region).queryByRole("button", { name: /load earlier/i })).toBeNull();
     fireEvent.click(within(region).getByRole("button", { name: /close/i }));
     expect(screen.queryByRole("region", { name: /session preview/i })).toBeNull();
   });
@@ -807,28 +809,42 @@ describe("RunsPanel run details", () => {
     expect(list).not.toMatch(/null|undefined|NaN/);
   });
 
-  test("load more appends the next page until the end of the session", async () => {
+  test("load earlier puts the page before the latest one above it, back to the start", async () => {
     const preview = vi
       .spyOn(loopRunService, "getSessionPreview")
-      .mockImplementation(async (_run, _adapter, _session, fromOffset) =>
-        fromOffset
-          ? previewPage({ events: ['{"page":2}'], fromOffset, nextOffset: null })
-          : previewPage({ events: ['{"page":1}'], fromOffset: 0, nextOffset: 11 }),
+      .mockImplementation(async (_run, _adapter, _session, beforeOffset) =>
+        beforeOffset
+          ? previewPage({ events: ['{"page":1}'], fromOffset: 0, nextOffset: beforeOffset })
+          : previewPage({ events: ['{"page":2}'], fromOffset: 11, previousOffset: 11 }),
       );
     renderDetails(twoNodeRun({ availableSessions: [sessionEntry("sess-1")] }));
     fireEvent.click(await screen.findByRole("button", { name: /ai sessions \(1\)/i }));
     fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
     const region = await screen.findByRole("region", { name: /session preview/i });
+    expect(preview.mock.calls[0][3]).toBeUndefined();
 
-    fireEvent.click(within(region).getByRole("button", { name: /load more/i }));
+    fireEvent.click(within(region).getByRole("button", { name: /load earlier/i }));
 
-    await waitFor(() => expect(region.textContent).toContain(JSON.stringify({ page: 2 }, null, 2)));
+    await waitFor(() => expect(region.textContent).toContain(JSON.stringify({ page: 1 }, null, 2)));
     expect(preview).toHaveBeenLastCalledWith(RUN_A, "claude", "sess-1", 11);
-    expect(region.textContent).toContain(JSON.stringify({ page: 1 }, null, 2));
+    expect(region.textContent).toContain(JSON.stringify({ page: 2 }, null, 2));
     expect(region.textContent!.indexOf('"page": 1')).toBeLessThan(
       region.textContent!.indexOf('"page": 2'),
     );
-    expect(within(region).queryByRole("button", { name: /load more/i })).toBeNull();
+    expect(within(region).queryByRole("button", { name: /load earlier/i })).toBeNull();
+  });
+
+  test("an event cut off at the page size is shown as truncated", async () => {
+    vi.spyOn(loopRunService, "getSessionPreview").mockResolvedValue(
+      previewPage({ events: ['{"messages":"xxxx'], truncated: true }),
+    );
+    renderDetails(twoNodeRun({ availableSessions: [sessionEntry("sess-1")] }));
+    fireEvent.click(await screen.findByRole("button", { name: /ai sessions \(1\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
+
+    const region = await screen.findByRole("region", { name: /session preview/i });
+    expect(region.textContent).toContain('{"messages":"xxxx');
+    expect(region.textContent).toContain("(truncated)");
   });
 
   test("a node's events are read only once expanded, and only its own", async () => {
@@ -1396,8 +1412,8 @@ describe("RunsPanel session preview requests", () => {
   const page = (
     sessionId: string,
     events: string[],
-    nextOffset: number | null,
-    fromOffset = 0,
+    previousOffset: number | null,
+    fromOffset = previousOffset ?? 0,
   ): LoopRunSessionPreview => ({
     adapterName: "claude",
     sessionId,
@@ -1408,7 +1424,9 @@ describe("RunsPanel session preview requests", () => {
     eventCount: 4,
     events,
     fromOffset,
-    nextOffset,
+    nextOffset: null,
+    previousOffset,
+    truncated: false,
   });
 
   async function openSessions() {
@@ -1440,20 +1458,20 @@ describe("RunsPanel session preview requests", () => {
     expect(isDisabled(screen.getByRole("button", { name: /preview session sess-2/i }))).toBe(false);
   });
 
-  test("a next page answered after the preview was closed is dropped", async () => {
+  test("an earlier page answered after the preview was closed is dropped", async () => {
     const more = deferred<LoopRunSessionPreview>();
     vi.spyOn(loopRunService, "getSessionPreview").mockImplementation(
-      async (_run, _a, _id, fromOffset) =>
-        fromOffset ? more.promise : page("sess-1", ['{"page":1}'], 11),
+      async (_run, _a, _id, beforeOffset) =>
+        beforeOffset ? more.promise : page("sess-1", ['{"page":1}'], 11),
     );
     await openSessions();
     fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
     const region = await screen.findByRole("region", { name: /session preview/i });
-    fireEvent.click(within(region).getByRole("button", { name: /load more/i }));
+    fireEvent.click(within(region).getByRole("button", { name: /load earlier/i }));
 
     fireEvent.click(within(region).getByRole("button", { name: /close/i }));
     await act(async () => {
-      more.resolve(page("sess-1", ['{"page":2}'], null, 11));
+      more.resolve(page("sess-1", ['{"page":0}'], null));
       await more.promise;
     });
 
@@ -1462,11 +1480,11 @@ describe("RunsPanel session preview requests", () => {
     expect(isDisabled(screen.getByRole("button", { name: /preview session sess-2/i }))).toBe(false);
   });
 
-  test("a next page answered after another session was opened never joins it", async () => {
+  test("an earlier page answered after another session was opened never joins it", async () => {
     const more = deferred<LoopRunSessionPreview>();
     vi.spyOn(loopRunService, "getSessionPreview").mockImplementation(
-      async (_run, _a, id, fromOffset) =>
-        fromOffset
+      async (_run, _a, id, beforeOffset) =>
+        beforeOffset
           ? more.promise
           : id === "sess-1"
             ? page("sess-1", ['{"from":"one"}'], 11)
@@ -1475,7 +1493,7 @@ describe("RunsPanel session preview requests", () => {
     await openSessions();
     fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
     const first = await screen.findByRole("region", { name: /session preview/i });
-    fireEvent.click(within(first).getByRole("button", { name: /load more/i }));
+    fireEvent.click(within(first).getByRole("button", { name: /load earlier/i }));
 
     fireEvent.click(screen.getByRole("button", { name: /preview session sess-2/i }));
     await waitFor(() =>
@@ -1484,14 +1502,14 @@ describe("RunsPanel session preview requests", () => {
       ),
     );
     await act(async () => {
-      more.resolve(page("sess-1", ['{"stale":"page"}'], null, 11));
+      more.resolve(page("sess-1", ['{"stale":"page"}'], null));
       await more.promise;
     });
 
     const region = screen.getByRole("region", { name: /session preview/i });
     expect(region.textContent).not.toContain("stale");
     expect(region.textContent).not.toContain('"from": "one"');
-    expect(isDisabled(within(region).getByRole("button", { name: /load more/i }))).toBe(false);
+    expect(isDisabled(within(region).getByRole("button", { name: /load earlier/i }))).toBe(false);
     expect(isDisabled(screen.getByRole("button", { name: /preview session sess-1/i }))).toBe(false);
   });
 });

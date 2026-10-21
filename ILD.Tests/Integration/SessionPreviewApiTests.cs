@@ -22,6 +22,10 @@ public sealed class SessionPreviewApiTests : IClassFixture<SessionPreviewApiTest
 
     private static readonly string[] LongLines = Enumerable.Range(0, 250).Select(n => $"{{\"line\":{n}}}").ToArray();
 
+    private const int PageBudget = 1024 * 1024;
+
+    private static readonly string SingleLine = "{\"info\":\"" + new string('x', 3 * PageBudget) + "\"}";
+
     private readonly Host _host;
 
     public SessionPreviewApiTests(Host host) => _host = host;
@@ -95,6 +99,36 @@ public sealed class SessionPreviewApiTests : IClassFixture<SessionPreviewApiTest
         Assert.Equal(JsonValueKind.Null, page.GetProperty("nextOffset").ValueKind);
     }
 
+    [Fact]
+    public async Task Tail_pages_carry_where_the_page_before_them_ends_back_to_the_start()
+    {
+        var latest = await PreviewAsync("adapterName=Pi&sessionId=long&tail=200");
+        Assert.Equal(LongLines[50..], Events(latest));
+        Assert.Equal(Offset(LongLines, 50), latest.GetProperty("previousOffset").GetInt64());
+
+        var earlier = await PreviewAsync($"adapterName=Pi&sessionId=long&tail=200&beforeOffset={Offset(LongLines, 50)}");
+        Assert.Equal(LongLines[..50], Events(earlier));
+        Assert.Equal(0, earlier.GetProperty("fromOffset").GetInt64());
+        Assert.Equal(JsonValueKind.Null, earlier.GetProperty("previousOffset").ValueKind);
+        Assert.Equal(Offset(LongLines, 50), earlier.GetProperty("nextOffset").GetInt64());
+    }
+
+    [Fact]
+    public async Task A_single_line_session_comes_back_cut_off_within_the_page_budget()
+    {
+        foreach (var query in new[] { "adapterName=OpenCode&sessionId=single", "adapterName=OpenCode&sessionId=single&tail=1" })
+        {
+            var response = await _host.Client.GetAsync($"/api/v1/loopruns/{_host.RunId}/sessions/preview?{query}", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var body = await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+            Assert.True(body.Length < PageBudget + 4096, $"{body.Length} bytes for {query}");
+            var page = JsonSerializer.Deserialize<JsonElement>(body);
+            Assert.True(page.GetProperty("truncated").GetBoolean());
+            Assert.StartsWith(Assert.Single(Events(page)), SingleLine, StringComparison.Ordinal);
+            Assert.Equal(SingleLine.Length, page.GetProperty("byteLength").GetInt64());
+        }
+    }
+
     [Theory]
     [InlineData("run", "adapterName=Pi&sessionId=short&tail=2&fromOffset=0")]
     [InlineData("run", "adapterName=Pi&sessionId=short&fromOffset=-1")]
@@ -103,6 +137,9 @@ public sealed class SessionPreviewApiTests : IClassFixture<SessionPreviewApiTest
     [InlineData("run", "adapterName=Pi&sessionId=short&limit=501")]
     [InlineData("run", "adapterName=Pi&sessionId=short&tail=0")]
     [InlineData("run", "adapterName=Pi&sessionId=short&tail=501")]
+    [InlineData("run", "adapterName=Pi&sessionId=short&beforeOffset=0")]
+    [InlineData("run", "adapterName=Pi&sessionId=short&tail=2&beforeOffset=-1")]
+    [InlineData("run", "adapterName=Pi&sessionId=short&tail=2&beforeOffset=PAST_END")]
     [InlineData("run", "sessionId=short")]
     [InlineData("run", "adapterName=Pi")]
     [InlineData("not-a-guid", "adapterName=Pi&sessionId=short")]
@@ -199,6 +236,8 @@ public sealed class SessionPreviewApiTests : IClassFixture<SessionPreviewApiTest
                 store, SessionSnapshotKey.ForRun(RunId, "Pi", "short"), "pi-jsonl", string.Concat(ShortLines.Select(l => l + "\n")), default);
             await SessionSnapshotTestSupport.SeedAsync(
                 store, SessionSnapshotKey.ForRun(RunId, "Pi", "long"), "pi-jsonl", string.Concat(LongLines.Select(l => l + "\n")), default);
+            await SessionSnapshotTestSupport.SeedAsync(
+                store, SessionSnapshotKey.ForRun(RunId, "OpenCode", "single"), "opencode-json", SingleLine, default);
         }
 
         public async ValueTask DisposeAsync()

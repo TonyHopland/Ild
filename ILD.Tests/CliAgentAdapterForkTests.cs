@@ -6,6 +6,7 @@ using ILD.Data.Entities;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ILD.Tests;
@@ -46,9 +47,34 @@ public class CliAgentAdapterForkTests
             var path = Path.Combine(dir, "sess-1.jsonl");
             File.WriteAllBytes(path, []);
 
-            await new SnapshotAdapter(provider.GetRequiredService<IServiceScopeFactory>()).PersistAsync(runId, "sess-1", path);
+            await new SnapshotAdapter(provider.GetRequiredService<IServiceScopeFactory>()).PersistAsync(runId, "sess-1", path, NullLogger.Instance, ct);
 
             Assert.Equal("{\"turn\":1}\n", await SessionSnapshotTestSupport.ReadAllTextAsync(new AdapterSessionSnapshotStore(db.Fresh()), key, ct));
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
+    public async Task A_save_cut_short_by_a_cancelled_turn_is_not_reported_as_a_failure_and_does_not_throw()
+    {
+        using var db = new TestDb();
+        var runId = await TestRuns.SeedAsync(db);
+        await using var provider = SnapshotServices(db);
+        var dir = Directory.CreateTempSubdirectory("ild-persist-").FullName;
+        var log = new ListLogger<CliAgentAdapterForkTests>();
+        try
+        {
+            var path = Path.Combine(dir, "sess-1.jsonl");
+            File.WriteAllText(path, "{\"turn\":1}\n");
+
+            await new SnapshotAdapter(provider.GetRequiredService<IServiceScopeFactory>()).PersistAsync(runId, "sess-1", path, log, new CancellationToken(canceled: true));
+
+            Assert.DoesNotContain(log.Entries, e => e.Level >= LogLevel.Warning);
+            Assert.Contains(log.Entries, e => e.Message.Contains("cancelled", StringComparison.Ordinal));
+            Assert.Empty(await new AdapterSessionSnapshotStore(db.Fresh()).ListMetadataForRunAsync(runId, TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -74,16 +100,16 @@ public class CliAgentAdapterForkTests
         public Task<bool> ForkAsync(Guid runId, string source, string dest, CancellationToken ct)
             => ForkSessionSnapshotAsync(runId, source, dest, ct);
 
-        public Task PersistAsync(Guid runId, string sessionId, string path)
+        public Task PersistAsync(Guid runId, string sessionId, string path, ILogger logger, CancellationToken ct)
             => PersistSessionFileAsync(
                 new AgentExecutionContext(
                     Provider: new AiProvider { Name = "p", Type = "claude-code", BaseUrl = string.Empty, Model = string.Empty },
                     Prompt: "prompt",
                     RunContext: new LoopRunContext(runId, "wi", "t", "d", Path.GetTempPath(), "main", new List<string>(), null),
                     ExecutionCount: 1,
-                    Cancel: TestContext.Current.CancellationToken,
+                    Cancel: ct,
                     SessionId: sessionId,
                     ManageSession: true),
-                sessionId, path, SessionSnapshotFormats.ClaudeJsonl, NullLogger.Instance);
+                sessionId, path, SessionSnapshotFormats.ClaudeJsonl, logger);
     }
 }

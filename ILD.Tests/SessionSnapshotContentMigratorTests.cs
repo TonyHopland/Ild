@@ -131,6 +131,46 @@ public sealed class SessionSnapshotContentMigratorTests : IAsyncLifetime
         Assert.Equal(meta, await StoreMetadataAsync(key));
     }
 
+    /// <summary>
+    /// The legacy text is read a slice at a time (1 Mi characters, here one byte each) and each
+    /// chunk is written as soon as it is cut, so conversion never holds more than about one chunk:
+    /// after the checking pass, no more slices are read before a chunk is written than one chunk
+    /// target needs, plus the one that ends it.
+    /// </summary>
+    [Fact]
+    public async Task A_legacy_row_of_several_chunks_is_read_a_slice_at_a_time_and_written_a_chunk_at_a_time()
+    {
+        const int sliceChars = 1024 * 1024;
+        var lines = SyntheticTranscript.Lines("s1", 18 * 1024 * 1024, seed: 12).TrimEnd('\n').Split('\n');
+        await using (var db = Context())
+            await SessionSnapshotTestSupport.SeedLegacyAsync(db, _runId, null, "ClaudeCode", "s1", SessionSnapshotTestSupport.LegacyClaudeWrapper("s1", lines), Ct);
+        _sql.Clear();
+
+        await RunMigrationAsync();
+
+        var commands = _sql.Commands.Select(c => c.Sql).ToList();
+        static bool IsSlice(string sql) => sql.Contains("substr(\"SessionJson\"", StringComparison.Ordinal);
+        static bool IsChunkWrite(string sql) => sql.TrimStart().StartsWith("INSERT", StringComparison.OrdinalIgnoreCase) && SnapshotSqlRecorder.TouchesChunks(sql);
+        var slices = commands.Select((sql, i) => (sql, i)).Where(c => IsSlice(c.sql)).Select(c => c.i).ToList();
+        var writes = commands.Select((sql, i) => (sql, i)).Where(c => IsChunkWrite(c.sql)).Select(c => c.i).ToList();
+        Assert.True(writes.Count >= 4, $"{writes.Count} chunks");
+        Assert.Equal(0, slices.Count % 2);
+        var writingPass = slices[slices.Count / 2];
+        Assert.True(writes[0] > writingPass && writes[0] < slices[^1], "chunks are written while the text is still being read");
+
+        var readSinceWrite = 0;
+        foreach (var sql in commands.Skip(writingPass))
+        {
+            if (IsSlice(sql)) readSinceWrite++;
+            if (!IsChunkWrite(sql)) continue;
+            Assert.True(readSinceWrite <= SessionSnapshotChunkTarget / sliceChars + 1, $"{readSinceWrite} slices read before a chunk was written");
+            readSinceWrite = 0;
+        }
+        Assert.Equal(Encoding.UTF8.GetBytes(string.Concat(lines.Select(l => l + "\n"))), await ReadAllAsync(SessionSnapshotKey.ForRun(_runId, "ClaudeCode", "s1")));
+    }
+
+    private const int SessionSnapshotChunkTarget = 4 * 1024 * 1024;
+
     [Fact]
     public async Task A_row_that_fails_is_logged_and_left_for_the_next_start_while_the_rest_convert()
     {

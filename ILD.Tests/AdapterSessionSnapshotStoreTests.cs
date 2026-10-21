@@ -137,19 +137,63 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
         Assert.Equal("{\"a\":1}\n", await SessionSnapshotTestSupport.ReadAllTextAsync(Store(), Key(), Ct));
     }
 
+    /// <summary>
+    /// The two appends run at once, each on its own connection to one database file. SQLite
+    /// serialises their transactions on its database write lock, where Postgres serialises them
+    /// on the row lock the claim takes; either way the second sees the first's length and lands
+    /// nothing.
+    /// </summary>
     [Fact]
-    public async Task Of_two_appends_from_the_same_length_only_the_first_lands()
+    public async Task Of_two_appends_started_together_from_the_same_length_only_one_lands()
     {
-        await AppendAsync(Key(), "{\"base\":0}\n", 0);
-        var expected = (await Store().GetMetadataAsync(Key(), Ct))!.ByteLength;
+        var file = Path.Combine(Path.GetTempPath(), $"ild-snapshot-race-{Guid.NewGuid():N}.db");
+        AppDbContext FileContext() => new(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite($"Data Source={file};Pooling=False")
+            .WithPostgresSemantics()
+            .Options);
+        try
+        {
+            await using (var db = FileContext())
+            {
+                await db.Database.EnsureCreatedAsync(Ct);
+                var template = new LoopTemplate { Id = Guid.NewGuid(), Name = $"template-{_runId:N}", RecoveryPolicy = RecoveryPolicy.AutoResume };
+                var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+                db.LoopTemplates.Add(template);
+                db.LoopTemplateVersions.Add(version);
+                db.LoopRuns.Add(new LoopRun
+                {
+                    Id = _runId,
+                    WorkItemId = Guid.NewGuid().ToString(),
+                    LoopTemplateVersionId = version.Id,
+                    Status = LoopRunStatus.Running,
+                    RecoveryPolicy = RecoveryPolicy.AutoResume,
+                });
+                await db.SaveChangesAsync(Ct);
+            }
+            Task<SessionSnapshotAppendResult> Append(string text, long expected)
+            {
+                var store = new AdapterSessionSnapshotStore(FileContext());
+                return store.AppendAsync(Key(), "claude-jsonl", new MemoryStream(Encoding.UTF8.GetBytes(text)), expected, "tail", Ct);
+            }
+            await Append("{\"base\":0}\n", 0);
+            const string one = "{\"writer\":\"one\"}\n", two = "{\"writer\":\"two\"}\n";
 
-        var first = await AppendAsync(Key(), "{\"writer\":\"one\"}\n", expected);
-        var second = await AppendAsync(Key(), "{\"writer\":\"two\"}\n", expected);
+            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var first = Task.Run(async () => { await start.Task; return await Append(one, 11); }, Ct);
+            var second = Task.Run(async () => { await start.Task; return await Append(two, 11); }, Ct);
+            start.SetResult();
+            var results = await Task.WhenAll(first, second);
 
-        Assert.Equal(SessionSnapshotAppendResult.Appended, first);
-        Assert.Equal(SessionSnapshotAppendResult.Conflict, second);
-        Assert.Equal("{\"base\":0}\n{\"writer\":\"one\"}\n", await SessionSnapshotTestSupport.ReadAllTextAsync(Store(), Key(), Ct));
-        Assert.Equal(2, (await ChunksAsync()).Count);
+            Assert.Equal(new[] { SessionSnapshotAppendResult.Appended, SessionSnapshotAppendResult.Conflict }, results.Order());
+            var winner = results[0] == SessionSnapshotAppendResult.Appended ? one : two;
+            Assert.Equal("{\"base\":0}\n" + winner, await SessionSnapshotTestSupport.ReadAllTextAsync(new AdapterSessionSnapshotStore(FileContext()), Key(), Ct));
+            await using var check = FileContext();
+            Assert.Equal(2, await check.AdapterSessionSnapshotChunks.CountAsync(Ct));
+        }
+        finally
+        {
+            File.Delete(file);
+        }
     }
 
     [Fact]
@@ -287,6 +331,19 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Forking_a_snapshot_onto_itself_writes_nothing_and_converts_nothing()
+    {
+        await using var db = Context();
+        var id = await SessionSnapshotTestSupport.SeedLegacyAsync(db, _runId, null, "Pi", "same", "{\"n\":1}\n", Ct);
+        _sql.Clear();
+
+        Assert.True(await Store().ForkAsync(Key("same", "Pi"), Key("same", "Pi"), Ct));
+
+        Assert.DoesNotContain(_sql.Commands, c => !c.Sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("{\"n\":1}\n", await SessionSnapshotTestSupport.ReadLegacySessionJsonAsync(Context(), id, Ct));
+    }
+
+    [Fact]
     public async Task Listing_metadata_reads_no_chunk_and_no_legacy_content()
     {
         await SessionSnapshotTestSupport.SeedAsync(Store(), Key("big"), "claude-jsonl", SyntheticTranscript.Lines("big", 5 * MiB, seed: 9), Ct);
@@ -297,7 +354,6 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
         _sql.Clear();
 
         var forRun = await Store().ListMetadataForRunAsync(_runId, Ct);
-        var forChat = await Store().ListMetadataForChatAsync(chatId, Ct);
 
         Assert.DoesNotContain(_sql.Commands, c => SnapshotSqlRecorder.TouchesChunks(c.Sql));
         Assert.DoesNotContain(_sql.Commands, c => SnapshotSqlRecorder.SelectsSessionJson(c.Sql));
@@ -306,7 +362,6 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
         Assert.False(big.Unconverted);
         Assert.True(big.ChunkCount >= 2);
         Assert.True(forRun.Single(m => m.SessionId == "legacy").Unconverted);
-        Assert.Equal("chat", Assert.Single(forChat).SessionId);
         Assert.Empty(await ChunksAsync(Key("legacy", "Pi")));
     }
 
