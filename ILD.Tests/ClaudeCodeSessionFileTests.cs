@@ -221,14 +221,20 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
         File.AppendAllText(SessionPath, "{\"session_id\":\"claude-sess\",\"turn\":2}\n");
 
         // Another writer lands between this turn's metadata read and its append.
+        var raced = 0;
         var racing = new ServiceCollection();
         racing.AddDbContext<AppDbContext>(options => options.UseSqlite(_connection));
         racing.AddScoped<IAdapterSessionSnapshotStore>(sp => new RacingSnapshotStore(
-            new AdapterSessionSnapshotStore(sp.GetRequiredService<AppDbContext>()), AppendFromAnotherWriterAsync));
+            new AdapterSessionSnapshotStore(sp.GetRequiredService<AppDbContext>()), async () =>
+            {
+                await AppendFromAnotherWriterAsync();
+                Interlocked.Increment(ref raced);
+            }));
         await using var racingServices = racing.BuildServiceProvider();
 
         await RunAsync(services: racingServices);
 
+        Assert.Equal(1, raced);
         Assert.Equal(File.ReadAllBytes(SessionPath), await StoredAsync());
     }
 
