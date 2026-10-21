@@ -34,8 +34,8 @@ public interface ILoopEngine
     ///
     /// Not a choke point, and nothing has to funnel through here. Other writers
     /// end runs their own way, on purpose: the engine's own lifecycle finishes
-    /// its runs Completed at a Cleanup node or Failed on a node failure or
-    /// crash; <c>StuckRunWatchdog</c> marks a driverless "Completed yet Running"
+    /// its runs Completed at a Cleanup node (a node failure with nowhere to go,
+    /// or a crash, parks the run instead of ending it); <c>StuckRunWatchdog</c> marks a driverless "Completed yet Running"
     /// row Failed, deliberately keeping the completion timestamp it was
     /// finalized with; and <c>WorkItemManager</c> writes Completed on the
     /// Cleanup→Backlog path and Cancelled as its no-engine fallback. Routing any
@@ -143,7 +143,10 @@ public interface ILoopEngine
     /// Re-enter the run at the template node corresponding to
     /// <paramref name="runNodeId"/>, replaying with the same
     /// <c>{{PreviousNode.Output}}</c> seed that the node saw the last
-    /// time it started. Fails if the run is currently executing.
+    /// time it started. Fails if the run is currently executing, or has ended —
+    /// except a run that ended Failed on a failed node before such a failure
+    /// parked the run, which is reopened when it is its work item's latest run,
+    /// no other run of the item is live and the item waits on a person.
     /// </summary>
     Task RetryFromNodeAsync(Guid runId, Guid runNodeId);
 

@@ -90,7 +90,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         newlyTrue.ExceptWith(baseline);
 
         // Connected-only: emit nothing for a newly-true state whose named edge
-        // isn't wired, otherwise the engine would fail the run ("missing edge
+        // isn't wired, otherwise the engine would park the run ("missing edge
         // connection"). Read before the review ledger, so an unwired on_comment
         // costs no forge call and writes no ledger at all.
         var edges = await _runs.GetEdgesForNodeIdsAsync(new[] { runNode.LoopNodeId });

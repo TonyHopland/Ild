@@ -135,7 +135,7 @@ public static class LoopTemplateValidator
         foreach (var node in nodes)
             declaredById.TryAdd(node.Id, DeclaredOutputs(node, errors));
         // The named outputs each node has a Custom edge from. A rule, case or
-        // default routing to an unwired output would fail the run when it routes,
+        // default routing to an unwired output would park the run when it routes,
         // so it is refused here.
         var wiredById = edges
             .Where(e => !string.IsNullOrWhiteSpace(e.Name)

@@ -71,7 +71,7 @@ public sealed class RemoteWorkItemStartupReconciler : IHostedService
                 ApiKey = opts.ApiKey,
             };
 
-            // Running runs plus runs parked WaitingHuman at a Human/PR node —
+            // Running runs plus runs parked WaitingHuman for a person —
             // the engine considers both active.
             var allActive = await loopRunStore.GetActiveRunsAsync();
 

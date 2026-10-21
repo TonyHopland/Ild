@@ -131,7 +131,7 @@ public class PrSyncService : IPrSyncService
     /// <summary>
     /// Resume the run on <paramref name="edgeName"/>, and report whether it
     /// happened. Connected-only (mirrors the PR heartbeat poller): a named
-    /// custom edge with no wired connection fails the run ("missing edge
+    /// custom edge with no wired connection parks the run ("missing edge
     /// connection"), so emit only when the PR node actually wires that edge.
     /// No fallback to OnSuccess/OnFailure for any state.
     /// </summary>
