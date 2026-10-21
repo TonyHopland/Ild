@@ -38,17 +38,17 @@ public interface IAdapterSessionSnapshotStore
     /// <summary>
     /// Up to <paramref name="maxEvents"/> lines ending at <paramref name="beforeRawOffset"/> (the end of
     /// the content when null), reading only the chunks they are in and never a line whose start it has
-    /// not read; an empty page when there is no snapshot. Its <see cref="SessionSnapshotPage.PreviousOffset"/>
+    /// not read; null when there is no snapshot. Its <see cref="SessionSnapshotPage.PreviousOffset"/>
     /// is where to ask for the page before it.
     /// </summary>
-    Task<SessionSnapshotPage> ReadTailAsync(SessionSnapshotKey key, int maxEvents, long? beforeRawOffset, CancellationToken cancellationToken = default);
+    Task<SessionSnapshotPage?> ReadTailAsync(SessionSnapshotKey key, int maxEvents, long? beforeRawOffset, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The start of content that is one document rather than lines, up to a page's budget, as
     /// a page of one event that is <see cref="SessionSnapshotPage.Truncated"/> when the content
-    /// goes on past it; an empty page when there is no snapshot or it is empty.
+    /// goes on past it, and empty when the content is; null when there is no snapshot.
     /// </summary>
-    Task<SessionSnapshotPage> ReadHeadAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default);
+    Task<SessionSnapshotPage?> ReadHeadAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Copies the source snapshot to <paramref name="destination"/> with every occurrence of the
@@ -97,9 +97,11 @@ public enum SessionSnapshotAppendResult
 }
 
 /// <summary>
-/// Lines of a snapshot, each without its '\n': the first starts at raw offset
+/// Lines of a snapshot, read with the <see cref="Snapshot"/> metadata they belong to, each
+/// without its '\n': the first starts at raw offset
 /// <see cref="FromOffset"/>; <see cref="PreviousOffset"/> is where the page before it ends,
 /// or null when it starts the content. A page holds about a megabyte of lines at most; a
 /// single line longer than that is cut off at it, and <see cref="Truncated"/> says so.
 /// </summary>
-public sealed record SessionSnapshotPage(IReadOnlyList<string> Events, long FromOffset, long? PreviousOffset, bool Truncated);
+public sealed record SessionSnapshotPage(
+    SessionSnapshotMetadata Snapshot, IReadOnlyList<string> Events, long FromOffset, long? PreviousOffset, bool Truncated);

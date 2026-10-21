@@ -6,11 +6,13 @@ namespace ILD.Tests;
 /// <summary>A string read as UTF-8 a block at a time gives exactly the bytes of encoding it whole.</summary>
 public sealed class Utf8TextStreamTests
 {
-    private static readonly string Text = string.Concat(Enumerable.Repeat("{\"text\":\"café ✓ 🙂\"}\n", 20_000)) + "\ud800 end";
+    private static readonly string Text = string.Concat(Enumerable.Repeat("{\"text\":\"café ✓ 🙂\"}\n", 20_000)) + "\ud800 end \udfff\ud83d";
 
     [Theory]
     [InlineData(1)]
+    [InlineData(2)]
     [InlineData(3)]
+    [InlineData(4)]
     [InlineData(5)]
     [InlineData(81920)]
     public async Task Reading_in_blocks_of_any_size_gives_the_bytes_of_the_whole_string(int blockSize)

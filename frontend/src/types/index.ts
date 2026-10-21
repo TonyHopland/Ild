@@ -586,7 +586,8 @@ export interface LoopRunAvailableSession {
   updatedAt: string | null;
   isCurrent: boolean;
   placeholders: string[];
-  /** Snapshot metadata; all null for a snapshot not yet converted to the current format. */
+  // Snapshot metadata. Legacy (remove with migration B): all null for a snapshot not yet
+  // converted to the current format.
   format: string | null;
   byteLength: number | null;
   eventCount: number | null;

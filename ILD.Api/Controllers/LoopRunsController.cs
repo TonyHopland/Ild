@@ -491,7 +491,8 @@ public class LoopRunsController : ControllerBase
         if (beforeOffset < 0)
             return BadRequest(new { error = "beforeOffset must not be negative" });
 
-        // Listing reads metadata only and never converts, unlike a single snapshot's metadata.
+        // Legacy (remove with migration B): found in the listing, which never converts, rather
+        // than through GetMetadataAsync, which would.
         var snapshot = (await _sessionSnapshotStore.ListMetadataForRunAsync(guid))
             .FirstOrDefault(s => s.AdapterName == adapterName && s.SessionId == sessionId);
         if (snapshot == null)
@@ -499,6 +500,8 @@ public class LoopRunsController : ControllerBase
 
         // Legacy (remove with migration B): converting a long session takes seconds, so a preview
         // leaves it to the background migration and says so; a converted row never goes back.
+        // The page carries the metadata it was read with, so a turn saved meanwhile cannot
+        // describe one version and show another.
         SessionSnapshotPage? page = null;
         if (!snapshot.Unconverted)
         {
@@ -512,6 +515,8 @@ public class LoopRunsController : ControllerBase
             page = lines
                 ? await _sessionSnapshotStore.ReadTailAsync(key, tail, beforeOffset)
                 : await _sessionSnapshotStore.ReadHeadAsync(key);
+            if (page == null)
+                return NotFound(new { error = "Session snapshot not found" });
         }
 
         return Ok(new
@@ -519,10 +524,11 @@ public class LoopRunsController : ControllerBase
             adapterName = snapshot.AdapterName,
             sessionId = snapshot.SessionId,
             createdAt = snapshot.CreatedAt,
-            updatedAt = snapshot.UpdatedAt,
-            format = page is null ? null : snapshot.Format,
-            byteLength = page is null ? (long?)null : snapshot.ByteLength,
-            eventCount = page is null ? (int?)null : snapshot.EventCount,
+            updatedAt = page?.Snapshot.UpdatedAt ?? snapshot.UpdatedAt,
+            // Legacy (remove with migration B): null while converting, as in the sessions list.
+            format = page?.Snapshot.Format,
+            byteLength = page?.Snapshot.ByteLength,
+            eventCount = page?.Snapshot.EventCount,
             events = page?.Events ?? [],
             fromOffset = page?.FromOffset ?? 0,
             previousOffset = page?.PreviousOffset,

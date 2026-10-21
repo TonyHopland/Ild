@@ -29,7 +29,7 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
         string[] lines = [new('a', LineBytes), new('b', LineBytes), new('c', LineBytes)];
         await SessionSnapshotTestSupport.SeedAsync(Store(), key, SessionSnapshotFormats.ClaudeJsonl, string.Concat(lines.Select(l => l + "\n")), Ct);
 
-        var tail = await Store().ReadTailAsync(key, 200, null, Ct);
+        var tail = (await Store().ReadTailAsync(key, 200, null, Ct))!;
 
         Assert.False(tail.Truncated);
         Assert.Equal(lines[2..], tail.Events);
@@ -44,7 +44,7 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
         var line = "{\"messages\":\"" + string.Concat(Enumerable.Repeat("é", 2 * Budget)) + "\"}";
         await SessionSnapshotTestSupport.SeedAsync(Store(), key, SessionSnapshotFormats.OpenCodeJson, line, Ct);
 
-        foreach (var page in new[] { await Store().ReadHeadAsync(key, Ct), await Store().ReadTailAsync(key, 200, null, Ct) })
+        foreach (var page in new[] { (await Store().ReadHeadAsync(key, Ct))!, (await Store().ReadTailAsync(key, 200, null, Ct))! })
         {
             var only = Assert.Single(page.Events);
             Assert.True(page.Truncated);
@@ -63,8 +63,8 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
         var line = new string('x', 2 * Budget);
         await SessionSnapshotTestSupport.SeedAsync(Store(), key, SessionSnapshotFormats.ClaudeJsonl, line + "\n\n\n{\"n\":1}\n", Ct);
 
-        var latest = await Store().ReadTailAsync(key, 200, null, Ct);
-        var page = await Store().ReadTailAsync(key, 200, latest.PreviousOffset, Ct);
+        var latest = (await Store().ReadTailAsync(key, 200, null, Ct))!;
+        var page = (await Store().ReadTailAsync(key, 200, latest.PreviousOffset, Ct))!;
 
         Assert.Equal(new[] { "", "", "{\"n\":1}" }, latest.Events);
         Assert.False(latest.Truncated);
@@ -84,7 +84,7 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
         await AppendAsync(key, cutOff, 0);
         await AppendAsync(key, continued + "\n" + last + "\n", cutOff.Length);
 
-        var page = await Store().ReadTailAsync(key, 200, null, Ct);
+        var page = (await Store().ReadTailAsync(key, 200, null, Ct))!;
 
         Assert.Equal(new[] { last }, page.Events);
         Assert.Equal(cutOff.Length + continued.Length + 1, page.FromOffset);
@@ -97,9 +97,9 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
         var lines = Enumerable.Range(0, 1000).Select(n => $"{{\"n\":{n}}}").ToArray();
         await SessionSnapshotTestSupport.SeedAsync(Store(), key, SessionSnapshotFormats.ClaudeJsonl, string.Concat(lines.Select(l => l + "\n")), Ct);
 
-        var pages = new List<SessionSnapshotPage> { await Store().ReadTailAsync(key, 300, null, Ct) };
+        var pages = new List<SessionSnapshotPage> { (await Store().ReadTailAsync(key, 300, null, Ct))! };
         while (pages[^1].PreviousOffset is { } before)
-            pages.Add(await Store().ReadTailAsync(key, 300, before, Ct));
+            pages.Add((await Store().ReadTailAsync(key, 300, before, Ct))!);
 
         Assert.Equal(new[] { 300, 300, 300, 100 }, pages.Select(p => p.Events.Count));
         Assert.Equal(lines, pages.AsEnumerable().Reverse().SelectMany(p => p.Events));

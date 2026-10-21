@@ -378,7 +378,7 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
         }
 
         _sql.Clear();
-        var head = await Store().ReadHeadAsync(Key(), Ct);
+        var head = (await Store().ReadHeadAsync(Key(), Ct))!;
         Assert.Equal(string.Concat(parts)[..budget], Assert.Single(head.Events));
         Assert.True(head.Truncated);
         Assert.Equal(0, head.FromOffset);
@@ -386,11 +386,18 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
         Assert.Equal(2, _sql.ChunkDataReads);
 
         await SessionSnapshotTestSupport.SeedAsync(Store(), Key("small"), "opencode-json", "{\n  \"id\": \"small\"\n}\n", Ct);
-        var whole = await Store().ReadHeadAsync(Key("small"), Ct);
+        var whole = (await Store().ReadHeadAsync(Key("small"), Ct))!;
         Assert.Equal("{\n  \"id\": \"small\"\n}\n", Assert.Single(whole.Events));
         Assert.False(whole.Truncated);
 
-        Assert.Empty((await Store().ReadHeadAsync(Key("missing"), Ct)).Events);
+        await Store().ReplaceAsync(Key("empty"), "opencode-json", new MemoryStream(), Ct);
+        var empty = (await Store().ReadHeadAsync(Key("empty"), Ct))!;
+        Assert.Empty(empty.Events);
+        Assert.False(empty.Truncated);
+        Assert.Equal(0, empty.Snapshot.ByteLength);
+
+        Assert.Null(await Store().ReadHeadAsync(Key("missing"), Ct));
+        Assert.Null(await Store().ReadTailAsync(Key("missing"), 10, null, Ct));
     }
 
     [Fact]
@@ -410,13 +417,13 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
         }
 
         _sql.Clear();
-        var lastTwo = await Store().ReadTailAsync(Key(), 2, null, Ct);
+        var lastTwo = (await Store().ReadTailAsync(Key(), 2, null, Ct))!;
         Assert.Equal(new[] { "{\"n\":7}", "{\"n\":8}" }, lastTwo.Events);
         Assert.Equal(7 * 8, lastTwo.FromOffset);
         Assert.Equal(1, _sql.ChunkDataReads);
 
         _sql.Clear();
-        var lastFour = await Store().ReadTailAsync(Key(), 4, null, Ct);
+        var lastFour = (await Store().ReadTailAsync(Key(), 4, null, Ct))!;
         Assert.Equal(new[] { "{\"n\":5}", "{\"n\":6}", "{\"n\":7}", "{\"n\":8}" }, lastFour.Events);
         Assert.Equal(5 * 8, lastFour.FromOffset);
         Assert.Equal(2, _sql.ChunkDataReads);

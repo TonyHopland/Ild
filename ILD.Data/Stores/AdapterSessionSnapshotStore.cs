@@ -83,8 +83,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         else
         {
             // Claiming the row takes its lock, so appends to one snapshot run one at a time
-            // and the loser of a race sees the winner's length and matches nothing. A row
-            // still holding legacy content never gets chunks beside it.
+            // and the loser of a race sees the winner's length and matches nothing.
             var claimed = await _db.AdapterSessionSnapshots
                 .Where(s => s.Id == id
                     && s.ByteLength == expectedByteLength
@@ -180,28 +179,28 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         }
     }
 
-    public async Task<SessionSnapshotPage> ReadHeadAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default)
+    public async Task<SessionSnapshotPage?> ReadHeadAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default)
     {
         if (await BeginConsistentReadAsync(key, cancellationToken) is not ({ } tx, { } metadata))
-            return Page([], 0, truncated: false);
+            return null;
         await using var _ = tx;
         if (metadata.ByteLength == 0)
-            return Page([], 0, truncated: false);
+            return Page(metadata, [], 0, truncated: false);
 
         var bytes = new byte[Math.Min(metadata.ByteLength, PageByteBudget)];
         await using (var content = await OpenContentAsync(metadata.Id, 0, ownedTransaction: null, cancellationToken))
             await content.ReadExactlyAsync(bytes, cancellationToken);
         var truncated = metadata.ByteLength > bytes.Length;
-        return Page([Encoding.UTF8.GetString(bytes, 0, truncated ? WholeUtf8Length(bytes) : bytes.Length)], 0, truncated);
+        return Page(metadata, [Encoding.UTF8.GetString(bytes, 0, truncated ? WholeUtf8Length(bytes) : bytes.Length)], 0, truncated);
     }
 
-    public async Task<SessionSnapshotPage> ReadTailAsync(
+    public async Task<SessionSnapshotPage?> ReadTailAsync(
         SessionSnapshotKey key, int maxEvents, long? beforeRawOffset, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
         if (beforeRawOffset is { } requested) ArgumentOutOfRangeException.ThrowIfNegative(requested);
         if (await BeginConsistentReadAsync(key, cancellationToken) is not ({ } tx, { } metadata))
-            return Page([], 0, truncated: false);
+            return null;
         await using var _ = tx;
         var before = Math.Min(beforeRawOffset ?? metadata.ByteLength, metadata.ByteLength);
 
@@ -261,7 +260,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
             }
             events.Add(Encoding.UTF8.GetString(bytes, 0, kept));
         }
-        return Page(events, first < lineStarts.Count ? lineStarts[first] : before, truncated);
+        return Page(metadata, events, first < lineStarts.Count ? lineStarts[first] : before, truncated);
     }
 
     /// <summary>The raw bytes <c>[offset, offset + length)</c> out of chunks read in reverse order.</summary>
@@ -289,8 +288,8 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
     }
 
     /// <summary>A page whose previous page ends where it starts, unless it starts the content.</summary>
-    private static SessionSnapshotPage Page(IReadOnlyList<string> events, long fromOffset, bool truncated)
-        => new(events, fromOffset, fromOffset > 0 ? fromOffset : null, truncated);
+    private static SessionSnapshotPage Page(SessionSnapshotMetadata snapshot, IReadOnlyList<string> events, long fromOffset, bool truncated)
+        => new(snapshot, events, fromOffset, fromOffset > 0 ? fromOffset : null, truncated);
 
     public async Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default)
     {
@@ -321,13 +320,13 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
     }
 
     /// <summary>
-    /// A repeatable-read transaction and the snapshot's metadata as of it, converting a
-    /// legacy row first (through <see cref="GetMetadataAsync"/>); null when there is no snapshot. Every chunk read inside it sees the
+    /// A repeatable-read transaction and the snapshot's metadata as of it; null when there is no snapshot. Every chunk read inside it sees the
     /// content the metadata describes, even while a replace swaps that content out.
     /// </summary>
     private async Task<(IDbContextTransaction Transaction, SessionSnapshotMetadata Metadata)?> BeginConsistentReadAsync(
         SessionSnapshotKey key, CancellationToken ct)
     {
+        // Legacy (remove with migration B): GetMetadataAsync converts a row still in the old column first.
         if (await GetMetadataAsync(key, ct) is null) return null;
 
         var tx = await _db.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, ct);

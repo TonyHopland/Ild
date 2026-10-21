@@ -52,10 +52,12 @@ internal sealed class Utf8TextStream(string text) : Stream
     }
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
-        => Task.FromResult(Read(buffer.AsSpan(offset, count)));
+        => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
 
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        => ValueTask.FromResult(Read(buffer.Span));
+        => cancellationToken.IsCancellationRequested
+            ? ValueTask.FromCanceled<int>(cancellationToken)
+            : ValueTask.FromResult(Read(buffer.Span));
 
     public override void Flush() { }
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

@@ -74,9 +74,9 @@ is emptied as each session converts, and older releases read only that column.
 
 Once every installation has logged `Session snapshot conversion finished: … none left`, a
 later release adds an EF migration that drops `AdapterSessionSnapshots.SessionJson` and
-removes the code that only exists for unconverted rows. Every such place is marked
-`// Legacy (remove with migration B)`, so `grep -rn "Legacy (remove with migration B)"`
-finds them all:
+removes the code that only exists for unconverted rows. Each such place carries the marker
+`Legacy (remove with migration B)`, so `grep -rn "Legacy (remove with migration B)"` lists
+them:
 
 - `AdapterSessionSnapshot.LegacySessionJsonColumn` and its mapping in `AppDbContext`
 - `SessionSnapshotContentMigrator`, `SessionSnapshotMigrationService` and its registration
@@ -85,7 +85,10 @@ finds them all:
   `ToMetadata`
 - `SessionSnapshotMetadata.Unconverted`
 - the `Unconverted` handling in `LoopRunsController` (the sessions list and the preview's
-  `converting` response), and the frontend's message for it
+  `converting` response), and in the frontend the `converting` field, its message and the
+  nullable session metadata
+- the test helpers that seed legacy rows (`SessionSnapshotTestSupport.SeedLegacyAsync` and
+  those beside it) and the tests that use them
 
 ## Worktree preview proxy
 

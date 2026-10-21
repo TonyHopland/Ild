@@ -39,6 +39,7 @@ internal static class SessionSnapshotTestSupport
     /// <summary>
     /// A row as migration A leaves it: the transcript still in the legacy
     /// <c>SessionJson</c> column and the new metadata columns at their defaults.
+    /// Legacy (remove with migration B): with the helpers below and the tests that use them.
     /// </summary>
     public static async Task<Guid> SeedLegacyAsync(
         AppDbContext db, Guid? loopRunId, Guid? chatSessionId, string adapterName, string sessionId, string sessionJson, CancellationToken ct)
