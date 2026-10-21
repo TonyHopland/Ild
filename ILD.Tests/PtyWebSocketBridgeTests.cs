@@ -121,8 +121,9 @@ public class PtyWebSocketBridgeTests
             App = "/bin/sh",
             // The background sleep inherits the PTY and ignores the SIGHUP the shell's
             // exit sends it, so the output never reaches EOF and only the bridge's
-            // bounded wait ends it.
-            CommandLine = new[] { "-c", $"echo ready; read line; (trap \"\" HUP; exec sleep 60) & echo $! > '{pidFile}'; echo boom; exit 3" },
+            // bounded wait ends it. The shell ignores HUP before forking it, so the
+            // sleep is ignoring it from birth and cannot lose a race to the exit.
+            CommandLine = new[] { "-c", $"echo ready; read line; trap \"\" HUP; sleep 60 & echo $! > '{pidFile}'; echo boom; exit 3" },
             Environment = new Dictionary<string, string>(),
         };
 
