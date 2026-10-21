@@ -732,6 +732,10 @@ public sealed class LoopEngine : ILoopEngine
 
     private const string RetryOfEndedRunRefused = "Cannot retry a node of a run that has ended; start a new run instead";
 
+    // The reopen path (ReopenToRetryAsync, EndedOnFailedNode) exists only to
+    // revive runs that ended Failed on a failed node before such a failure
+    // parked the run; once none of those are left, it can be removed.
+
     /// <summary>
     /// Reopen a run that ended on a failed node before such a failure parked the
     /// run instead — Failed with "Node Failed" — and set it up to retry
@@ -1126,7 +1130,7 @@ public sealed class LoopEngine : ILoopEngine
                         // CurrentAiSessionId is deliberately left alone — the
                         // provider cut off a node that HAD started, so Resume
                         // should continue that same session.
-                        await ParkForHumanAsync(run, node, HaltReason.Throttled,
+                        await ParkForHumanAsync(run, node.Id, node.Label, HaltReason.Throttled,
                             HumanFeedbackReasons.AiProviderThrottled, intr.Reason, loopRunStore, workItems, eventLog, runNodeId);
                         return ParkResult.Stop;
                     }
@@ -1394,7 +1398,7 @@ public sealed class LoopEngine : ILoopEngine
         // note appended) instead of dropping "Continue where you left off." into
         // an earlier node's conversation. See AINodeExecutor's steering path.
         run.CurrentAiSessionId = null;
-        await ParkForHumanAsync(run, node, HaltReason.MaxAiTraversals,
+        await ParkForHumanAsync(run, node.Id, node.Label, HaltReason.MaxAiTraversals,
             HumanFeedbackReasons.MaxAiTraversalsReached,
             $"The AI ran {run.AiTraversalCount} steps without human input (limit {limit}). "
                 + "Continue, continue with guidance, or abandon the run.",
@@ -1424,7 +1428,7 @@ public sealed class LoopEngine : ILoopEngine
         // Parked before the node starts, as for the AI traversal cap: the session
         // on the row belongs to a node that already finished.
         run.CurrentAiSessionId = null;
-        await ParkForHumanAsync(run, node, HaltReason.GlobalVariableMissing,
+        await ParkForHumanAsync(run, node.Id, node.Label, HaltReason.GlobalVariableMissing,
             HumanFeedbackReasons.GlobalVariableMissing,
             $"Global variable(s) {string.Join(", ", missing)} used by \"{node.Label}\" are missing or empty. "
                 + "Set them on the Global Variables page (/global-variables), then resume.",
@@ -1447,34 +1451,40 @@ public sealed class LoopEngine : ILoopEngine
     }
 
     /// <summary>
-    /// Park a run at a person's feet exactly as the Halt button does:
-    /// <see cref="LoopRunStatus.WaitingHuman"/> + <c>IsHalted</c> stamped with
-    /// <paramref name="haltReason"/>, so <see cref="ResumeFromHaltAsync"/> is the
-    /// way out and startup leaves it alone, and the work item moved to
-    /// HumanFeedback, with <paramref name="reason"/> recorded in full on the run.
-    /// The whole park is one write plus both notifications, which is why it lives
-    /// here rather than at each caller: a park missing the <c>HaltedAsync</c>
-    /// notification or the transition is a run nobody is told about.
+    /// Park a run at a person's feet: <see cref="LoopRunStatus.WaitingHuman"/>
+    /// and the work item moved to HumanFeedback, with <paramref name="reason"/>
+    /// recorded on the run — or <paramref name="recordedReason"/>, when the full
+    /// text is longer than the work item should carry. With a
+    /// <paramref name="haltReason"/> it parks exactly as the Halt button does,
+    /// <c>IsHalted</c> stamped with it, so <see cref="ResumeFromHaltAsync"/> is the
+    /// way out. Without one it is no halt — a node failed with nowhere to go, or
+    /// the run loop crashed — and <see cref="RetryFromNodeAsync"/> is the way
+    /// out. Startup leaves either alone. The whole park is one write plus its
+    /// notifications, which is why it lives here rather than at each caller: a
+    /// park missing a notification or the transition is a run nobody is told
+    /// about.
     ///
     /// Deliberately does NOT cancel the run's cancellation token — that is
     /// <see cref="HaltRunAsync"/>'s job and exists to kill a live agent process.
     /// Every caller here parks a run with no node in flight.
     /// </summary>
     private async Task ParkForHumanAsync(
-        LoopRun run, LoopNode node, HaltReason haltReason, string feedbackReason,
-        string reason, ILoopRunStore store, IWorkItemManager workItems, IEventLogService? eventLog, Guid? runNodeId)
+        LoopRun run, Guid? nodeId, string? nodeLabel, HaltReason? haltReason, string feedbackReason,
+        string reason, ILoopRunStore store, IWorkItemManager workItems, IEventLogService? eventLog, Guid? runNodeId,
+        string? recordedReason = null)
     {
         var old = run.Status;
         run.Status = LoopRunStatus.WaitingHuman;
-        run.IsHalted = true;
+        run.IsHalted = haltReason is not null;
         run.HaltReason = haltReason;
         run.HumanFeedbackReason = feedbackReason;
         await store.UpdateRunAsync(run);
         if (eventLog is not null)
-            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunParked, reason, node.Id, runNodeId));
+            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunParked, recordedReason ?? reason, nodeId, runNodeId));
         await _notifier.RunStateChangedAsync(run.Id, old, LoopRunStatus.WaitingHuman);
-        await _notifier.HaltedAsync(run.Id);
-        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        if (haltReason is not null)
+            await _notifier.HaltedAsync(run.Id);
+        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, nodeLabel), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: feedbackReason, currentLoopRunId: run.Id);
     }
 
@@ -1496,30 +1506,18 @@ public sealed class LoopEngine : ILoopEngine
     }
 
     /// <summary>
-    /// Park a run on a node that failed with nowhere to go: WaitingHuman with
-    /// "Node Failed", the work item moved to HumanFeedback, and
-    /// <paramref name="reason"/> recorded in full. Not a halt: the way on is
-    /// <see cref="RetryFromNodeAsync"/> on the failed execution, and startup
-    /// leaves the run alone. A run that had already ended before the node ran
+    /// Park a run on a node that failed with nowhere to go, as "Node Failed",
+    /// with <paramref name="reason"/> recorded in full. Not a halt: the way on is
+    /// <see cref="RetryFromNodeAsync"/> on the failed execution. A run that had already ended before the node ran
     /// (<see cref="CleanupRunAsync"/>) stays ended; parking it would bring it back
     /// to life past the checks a reopen makes.
     /// </summary>
     private async Task ParkOnFailedNodeAsync(
         LoopRun run, string reason, ILoopRunStore store, IServiceProvider sp, LoopNode node, Guid? runNodeId)
     {
-        var old = run.Status;
-        if (!IsAlive(old)) return;
-        run.Status = LoopRunStatus.WaitingHuman;
-        run.IsHalted = false;
-        run.HaltReason = null;
-        run.HumanFeedbackReason = HumanFeedbackReasons.NodeFailed;
-        await store.UpdateRunAsync(run);
-        if (sp.GetService<IEventLogService>() is { } eventLog)
-            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunParked, reason, node.Id, runNodeId));
-        await _notifier.RunStateChangedAsync(run.Id, old, LoopRunStatus.WaitingHuman);
-        await sp.GetRequiredService<IWorkItemManager>().TransitionAsync(
-            RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            reason: reason, humanFeedbackReason: HumanFeedbackReasons.NodeFailed, currentLoopRunId: run.Id);
+        if (!IsAlive(run.Status)) return;
+        await ParkForHumanAsync(run, node.Id, node.Label, haltReason: null, HumanFeedbackReasons.NodeFailed,
+            reason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), runNodeId);
     }
 
     private static bool IsAlive(LoopRunStatus status)
@@ -1547,11 +1545,8 @@ public sealed class LoopEngine : ILoopEngine
             : null;
         if (crashed?.Status != LoopRunNodeStatus.Running) crashed = null;
 
-        // Clamp before persisting: a flattened inner-exception chain is unbounded,
-        // but HumanFeedbackReason is varchar(512). An over-length reason would make
-        // this handler's own UpdateRunAsync SaveChanges throw — swallowed by the
-        // caller's TrySafe — leaving the run stuck Running and never parked. The
-        // event below keeps the whole of it.
+        // A flattened inner-exception chain is unbounded: the execution's error
+        // and the work item get it clamped, and the park's event keeps the whole.
         var shortReason = Truncate(reason, MaxHumanFeedbackReasonLength);
         if (crashed is not null)
         {
@@ -1559,18 +1554,9 @@ public sealed class LoopEngine : ILoopEngine
             await _notifier.NodeStateChangedAsync(runId, crashed.LoopNodeId, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
         }
 
-        var workItems = sp.GetRequiredService<IWorkItemManager>();
-        var old = run.Status;
-        run.Status = LoopRunStatus.WaitingHuman;
-        run.IsHalted = false;
-        run.HaltReason = null;
-        run.HumanFeedbackReason = shortReason;
-        await store.UpdateRunAsync(run);
-        if (sp.GetService<IEventLogService>() is { } eventLog)
-            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.RunParked, reason, crashed?.LoopNodeId, crashed?.Id));
-        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.WaitingHuman);
-        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, crashed?.NodeLabel), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
-            reason: run.HumanFeedbackReason, humanFeedbackReason: HumanFeedbackReasons.RunCrashed, currentLoopRunId: run.Id);
+        await ParkForHumanAsync(run, crashed?.LoopNodeId, crashed?.NodeLabel, haltReason: null, HumanFeedbackReasons.RunCrashed,
+            shortReason, store, sp.GetRequiredService<IWorkItemManager>(), sp.GetService<IEventLogService>(), crashed?.Id,
+            recordedReason: reason);
     }
 
     /// <summary>
