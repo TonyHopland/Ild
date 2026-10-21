@@ -1,4 +1,4 @@
-using ILD.Data;
+using ILD.Data.Entities;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
