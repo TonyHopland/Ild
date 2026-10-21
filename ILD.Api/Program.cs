@@ -297,10 +297,24 @@ try
     app.UseCors("AllowFrontend");
 
     var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
+    // Vite names every file under assets/ by its content hash, so a new build
+    // names new files and those can be cached for good. Everything else, the
+    // shell above all, is revalidated on each use, or a browser keeps loading
+    // the previous release until a hard refresh. By the time a response is
+    // prepared, the request path is the served file's: UseDefaultFiles and
+    // MapFallbackToFile both rewrite it, so the shell answering an unknown
+    // /assets/ URL is never long-cached.
+    var spaFiles = new StaticFileOptions
+    {
+        OnPrepareResponse = ctx => ctx.Context.Response.Headers.CacheControl =
+            ctx.Context.Request.Path.StartsWithSegments("/assets")
+                ? "public, max-age=31536000, immutable"
+                : "no-cache",
+    };
     if (Directory.Exists(wwwroot))
     {
         app.UseDefaultFiles();
-        app.UseStaticFiles();
+        app.UseStaticFiles(spaFiles);
     }
 
     // Authorization is per-endpoint from here on, under a user-only fallback
@@ -329,7 +343,7 @@ try
         }
 
         // The SPA shell itself is anonymous — it is what renders the login screen.
-        app.MapFallbackToFile("index.html").AllowAnonymous();
+        app.MapFallbackToFile("index.html", spaFiles).AllowAnonymous();
     }
 
     await app.RunAsync();
