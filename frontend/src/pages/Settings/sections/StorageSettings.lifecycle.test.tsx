@@ -72,8 +72,9 @@ describe("StorageSettings lifecycle", () => {
     await screen.findByText("Worktrees");
     fireEvent.click(button("Clean up worktrees of Done work items"));
 
+    // findBy can resolve before the effect that moves focus has run.
     const list = await screen.findByRole("group", { name: /will be removed/i });
-    expect(document.activeElement).toBe(list);
+    await waitFor(() => expect(document.activeElement).toBe(list));
 
     fireEvent.click(button(/cancel/i));
 
