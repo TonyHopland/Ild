@@ -132,15 +132,15 @@ public sealed class SessionSnapshotContentMigratorTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// The legacy text is read a slice at a time (1 Mi characters, here one byte each) and each
-    /// chunk is written as soon as it is cut, so conversion never holds more than about one chunk:
-    /// after the checking pass, no more slices are read before a chunk is written than one chunk
-    /// target needs, plus the one that ends it.
+    /// The legacy text is read a slice at a time (8 Mi characters, here one byte each) in one pass
+    /// that writes each chunk as soon as it is cut, so conversion never holds more than about one
+    /// chunk and one slice: no more slices are read before a chunk is written than one chunk target
+    /// needs, plus the one that ends it.
     /// </summary>
     [Fact]
     public async Task A_legacy_row_of_several_chunks_is_read_a_slice_at_a_time_and_written_a_chunk_at_a_time()
     {
-        const int sliceChars = 1024 * 1024;
+        const int sliceChars = 8 * 1024 * 1024;
         var lines = SyntheticTranscript.Lines("s1", 18 * 1024 * 1024, seed: 12).TrimEnd('\n').Split('\n');
         await using (var db = Context())
             await SessionSnapshotTestSupport.SeedLegacyAsync(db, _runId, null, "ClaudeCode", "s1", SessionSnapshotTestSupport.LegacyClaudeWrapper("s1", lines), Ct);
@@ -154,12 +154,11 @@ public sealed class SessionSnapshotContentMigratorTests : IAsyncLifetime
         var slices = commands.Select((sql, i) => (sql, i)).Where(c => IsSlice(c.sql)).Select(c => c.i).ToList();
         var writes = commands.Select((sql, i) => (sql, i)).Where(c => IsChunkWrite(c.sql)).Select(c => c.i).ToList();
         Assert.True(writes.Count >= 4, $"{writes.Count} chunks");
-        Assert.Equal(0, slices.Count % 2);
-        var writingPass = slices[slices.Count / 2];
-        Assert.True(writes[0] > writingPass && writes[0] < slices[^1], "chunks are written while the text is still being read");
+        Assert.Equal((int)Math.Ceiling((double)SessionSnapshotTestSupport.LegacyClaudeWrapper("s1", lines).Length / sliceChars), slices.Count);
+        Assert.True(writes[0] < slices[^1], "chunks are written while the text is still being read");
 
         var readSinceWrite = 0;
-        foreach (var sql in commands.Skip(writingPass))
+        foreach (var sql in commands)
         {
             if (IsSlice(sql)) readSinceWrite++;
             if (!IsChunkWrite(sql)) continue;
@@ -170,6 +169,27 @@ public sealed class SessionSnapshotContentMigratorTests : IAsyncLifetime
     }
 
     private const int SessionSnapshotChunkTarget = 4 * 1024 * 1024;
+
+    [Fact]
+    public async Task A_large_claude_row_found_broken_after_chunks_were_written_is_kept_verbatim_alone()
+    {
+        var lines = SyntheticTranscript.Lines("s1", 9 * 1024 * 1024, seed: 13).TrimEnd('\n').Split('\n');
+        var broken = SessionSnapshotTestSupport.LegacyClaudeWrapper("s1", lines)[..^3];
+        await using (var db = Context())
+            await SessionSnapshotTestSupport.SeedLegacyAsync(db, _runId, null, "ClaudeCode", "s1", broken, Ct);
+
+        await RunMigrationAsync();
+
+        var key = SessionSnapshotKey.ForRun(_runId, "ClaudeCode", "s1");
+        var meta = await StoreMetadataAsync(key);
+        Assert.Equal("raw", meta.Format);
+        var expected = Encoding.UTF8.GetBytes(broken);
+        Assert.Equal(expected.Length, meta.ByteLength);
+        Assert.Equal(expected, await ReadAllAsync(key));
+        var chunks = await ChunksAsync();
+        Assert.Equal(meta.ChunkCount, chunks.Count);
+        Assert.Equal(expected.Length, chunks.Sum(c => (long)c.RawLength));
+    }
 
     [Fact]
     public async Task A_row_that_fails_is_logged_and_left_for_the_next_start_while_the_rest_convert()

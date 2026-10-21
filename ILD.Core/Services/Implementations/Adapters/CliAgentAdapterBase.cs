@@ -215,11 +215,11 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             }
             logger.LogWarning("The {Adapter} session {SessionId} changed in the store while it was being saved twice running, so this turn's save was skipped", Name, sessionId);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ctx.Cancel.IsCancellationRequested)
         {
             logger.LogWarning(ex, "Could not save the {Adapter} session {SessionId}: {Reason}", Name, sessionId, ex.Message);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ctx.Cancel.IsCancellationRequested)
         {
             // A cancelled turn is not a failed save, and stopping the save must not fail the turn either.
             logger.LogInformation("Stopped saving the {Adapter} session {SessionId} because the turn was cancelled", Name, sessionId);

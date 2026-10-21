@@ -348,8 +348,9 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         if (source == destination) return await Snapshots(source).AnyAsync(cancellationToken);
 
         // One repeatable-read transaction reads the source and writes the copy, so the copy is
-        // of one version of the source. A write to the destination that lands meanwhile makes
-        // Postgres refuse ours rather than wait; the copy is then made again, once.
+        // of one version of the source. A concurrent write to the destination makes Postgres
+        // fail ours once that write commits, with a serialization failure or, when both created
+        // the destination row, a unique violation; the copy is then made again, once.
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -363,7 +364,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
                 await tx.CommitAsync(cancellationToken);
                 return true;
             }
-            catch (Exception ex) when (attempt == 1 && DbErrors.IsSerializationFailure(ex))
+            catch (Exception ex) when (attempt == 1 && (DbErrors.IsSerializationFailure(ex) || ex is DbUpdateException update && DbErrors.IsUniqueViolation(update)))
             {
                 _db.ChangeTracker.Clear();
             }

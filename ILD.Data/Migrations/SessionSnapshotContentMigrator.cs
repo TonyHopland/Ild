@@ -39,9 +39,8 @@ public static class SessionSnapshotContentMigrator
     /// <summary>
     /// Converts one row in one transaction that claims it, writes each chunk as soon as it is
     /// cut and then empties the legacy column. The legacy text is read a slice at a time, so no
-    /// more than one slice and one chunk are held. A Claude wrapper is checked by a first pass
-    /// that writes nothing, and only then unwrapped. False when the row holds no legacy content
-    /// (any more).
+    /// more than one slice and one chunk are held. A Claude wrapper is unwrapped
+    /// as it is read. False when the row holds no legacy content (any more).
     /// </summary>
     public static async Task<bool> ConvertRowAsync(AppDbContext db, Guid snapshotId, CancellationToken ct = default)
     {
@@ -59,26 +58,24 @@ public static class SessionSnapshotContentMigrator
         // does convert cleanly instead of failing every read that converts it.
         await db.AdapterSessionSnapshotChunks.Where(c => c.SnapshotId == snapshotId).ExecuteDeleteAsync(ct);
 
-        LegacyText Text() => new(db, snapshotId, row.Length);
+        // A Claude wrapper is unwrapped as it is read, in the one pass that writes the chunks.
+        // Content that turns out not to be one is rare; its chunks are dropped and it is
+        // written again verbatim, as content the conversion could not interpret.
         var format = row.AdapterName switch
         {
-            "ClaudeCode" => await new ClaudeWrapperScanner(Text(), output: null).TryUnwrapAsync(ct)
-                ? SessionSnapshotFormats.ClaudeJsonl
-                : SessionSnapshotFormats.Raw,
+            "ClaudeCode" => SessionSnapshotFormats.ClaudeJsonl,
             "Pi" => SessionSnapshotFormats.PiJsonl,
             "Codex" => SessionSnapshotFormats.CodexJsonl,
             "OpenCode" => SessionSnapshotFormats.OpenCodeJson,
             _ => SessionSnapshotFormats.Raw,
         };
-
-        var chunker = new SessionSnapshotChunker(snapshotId, 0, 0, (chunk, token) => InsertAsync(db, chunk, token));
-        var output = new Utf8Output(chunker);
-        if (format == SessionSnapshotFormats.ClaudeJsonl)
-            await new ClaudeWrapperScanner(Text(), output).TryUnwrapAsync(ct);
-        else
-            await output.CopyAsync(Text(), ct);
-        await output.FlushAsync(ct);
-        await chunker.CompleteAsync(ct);
+        var chunker = await WriteAsync(db, snapshotId, row.Length, unwrap: format == SessionSnapshotFormats.ClaudeJsonl, ct);
+        if (chunker is null)
+        {
+            await db.AdapterSessionSnapshotChunks.Where(c => c.SnapshotId == snapshotId).ExecuteDeleteAsync(ct);
+            format = SessionSnapshotFormats.Raw;
+            chunker = (await WriteAsync(db, snapshotId, row.Length, unwrap: false, ct))!;
+        }
 
         await db.AdapterSessionSnapshots
             .Where(s => s.Id == snapshotId)
@@ -91,6 +88,28 @@ public static class SessionSnapshotContentMigrator
                 .SetProperty(s => EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn), (string?)null), ct);
         await tx.CommitAsync(ct);
         return true;
+    }
+
+    /// <summary>
+    /// The row's legacy text written as chunks, unwrapping a Claude wrapper when
+    /// <paramref name="unwrap"/>; null when the text turned out not to be one.
+    /// </summary>
+    private static async Task<SessionSnapshotChunker?> WriteAsync(AppDbContext db, Guid snapshotId, int length, bool unwrap, CancellationToken ct)
+    {
+        var chunker = new SessionSnapshotChunker(snapshotId, 0, 0, (chunk, token) => InsertAsync(db, chunk, token));
+        var output = new Utf8Output(chunker);
+        var text = new LegacyText(db, snapshotId, length);
+        if (unwrap)
+        {
+            if (!await new ClaudeWrapperScanner(text, output).TryUnwrapAsync(ct)) return null;
+        }
+        else
+        {
+            await output.CopyAsync(text, ct);
+        }
+        await output.FlushAsync(ct);
+        await chunker.CompleteAsync(ct);
+        return chunker;
     }
 
     private static async Task InsertAsync(AppDbContext db, AdapterSessionSnapshotChunk chunk, CancellationToken ct)
@@ -108,11 +127,13 @@ public static class SessionSnapshotContentMigrator
 
     /// <summary>
     /// A row's legacy text, fetched a slice of characters at a time by its own query, so no
-    /// reader stays open between slices and other commands can run on the connection.
+    /// reader stays open between slices and other commands can run on the connection. Postgres
+    /// decompresses a stored value up to the end of each slice it is asked for, so slices are
+    /// large: an 85 MB transcript converts in about a dozen queries.
     /// </summary>
     private sealed class LegacyText(AppDbContext db, Guid snapshotId, int length) : TextReader
     {
-        public const int SliceChars = 1024 * 1024;
+        public const int SliceChars = 8 * 1024 * 1024;
 
         private string _slice = string.Empty;
         private int _position;
@@ -154,6 +175,18 @@ public static class SessionSnapshotContentMigrator
             _chars[_count++] = c;
         }
 
+        public async ValueTask WriteAsync(ReadOnlyMemory<char> text, CancellationToken ct)
+        {
+            while (!text.IsEmpty)
+            {
+                if (_count == _chars.Length) await EncodeAsync(flush: false, ct);
+                var taken = Math.Min(text.Length, _chars.Length - _count);
+                text[..taken].CopyTo(_chars.AsMemory(_count));
+                _count += taken;
+                text = text[taken..];
+            }
+        }
+
         public async Task CopyAsync(TextReader text, CancellationToken ct)
         {
             int read;
@@ -176,18 +209,15 @@ public static class SessionSnapshotContentMigrator
 
     /// <summary>
     /// Walks the old Claude wrapper object as it streams in and writes each element of its
-    /// root <c>events</c> array, exactly as it appears in the text, followed by a newline;
-    /// without an output it only checks that the text is one.
+    /// root <c>events</c> array, exactly as it appears in the text, followed by a newline.
     /// Fails on anything that is not one well-formed wrapper object: no root object, no
     /// <c>events</c> array, unbalanced brackets or strings, or text after the object.
     /// </summary>
-    private sealed class ClaudeWrapperScanner(TextReader text, Utf8Output? output)
+    private sealed class ClaudeWrapperScanner(TextReader text, Utf8Output output)
     {
         private readonly char[] _buffer = new char[16384];
         private int _position;
         private int _length;
-
-        private ValueTask EmitAsync(char c, CancellationToken ct) => output?.WriteAsync(c, ct) ?? ValueTask.CompletedTask;
 
         public async Task<bool> TryUnwrapAsync(CancellationToken ct)
         {
@@ -235,7 +265,7 @@ public static class SessionSnapshotContentMigrator
             {
                 await PeekNonSpaceAsync(ct);
                 if (!await ValueAsync(emit: true, ct)) return false;
-                await EmitAsync('\n', ct);
+                await output.WriteAsync('\n', ct);
 
                 var separator = await NextNonSpaceAsync(ct);
                 if (separator == ']') return true;
@@ -249,45 +279,50 @@ public static class SessionSnapshotContentMigrator
             var first = await PeekAsync(ct);
             if (first is '"' or '{' or '[')
             {
+                // Scanned a buffer at a time and copied out in runs: these values are nearly all
+                // of a transcript, so they are the one place the scan must not go a character
+                // per call.
                 var closers = new Stack<char>();
                 var inString = false;
-                do
+                var escaped = false;
+                while (true)
                 {
-                    var c = await NextAsync(ct);
-                    if (c == -1) return false;
-                    if (emit) await EmitAsync((char)c, ct);
-                    if (inString)
+                    if (_position == _length && !await FillAsync(ct)) return false;
+                    var start = _position;
+                    var done = false;
+                    while (!done && _position < _length)
                     {
-                        if (c == '\\')
+                        var c = _buffer[_position++];
+                        if (inString)
                         {
-                            var escaped = await NextAsync(ct);
-                            if (escaped == -1) return false;
-                            if (emit) await EmitAsync((char)escaped, ct);
+                            if (escaped) escaped = false;
+                            else if (c == '\\') escaped = true;
+                            else if (c == '"') inString = false;
                         }
                         else if (c == '"')
                         {
-                            inString = false;
+                            inString = true;
                         }
-                        continue;
+                        else if (c is '{' or '[')
+                        {
+                            closers.Push(c == '{' ? '}' : ']');
+                        }
+                        else if (c is '}' or ']' && (closers.Count == 0 || closers.Pop() != c))
+                        {
+                            return false;
+                        }
+                        done = !inString && closers.Count == 0;
                     }
-                    switch (c)
-                    {
-                        case '"': inString = true; break;
-                        case '{': closers.Push('}'); break;
-                        case '[': closers.Push(']'); break;
-                        case '}' or ']':
-                            if (closers.Count == 0 || closers.Pop() != c) return false;
-                            break;
-                    }
-                } while (inString || closers.Count > 0);
-                return true;
+                    if (emit) await output.WriteAsync(_buffer.AsMemory(start, _position - start), ct);
+                    if (done) return true;
+                }
             }
 
             var length = 0;
             while (await PeekAsync(ct) is var c && c != -1 && c is not (',' or '}' or ']') && !char.IsWhiteSpace((char)c))
             {
                 await NextAsync(ct);
-                if (emit) await EmitAsync((char)c, ct);
+                if (emit) await output.WriteAsync((char)c, ct);
                 length++;
             }
             return length > 0;
