@@ -17,7 +17,11 @@ export default function Header() {
     <header className="header">
       <div className="header-content">
         <div className="header-brand">
-          <NavLink to="/taskboard">{APP_NAME}</NavLink>
+          <NavLink to="/taskboard">
+            {/* Decorative: the link is named by the title beside it. */}
+            <img src="/ild.svg" alt="" aria-hidden="true" />
+            {APP_NAME}
+          </NavLink>
         </div>
         <nav className="header-nav">
           {NAV_ITEMS.map((item) => {
@@ -88,10 +92,21 @@ export default function Header() {
         }
 
         .header-brand a {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
           font-size: 1.25rem;
           font-weight: 700;
           color: #e0e0e0;
           text-decoration: none;
+        }
+
+        /* The SVG pads its viewBox around the flame, so the image is drawn a
+           little larger than the flame should look. */
+        .header-brand img {
+          display: block;
+          width: 2rem;
+          height: 2rem;
         }
 
         /* min-width: 0 lets this flex child shrink below its content width so the
