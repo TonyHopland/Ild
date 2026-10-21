@@ -1167,6 +1167,21 @@ describe("a run stopped on a failed node", () => {
     },
   );
 
+  test("a failure earlier in the run is not offered as the node that stopped it", async () => {
+    const run = failedRun({ status: LoopRunStatus.WaitingHuman });
+    mockServices({
+      ...run,
+      nodes: [
+        ...run.nodes,
+        execution("exec-3", "Review", "2026-09-24T09:12:00Z", "2026-09-24T09:13:00Z"),
+      ],
+    });
+    const panel = await openActionTab(failedItem());
+
+    expect(within(panel).queryByText("“Run tests” failed")).toBeNull();
+    expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
+  });
+
   test("See it in the run timeline opens the Runs tab", async () => {
     mockServices(failedRun());
     const panel = await openActionTab(failedItem());

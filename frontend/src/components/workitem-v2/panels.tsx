@@ -186,13 +186,14 @@ export function feedbackFor(
 
 const NODE_FAILED = "Node Failed";
 
-/** The node that stopped the run: its last failed execution, if the run on screen has one. */
+/**
+ * The node that stopped the run: its last execution, when that one failed. An
+ * earlier failure is not it — a run stopped by an unwired output stopped after
+ * a node that succeeded.
+ */
 function failedNodeOf(run: LoopRun | null): LoopRunNode | null {
-  if (!run) return null;
-  for (let i = run.nodes.length - 1; i >= 0; i--) {
-    if (run.nodes[i].status === LoopRunNodeStatus.Failed) return run.nodes[i];
-  }
-  return null;
+  const last = run?.nodes[run.nodes.length - 1];
+  return last?.status === LoopRunNodeStatus.Failed ? last : null;
 }
 
 /**
