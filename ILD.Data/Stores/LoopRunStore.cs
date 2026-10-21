@@ -146,7 +146,7 @@ public class LoopRunStore : ILoopRunStore
             .ToList();
     }
 
-    public async Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200)
+    public async Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int skip = 0, int take = 200)
         => await _db.LoopRuns.AsNoTracking()
             .Where(r => !r.Retain
                 && (r.Status == LoopRunStatus.Completed
@@ -155,7 +155,8 @@ public class LoopRunStore : ILoopRunStore
                 && r.CompletedAt != null
                 && r.CompletedAt < cutoff)
             .OrderBy(r => r.CompletedAt)
-            .Take(take)
+            .ThenBy(r => r.Id)
+            .Skip(skip).Take(take)
             .ToListAsync();
 
     public async Task<IReadOnlyList<LoopRun>> GetRunsWithWorktreeAsync()

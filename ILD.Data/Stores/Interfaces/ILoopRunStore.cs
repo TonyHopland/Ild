@@ -104,10 +104,11 @@ public interface ILoopRunStore
     /// <summary>
     /// Terminal runs (Completed/Failed/Cancelled) that completed before
     /// <paramref name="cutoff"/> and are not pinned (<c>Retain == false</c>).
-    /// Candidates for the worktree retention sweeper; the caller still applies
-    /// the "not the work item's current run" rule. Bounded by <paramref name="take"/>.
+    /// Candidates for the worktree retention sweeper, oldest first in a stable
+    /// order; the caller still applies the "work item is Done" rule and pages
+    /// past the candidates it keeps with <paramref name="skip"/>.
     /// </summary>
-    Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int take = 200);
+    Task<IReadOnlyList<LoopRun>> GetReclaimableRunsAsync(DateTime cutoff, int skip = 0, int take = 200);
 
     /// <summary>
     /// Every run that still names a worktree, in any state, untracked: what

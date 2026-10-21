@@ -172,13 +172,13 @@ export default function IldSettings() {
           label="Delete finished runs after"
           min={0}
           max={3650}
-          fallback={30}
-          minLabel="0 (disabled)"
+          fallback={0}
+          minLabel="0 (when done)"
           unit="days"
         >
-          How long a finished run&apos;s worktree, branch, and history are kept before being
-          reclaimed. Set to <strong>0</strong> to keep runs forever. Runs pinned with “Retain” are
-          never deleted.
+          A finished run&apos;s worktree, branch, and history are deleted once its work item is Done
+          and the run finished more than this many days ago. With <strong>0</strong> that is the
+          next cleanup pass after Done. Runs pinned with “Retain” are never deleted.
         </NumericSettingField>
       </section>
 

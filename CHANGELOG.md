@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Finished runs are deleted once their work item is Done, by default.** Breaking: a saved retention of 0 used to keep runs forever and now deletes them at the next cleanup after Done, and untouched installs move from 30 days to 0. Runs of a work item that is not Done are no longer deleted at all. To keep runs, pin them with Retain or set a number of days.
+
 ### Added
 
 - **Opening a saved AI session shows it a page at a time, with its size and number of events.**
