@@ -30,6 +30,27 @@ describe("Ild settings", () => {
     });
   });
 
+  test("run retention shows 0 when unread and names 0 as when done", async () => {
+    vi.spyOn(authServices.settingsService, "get").mockRejectedValue(new Error("offline"));
+    const put = vi.spyOn(authServices.settingsService, "put");
+
+    render(<IldSettings />);
+
+    const retention = (await screen.findByLabelText(
+      /delete finished runs after/i,
+    )) as HTMLInputElement;
+    expect(retention.value).toBe("0");
+
+    fireEvent.change(retention, { target: { value: "3651" } });
+    fireEvent.blur(retention);
+    const error = await screen.findByText(/^Must be an integer between 0 .* and 3650\.$/);
+    expect(error.textContent).toContain("0 (when done)");
+    expect(put).not.toHaveBeenCalledWith(
+      authServices.SchedulerSettingKeys.RunRetentionDays,
+      "3651",
+    );
+  });
+
   test("saves the AI step cap", async () => {
     const put = vi.spyOn(authServices.settingsService, "put");
 
