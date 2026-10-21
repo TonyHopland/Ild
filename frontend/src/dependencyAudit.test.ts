@@ -31,7 +31,12 @@ function major(version: string): number {
 // fixes on several majors, so floors are keyed by major version: every resolved
 // copy must clear the floor for its own major, and an unexpected major (one with
 // no floor) fails loudly rather than slipping through unverified.
-const patchedFloors: { name: string; floors: Record<number, string>; advisory: string }[] = [
+const patchedFloors: {
+  name: string;
+  floors: Record<number, string>;
+  advisory: string;
+  mayBeAbsent?: boolean;
+}[] = [
   // GHSA-8x6r-g9mw-2r78 (DoS), GHSA-84g9-w2xq-vcv6 (CSRF) and GHSA-qwww-vcr4-c8h2
   // (RSC-mode CSRF). The last is patched only in 8.3.0, and no 7.x carries the fix,
   // so the floor is the whole 8 major: v8 drops the `react-router-dom` re-export
@@ -49,7 +54,14 @@ const patchedFloors: { name: string; floors: Record<number, string>; advisory: s
     advisory: "GHSA-96hv-2xvq-fx4p / GHSA-58qx-3vcg-4xpx",
   },
   // vite GHSA-fx2h-pf6j-xcff and launch-editor NTLMv2 disclosure (patched 8.0.16).
-  { name: "vite", floors: { 8: "8.0.16" }, advisory: "GHSA-fx2h-pf6j-xcff / GHSA-v6wh-96g9-6wx3" },
+  // Vite+ aliases vite to vite-plus-core, so a real copy appears only if something
+  // bypasses the alias.
+  {
+    name: "vite",
+    floors: { 8: "8.0.16" },
+    advisory: "GHSA-fx2h-pf6j-xcff / GHSA-v6wh-96g9-6wx3",
+    mayBeAbsent: true,
+  },
   // postcss GHSA-r28c-9q8g-f849 (path traversal), patched 8.5.18. Reached through
   // the vite-plus toolchain, so a toolchain downgrade is what would reintroduce it.
   { name: "postcss", floors: { 8: "8.5.18" }, advisory: "GHSA-r28c-9q8g-f849" },
@@ -62,9 +74,14 @@ const patchedFloors: { name: string; floors: Record<number, string>; advisory: s
     advisory: "GHSA-vxpw-j846-p89q / GHSA-hm92-r4w5-c3mj / GHSA-vmh5-mc38-953g",
   },
   // vitest and @vitest/mocker GHSA-82fw-gwwq-j7x9, patched 4.1.11. Both arrive with
-  // the vite-plus toolchain, which ships the fix from 0.3.
-  { name: "vitest", floors: { 4: "4.1.11" }, advisory: "GHSA-82fw-gwwq-j7x9" },
-  { name: "@vitest/mocker", floors: { 4: "4.1.11" }, advisory: "GHSA-82fw-gwwq-j7x9" },
+  // the vite-plus toolchain; Vite+ 1.x ships vitest 5, where only the pre-release
+  // betas before 5.0.0-rc.2 were affected, so every stable 5.x is patched.
+  { name: "vitest", floors: { 4: "4.1.11", 5: "5.0.0" }, advisory: "GHSA-82fw-gwwq-j7x9" },
+  {
+    name: "@vitest/mocker",
+    floors: { 4: "4.1.11", 5: "5.0.0" },
+    advisory: "GHSA-82fw-gwwq-j7x9",
+  },
   // nanoid GHSA-2v37-7h3g-55p8 (a zero-size custom generator loops forever),
   // patched 3.3.18 and held there by a pnpm-workspace.yaml override.
   { name: "nanoid", floors: { 3: "3.3.18" }, advisory: "GHSA-2v37-7h3g-55p8" },
@@ -73,9 +90,9 @@ const patchedFloors: { name: string; floors: Record<number, string>; advisory: s
 describe("dependency security audit", () => {
   test.each(patchedFloors)(
     "$name clears its patched floor on every resolved major",
-    ({ name, floors }) => {
+    ({ name, floors, mayBeAbsent }) => {
       const versions = resolvedVersions(name);
-      expect(versions.length).toBeGreaterThan(0);
+      if (!mayBeAbsent) expect(versions.length).toBeGreaterThan(0);
       for (const version of versions) {
         const floor = floors[major(version)];
         // An unexpected major has no verified floor — fail rather than assume safe.
