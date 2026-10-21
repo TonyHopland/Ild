@@ -445,6 +445,35 @@ public class OpenCodeAdapterTests
         }
     }
 
+    [Theory]
+    [InlineData("test-provider", "test-provider/test-model")]
+    [InlineData("OpenCode", "opencode/test-model")]
+    public async Task ExecuteAsync_points_the_model_and_the_small_model_at_the_configured_model(string providerName, string modelRef)
+    {
+        var worktreeDir = Path.Combine(Path.GetTempPath(), $"ild-opencode-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(worktreeDir);
+        var scriptPath = Path.Combine(worktreeDir, "env.sh");
+        File.WriteAllText(scriptPath, "#!/bin/sh\nprintenv OPENCODE_CONFIG_CONTENT\n");
+        MakeExecutable(scriptPath);
+
+        try
+        {
+            var ctx = BuildContext(binaryPath: scriptPath, prompt: "ignored", worktreePath: worktreeDir, executionCount: 1);
+            ctx.Provider.Name = providerName;
+
+            var result = await new OpenCodeAdapter().ExecuteAsync(ctx);
+
+            Assert.True(result.Success);
+            using var config = JsonDocument.Parse(Assert.IsType<string>(result.Output));
+            Assert.Equal(modelRef, config.RootElement.GetProperty("model").GetString());
+            Assert.Equal(modelRef, config.RootElement.GetProperty("small_model").GetString());
+        }
+        finally
+        {
+            Directory.Delete(worktreeDir, true);
+        }
+    }
+
     [Fact]
     public async Task ExecuteAsync_passes_session_flag_when_session_id_is_set()
     {

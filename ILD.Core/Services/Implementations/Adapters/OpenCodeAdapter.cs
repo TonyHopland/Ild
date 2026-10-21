@@ -796,8 +796,15 @@ public class OpenCodeAdapter : CliAgentAdapterBase
         if (mcp.Count > 0)
             config["mcp"] = mcp;
 
-        var configJson = JsonSerializer.Serialize(config);
+        // opencode titles a new session with its small model, and with none configured it
+        // picks a built-in one: under a provider id that is also one of its own (a provider
+        // named "OpenCode" becomes "opencode"), that model goes to this provider's server,
+        // which refuses it and fails the first message. Both point at the configured model.
         var modelRef = $"{providerId}/{modelId}";
+        config["model"] = modelRef;
+        config["small_model"] = modelRef;
+
+        var configJson = JsonSerializer.Serialize(config);
         return (modelRef, configJson);
     }
 
