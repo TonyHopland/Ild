@@ -5,10 +5,10 @@ namespace ILD.Data.Stores.Interfaces;
 /// compressed chunks that each end on a line. Listing reads metadata only; content
 /// is streamed a chunk at a time and never held whole.
 ///
-/// A row written before the split still holds its transcript in the legacy column
-/// until the startup content migration reaches it. Every read that needs the content
-/// or its exact metadata converts such a row first; listing never does, and reports it
-/// as <see cref="SessionSnapshotMetadata.Unconverted"/>.
+/// Legacy (remove with migration B): a row written before the split still holds its
+/// transcript in the legacy column until the startup content migration reaches it. Every
+/// read that needs the content or its exact metadata converts such a row first; listing
+/// never does, and reports it as <see cref="SessionSnapshotMetadata.Unconverted"/>.
 /// </summary>
 public interface IAdapterSessionSnapshotStore
 {
@@ -43,8 +43,12 @@ public interface IAdapterSessionSnapshotStore
     /// </summary>
     Task<SessionSnapshotPage> ReadTailAsync(SessionSnapshotKey key, int maxEvents, long? beforeRawOffset, CancellationToken cancellationToken = default);
 
-    /// <summary>Up to <paramref name="maxEvents"/> lines from <paramref name="fromRawOffset"/>, reading no chunk before it; an empty page when there is no snapshot.</summary>
-    Task<SessionSnapshotPage> ReadRangeAsync(SessionSnapshotKey key, long fromRawOffset, int maxEvents, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// The start of content that is one document rather than lines, up to a page's budget, as
+    /// a page of one event that is <see cref="SessionSnapshotPage.Truncated"/> when the content
+    /// goes on past it; an empty page when there is no snapshot or it is empty.
+    /// </summary>
+    Task<SessionSnapshotPage> ReadHeadAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Copies the source snapshot to <paramref name="destination"/> with every occurrence of the
@@ -65,8 +69,9 @@ public sealed record SessionSnapshotKey(Guid? LoopRunId, Guid? ChatSessionId, st
 }
 
 /// <summary>
-/// A snapshot's metadata. <see cref="Unconverted"/> rows still hold their content in the
-/// legacy column, so their format, lengths and counts are not known yet.
+/// A snapshot's metadata. Legacy (remove with migration B): <see cref="Unconverted"/> rows
+/// still hold their content in the legacy column, so their format, lengths and counts are
+/// not known yet.
 /// </summary>
 public sealed record SessionSnapshotMetadata(
     Guid Id,
@@ -82,6 +87,7 @@ public sealed record SessionSnapshotMetadata(
     string? TailHash,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
+    // Legacy (remove with migration B): true while the row still holds its content in the old column.
     bool Unconverted);
 
 public enum SessionSnapshotAppendResult
@@ -92,10 +98,8 @@ public enum SessionSnapshotAppendResult
 
 /// <summary>
 /// Lines of a snapshot, each without its '\n': the first starts at raw offset
-/// <see cref="FromOffset"/>; <see cref="NextOffset"/> is where the next page starts, or
-/// null when the page reaches the end of the content; <see cref="PreviousOffset"/> is where
-/// the page before it ends, or null when it starts the content. A page holds about a
-/// megabyte of lines at most; a single line longer than that is cut off at it, and
-/// <see cref="Truncated"/> says so.
+/// <see cref="FromOffset"/>; <see cref="PreviousOffset"/> is where the page before it ends,
+/// or null when it starts the content. A page holds about a megabyte of lines at most; a
+/// single line longer than that is cut off at it, and <see cref="Truncated"/> says so.
 /// </summary>
-public sealed record SessionSnapshotPage(IReadOnlyList<string> Events, long FromOffset, long? NextOffset, long? PreviousOffset, bool Truncated);
+public sealed record SessionSnapshotPage(IReadOnlyList<string> Events, long FromOffset, long? PreviousOffset, bool Truncated);

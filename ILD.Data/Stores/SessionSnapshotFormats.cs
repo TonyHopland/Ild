@@ -20,6 +20,9 @@ public static class SessionSnapshotFormats
     /// <summary>Content the content migration could not interpret: kept as it was, never restored.</summary>
     public const string Raw = "raw";
 
+    /// <summary>Whether content of <paramref name="format"/> is lines (JSONL) rather than one document.</summary>
+    public static bool IsLines(string format) => format is ClaudeJsonl or PiJsonl or CodexJsonl;
+
     /// <summary>The codec chunk data is compressed with.</summary>
     public const string Brotli = "br";
 

@@ -330,7 +330,7 @@ public class OpenCodeAdapter : CliAgentAdapterBase
             return ($"[opencode-error] failed to export managed session '{sessionId}': invalid JSON returned ({sessionJson.Length} chars)", null);
 
         await using (var scope = ScopeFactory.CreateAsyncScope())
-        using (var content = new MemoryStream(Encoding.UTF8.GetBytes(sessionJson)))
+        using (var content = new Utf8TextStream(sessionJson))
         {
             await scope.ServiceProvider.GetRequiredService<IAdapterSessionSnapshotStore>()
                 .ReplaceAsync(SnapshotKey(ctx, sessionId), SessionSnapshotFormats.OpenCodeJson, content, ctx.Cancel);

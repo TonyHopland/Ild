@@ -273,8 +273,8 @@ public sealed class ClaudeCodeSessionFileTests : IAsyncLifetime
             => inner.OpenReadAsync(key, fromRawOffset, cancellationToken);
         public Task<SessionSnapshotPage> ReadTailAsync(SessionSnapshotKey key, int maxEvents, long? beforeRawOffset, CancellationToken cancellationToken = default)
             => inner.ReadTailAsync(key, maxEvents, beforeRawOffset, cancellationToken);
-        public Task<SessionSnapshotPage> ReadRangeAsync(SessionSnapshotKey key, long fromRawOffset, int maxEvents, CancellationToken cancellationToken = default)
-            => inner.ReadRangeAsync(key, fromRawOffset, maxEvents, cancellationToken);
+        public Task<SessionSnapshotPage> ReadHeadAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default)
+            => inner.ReadHeadAsync(key, cancellationToken);
         public Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default)
             => inner.ForkAsync(source, destination, cancellationToken);
     }

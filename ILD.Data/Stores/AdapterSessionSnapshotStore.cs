@@ -25,6 +25,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         s.TailHash,
         s.CreatedAt,
         s.UpdatedAt,
+        // Legacy (remove with migration B): whether the row still holds its content in the old column.
         EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn) != null);
 
     /// <summary>The raw line bytes a page holds at most; a single longer line is cut off at it.</summary>
@@ -50,6 +51,8 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
     {
         var metadata = await Snapshots(key).Select(ToMetadata).FirstOrDefaultAsync(cancellationToken);
         if (metadata is not { Unconverted: true }) return metadata;
+
+        // Legacy (remove with migration B): a row still in the old column is converted before its metadata is used.
 
         await SessionSnapshotContentMigrator.ConvertRowAsync(_db, metadata.Id, cancellationToken);
         return await Snapshots(key).Select(ToMetadata).FirstOrDefaultAsync(cancellationToken);
@@ -85,6 +88,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
             var claimed = await _db.AdapterSessionSnapshots
                 .Where(s => s.Id == id
                     && s.ByteLength == expectedByteLength
+                    // Legacy (remove with migration B): a row still in the old column is not appended to.
                     && EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn) == null)
                 .ExecuteUpdateAsync(set => set.SetProperty(s => s.UpdatedAt, DateTime.UtcNow), cancellationToken);
             if (claimed == 0) return SessionSnapshotAppendResult.Conflict;
@@ -155,6 +159,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
                 .SetProperty(s => s.ChunkCount, chunker.ChunksWritten)
                 .SetProperty(s => s.EventCount, chunker.LinesWritten)
                 .SetProperty(s => s.TailHash, chunker.TailHash)
+                // Legacy (remove with migration B): replacing a row still in the old column empties it.
                 .SetProperty(s => EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn), (string?)null)
                 .SetProperty(s => s.UpdatedAt, DateTime.UtcNow), cancellationToken);
     }
@@ -175,80 +180,19 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         }
     }
 
-    public async Task<SessionSnapshotPage> ReadRangeAsync(SessionSnapshotKey key, long fromRawOffset, int maxEvents, CancellationToken cancellationToken = default)
+    public async Task<SessionSnapshotPage> ReadHeadAsync(SessionSnapshotKey key, CancellationToken cancellationToken = default)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(fromRawOffset);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
         if (await BeginConsistentReadAsync(key, cancellationToken) is not ({ } tx, { } metadata))
-            return Page([], fromRawOffset, null, truncated: false);
+            return Page([], 0, truncated: false);
         await using var _ = tx;
-        if (fromRawOffset >= metadata.ByteLength)
-            return Page([], fromRawOffset, null, truncated: false);
+        if (metadata.ByteLength == 0)
+            return Page([], 0, truncated: false);
 
-        await using var content = await OpenContentAsync(metadata.Id, fromRawOffset, ownedTransaction: null, cancellationToken);
-        var events = new List<string>();
-        var line = new MemoryStream();
-        var lineLength = 0L;
-        var pageBytes = 0L;
-        var next = fromRawOffset;
-        var truncated = false;
-        var block = new byte[81920];
-        var full = false;
-
-        string TakeLine()
-        {
-            var kept = (int)line.Length;
-            var cut = lineLength > kept;
-            if (cut) kept = WholeUtf8Length(line.GetBuffer().AsSpan(0, kept));
-            truncated |= cut;
-            pageBytes += line.Length;
-            var text = Encoding.UTF8.GetString(line.GetBuffer(), 0, kept);
-            line.SetLength(0);
-            lineLength = 0;
-            return text;
-        }
-
-        while (!full && events.Count < maxEvents)
-        {
-            var read = await content.ReadAsync(block, cancellationToken);
-            if (read == 0)
-            {
-                if (lineLength > 0)
-                {
-                    next += lineLength;
-                    events.Add(TakeLine());
-                }
-                break;
-            }
-
-            var span = block.AsSpan(0, read);
-            while (events.Count < maxEvents)
-            {
-                var newline = span.IndexOf((byte)'\n');
-                var part = newline < 0 ? span : span[..newline];
-                if (events.Count > 0 && pageBytes + lineLength + part.Length > PageByteBudget)
-                {
-                    full = true;
-                    break;
-                }
-                // Only a page's first line can outgrow the budget; it is kept up to the budget.
-                line.Write(part[..(int)Math.Min(part.Length, PageByteBudget - line.Length)]);
-                lineLength += part.Length;
-                if (newline < 0) break;
-
-                next += lineLength + 1;
-                events.Add(TakeLine());
-                span = span[(newline + 1)..];
-                // A line cut off at the budget fills its page on its own.
-                if (truncated)
-                {
-                    full = true;
-                    break;
-                }
-            }
-        }
-
-        return Page(events, fromRawOffset, next < metadata.ByteLength ? next : null, truncated);
+        var bytes = new byte[Math.Min(metadata.ByteLength, PageByteBudget)];
+        await using (var content = await OpenContentAsync(metadata.Id, 0, ownedTransaction: null, cancellationToken))
+            await content.ReadExactlyAsync(bytes, cancellationToken);
+        var truncated = metadata.ByteLength > bytes.Length;
+        return Page([Encoding.UTF8.GetString(bytes, 0, truncated ? WholeUtf8Length(bytes) : bytes.Length)], 0, truncated);
     }
 
     public async Task<SessionSnapshotPage> ReadTailAsync(
@@ -257,10 +201,9 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
         if (beforeRawOffset is { } requested) ArgumentOutOfRangeException.ThrowIfNegative(requested);
         if (await BeginConsistentReadAsync(key, cancellationToken) is not ({ } tx, { } metadata))
-            return Page([], 0, null, truncated: false);
+            return Page([], 0, truncated: false);
         await using var _ = tx;
         var before = Math.Min(beforeRawOffset ?? metadata.ByteLength, metadata.ByteLength);
-        var next = before < metadata.ByteLength ? before : (long?)null;
 
         // Walk back a chunk at a time, keeping each chunk once. A line is only returned once
         // its start has been read: the newline before it, or the start of the content.
@@ -318,7 +261,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
             }
             events.Add(Encoding.UTF8.GetString(bytes, 0, kept));
         }
-        return Page(events, first < lineStarts.Count ? lineStarts[first] : before, next, truncated);
+        return Page(events, first < lineStarts.Count ? lineStarts[first] : before, truncated);
     }
 
     /// <summary>The raw bytes <c>[offset, offset + length)</c> out of chunks read in reverse order.</summary>
@@ -346,8 +289,8 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
     }
 
     /// <summary>A page whose previous page ends where it starts, unless it starts the content.</summary>
-    private static SessionSnapshotPage Page(IReadOnlyList<string> events, long fromOffset, long? nextOffset, bool truncated)
-        => new(events, fromOffset, nextOffset, fromOffset > 0 ? fromOffset : null, truncated);
+    private static SessionSnapshotPage Page(IReadOnlyList<string> events, long fromOffset, bool truncated)
+        => new(events, fromOffset, fromOffset > 0 ? fromOffset : null, truncated);
 
     public async Task<bool> ForkAsync(SessionSnapshotKey source, SessionSnapshotKey destination, CancellationToken cancellationToken = default)
     {
@@ -379,7 +322,7 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
 
     /// <summary>
     /// A repeatable-read transaction and the snapshot's metadata as of it, converting a
-    /// legacy row first; null when there is no snapshot. Every chunk read inside it sees the
+    /// legacy row first (through <see cref="GetMetadataAsync"/>); null when there is no snapshot. Every chunk read inside it sees the
     /// content the metadata describes, even while a replace swaps that content out.
     /// </summary>
     private async Task<(IDbContextTransaction Transaction, SessionSnapshotMetadata Metadata)?> BeginConsistentReadAsync(

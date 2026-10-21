@@ -260,6 +260,12 @@ function SessionPreview({
           <li key={line}>{line}</li>
         ))}
       </ul>
+      {/* Legacy (remove with migration B): a session the background conversion has not reached. */}
+      {firstPage.converting && (
+        <div className="wiv2-run-hint" role="status">
+          This session is still being converted, try again shortly.
+        </div>
+      )}
       {previousOffset !== null && (
         <button
           type="button"

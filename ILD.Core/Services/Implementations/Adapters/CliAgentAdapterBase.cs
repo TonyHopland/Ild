@@ -211,7 +211,7 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             var key = SnapshotKey(ctx, sessionId);
             for (var attempt = 0; attempt < 2; attempt++)
             {
-                if (await SaveSessionFileAsync(store, key, path, format, ctx.Cancel) == SessionSnapshotAppendResult.Appended) return;
+                if (await SaveSessionFileAsync(store, key, path, format, ctx.Cancel)) return;
             }
             logger.LogWarning("The {Adapter} session {SessionId} changed in the store while it was being saved twice running, so this turn's save was skipped", Name, sessionId);
         }
@@ -226,13 +226,14 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
         }
     }
 
-    private static async Task<SessionSnapshotAppendResult> SaveSessionFileAsync(
+    /// <summary>True once the file is saved or there was nothing to save; false when an append lost a race and the save should be decided again.</summary>
+    private static async Task<bool> SaveSessionFileAsync(
         IAdapterSessionSnapshotStore store, SessionSnapshotKey key, string path, string format, CancellationToken ct)
     {
         // The session file sits where the agent can write, so it is only measured and
         // read as the agent (see AgentWritableFiles), never through a link.
         // An empty file holds nothing to keep, and must not replace a history stored earlier.
-        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not ({ } length and > 0)) return SessionSnapshotAppendResult.Appended;
+        if (await AgentWritableFiles.GetFileLengthAsync(path, ct) is not ({ } length and > 0)) return true;
 
         var stored = await store.GetMetadataAsync(key, ct);
         if (stored is not null
@@ -240,17 +241,17 @@ public abstract class CliAgentAdapterBase : IAgentAdapter
             && length >= stored.ByteLength
             && await TailHashAsync(path, stored.ByteLength, ct) == stored.TailHash)
         {
-            if (length == stored.ByteLength) return SessionSnapshotAppendResult.Appended;
+            if (length == stored.ByteLength) return true;
 
             var tailHash = await TailHashAsync(path, length, ct);
             var result = SessionSnapshotAppendResult.Conflict;
             await AgentWritableFiles.ReadFileRangeAsync(path, stored.ByteLength, length - stored.ByteLength,
                 async added => result = await store.AppendAsync(key, format, added, stored.ByteLength, tailHash, ct));
-            return result;
+            return result == SessionSnapshotAppendResult.Appended;
         }
 
         await AgentWritableFiles.ReadFileRangeAsync(path, 0, length, whole => store.ReplaceAsync(key, format, whole, ct));
-        return SessionSnapshotAppendResult.Appended;
+        return true;
     }
 
     /// <summary>The <see cref="SessionSnapshotFormats.TailHash"/> of the file's bytes just before <paramref name="end"/>.</summary>

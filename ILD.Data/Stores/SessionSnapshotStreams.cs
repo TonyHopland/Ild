@@ -137,8 +137,9 @@ internal sealed class LineWiseReplacingStream : Stream
     public override long Length => throw new NotSupportedException();
     public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
 
+    /// <summary>Only read asynchronously: a fork copies it into the store with async I/O, and nothing reads it otherwise.</summary>
     public override int Read(byte[] buffer, int offset, int count)
-        => ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+        => throw new NotSupportedException("Read this stream asynchronously.");
 
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         => ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();

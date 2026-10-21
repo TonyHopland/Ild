@@ -8,6 +8,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.DTOs;
 using ILD.Data.Enums;
+using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
@@ -208,7 +209,8 @@ public class LoopRunsController : ControllerBase
                 sessionId = s.SessionId,
                 createdAt = s.CreatedAt,
                 updatedAt = s.UpdatedAt,
-                // Unknown until the row's content is converted, so shown as nothing rather than guessed.
+                // Legacy (remove with migration B): unknown until the row's content is converted, so
+                // shown as nothing rather than guessed.
                 format = s.Unconverted ? null : s.Format,
                 byteLength = s.Unconverted ? (long?)null : s.ByteLength,
                 eventCount = s.Unconverted ? (int?)null : s.EventCount,
@@ -464,19 +466,18 @@ public class LoopRunsController : ControllerBase
     private const int MaxPreviewEvents = 500;
 
     /// <summary>
-    /// A page of a saved session's raw lines: up to <paramref name="limit"/> lines from the
-    /// raw byte offset <paramref name="fromOffset"/> (from the start by default), or the last
-    /// <paramref name="tail"/> lines before <paramref name="beforeOffset"/> (the end by default),
-    /// which is how a reader pages back from the latest events. Only the chunks holding them are read.
+    /// A page of a saved session: of a JSONL session, the last <paramref name="tail"/> lines before
+    /// <paramref name="beforeOffset"/> (the end by default), which is how a reader pages back from
+    /// the latest events, reading only the chunks that hold them; of a session that is one
+    /// document, its start as a single event. A session still in the legacy column is not
+    /// converted here: the page is empty and says it is converting.
     /// </summary>
     [HttpGet("{id}/sessions/preview")]
     public async Task<IActionResult> GetSessionPreview(
         string id,
         [FromQuery] string adapterName,
         [FromQuery] string sessionId,
-        [FromQuery] long? fromOffset = null,
-        [FromQuery] int? limit = null,
-        [FromQuery] int? tail = null,
+        [FromQuery] int tail = DefaultPreviewEvents,
         [FromQuery] long? beforeOffset = null)
     {
         if (!Guid.TryParse(id, out var guid))
@@ -485,25 +486,33 @@ public class LoopRunsController : ControllerBase
         if (string.IsNullOrWhiteSpace(adapterName) || string.IsNullOrWhiteSpace(sessionId))
             return BadRequest(new { error = "adapterName and sessionId are required" });
 
-        if (tail is not null && (fromOffset is not null || limit is not null))
-            return BadRequest(new { error = "tail cannot be combined with fromOffset or limit" });
-        if (beforeOffset is not null && tail is null)
-            return BadRequest(new { error = "beforeOffset is only read with tail" });
-        if (tail is < 1 or > MaxPreviewEvents || limit is < 1 or > MaxPreviewEvents)
-            return BadRequest(new { error = $"limit and tail must be between 1 and {MaxPreviewEvents}" });
-        if (fromOffset < 0 || beforeOffset < 0)
-            return BadRequest(new { error = "fromOffset and beforeOffset must not be negative" });
+        if (tail is < 1 or > MaxPreviewEvents)
+            return BadRequest(new { error = $"tail must be between 1 and {MaxPreviewEvents}" });
+        if (beforeOffset < 0)
+            return BadRequest(new { error = "beforeOffset must not be negative" });
 
-        var key = SessionSnapshotKey.ForRun(guid, adapterName, sessionId);
-        var snapshot = await _sessionSnapshotStore.GetMetadataAsync(key);
+        // Listing reads metadata only and never converts, unlike a single snapshot's metadata.
+        var snapshot = (await _sessionSnapshotStore.ListMetadataForRunAsync(guid))
+            .FirstOrDefault(s => s.AdapterName == adapterName && s.SessionId == sessionId);
         if (snapshot == null)
             return NotFound(new { error = "Session snapshot not found" });
-        if (fromOffset > snapshot.ByteLength || beforeOffset > snapshot.ByteLength)
-            return BadRequest(new { error = "fromOffset and beforeOffset must not be past the end of the session" });
 
-        var page = tail is { } lastLines
-            ? await _sessionSnapshotStore.ReadTailAsync(key, lastLines, beforeOffset)
-            : await _sessionSnapshotStore.ReadRangeAsync(key, fromOffset ?? 0, limit ?? DefaultPreviewEvents);
+        // Legacy (remove with migration B): converting a long session takes seconds, so a preview
+        // leaves it to the background migration and says so; a converted row never goes back.
+        SessionSnapshotPage? page = null;
+        if (!snapshot.Unconverted)
+        {
+            var lines = SessionSnapshotFormats.IsLines(snapshot.Format);
+            if (beforeOffset is not null && !lines)
+                return BadRequest(new { error = "beforeOffset only applies to a session of lines" });
+            if (beforeOffset > snapshot.ByteLength)
+                return BadRequest(new { error = "beforeOffset must not be past the end of the session" });
+
+            var key = SessionSnapshotKey.ForRun(guid, adapterName, sessionId);
+            page = lines
+                ? await _sessionSnapshotStore.ReadTailAsync(key, tail, beforeOffset)
+                : await _sessionSnapshotStore.ReadHeadAsync(key);
+        }
 
         return Ok(new
         {
@@ -511,14 +520,14 @@ public class LoopRunsController : ControllerBase
             sessionId = snapshot.SessionId,
             createdAt = snapshot.CreatedAt,
             updatedAt = snapshot.UpdatedAt,
-            format = snapshot.Format,
-            byteLength = snapshot.ByteLength,
-            eventCount = snapshot.EventCount,
-            events = page.Events,
-            fromOffset = page.FromOffset,
-            nextOffset = page.NextOffset,
-            previousOffset = page.PreviousOffset,
-            truncated = page.Truncated,
+            format = page is null ? null : snapshot.Format,
+            byteLength = page is null ? (long?)null : snapshot.ByteLength,
+            eventCount = page is null ? (int?)null : snapshot.EventCount,
+            events = page?.Events ?? [],
+            fromOffset = page?.FromOffset ?? 0,
+            previousOffset = page?.PreviousOffset,
+            truncated = page?.Truncated ?? false,
+            converting = page is null,
         });
     }
 

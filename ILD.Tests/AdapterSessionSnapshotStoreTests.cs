@@ -366,39 +366,31 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_range_read_fetches_only_the_chunks_it_returns_lines_from()
+    public async Task A_head_read_fetches_only_the_chunks_its_page_reaches_and_says_when_the_content_goes_on()
     {
-        var turns = new[]
-        {
-            "{\"n\":0}\n{\"n\":1}\n{\"n\":2}\n",
-            "{\"n\":3}\n{\"n\":4}\n{\"n\":5}\n",
-            "{\"n\":6}\n{\"n\":7}\n{\"n\":8}",
-        };
+        const int budget = 1024 * 1024;
+        var parts = new[] { new string('a', 600 * 1024), new string('b', 600 * 1024), new string('c', 600 * 1024) };
         long stored = 0;
-        foreach (var turn in turns)
+        foreach (var part in parts)
         {
-            await AppendAsync(Key(), turn, stored);
-            stored += turn.Length;
+            await AppendAsync(Key(), part, stored);
+            stored += part.Length;
         }
-        var lineStarts = string.Concat(turns).Split('\n').Select((_, i) => i * 8L).ToArray();
 
         _sql.Clear();
-        var middle = await Store().ReadRangeAsync(Key(), lineStarts[4], 2, Ct);
-        Assert.Equal(new[] { "{\"n\":4}", "{\"n\":5}" }, middle.Events);
-        Assert.Equal(lineStarts[4], middle.FromOffset);
-        Assert.Equal(lineStarts[6], middle.NextOffset);
-        Assert.Equal(1, _sql.ChunkDataReads);
-
-        _sql.Clear();
-        var spanning = await Store().ReadRangeAsync(Key(), lineStarts[5], 10, Ct);
-        Assert.Equal(new[] { "{\"n\":5}", "{\"n\":6}", "{\"n\":7}", "{\"n\":8}" }, spanning.Events);
-        Assert.Null(spanning.NextOffset);
+        var head = await Store().ReadHeadAsync(Key(), Ct);
+        Assert.Equal(string.Concat(parts)[..budget], Assert.Single(head.Events));
+        Assert.True(head.Truncated);
+        Assert.Equal(0, head.FromOffset);
+        Assert.Null(head.PreviousOffset);
         Assert.Equal(2, _sql.ChunkDataReads);
 
-        var first = await Store().ReadRangeAsync(Key(), 0, 3, Ct);
-        Assert.Equal(new[] { "{\"n\":0}", "{\"n\":1}", "{\"n\":2}" }, first.Events);
-        Assert.Equal(0, first.FromOffset);
-        Assert.Equal(lineStarts[3], first.NextOffset);
+        await SessionSnapshotTestSupport.SeedAsync(Store(), Key("small"), "opencode-json", "{\n  \"id\": \"small\"\n}\n", Ct);
+        var whole = await Store().ReadHeadAsync(Key("small"), Ct);
+        Assert.Equal("{\n  \"id\": \"small\"\n}\n", Assert.Single(whole.Events));
+        Assert.False(whole.Truncated);
+
+        Assert.Empty((await Store().ReadHeadAsync(Key("missing"), Ct)).Events);
     }
 
     [Fact]
@@ -421,7 +413,6 @@ public sealed class AdapterSessionSnapshotStoreTests : IAsyncLifetime
         var lastTwo = await Store().ReadTailAsync(Key(), 2, null, Ct);
         Assert.Equal(new[] { "{\"n\":7}", "{\"n\":8}" }, lastTwo.Events);
         Assert.Equal(7 * 8, lastTwo.FromOffset);
-        Assert.Null(lastTwo.NextOffset);
         Assert.Equal(1, _sql.ChunkDataReads);
 
         _sql.Clear();

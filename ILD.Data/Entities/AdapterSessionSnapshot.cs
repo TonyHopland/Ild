@@ -19,6 +19,7 @@ public class AdapterSessionSnapshot : IHasUpdatedAt
     /// <summary>
     /// The shadow column that held the whole transcript before it moved into chunks.
     /// Only the content migration reads it; elsewhere it is only ever tested for null.
+    /// Legacy (remove with migration B): the column and every use of this name.
     /// </summary>
     public const string LegacySessionJsonColumn = "SessionJson";
 

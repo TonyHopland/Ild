@@ -82,6 +82,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRecoveryManager, RecoveryManager>();
         services.AddScoped<IPrSyncService, PrSyncService>();
         services.AddScoped<IAdapterSessionSnapshotStore, AdapterSessionSnapshotStore>();
+        // Legacy (remove with migration B): converts rows still in the old SessionJson column.
         services.AddHostedService<SessionSnapshotMigrationService>();
 
         // Standalone chat (ADR-0010): the turn runner is a singleton (owns

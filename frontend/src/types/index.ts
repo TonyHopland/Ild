@@ -592,7 +592,10 @@ export interface LoopRunAvailableSession {
   eventCount: number | null;
 }
 
-/** One page of a saved session snapshot: raw event lines starting at fromOffset. */
+/**
+ * One page of a saved session snapshot: raw event lines starting at fromOffset, or for a
+ * session that is one document (opencode-json), its start as a single event.
+ */
 export interface LoopRunSessionPreview {
   adapterName: string;
   sessionId: string;
@@ -603,12 +606,13 @@ export interface LoopRunSessionPreview {
   eventCount: number | null;
   events: string[];
   fromOffset: number;
-  /** Where the next page starts; null once the last event has been returned. */
-  nextOffset: number | null;
   /** Where the page before this one ends; null when this page starts the session. */
   previousOffset: number | null;
   /** Whether the page's one event was longer than a page may be and is cut off. */
   truncated: boolean;
+  // Legacy (remove with migration B): the session still waits for the background conversion;
+  // the page is empty and its metadata null.
+  converting: boolean;
 }
 
 export interface LoopRunVariable {

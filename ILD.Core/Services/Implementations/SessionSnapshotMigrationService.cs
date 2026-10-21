@@ -11,6 +11,7 @@ namespace ILD.Core.Services.Implementations;
 /// into chunks (see <see cref="SessionSnapshotContentMigrator"/>), once per start, in the
 /// background so startup does not wait for it. Rows go one at a time, each in its own
 /// scope; one that fails is logged and left for the next start while the rest go on.
+/// Legacy (remove with migration B): this whole service and its registration.
 /// </summary>
 public sealed class SessionSnapshotMigrationService : BackgroundService
 {

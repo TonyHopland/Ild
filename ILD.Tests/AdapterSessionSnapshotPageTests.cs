@@ -5,8 +5,9 @@ using ILD.Data.Stores.Interfaces;
 namespace ILD.Tests;
 
 /// <summary>
-/// Preview pages: about a megabyte of lines at most, a longer single line cut off at that, and
-/// pages that walk back from the end of a session to its start.
+/// Preview pages: about a megabyte of lines at most, a longer single line cut off at that,
+/// pages that walk back from the end of a session to its start, and the start of a session
+/// that is one document.
 /// </summary>
 public sealed class AdapterSessionSnapshotPageTests : IDisposable
 {
@@ -22,18 +23,15 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
     private IAdapterSessionSnapshotStore Store() => new AdapterSessionSnapshotStore(_db.Fresh());
 
     [Fact]
-    public async Task A_page_of_long_lines_stops_before_a_megabyte_and_says_where_the_next_starts()
+    public async Task A_page_of_long_lines_stops_before_a_megabyte_and_says_where_the_page_before_it_ends()
     {
         var key = await KeyAsync();
         string[] lines = [new('a', LineBytes), new('b', LineBytes), new('c', LineBytes)];
         await SessionSnapshotTestSupport.SeedAsync(Store(), key, SessionSnapshotFormats.ClaudeJsonl, string.Concat(lines.Select(l => l + "\n")), Ct);
 
-        var range = await Store().ReadRangeAsync(key, 0, 200, Ct);
         var tail = await Store().ReadTailAsync(key, 200, null, Ct);
 
-        Assert.Equal(lines[..1], range.Events);
-        Assert.Equal(LineBytes + 1, range.NextOffset);
-        Assert.False(range.Truncated);
+        Assert.False(tail.Truncated);
         Assert.Equal(lines[2..], tail.Events);
         Assert.Equal(2L * (LineBytes + 1), tail.FromOffset);
         Assert.Equal(2L * (LineBytes + 1), tail.PreviousOffset);
@@ -46,7 +44,7 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
         var line = "{\"messages\":\"" + string.Concat(Enumerable.Repeat("é", 2 * Budget)) + "\"}";
         await SessionSnapshotTestSupport.SeedAsync(Store(), key, SessionSnapshotFormats.OpenCodeJson, line, Ct);
 
-        foreach (var page in new[] { await Store().ReadRangeAsync(key, 0, 200, Ct), await Store().ReadTailAsync(key, 200, null, Ct) })
+        foreach (var page in new[] { await Store().ReadHeadAsync(key, Ct), await Store().ReadTailAsync(key, 200, null, Ct) })
         {
             var only = Assert.Single(page.Events);
             Assert.True(page.Truncated);
@@ -54,7 +52,6 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
             Assert.StartsWith(only, line, StringComparison.Ordinal);
             Assert.True(only.Length > Budget / 3);
             Assert.Equal(0, page.FromOffset);
-            Assert.Null(page.NextOffset);
             Assert.Null(page.PreviousOffset);
         }
     }
@@ -66,11 +63,15 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
         var line = new string('x', 2 * Budget);
         await SessionSnapshotTestSupport.SeedAsync(Store(), key, SessionSnapshotFormats.ClaudeJsonl, line + "\n\n\n{\"n\":1}\n", Ct);
 
-        var page = await Store().ReadRangeAsync(key, 0, 200, Ct);
+        var latest = await Store().ReadTailAsync(key, 200, null, Ct);
+        var page = await Store().ReadTailAsync(key, 200, latest.PreviousOffset, Ct);
 
+        Assert.Equal(new[] { "", "", "{\"n\":1}" }, latest.Events);
+        Assert.False(latest.Truncated);
+        Assert.Equal(line.Length + 1, latest.PreviousOffset);
         Assert.Single(page.Events);
         Assert.True(page.Truncated);
-        Assert.Equal(line.Length + 1, page.NextOffset);
+        Assert.Null(page.PreviousOffset);
     }
 
     [Fact]
@@ -102,8 +103,6 @@ public sealed class AdapterSessionSnapshotPageTests : IDisposable
 
         Assert.Equal(new[] { 300, 300, 300, 100 }, pages.Select(p => p.Events.Count));
         Assert.Equal(lines, pages.AsEnumerable().Reverse().SelectMany(p => p.Events));
-        Assert.Null(pages[0].NextOffset);
-        Assert.All(pages.Skip(1), p => Assert.NotNull(p.NextOffset));
         Assert.Equal(0, pages[^1].FromOffset);
     }
 

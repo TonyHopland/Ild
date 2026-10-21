@@ -756,9 +756,9 @@ describe("RunsPanel run details", () => {
       eventCount: 3,
       events: [],
       fromOffset: 0,
-      nextOffset: null,
       previousOffset: null,
       truncated: false,
+      converting: false,
       ...overrides,
     };
   }
@@ -814,7 +814,7 @@ describe("RunsPanel run details", () => {
       .spyOn(loopRunService, "getSessionPreview")
       .mockImplementation(async (_run, _adapter, _session, beforeOffset) =>
         beforeOffset
-          ? previewPage({ events: ['{"page":1}'], fromOffset: 0, nextOffset: beforeOffset })
+          ? previewPage({ events: ['{"page":1}'], fromOffset: 0 })
           : previewPage({ events: ['{"page":2}'], fromOffset: 11, previousOffset: 11 }),
       );
     renderDetails(twoNodeRun({ availableSessions: [sessionEntry("sess-1")] }));
@@ -845,6 +845,38 @@ describe("RunsPanel run details", () => {
     const region = await screen.findByRole("region", { name: /session preview/i });
     expect(region.textContent).toContain('{"messages":"xxxx');
     expect(region.textContent).toContain("(truncated)");
+  });
+
+  test("a session that is one document is shown as one formatted block", async () => {
+    const document = '{"id":"ses_1","messages":[{"role":"user"},{"role":"assistant"}]}';
+    vi.spyOn(loopRunService, "getSessionPreview").mockResolvedValue(
+      previewPage({ adapterName: "OpenCode", format: "opencode-json", events: [document] }),
+    );
+    renderDetails(twoNodeRun({ availableSessions: [sessionEntry("sess-1")] }));
+    fireEvent.click(await screen.findByRole("button", { name: /ai sessions \(1\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
+
+    const region = await screen.findByRole("region", { name: /session preview/i });
+    const blocks = region.querySelectorAll("pre");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].textContent).toBe(JSON.stringify(JSON.parse(document), null, 2));
+    expect(within(region).queryByRole("button", { name: /load earlier/i })).toBeNull();
+  });
+
+  test("a session still being converted says so and shows no events", async () => {
+    vi.spyOn(loopRunService, "getSessionPreview").mockResolvedValue(
+      previewPage({ converting: true, format: null, byteLength: null, eventCount: null }),
+    );
+    renderDetails(twoNodeRun({ availableSessions: [sessionEntry("sess-1")] }));
+    fireEvent.click(await screen.findByRole("button", { name: /ai sessions \(1\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /preview session sess-1/i }));
+
+    const region = await screen.findByRole("region", { name: /session preview/i });
+    expect(within(region).getByRole("status").textContent).toBe(
+      "This session is still being converted, try again shortly.",
+    );
+    expect(region.querySelectorAll("pre")).toHaveLength(0);
+    expect(region.textContent).not.toMatch(/Format:|Size:|Events:|null|undefined/);
   });
 
   test("a node's events are read only once expanded, and only its own", async () => {
@@ -1424,9 +1456,9 @@ describe("RunsPanel session preview requests", () => {
     eventCount: 4,
     events,
     fromOffset,
-    nextOffset: null,
     previousOffset,
     truncated: false,
+    converting: false,
   });
 
   async function openSessions() {

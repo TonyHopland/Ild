@@ -253,7 +253,7 @@ public class AppDbContext : DbContext
             e.HasIndex(s => new { s.ChatSessionId, s.AdapterName, s.SessionId })
                 .IsUnique()
                 .HasFilter(null);
-            // Dropped by migration B once every deployment has converted its rows.
+            // Legacy (remove with migration B): dropped once every deployment has converted its rows.
             e.Property<string?>(AdapterSessionSnapshot.LegacySessionJsonColumn);
         });
 

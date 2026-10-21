@@ -20,11 +20,33 @@ namespace ILD.Data.Migrations;
 /// A row is converted in one transaction that both writes its chunks and empties the
 /// legacy column, claimed by <c>SessionJson IS NOT NULL</c>: a crash leaves the row as it
 /// was, a second pass finds nothing to do, and a row a turn has meanwhile replaced is left
-/// alone. Leave this wired up until every deployment has started once on this version;
-/// migration B then drops the column.
+/// alone.
+///
+/// Legacy (remove with migration B): this whole class. Leave it wired up until every
+/// deployment has started once on this version and logged that conversion finished;
+/// migration B then drops the column (see docs/deployment.md).
 /// </summary>
 public static class SessionSnapshotContentMigrator
 {
+    // The Name each adapter in ILD.Core reports (ClaudeCodeAdapter, PiAdapter, CodexAdapter,
+    // OpenCodeAdapter), which legacy rows are keyed by. ILD.Data sits below ILD.Core and cannot
+    // reference the adapters, so the names are repeated here; a test pins them to the adapters,
+    // so renaming one fails that test rather than this conversion.
+    private const string ClaudeCodeAdapterName = "ClaudeCode";
+    private const string PiAdapterName = "Pi";
+    private const string CodexAdapterName = "Codex";
+    private const string OpenCodeAdapterName = "OpenCode";
+
+    /// <summary>The format a legacy row of <paramref name="adapterName"/> converts to; <see cref="SessionSnapshotFormats.Raw"/> for an adapter that never saved sessions.</summary>
+    public static string FormatForAdapter(string adapterName) => adapterName switch
+    {
+        ClaudeCodeAdapterName => SessionSnapshotFormats.ClaudeJsonl,
+        PiAdapterName => SessionSnapshotFormats.PiJsonl,
+        CodexAdapterName => SessionSnapshotFormats.CodexJsonl,
+        OpenCodeAdapterName => SessionSnapshotFormats.OpenCodeJson,
+        _ => SessionSnapshotFormats.Raw,
+    };
+
     /// <summary>The next row still holding legacy content, leaving out <paramref name="skip"/>; null when none is left.</summary>
     public static async Task<Guid?> FindNextAsync(AppDbContext db, IReadOnlyCollection<Guid> skip, CancellationToken ct = default)
     {
@@ -45,6 +67,10 @@ public static class SessionSnapshotContentMigrator
     public static async Task<bool> ConvertRowAsync(AppDbContext db, Guid snapshotId, CancellationToken ct = default)
     {
         await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // The update takes the row's lock and checks the legacy column is still set in one
+        // statement, so an append or replace waits for this conversion, and a row a turn has
+        // replaced meanwhile (its column emptied) is left alone. It sets a value the conversion
+        // writes anyway; it is the lock that matters.
         var claimed = await db.AdapterSessionSnapshots
             .Where(s => s.Id == snapshotId && EF.Property<string?>(s, AdapterSessionSnapshot.LegacySessionJsonColumn) != null)
             .ExecuteUpdateAsync(set => set.SetProperty(s => s.Compression, SessionSnapshotFormats.Brotli), ct);
@@ -61,14 +87,7 @@ public static class SessionSnapshotContentMigrator
         // A Claude wrapper is unwrapped as it is read, in the one pass that writes the chunks.
         // Content that turns out not to be one is rare; its chunks are dropped and it is
         // written again verbatim, as content the conversion could not interpret.
-        var format = row.AdapterName switch
-        {
-            "ClaudeCode" => SessionSnapshotFormats.ClaudeJsonl,
-            "Pi" => SessionSnapshotFormats.PiJsonl,
-            "Codex" => SessionSnapshotFormats.CodexJsonl,
-            "OpenCode" => SessionSnapshotFormats.OpenCodeJson,
-            _ => SessionSnapshotFormats.Raw,
-        };
+        var format = FormatForAdapter(row.AdapterName);
         var chunker = await WriteAsync(db, snapshotId, row.Length, unwrap: format == SessionSnapshotFormats.ClaudeJsonl, ct);
         if (chunker is null)
         {

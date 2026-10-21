@@ -1,9 +1,11 @@
 using System.Data.Common;
 using System.Text;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Adapters;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Migrations;
 using ILD.Data.Stores;
 using ILD.Data.Stores.Interfaces;
 using Microsoft.Data.Sqlite;
@@ -217,11 +219,21 @@ public sealed class SessionSnapshotContentMigratorTests : IAsyncLifetime
         Assert.Equal("{\"n\":1}\n", Encoding.UTF8.GetString((await ReadAllAsync(SessionSnapshotKey.ForRun(_runId, "Pi", "fails")))!));
     }
 
+    [Fact]
+    public void Each_adapter_name_converts_to_the_format_that_adapter_saves()
+    {
+        Assert.Equal(SessionSnapshotFormats.ClaudeJsonl, SessionSnapshotContentMigrator.FormatForAdapter(new ClaudeCodeAdapter().Name));
+        Assert.Equal(SessionSnapshotFormats.PiJsonl, SessionSnapshotContentMigrator.FormatForAdapter(new PiAdapter().Name));
+        Assert.Equal(SessionSnapshotFormats.CodexJsonl, SessionSnapshotContentMigrator.FormatForAdapter(new CodexAdapter().Name));
+        Assert.Equal(SessionSnapshotFormats.OpenCodeJson, SessionSnapshotContentMigrator.FormatForAdapter(new OpenCodeAdapter().Name));
+        Assert.Equal(SessionSnapshotFormats.Raw, SessionSnapshotContentMigrator.FormatForAdapter(new CopilotAdapter().Name));
+    }
+
     [Theory]
     [InlineData("metadata")]
     [InlineData("read")]
     [InlineData("tail")]
-    [InlineData("range")]
+    [InlineData("head")]
     public async Task Reading_a_row_the_migration_has_not_reached_converts_it_first(string read)
     {
         Guid id;
@@ -248,8 +260,8 @@ public sealed class SessionSnapshotContentMigratorTests : IAsyncLifetime
                 case "tail":
                     Assert.Equal(new[] { "{\"n\":1}", "{\"n\":2}" }, (await store.ReadTailAsync(key, 10, null, Ct)).Events);
                     break;
-                case "range":
-                    Assert.Equal(new[] { "{\"n\":1}", "{\"n\":2}" }, (await store.ReadRangeAsync(key, 0, 10, Ct)).Events);
+                case "head":
+                    Assert.Equal(new[] { "{\"n\":1}\n{\"n\":2}\n" }, (await store.ReadHeadAsync(key, Ct)).Events);
                     break;
             }
         }
