@@ -291,6 +291,34 @@ public class WorktreeRetentionSweeperTests
         reclaimer.Verify(r => r.ReclaimLocalStateAsync(It.Is<LoopRun>(x => x.Id == second.Id)), Times.Never);
     }
 
+    [Fact]
+    public async Task Sweep_looks_up_each_work_items_status_once_per_pass()
+    {
+        var db = new TestDb();
+        var (version, _) = SeedTemplate(db);
+        var active = Guid.NewGuid().ToString();
+        var done = Guid.NewGuid().ToString();
+        var kept = Enumerable.Range(1, 3)
+            .Select(i => SeedRun(db, version.Id, active, LoopRunStatus.Failed,
+                completedAt: DateTime.UtcNow.AddDays(-i), worktree: $"/tmp/wt/kept-{i}", branch: $"ild/wi-x-run-kept-{i}"))
+            .ToList();
+        var reclaimable = Enumerable.Range(1, 2)
+            .Select(i => SeedRun(db, version.Id, done, LoopRunStatus.Completed,
+                completedAt: DateTime.UtcNow.AddHours(-i), worktree: $"/tmp/wt/done-{i}", branch: $"ild/wi-x-run-done-{i}"))
+            .ToList();
+
+        var workItems = WorkItemsReturning((active, RemoteWorkItemStatus.Running), (done, RemoteWorkItemStatus.Done));
+
+        await InvokeSweepOnceAsync(BuildSweeper(db, workItems.Object, ReclaimerReturning(true).Object, retentionDays: 0));
+
+        workItems.Verify(x => x.GetWorkItemAsync(active), Times.Once);
+        workItems.Verify(x => x.GetWorkItemAsync(done), Times.Once);
+        foreach (var run in kept)
+            Assert.NotNull(await db.LoopRuns.GetByIdAsync(run.Id));
+        foreach (var run in reclaimable)
+            Assert.Null(await db.LoopRuns.GetByIdAsync(run.Id));
+    }
+
     private static (LoopTemplateVersion version, LoopTemplate template) SeedTemplate(TestDb db)
     {
         var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t", RecoveryPolicy = RecoveryPolicy.AutoResume };
