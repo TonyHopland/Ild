@@ -28,8 +28,8 @@ namespace ILD.Core.Services.Implementations;
 /// A pass runs every 6 hours, the first 10 minutes after start, and pages
 /// through every candidate: the runs it keeps are the oldest, and would
 /// otherwise fill one batch forever. Each work item's status is looked up once
-/// per pass. The window is read from settings on every
-/// pass, so changing it in the UI takes effect on the next sweep without a restart.
+/// per pass. The window is read from settings on every pass, so changing it in
+/// the UI takes effect on the next sweep without a restart.
 /// </summary>
 public sealed class WorktreeRetentionSweeper : BackgroundService
 {
