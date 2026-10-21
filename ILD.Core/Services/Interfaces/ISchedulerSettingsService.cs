@@ -13,9 +13,9 @@ public static class AppSettingKeys
 
     /// <summary>
     /// Days after a run reaches a terminal state before the worktree retention
-    /// sweeper reclaims its worktree/branch and deletes the run, counted only
-    /// once its work item is Done. <c>0</c> reclaims it on the next sweep after
-    /// the work item is Done.
+    /// sweeper reclaims its worktree/branch and deletes the run. Only runs of a
+    /// Done work item are reclaimed, so <c>0</c> reclaims one on the next sweep
+    /// after its work item is Done.
     /// </summary>
     public const string RunRetentionDays = "run.retentionDays";
     public const int DefaultRunRetentionDays = 0;

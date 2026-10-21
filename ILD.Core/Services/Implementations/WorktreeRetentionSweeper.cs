@@ -78,8 +78,6 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
         var sp = scope.ServiceProvider;
         var settings = sp.GetRequiredService<ISchedulerSettingsService>();
         var runStore = sp.GetRequiredService<ILoopRunStore>();
-        var workItems = sp.GetRequiredService<IWorkItemManager>();
-        var reclaimer = sp.GetRequiredService<IRunReclaimer>();
 
         var retentionDays = await settings.GetRunRetentionDaysAsync(ct);
         var cutoff = DateTime.UtcNow - TimeSpan.FromDays(retentionDays);
@@ -94,7 +92,7 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
             foreach (var candidate in page)
             {
                 if (ct.IsCancellationRequested) return;
-                if (await TryReclaimAsync(candidate.Id, cutoff, runStore, workItems, reclaimer, ct))
+                if (await TryReclaimAsync(candidate.Id, cutoff, ct))
                     reclaimed++;
                 else
                     kept++;
@@ -106,9 +104,17 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
             _log.LogInformation("Worktree retention reclaimed {Count} runs terminal before {Cutoff:o}", reclaimed, cutoff);
     }
 
-    private async Task<bool> TryReclaimAsync(
-        Guid runId, DateTime cutoff, ILoopRunStore runStore, IWorkItemManager workItems, IRunReclaimer reclaimer, CancellationToken ct)
+    private async Task<bool> TryReclaimAsync(Guid runId, DateTime cutoff, CancellationToken ct)
     {
+        // A scope of its own: looking up a work item tracks all its runs, and a
+        // re-read in a shared scope would return those copies instead of the
+        // database, missing a pin or a retry made since.
+        using var scope = _scopes.CreateScope();
+        var sp = scope.ServiceProvider;
+        var runStore = sp.GetRequiredService<ILoopRunStore>();
+        var workItems = sp.GetRequiredService<IWorkItemManager>();
+        var reclaimer = sp.GetRequiredService<IRunReclaimer>();
+
         // Re-read the run just before touching it: between the candidate
         // query and now the user may have pinned it or retried it back to
         // Running — destroying an active run's worktree out from under it
