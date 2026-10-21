@@ -31,7 +31,8 @@ public class EventLogStore : IEventLogStore
             if (!await RunRowLock.TakeAsync(_db, runId))
                 throw new InvalidOperationException($"Run {runId} not found while appending an event.");
 
-            if (await IsConversationAsync(entry) &&
+            // A reopen is how a closed run opens again, so the closed check cannot refuse it.
+            if (entry.EventType != EventType.RunReopened && await IsConversationAsync(entry) &&
                 (!RunConversationEvents.Ending.Contains(entry.EventType) &&
                  await _db.LoopRuns.AsNoTracking().AnyAsync(r => r.Id == runId &&
                     (r.Status == LoopRunStatus.Completed || r.Status == LoopRunStatus.Failed ||
@@ -66,7 +67,8 @@ public class EventLogStore : IEventLogStore
         => _db.EventLogs.AnyAsync(e => e.LoopRunId == runId
             && (e.EventType == EventType.LoopRunCompleted
                 || e.EventType == EventType.LoopRunFailed
-                || e.EventType == EventType.LoopRunCancelled));
+                || e.EventType == EventType.LoopRunCancelled)
+            && !_db.EventLogs.Any(r => r.LoopRunId == runId && r.EventType == EventType.RunReopened && r.Id > e.Id));
 
     public async Task<IReadOnlyList<EventLog>> GetByRunIdAsync(Guid runId)
         => await _db.EventLogs.AsNoTracking().Where(e => e.LoopRunId == runId).OrderBy(e => e.Id).ToListAsync();

@@ -58,4 +58,10 @@ public enum EventType
     /// <see cref="HumanFeedbackRequested"/> instead.
     /// </summary>
     RunParked = 22,
+
+    /// <summary>
+    /// A run that had ended on a failed node was opened again to retry that
+    /// node. Ending events before it no longer close the run's conversation.
+    /// </summary>
+    RunReopened = 23,
 }

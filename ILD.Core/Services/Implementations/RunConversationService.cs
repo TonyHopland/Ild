@@ -65,6 +65,7 @@ public sealed class RunConversationService : IRunConversationService
             EventType.LoopRunCompleted => "Run completed",
             EventType.LoopRunFailed => "Run failed",
             EventType.LoopRunCancelled => "Run cancelled",
+            EventType.RunReopened => "Run reopened",
             _ => type.ToString(),
         };
 

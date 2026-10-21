@@ -661,11 +661,16 @@ public sealed class LoopEngine : ILoopEngine
         using var scope = _sp.CreateScope();
         var loopRunStore = scope.ServiceProvider.GetRequiredService<ILoopRunStore>();
         var workItems = scope.ServiceProvider.GetRequiredService<IWorkItemManager>();
+        var eventLog = scope.ServiceProvider.GetRequiredService<IEventLogService>();
         var run = await loopRunStore.GetByIdAsync(runId);
         if (run is null) return;
-        if (!IsAlive(run.Status) || await scope.ServiceProvider.GetRequiredService<IEventLogService>().HasRunEndedAsync(runId))
-            throw new InvalidOperationException("Cannot retry a node of a run that has ended; start a new run instead");
-        if (run.Status == LoopRunStatus.Running && !run.IsPaused)
+        var oldStatus = run.Status;
+        if (!IsAlive(run.Status) || await eventLog.HasRunEndedAsync(runId))
+        {
+            if (!await ReopenToRetryAsync(run, runNodeId, loopRunStore, workItems, eventLog))
+                throw new InvalidOperationException(RetryOfEndedRunRefused);
+        }
+        else if (run.Status == LoopRunStatus.Running && !run.IsPaused)
             throw new InvalidOperationException("Cannot retry while run is actively executing");
         var target = await loopRunStore.GetRunNodeByIdAsync(runNodeId);
         if (target is null || target.LoopRunId != runId) return;
@@ -677,7 +682,6 @@ public sealed class LoopEngine : ILoopEngine
             var prev = await loopRunStore.GetRunNodeByIdAsync(prevId);
             prevOutput = prev?.Output;
         }
-        var oldStatus = run.Status;
         run.CurrentNodeId = target.LoopNodeId;
         run.PreviousNodeOutput = prevOutput;
         run.ExternalActionResult = null;
@@ -701,6 +705,44 @@ public sealed class LoopEngine : ILoopEngine
         await _notifier.RunStateChangedAsync(runId, oldStatus, LoopRunStatus.Running);
         _ = LaunchAfterAwaitAsync(runId);
     }
+
+    private const string RetryOfEndedRunRefused = "Cannot retry a node of a run that has ended; start a new run instead";
+
+    /// <summary>
+    /// Reopen a run that ended on a failed node before such a failure parked the
+    /// run instead — Failed with "Node Failed" — so that node can be retried.
+    /// Only the work item's latest run, with no other live run, while the item
+    /// still waits on a person; any other ended run stays ended and this returns
+    /// false. The reopen is recorded under the run's lock together with the
+    /// status change, so a concurrent end or second reopen cannot split them.
+    /// </summary>
+    private static async Task<bool> ReopenToRetryAsync(
+        LoopRun run, Guid runNodeId, ILoopRunStore store, IWorkItemManager workItems, IEventLogService eventLog)
+    {
+        if (!EndedOnFailedNode(run)) return false;
+        var target = await store.GetRunNodeByIdAsync(runNodeId);
+        if (target is null || target.LoopRunId != run.Id) return false;
+        if ((await store.GetLatestByWorkItemAsync(run.WorkItemId))?.Id != run.Id
+            || await store.GetActiveByWorkItemAsync(run.WorkItemId) is not null
+            || (await workItems.GetWorkItemAsync(run.WorkItemId))?.Status != RemoteWorkItemStatus.HumanFeedback)
+            return false;
+
+        await eventLog.AppendAlongsideAsync(run.Id, EventType.RunReopened,
+            $"Reopened to retry {target.NodeLabel ?? "a step"}", target.LoopNodeId, target.Id, edgeName: null,
+            async () =>
+            {
+                await store.ReloadAsync(run);
+                if (!EndedOnFailedNode(run))
+                    throw new InvalidOperationException(RetryOfEndedRunRefused);
+                run.Status = LoopRunStatus.Running;
+                run.CompletedAt = null;
+                await store.UpdateRunAsync(run);
+            });
+        return true;
+    }
+
+    private static bool EndedOnFailedNode(LoopRun run)
+        => run.Status == LoopRunStatus.Failed && run.HumanFeedbackReason == HumanFeedbackReasons.NodeFailed;
 
     public async Task CleanupRunAsync(Guid runId)
     {
@@ -974,7 +1016,7 @@ public sealed class LoopEngine : ILoopEngine
                             {
                                 // Unlinked: this execution succeeded and its own turn
                                 // already carries what it did.
-                                await FailRunAsync(run, $"missing edge connection: {ok.EdgeName}", loopRunStore, sp,
+                                await ParkOnFailedNodeAsync(run, $"missing edge connection: {ok.EdgeName}", loopRunStore, sp,
                                     node, runNodeId: null);
                                 return ParkResult.Stop;
                             }
@@ -1021,7 +1063,7 @@ public sealed class LoopEngine : ILoopEngine
                         var failEdge = await ResolveNextEdgeAsync(loopRunStore, node.Id, f.Edge);
                         if (failEdge is null)
                         {
-                            await FailRunAsync(run, f.Reason, loopRunStore, sp, node, runNodeId);
+                            await ParkOnFailedNodeAsync(run, f.Reason, loopRunStore, sp, node, runNodeId);
                             return ParkResult.Stop;
                         }
                         run.CurrentNodeId = failEdge.TargetNodeId;
@@ -1432,19 +1474,30 @@ public sealed class LoopEngine : ILoopEngine
         return ParkResult.Stop;
     }
 
-    private async Task FailRunAsync(
+    /// <summary>
+    /// Park a run on a node that failed with nowhere to go: WaitingHuman with
+    /// "Node Failed", the work item moved to HumanFeedback, and
+    /// <paramref name="reason"/> recorded in full. Not a halt: the way on is
+    /// <see cref="RetryFromNodeAsync"/> on the failed execution, and startup
+    /// leaves the run alone. A run that had already ended before the node ran
+    /// (<see cref="CleanupRunAsync"/>) stays ended; parking it would bring it back
+    /// to life past the checks a reopen makes.
+    /// </summary>
+    private async Task ParkOnFailedNodeAsync(
         LoopRun run, string reason, ILoopRunStore store, IServiceProvider sp, LoopNode node, Guid? runNodeId)
     {
-        var workItems = sp.GetRequiredService<IWorkItemManager>();
         var old = run.Status;
-        run.Status = LoopRunStatus.Failed;
-        run.CompletedAt = DateTime.UtcNow;
+        if (!IsAlive(old)) return;
+        run.Status = LoopRunStatus.WaitingHuman;
+        run.IsHalted = false;
+        run.HaltReason = null;
         run.HumanFeedbackReason = HumanFeedbackReasons.NodeFailed;
         await store.UpdateRunAsync(run);
-        _progressBuffer.Clear(run.Id);
-        if (IsAlive(old) && sp.GetService<IEventLogService>() is { } eventLog)
-            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.LoopRunFailed, reason, node.Id, runNodeId));
-        await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
+        if (sp.GetService<IEventLogService>() is { } eventLog)
+            await TrySafe(run.Id, () => eventLog.AppendAsync(run.Id, EventType.RunParked, reason, node.Id, runNodeId));
+        await _notifier.RunStateChangedAsync(run.Id, old, LoopRunStatus.WaitingHuman);
+        await sp.GetRequiredService<IWorkItemManager>().TransitionAsync(
+            RunActor(run.Id, run.WorkItemId, node.Label), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: reason, humanFeedbackReason: HumanFeedbackReasons.NodeFailed, currentLoopRunId: run.Id);
     }
 
@@ -1452,10 +1505,11 @@ public sealed class LoopEngine : ILoopEngine
         => status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman;
 
     /// <summary>
-    /// Terminal handler for an unhandled exception in the run loop. Marks the
-    /// run Failed and parks the work item for review, but only if the run is
-    /// still Running — a crash during a transition that already moved the run
-    /// to a terminal/parked state must not clobber that state.
+    /// Handler for an unhandled exception in the run loop. Parks the run for a
+    /// person on the execution the crash cut short, which is marked Failed so
+    /// it can be retried, and moves the work item to HumanFeedback — but only if
+    /// the run is still Running: a crash during a transition that already moved
+    /// the run to a terminal/parked state must not clobber that state.
     /// </summary>
     private async Task MarkRunCrashedAsync(Guid runId, string reason)
     {
@@ -1472,21 +1526,28 @@ public sealed class LoopEngine : ILoopEngine
             : null;
         if (crashed?.Status != LoopRunNodeStatus.Running) crashed = null;
 
-        var workItems = sp.GetRequiredService<IWorkItemManager>();
-        var old = run.Status;
-        run.Status = LoopRunStatus.Failed;
-        run.CompletedAt = DateTime.UtcNow;
         // Clamp before persisting: a flattened inner-exception chain is unbounded,
         // but HumanFeedbackReason is varchar(512). An over-length reason would make
         // this handler's own UpdateRunAsync SaveChanges throw — swallowed by the
         // caller's TrySafe — leaving the run stuck Running and never parked. The
         // event below keeps the whole of it.
-        run.HumanFeedbackReason = Truncate(reason, MaxHumanFeedbackReasonLength);
+        var shortReason = Truncate(reason, MaxHumanFeedbackReasonLength);
+        if (crashed is not null)
+        {
+            await CompleteRunNodeAsync(store, crashed.Id, LoopRunNodeStatus.Failed, crashed.Output, shortReason);
+            await _notifier.NodeStateChangedAsync(runId, crashed.LoopNodeId, LoopRunNodeStatus.Running, LoopRunNodeStatus.Failed);
+        }
+
+        var workItems = sp.GetRequiredService<IWorkItemManager>();
+        var old = run.Status;
+        run.Status = LoopRunStatus.WaitingHuman;
+        run.IsHalted = false;
+        run.HaltReason = null;
+        run.HumanFeedbackReason = shortReason;
         await store.UpdateRunAsync(run);
-        _progressBuffer.Clear(runId);
         if (sp.GetService<IEventLogService>() is { } eventLog)
-            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.LoopRunFailed, reason, crashed?.LoopNodeId, crashed?.Id));
-        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.Failed);
+            await TrySafe(runId, () => eventLog.AppendAsync(runId, EventType.RunParked, reason, crashed?.LoopNodeId, crashed?.Id));
+        await _notifier.RunStateChangedAsync(runId, old, LoopRunStatus.WaitingHuman);
         await workItems.TransitionAsync(RunActor(run.Id, run.WorkItemId, crashed?.NodeLabel), run.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             reason: run.HumanFeedbackReason, humanFeedbackReason: HumanFeedbackReasons.RunCrashed, currentLoopRunId: run.Id);
     }

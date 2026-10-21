@@ -7,7 +7,7 @@ namespace ILD.Data.Enums;
 /// </summary>
 public static class RunConversationEvents
 {
-    /// <summary>The events that close a run's conversation.</summary>
+    /// <summary>The events that close a run's conversation, until a later <see cref="EventType.RunReopened"/>.</summary>
     public static readonly IReadOnlySet<EventType> Ending = new HashSet<EventType>
     {
         EventType.LoopRunCompleted,
@@ -24,6 +24,7 @@ public static class RunConversationEvents
         EventType.LoopRunStarted,
         EventType.RunParked,
         EventType.RecoveryTriggered,
+        EventType.RunReopened,
     };
 
     /// <summary>Every event type the conversation projection can turn into a message.</summary>

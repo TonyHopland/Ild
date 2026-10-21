@@ -24,7 +24,10 @@ public interface IEventLogStore
     /// </summary>
     Task<long> AppendAlongsideAsync(EventLog entry, Func<Task> alongside);
 
-    /// <summary>Whether the run's run-ending event (completed, failed, cancelled) has been written.</summary>
+    /// <summary>
+    /// Whether the run's run-ending event (completed, failed, cancelled) has been
+    /// written and no reopen has followed it.
+    /// </summary>
     Task<bool> HasEndedAsync(Guid runId);
 
     Task<IReadOnlyList<EventLog>> GetByRunIdAsync(Guid runId);
