@@ -12,10 +12,10 @@ public static class AppSettingKeys
     public const bool DefaultIsPaused = false;
 
     /// <summary>
-    /// Days after a run reaches a terminal state before the worktree retention
-    /// sweeper reclaims its worktree/branch and deletes the run. Only runs of a
-    /// Done work item are reclaimed, so <c>0</c> reclaims one on the next sweep
-    /// after its work item is Done.
+    /// The worktree retention sweeper reclaims a run's worktree/branch and
+    /// deletes the run once its work item is Done and the run finished more than
+    /// this many days ago. <c>0</c> reclaims it on the next sweep after its work
+    /// item is Done.
     /// </summary>
     public const string RunRetentionDays = "run.retentionDays";
     public const int DefaultRunRetentionDays = 0;
@@ -153,7 +153,7 @@ public interface ISchedulerSettingsService
     Task<bool> GetIsPausedAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Run retention window in days; <c>0</c> means reclaim on the next sweep once the work item is Done.
+    /// Run retention window in days: a run is reclaimed once its work item is Done and it finished more than this many days ago; <c>0</c> means the next sweep after Done.
     /// </summary>
     Task<int> GetRunRetentionDaysAsync(CancellationToken ct = default);
 

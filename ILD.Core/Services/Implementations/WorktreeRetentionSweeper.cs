@@ -12,10 +12,9 @@ namespace ILD.Core.Services.Implementations;
 /// Reclaims disk from finished runs. Each run keeps its own worktree and branch
 /// so finished runs stay inspectable (see ADR-0008); this sweeper deletes the
 /// whole run — worktree, local branch, and the run row (nodes, edge traversals,
-/// event logs cascade) — once its work item is <c>Done</c> and the run has been
-/// terminal longer than the configured <see cref="AppSettingKeys.RunRetentionDays"/>
-/// window. With the default of <c>0</c> that is the first pass after the work
-/// item is Done.
+/// event logs cascade) — once its work item is <c>Done</c> and the run finished
+/// more than <see cref="AppSettingKeys.RunRetentionDays"/> days ago. With the
+/// default of <c>0</c> that is the first pass after the work item is Done.
 ///
 /// Safety rails:
 /// <list type="bullet">
@@ -28,7 +27,8 @@ namespace ILD.Core.Services.Implementations;
 /// </list>
 /// A pass runs every 6 hours, the first 10 minutes after start, and pages
 /// through every candidate: the runs it keeps are the oldest, and would
-/// otherwise fill one batch forever. The window is read from settings on every
+/// otherwise fill one batch forever. Each work item's status is looked up once
+/// per pass. The window is read from settings on every
 /// pass, so changing it in the UI takes effect on the next sweep without a restart.
 /// </summary>
 public sealed class WorktreeRetentionSweeper : BackgroundService
@@ -86,13 +86,17 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
         // so skipping the kept ones reaches the next unseen candidate.
         var reclaimed = 0;
         var kept = 0;
+        // Whether each work item is still in play, looked up once per pass: kept
+        // runs pile up under items that are not Done, and every lookup loads all
+        // of the item's runs.
+        var itemInPlay = new Dictionary<string, bool>(StringComparer.Ordinal);
         while (true)
         {
             var page = await runStore.GetReclaimableRunsAsync(cutoff, kept, PageSize);
             foreach (var candidate in page)
             {
                 if (ct.IsCancellationRequested) return;
-                if (await TryReclaimAsync(candidate.Id, cutoff, ct))
+                if (await TryReclaimAsync(candidate.Id, cutoff, itemInPlay, ct))
                     reclaimed++;
                 else
                     kept++;
@@ -104,7 +108,8 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
             _log.LogInformation("Worktree retention reclaimed {Count} runs terminal before {Cutoff:o}", reclaimed, cutoff);
     }
 
-    private async Task<bool> TryReclaimAsync(Guid runId, DateTime cutoff, CancellationToken ct)
+    private async Task<bool> TryReclaimAsync(
+        Guid runId, DateTime cutoff, Dictionary<string, bool> itemInPlay, CancellationToken ct)
     {
         // A scope of its own: looking up a work item tracks all its runs, and a
         // re-read in a shared scope would return those copies instead of the
@@ -126,8 +131,13 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
 
         // Keep every run of a work item that is still in play, superseded or
         // not; only reclaim once the work item is Done.
-        var wi = await workItems.GetWorkItemAsync(run.WorkItemId);
-        if (wi is not null && wi.Status != RemoteWorkItemStatus.Done) return false;
+        if (!itemInPlay.TryGetValue(run.WorkItemId, out var inPlay))
+        {
+            var wi = await workItems.GetWorkItemAsync(run.WorkItemId);
+            inPlay = wi is not null && wi.Status != RemoteWorkItemStatus.Done;
+            itemInPlay[run.WorkItemId] = inPlay;
+        }
+        if (inPlay) return false;
 
         // Only drop the run row once its local git state is verified gone;
         // otherwise keep the row so the next sweep can retry — a deleted

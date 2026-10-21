@@ -686,9 +686,9 @@ The log is swept, not kept forever: an entry older than
 `network.logRetentionDays` (default `30`, capped at 3650, `0` keeps the log
 forever) is deleted by a background sweep that runs every six hours. Like
 `run.retentionDays` (default `0`: a run is deleted at the next sweep after its
-work item is Done, and never while the item is still in play) the window is read on every pass, so a change in Settings
-takes effect on the next sweep without a restart, and a sweep that removed
-anything refreshes an open log view.
+work item is Done, and never while the item is still in play), the window is
+read on every pass, so a change in Settings takes effect on the next sweep
+without a restart, and a sweep that removed anything refreshes an open log view.
 
 Whether the limit is **enforced** or **advisory** depends on the container being
 granted `NET_ADMIN` — see [Deployment](deployment.md#agent-network-limits-net_admin).

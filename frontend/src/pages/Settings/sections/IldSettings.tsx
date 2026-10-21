@@ -176,9 +176,9 @@ export default function IldSettings() {
           minLabel="0 (when done)"
           unit="days"
         >
-          How long a finished run&apos;s worktree, branch, and history are kept. They are only
-          deleted once its work item is Done, and with <strong>0</strong> at the next cleanup pass
-          after that. Runs pinned with “Retain” are never deleted.
+          A finished run&apos;s worktree, branch, and history are deleted once its work item is Done
+          and the run finished more than this many days ago. With <strong>0</strong> that is the
+          next cleanup pass after Done. Runs pinned with “Retain” are never deleted.
         </NumericSettingField>
       </section>
 
