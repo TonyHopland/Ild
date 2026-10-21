@@ -293,6 +293,14 @@ public class PrSyncServiceTests
         => h.WorkItemsMock.Verify(s => s.TransitionAsync(It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.Done,
             It.IsAny<string?>(), It.IsAny<string?>(), h.RunId, It.IsAny<string?>()), times);
 
+    private static void ParkAs(LoopEngineHarness h, string humanFeedbackReason, bool halted = false)
+    {
+        var run = h.Db.Context.LoopRuns.Single(r => r.Id == h.RunId);
+        run.HumanFeedbackReason = humanFeedbackReason;
+        run.IsHalted = halted;
+        h.Db.Context.SaveChanges();
+    }
+
     [Fact]
     public async Task A_merge_of_a_run_parked_on_a_failed_node_ends_the_run_and_finishes_the_item()
     {
@@ -313,20 +321,55 @@ public class PrSyncServiceTests
         VerifyItemFinished(h, Times.Once);
     }
 
-    public enum WaitingRun { AtPrNode, HaltedByAPerson }
+    [Fact]
+    public async Task A_merge_of_a_run_parked_on_a_crash_ends_the_run_and_finishes_the_item()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.AI, "Agent");
+        h.SeedRun("a", LoopRunStatus.WaitingHuman);
+        ParkAs(h, HumanFeedbackReasons.RunCrashed);
+        GivePr(h);
+
+        await MergeAsync(h);
+
+        Assert.Equal(LoopRunStatus.Cancelled, h.ReloadRun().Status);
+        VerifyItemFinished(h, Times.Once);
+    }
+
+    [Fact]
+    public async Task A_merge_does_not_finish_a_parked_run_that_is_no_longer_its_items_latest()
+    {
+        using var h = new LoopEngineHarness();
+        h.AddNode("a", NodeType.AI, "Agent");
+        var parked = h.SeedRun("a", LoopRunStatus.WaitingHuman);
+        ParkAs(h, HumanFeedbackReasons.NodeFailed);
+        GivePr(h);
+        RunTimeline.SeedRun(h.Db, h.WorkItemId, h.TemplateVersionId, LoopRunStatus.Completed,
+            startedAt: parked.StartedAt!.Value.AddMinutes(5));
+
+        await MergeAsync(h);
+
+        Assert.Equal(LoopRunStatus.WaitingHuman, h.ReloadRun().Status);
+        VerifyItemFinished(h, Times.Never);
+    }
+
+    public enum WaitingRun { AtPrNode, HaltedByAPerson, HaltedOnTheNodeThatFailed }
 
     [Theory]
     [InlineData(WaitingRun.AtPrNode)]
     [InlineData(WaitingRun.HaltedByAPerson)]
+    [InlineData(WaitingRun.HaltedOnTheNodeThatFailed)]
     public async Task A_merge_does_not_finish_a_run_waiting_on_a_person_at_a_node(WaitingRun shape)
     {
         using var h = new LoopEngineHarness();
         h.AddNode("pr", NodeType.PR, "Pull request");
-        var halted = shape == WaitingRun.HaltedByAPerson;
-        h.SeedRun("pr", LoopRunStatus.WaitingHuman, isHalted: halted);
-        var run = h.Db.Context.LoopRuns.Single(r => r.Id == h.RunId);
-        run.HumanFeedbackReason = halted ? HumanFeedbackReasons.RunHalted : HumanFeedbackReasons.PrAwaitingMerge;
-        h.Db.Context.SaveChanges();
+        h.SeedRun("pr", LoopRunStatus.WaitingHuman);
+        switch (shape)
+        {
+            case WaitingRun.AtPrNode: ParkAs(h, HumanFeedbackReasons.PrAwaitingMerge); break;
+            case WaitingRun.HaltedByAPerson: ParkAs(h, HumanFeedbackReasons.RunHalted, halted: true); break;
+            case WaitingRun.HaltedOnTheNodeThatFailed: ParkAs(h, HumanFeedbackReasons.NodeFailed, halted: true); break;
+        }
         GivePr(h);
 
         await MergeAsync(h);
