@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Previews and agents can send one plain-HTTP request after another through the network proxy, as a tool-calling chat with a local model does.**
 
+- **A step that fails with nowhere to go waits for you to retry it instead of ending the run, and runs that already ended this way can be retried too.**
+
 ## [0.18.0] - 2026-10-18
 
 ### Added
