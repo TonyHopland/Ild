@@ -26,7 +26,7 @@ import Icon from "../Icon";
 import { feedbackReasonLabel, pillClass, type Tone } from "../../utils/labels";
 import { failureMessage } from "./RunDetailSections";
 import { repositoryName } from "../../utils/repositoryName";
-import { nodeTakesRetry, runTakesRetryNow } from "./retry";
+import { NODE_FAILED, nodeTakesRetry, runReopensOnRetry, runTakesRetryNow } from "./retry";
 
 /**
  * What the round is about to say on the pull request, and the chance to stop
@@ -184,8 +184,6 @@ export function feedbackFor(
   return run && !waitsForAnswer(run) ? null : { kind: "answer", reason, runId };
 }
 
-const NODE_FAILED = "Node Failed";
-
 /**
  * The node that stopped the run: its last execution, when that one failed. An
  * earlier failure is not it — a run stopped by an unwired output stopped after
@@ -215,11 +213,9 @@ function FailedNodeCard({
   onShowRuns?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  // The same rule as the Runs tab, plus a run that ended Failed on this node:
-  // the card shows only for the item's current run with the item waiting on
-  // it, and the retry reopens that run.
+  // The same rule as the Runs tab, plus a run that ended on this node.
   const canRetry =
-    (runTakesRetryNow(run) || run.status === LoopRunStatus.Failed) &&
+    (runTakesRetryNow(run) || runReopensOnRetry(run, workItem)) &&
     nodeTakesRetry(node.status, node.nodeType);
   const busy = detail.runLock.pendingOf(run.id) !== null;
   const recorded = node.error ?? node.output;

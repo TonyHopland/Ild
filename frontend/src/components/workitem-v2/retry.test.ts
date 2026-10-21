@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
-import { LoopRunNodeStatus, LoopRunStatus, NodeType } from "../../types";
-import { nodeTakesRetry, runOffersRetry, runTakesRetryNow } from "./retry";
+import { LoopRunNodeStatus, LoopRunStatus, NodeType, WorkItemStatus } from "../../types";
+import { nodeTakesRetry, runOffersRetry, runReopensOnRetry, runTakesRetryNow } from "./retry";
 
 describe("when a run can go back to a node", () => {
   test.each([
@@ -16,6 +16,37 @@ describe("when a run can go back to a node", () => {
       expect(runTakesRetryNow({ status, isPaused })).toBe(now);
     },
   );
+
+  const waiting = {
+    status: WorkItemStatus.HumanFeedback,
+    humanFeedbackReason: "Node Failed",
+    currentLoopRunId: "run-1",
+  };
+  test.each([
+    ["a run that ended on its failed node", LoopRunStatus.Failed, waiting, true],
+    ["a completed run", LoopRunStatus.Completed, waiting, false],
+    ["a cancelled run", LoopRunStatus.Cancelled, waiting, false],
+    [
+      "a run that failed for another reason",
+      LoopRunStatus.Failed,
+      { ...waiting, humanFeedbackReason: "Run Crashed" },
+      false,
+    ],
+    [
+      "a run its item no longer waits on",
+      LoopRunStatus.Failed,
+      { ...waiting, status: WorkItemStatus.Backlog },
+      false,
+    ],
+    [
+      "a run that is not its item's current run",
+      LoopRunStatus.Failed,
+      { ...waiting, currentLoopRunId: "run-2" },
+      false,
+    ],
+  ])("whether a retry reopens %s", (_, status, workItem, reopens) => {
+    expect(runReopensOnRetry({ id: "run-1", status }, workItem)).toBe(reopens);
+  });
 
   test("Start, Cleanup and the node running now are never retried; any other node is", () => {
     expect(nodeTakesRetry(LoopRunNodeStatus.Failed, NodeType.Start)).toBe(false);
