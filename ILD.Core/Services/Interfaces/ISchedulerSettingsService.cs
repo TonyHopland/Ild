@@ -13,11 +13,12 @@ public static class AppSettingKeys
 
     /// <summary>
     /// Days after a run reaches a terminal state before the worktree retention
-    /// sweeper reclaims its worktree/branch and deletes the run. <c>0</c>
-    /// disables automatic reclamation entirely.
+    /// sweeper reclaims its worktree/branch and deletes the run, counted only
+    /// once its work item is Done. <c>0</c> reclaims it on the next sweep after
+    /// the work item is Done.
     /// </summary>
     public const string RunRetentionDays = "run.retentionDays";
-    public const int DefaultRunRetentionDays = 30;
+    public const int DefaultRunRetentionDays = 0;
 
     // WorkItem server connection settings (previously stored per RemoteProvider).
     public const string WorkItemServerUrl = "workItemServer.url";
@@ -152,7 +153,7 @@ public interface ISchedulerSettingsService
     Task<bool> GetIsPausedAsync(CancellationToken ct = default);
 
     /// <summary>
-    /// Run retention window in days; <c>0</c> means never auto-reclaim.
+    /// Run retention window in days; <c>0</c> means reclaim on the next sweep once the work item is Done.
     /// </summary>
     Task<int> GetRunRetentionDaysAsync(CancellationToken ct = default);
 

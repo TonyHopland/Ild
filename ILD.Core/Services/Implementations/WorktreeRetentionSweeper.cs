@@ -9,23 +9,27 @@ using Microsoft.Extensions.Logging;
 namespace ILD.Core.Services.Implementations;
 
 /// <summary>
-/// Reclaims disk from old runs. Each run keeps its own worktree and branch so
-/// finished runs stay inspectable (see ADR-0008); this sweeper deletes the
+/// Reclaims disk from finished runs. Each run keeps its own worktree and branch
+/// so finished runs stay inspectable (see ADR-0008); this sweeper deletes the
 /// whole run — worktree, local branch, and the run row (nodes, edge traversals,
-/// event logs cascade) — once it has been terminal longer than the configured
-/// <see cref="AppSettingKeys.RunRetentionDays"/> window.
+/// event logs cascade) — once its work item is <c>Done</c> and the run has been
+/// terminal longer than the configured <see cref="AppSettingKeys.RunRetentionDays"/>
+/// window. With the default of <c>0</c> that is the first pass after the work
+/// item is Done.
 ///
 /// Safety rails:
 /// <list type="bullet">
 /// <item>Runs pinned with <c>Retain == true</c> are never touched.</item>
-/// <item>The run a still-active work item points at (its current run) is kept
-/// until the work item is <c>Done</c>, so a parked Failed run isn't yanked out
-/// from under a human reviewing it.</item>
-/// <item>A retention value of <c>0</c> disables reclamation entirely.</item>
+/// <item>No run of a work item that is not <c>Done</c> is reclaimed — neither
+/// its current run nor one a newer run superseded — so a parked Failed run isn't
+/// yanked out from under a human reviewing it. Runs of a work item the server no
+/// longer has are reclaimed.</item>
 /// <item>Remote branches/PRs are left intact — only local state is reclaimed.</item>
 /// </list>
-/// The window is read from settings on every pass, so changing it in the UI
-/// takes effect on the next sweep without a restart.
+/// A pass runs every 6 hours, the first 10 minutes after start, and pages
+/// through every candidate: the runs it keeps are the oldest, and would
+/// otherwise fill one batch forever. The window is read from settings on every
+/// pass, so changing it in the UI takes effect on the next sweep without a restart.
 /// </summary>
 public sealed class WorktreeRetentionSweeper : BackgroundService
 {
@@ -33,6 +37,7 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
     // Short first delay: a 6h wait before the first pass means a deployment
     // that restarts more often than every 6h never reclaims anything.
     private static readonly TimeSpan InitialDelay = TimeSpan.FromMinutes(10);
+    private const int PageSize = 200;
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ILogger<WorktreeRetentionSweeper> _log;
@@ -77,59 +82,66 @@ public sealed class WorktreeRetentionSweeper : BackgroundService
         var reclaimer = sp.GetRequiredService<IRunReclaimer>();
 
         var retentionDays = await settings.GetRunRetentionDaysAsync(ct);
-        if (retentionDays <= 0) return; // reclamation disabled
-
         var cutoff = DateTime.UtcNow - TimeSpan.FromDays(retentionDays);
-        var candidates = await runStore.GetReclaimableRunsAsync(cutoff);
-        if (candidates.Count == 0) return;
 
+        // Kept candidates stay in the result set and reclaimed ones drop out,
+        // so skipping the kept ones reaches the next unseen candidate.
         var reclaimed = 0;
-        foreach (var candidate in candidates)
+        var kept = 0;
+        while (true)
         {
-            if (ct.IsCancellationRequested) return;
-
-            // Re-read the run just before touching it: between the candidate
-            // query and now the user may have pinned it or retried it back to
-            // Running — destroying an active run's worktree out from under it
-            // would strand the resumed run.
-            var run = await runStore.GetByIdAsync(candidate.Id);
-            if (run is null || run.Retain) continue;
-            if (run.Status is not (LoopRunStatus.Completed or LoopRunStatus.Failed or LoopRunStatus.Cancelled)) continue;
-            if (run.CompletedAt is null || run.CompletedAt >= cutoff) continue;
-
-            // Keep the run a still-active work item is pointing at; only reclaim
-            // it once the work item is Done or a newer run has superseded it.
-            var wi = await workItems.GetWorkItemAsync(run.WorkItemId);
-            if (wi is not null && wi.Status != RemoteWorkItemStatus.Done)
+            var page = await runStore.GetReclaimableRunsAsync(cutoff, kept, PageSize);
+            foreach (var candidate in page)
             {
-                var latest = await runStore.GetLatestByWorkItemAsync(run.WorkItemId);
-                if (latest?.Id == run.Id) continue;
+                if (ct.IsCancellationRequested) return;
+                if (await TryReclaimAsync(candidate.Id, cutoff, runStore, workItems, reclaimer, ct))
+                    reclaimed++;
+                else
+                    kept++;
             }
-
-            // Only drop the run row once its local git state is verified gone;
-            // otherwise keep the row so the next sweep can retry — a deleted
-            // row makes the leftover worktree/branch permanently invisible.
-            if (!await reclaimer.ReclaimLocalStateAsync(run))
-            {
-                _log.LogWarning("Run {RunId} reclaim incomplete; keeping run row for retry next sweep", run.Id);
-                continue;
-            }
-
-            try
-            {
-                await workItems.WithdrawPendingProposalsOfRunAsync(_actor, run.Id, ct);
-            }
-            catch (HttpRequestException ex)
-            {
-                _log.LogWarning(ex, "Run {RunId}'s pending edit proposals could not be withdrawn; keeping run row for retry next sweep", run.Id);
-                continue;
-            }
-
-            if (await runStore.DeleteAsync(run.Id))
-                reclaimed++;
+            if (page.Count < PageSize) break;
         }
 
         if (reclaimed > 0)
             _log.LogInformation("Worktree retention reclaimed {Count} runs terminal before {Cutoff:o}", reclaimed, cutoff);
+    }
+
+    private async Task<bool> TryReclaimAsync(
+        Guid runId, DateTime cutoff, ILoopRunStore runStore, IWorkItemManager workItems, IRunReclaimer reclaimer, CancellationToken ct)
+    {
+        // Re-read the run just before touching it: between the candidate
+        // query and now the user may have pinned it or retried it back to
+        // Running — destroying an active run's worktree out from under it
+        // would strand the resumed run.
+        var run = await runStore.GetByIdAsync(runId);
+        if (run is null || run.Retain) return false;
+        if (run.Status is not (LoopRunStatus.Completed or LoopRunStatus.Failed or LoopRunStatus.Cancelled)) return false;
+        if (run.CompletedAt is null || run.CompletedAt >= cutoff) return false;
+
+        // Keep every run of a work item that is still in play, superseded or
+        // not; only reclaim once the work item is Done.
+        var wi = await workItems.GetWorkItemAsync(run.WorkItemId);
+        if (wi is not null && wi.Status != RemoteWorkItemStatus.Done) return false;
+
+        // Only drop the run row once its local git state is verified gone;
+        // otherwise keep the row so the next sweep can retry — a deleted
+        // row makes the leftover worktree/branch permanently invisible.
+        if (!await reclaimer.ReclaimLocalStateAsync(run))
+        {
+            _log.LogWarning("Run {RunId} reclaim incomplete; keeping run row for retry next sweep", run.Id);
+            return false;
+        }
+
+        try
+        {
+            await workItems.WithdrawPendingProposalsOfRunAsync(_actor, run.Id, ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            _log.LogWarning(ex, "Run {RunId}'s pending edit proposals could not be withdrawn; keeping run row for retry next sweep", run.Id);
+            return false;
+        }
+
+        return await runStore.DeleteAsync(run.Id);
     }
 }
