@@ -1139,14 +1139,33 @@ describe("a run stopped on a failed node", () => {
     expect(retry).toHaveBeenCalledWith("run-1", "exec-2");
   });
 
-  test("an ended run offers no retry, only the ways on from it", async () => {
-    mockServices(failedRun({ status: LoopRunStatus.Failed }));
+  test("a run that ended on the failed node still retries it, beside the ways on from it", async () => {
+    mockServices(failedRun({ status: LoopRunStatus.Failed, completedAt: "2026-09-24T09:11:00Z" }));
+    const retry = vi.spyOn(authServices.loopRunService, "retryFromNode").mockResolvedValue();
     const panel = await openActionTab(failedItem());
 
-    expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
     expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
     expect(within(panel).getByRole("button", { name: "See it in the run timeline" })).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole("button", { name: "Retry this node" }));
+    });
+
+    expect(retry).toHaveBeenCalledWith("run-1", "exec-2");
   });
+
+  test.each([LoopRunStatus.Completed, LoopRunStatus.Cancelled])(
+    "a %s run offers no retry, only the ways on from it",
+    async (status) => {
+      mockServices(failedRun({ status, completedAt: "2026-09-24T09:11:00Z" }));
+      const panel = await openActionTab(failedItem());
+
+      expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
+      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+      expect(
+        within(panel).getByRole("button", { name: "See it in the run timeline" }),
+      ).toBeTruthy();
+    },
+  );
 
   test("See it in the run timeline opens the Runs tab", async () => {
     mockServices(failedRun());

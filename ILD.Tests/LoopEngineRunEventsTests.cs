@@ -192,7 +192,7 @@ public class LoopEngineRunEventsTests
     }
 
     [Fact]
-    public async Task A_node_failing_with_nowhere_to_go_records_the_run_failure_with_the_full_reason_on_that_execution()
+    public async Task A_node_failing_with_nowhere_to_go_records_the_park_with_the_full_reason_on_that_execution()
     {
         var reason = "dotnet test exited with code 1:\n" + string.Join("\n", Enumerable.Range(1, 40).Select(i => $"  failed: Suite.Test{i}"));
         using var h = new LoopEngineHarness();
@@ -205,14 +205,14 @@ public class LoopEngineRunEventsTests
         await h.RunAsync();
 
         var failedNode = Assert.Single(h.ReloadRunNodes());
-        var failed = Assert.Single(RunTimeline.EndingEvents(h.Db, h.RunId));
-        Assert.Equal(EventType.LoopRunFailed, failed.EventType);
-        Assert.Contains(reason, failed.Data);
-        Assert.Equal(failedNode.Id, failed.RunNodeId);
+        var parked = Assert.Single(Events(h, EventType.RunParked));
+        Assert.Contains(reason, parked.Data);
+        Assert.Equal(failedNode.Id, parked.RunNodeId);
+        Assert.Empty(RunTimeline.EndingEvents(h.Db, h.RunId));
     }
 
     [Fact]
-    public async Task A_named_output_with_no_edge_records_the_run_failure_naming_the_output()
+    public async Task A_named_output_with_no_edge_records_the_park_naming_the_output()
     {
         using var h = new LoopEngineHarness();
         h.AddNode("ai", NodeType.AI, "Reviewer");
@@ -223,9 +223,8 @@ public class LoopEngineRunEventsTests
 
         await h.RunAsync();
 
-        var failed = Assert.Single(RunTimeline.EndingEvents(h.Db, h.RunId));
-        Assert.Equal(EventType.LoopRunFailed, failed.EventType);
-        Assert.Contains("missing edge connection: approve", failed.Data);
+        Assert.Contains("missing edge connection: approve", Assert.Single(Events(h, EventType.RunParked)).Data);
+        Assert.Empty(RunTimeline.EndingEvents(h.Db, h.RunId));
     }
 
     private sealed class ThrowingExecutor(NodeType type, Exception exception) : INodeExecutor
@@ -235,7 +234,7 @@ public class LoopEngineRunEventsTests
     }
 
     [Fact]
-    public async Task A_crash_records_the_run_failure_with_the_whole_exception_chain_however_long()
+    public async Task A_crash_parks_the_run_recording_the_whole_exception_chain_however_long()
     {
         var outer = "Persisting the node result failed: " + string.Concat(Enumerable.Repeat("context of the failure; ", 30));
         const string inner = "23502: null value in column \"AiProvider\" violates not-null constraint";
@@ -247,12 +246,15 @@ public class LoopEngineRunEventsTests
         await h.LaunchAsync();
         await h.WaitUntilIdleAsync();
 
-        Assert.Equal(LoopRunStatus.Failed, h.ReloadRun().Status);
-        var failed = Assert.Single(RunTimeline.EndingEvents(h.Db, h.RunId));
-        Assert.Equal(EventType.LoopRunFailed, failed.EventType);
-        Assert.True(failed.Data!.Length > LoopEngine.MaxHumanFeedbackReasonLength, "the event keeps what the 512-character column cannot");
-        Assert.Contains(outer.TrimEnd(), failed.Data);
-        Assert.Contains(inner, failed.Data);
+        var run = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Null(run.CompletedAt);
+        Assert.False(run.IsHalted);
+        Assert.Empty(RunTimeline.EndingEvents(h.Db, h.RunId));
+        var parked = Assert.Single(Events(h, EventType.RunParked));
+        Assert.True(parked.Data!.Length > LoopEngine.MaxHumanFeedbackReasonLength, "the event keeps what the 512-character column cannot");
+        Assert.Contains(outer.TrimEnd(), parked.Data);
+        Assert.Contains(inner, parked.Data);
     }
 
     [Fact]

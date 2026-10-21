@@ -120,7 +120,7 @@ public class LoopEngineRoutingTests
     }
 
     [Fact]
-    public async Task Fail_without_OnFailure_edge_fails_run_to_HumanFeedback()
+    public async Task Fail_without_OnFailure_edge_parks_run_in_HumanFeedback()
     {
         using var h = new LoopEngineHarness();
         h.AddNode("a", NodeType.Cmd);
@@ -133,7 +133,8 @@ public class LoopEngineRoutingTests
         await h.RunAsync();
 
         var run = h.ReloadRun();
-        Assert.Equal(LoopRunStatus.Failed, run.Status);
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Null(run.CompletedAt);
         h.WorkItemsMock.Verify(m => m.TransitionAsync(
             It.IsAny<WorkItemActor>(), h.WorkItemId, RemoteWorkItemStatus.HumanFeedback,
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<Guid?>(), It.IsAny<string?>()), Times.AtLeastOnce);
@@ -204,7 +205,7 @@ public class LoopEngineRoutingTests
     }
 
     [Fact]
-    public async Task Custom_edge_with_no_connection_fails_run_with_missing_edge_reason()
+    public async Task Custom_edge_with_no_connection_parks_run_with_missing_edge_reason()
     {
         using var h = new LoopEngineHarness();
         h.AddNode("a", NodeType.AI);
@@ -220,10 +221,12 @@ public class LoopEngineRoutingTests
         await h.RunAsync();
 
         var run = h.ReloadRun();
-        Assert.Equal(LoopRunStatus.Failed, run.Status);
+        Assert.Equal(LoopRunStatus.WaitingHuman, run.Status);
+        Assert.Null(run.CompletedAt);
         Assert.Equal(HumanFeedbackReasons.NodeFailed, run.HumanFeedbackReason);
         Assert.Equal("missing edge connection: Escalate",
-            Assert.Single(h.ReloadEvents(), e => e.EventType == EventType.LoopRunFailed).Data);
+            Assert.Single(h.ReloadEvents(), e => e.EventType == EventType.RunParked).Data);
+        Assert.DoesNotContain(h.ReloadEvents(), e => e.EventType == EventType.LoopRunFailed);
     }
 
     [Fact]
