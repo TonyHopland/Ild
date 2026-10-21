@@ -53,7 +53,6 @@ public sealed class AdapterSessionSnapshotStore : IAdapterSessionSnapshotStore
         if (metadata is not { Unconverted: true }) return metadata;
 
         // Legacy (remove with migration B): a row still in the old column is converted before its metadata is used.
-
         await SessionSnapshotContentMigrator.ConvertRowAsync(_db, metadata.Id, cancellationToken);
         return await Snapshots(key).Select(ToMetadata).FirstOrDefaultAsync(cancellationToken);
     }
