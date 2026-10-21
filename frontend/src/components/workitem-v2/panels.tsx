@@ -214,8 +214,12 @@ function FailedNodeCard({
   onShowRuns?: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  // The same rule as the Runs tab.
-  const canRetry = runTakesRetryNow(run) && nodeTakesRetry(node.status, node.nodeType);
+  // The same rule as the Runs tab, plus a run that ended Failed on this node:
+  // the card shows only for the item's current run with the item waiting on
+  // it, and the retry reopens that run.
+  const canRetry =
+    (runTakesRetryNow(run) || run.status === LoopRunStatus.Failed) &&
+    nodeTakesRetry(node.status, node.nodeType);
   const busy = detail.runLock.pendingOf(run.id) !== null;
   const recorded = node.error ?? node.output;
   const failedAt = node.completedAt ? new Date(node.completedAt).toLocaleString() : null;

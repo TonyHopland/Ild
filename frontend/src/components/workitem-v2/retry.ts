@@ -2,7 +2,9 @@ import { LoopRun, LoopRunNodeStatus, LoopRunStatus, NodeType } from "../../types
 
 /**
  * When a run can be sent back to one of its nodes. One rule for the Runs tab
- * and the failed-node card on the Action tab, so they never disagree.
+ * and the failed-node card on the Action tab, so they never disagree; the card
+ * alone also offers it on a run that ended on the failed node it shows, which
+ * the retry reopens.
  */
 
 /** A run still alive, running or parked: one that offers a retry at all. An ended run is not restarted. */
