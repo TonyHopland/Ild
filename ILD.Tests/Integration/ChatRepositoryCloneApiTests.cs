@@ -13,6 +13,7 @@ using ILD.Core.Services.Interfaces;
 using ILD.Data;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -591,7 +592,12 @@ public class ChatRepositoryCloneApiTests
         {
             Directory.CreateDirectory(_root);
             Git = RecordingRepositoryManager.Around(new RepositoryManager(worktreesRoot: Path.Combine(_root, "worktrees")));
-            Factory = new ApiFactory(configureServices: services => services.ReplaceSingleton<IRepositoryManager>((IRepositoryManager)(object)Git));
+            var database = SqliteDatabaseFile.Create(Path.Combine(_root, "db"));
+            Factory = new ApiFactory(configureServices: services =>
+            {
+                SqliteDatabaseFile.Use(services, database);
+                services.ReplaceSingleton<IRepositoryManager>((IRepositoryManager)(object)Git);
+            });
         }
 
         public static async Task<Host> StartAsync()
@@ -746,6 +752,7 @@ public class ChatRepositoryCloneApiTests
         public async ValueTask DisposeAsync()
         {
             await Factory.DisposeAsync();
+            SqliteConnection.ClearAllPools();
             try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
         }
     }

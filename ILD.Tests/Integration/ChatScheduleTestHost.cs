@@ -15,9 +15,7 @@ using ILD.Data.Stores.Interfaces;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Moq;
 
@@ -54,16 +52,12 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
         Clock = new ManualClock(startUtc);
         Registry = new ScriptedAdapterRegistry(Adapter);
         _ownsDatabase = databaseFile is null;
-        DatabaseFile = databaseFile ?? CreateDatabaseFile();
-        var connectionString = ConnectionString(DatabaseFile);
+        DatabaseFile = databaseFile
+            ?? SqliteDatabaseFile.Create(Path.Combine(Path.GetTempPath(), "ild-schedules-" + Guid.NewGuid().ToString("N")));
 
         Factory = new ApiFactory(configureServices: services =>
         {
-            services.RemoveAll<DbContextOptions<AppDbContext>>();
-            services.RemoveAll<IDbContextOptionsConfiguration<AppDbContext>>();
-            services.AddDbContext<AppDbContext>(options => options.UseSqlite(connectionString,
-                sql => sql.MigrationsAssembly(typeof(AppDbContext).Assembly)).WithPostgresSemantics());
-
+            SqliteDatabaseFile.Use(services, DatabaseFile);
             LeaveOutScheduleLoop(services);
             services.ReplaceSingleton<TimeProvider>(Clock);
             services.ReplaceSingleton<IAgentAdapterRegistry>(Registry);
@@ -92,24 +86,6 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
         if (!_ownsDatabase) return;
         SqliteConnection.ClearAllPools();
         try { Directory.Delete(Path.GetDirectoryName(DatabaseFile)!, recursive: true); } catch { }
-    }
-
-    private static string ConnectionString(string file) => $"Data Source={file}";
-
-    private static string CreateDatabaseFile()
-    {
-        var directory = Path.Combine(Path.GetTempPath(), "ild-schedules-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        var file = Path.Combine(directory, "ild.db");
-        using var schema = SqliteSchemaTemplate<AppDbContext>.OpenCopy(options => new AppDbContext(options));
-        using var target = new SqliteConnection(ConnectionString(file));
-        target.Open();
-        schema.BackupDatabase(target);
-        // Readers never wait on a writer, and a writer waits its turn rather than failing.
-        using var wal = target.CreateCommand();
-        wal.CommandText = "PRAGMA journal_mode=WAL;";
-        wal.ExecuteNonQuery();
-        return file;
     }
 
     // The test runs every scheduler pass itself. Registered by type or through a
@@ -311,7 +287,7 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
         {
             last = await LastFiringAsync(scheduleId);
             return last.ValueKind == JsonValueKind.Object && done(last);
-        }, waitingFor);
+        }, waitingFor, () => $"last firing seen: {last}");
         return last;
     }
 
@@ -342,12 +318,13 @@ internal sealed class ChatScheduleTestHost : IAsyncDisposable
         => EventuallyAsync(async () => (await ChatAsync(chatId)).GetProperty("activeTurnId").ValueKind == JsonValueKind.Null,
             $"chat {chatId} to fall idle");
 
-    public static async Task EventuallyAsync(Func<Task<bool>> condition, string waitingFor)
+    public static async Task EventuallyAsync(Func<Task<bool>> condition, string waitingFor, Func<string>? lastSeen = null)
     {
         var deadline = DateTime.UtcNow + Patience;
         while (!await condition())
         {
-            Assert.True(DateTime.UtcNow < deadline, $"timed out waiting for {waitingFor}");
+            Assert.True(DateTime.UtcNow < deadline,
+                lastSeen is null ? $"timed out waiting for {waitingFor}" : $"timed out waiting for {waitingFor}; {lastSeen()}");
             await Task.Delay(20, TestContext.Current.CancellationToken);
         }
     }
