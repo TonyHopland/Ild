@@ -69,14 +69,21 @@ public class PrSyncService : IPrSyncService
 
             // An active run completes through its own graph (PR node signal →
             // ... → Cleanup → Done). Only when the merged PR belongs to the
-            // work item's current run and that run is already terminal (no
-            // engine path left to resume) does the merge finish the item here.
-            if (run.Status is LoopRunStatus.Failed or LoopRunStatus.Cancelled)
+            // work item's current run and that run has no engine path left to
+            // resume — it is terminal, or parked on a failure that only a
+            // person's retry moves on — does the merge finish the item here. A
+            // parked run is ended first, so it gives up its concurrency slot.
+            if (run.Status is LoopRunStatus.Failed or LoopRunStatus.Cancelled || run.IsParkedOnFailure)
             {
                 var latest = await _loopRunStore.GetLatestByWorkItemAsync(run.WorkItemId);
                 if (latest?.Id == run.Id)
+                {
+                    var reason = $"PR {run.PrUrl} merged";
+                    if (run.IsParkedOnFailure)
+                        await _loopEngine.StopRunAsync(run.Id, reason);
                     await _workItems.TransitionAsync(webhook, run.WorkItemId, RemoteWorkItemStatus.Done,
-                        reason: $"PR {run.PrUrl} merged", currentLoopRunId: run.Id);
+                        reason: reason, currentLoopRunId: run.Id);
+                }
             }
         }
 

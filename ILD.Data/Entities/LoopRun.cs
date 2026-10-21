@@ -101,6 +101,15 @@ public class LoopRun : IHasUpdatedAt
     public bool IsRecoverable => RecoverableHere(this);
 
     /// <summary>
+    /// Parked on a failure rather than at a question or by a halt: a node failed
+    /// with nowhere to go, or the run loop crashed. Only a person's retry moves
+    /// it on.
+    /// </summary>
+    [NotMapped]
+    public bool IsParkedOnFailure => Status == LoopRunStatus.WaitingHuman && !IsHalted
+        && HumanFeedbackReason is HumanFeedbackReasons.NodeFailed or HumanFeedbackReasons.RunCrashed;
+
+    /// <summary>
     /// The live AI session id captured mid-stream by the active adapter, so a
     /// halted run can be resumed against the SAME agent session. Written by the
     /// AI node executor in its own DI scope as the session id arrives.
