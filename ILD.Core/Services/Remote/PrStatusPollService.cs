@@ -223,7 +223,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         try
         {
             if (!await _remote.MergePullRequestAsync(repoUrl, prNumber))
-                failure = "The provider refused the merge; it may have conflicts or be blocked by branch protection.";
+                failure = "The provider refused the merge; it may have conflicts or be blocked by branch protection";
         }
         catch (Exception ex)
         {
