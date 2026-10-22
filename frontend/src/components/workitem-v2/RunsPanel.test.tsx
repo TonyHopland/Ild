@@ -1683,7 +1683,7 @@ describe("RunsPanel retry", () => {
     nodeType,
   });
 
-  test("is never offered on Start or Cleanup, and stands out only on a failed node", async () => {
+  test("is never offered on a Start or Cleanup that did not fail, and stands out only on a failed node", async () => {
     renderActionPanel([
       run({
         id: RUN_A,
@@ -1705,5 +1705,20 @@ describe("RunsPanel retry", () => {
     const [developer, failed] = retries;
     expect(developer.classList.contains("btn-ghost")).toBe(true);
     expect(failed.classList.contains("btn-primary")).toBe(true);
+  });
+
+  test.each(["Start", "Cleanup"])("stands out on a %s node that failed", async (nodeType) => {
+    renderActionPanel([
+      run({
+        id: RUN_A,
+        status: LoopRunStatus.WaitingHuman,
+        completedAt: null,
+        nodes: [node("x", nodeType, nodeType, LoopRunNodeStatus.Failed)],
+      }),
+    ]);
+    await screen.findByText(nodeType);
+
+    const retry = screen.getByRole("button", { name: "Retry from this node" });
+    expect(retry.classList.contains("btn-primary")).toBe(true);
   });
 });

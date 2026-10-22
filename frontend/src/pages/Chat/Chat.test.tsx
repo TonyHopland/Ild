@@ -216,6 +216,10 @@ function LocationProbe() {
       <button type="button" onClick={() => void navigate(-1)}>
         History back
       </button>
+      {/* The browser's Forward button. */}
+      <button type="button" onClick={() => void navigate(1)}>
+        History forward
+      </button>
     </>
   );
 }
@@ -814,6 +818,96 @@ describe("The open chat and what is shown", () => {
     expect(within(bubble).queryByText("Hello there")).toBeNull();
   });
 
+  /**
+   * Has the start form's start answer and, before anything renders, goes Back: a
+   * Back that lands while the move to the new chat is still on its way.
+   */
+  async function startAnswersAndBackLandsAtOnce() {
+    sessions.s9 = session("s9", "Fresh", [msg("s9-0", 0, "assistant", "Hello there")]);
+    let created: () => void = () => {};
+    chatService.start.mockImplementation(
+      () =>
+        new Promise<ChatSession>((resolve) => {
+          created = () => {
+            server = [summary("s9", "Fresh", "2026-01-04T00:00:00Z"), ...server];
+            resolve(structuredClone(sessions.s9));
+          };
+        }),
+    );
+    const start = await screen.findByRole("button", { name: "Start chat" });
+    await waitFor(() =>
+      expect((screen.getByLabelText("AI provider") as HTMLSelectElement).value).toBe("p1"),
+    );
+    fireEvent.click(start);
+    await waitFor(() => expect(chatService.start).toHaveBeenCalledTimes(1));
+
+    const listReads = chatService.listHistory.mock.calls.length;
+    await act(async () => {
+      created();
+      // The start has been answered once it asks for the list again.
+      for (let i = 0; i < 50 && chatService.listHistory.mock.calls.length === listReads; i++)
+        await Promise.resolve();
+      expect(chatService.listHistory.mock.calls.length).toBeGreaterThan(listReads);
+      fireEvent.click(screen.getByRole("button", { name: "History back" }));
+    });
+    await settle();
+  }
+
+  async function startFormIsShownAndNotTheNewChat() {
+    expect(currentPath()).toBe("/chat");
+    expect(screen.getByRole("button", { name: "Start chat" })).toBeTruthy();
+    expect(screen.queryByText("Hello there")).toBeNull();
+
+    fireEvent.click(
+      within(screen.getByRole("navigation")).getByRole("link", { name: "Taskboard" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
+    const bubble = await screen.findByRole("dialog", { name: "AI chat" });
+    expect(await within(bubble).findByRole("button", { name: "Start chat" })).toBeTruthy();
+    await settle();
+    expect(within(bubble).queryByText("Hello there")).toBeNull();
+  }
+
+  test("going back as a chat started on the page is opened shows the start form, not that chat", async () => {
+    renderShell("/chat");
+
+    await startAnswersAndBackLandsAtOnce();
+
+    await startFormIsShownAndNotTheNewChat();
+  });
+
+  test("going back as a chat is started from a start form reached by Forward shows that start form", async () => {
+    seedTwoChats();
+    renderShell("/chat/s1");
+    expect(await screen.findByText("s1 reply")).toBeTruthy();
+    fireEvent.click(within(pageSidebar()).getByRole("button", { name: "New chat" }));
+    expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "History back" }));
+    expect(await screen.findByText("s1 reply")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "History forward" }));
+    expect(await screen.findByRole("button", { name: "Start chat" })).toBeTruthy();
+    expect(currentPath()).toBe("/chat");
+
+    await startAnswersAndBackLandsAtOnce();
+
+    await startFormIsShownAndNotTheNewChat();
+  });
+
+  test("a chat that cannot be started says why on the start form", async () => {
+    chatService.start.mockRejectedValue({ message: "No capacity for another chat." });
+    renderShell("/chat");
+
+    const start = await screen.findByRole("button", { name: "Start chat" });
+    await waitFor(() =>
+      expect((screen.getByLabelText("AI provider") as HTMLSelectElement).value).toBe("p1"),
+    );
+    fireEvent.click(start);
+
+    expect(await screen.findByText("No capacity for another chat.")).toBeTruthy();
+    expect(currentPath()).toBe("/chat");
+    expect(screen.getByRole("button", { name: "Start chat" })).toBeTruthy();
+  });
+
   test("a chat the page cannot open is not left as the bubble's chat", async () => {
     seedTwoChats();
     renderShell("/chat/s1");
@@ -895,6 +989,7 @@ describe("The open chat and what is shown", () => {
       created();
     });
     await settle();
+    expect(currentPath()).toBe("/taskboard");
 
     fireEvent.click(await screen.findByRole("button", { name: "Open chat" }));
     expect(await within(await openChatList()).findByText("Fresh")).toBeTruthy();

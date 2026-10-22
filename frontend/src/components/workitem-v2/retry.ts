@@ -50,8 +50,9 @@ export function runTakesRetryNow(run: Pick<LoopRun, "status" | "isPaused">): boo
 }
 
 /**
- * A node a run can go back to: not the one running now, and not Start or
- * Cleanup, which cannot meaningfully run again.
+ * A node a run can go back to: not the one running now, and not a Start or
+ * Cleanup that did not fail, which cannot meaningfully run again. A failed
+ * node of any type can, once its cause is fixed.
  */
 export function nodeTakesRetry(
   status: LoopRunNodeStatus,
@@ -59,7 +60,7 @@ export function nodeTakesRetry(
 ): boolean {
   return (
     status !== LoopRunNodeStatus.Running &&
-    nodeType !== NodeType.Start &&
-    nodeType !== NodeType.Cleanup
+    (status === LoopRunNodeStatus.Failed ||
+      (nodeType !== NodeType.Start && nodeType !== NodeType.Cleanup))
   );
 }
