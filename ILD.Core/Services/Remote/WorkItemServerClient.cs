@@ -212,8 +212,6 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
         var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/reorder", actor);
         msg.Content = JsonContent.Create(req, options: JsonOpts);
         using var resp = await _http.SendAsync(msg, ct);
-        if (resp.StatusCode == HttpStatusCode.NotFound)
-            return new RemoteReorderWorkItemResponse { Outcome = RemoteReorderOutcome.NotFound };
         EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemoteReorderWorkItemResponse>(JsonOpts, ct))!;
     }

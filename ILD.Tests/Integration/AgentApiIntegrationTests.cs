@@ -1124,6 +1124,8 @@ public class AgentApiIntegrationTests
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
         var error = (await resp.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("error").GetString();
         Assert.Contains("orderBy=priority", error);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await client.GetAsync("/api/v1/agent/workitems?priority=", TestContext.Current.CancellationToken)).StatusCode);
     }
 
     [Fact]

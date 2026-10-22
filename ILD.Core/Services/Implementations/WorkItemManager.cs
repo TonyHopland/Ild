@@ -985,7 +985,9 @@ public class WorkItemManager : IWorkItemManager
             }
         }
 
-        if (prev != actual)
+        // A placed item moved on the board even when someone else had already
+        // moved it to this status since it was read.
+        if (prev != actual || spot is not null)
             await _notifier.WorkItemStateChangedAsync(workItemId, prev, actual);
 
         if (actual == RemoteWorkItemStatus.HumanFeedback && reason != null)

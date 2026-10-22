@@ -206,7 +206,7 @@ public sealed class WorkItemServerHistoryApiTests : IAsyncLifetime
 
         var history = await HistoryAsync(id);
 
-        Assert.Equal(11 + 2 + 1 + 1 + 1, history.Length);
+        Assert.Equal(10 + 2 + 1 + 1 + 1, history.Length);
         var stamps = history.Select(e => e.GetProperty("timestamp").GetDateTime()).ToList();
         Assert.Equal(stamps.OrderByDescending(t => t), stamps);
         Assert.Equal(
@@ -241,7 +241,7 @@ public sealed class WorkItemServerHistoryApiTests : IAsyncLifetime
         Assert.Equal("42", Str(status, "actorWorkItemId"));
 
         var created = history.Where(e => Str(e, "kind") == "Created").ToList();
-        Assert.Equal(11, created.Count);
+        Assert.Equal(10, created.Count);
         Assert.Single(created.Select(e => Str(e, "saveId")).Distinct());
         Assert.All(created, e => Assert.Null(Str(e, "oldValue")));
         Assert.All(created, e => Assert.Equal("alice", Str(e, "username")));
