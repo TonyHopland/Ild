@@ -164,6 +164,9 @@ public sealed class WorkItemService : IWorkItemService
     private static IQueryable<WorkItem> InBoardOrder(IQueryable<WorkItem> items)
         => items.OrderBy(w => w.Priority).ThenBy(w => w.InternalId);
 
+    private static IQueryable<WorkItem> InReverseBoardOrder(IQueryable<WorkItem> items)
+        => items.OrderByDescending(w => w.Priority).ThenByDescending(w => w.InternalId);
+
     public async Task<WorkItemDto?> UpdateAsync(string id, UpdateWorkItemRequest req, CancellationToken ct = default)
     {
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
@@ -450,9 +453,8 @@ public sealed class WorkItemService : IWorkItemService
         else
         {
             next = below!;
-            prev = await others.Where(x => x.Priority < next.Priority
-                    || (x.Priority == next.Priority && x.InternalId < next.InternalId))
-                .OrderByDescending(x => x.Priority).ThenByDescending(x => x.InternalId)
+            prev = await InReverseBoardOrder(others.Where(x => x.Priority < next.Priority
+                    || (x.Priority == next.Priority && x.InternalId < next.InternalId)))
                 .Select(x => new BoardKey(x.InternalId, x.Priority))
                 .FirstOrDefaultAsync(ct);
         }

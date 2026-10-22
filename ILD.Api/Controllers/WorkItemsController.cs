@@ -341,9 +341,9 @@ public class WorkItemsController : ControllerBase
         RemoteWorkItemStatus? target = null;
         if (request.TargetStatus is not null)
         {
-            if (!Enum.TryParse<WorkItemStatus>(request.TargetStatus, true, out var parsed))
+            if (ParseTargetStatus(request.TargetStatus) is not { } parsed)
                 return BadRequest(new { error = "Invalid target status" });
-            target = (RemoteWorkItemStatus)(int)parsed;
+            target = parsed;
         }
 
         return await _workItemManager.ReorderAsync(user, id, request.AboveId, request.BelowId, target) switch
@@ -939,14 +939,17 @@ public class WorkItemsController : ControllerBase
             await chatNotifier.EditProposalsChangedAsync(chat);
     }
 
+    private static RemoteWorkItemStatus? ParseTargetStatus(string? value)
+        => Enum.TryParse<WorkItemStatus>(value, true, out var parsed) ? (RemoteWorkItemStatus)(int)parsed : null;
+
     [HttpPost("{id}/transition")]
     public async Task<IActionResult> Transition(string id, [FromBody] WorkItemTransitionRequest request)
     {
-        if (!Enum.TryParse<WorkItemStatus>(request.TargetStatus, true, out var target))
+        if (ParseTargetStatus(request.TargetStatus) is not { } target)
             return BadRequest(new { error = "Invalid target status" });
         if (SignedInUser is not { } actor)
             return Unauthorized();
-        var ok = await _workItemManager.MoveAsync(actor, id, (RemoteWorkItemStatus)(int)target);
+        var ok = await _workItemManager.MoveAsync(actor, id, target);
         return ok ? Ok() : BadRequest(new { error = "Transition not allowed" });
     }
 
