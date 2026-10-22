@@ -1115,6 +1115,9 @@ function previewDataFetch(
 const keepCheckbox = () =>
   screen.getByLabelText("Keep preview data between runs") as HTMLInputElement;
 
+const parallelismInput = () =>
+  screen.getByLabelText("Parallelism (0 = unlimited)") as HTMLInputElement;
+
 function sentBodies(fetchMock: ReturnType<typeof vi.fn>, method: string) {
   return fetchMock.mock.calls
     .filter((c: unknown[]) => (c[1] as { method?: string } | undefined)?.method === method)
@@ -1229,5 +1232,56 @@ describe("Repositories page — preview data", () => {
     fireEvent.click(within(repoRow("beta-app")).getByRole("button", { name: "Edit" }));
     await screen.findByText("Edit Repository");
     expect(screen.queryByText(refusal)).toBeNull();
+  });
+});
+
+describe("Repositories page — parallelism", () => {
+  test("the edit form shows each repository's stored parallelism and saves a change to it", async () => {
+    const state = {
+      repos: [
+        { ...repo("repo-1", "alpha-app"), parallelism: 2 },
+        { ...repo("repo-2", "beta-app"), parallelism: 0 },
+      ],
+    };
+    const fetchMock = previewDataFetch(state);
+    renderPage(fetchMock);
+    await waitFor(() => expect(screen.getByText("alpha-app")).toBeTruthy());
+
+    fireEvent.click(within(repoRow("alpha-app")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Repository");
+    expect(parallelismInput().value).toBe("2");
+
+    fireEvent.change(parallelismInput(), { target: { value: "1" } });
+    fireEvent.click(screen.getByText("Update"));
+    await waitFor(() => expect(screen.queryByText("Edit Repository")).toBeNull());
+
+    const put = sentBodies(fetchMock, "PUT").find((c) => c.url.endsWith("/repositories/repo-1"));
+    expect(put?.body.parallelism).toBe(1);
+
+    fireEvent.click(within(repoRow("beta-app")).getByRole("button", { name: "Edit" }));
+    await screen.findByText("Edit Repository");
+    expect(parallelismInput().value).toBe("0");
+  });
+
+  test("the create form starts at 0 (unlimited) and sends the entered parallelism", async () => {
+    const fetchMock = previewDataFetch({ repos: [] });
+    renderPage(fetchMock);
+    await waitFor(() => expect(screen.getByText("+ Add repository")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("+ Add repository"));
+    await screen.findByText("New Repository");
+    expect(parallelismInput().value).toBe("0");
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "new-repo" } });
+    fireEvent.change(screen.getByLabelText("Clone URL"), {
+      target: { value: "https://git.example.com/new-repo.git" },
+    });
+    fireEvent.change(screen.getByLabelText("Remote Provider"), { target: { value: "prov-1" } });
+    fireEvent.change(parallelismInput(), { target: { value: "3" } });
+    fireEvent.click(screen.getByText("Create"));
+    await waitFor(() => expect(screen.queryByText("New Repository")).toBeNull());
+
+    const post = sentBodies(fetchMock, "POST").find((c) => c.url.endsWith("/repositories"));
+    expect(post?.body.parallelism).toBe(3);
   });
 });

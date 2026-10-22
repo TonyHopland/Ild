@@ -148,6 +148,54 @@ public class RepositoriesIntegrationTests
         Assert.True((await createdOn.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("keepPreviewData").GetBoolean());
     }
 
+    [Fact]
+    public async Task Parallelism_is_unlimited_by_default_settable_kept_when_left_out_and_validated()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var providerId = await SeedProviderAsync(factory);
+        var ct = TestContext.Current.CancellationToken;
+        object Payload(int? parallelism) => new
+        {
+            name = "my-repo", cloneUrl = "https://git.example.com/my-repo.git", defaultBranch = "main",
+            remoteProviderId = providerId, defaultIntakeStatus = "Backlog", parallelism,
+        };
+        async Task<int> Parallelism(HttpResponseMessage response)
+        {
+            Assert.True(response.IsSuccessStatusCode, response.StatusCode.ToString());
+            return (await response.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("parallelism").GetInt32();
+        }
+
+        var created = await client.PostAsJsonAsync("/api/v1/repositories", NewRepoPayload(providerId), ct);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("id").GetString()!;
+        Assert.Equal(0, await Parallelism(await client.GetAsync($"/api/v1/repositories/{id}", ct)));
+
+        Assert.Equal(1, await Parallelism(await client.PutAsJsonAsync($"/api/v1/repositories/{id}", Payload(1), ct)));
+        Assert.Equal(1, await Parallelism(await client.PutAsJsonAsync($"/api/v1/repositories/{id}", NewRepoPayload(providerId), ct)));
+        Assert.Equal(1, await Parallelism(await client.PutAsJsonAsync($"/api/v1/repositories/{id}", Payload(null), ct)));
+
+        foreach (var invalid in new[] { -1, 1001 })
+        {
+            var refused = await client.PutAsJsonAsync($"/api/v1/repositories/{id}", Payload(invalid), ct);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+            var refusedCreate = await client.PostAsJsonAsync("/api/v1/repositories", Payload(invalid), ct);
+            Assert.Equal(HttpStatusCode.BadRequest, refusedCreate.StatusCode);
+        }
+        Assert.Equal(1, await Parallelism(await client.GetAsync($"/api/v1/repositories/{id}", ct)));
+
+        Assert.Equal(1000, await Parallelism(await client.PutAsJsonAsync($"/api/v1/repositories/{id}", Payload(1000), ct)));
+        Assert.Equal(0, await Parallelism(await client.PutAsJsonAsync($"/api/v1/repositories/{id}", Payload(0), ct)));
+        var listed = await client.GetFromJsonAsync<JsonElement>("/api/v1/repositories", ct);
+        Assert.Equal(0, listed.EnumerateArray().Single(r => r.GetProperty("id").GetString() == id).GetProperty("parallelism").GetInt32());
+
+        var createdLimited = await client.PostAsJsonAsync("/api/v1/repositories", new
+        {
+            name = "limited-repo", cloneUrl = "https://git.example.com/limited-repo.git", defaultBranch = "main",
+            remoteProviderId = providerId, defaultIntakeStatus = "Backlog", parallelism = 3,
+        }, ct);
+        Assert.Equal(3, (await createdLimited.Content.ReadFromJsonAsync<JsonElement>(ct)).GetProperty("parallelism").GetInt32());
+    }
+
     // The agent service token authenticates fine — it just is not a user, and every
     // endpoint outside /api/v1/agent demands the user role. These tests pin that.
     private static HttpClient CreateAgentClient(ApiFactory factory)
