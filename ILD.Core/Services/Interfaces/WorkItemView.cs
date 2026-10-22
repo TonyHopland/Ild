@@ -138,6 +138,12 @@ public sealed class WorkItemView
 
     /// <summary>How many agent-proposed edits to this item wait for a human to approve or reject them.</summary>
     public int PendingEditProposalCount { get; set; }
+
+    /// <summary>
+    /// Set on a Ready item the latest scheduler pass left in Ready because its
+    /// repository had reached its parallelism limit; null for every other item.
+    /// </summary>
+    public RepositoryParallelismHold? RepositoryParallelismHold { get; set; }
 }
 
 /// <summary>
