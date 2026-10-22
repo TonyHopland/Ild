@@ -2312,4 +2312,130 @@ public class WorkItemManagerTests
                 Directory.Delete(worktree, recursive: true);
         }
     }
+
+    private sealed class CountingOptionsResolver(IWorkItemServerOptionsResolver inner) : IWorkItemServerOptionsResolver
+    {
+        public int Calls;
+
+        public Task<WorkItemServerOptions> ResolveForRepositoryAsync(Guid? repositoryId, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref Calls);
+            return inner.ResolveForRepositoryAsync(repositoryId, ct);
+        }
+
+        public Task<WorkItemServerOptions> ResolveForWorkItemAsync(string workItemId, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref Calls);
+            return inner.ResolveForWorkItemAsync(workItemId, ct);
+        }
+    }
+
+    private static Guid SeedRun(TestDb db, string workItemId, LoopRunStatus status, DateTime startedAt, string worktreePath)
+    {
+        var template = new LoopTemplate { Id = Guid.NewGuid(), Name = "t" };
+        var version = new LoopTemplateVersion { Id = Guid.NewGuid(), LoopTemplateId = template.Id, VersionNumber = 1 };
+        db.Context.LoopTemplates.Add(template);
+        db.Context.LoopTemplateVersions.Add(version);
+        var runId = Guid.NewGuid();
+        db.Context.LoopRuns.Add(new LoopRun
+        {
+            Id = runId,
+            WorkItemId = workItemId,
+            LoopTemplateVersionId = version.Id,
+            Status = status,
+            CreatedAt = startedAt,
+            StartedAt = startedAt,
+            WorktreePath = worktreePath,
+        });
+        db.Context.SaveChanges();
+        return runId;
+    }
+
+    [Fact]
+    public async Task Dependency_and_dependent_views_cost_the_same_queries_however_many_items_they_list()
+    {
+        using var db = new TestDb();
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var eventLog = new Mock<IEventLogService>();
+        eventLog.Setup(e => e.AppendAsync(It.IsAny<Guid>(), It.IsAny<EventType>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<string?>()))
+            .ReturnsAsync(1L);
+        var preview = new Mock<IWorktreePreviewService>();
+        preview.Setup(p => p.IsPreviewRunning(It.IsAny<string>())).Returns((string path) => path == "/worktrees/a");
+        var sql = new ILD.Tests.Integration.SqlCapture();
+        await using var runsContext = new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(db.Context.Database.GetDbConnection())
+            .WithPostgresSemantics()
+            .AddInterceptors(sql)
+            .Options);
+        var resolver = new CountingOptionsResolver(db.ServerOptions);
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, eventLog.Object,
+            new ILD.Data.Stores.LoopRunStore(runsContext), db.ServerClient, resolver, TestActors.Instance,
+            previewService: preview.Object);
+
+        var target = await mgr.CreateWorkItemAsync(TestActors.Human, "target", "", repo.Id);
+        var a = await mgr.CreateWorkItemAsync(TestActors.Human, "a", "", repo.Id);
+        var b = await mgr.CreateWorkItemAsync(TestActors.Human, "b", "", repo.Id);
+        var c = await mgr.CreateWorkItemAsync(TestActors.Human, "c", "", repo.Id);
+        var now = DateTime.UtcNow;
+        // a: a live run beats a later failed one. b: the latest run speaks for it even
+        // though it completed. c: no run at all.
+        var aLive = SeedRun(db, a, LoopRunStatus.Running, now.AddHours(-3), "/worktrees/a");
+        SeedRun(db, a, LoopRunStatus.Failed, now.AddHours(-1), "/worktrees/a-retry");
+        SeedRun(db, b, LoopRunStatus.Completed, now.AddHours(-2), "/worktrees/b-old");
+        var bLatest = SeedRun(db, b, LoopRunStatus.Completed, now.AddHours(-1), "/worktrees/b");
+        await db.LoopRuns.SetWorkItemStatusReasonAsync(a, "waiting on review");
+        await db.LoopRuns.SetWorkItemStatusReasonAsync(c, "blocked upstream");
+        var expected = new Dictionary<string, (Guid? Run, bool Preview, string? Reason)>
+        {
+            [target] = (null, false, null),
+            [a] = (aLive, true, "waiting on review"),
+            [b] = (bLatest, false, null),
+            [c] = (null, false, "blocked upstream"),
+        };
+
+        async Task<(int Queries, int Resolves, IReadOnlyList<WorkItemView> Views)> Measure(Func<Task<IReadOnlyList<WorkItemView>>> read)
+        {
+            var queries = sql.Commands.Count();
+            var resolves = resolver.Calls;
+            var views = await read();
+            return (sql.Commands.Count() - queries, resolver.Calls - resolves, views);
+        }
+
+        void AssertViews(IEnumerable<string> order, IReadOnlyList<WorkItemView> views)
+        {
+            Assert.Equal(order, views.Select(v => v.Id));
+            foreach (var view in views)
+                Assert.Equal(expected[view.Id], (view.CurrentLoopRunId, view.IsPreviewRunning, view.StatusReason));
+        }
+
+        var opts = await db.ServerOptions.ResolveForWorkItemAsync(target);
+
+        await mgr.AddDependencyAsync(TestActors.Human, target, a);
+        var oneDependency = await Measure(() => mgr.GetDependenciesAsync(target));
+        var oneDependent = await Measure(() => mgr.GetDependentsAsync(a));
+        AssertViews([a], oneDependency.Views);
+        AssertViews([target], oneDependent.Views);
+
+        await mgr.AddDependencyAsync(TestActors.Human, target, c);
+        await mgr.AddDependencyAsync(TestActors.Human, target, b);
+        await mgr.AddDependencyAsync(TestActors.Human, b, a);
+        var threeDependencies = await Measure(() => mgr.GetDependenciesAsync(target));
+        var twoDependents = await Measure(() => mgr.GetDependentsAsync(a));
+
+        var dependencyOrder = (await db.ServerClient.GetAsync(opts, target))!.Dependencies;
+        Assert.Equal(3, dependencyOrder.Count);
+        AssertViews(dependencyOrder, threeDependencies.Views);
+        var dependentOrder = (await db.ServerClient.ListAsync(opts, status: null, tags: null))
+            .Where(w => w.Dependencies.Contains(a)).Select(w => w.Id).ToList();
+        Assert.Equal(2, dependentOrder.Count);
+        AssertViews(dependentOrder, twoDependents.Views);
+
+        Assert.Equal(oneDependency.Queries, threeDependencies.Queries);
+        Assert.Equal(oneDependent.Queries, twoDependents.Queries);
+        Assert.All(new[] { oneDependency, threeDependencies, oneDependent, twoDependents }, m => Assert.Equal(1, m.Resolves));
+    }
 }

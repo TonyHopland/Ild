@@ -4,7 +4,9 @@ using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Interfaces;
 using ILD.Data.Entities;
 using ILD.Data.Security;
+using ILD.Data.Stores.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Moq;
 
 namespace ILD.Tests;
 
@@ -187,6 +189,93 @@ public class AuthServiceTests
         // Older than a minute: the bump lands.
         await SetLastSeenAsync(db, DateTime.UtcNow.AddMinutes(-5));
         Assert.True(await svc.ValidateSessionAsync(token));
+        Assert.True((await StoredSessionAsync(db)).LastSeenAt > DateTime.UtcNow.AddSeconds(-30));
+    }
+
+    /// <summary>The real store, with the session reads counted.</summary>
+    private static Mock<IAuthStore> CountingStore(TestDb db)
+    {
+        var store = new Mock<IAuthStore>();
+        store.Setup(s => s.GetSessionByTokenHashAsync(It.IsAny<string>()))
+            .Returns((string hash) => db.Auth.GetSessionByTokenHashAsync(hash));
+        store.Setup(s => s.TouchSessionAsync(It.IsAny<Guid>(), It.IsAny<DateTime>()))
+            .Returns((Guid id, DateTime at) => db.Auth.TouchSessionAsync(id, at));
+        return store;
+    }
+
+    private static AuthService Make(IAuthStore store, TestDb db)
+        => new(store, db.Settings, new BootstrapCredentials(BootstrapCredentials.DefaultUsername, "secret"));
+
+    [Fact]
+    public async Task AuthenticateSession_reads_the_session_once_and_names_its_owner()
+    {
+        using var db = new TestDb();
+        var token = await LoginAsync(Make(db));
+        var store = CountingStore(db);
+
+        var identity = await Make(store.Object, db).AuthenticateSessionAsync(token);
+
+        Assert.NotNull(identity);
+        Assert.Equal("admin", identity.Username);
+        store.Verify(s => s.GetSessionByTokenHashAsync(It.IsAny<string>()), Times.Once);
+
+        Assert.Null(await Make(db).AuthenticateSessionAsync("not-a-token"));
+        Assert.Null(await Make(db).AuthenticateSessionAsync(string.Empty));
+    }
+
+    [Fact]
+    public async Task AuthenticateSession_keeps_a_session_without_a_username_authenticated()
+    {
+        using var db = new TestDb();
+        var store = new Mock<IAuthStore>();
+        store.Setup(s => s.GetSessionByTokenHashAsync(It.IsAny<string>())).ReturnsAsync(new UserSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = Guid.NewGuid(),
+            CreatedAt = DateTime.UtcNow,
+            LastSeenAt = DateTime.UtcNow,
+            User = null,
+        });
+
+        var identity = await Make(store.Object, db).AuthenticateSessionAsync("some-token");
+
+        Assert.NotNull(identity);
+        Assert.Null(identity.Username);
+    }
+
+    [Theory]
+    [InlineData("revoked")]
+    [InlineData("expired")]
+    [InlineData("idle")]
+    public async Task AuthenticateSession_rejects_a_dead_session_on_the_very_next_request(string death)
+    {
+        using var db = new TestDb();
+        var token = await LoginAsync(Make(db));
+        Assert.NotNull(await Make(db).AuthenticateSessionAsync(token));
+
+        switch (death)
+        {
+            case "revoked": await Make(db).LogoutAsync(token); break;
+            case "expired": await ShiftSessionBackAsync(db, TimeSpan.FromDays(200)); break;
+            case "idle": await ShiftSessionBackAsync(db, TimeSpan.FromDays(45), keepExpiryInFuture: true); break;
+        }
+
+        Assert.Null(await Make(db).AuthenticateSessionAsync(token));
+    }
+
+    [Fact]
+    public async Task AuthenticateSession_bumps_LastSeenAt_only_once_a_minute()
+    {
+        using var db = new TestDb();
+        var token = await LoginAsync(Make(db));
+
+        var stale = DateTime.UtcNow.AddSeconds(-5);
+        await SetLastSeenAsync(db, stale);
+        Assert.NotNull(await Make(db).AuthenticateSessionAsync(token));
+        Assert.True(Math.Abs(((await StoredSessionAsync(db)).LastSeenAt - stale).TotalSeconds) < 1);
+
+        await SetLastSeenAsync(db, DateTime.UtcNow.AddMinutes(-5));
+        Assert.NotNull(await Make(db).AuthenticateSessionAsync(token));
         Assert.True((await StoredSessionAsync(db)).LastSeenAt > DateTime.UtcNow.AddSeconds(-30));
     }
 
