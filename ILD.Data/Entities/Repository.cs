@@ -47,6 +47,11 @@ public class Repository : IHasUpdatedAt
     /// </summary>
     public bool KeepPreviewData { get; set; }
 
+    /// <summary>
+    /// Max work items of this repository in progress at once. 0 means unlimited.
+    /// </summary>
+    public int Parallelism { get; set; }
+
     public WorkItemStatus DefaultIntakeStatus { get; set; }
 
     public DateTime CreatedAt { get; set; }

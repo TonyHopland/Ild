@@ -40,6 +40,10 @@ public class RepositoryDto
     /// <summary>Keep preview data between runs. Null on update keeps the stored value.</summary>
     public bool? KeepPreviewData { get; set; }
 
+    /// <summary>0 = unlimited. Null on update keeps the stored value.</summary>
+    [Range(0, 1000)]
+    public int? Parallelism { get; set; }
+
     [Required]
     public string RemoteProviderId { get; set; } = string.Empty;
 

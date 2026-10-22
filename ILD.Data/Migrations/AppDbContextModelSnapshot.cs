@@ -1512,6 +1512,9 @@ namespace ILD.Data.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<int>("Parallelism")
+                        .HasColumnType("integer");
+
                     b.Property<string>("PreviewEnv")
                         .HasMaxLength(24576)
                         .HasColumnType("character varying(24576)");
