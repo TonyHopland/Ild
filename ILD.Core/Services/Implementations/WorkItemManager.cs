@@ -1056,7 +1056,7 @@ public class WorkItemManager : IWorkItemManager
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         if (await _server.GetAsync(opts, dependsOnWorkItemId) == null)
             return $"Dependency not found: {dependsOnWorkItemId}";
-        if (await WouldCreateCycle(workItemId, dependsOnWorkItemId))
+        if (await WouldCreateCycle(opts, workItemId, dependsOnWorkItemId))
             return $"Making {workItemId} depend on {dependsOnWorkItemId} would create a cycle.";
         return null;
     }
@@ -1070,7 +1070,7 @@ public class WorkItemManager : IWorkItemManager
     public async Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
-        var ids = (await _server.GetAsync(opts, workItemId))?.Dependencies ?? Array.Empty<string>();
+        var ids = await GetServerDependencyIdsAsync(opts, workItemId);
         var dependencies = new List<RemoteWorkItem>();
         foreach (var id in ids)
         {
@@ -1109,10 +1109,10 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<bool> IsReadyAsync(string workItemId)
     {
-        var ids = await GetServerDependencyIdsAsync(workItemId);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
+        var ids = await GetServerDependencyIdsAsync(opts, workItemId);
         if (ids.Count == 0) return true;
 
-        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         foreach (var depId in ids)
         {
             var dep = await _server.GetAsync(opts, depId);
@@ -1122,14 +1122,13 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    private async Task<IReadOnlyList<string>> GetServerDependencyIdsAsync(string workItemId)
+    private async Task<IReadOnlyList<string>> GetServerDependencyIdsAsync(WorkItemServerOptions opts, string workItemId)
     {
-        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var serverWi = await _server.GetAsync(opts, workItemId);
         return serverWi?.Dependencies?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>();
     }
 
-    private async Task<bool> WouldCreateCycle(string workItemId, string newDepId)
+    private async Task<bool> WouldCreateCycle(WorkItemServerOptions opts, string workItemId, string newDepId)
     {
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var stack = new Stack<string>();
@@ -1139,7 +1138,7 @@ public class WorkItemManager : IWorkItemManager
             var cur = stack.Pop();
             if (!visited.Add(cur)) continue;
             if (cur == workItemId) return true;
-            var nextDeps = await GetServerDependencyIdsAsync(cur);
+            var nextDeps = await GetServerDependencyIdsAsync(opts, cur);
             foreach (var n in nextDeps) stack.Push(n);
         }
         return false;
