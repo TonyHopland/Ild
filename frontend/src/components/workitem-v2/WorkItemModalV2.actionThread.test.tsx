@@ -12,6 +12,7 @@ import {
   LoopRunStatus,
   LoopRunNodeStatus,
   LoopRunNode,
+  NodeType,
   TurnVariableChange,
   RemotePrSnapshot,
   WorkItemEditProposal,
@@ -1181,6 +1182,62 @@ describe("a run stopped on a failed node", () => {
     expect(within(panel).queryByText("“Run tests” failed")).toBeNull();
     expect(within(panel).queryByRole("button", { name: "Retry this node" })).toBeNull();
   });
+
+  const failedStart = (overrides: Partial<LoopRun> = {}) =>
+    makeRun({
+      nodes: [
+        {
+          ...execution("exec-start", "Start", "2026-09-24T09:00:00Z", "2026-09-24T09:00:02Z"),
+          status: LoopRunNodeStatus.Failed,
+          error:
+            "ild.config install failed: A preview is already running for work item 398 (Other). Stop it before starting this one.",
+          nodeType: NodeType.Start,
+        },
+      ],
+      ...overrides,
+    });
+
+  test.each<[string, Partial<LoopRun>]>([
+    ["parked", { status: LoopRunStatus.WaitingHuman }],
+    ["running but paused", { status: LoopRunStatus.Running, isPaused: true }],
+    ["ended on it", { status: LoopRunStatus.Failed, completedAt: "2026-09-24T09:00:02Z" }],
+  ])(
+    "a Start node whose install failed retries that execution of a run %s, beside the ways on from it",
+    async (_, overrides) => {
+      mockServices(failedStart(overrides));
+      const retry = vi.spyOn(authServices.loopRunService, "retryFromNode").mockResolvedValue();
+      const panel = await openActionTab(failedItem());
+
+      expect(within(panel).getByText("“Start” failed")).toBeTruthy();
+      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+      expect(
+        within(panel).getByRole("button", { name: "See it in the run timeline" }),
+      ).toBeTruthy();
+      await act(async () => {
+        fireEvent.click(within(panel).getByRole("button", { name: "Retry this node" }));
+      });
+
+      expect(retry).toHaveBeenCalledWith("run-1", "exec-start");
+    },
+  );
+
+  test.each(Object.values(NodeType))(
+    "a failed %s node offers Retry this node",
+    async (nodeType) => {
+      const run = failedRun();
+      mockServices({
+        ...run,
+        nodes: [run.nodes[0], { ...run.nodes[1], nodeLabel: "Failing step", nodeType }],
+      });
+      const panel = await openActionTab(failedItem());
+
+      expect(within(panel).getByRole("button", { name: "Retry this node" })).toBeTruthy();
+      expect(within(panel).getByRole("button", { name: "Clean up → Backlog" })).toBeTruthy();
+      expect(
+        within(panel).getByRole("button", { name: "See it in the run timeline" }),
+      ).toBeTruthy();
+    },
+  );
 
   test("See it in the run timeline opens the Runs tab", async () => {
     mockServices(failedRun());

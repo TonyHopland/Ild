@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
 using ILD.Core.Services.Implementations;
+using ILD.Core.Services.Implementations.Executors;
+using ILD.Core.Services.Implementations.PackageFeeds;
 using ILD.Core.Services.Interfaces;
 using ILD.Core.Services.Remote;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
+using ILD.Data.Stores.Interfaces;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -187,6 +191,135 @@ public class LoopEngineFailedNodeParkTests
         Assert.Equal(2, agent.Invocations);
         Assert.Contains(h.ReloadRunNodes(), n => n.LoopNodeId == h.NodesById["b"].Id && n.Status == LoopRunNodeStatus.Succeeded);
         Assert.Equal(LoopRunStatus.Completed, h.ReloadRun().Status);
+    }
+
+    private const string PreviewConflict =
+        "A preview is already running for work item 398 (Other). Stop it before starting this one.";
+
+    [Fact]
+    public async Task A_Start_node_whose_install_meets_another_preview_parks_the_run_and_retrying_it_once_that_preview_stops_reuses_the_worktree_and_proceeds()
+    {
+        using var setup = new StartWithInstall();
+        setup.Preview.SetupSequence(p => p.InstallAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(),
+                It.IsAny<IReadOnlyList<PackageFeedCredential>?>(), It.IsAny<PreviewVolumeScope?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException(PreviewConflict))
+            .ThrowsAsync(new InvalidOperationException(PreviewConflict))
+            .ReturnsAsync(new WorktreeInstallResult(true));
+        using var h = new LoopEngineHarness(configure: setup.Register);
+        var start = h.AddNode("start", NodeType.Start, "Start");
+        start.Config = "{\"runInstall\":true}";
+        h.Db.Context.SaveChanges();
+        h.AddNode("tests", NodeType.Cmd, "Tests");
+        h.AddEdge("start", "tests", EdgeType.OnSuccess);
+        h.Registry.Register(new StartNodeExecutor());
+        h.Registry.Register(new ScriptedExecutor(NodeType.Cmd,
+            new NodeOutcome.NodeStarting("dotnet test"),
+            new NodeOutcome.Terminal("passed")));
+        h.WorkItemsMock.Setup(m => m.GetWorkItemAsync(h.WorkItemId))
+            .ReturnsAsync(new WorkItemView { Id = h.WorkItemId, Title = "T", RepositoryId = setup.RepositoryId });
+        h.SeedRun("start");
+        var reason = $"ild.config install failed: {PreviewConflict}";
+
+        await h.RunAsync();
+
+        AssertParkedOnFailedNode(h, "start", Assert.Single(h.ReloadRunNodes()), reason);
+        var first = h.ReloadRun();
+        Assert.Equal(setup.Worktree, first.WorktreePath);
+        Assert.False(string.IsNullOrEmpty(first.BranchName));
+
+        await h.Engine.RetryFromNodeAsync(h.RunId, Assert.Single(h.ReloadRunNodes()).Id);
+        await h.WaitUntilIdleAsync();
+
+        var again = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.WaitingHuman, again.Status);
+        Assert.Null(again.CompletedAt);
+        Assert.False(again.IsHalted);
+        Assert.Equal(HumanFeedbackReasons.NodeFailed, again.HumanFeedbackReason);
+        Assert.Equal(start.Id, again.CurrentNodeId);
+        var attempts = h.ReloadRunNodes();
+        Assert.Equal(2, attempts.Count);
+        Assert.All(attempts, n =>
+        {
+            Assert.Equal(start.Id, n.LoopNodeId);
+            Assert.Equal(LoopRunNodeStatus.Failed, n.Status);
+            Assert.Equal(reason, n.Error);
+        });
+        Assert.Equal(2, Events(h, EventType.RunParked).Count);
+        Assert.Empty(RunTimeline.EndingEvents(h.Db, h.RunId));
+
+        await h.Engine.RetryFromNodeAsync(h.RunId, attempts[^1].Id);
+        await h.WaitUntilIdleAsync();
+
+        var done = h.ReloadRun();
+        Assert.Equal(LoopRunStatus.Completed, done.Status);
+        Assert.Equal(first.WorktreePath, done.WorktreePath);
+        Assert.Equal(first.BranchName, done.BranchName);
+        VerifyItemMovedTo(h, RemoteWorkItemStatus.Running);
+        var nodes = h.ReloadRunNodes();
+        Assert.Equal(
+            new[] { LoopRunNodeStatus.Failed, LoopRunNodeStatus.Failed, LoopRunNodeStatus.Succeeded },
+            nodes.Where(n => n.LoopNodeId == start.Id).Select(n => n.Status));
+        Assert.Equal(LoopRunNodeStatus.Succeeded, Assert.Single(nodes, n => n.LoopNodeId == h.NodesById["tests"].Id).Status);
+        setup.RepoManager.Verify(m => m.CreateWorktreeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Once);
+        setup.Preview.Verify(p => p.InstallAsync(setup.Worktree, It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<IReadOnlyList<PackageFeedCredential>?>(), It.IsAny<PreviewVolumeScope?>(), It.IsAny<CancellationToken>()), Times.Exactly(3));
+    }
+
+    /// <summary>
+    /// What the real Start node needs to prepare a worktree and install in it: a
+    /// repository with a base clone on disk, a repo manager that makes a worktree
+    /// there, and the preview service the test scripts.
+    /// </summary>
+    private sealed class StartWithInstall : IDisposable
+    {
+        private readonly string _baseRepo = Directory.CreateTempSubdirectory("ild-park-start-base-").FullName;
+        private readonly string _dataPath = Directory.CreateTempSubdirectory("ild-park-start-data-").FullName;
+
+        public Guid RepositoryId { get; } = Guid.NewGuid();
+        public string Worktree { get; } = Directory.CreateTempSubdirectory("ild-park-start-wt-").FullName;
+        public Mock<IRepositoryManager> RepoManager { get; } = new();
+        public Mock<IWorktreePreviewService> Preview { get; } = new();
+
+        public StartWithInstall()
+        {
+            Directory.CreateDirectory(Path.Combine(_baseRepo, ".git"));
+            RepoManager.Setup(m => m.FetchAsync(It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<GitAuthOptions?>()))
+                .ReturnsAsync(true);
+            RepoManager.Setup(m => m.ResetHardAsync(_baseRepo, "origin/main", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(true);
+            RepoManager.Setup(m => m.CreateWorktreeAsync(_baseRepo, It.IsAny<string>()))
+                .ReturnsAsync(Worktree);
+            RepoManager.Setup(m => m.RebaseAsync(Worktree, "origin/main", It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new RebaseResult(true, Array.Empty<string>(), null));
+            RepoManager.Setup(m => m.ValidateWorktreeHealthAsync(Worktree)).ReturnsAsync(true);
+        }
+
+        public void Register(IServiceCollection services)
+        {
+            var providers = new Mock<IProviderStore>();
+            providers.Setup(s => s.GetRepositoryByIdAsync(RepositoryId)).ReturnsAsync(new Repository
+            {
+                Id = RepositoryId,
+                Name = "r",
+                CloneUrl = "https://example.com/o/r.git",
+                DefaultBranch = "main",
+                WorktreesPath = _baseRepo,
+                RemoteProviderId = Guid.NewGuid(),
+            });
+            providers.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+            services.AddSingleton(providers.Object);
+            services.AddSingleton(RepoManager.Object);
+            services.AddSingleton(Preview.Object);
+            services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["App:DataPath"] = _dataPath })
+                .Build());
+        }
+
+        public void Dispose()
+        {
+            foreach (var dir in new[] { _baseRepo, _dataPath, Worktree })
+                try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+        }
     }
 
     /// <summary>

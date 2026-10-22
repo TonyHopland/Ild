@@ -48,11 +48,16 @@ describe("when a run can go back to a node", () => {
     expect(runReopensOnRetry({ id: "run-1", status }, workItem)).toBe(reopens);
   });
 
-  test("Start, Cleanup and the node running now are never retried; any other node is", () => {
-    expect(nodeTakesRetry(LoopRunNodeStatus.Failed, NodeType.Start)).toBe(false);
-    expect(nodeTakesRetry(LoopRunNodeStatus.Failed, NodeType.Cleanup)).toBe(false);
+  test.each(Object.values(NodeType))("a failed %s node is retried", (nodeType) => {
+    expect(nodeTakesRetry(LoopRunNodeStatus.Failed, nodeType)).toBe(true);
+  });
+
+  test("a Start or Cleanup that did not fail and the node running now are never retried; any other node is", () => {
+    expect(nodeTakesRetry(LoopRunNodeStatus.Succeeded, NodeType.Start)).toBe(false);
+    expect(nodeTakesRetry(LoopRunNodeStatus.Succeeded, NodeType.Cleanup)).toBe(false);
+    expect(nodeTakesRetry(LoopRunNodeStatus.Running, NodeType.Start)).toBe(false);
     expect(nodeTakesRetry(LoopRunNodeStatus.Running, NodeType.AI)).toBe(false);
-    expect(nodeTakesRetry(LoopRunNodeStatus.Failed, NodeType.AI)).toBe(true);
+    expect(nodeTakesRetry(LoopRunNodeStatus.Succeeded, NodeType.AI)).toBe(true);
     expect(nodeTakesRetry(LoopRunNodeStatus.Succeeded, undefined)).toBe(true);
   });
 });
