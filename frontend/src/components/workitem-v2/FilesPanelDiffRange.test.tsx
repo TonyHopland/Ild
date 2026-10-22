@@ -3,7 +3,6 @@ import { render, screen, fireEvent, cleanup, act } from "@testing-library/react"
 import FilesPanel from "./FilesPanel";
 import {
   WorkItem,
-  WorkItemPriority,
   WorkItemStatus,
   WorktreeCommits,
   WorktreeDiffRange,
@@ -37,7 +36,7 @@ function makeWorkItem(): WorkItem {
     title: "Test",
     description: "",
     status: WorkItemStatus.HumanFeedback,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useTaskboardColumns } from "./useTaskboardColumns";
 import { mockTaskboardServer } from "../../test-support";
-import { WorkItem, WorkItemPage, WorkItemPriority, WorkItemStatus } from "../../types";
+import { WorkItem, WorkItemPage, WorkItemStatus } from "../../types";
 import { EMPTY_TASKBOARD_FILTER } from "../../utils/taskboardFilter";
 
 afterEach(() => {
@@ -15,7 +15,7 @@ function backlogItem(n: number): WorkItem {
     title: `b${n}`,
     description: "",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: -n,
     tags: [],
     repositoryId: "repo-1",
     prUrl: null,

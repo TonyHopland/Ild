@@ -9,7 +9,6 @@ import {
   WorkItem,
   WorkItemEditProposal,
   WorkItemStatus,
-  WorkItemPriority,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import { proposalCardAround } from "../../test-support";
@@ -29,7 +28,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Old title",
     description: "The original description.",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

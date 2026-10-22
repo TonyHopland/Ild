@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { QueuedPrWrites } from "./panels";
 import { loopRunService } from "../../services/auth";
-import { WorkItem, WorkItemStatus, WorkItemPriority, PrQueuedWrite } from "../../types";
+import { WorkItem, WorkItemStatus, PrQueuedWrite } from "../../types";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
 afterEach(() => {
@@ -16,7 +16,7 @@ function workItem(): WorkItem {
     title: "Test",
     description: "",
     status: WorkItemStatus.Running,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

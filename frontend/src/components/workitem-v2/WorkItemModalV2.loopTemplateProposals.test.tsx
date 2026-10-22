@@ -8,7 +8,6 @@ import {
   LoopRunStatus,
   WorkItem,
   WorkItemStatus,
-  WorkItemPriority,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -35,7 +34,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Old title",
     description: "The original description.",
     status: WorkItemStatus.Done,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

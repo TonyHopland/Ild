@@ -7,7 +7,6 @@ import { feedbackFor } from "./panels";
 import {
   WorkItem,
   WorkItemStatus,
-  WorkItemPriority,
   LoopRun,
   LoopRunStatus,
   LoopRunNodeStatus,
@@ -33,7 +32,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Work Item",
     description: "",
     status: WorkItemStatus.Running,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

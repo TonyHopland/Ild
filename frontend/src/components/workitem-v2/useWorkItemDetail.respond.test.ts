@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, act, cleanup, waitFor } from "@testing-library/react";
 import { useWorkItemDetail } from "./useWorkItemDetail";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import {
   repositoryService,
@@ -22,7 +22,7 @@ function makeParkedWorkItem(): WorkItem {
     title: "Test",
     description: "",
     status: WorkItemStatus.HumanFeedback,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

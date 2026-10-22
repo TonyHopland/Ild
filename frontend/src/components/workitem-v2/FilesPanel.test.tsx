@@ -4,7 +4,6 @@ import FilesPanel, { workItemKey } from "./FilesPanel";
 import {
   WorkItem,
   WorkItemStatus,
-  WorkItemPriority,
   WorktreeCommits,
   WorktreeDiffRange,
   WorktreeFileContent,
@@ -38,7 +37,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test",
     description: "",
     status: WorkItemStatus.Running,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

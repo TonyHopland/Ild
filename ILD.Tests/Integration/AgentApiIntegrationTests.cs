@@ -1075,7 +1075,7 @@ public class AgentApiIntegrationTests
         Assert.EndsWith("…", preview);
 
         // Lightweight triage fields are present.
-        Assert.Equal("Medium", row.GetProperty("priority").GetString());
+        Assert.Equal(JsonValueKind.Number, row.GetProperty("priority").ValueKind);
         Assert.Equal("backend-loop", row.GetProperty("tags")[0].GetString());
         Assert.Equal(0, row.GetProperty("blockedByCount").GetInt32());
         Assert.Equal(0, row.GetProperty("blocksCount").GetInt32());
@@ -1085,6 +1085,32 @@ public class AgentApiIntegrationTests
         var withBody = JsonDocument.Parse(await (await client.GetAsync("/api/v1/agent/workitems?includeDescription=true", TestContext.Current.CancellationToken)).Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
         var full = withBody.EnumerateArray().Single(e => e.GetProperty("title").GetString() == "triage me");
         Assert.Equal(longBody, full.GetProperty("description").GetString());
+    }
+
+    [Fact]
+    public async Task ListWorkItems_orders_by_priority_in_board_order_and_get_carries_the_number()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var repoId = await SeedRepositoryAsync(factory, intake: WorkItemStatus.Backlog);
+        var runId = Guid.NewGuid();
+        var older = await CreateAsync(client, "older", runId, repoId);
+        var newer = await CreateAsync(client, "newer", runId, repoId);
+        // Renaming the older item makes it the most recently updated.
+        var put = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/agent/workitems/{older}")
+        {
+            Content = JsonContent.Create(new { title = "older, renamed" }),
+        };
+        put.Headers.Add("X-ILD-Run-Id", runId.ToString());
+        (await client.SendAsync(put, TestContext.Current.CancellationToken)).EnsureSuccessStatusCode();
+
+        var rows = await client.GetFromJsonAsync<JsonElement>("/api/v1/agent/workitems?orderBy=priority", TestContext.Current.CancellationToken);
+
+        Assert.Equal(new[] { newer, older }, rows.EnumerateArray().Select(r => r.GetProperty("id").GetString()));
+        var priorities = rows.EnumerateArray().Select(r => r.GetProperty("priority").GetDouble()).ToList();
+        Assert.True(priorities[0] < priorities[1]);
+        var detail = await client.GetFromJsonAsync<JsonElement>($"/api/v1/agent/workitems/{newer}", TestContext.Current.CancellationToken);
+        Assert.Equal(priorities[0], detail.GetProperty("priority").GetDouble());
     }
 
     [Fact]
@@ -1263,6 +1289,7 @@ public class AgentApiIntegrationTests
 
         Assert.Equal(2, summary.GetProperty("total").GetInt32());
         Assert.Equal(2, summary.GetProperty("countsByStatus").GetProperty("Backlog").GetInt32());
+        Assert.False(summary.TryGetProperty("countsByPriority", out _));
         // No dependencies, so both items are actionable now.
         Assert.Equal(2, summary.GetProperty("actionable").GetInt32());
         Assert.Equal(0, summary.GetProperty("blocked").GetInt32());

@@ -4,7 +4,6 @@ using ILD.Core.Services.Remote;
 using ILD.WorkItemServer.Dtos;
 using Microsoft.EntityFrameworkCore;
 using Moq;
-using WiPriority = ILD.WorkItemServer.Domain.WorkItemPriority;
 using WiStatus = ILD.WorkItemServer.Domain.WorkItemStatus;
 
 namespace ILD.Tests;
@@ -36,7 +35,7 @@ public sealed class WorkItemTriageTests : IDisposable
 
     private async Task<string> SeedAsync(
         string title,
-        WiPriority priority = WiPriority.Medium,
+        double? priority = null,
         WiStatus status = WiStatus.Backlog,
         string[]? tags = null,
         string[]? deps = null,
@@ -49,7 +48,6 @@ public sealed class WorkItemTriageTests : IDisposable
         {
             Title = title,
             Description = description,
-            Priority = priority,
             Tags = tags ?? Array.Empty<string>(),
             Dependencies = deps ?? Array.Empty<string>(),
             ForceStatus = status,
@@ -57,11 +55,15 @@ public sealed class WorkItemTriageTests : IDisposable
             CreatedByLoopRunId = createdByLoopRunId,
         });
 
-        if (timestamp.HasValue)
+        if (timestamp.HasValue || priority.HasValue)
         {
             var entity = await _db.Server.ServerDb.WorkItems.FirstAsync(w => w.Id == dto.Id);
-            entity.CreatedAt = timestamp.Value;
-            entity.UpdatedAt = timestamp.Value;
+            if (timestamp.HasValue)
+            {
+                entity.CreatedAt = timestamp.Value;
+                entity.UpdatedAt = timestamp.Value;
+            }
+            if (priority.HasValue) entity.Priority = priority.Value;
             await _db.Server.ServerDb.SaveChangesAsync();
         }
         return dto.Id;
@@ -141,37 +143,34 @@ public sealed class WorkItemTriageTests : IDisposable
     }
 
     [Fact]
-    public async Task ListSummaries_filters_by_priority_and_tags()
+    public async Task ListSummaries_filters_by_tags()
     {
-        await SeedAsync("low", priority: WiPriority.Low, tags: new[] { "backend" });
-        var highBackend = await SeedAsync("high backend", priority: WiPriority.High, tags: new[] { "backend" });
-        await SeedAsync("high frontend", priority: WiPriority.High, tags: new[] { "frontend" });
+        await SeedAsync("low", tags: new[] { "frontend" });
+        var backend = await SeedAsync("high backend", tags: new[] { "backend" });
 
-        var byPriority = await _mgr.ListSummariesAsync(new WorkItemListQuery { Priority = RemoteWorkItemPriority.High });
-        Assert.Equal(2, byPriority.Count);
-        Assert.All(byPriority, r => Assert.Equal(RemoteWorkItemPriority.High, r.Priority));
-
-        var byTag = await _mgr.ListSummariesAsync(new WorkItemListQuery
-        {
-            Priority = RemoteWorkItemPriority.High,
-            Tags = new[] { "backend" },
-        });
-        Assert.Equal(highBackend, Assert.Single(byTag).Id);
+        var byTag = await _mgr.ListSummariesAsync(new WorkItemListQuery { Tags = new[] { "backend" } });
+        Assert.Equal(backend, Assert.Single(byTag).Id);
     }
 
+    /// <summary>
+    /// Board order: the lowest order value first. Ids "2" and "10" tie on it and
+    /// come back numerically, although "10" sorts first as a string and was
+    /// updated last.
+    /// </summary>
     [Fact]
-    public async Task ListSummaries_orders_by_priority_highest_first()
+    public async Task ListSummaries_orders_by_priority_in_board_order_with_ties_in_id_order()
     {
-        await SeedAsync("medium", priority: WiPriority.Medium);
-        await SeedAsync("critical", priority: WiPriority.Critical);
-        await SeedAsync("low", priority: WiPriority.Low);
-        await SeedAsync("high", priority: WiPriority.High);
+        var priorities = new Dictionary<int, double> { [2] = 1, [5] = -3, [10] = 1 };
+        var ids = new List<string>();
+        for (var i = 1; i <= 10; i++)
+            ids.Add(await SeedAsync($"i{i}", priority: priorities.GetValueOrDefault(i, 4),
+                timestamp: new DateTime(2026, 1, i, 0, 0, 0, DateTimeKind.Utc)));
+        Assert.Equal(Enumerable.Range(1, 10).Select(i => i.ToString(System.Globalization.CultureInfo.InvariantCulture)), ids);
 
         var rows = await _mgr.ListSummariesAsync(new WorkItemListQuery { OrderBy = WorkItemOrderBy.Priority });
 
-        Assert.Equal(
-            new[] { RemoteWorkItemPriority.Critical, RemoteWorkItemPriority.High, RemoteWorkItemPriority.Medium, RemoteWorkItemPriority.Low },
-            rows.Select(r => r.Priority).ToArray());
+        Assert.Equal(new[] { "5", "2", "10", "1", "3", "4", "6", "7", "8", "9" }, rows.Select(r => r.Id));
+        Assert.Equal(new[] { -3d, 1, 1, 4, 4, 4, 4, 4, 4, 4 }, rows.Select(r => r.Priority));
     }
 
     [Fact]
@@ -204,11 +203,11 @@ public sealed class WorkItemTriageTests : IDisposable
     }
 
     [Fact]
-    public async Task GetBacklogSummary_aggregates_status_priority_and_blocked_vs_actionable()
+    public async Task GetBacklogSummary_aggregates_status_and_blocked_vs_actionable()
     {
-        var done = await SeedAsync("done", priority: WiPriority.High, status: WiStatus.Done);
-        await SeedAsync("ready", priority: WiPriority.High, status: WiStatus.Backlog, deps: new[] { done });
-        await SeedAsync("blocked", priority: WiPriority.Low, status: WiStatus.WorkQueue, deps: new[] { "missing" });
+        var done = await SeedAsync("done", status: WiStatus.Done);
+        await SeedAsync("ready", status: WiStatus.Backlog, deps: new[] { done });
+        await SeedAsync("blocked", status: WiStatus.WorkQueue, deps: new[] { "missing" });
 
         var summary = await _mgr.GetBacklogSummaryAsync(null);
 
@@ -216,8 +215,6 @@ public sealed class WorkItemTriageTests : IDisposable
         Assert.Equal(1, summary.CountsByStatus["Done"]);
         Assert.Equal(1, summary.CountsByStatus["Backlog"]);
         Assert.Equal(1, summary.CountsByStatus["WorkQueue"]);
-        Assert.Equal(2, summary.CountsByPriority["High"]);
-        Assert.Equal(1, summary.CountsByPriority["Low"]);
         // `done` (no deps) and `ready` (dep Done) are actionable; `blocked` is not.
         Assert.Equal(2, summary.Actionable);
         Assert.Equal(1, summary.Blocked);

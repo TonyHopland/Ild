@@ -148,8 +148,9 @@ public sealed class WorkItemHistoryBaselineTests : IAsyncLifetime
         var expected = new List<(string Id, string Field, string Name)>();
         foreach (var status in Enum.GetValues<WorkItemStatus>())
             expected.Add(((await InsertItemAsync(w => w.Status = status)).Id, "status", WorkItemHistoryFields.Encode(status)!));
-        foreach (var priority in Enum.GetValues<WorkItemPriority>())
-            expected.Add(((await InsertItemAsync(w => w.Priority = priority)).Id, "priority", WorkItemHistoryFields.Encode(priority)!));
+        // The seed ran while priority was still Low..Critical, stored as 0..3.
+        foreach (var (stored, name) in new[] { (0d, "Low"), (1d, "Medium"), (2d, "High"), (3d, "Critical") })
+            expected.Add(((await InsertItemAsync(w => w.Priority = stored)).Id, "priority", name));
         foreach (var mode in Enum.GetValues<AiProviderOverrideMode>())
             expected.Add(((await InsertItemAsync(w => w.AiProviderOverride = mode)).Id, "aiProviderOverride", WorkItemHistoryFields.Encode(mode)!));
 

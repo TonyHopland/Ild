@@ -53,7 +53,6 @@ public class WorkItemServiceTests : IAsyncLifetime
         {
             Title = "child",
             Description = "d",
-            Priority = WorkItemPriority.High,
             Tags = new[] { "bug-fix" },
             Dependencies = new[] { dep.Id },
         }, TestContext.Current.CancellationToken);
@@ -61,7 +60,154 @@ public class WorkItemServiceTests : IAsyncLifetime
         Assert.Equal(WorkItemStatus.Backlog, dto.Status);
         Assert.Equal("bug-fix", Assert.Single(dto.Tags));
         Assert.Equal(dep.Id, Assert.Single(dto.Dependencies));
-        Assert.Equal(WorkItemPriority.High, dto.Priority);
+    }
+
+    [Fact]
+    public async Task A_new_item_goes_above_every_existing_item_of_any_status()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "first" }, ct);
+        Assert.Equal(0d, first.Priority);
+
+        var second = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "second", ForceStatus = WorkItemStatus.Ready }, ct);
+        Assert.True(second.Priority < first.Priority);
+
+        var done = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "done", ForceStatus = WorkItemStatus.Done }, ct);
+        await _svc.UpdateAsync(done.Id, new UpdateWorkItemRequest { Priority = -1000.5 }, ct);
+
+        var third = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "third" }, ct);
+
+        Assert.True(third.Priority < -1000.5, $"third got {third.Priority}");
+        Assert.Equal(third.Priority, (await _svc.GetAsync(third.Id, ct))!.Priority);
+    }
+
+    [Fact]
+    public async Task Update_sets_the_priority_when_given_and_leaves_it_alone_otherwise()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var created = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, ct);
+        _clock.Now = _clock.Now.AddMinutes(1);
+
+        var moved = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Priority = 2.5 }, ct);
+
+        Assert.Equal(2.5, moved!.Priority);
+        Assert.Equal(_clock.Now, moved.UpdatedAt);
+        Assert.Equal("x", moved.Title);
+
+        var renamed = await _svc.UpdateAsync(created.Id, new UpdateWorkItemRequest { Title = "y" }, ct);
+
+        Assert.Equal(2.5, renamed!.Priority);
+        Assert.Equal(2.5, (await _svc.GetAsync(created.Id, ct))!.Priority);
+    }
+
+    /// <summary>
+    /// Ids "2" and "10" tie on priority: the numeric id order puts "2" first,
+    /// where an ordinal string comparison or a descending one would not.
+    /// </summary>
+    [Fact]
+    public async Task List_and_poll_return_items_in_board_order_with_equal_priorities_in_id_order()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var ids = new List<string>();
+        for (var i = 1; i <= 10; i++)
+            ids.Add((await _svc.CreateAsync(new CreateWorkItemRequest { Title = $"i{i}", ForceStatus = WorkItemStatus.Ready }, ct)).Id);
+        Assert.Equal(Enumerable.Range(1, 10).Select(i => i.ToString(System.Globalization.CultureInfo.InvariantCulture)), ids);
+
+        var priorities = new Dictionary<string, double>
+        {
+            ["1"] = 0.5, ["2"] = 1, ["3"] = -1, ["4"] = 7, ["5"] = 7,
+            ["6"] = 7, ["7"] = 7, ["8"] = 7, ["9"] = 7, ["10"] = 1,
+        };
+        foreach (var (id, priority) in priorities)
+            await _svc.UpdateAsync(id, new UpdateWorkItemRequest { Priority = priority }, ct);
+        await _svc.TransitionAsync("9", new TransitionRequest { TargetStatus = WorkItemStatus.Backlog }, ct);
+        _db.ChangeTracker.Clear();
+
+        var expected = new[] { "3", "1", "2", "10", "4", "5", "6", "7", "8", "9" };
+        Assert.Equal(expected, (await _svc.ListAsync(null, null, ct)).Select(w => w.Id));
+        Assert.Equal(expected.Where(id => id != "9"), (await _svc.ListAsync(WorkItemStatus.Ready, null, ct)).Select(w => w.Id));
+        Assert.Equal(expected.Where(id => id != "9"), (await _svc.PollAsync(Array.Empty<string>(), ct)).ReadyItems.Select(w => w.Id));
+    }
+
+    /// <summary>
+    /// SQLite returns rows tied on every sort key in key order, which Postgres
+    /// does not promise, so a sort on the priority alone can only be seen in the
+    /// query: wherever the database sorts by priority, a further key follows it.
+    /// </summary>
+    [Fact]
+    public async Task Wherever_the_database_sorts_by_priority_a_tie_break_follows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a", ForceStatus = WorkItemStatus.Ready }, ct);
+        await _svc.CreateAsync(new CreateWorkItemRequest { Title = "b", ForceStatus = WorkItemStatus.Ready }, ct);
+        var commands = new SaveCommandRecorder();
+        await using var recorded = new WorkItemServerDbContext(
+            new DbContextOptionsBuilder<WorkItemServerDbContext>().UseSqlite(_conn).AddInterceptors(commands).Options)
+        {
+            HistoryActor = TestActors.ServerHuman,
+        };
+        var svc = new WorkItemService(recorded, _clock);
+
+        await svc.ListAsync(null, null, ct);
+        await svc.ListAsync(WorkItemStatus.Ready, null, ct);
+        await svc.PollAsync(Array.Empty<string>(), ct);
+
+        foreach (var command in commands.Executed)
+        {
+            var orderBy = System.Text.RegularExpressions.Regex.Match(command, @"ORDER BY (?<keys>.*?)(LIMIT|OFFSET|\)|;|$)",
+                System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (orderBy.Success && orderBy.Groups["keys"].Value.Contains("\"Priority\"", StringComparison.Ordinal))
+                Assert.True(orderBy.Groups["keys"].Value.Contains(',', StringComparison.Ordinal), command);
+        }
+    }
+
+    /// <summary>
+    /// Every way an item changes column without a drag keeps its order value, so
+    /// items keep their order relative to each other: a transition, the Running
+    /// claim, a stale reclaim, a promotion when a dependency is done, and the
+    /// scrub of a deleted dependency.
+    /// </summary>
+    [Fact]
+    public async Task Status_changes_never_change_the_priority()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var doneDep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep done later" }, ct);
+        var deletedDep = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "dep deleted later" }, ct);
+        var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, ct);
+        var b = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "b", ForceStatus = WorkItemStatus.WorkQueue, Dependencies = new[] { doneDep.Id },
+        }, ct);
+        var c = await _svc.CreateAsync(new CreateWorkItemRequest
+        {
+            Title = "c", ForceStatus = WorkItemStatus.WorkQueue, Dependencies = new[] { deletedDep.Id },
+        }, ct);
+        var set = new Dictionary<string, double> { [a.Id] = 3.25, [b.Id] = -7.5, [c.Id] = 11 };
+        foreach (var (id, priority) in set)
+            await _svc.UpdateAsync(id, new UpdateWorkItemRequest { Priority = priority }, ct);
+
+        async Task AssertKeptAsync()
+        {
+            _db.ChangeTracker.Clear();
+            foreach (var (id, priority) in set)
+                Assert.Equal(priority, (await _svc.GetAsync(id, ct))!.Priority);
+        }
+
+        await _svc.TransitionAsync(a.Id, new TransitionRequest { TargetStatus = WorkItemStatus.WorkQueue }, ct);
+        await _svc.TransitionAsync(a.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Ready }, ct);
+        await AssertKeptAsync();
+        Assert.True((await _svc.TransitionAsync(a.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Running }, ct)).Success);
+        await AssertKeptAsync();
+        _clock.Now = _clock.Now.AddMinutes(20);
+        Assert.Equal(1, await _svc.ReclaimStaleAsync(TimeSpan.FromMinutes(15), ct));
+        await AssertKeptAsync();
+
+        await _svc.TransitionAsync(doneDep.Id, new TransitionRequest { TargetStatus = WorkItemStatus.Done }, ct);
+        Assert.True(await _svc.DeleteAsync(deletedDep.Id, ct));
+        await AssertKeptAsync();
+
+        foreach (var id in new[] { a.Id, b.Id, c.Id })
+            Assert.Equal(WorkItemStatus.Ready, (await _svc.GetAsync(id, ct))!.Status);
     }
 
     [Fact]

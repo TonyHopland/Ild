@@ -76,7 +76,6 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         {
             Title = "client-roundtrip",
             Tags = new[] { "alpha", "beta" },
-            Priority = RemoteWorkItemPriority.High,
         }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal("client-roundtrip", created.Title);
@@ -85,6 +84,28 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         var fetched = await _client.GetAsync(_opts, created.Id, TestContext.Current.CancellationToken);
         Assert.NotNull(fetched);
         Assert.Equal(RemoteWorkItemStatus.Backlog, fetched!.Status);
+    }
+
+    [Fact]
+    public async Task The_order_value_round_trips_through_create_and_update()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var older = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "older",
+        }, TestActors.Human, ct);
+        var newer = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "newer",
+        }, TestActors.Human, ct);
+        Assert.True(newer.Priority < older.Priority);
+
+        var moved = await _client.UpdateAsync(_opts, newer.Id, new RemoteUpdateWorkItemRequest { Priority = older.Priority + 0.5 }, TestActors.Human, ct);
+        Assert.Equal(older.Priority + 0.5, moved!.Priority);
+
+        var renamed = await _client.UpdateAsync(_opts, newer.Id, new RemoteUpdateWorkItemRequest { Title = "renamed" }, TestActors.Human, ct);
+        Assert.Equal(older.Priority + 0.5, renamed!.Priority);
+        Assert.Equal(older.Priority + 0.5, (await _client.GetAsync(_opts, newer.Id, ct))!.Priority);
     }
 
     [Fact]

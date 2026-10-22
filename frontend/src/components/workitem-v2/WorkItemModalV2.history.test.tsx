@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus } from "../../types";
 import type { WorkItemHistoryEntry } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -21,7 +21,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Work Item",
     description: "",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     repositoryId: "repo-1",
     prUrl: null,
@@ -315,9 +315,61 @@ describe("WorkItemModalV2 History tab", () => {
 
     const all = text(panel);
     expect(all).toMatch(/State at history start/i);
-    expect(all).toContain("High");
     expect(all).not.toMatch(/\b(null|undefined|unknown)\b/i);
     expect(panel.querySelector('a[href^="/taskboard/"]')).toBeNull();
+  });
+
+  test("priority changes are not shown, and a save that only changed the priority is left out", async () => {
+    mockServices(async () => [
+      entry({
+        saveId: "save-3",
+        username: "dave",
+        field: "title",
+        oldValue: "Old",
+        newValue: "Retitled",
+      }),
+      entry({
+        saveId: "save-3",
+        username: "dave",
+        field: "priority",
+        oldValue: "1.5",
+        newValue: "-3",
+      }),
+      entry({
+        saveId: "save-2",
+        username: "carol",
+        field: "priority",
+        oldValue: "0",
+        newValue: "1.5",
+      }),
+      entry({
+        saveId: "save-1",
+        kind: "Baseline",
+        username: null,
+        field: "title",
+        oldValue: null,
+        newValue: "Title when history began",
+      }),
+      entry({
+        saveId: "save-1",
+        kind: "Baseline",
+        username: null,
+        field: "priority",
+        oldValue: null,
+        newValue: "High",
+      }),
+    ]);
+    await renderDialog(makeWorkItem());
+
+    const panel = await openHistory();
+    await waitFor(() => expect(panel.textContent).toContain("Retitled"));
+
+    const all = text(panel);
+    expect(all).toContain("Title when history began");
+    expect(all).not.toMatch(/priority/i);
+    expect(all).not.toContain("High");
+    expect(all).not.toContain("1.5");
+    expect(all).not.toContain("carol");
   });
 
   test("a created save is labelled as the item's creation", async () => {

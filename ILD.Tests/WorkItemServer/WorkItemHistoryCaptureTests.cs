@@ -155,7 +155,6 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         {
             Title = "Add a login page",
             Description = "Users sign in with a password.",
-            Priority = WorkItemPriority.High,
             ForceStatus = WorkItemStatus.Ready,
             Tags = new[] { "feature", "ui" },
             Dependencies = new[] { dep.Id },
@@ -170,7 +169,7 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         Assert.Equal("Add a login page", ValueOf(rows, "title"));
         Assert.Equal("Users sign in with a password.", ValueOf(rows, "description"));
         Assert.Equal("Ready", ValueOf(rows, "status"));
-        Assert.Equal("High", ValueOf(rows, "priority"));
+        Assert.Equal(stored.Priority, double.Parse(ValueOf(rows, "priority")!, System.Globalization.CultureInfo.InvariantCulture));
         Assert.Equal(stored.TagsJson, ValueOf(rows, "tags"));
         Assert.Equal(stored.DependenciesJson, ValueOf(rows, "dependencies"));
         Assert.Equal(repository.ToString("D"), ValueOf(rows, "repository"));
@@ -218,6 +217,29 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         _clock.Now = _clock.Now.AddMinutes(5);
         await _svc.UpdateAsync(dto.Id, new UpdateWorkItemRequest { Title = "New title", Tags = new[] { "feature" } }, Ct);
         Assert.Equal(created.Count + changed.Count, (await RowsAsync(dto.Id)).Count);
+    }
+
+    [Theory]
+    [InlineData(1.5, "1.5")]
+    [InlineData(-3, "-3")]
+    [InlineData(-0.1, "-0.1")]
+    public async Task A_priority_change_is_written_as_an_invariant_number(double priority, string expected)
+    {
+        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, Ct);
+        var before = (await RowsAsync(dto.Id)).Count;
+        var culture = System.Globalization.CultureInfo.CurrentCulture;
+        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
+        try
+        {
+            await _svc.UpdateAsync(dto.Id, new UpdateWorkItemRequest { Priority = priority }, Ct);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = culture;
+        }
+
+        var changed = await RowsAfterAsync(dto.Id, before);
+        Assert.Equal(expected, ValueOf(changed, "priority"));
     }
 
     [Fact]

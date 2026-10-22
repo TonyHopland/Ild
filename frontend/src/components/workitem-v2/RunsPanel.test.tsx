@@ -5,7 +5,6 @@ import { loopRunService } from "../../services/auth";
 import {
   WorkItem,
   WorkItemStatus,
-  WorkItemPriority,
   LoopRun,
   LoopRunAvailableSession,
   LoopRunSessionPreview,
@@ -26,7 +25,7 @@ function workItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test",
     description: "",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
