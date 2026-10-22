@@ -14,6 +14,13 @@ public interface IAuthService
     /// <summary>Revokes the one session the token belongs to, not the user's others.</summary>
     Task LogoutAsync(string sessionToken);
 
+    /// <summary>
+    /// The identity of a live session, or null when the token names none. Reads the
+    /// session once and writes back its last activity at most once a minute: what
+    /// authenticating a request costs.
+    /// </summary>
+    Task<SessionIdentity?> AuthenticateSessionAsync(string sessionToken);
+
     Task<bool> ValidateSessionAsync(string sessionToken);
     Task<string?> GetUsernameAsync(string sessionToken);
 

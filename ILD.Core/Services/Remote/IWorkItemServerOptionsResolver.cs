@@ -1,6 +1,6 @@
 using ILD.Data.Entities;
+using ILD.Data.Stores.Interfaces;
 using ILD.Core.Services.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace ILD.Core.Services.Remote;
 
@@ -20,30 +20,26 @@ public interface IWorkItemServerOptionsResolver
 /// <summary>
 /// Production resolver that reads the global WorkItem server connection
 /// (<c>workItemServer.url</c> + <c>workItemServer.apiKey</c>) from the
-/// AppSettings table. Throws when no URL is configured — per the PRD's
-/// hard-break contract, ILD requires a remote WorkItemServer.
+/// AppSettings, through the process-wide settings cache. Throws when no URL is
+/// configured — per the PRD's hard-break contract, ILD requires a remote
+/// WorkItemServer.
 /// </summary>
 public sealed class DbWorkItemServerOptionsResolver : IWorkItemServerOptionsResolver
 {
-    private readonly AppDbContext _db;
+    private readonly IAppSettingStore _settings;
 
-    public DbWorkItemServerOptionsResolver(AppDbContext db) => _db = db;
+    public DbWorkItemServerOptionsResolver(IAppSettingStore settings) => _settings = settings;
 
     public async Task<WorkItemServerOptions> ResolveForRepositoryAsync(Guid? repositoryId, CancellationToken ct = default)
     {
-        var settings = await _db.AppSettings
-            .AsNoTracking()
-            .Where(s => s.Key == AppSettingKeys.WorkItemServerUrl || s.Key == AppSettingKeys.WorkItemServerApiKey)
-            .ToDictionaryAsync(s => s.Key, s => s.Value, ct);
-
-        settings.TryGetValue(AppSettingKeys.WorkItemServerUrl, out var url);
+        var url = (await _settings.GetByKeyAsync(AppSettingKeys.WorkItemServerUrl, ct))?.Value;
 
         if (string.IsNullOrEmpty(url))
             throw new InvalidOperationException(
                 "No WorkItem server URL is configured. " +
                 "ILD requires a remote WorkItemServer for work-item operations.");
 
-        settings.TryGetValue(AppSettingKeys.WorkItemServerApiKey, out var apiKey);
+        var apiKey = (await _settings.GetByKeyAsync(AppSettingKeys.WorkItemServerApiKey, ct))?.Value;
 
         return new WorkItemServerOptions
         {

@@ -225,6 +225,19 @@ public static class AgentIsolation
         => Route(psi, AgentUser, AgentGroup, AgentHome, EgressProxyUrl(aiProviderId));
 
     /// <summary>
+    /// Keeps a <c>dotnet build</c> inside a launched process from leaving MSBuild
+    /// worker nodes, the MSBuild server or the Roslyn compiler server running after
+    /// it returns. Added by <see cref="Route(ProcessStartInfo, string?, string?, string?, string?)"/>
+    /// only where the launch does not already set the name.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> BuildServerEnvironment { get; } = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["MSBUILDDISABLENODEREUSE"] = "1",
+        ["UseSharedCompilation"] = "false",
+        ["DOTNET_CLI_USE_MSBUILD_SERVER"] = "0",
+    };
+
+    /// <summary>
     /// The wrap primitive with explicit parameters — the env-based
     /// <see cref="Route(ProcessStartInfo)"/> is the production convenience over
     /// this. Exposed so the rewrite can be verified without mutating (global)
@@ -237,6 +250,9 @@ public static class AgentIsolation
     /// </summary>
     public static ProcessStartInfo Route(ProcessStartInfo psi, string? agentUser, string? agentGroup, string? agentHome, string? egressProxy = null)
     {
+        foreach (var (key, value) in BuildServerEnvironment)
+            psi.Environment.TryAdd(key, value);
+
         if (NonEmpty(egressProxy) is { } proxy)
         {
             foreach (var (key, value) in EgressProxyEnvironment(proxy))

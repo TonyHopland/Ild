@@ -54,7 +54,7 @@ public sealed class WorkItemServerProgram
         if (hasDatabase)
         {
             builder.Services.AddDbContext<WorkItemServerDbContext>(opt =>
-                opt.UseNpgsql(connectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public")));
+                opt.UseNpgsql(NpgsqlPoolDefaults.Apply(connectionString, "ILD.WorkItemServer", maxPoolSize: 8), npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public")));
         }
         // When no connection string is set (e.g. integration tests), skip registration
         // so no Npgsql internal services are registered. The test factory substitutes

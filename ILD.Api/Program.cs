@@ -59,7 +59,7 @@ try
     {
         builder.Services.AddDataLayer(options =>
         {
-            options.UseNpgsql(connectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public"));
+            options.UseNpgsql(NpgsqlPoolDefaults.Apply(connectionString, "ILD.Api", maxPoolSize: 15), npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public"));
         });
     }
     // When no connection string is set (e.g. integration tests), skip AddDataLayer

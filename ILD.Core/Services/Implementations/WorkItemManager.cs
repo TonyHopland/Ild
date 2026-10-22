@@ -1069,41 +1069,42 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId)
     {
-        var ids = await GetServerDependencyIdsAsync(workItemId);
-        if (ids.Count == 0) return Array.Empty<WorkItemView>();
-
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
-        var views = new List<WorkItemView>();
+        var ids = (await _server.GetAsync(opts, workItemId))?.Dependencies ?? Array.Empty<string>();
+        var dependencies = new List<RemoteWorkItem>();
         foreach (var id in ids)
         {
-            var remote = await _server.GetAsync(opts, id);
-            if (remote != null)
-            {
-                var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
-                var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-                               ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).ThenByDescending(r => r.Id).FirstOrDefault();
-                views.Add(BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
-                    await _loopRunStore.GetWorkItemStatusReasonAsync(id)));
-            }
+            if (await _server.GetAsync(opts, id) is { } remote)
+                dependencies.Add(remote);
         }
-        return views;
+        return await RelatedViewsAsync(dependencies);
     }
 
     public async Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(string workItemId)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var all = await _server.ListAsync(opts, status: null, tags: null);
-        var dependents = all.Where(w => w.Dependencies.Contains(workItemId)).ToList();
-        var views = new List<WorkItemView>();
-        foreach (var candidate in dependents)
+        return await RelatedViewsAsync(all.Where(w => w.Dependencies.Contains(workItemId)).ToList());
+    }
+
+    /// <summary>
+    /// Views of the items a dependency list shows, their runs and status reasons
+    /// read in one query each. Here the current run is the running one, else the latest.
+    /// </summary>
+    private async Task<IReadOnlyList<WorkItemView>> RelatedViewsAsync(IReadOnlyList<RemoteWorkItem> remotes)
+    {
+        if (remotes.Count == 0) return Array.Empty<WorkItemView>();
+
+        var ids = remotes.Select(w => w.Id).ToList();
+        var runsByWorkItem = await RunsByWorkItemAsync(ids);
+        var statusReasons = await _loopRunStore.GetWorkItemStatusReasonsAsync(ids);
+        return remotes.Select(remote =>
         {
-            var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
-            var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-                           ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).ThenByDescending(r => r.Id).FirstOrDefault();
-            views.Add(BuildView(candidate, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
-                await _loopRunStore.GetWorkItemStatusReasonAsync(candidate.Id)));
-        }
-        return views;
+            var runs = runsByWorkItem.GetValueOrDefault(remote.Id) ?? [];
+            var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running) ?? LatestRun(runs);
+            return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
+                statusReasons.GetValueOrDefault(remote.Id));
+        }).ToList();
     }
 
     public async Task<bool> IsReadyAsync(string workItemId)

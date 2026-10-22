@@ -55,12 +55,12 @@ public sealed class IldAuthenticationHandler : AuthenticationHandler<Authenticat
         if (_agentTokens.Matches(token))
             return Ticket(IldAuthentication.AgentRole, name: "agent");
 
-        if (!await _authService.ValidateSessionAsync(token))
+        if (await _authService.AuthenticateSessionAsync(token) is not { } session)
             return AuthenticateResult.Fail(InvalidSession);
 
         // A session with no resolvable username stays authenticated but nameless,
         // which is what the endpoints that need a user identity check for.
-        return Ticket(IldAuthentication.UserRole, name: await _authService.GetUsernameAsync(token));
+        return Ticket(IldAuthentication.UserRole, name: session.Username);
     }
 
     /// <summary>
