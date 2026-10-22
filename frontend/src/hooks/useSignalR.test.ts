@@ -242,7 +242,9 @@ describe("useSignalR", () => {
       await Promise.resolve();
     });
 
-    const dispatchers = onMock.mock.calls.filter(([eventType]) => eventType === "WorkItemRunProgressed");
+    const dispatchers = onMock.mock.calls.filter(
+      ([eventType]) => eventType === "WorkItemRunProgressed",
+    );
     expect(dispatchers).toHaveLength(1);
     (dispatchers[0][1] as (payload: unknown) => void)({ workItemId: "a" });
     expect(handler).toHaveBeenCalledWith(
