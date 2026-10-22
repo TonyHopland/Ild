@@ -93,7 +93,8 @@ public static class AgentIsolation
     /// <summary>
     /// Loopback port of the egress proxy (<c>ILD.Core.Services.Implementations.Network.EgressProxy</c>).
     /// When set, every crossing points the child's <c>HTTP_PROXY</c>/<c>HTTPS_PROXY</c>/
-    /// <c>ALL_PROXY</c> at it (<see cref="EgressProxyEnvironment"/>); unset means no proxy
+    /// <c>ALL_PROXY</c> at it and sets <c>NODE_USE_ENV_PROXY</c>
+    /// (<see cref="EgressProxyEnvironment"/>); unset means no proxy
     /// is running and no launch is pointed anywhere. Read by the container entrypoint too,
     /// which lets exactly this port through the agent uid's firewall rules.
     /// </summary>
@@ -481,7 +482,10 @@ public static class AgentIsolation
     /// The variables that funnel a child's HTTP(S) traffic through
     /// <paramref name="proxyUrl"/>. Both spellings of each, because the tools an
     /// agent runs disagree: curl reads only lower-case <c>http_proxy</c>, while
-    /// most Node and Go clients read the upper-case forms.
+    /// most Node and Go clients read the upper-case forms. Node's built-in
+    /// <c>fetch</c> (corepack's downloads included) ignores all of them unless
+    /// <c>NODE_USE_ENV_PROXY=1</c>, which Node reads from v24.0.0 and v22.21.0;
+    /// older Node ignores it. Only that upper-case name exists.
     /// </summary>
     public static IReadOnlyDictionary<string, string> EgressProxyEnvironment(string proxyUrl)
         => new Dictionary<string, string>(StringComparer.Ordinal)
@@ -494,6 +498,7 @@ public static class AgentIsolation
             ["all_proxy"] = proxyUrl,
             ["NO_PROXY"] = EgressNoProxy,
             ["no_proxy"] = EgressNoProxy,
+            ["NODE_USE_ENV_PROXY"] = "1",
         };
 
     // Truly immutable so the shared sentinel cannot be mutated by a caller that

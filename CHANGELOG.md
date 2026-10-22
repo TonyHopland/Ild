@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **AutoMerge pull requests merge once CI is green even where the provider has no auto-merge; if Ild cannot merge one, it asks you to merge it by hand.**
 
+### Fixed
+
+- **Node tools an agent runs, corepack among them, reach the network through the egress proxy instead of timing out.**
+
 ## [0.20.0] - 2026-10-22
 
 ### Changed
