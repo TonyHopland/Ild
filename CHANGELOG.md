@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Agent runs and previews hold fewer database connections and leave no build servers running.**
+
 - **A failed Start or Cleanup step can be retried like any other failed step.**
 
 - **Going Back right after starting a chat shows the start form, not the new chat.**
