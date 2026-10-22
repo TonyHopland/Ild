@@ -8,6 +8,7 @@ import {
   appendPage,
   findLoadedItem,
   applyItem as applyItemTo,
+  type ApplyOptions,
   removeItem as removeItemFrom,
   type ColumnState,
   type TaskboardColumns,
@@ -304,12 +305,8 @@ export function useTaskboardColumns(filter: TaskboardFilter, onError: (message: 
   );
 
   const applyItem = useCallback(
-    (item: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
-      commitLive(
-        item.id,
-        item,
-        applyItemTo(boardRef.current, item, filterRef.current, { countAsNew }),
-      );
+    (item: WorkItem, options: ApplyOptions) => {
+      commitLive(item.id, item, applyItemTo(boardRef.current, item, filterRef.current, options));
     },
     [commitLive],
   );

@@ -39,17 +39,26 @@ function holderOf(board: TaskboardColumns, id: string): WorkItemStatus | undefin
   );
 }
 
+/** How a live copy of an item joins the board. */
+export interface ApplyOptions {
+  /** Count an item the board never held (a create). */
+  countAsNew: boolean;
+  /** The card the server just placed the item directly after, for a drop. */
+  placedAfter?: string;
+}
+
 /**
  * The column's loaded cards with `item` in its place in server order, or without
  * it when it sorts after the last loaded card of a column that has more on the
- * server, where it would be out of order.
+ * server, where it would be out of order — unless the server placed it directly
+ * after that card.
  */
-function placeInColumn(column: ColumnState, item: WorkItem): WorkItem[] {
+function placeInColumn(column: ColumnState, item: WorkItem, placedAfter?: string): WorkItem[] {
   const last = column.items[column.items.length - 1];
   const fits =
     column.loaded &&
     (column.items.length >= column.total ||
-      (last !== undefined && compareServerOrder(item, last) <= 0));
+      (last !== undefined && (compareServerOrder(item, last) <= 0 || last.id === placedAfter)));
   return fits
     ? insertInServerOrder(column.items, item)
     : column.items.filter((wi) => wi.id !== item.id);
@@ -68,12 +77,15 @@ export function applyItem(
   board: TaskboardColumns,
   item: WorkItem,
   filter: TaskboardFilter,
-  { countAsNew }: { countAsNew: boolean },
+  { countAsNew, placedAfter }: ApplyOptions,
 ): TaskboardColumns {
   const holder = holderOf(board, item.id);
   const matches = matchesTaskboardFilter(item, filter);
   if (holder === item.status && matches) {
-    return { ...board, [holder]: { ...board[holder], items: placeInColumn(board[holder], item) } };
+    return {
+      ...board,
+      [holder]: { ...board[holder], items: placeInColumn(board[holder], item, placedAfter) },
+    };
   }
 
   const next = { ...board };
@@ -90,7 +102,7 @@ export function applyItem(
 
   next[item.status] = {
     ...target,
-    items: placeInColumn(target, item),
+    items: placeInColumn(target, item, placedAfter),
     total: holder || countAsNew ? target.total + 1 : target.total,
   };
   return next;

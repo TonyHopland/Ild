@@ -24,7 +24,7 @@ import {
   sameTag,
   type TaskboardFilter,
 } from "../../utils/taskboardFilter";
-import { findLoadedItem } from "../../utils/taskboardColumns";
+import { findLoadedItem, type ApplyOptions } from "../../utils/taskboardColumns";
 import { useTaskboardColumns } from "./useTaskboardColumns";
 import { repositoryName } from "../../utils/repositoryName";
 import "./Taskboard.css";
@@ -285,8 +285,8 @@ export default function Taskboard() {
 
   // A created, edited or moved item: placed on the board, counted, its tags
   // reconciled with the chips, and refreshed in the dialog when it is the one open.
-  const showLiveItem = (wi: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
-    applyItem(wi, { countAsNew });
+  const showLiveItem = (wi: WorkItem, options: ApplyOptions) => {
+    applyItem(wi, options);
     requestCountsRefresh();
     requestTagsRefresh();
     setEditingItem((open) => (open?.id === wi.id ? wi : open));
@@ -300,14 +300,18 @@ export default function Taskboard() {
   };
 
   // A copy read back after this client changed the item: an answer, an edit, a
-  // move or a creation.
-  const showReadBack = (wi: WorkItem, { countAsNew }: { countAsNew: boolean }) => {
-    showLiveItem(wi, { countAsNew });
+  // move, a drop or a creation.
+  const showReadBack = (wi: WorkItem, options: ApplyOptions) => {
+    showLiveItem(wi, options);
     if (syncInFlightRef.current.has(wi.id)) syncWorkItem(wi.id, { itemChanged: false });
   };
 
   const handleWorkItemUpdate = (updated: WorkItem) => {
     showReadBack(updated, { countAsNew: false });
+  };
+
+  const handleWorkItemPlaced = (placed: WorkItem, placedAfter: string | undefined) => {
+    showReadBack(placed, { countAsNew: false, placedAfter });
   };
 
   const handleCreated = (created: WorkItem) => {
@@ -514,6 +518,7 @@ export default function Taskboard() {
                 workItems={column.items}
                 total={column.total}
                 onWorkItemUpdate={handleWorkItemUpdate}
+                onWorkItemPlaced={handleWorkItemPlaced}
                 onWorkItemClick={handleCardClick}
                 onError={(msg) => setErrorText(msg)}
                 onMoveWorkItem={handleMoveWorkItem}

@@ -721,12 +721,16 @@ public class WorkItemManager : IWorkItemManager
         if ((prev is null || prev.Priority < priority) && (next is null || priority < next.Priority))
             return await WritePriorityAsync(opts, actor, item.Id, priority) ? ReorderOutcome.Moved : ReorderOutcome.NotFound;
 
+        // The new numbers sit below every current one and are written from the top
+        // down, so at every step the items written so far lead the board in their
+        // new order and the rest follow in their old one: a renumber cut short
+        // leaves the board in order, and no card moves down a column on the way.
         rest.Insert(slot, item);
+        var first = board[0].Priority - rest.Count;
         var outcome = ReorderOutcome.Moved;
         for (var i = 0; i < rest.Count; i++)
         {
-            if (rest[i].Priority == i) continue;
-            var written = await WritePriorityAsync(opts, actor, rest[i].Id, i);
+            var written = await WritePriorityAsync(opts, actor, rest[i].Id, first + i);
             if (!written && rest[i] == item) outcome = ReorderOutcome.NotFound;
         }
         return outcome;

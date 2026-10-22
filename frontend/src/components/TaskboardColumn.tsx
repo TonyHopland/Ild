@@ -25,6 +25,9 @@ interface TaskboardColumnProps {
   // How many items the column holds on the server under the board filter.
   total: number;
   onWorkItemUpdate: (workItem: WorkItem) => void;
+  // A dropped card as read back from the server, with the card it now sits
+  // directly after; without it, the card goes to onWorkItemUpdate.
+  onWorkItemPlaced?: (workItem: WorkItem, placedAfter: string | undefined) => void;
   onWorkItemClick?: (workItem: WorkItem) => void;
   onError?: (message: string) => void;
   onMoveWorkItem?: (workItem: WorkItem, direction: "prev" | "next") => void;
@@ -51,6 +54,7 @@ export default function TaskboardColumn({
   workItems,
   total,
   onWorkItemUpdate,
+  onWorkItemPlaced,
   onWorkItemClick,
   onError,
   onMoveWorkItem,
@@ -131,13 +135,14 @@ export default function TaskboardColumn({
       if (others.length === 0) return;
     }
 
+    const aboveId = others[position - 1]?.id;
     try {
-      onWorkItemUpdate(
-        await workItemService.reorder(workItemId, {
-          aboveId: others[position - 1]?.id,
-          belowId: others[position]?.id,
-        }),
-      );
+      const placed = await workItemService.reorder(workItemId, {
+        aboveId,
+        belowId: others[position]?.id,
+      });
+      if (onWorkItemPlaced) onWorkItemPlaced(placed, aboveId);
+      else onWorkItemUpdate(placed);
     } catch (error) {
       report(error, "Failed to reorder work item.");
     }

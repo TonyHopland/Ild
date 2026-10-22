@@ -24,8 +24,8 @@ public interface IWorkItemManager
     /// after it in the whole board's order (every status), the card below only
     /// being checked to exist; otherwise directly before the card below. Only the
     /// item is written, unless no number is left between its new neighbours:
-    /// then the whole board is renumbered in the same order, writing only the
-    /// items whose value changes. Every written item is announced.
+    /// then the whole board is renumbered in the same order. Every written item
+    /// is announced.
     /// </summary>
     Task<ReorderOutcome> ReorderAsync(WorkItemActor actor, string workItemId, string? aboveId, string? belowId);
 
