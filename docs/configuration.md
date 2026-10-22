@@ -741,11 +741,12 @@ blocks nothing. Edits apply to the agent's **next connection** — no restart, a
 a host that is newly blacklisted has its open connections reset.
 
 Everything the agent runs is pointed at the proxy through `HTTP_PROXY`,
-`HTTPS_PROXY` and `ALL_PROXY` (both spellings), with loopback on `NO_PROXY` so
-the agent's MCP server still reaches ILD's own API directly. Every launch also
-gets `NODE_USE_ENV_PROXY=1`: Node's built-in `fetch` (corepack's downloads
-included) ignores the proxy variables without it and would connect directly.
-Node reads it from v24.0.0 and v22.21.0; older Node ignores it. A
+`HTTPS_PROXY` and `ALL_PROXY` (both spellings), with loopback on `NO_PROXY`
+(`localhost`, `127.0.0.1`, `::1` and `[::1]`, the bracketed form for Node's
+`fetch`) so the agent's MCP server still reaches ILD's own API directly. Every
+launch also gets `NODE_USE_ENV_PROXY=1`: Node's built-in `fetch` (corepack's
+downloads included) ignores the proxy variables without it and would connect
+directly. Node reads it from v24.0.0 and v22.21.0; older Node ignores it. A
 verification or test script that clears the proxy variables to run tests
 directly should clear `NODE_USE_ENV_PROXY` too. Two consequences:
 

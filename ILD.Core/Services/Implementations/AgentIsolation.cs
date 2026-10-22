@@ -103,9 +103,11 @@ public static class AgentIsolation
     /// <summary>
     /// Destinations a proxied child reaches directly: ILD's own API (the MCP
     /// callback at <c>ILD_API_URL</c>) and anything else on loopback, which the
-    /// agent uid's firewall rules let through untouched.
+    /// agent uid's firewall rules let through untouched. Node's fetch compares the
+    /// host with its brackets, so <c>::1</c> alone does not match
+    /// <c>http://[::1]:port</c>.
     /// </summary>
-    public const string EgressNoProxy = "localhost,127.0.0.1,::1";
+    public const string EgressNoProxy = "localhost,127.0.0.1,::1,[::1]";
 
     // The privilege-drop tool, by absolute path. Shipped by util-linux in the
     // image (Dockerfile installs it explicitly), so the location is ours to fix.
