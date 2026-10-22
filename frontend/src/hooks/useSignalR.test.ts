@@ -218,6 +218,7 @@ describe("useSignalR", () => {
     expect(onForEvent()).toBe(1);
     unmount();
   });
+
   test("a handler added while the hub reconnects receives events once it is back", async () => {
     localStorage.setItem("auth_token", "tok-1");
     authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
