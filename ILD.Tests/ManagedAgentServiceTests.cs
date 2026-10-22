@@ -1,6 +1,7 @@
 using System.Net;
 using System.Runtime.Versioning;
 using System.Text;
+using System.Text.Json;
 using ILD.Core.Services.Implementations;
 using ILD.Core.Services.Implementations.Adapters;
 using ILD.Core.Services.Interfaces;
@@ -446,12 +447,12 @@ public class ManagedAgentServiceTests : IDisposable
         await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
 
         Assert.NotNull(runner.PackageJsonDuringInstall);
-        using var doc = System.Text.Json.JsonDocument.Parse(runner.PackageJsonDuringInstall);
+        using var doc = JsonDocument.Parse(runner.PackageJsonDuringInstall);
         Assert.True(doc.RootElement.TryGetProperty("allowScripts", out var allowScripts));
-        Assert.Equal(System.Text.Json.JsonValueKind.Object, allowScripts.ValueKind);
+        Assert.Equal(JsonValueKind.Object, allowScripts.ValueKind);
         var entry = Assert.Single(allowScripts.EnumerateObject());
         Assert.Equal(_agent.NpmPackage, entry.Name);
-        Assert.Equal(System.Text.Json.JsonValueKind.True, entry.Value.ValueKind);
+        Assert.Equal(JsonValueKind.True, entry.Value.ValueKind);
 
         var install = Assert.Single(runner.Calls, c => c.Count > 1 && c[1] == "install");
         Assert.DoesNotContain(install, a => a.Contains("allow-all-scripts"));

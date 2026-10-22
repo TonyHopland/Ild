@@ -697,25 +697,26 @@ Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`,
 `NODE_RUNTIME_VERSION` and `NPM_VERSION`. With `WITH_NODE=1` the image installs
 Node `NODE_RUNTIME_VERSION` (24.22.1 by default) and then npm `NPM_VERSION`
 (12.2.0 by default) in place of the npm that Node ships, so repositories that
-require a newer npm in `devEngines` can run npm and npx. `NPM_VERSION` takes an
-exact version, not a range or `latest`: the build checks that npm reports
-exactly that version for both the `ild` and `agent` users, and fails otherwise.
-npm 12 skips the install scripts of a repository's dependencies unless its
-`package.json` approves them in `allowScripts`; the install still succeeds, so
-a dependency that needs its postinstall fails later. An empty `NPM_VERSION`
-keeps the npm bundled with Node. Compose replaces an
-empty value in `.env` with the default, so with compose pass
-`--build-arg NPM_VERSION=` to `docker compose build` instead. pnpm in the image
-comes only from Node's corepack, so each repository's `packageManager` picks its
-version. Node 25 and later no longer ship corepack, so an image built with such
-a `NODE_RUNTIME_VERSION` (including `latest`) has no pnpm.
+require a newer npm in `devEngines` can run npm and npx.
 
-With `WITH_DOTNET_SDK=1` the image is based on
-`mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION`, so the SDK available to agents
-tracks `DOTNET_VERSION` rather than a separate channel. It also carries the Azure
-Artifacts credential provider, pinned by `ARTIFACTS_CREDPROVIDER_VERSION`, which
-needs a `DOTNET_VERSION` whose SDK is 9.0.200 or later — see
-[Package feeds](#package-feeds).
+`NPM_VERSION` takes an exact version, not a range or `latest`: the build checks
+that npm reports exactly that version for both the `ild` and `agent` users, and
+fails otherwise. An empty `NPM_VERSION` keeps the npm bundled with Node.
+
+npm 12 skips the install scripts of a repository's dependencies unless its
+`package.json` approves them in `allowScripts`; the install still succeeds, so a
+dependency that needs its postinstall fails later.
+
+pnpm in the image comes only from Node's corepack, so each repository's
+`packageManager` picks its version. Node 25 and later no longer ship
+corepack, so an image built with such a `NODE_RUNTIME_VERSION` (including
+`latest`) has no pnpm.
+
+With `WITH_DOTNET_SDK=1` the image is based on `mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION`,
+so the SDK available to agents tracks `DOTNET_VERSION` rather than a separate
+channel. It also carries the Azure Artifacts credential provider, pinned by
+`ARTIFACTS_CREDPROVIDER_VERSION`, which needs a `DOTNET_VERSION` whose SDK is
+9.0.200 or later — see [Package feeds](#package-feeds).
 
 ### Agent network limits
 

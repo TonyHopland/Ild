@@ -30,7 +30,7 @@ pass() { echo "ok: $*"; }
 # --- 1. Build-arg defaults agree across the three files. ---------------------
 for var in NPM_VERSION NODE_RUNTIME_VERSION; do
   in_dockerfile="$(sed -n "s/^[[:space:]]*ARG[[:space:]]\{1,\}$var=\([^[:space:]]*\).*/\1/p" "$dockerfile" | head -n1)"
-  in_compose="$(sed -n "s/.*$var:[[:space:]]*\"\{0,1\}\${$var:-\([^}]*\)}.*/\1/p" "$compose_file" | head -n1)"
+  in_compose="$(sed -n "s/.*$var:[[:space:]]*\"\{0,1\}\${$var:\{0,1\}-\([^}]*\)}.*/\1/p" "$compose_file" | head -n1)"
   in_env="$(sed -n "s/^[[:space:]]*#\{0,1\}[[:space:]]*$var=\([^[:space:]]*\).*/\1/p" "$env_example" | head -n1)"
 
   if [ -z "$in_dockerfile" ] || [ -z "$in_compose" ] || [ -z "$in_env" ]; then
