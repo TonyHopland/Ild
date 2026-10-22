@@ -38,6 +38,7 @@ export default function Repositories() {
   const [packageFeedsError, setPackageFeedsError] = useState<string | null>(null);
   const [selectedFeeds, setSelectedFeeds] = useState<string[]>([]);
   const [keepPreviewData, setKeepPreviewData] = useState(false);
+  const [parallelism, setParallelism] = useState(0);
   // The .env is masked out of the repository list, so the plaintext is fetched only
   // once an edit is open — never behind the page load — and only for the repository
   // being edited: a response for a previously-edited one is dropped.
@@ -81,6 +82,7 @@ export default function Repositories() {
     setDefaultIntakeStatus(repo.defaultIntakeStatus);
     setSelectedFeeds(repo.packageFeeds?.map((f) => f.name) ?? []);
     setKeepPreviewData(repo.keepPreviewData ?? false);
+    setParallelism(repo.parallelism ?? 0);
     // Every form field starts from this repository, the .env included: a session
     // that was abandoned rather than saved must not carry into the new one.
     previewEnv.reset();
@@ -97,6 +99,7 @@ export default function Repositories() {
     setDefaultIntakeStatus(WorkItemStatus.Backlog);
     setSelectedFeeds([]);
     setKeepPreviewData(false);
+    setParallelism(0);
     previewEnv.reset();
   };
 
@@ -130,6 +133,7 @@ export default function Repositories() {
       defaultIntakeStatus,
       packageFeeds: selectedFeeds,
       keepPreviewData,
+      parallelism,
       // The .env rides along only when the user changed the prefilled text; emptying
       // it removes the stored value instead, which this write cannot express and the
       // commit below does.
@@ -503,6 +507,24 @@ export default function Repositories() {
                     }}
                   />
                 )}
+              </div>
+              <div className="form-group">
+                <label htmlFor="repoParallelism">Parallelism (0 = unlimited)</label>
+                <input
+                  id="repoParallelism"
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={parallelism}
+                  aria-describedby="repoParallelismHint"
+                  onChange={(e) =>
+                    setParallelism(Math.min(1000, Math.max(0, parseInt(e.target.value, 10) || 0)))
+                  }
+                />
+                <span className="repo-hint" id="repoParallelismHint">
+                  How many of this repository's work items run at once. The rest wait in Ready until
+                  one is Done.
+                </span>
               </div>
               <div className="form-group">
                 <span className="repo-group-label" id="repoPackageFeeds">

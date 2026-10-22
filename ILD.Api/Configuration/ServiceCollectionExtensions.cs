@@ -174,6 +174,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ILoopTemplateResolver, DbLoopTemplateResolver>();
         services.AddScoped<IWorkItemServerOptionsResolver, DbWorkItemServerOptionsResolver>();
         services.AddScoped<IRemoteWorkItemCoordinator, RemoteWorkItemCoordinator>();
+        services.AddSingleton<RepositoryParallelismHolds>();
         services.AddSingleton<IConfigureOptions<WorkItemSchedulerOptions>, WorkItemSchedulerOptionsConfigurator>();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IAiProviderConcurrencyTracker, AiProviderConcurrencyTracker>();

@@ -41,6 +41,7 @@ public class RepositoriesController : ControllerBase
         defaultIntakeStatus = r.DefaultIntakeStatus,
         hasPreviewEnv = !string.IsNullOrEmpty(r.PreviewEnv),
         keepPreviewData = r.KeepPreviewData,
+        parallelism = r.Parallelism,
         packageFeeds = r.PackageFeeds
             .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .Select(s => new { name = s.Name, missing = !existingFeeds.Contains(s.NormalizedName) }),
@@ -108,6 +109,7 @@ public class RepositoriesController : ControllerBase
             DefaultIntakeStatus = request.DefaultIntakeStatus,
             PreviewEnv = string.IsNullOrEmpty(request.PreviewEnv) ? null : request.PreviewEnv,
             KeepPreviewData = request.KeepPreviewData ?? false,
+            Parallelism = request.Parallelism ?? 0,
             CreatedAt = DateTime.UtcNow,
         };
         if (await SelectFeedsAsync(repo, request.PackageFeeds) is { } feedsError)
@@ -134,6 +136,7 @@ public class RepositoriesController : ControllerBase
         // that leaves the textarea blank keeps the stored .env (mirrors ApiKey).
         if (!string.IsNullOrEmpty(request.PreviewEnv)) repo.PreviewEnv = request.PreviewEnv;
         if (request.KeepPreviewData is { } keepPreviewData) repo.KeepPreviewData = keepPreviewData;
+        if (request.Parallelism is { } parallelism) repo.Parallelism = parallelism;
         repo.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return Ok(await ResponseAsync(repo));

@@ -93,6 +93,7 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
     private readonly ILogger<WorkItemScheduler> _log;
     private readonly TimeProvider _time;
     private readonly IShutdownState _shutdown;
+    private readonly RepositoryParallelismHolds? _repositoryHolds;
     private readonly SemaphoreSlim _pulse = new(0, 1);
 
     public WorkItemScheduler(
@@ -100,13 +101,15 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
         IOptionsMonitor<WorkItemSchedulerOptions> options,
         ILogger<WorkItemScheduler> log,
         TimeProvider time,
-        IShutdownState? shutdown = null)
+        IShutdownState? shutdown = null,
+        RepositoryParallelismHolds? repositoryHolds = null)
     {
         _scopes = scopes;
         _options = options;
         _log = log;
         _time = time;
         _shutdown = shutdown ?? ShutdownState.NeverStopping;
+        _repositoryHolds = repositoryHolds;
     }
 
     public void Pulse()
@@ -126,9 +129,10 @@ public sealed class WorkItemScheduler : BackgroundService, IWorkItemScheduler
 
             if (!opts.Enabled || string.IsNullOrWhiteSpace(opts.BaseUrl))
             {
-                // Switched off: whatever we last saw about the cap is no longer
-                // something we are watching.
+                // Switched off: whatever we last saw about the cap or the
+                // repository limits is no longer something we are watching.
                 capStalls.Reset();
+                _repositoryHolds?.Clear();
                 await WaitForNextPassAsync(opts.PollInterval, stoppingToken);
                 continue;
             }

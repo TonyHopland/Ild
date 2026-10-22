@@ -292,4 +292,29 @@ describe("WorkItemCard", () => {
     expect(screen.getByText("5s")).toBeTruthy();
     expect(container.querySelector(".work-item-step")).toBeNull();
   });
+
+  test("a Ready card held by its repository's parallelism limit says so", () => {
+    render(
+      <WorkItemCard
+        workItem={makeItem({
+          status: WorkItemStatus.Ready,
+          repositoryParallelismHold: { inProgress: 2, limit: 1 },
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByText("Waiting: repository parallelism limit (2/1 in progress)"),
+    ).toBeTruthy();
+  });
+
+  test("a Ready card without a parallelism hold shows no waiting reason", () => {
+    const { container } = render(
+      <WorkItemCard
+        workItem={makeItem({ status: WorkItemStatus.Ready, repositoryParallelismHold: null })}
+      />,
+    );
+
+    expect(container.textContent).not.toContain("repository parallelism limit");
+  });
 });

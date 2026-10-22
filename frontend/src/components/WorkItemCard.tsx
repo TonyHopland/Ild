@@ -115,6 +115,11 @@ export default function WorkItemCard({
           </span>
         </div>
       )}
+      {workItem.status === WorkItemStatus.Ready && workItem.repositoryParallelismHold && (
+        <div className="work-item-repository-hold">
+          {`Waiting: repository parallelism limit (${workItem.repositoryParallelismHold.inProgress}/${workItem.repositoryParallelismHold.limit} in progress)`}
+        </div>
+      )}
       {prBadges.length > 0 && (
         <div className="work-item-pr-badges">
           {prBadges.map((badge) => (
@@ -218,6 +223,12 @@ export default function WorkItemCard({
         }
 
         .human-feedback-badge {
+          margin-bottom: 0.375rem;
+        }
+
+        .work-item-repository-hold {
+          font-size: var(--fs-xs);
+          color: var(--text-2);
           margin-bottom: 0.375rem;
         }
 

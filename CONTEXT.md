@@ -142,7 +142,7 @@ An AI node whose adapter reported a failure the provider caused rather than the 
 _Avoid_: rate limit error, provider failure, backoff
 
 **Ready**:
-WorkItem status meaning all dependencies are Done and the work item can begin execution.
+WorkItem status meaning all dependencies are Done and the work item can begin execution. A Ready item stays Ready while its repository's parallelism limit is reached: the repository's Running, Human Feedback and WaitingForIld items each hold a slot until they are Done.
 _Avoid_: available, queued
 
 **Backlog**:

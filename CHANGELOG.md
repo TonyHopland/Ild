@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A repository can limit how many of its work items run at once; the rest wait in Ready.**
+
 ### Fixed
 
 - **A failed Start or Cleanup step can be retried like any other failed step.**

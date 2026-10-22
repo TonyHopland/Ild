@@ -33,6 +33,7 @@ public class WorkItemManager : IWorkItemManager
     private readonly IRunReclaimer _runReclaimer;
     private readonly IRemoteProvider? _remoteProvider;
     private readonly ILogger<WorkItemManager> _logger;
+    private readonly RepositoryParallelismHolds _repositoryHolds;
 
     public WorkItemManager(
         IRepositoryManager repoManager,
@@ -48,7 +49,8 @@ public class WorkItemManager : IWorkItemManager
         ILoopEngine? engine = null,
         IRunReclaimer? runReclaimer = null,
         IRemoteProvider? remoteProvider = null,
-        ILogger<WorkItemManager>? logger = null)
+        ILogger<WorkItemManager>? logger = null,
+        RepositoryParallelismHolds? repositoryHolds = null)
     {
         _repoManager = repoManager;
         _providerStore = providerStore;
@@ -64,6 +66,7 @@ public class WorkItemManager : IWorkItemManager
         _runReclaimer = runReclaimer ?? new RunReclaimer(repoManager, providerStore, _previewService, _notifier);
         _remoteProvider = remoteProvider;
         _logger = logger ?? NullLogger<WorkItemManager>.Instance;
+        _repositoryHolds = repositoryHolds ?? new RepositoryParallelismHolds();
     }
 
     /// <summary>
@@ -459,7 +462,7 @@ public class WorkItemManager : IWorkItemManager
     private static LoopRun? LatestRun(IEnumerable<LoopRun> runs)
         => runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).ThenByDescending(r => r.Id).FirstOrDefault();
 
-    private static WorkItemView BuildView(
+    private WorkItemView BuildView(
         RemoteWorkItem remote,
         LoopRun? run,
         IReadOnlyList<LoopRun> runs,
@@ -504,6 +507,8 @@ public class WorkItemManager : IWorkItemManager
             PullRequests = BuildPrHistory(remote, runs),
             Attachments = remote.Attachments,
             PendingEditProposalCount = remote.PendingEditProposalCount,
+            // The latest pass's hold is only meaningful while the item is still Ready.
+            RepositoryParallelismHold = remote.Status == RemoteWorkItemStatus.Ready ? _repositoryHolds.Get(remote.Id) : null,
         };
     }
 

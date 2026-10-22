@@ -56,6 +56,12 @@ public sealed class PollCycleResult
     /// to say so: it knows the cadence, and this pass does not.
     /// </summary>
     public bool BlockedByCap { get; init; }
+
+    /// <summary>
+    /// Ready items left in Ready because their repository had reached its
+    /// parallelism limit. Never counted towards <see cref="BlockedByCap"/>.
+    /// </summary>
+    public IReadOnlyList<RemoteWorkItem> HeldByRepositoryLimit { get; init; } = Array.Empty<RemoteWorkItem>();
 }
 
 public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
@@ -69,6 +75,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
     private readonly IAiProviderConcurrencyTracker? _aiTracker;
     private readonly IWorkItemNotifier _workItemNotifier;
     private readonly ILogger<RemoteWorkItemCoordinator>? _logger;
+    private readonly RepositoryParallelismHolds _repositoryHolds;
 
     public RemoteWorkItemCoordinator(
         IWorkItemServerClient client,
@@ -79,7 +86,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         IProviderStore? providerStore = null,
         IAiProviderConcurrencyTracker? aiTracker = null,
         IWorkItemNotifier? workItemNotifier = null,
-        ILogger<RemoteWorkItemCoordinator>? logger = null)
+        ILogger<RemoteWorkItemCoordinator>? logger = null,
+        RepositoryParallelismHolds? repositoryHolds = null)
     {
         _client = client;
         _resolver = resolver;
@@ -90,6 +98,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         _aiTracker = aiTracker;
         _workItemNotifier = workItemNotifier ?? new NoopWorkItemNotifier();
         _logger = logger;
+        _repositoryHolds = repositoryHolds ?? new RepositoryParallelismHolds();
     }
 
     public async Task<PollCycleResult> RunPollCycleAsync(WorkItemServerOptions opts, int maxConcurrent, bool claimReadyItems = true, CancellationToken ct = default)
@@ -190,11 +199,23 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
         var hasActiveHumanFeedback = poll.ActiveItems.Any(w => w.Status == RemoteWorkItemStatus.HumanFeedback);
         var blockedByCap = false;
 
+        // Counted even while paused: the board shows which Ready items wait on
+        // their repository either way. A failure here fails the pass before any
+        // claim, so a limit whose slots cannot be counted is never exceeded.
+        var repositorySlots = await CountRepositorySlotsAsync(opts, poll.ReadyItems, ct);
+        RepositorySlots? SlotsOf(RemoteWorkItem w)
+            => w.RepositoryId is { } id ? repositorySlots.GetValueOrDefault(id) : null;
+        var attempted = new HashSet<string>(StringComparer.Ordinal);
+
         // While paused, leave Ready items untouched: the whole claim loop is the
         // auto-promotion path, so skipping it is what "pause" means. A human can
         // still promote a Ready item to Running manually via the transition API.
         foreach (var ready in claimReadyItems ? poll.ReadyItems : Enumerable.Empty<RemoteWorkItem>())
         {
+            // Before the global cap and template resolution, so an item its
+            // repository holds back is left exactly as it is: still Ready, with
+            // no transition and no status reason. It is reported after the loop.
+            if (SlotsOf(ready) is { Full: true }) continue;
             if (slotHolders.Count >= maxConcurrent)
             {
                 // There is Ready work and no room for it. This pass is the only
@@ -206,6 +227,7 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                 break;
             }
             if (ct.IsCancellationRequested) break;
+            attempted.Add(ready.Id);
 
             var resolution = _resolver.Resolve(ready.Tags);
             if (resolution.Kind != LoopTemplateResolutionKind.Single)
@@ -232,6 +254,8 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                 await _workItemNotifier.WorkItemStateChangedAsync(
                     ready.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.HumanFeedback);
                 escalated.Add(ready);
+                // Needs you holds a repository slot, so this item takes one.
+                SlotsOf(ready)?.Take();
                 continue;
             }
 
@@ -244,6 +268,10 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             {
                 slotHolders.Add(ready.Id);
                 claimed.Add(ready);
+                // Unlike the global slot, never handed back in this pass: a run
+                // that fails to start leaves the item in Running or HumanFeedback,
+                // and both hold the repository slot.
+                SlotsOf(ready)?.Take();
 
                 // The raw client claim above bypasses WorkItemManager, and
                 // the engine's subsequent transition is a no-op (prev ==
@@ -300,12 +328,35 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                     }
                 }
             }
-            // Lost-claim race (another instance got there first) is silently
-            // skipped — the next poll will simply not see the item again.
+            else if (RepositorySlotStatuses.Contains(claim.ActualStatus))
+            {
+                // Lost-claim race: another instance got there first, so the
+                // item is in progress all the same and holds its repository
+                // slot. The next poll will simply not see it again.
+                SlotsOf(ready)?.Take();
+            }
         }
+
+        // Counts only grow within a pass, so an item skipped above is still
+        // held here; this also catches items the global cap or a cancellation
+        // never let the loop reach, and every Ready item while paused.
+        var held = poll.ReadyItems
+            .Where(w => !attempted.Contains(w.Id) && SlotsOf(w) is { Full: true })
+            .ToList();
+        var changed = _repositoryHolds.Replace(held.ToDictionary(
+            w => w.Id, w => SlotsOf(w)!.ToHold(), StringComparer.Ordinal));
+        // Only items still Ready: claimed and escalated ones have had their own
+        // event this pass, and one that left Ready since the last pass must not
+        // be announced as Ready.
+        var stillReady = poll.ReadyItems.Select(w => w.Id)
+            .Except(claimed.Concat(escalated).Select(w => w.Id), StringComparer.Ordinal)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var id in changed.Where(stillReady.Contains))
+            await _workItemNotifier.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Ready);
 
         return new PollCycleResult
         {
+            HeldByRepositoryLimit = held,
             Claimed = claimed,
             Resumed = resumed,
             EscalatedToHumanFeedback = escalated,
@@ -313,6 +364,57 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             SlotHolders = slotHolders.OrderBy(id => id, StringComparer.Ordinal).ToList(),
             BlockedByCap = blockedByCap,
         };
+    }
+
+    private static readonly RemoteWorkItemStatus[] RepositorySlotStatuses =
+    [
+        RemoteWorkItemStatus.Running,
+        RemoteWorkItemStatus.HumanFeedback,
+        RemoteWorkItemStatus.WaitingForIld,
+    ];
+
+    /// <summary>
+    /// The slot ledger of every repository with a parallelism limit that has
+    /// an item in <paramref name="ready"/>. A repository's slots are taken by
+    /// its items on the board in Running, HumanFeedback or WaitingForIld —
+    /// read off the server rather than the local runs, because an item can
+    /// sit in HumanFeedback with no run behind it. Makes no server call when
+    /// no such repository exists.
+    /// </summary>
+    private async Task<Dictionary<Guid, RepositorySlots>> CountRepositorySlotsAsync(
+        WorkItemServerOptions opts, IReadOnlyList<RemoteWorkItem> ready, CancellationToken ct)
+    {
+        var slots = new Dictionary<Guid, RepositorySlots>();
+        if (_providerStore == null) return slots;
+        foreach (var repositoryId in ready.Select(w => w.RepositoryId).OfType<Guid>().Distinct())
+        {
+            var repository = await _providerStore.GetRepositoryByIdAsync(repositoryId);
+            if (repository is { Parallelism: > 0 })
+                slots[repositoryId] = new RepositorySlots(repository.Parallelism);
+        }
+        if (slots.Count == 0) return slots;
+
+        var holders = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var status in RepositorySlotStatuses)
+        {
+            foreach (var w in await _client.ListAsync(opts, status, null, ct))
+            {
+                if (w.RepositoryId is { } id && slots.TryGetValue(id, out var repositorySlots) && holders.Add(w.Id))
+                    repositorySlots.Take();
+            }
+        }
+        return slots;
+    }
+
+    private sealed class RepositorySlots(int limit)
+    {
+        private int _inProgress;
+
+        public bool Full => _inProgress >= limit;
+
+        public void Take() => _inProgress++;
+
+        public RepositoryParallelismHold ToHold() => new(_inProgress, limit);
     }
 
     /// <summary>
