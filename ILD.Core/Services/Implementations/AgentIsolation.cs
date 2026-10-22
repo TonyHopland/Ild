@@ -103,9 +103,10 @@ public static class AgentIsolation
     /// <summary>
     /// Destinations a proxied child reaches directly: ILD's own API (the MCP
     /// callback at <c>ILD_API_URL</c>) and anything else on loopback, which the
-    /// agent uid's firewall rules let through untouched. Node's fetch compares the
-    /// host with its brackets, so <c>::1</c> alone does not match
-    /// <c>http://[::1]:port</c>.
+    /// agent uid's firewall rules let through untouched. Both IPv6 spellings,
+    /// because Node's fetch, .NET's HttpClient and npm compare the host with its
+    /// brackets, so <c>::1</c> alone does not match <c>http://[::1]:port</c> for
+    /// them, while curl and Node's http module match only the bare form.
     /// </summary>
     public const string EgressNoProxy = "localhost,127.0.0.1,::1,[::1]";
 
