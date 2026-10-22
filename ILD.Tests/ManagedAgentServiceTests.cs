@@ -39,6 +39,9 @@ public class ManagedAgentServiceTests : IDisposable
         // Mode of the --prefix dir observed at the moment the install runs, i.e.
         // while the tree is half-built. Null until an install happens.
         public UnixFileMode? PrefixModeDuringInstall;
+        // The --prefix dir's package.json as npm would read it when the install
+        // starts. Null if there was none.
+        public string? PackageJsonDuringInstall;
         public List<IReadOnlyList<string>> Calls { get; } = new();
 
         // Concurrency instrumentation: when InstallGate is set, an install
@@ -71,6 +74,9 @@ public class ManagedAgentServiceTests : IDisposable
                     var prefix = ArgValue(args, "--prefix")!;
                     if (OperatingSystem.IsLinux())
                         PrefixModeDuringInstall = File.GetUnixFileMode(prefix);
+                    var packageJson = Path.Combine(prefix, "package.json");
+                    if (File.Exists(packageJson))
+                        PackageJsonDuringInstall = File.ReadAllText(packageJson);
                     if (InstallSucceeds && ProduceBinary)
                     {
                         var binDir = Path.Combine(prefix, "node_modules", ".bin");
@@ -425,6 +431,30 @@ public class ManagedAgentServiceTests : IDisposable
         Assert.Equal("0.80.2", status.InstalledVersion);
         // npm was asked to install the latest published version.
         Assert.Contains(runner.Calls, c => c.Contains("install") && c.Any(a => a.Contains("@latest")));
+    }
+
+    [Fact]
+    public async Task Install_approves_install_scripts_for_the_agent_package_only()
+    {
+        // npm 12 skips dependency install scripts unless the project's package.json
+        // allows them, and still exits 0, so an agent CLI that needs its
+        // postinstall would install "successfully" and then not run.
+        var runner = new FakeRunner { VersionAfterInstall = "0.80.2" };
+        var handler = new RegistryHandler { Version = "0.80.2" };
+        var service = CreateService(runner, handler);
+
+        await service.UpdateAsync(_agent.Key, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(runner.PackageJsonDuringInstall);
+        using var doc = System.Text.Json.JsonDocument.Parse(runner.PackageJsonDuringInstall);
+        Assert.True(doc.RootElement.TryGetProperty("allowScripts", out var allowScripts));
+        Assert.Equal(System.Text.Json.JsonValueKind.Object, allowScripts.ValueKind);
+        var entry = Assert.Single(allowScripts.EnumerateObject());
+        Assert.Equal(_agent.NpmPackage, entry.Name);
+        Assert.Equal(System.Text.Json.JsonValueKind.True, entry.Value.ValueKind);
+
+        var install = Assert.Single(runner.Calls, c => c.Count > 1 && c[1] == "install");
+        Assert.DoesNotContain(install, a => a.Contains("allow-all-scripts"));
     }
 
     [Fact]
