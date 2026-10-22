@@ -445,6 +445,7 @@ public sealed class CodexAdapterTests : IDisposable
             Assert.Equal(proxy, env.GetProperty("HTTP_PROXY").GetString());
             Assert.Equal(proxy, env.GetProperty("https_proxy").GetString());
             Assert.Equal("docs.example.com", env.GetProperty("NO_PROXY").GetString());
+            Assert.Equal("1", env.GetProperty("NODE_USE_ENV_PROXY").GetString());
         }
 
         // A name codex cannot take as a -c key is skipped, and the log says which.
@@ -497,6 +498,7 @@ public sealed class CodexAdapterTests : IDisposable
         // No proxy configured, so none is set for the server.
         using var launch = JsonDocument.Parse(ReadCopy(launchFile));
         Assert.False(launch.RootElement.GetProperty("env").TryGetProperty("HTTP_PROXY", out _));
+        Assert.False(launch.RootElement.GetProperty("env").TryGetProperty("NODE_USE_ENV_PROXY", out _));
         Assert.Empty(ConfigFilesLeft());
     }
 
