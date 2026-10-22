@@ -14,13 +14,22 @@ RUN apk add --no-cache git || (apt-get update && apt-get install -y --no-install
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY frontend/package.json frontend/
 
-# Install pnpm. Prefer corepack if available (Node <=24), otherwise install
-# pnpm directly via npm (Node 25+ unbundled corepack).
+# Install the pnpm that package.json's packageManager pins, so the lockfile is
+# read by the version that wrote it. Corepack (Node <=24) reads the pin itself
+# when given no version; Node 25+ no longer ships corepack, so there the pin is
+# read from package.json (minus any +sha suffix) and installed with npm. No pin
+# fails the build rather than guessing a version.
 RUN if command -v corepack >/dev/null 2>&1; then \
-      corepack enable && corepack prepare pnpm@latest --activate; \
+      corepack enable && corepack prepare --activate; \
     else \
-      npm install -g pnpm@latest; \
+      pnpm_version="$(node -p "(/^pnpm@([^+]+)/.exec(require('./package.json').packageManager || '') || [])[1] || ''")" && \
+      if [ -z "$pnpm_version" ]; then \
+        echo "package.json has no pnpm packageManager pin to install" >&2; \
+        exit 1; \
+      fi && \
+      npm install -g "pnpm@$pnpm_version"; \
     fi && \
+    pnpm --version && \
     pnpm install --frozen-lockfile
 
 # Copy frontend source and build
@@ -67,7 +76,8 @@ FROM final-base-${WITH_DOTNET_SDK} AS final
 WORKDIR /app
 
 ARG WITH_NODE=0
-ARG NODE_RUNTIME_VERSION=24.15.0
+ARG NODE_RUNTIME_VERSION=24.22.1
+ARG NPM_VERSION=12.2.0
 ARG WITH_CHROME=0
 ARG WITH_CERTS=0
 ARG APP_UID=10001
@@ -152,6 +162,20 @@ RUN git config --system --add safe.directory '*'
 # from the AI Provider page (npm-based), so they can be updated without
 # rebuilding the image and survive redeploys. Node/npm below (WITH_NODE) is
 # what those runtime installs and version checks use.
+#
+# NPM_VERSION replaces the npm that ships with Node, because repositories that
+# pin a newer npm in devEngines fail every npm/npx command under an older one.
+# Empty keeps Node's bundled npm. It is installed into the prefix Node was
+# extracted to, so /usr/local/bin/npm is that npm for every uid and in the login
+# shells previews run in, which reset PATH; the cache is a throwaway directory so
+# nothing lands under a home. The smoke check runs it as the agent and as ild
+# from a login shell, each with a throwaway HOME, and fails the build unless
+# both report NPM_VERSION.
+#
+# pnpm comes only from corepack, which leaves each repository's packageManager
+# to decide the version. Node 25+ no longer ships corepack, so there the image
+# has no pnpm: no pin applies at image level, and a global pnpm would override
+# every repository's own.
 RUN if [ "$WITH_NODE" = "1" ]; then \
   apt-get update && \
   apt-get install -y --no-install-recommends curl xz-utils && \
@@ -167,7 +191,22 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
   curl -fsSL "https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/node-v${NODE_RUNTIME_VERSION}-linux-${NODE_ARCH}.tar.xz" -o node.tar.xz && \
   tar -xf node.tar.xz -C /usr/local --strip-components=1 && \
   rm node.tar.xz && \
-  if command -v corepack >/dev/null 2>&1; then corepack enable; else npm install -g pnpm@latest; fi && \
+  if command -v corepack >/dev/null 2>&1; then corepack enable; fi && \
+  if [ -n "$NPM_VERSION" ]; then \
+    npm install -g --prefix /usr/local --cache /tmp/npm-install-cache --no-audit --no-fund "npm@$NPM_VERSION" && \
+    rm -rf /tmp/npm-install-cache /root/.npm && \
+    for ids in "${AGENT_UID}:${AGENT_GID}" "${APP_UID}:${APP_GID}"; do \
+      actual= && \
+      smoke_home="$(mktemp -d)" && \
+      chown "$ids" "$smoke_home" && \
+      actual="$(gosu "$ids" env HOME="$smoke_home" sh -lc 'npm --version')"; \
+      rm -rf "$smoke_home"; \
+      if [ "$actual" != "$NPM_VERSION" ]; then \
+        echo "npm as $ids reports '$actual', but NPM_VERSION=$NPM_VERSION" >&2; \
+        exit 1; \
+      fi; \
+    done; \
+  fi && \
   apt-get purge -y curl xz-utils && \
   apt-get autoremove -y && \
   rm -rf /var/lib/apt/lists/*; \
@@ -219,7 +258,7 @@ fi
 # endpoint, so the image is never built unless the agent's NuGet can find and run it.
 ARG WITH_DOTNET_SDK
 ARG DOTNET_VERSION
-ARG ARTIFACTS_CREDPROVIDER_VERSION=2.0.4
+ARG ARTIFACTS_CREDPROVIDER_VERSION=2.0.5
 RUN if [ "$WITH_DOTNET_SDK" = "1" ]; then \
   sdk_version="$(dotnet --version)" && \
   if ! printf '%s\n' "$sdk_version" | awk -F. '{ exit !($1 > 9 || ($1 == 9 && ($2 > 0 || $3 + 0 >= 200))) }'; then \

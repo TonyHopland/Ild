@@ -33,6 +33,9 @@ jobs:
       - name: Compose credential tests
         run: .github/scripts/compose-credentials.test.sh
 
+      - name: Image toolchain pin tests
+        run: .github/scripts/image-toolchain-pins.test.sh
+
   frontend:
     runs-on: ubuntu-latest
     steps:
