@@ -23,13 +23,6 @@ export enum WorkItemStatus {
   Done = "Done",
 }
 
-export enum WorkItemPriority {
-  Low = "Low",
-  Medium = "Medium",
-  High = "High",
-  Critical = "Critical",
-}
-
 /**
  * How a work item overrides the AI provider its AI nodes run against.
  * {@link None} leaves each node's own provider choice untouched;
@@ -48,7 +41,8 @@ export interface WorkItem {
   title: string;
   description: string;
   status: WorkItemStatus;
-  priority: WorkItemPriority;
+  /** The item's place in the board order: lower comes first, see `compareServerOrder`. */
+  priority: number;
   tags: string[];
   /**
    * Deprecated: template is resolved from {@link tags} at run start

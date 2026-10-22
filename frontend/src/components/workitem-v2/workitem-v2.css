@@ -64,14 +64,6 @@
   text-overflow: ellipsis;
 }
 
-.wiv2-priority {
-  font-size: 0.72rem;
-  color: #a0a0b0;
-  border: 1px solid #3a3a5c;
-  border-radius: 0.25rem;
-  padding: 0.15rem 0.4rem;
-}
-
 .wiv2-header-actions {
   display: flex;
   align-items: center;

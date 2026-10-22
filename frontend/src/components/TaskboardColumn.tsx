@@ -63,6 +63,9 @@ export default function TaskboardColumn({
   onFoldChange,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
+  // Where a card dragged over the column would land: before the loaded card at
+  // this index, or after the last one at the end.
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
   // Any column folds to a strip and opens again from it. Until the user
   // chooses, Done and the empty columns other than Running start folded, so the
   // busy ones get the room. A folded column opens while a card is dragged over it.
@@ -75,32 +78,68 @@ export default function TaskboardColumn({
   const needsYou = status === WorkItemStatus.HumanFeedback && !empty;
   const hasMore = onLoadMore !== undefined && workItems.length < total;
 
+  // On a card's upper half the drop spot is above it, on its lower half below
+  // it; anywhere else in the column it is below the last loaded card.
+  const dropIndexAt = (e: React.DragEvent): number => {
+    const card = e.target instanceof Element ? e.target.closest("[data-work-item-id]") : null;
+    const index = card
+      ? workItems.findIndex((wi) => wi.id === card.getAttribute("data-work-item-id"))
+      : -1;
+    if (index < 0) return workItems.length;
+    const { top, height } = card!.getBoundingClientRect();
+    return e.clientY < top + height / 2 ? index : index + 1;
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(true);
+    setDropIndex(dropIndexAt(e));
   };
 
   const handleDragLeave = () => {
     setDragOver(false);
+    setDropIndex(null);
+  };
+
+  const report = (error: unknown, fallback: string) => {
+    const msg = errorMessage(error, fallback);
+    if (onError) onError(msg);
+    else console.error(fallback, error);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    const index = dropIndexAt(e);
     setDragOver(false);
+    setDropIndex(null);
 
     const workItemId = e.dataTransfer.getData("text/plain");
     if (!workItemId) return;
 
-    // Ignore drops into the same column — nothing to do
-    const existingItem = workItems.find((item) => item.id === workItemId);
-    if (existingItem?.status === status) return;
+    const fromThisColumn = workItems.some((wi) => wi.id === workItemId);
+    const others = workItems.filter((wi) => wi.id !== workItemId);
+    const position = workItems.slice(0, index).filter((wi) => wi.id !== workItemId).length;
+    if (fromThisColumn && workItems[position]?.id === workItemId) return;
+
+    if (!fromThisColumn) {
+      try {
+        onWorkItemUpdate(await workItemService.moveTo(workItemId, status));
+      } catch (error) {
+        report(error, "Failed to update work item status.");
+        return;
+      }
+      if (others.length === 0) return;
+    }
 
     try {
-      onWorkItemUpdate(await workItemService.moveTo(workItemId, status));
+      onWorkItemUpdate(
+        await workItemService.reorder(workItemId, {
+          aboveId: others[position - 1]?.id,
+          belowId: others[position]?.id,
+        }),
+      );
     } catch (error) {
-      const msg = errorMessage(error, "Failed to update work item status.");
-      if (onError) onError(msg);
-      else console.error("Failed to update work item status:", error);
+      report(error, "Failed to reorder work item.");
     }
   };
 
@@ -135,6 +174,7 @@ export default function TaskboardColumn({
       data-status={status}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
+      onDragEnd={handleDragLeave}
       onDrop={handleDrop}
     >
       {!alone && (
@@ -156,10 +196,17 @@ export default function TaskboardColumn({
       )}
       <div className="taskboard-column-body">
         {empty && <p className="taskboard-column-empty">{EMPTY_HINT[status]}</p>}
-        {workItems.map((item) => (
+        {workItems.map((item, i) => (
           <WorkItemCard
             key={item.id}
             workItem={item}
+            dropEdge={
+              dropIndex === i
+                ? "above"
+                : dropIndex === workItems.length && i === workItems.length - 1
+                  ? "below"
+                  : undefined
+            }
             onClick={onWorkItemClick}
             onMove={onMoveWorkItem}
             loopTemplateNames={loopTemplateNames}

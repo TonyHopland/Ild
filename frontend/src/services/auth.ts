@@ -388,6 +388,14 @@ export const workItemService = {
     return workItemService.getById(id);
   },
 
+  /**
+   * Places an item where it was dropped on the board, between the cards directly
+   * above and below the drop spot in its column, and reads it back.
+   */
+  reorder: async (id: string, spot: { aboveId?: string; belowId?: string }): Promise<WorkItem> => {
+    return api.post<WorkItem>(`/workitems/${id}/reorder`, spot);
+  },
+
   getDependencies: async (
     id: string,
     opts?: { skip?: number; take?: number },
