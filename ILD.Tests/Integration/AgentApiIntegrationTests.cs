@@ -1114,6 +1114,19 @@ public class AgentApiIntegrationTests
     }
 
     [Fact]
+    public async Task ListWorkItems_refuses_the_removed_priority_filter_and_points_at_board_order()
+    {
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+
+        var resp = await client.GetAsync("/api/v1/agent/workitems?priority=High", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        var error = (await resp.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("error").GetString();
+        Assert.Contains("orderBy=priority", error);
+    }
+
+    [Fact]
     public async Task ListWorkItems_exposes_dependency_and_reverse_edges()
     {
         await using var factory = new ApiFactory();

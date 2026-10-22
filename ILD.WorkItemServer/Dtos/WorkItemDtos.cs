@@ -143,6 +143,56 @@ public sealed class TransitionResponse
 }
 
 /// <summary>
+/// A card dropped on the board, named by the cards directly above and below the
+/// drop spot in its column: with <see cref="AboveId"/> the item lands directly
+/// after that item in the whole board's order, otherwise directly before
+/// <see cref="BelowId"/>. A <see cref="TargetStatus"/> other than the item's
+/// own moves it there too, by the rules of a transition and in the same
+/// transaction, so the item either lands in place in its new column or does not
+/// move at all.
+/// </summary>
+public sealed class ReorderWorkItemRequest
+{
+    public string? AboveId { get; set; }
+    public string? BelowId { get; set; }
+    public WorkItemStatus? TargetStatus { get; set; }
+
+    /// <summary>As on a transition: the feedback actions, and why the item moves.</summary>
+    public string? Actions { get; set; }
+    public string? Reason { get; set; }
+}
+
+public enum ReorderWorkItemOutcome
+{
+    Moved = 0,
+
+    /// <summary>The item to move does not exist.</summary>
+    NotFound = 1,
+
+    /// <summary>No neighbour was given, or one is the item itself or does not exist.</summary>
+    InvalidNeighbour = 2,
+
+    /// <summary>The move to the target status was refused; <see cref="ReorderWorkItemResponse.Reason"/> says why.</summary>
+    TransitionRefused = 3,
+}
+
+public sealed class ReorderWorkItemResponse
+{
+    public ReorderWorkItemOutcome Outcome { get; set; }
+
+    /// <summary>The item as it now is, when it moved.</summary>
+    public WorkItemDto? Item { get; set; }
+
+    /// <summary>
+    /// No number was left between the neighbours, so every item of the board was
+    /// given a new one, in the same order. Readers holding order values re-read them.
+    /// </summary>
+    public bool Renumbered { get; set; }
+
+    public string? Reason { get; set; }
+}
+
+/// <summary>
 /// What came of recording a PR against a work item. Distinguished rather than
 /// collapsed into a bool because they mean different things to a caller: only
 /// <see cref="NotFound"/> says the request will never succeed, while

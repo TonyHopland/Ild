@@ -9,4 +9,10 @@ public class WorkItemReorderRequest
     public string? AboveId { get; set; }
 
     public string? BelowId { get; set; }
+
+    /// <summary>
+    /// The column the card was dropped in, by status name, when it came from
+    /// another one. Null keeps the item's status.
+    /// </summary>
+    public string? TargetStatus { get; set; }
 }

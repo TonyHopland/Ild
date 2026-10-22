@@ -135,6 +135,26 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         };
     }
 
+    public async Task<RemoteReorderWorkItemResponse> ReorderAsync(WorkItemServerOptions opts, string id, RemoteReorderWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
+        var resp = await _svc.ReorderAsync(id, new ReorderWorkItemRequest
+        {
+            AboveId = req.AboveId,
+            BelowId = req.BelowId,
+            TargetStatus = req.TargetStatus.HasValue ? Map(req.TargetStatus.Value) : null,
+            Actions = req.Actions,
+            Reason = req.Reason,
+        }, ct);
+        return new RemoteReorderWorkItemResponse
+        {
+            Outcome = (RemoteReorderOutcome)(int)resp.Outcome,
+            Item = resp.Item == null ? null : ToRemote(resp.Item),
+            Renumbered = resp.Renumbered,
+            Reason = resp.Reason,
+        };
+    }
+
     public Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default)
     {
         ActAs(actor);

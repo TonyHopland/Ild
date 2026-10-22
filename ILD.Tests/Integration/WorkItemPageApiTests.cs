@@ -179,6 +179,30 @@ public class WorkItemPageApiTests
         => client.PostAsync($"/api/v1/workitems/{id}/reorder", System.Net.Http.Json.JsonContent.Create(body), TestContext.Current.CancellationToken);
 
     [Fact]
+    public async Task A_card_dropped_in_another_column_moves_and_lands_in_place_in_one_request()
+    {
+        await using var host = await StartHostAsync();
+        var a = await host.SeedAsync("a", WiStatus.Ready, priority: 0);
+        var b = await host.SeedAsync("b", WiStatus.Ready, priority: 1);
+        var x = await host.SeedAsync("x", priority: 5);
+        var y = await host.SeedAsync("y", priority: 6);
+
+        var resp = await ReorderAsync(host.Human, x, new { aboveId = a, belowId = b, targetStatus = "Ready" });
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var view = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
+        Assert.Equal("Ready", view.GetProperty("status").GetString());
+        Assert.Equal([a, x, b], (await GetPageAsync(host.Human, "status=Ready")).Ids);
+        Assert.Equal([y], (await GetPageAsync(host.Human, "status=Backlog")).Ids);
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await ReorderAsync(host.Human, y, new { aboveId = a, targetStatus = "Sideways" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await ReorderAsync(host.Human, y, new { aboveId = a, targetStatus = "Running" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await ReorderAsync(host.Human, y, new { aboveId = "999", targetStatus = "Ready" })).StatusCode);
+        Assert.Equal([a, x, b], (await GetPageAsync(host.Human, "status=Ready")).Ids);
+        Assert.Equal([y], (await GetPageAsync(host.Human, "status=Backlog")).Ids);
+    }
+
+    [Fact]
     public async Task Reorder_places_the_card_between_its_drop_neighbours_and_refuses_what_it_cannot_place()
     {
         await using var host = await StartHostAsync();

@@ -330,19 +330,28 @@ public class WorkItemsController : ControllerBase
 
     /// <summary>
     /// Move a card to where it was dropped on the board, between the cards
-    /// directly above and below the drop spot in its column.
+    /// directly above and below the drop spot in its column, and into that
+    /// column when it came from another: one request, as the transition rules allow.
     /// </summary>
     [HttpPost("{id}/reorder")]
     public async Task<IActionResult> Reorder(string id, [FromBody] WorkItemReorderRequest request)
     {
         if (SignedInUser is not { } user)
             return Unauthorized();
+        RemoteWorkItemStatus? target = null;
+        if (request.TargetStatus is not null)
+        {
+            if (!Enum.TryParse<WorkItemStatus>(request.TargetStatus, true, out var parsed))
+                return BadRequest(new { error = "Invalid target status" });
+            target = (RemoteWorkItemStatus)(int)parsed;
+        }
 
-        return await _workItemManager.ReorderAsync(user, id, request.AboveId, request.BelowId) switch
+        return await _workItemManager.ReorderAsync(user, id, request.AboveId, request.BelowId, target) switch
         {
             ReorderOutcome.NotFound => NotFound(),
             ReorderOutcome.InvalidNeighbour => BadRequest(new { error = "aboveId or belowId must name another work item." }),
-            _ => Ok(await _workItemManager.GetWorkItemAsync(id)),
+            ReorderOutcome.TransitionRefused => BadRequest(new { error = "Transition not allowed" }),
+            _ => await _workItemManager.GetWorkItemAsync(id) is { } moved ? Ok(moved) : NotFound(),
         };
     }
 
@@ -937,16 +946,7 @@ public class WorkItemsController : ControllerBase
             return BadRequest(new { error = "Invalid target status" });
         if (SignedInUser is not { } actor)
             return Unauthorized();
-        var ok = target switch
-        {
-            WorkItemStatus.Backlog => await _workItemManager.TransitionToBacklogAsync(actor, id),
-            WorkItemStatus.WorkQueue => await _workItemManager.TransitionToWorkQueueAsync(actor, id),
-            WorkItemStatus.Ready => await _workItemManager.TransitionToReadyAsync(actor, id),
-            WorkItemStatus.Running => await _workItemManager.TransitionToRunningAsync(actor, id),
-            WorkItemStatus.HumanFeedback => await _workItemManager.TransitionToHumanFeedbackAsync(actor, id, "manual"),
-            WorkItemStatus.Done => await _workItemManager.TransitionToDoneAsync(actor, id),
-            _ => false,
-        };
+        var ok = await _workItemManager.MoveAsync(actor, id, (RemoteWorkItemStatus)(int)target);
         return ok ? Ok() : BadRequest(new { error = "Transition not allowed" });
     }
 

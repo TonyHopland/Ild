@@ -26,7 +26,7 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
 {
     private static readonly string[] TrackedFields =
     {
-        "title", "description", "status", "priority", "tags", "dependencies", "repository",
+        "title", "description", "status", "tags", "dependencies", "repository",
         "aiProviderOverride", "aiProviderOverrideId", "branchNameOverride", "baseBranchOverride",
     };
 
@@ -169,7 +169,6 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         Assert.Equal("Add a login page", ValueOf(rows, "title"));
         Assert.Equal("Users sign in with a password.", ValueOf(rows, "description"));
         Assert.Equal("Ready", ValueOf(rows, "status"));
-        Assert.Equal(stored.Priority, double.Parse(ValueOf(rows, "priority")!, System.Globalization.CultureInfo.InvariantCulture));
         Assert.Equal(stored.TagsJson, ValueOf(rows, "tags"));
         Assert.Equal(stored.DependenciesJson, ValueOf(rows, "dependencies"));
         Assert.Equal(repository.ToString("D"), ValueOf(rows, "repository"));
@@ -219,27 +218,29 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         Assert.Equal(created.Count + changed.Count, (await RowsAsync(dto.Id)).Count);
     }
 
-    [Theory]
-    [InlineData(1.5, "1.5")]
-    [InlineData(-3, "-3")]
-    [InlineData(-0.1, "-0.1")]
-    public async Task A_priority_change_is_written_as_an_invariant_number(double priority, string expected)
+    /// <summary>
+    /// The priority is the item's place on the board, not part of its history:
+    /// setting it, a reorder and a reorder that renumbers the whole board write
+    /// no rows, for the moved item or any other.
+    /// </summary>
+    [Fact]
+    public async Task Order_changes_write_no_history()
     {
-        var dto = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "x" }, Ct);
-        var before = (await RowsAsync(dto.Id)).Count;
-        var culture = System.Globalization.CultureInfo.CurrentCulture;
-        System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
-        try
-        {
-            await _svc.UpdateAsync(dto.Id, new UpdateWorkItemRequest { Priority = priority }, Ct);
-        }
-        finally
-        {
-            System.Globalization.CultureInfo.CurrentCulture = culture;
-        }
+        var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, Ct);
+        var b = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "b" }, Ct);
+        var c = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "c" }, Ct);
+        var ids = new[] { a.Id, b.Id, c.Id };
+        var before = new Dictionary<string, int>();
+        foreach (var id in ids) before[id] = (await RowsAsync(id)).Count;
 
-        var changed = await RowsAfterAsync(dto.Id, before);
-        Assert.Equal(expected, ValueOf(changed, "priority"));
+        await _svc.UpdateAsync(c.Id, new UpdateWorkItemRequest { Priority = 7.5 }, Ct);
+        await _svc.ReorderAsync(c.Id, new ReorderWorkItemRequest { BelowId = b.Id }, Ct);
+        await _svc.UpdateAsync(a.Id, new UpdateWorkItemRequest { Priority = 3 }, Ct);
+        await _svc.UpdateAsync(b.Id, new UpdateWorkItemRequest { Priority = 3 }, Ct);
+        var renumbered = await _svc.ReorderAsync(c.Id, new ReorderWorkItemRequest { AboveId = a.Id }, Ct);
+
+        Assert.True(renumbered.Renumbered);
+        foreach (var id in ids) Assert.Equal(before[id], (await RowsAsync(id)).Count);
     }
 
     [Fact]

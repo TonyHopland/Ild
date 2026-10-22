@@ -11,10 +11,11 @@ namespace ILD.WorkItemServer.Migrations
         // from 0, and the later-inserted item first when two were created at the
         // same instant, so every item gets its own value.
         private const string BoardOrderSql = """
-            UPDATE "WorkItems" SET "Priority" = (
-                SELECT COUNT(*) FROM "WorkItems" AS newer
-                WHERE newer."CreatedAt" > "WorkItems"."CreatedAt"
-                   OR (newer."CreatedAt" = "WorkItems"."CreatedAt" AND newer."InternalId" > "WorkItems"."InternalId"))
+            UPDATE "WorkItems" SET "Priority" = ranked."Rank"
+            FROM (
+                SELECT "InternalId", ROW_NUMBER() OVER (ORDER BY "CreatedAt" DESC, "InternalId" DESC) - 1 AS "Rank"
+                FROM "WorkItems") AS ranked
+            WHERE "WorkItems"."InternalId" = ranked."InternalId"
             """;
 
         // The old enum's Medium, so every item reads as a valid priority again.

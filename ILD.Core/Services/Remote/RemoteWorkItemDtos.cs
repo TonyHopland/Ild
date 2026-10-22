@@ -183,6 +183,36 @@ public sealed class RemoteTransitionResponse
     public string? Reason { get; set; }
 }
 
+/// <summary>Mirrors the WorkItem server's ReorderWorkItemRequest: a drop spot, and the status to move to with it.</summary>
+public sealed class RemoteReorderWorkItemRequest
+{
+    public string? AboveId { get; set; }
+    public string? BelowId { get; set; }
+    public RemoteWorkItemStatus? TargetStatus { get; set; }
+    public string? Actions { get; set; }
+    public string? Reason { get; set; }
+}
+
+/// <summary>Mirrors the WorkItem server's ReorderWorkItemOutcome.</summary>
+public enum RemoteReorderOutcome
+{
+    Moved = 0,
+    NotFound = 1,
+    InvalidNeighbour = 2,
+    TransitionRefused = 3,
+}
+
+public sealed class RemoteReorderWorkItemResponse
+{
+    public RemoteReorderOutcome Outcome { get; set; }
+    public RemoteWorkItem? Item { get; set; }
+
+    /// <summary>The whole board was renumbered, in the same order.</summary>
+    public bool Renumbered { get; set; }
+
+    public string? Reason { get; set; }
+}
+
 public sealed class RemotePollResponse
 {
     public IReadOnlyList<RemoteWorkItem> ActiveItems { get; set; } = Array.Empty<RemoteWorkItem>();

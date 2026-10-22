@@ -14,6 +14,15 @@ public interface IWorkItemService
     Task<bool> DeleteAsync(string id, CancellationToken ct = default);
 
     Task<TransitionResponse> TransitionAsync(string id, TransitionRequest req, CancellationToken ct = default);
+
+    /// <summary>
+    /// Place an item where it was dropped on the board, and move it to a new
+    /// status with it, in one transaction: see <see cref="ReorderWorkItemRequest"/>.
+    /// Only the item is written, unless no number is left between its new
+    /// neighbours: then one statement renumbers the whole board in the same
+    /// order. The order value is not part of history.
+    /// </summary>
+    Task<ReorderWorkItemResponse> ReorderAsync(string id, ReorderWorkItemRequest req, CancellationToken ct = default);
     Task<bool> AddDependencyAsync(string id, string dependencyId, CancellationToken ct = default);
     Task<bool> RemoveDependencyAsync(string id, string dependencyId, CancellationToken ct = default);
     Task<IReadOnlyList<string>?> GetDependenciesAsync(string id, CancellationToken ct = default);
@@ -90,7 +99,7 @@ public sealed class WorkItemService : IWorkItemService
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         var topmost = await _db.WorkItems.MinAsync(x => (double?)x.Priority, ct);
-        w.Priority = topmost - 1 ?? 0;
+        w.Priority = (topmost ?? 1) - 1;
         _db.WorkItems.Add(w);
         await _db.SaveChangesAsync(ct);
         w.Id = w.InternalId.ToString(CultureInfo.InvariantCulture);
@@ -148,7 +157,9 @@ public sealed class WorkItemService : IWorkItemService
     /// <summary>
     /// Lowest priority first, equal priorities in id order: an item's id is its
     /// InternalId as text, so InternalId orders ids numerically. Every reader
-    /// sharing the board sees the same order.
+    /// sharing the board sees the same order. This is the board order's source of
+    /// truth: the renumber below, ILD's WorkItemOrder and the taskboard's
+    /// compareServerOrder follow it.
     /// </summary>
     private static IQueryable<WorkItem> InBoardOrder(IQueryable<WorkItem> items)
         => items.OrderBy(w => w.Priority).ThenBy(w => w.InternalId);
@@ -229,7 +240,11 @@ public sealed class WorkItemService : IWorkItemService
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (w == null)
             return new TransitionResponse { Success = false, ActualStatus = WorkItemStatus.Backlog, Reason = "Not found" };
+        return await ApplyTransitionAsync(w, req, ct);
+    }
 
+    private async Task<TransitionResponse> ApplyTransitionAsync(WorkItem w, TransitionRequest req, CancellationToken ct)
+    {
         // Running is the only validated transition: dependency check + atomic claim.
         if (req.TargetStatus == WorkItemStatus.Running)
             return await ClaimRunningAsync(w, req.Reason, ct);
@@ -362,7 +377,10 @@ public sealed class WorkItemService : IWorkItemService
         // fresh from the very first poll, and clears any prior HumanFeedback
         // actions — mirroring the shared transition path for non-Running states.
         var now = _clock.GetUtcNow().UtcDateTime;
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        // A claim made as part of a reorder joins the reorder's transaction.
+        await using var transaction = _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
         var claimed = await _db.WorkItems
             .Where(x => x.Id == w.Id && x.Status != WorkItemStatus.Running)
             .ExecuteUpdateAsync(s => s
@@ -384,7 +402,7 @@ public sealed class WorkItemService : IWorkItemService
         _db.AddHistorySave(w.Id, WorkItemHistoryKind.Changed,
             [(WorkItemHistoryFields.Status, WorkItemHistoryFields.Encode(WorkItemStatus.Running))], reason);
         await _db.SaveChangesAsync(ct);
-        await transaction.CommitAsync(ct);
+        if (transaction is not null) await transaction.CommitAsync(ct);
 
         // The conditional UPDATE bypasses the change tracker, so the entity we
         // loaded above still holds its pre-claim state. Reload it from the row
@@ -392,6 +410,106 @@ public sealed class WorkItemService : IWorkItemService
         await _db.Entry(w).ReloadAsync(ct);
         return new TransitionResponse { Success = true, ActualStatus = WorkItemStatus.Running };
     }
+
+    public async Task<ReorderWorkItemResponse> ReorderAsync(string id, ReorderWorkItemRequest req, CancellationToken ct = default)
+    {
+        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (w == null) return new ReorderWorkItemResponse { Outcome = ReorderWorkItemOutcome.NotFound };
+
+        var above = req.AboveId is null ? null : await BoardKeyOfAsync(req.AboveId, ct);
+        var below = req.BelowId is null ? null : await BoardKeyOfAsync(req.BelowId, ct);
+        if ((req.AboveId is null && req.BelowId is null)
+            || req.AboveId == id || req.BelowId == id
+            || (req.AboveId is not null && above is null)
+            || (req.BelowId is not null && below is null))
+            return new ReorderWorkItemResponse { Outcome = ReorderWorkItemOutcome.InvalidNeighbour };
+
+        if (req.TargetStatus is { } target && target != w.Status)
+        {
+            var moved = await ApplyTransitionAsync(w, new TransitionRequest
+            {
+                TargetStatus = target,
+                Actions = req.Actions,
+                Reason = req.Reason,
+            }, ct);
+            if (!moved.Success)
+                return new ReorderWorkItemResponse { Outcome = ReorderWorkItemOutcome.TransitionRefused, Reason = moved.Reason };
+        }
+
+        var others = _db.WorkItems.Where(x => x.InternalId != w.InternalId);
+        BoardKey? prev, next;
+        if (above is not null)
+        {
+            prev = above;
+            next = await InBoardOrder(others.Where(x => x.Priority > above.Priority
+                    || (x.Priority == above.Priority && x.InternalId > above.InternalId)))
+                .Select(x => new BoardKey(x.InternalId, x.Priority))
+                .FirstOrDefaultAsync(ct);
+        }
+        else
+        {
+            next = below!;
+            prev = await others.Where(x => x.Priority < next.Priority
+                    || (x.Priority == next.Priority && x.InternalId < next.InternalId))
+                .OrderByDescending(x => x.Priority).ThenByDescending(x => x.InternalId)
+                .Select(x => new BoardKey(x.InternalId, x.Priority))
+                .FirstOrDefaultAsync(ct);
+        }
+        var priority = (prev, next) switch
+        {
+            (not null, not null) => prev.Priority + (next.Priority - prev.Priority) / 2,
+            (not null, null) => prev.Priority + 1,
+            _ => next!.Priority - 1,
+        };
+        var fits = (prev is null || prev.Priority < priority) && (next is null || priority < next.Priority);
+
+        if (fits) w.Priority = priority;
+        w.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
+        await _db.SaveChangesAsync(ct);
+        if (!fits)
+        {
+            await RenumberAsync(w.InternalId, (above ?? below)!.InternalId, above is not null ? 1 : -1, ct);
+            await _db.Entry(w).ReloadAsync(ct);
+        }
+        await transaction.CommitAsync(ct);
+
+        return new ReorderWorkItemResponse
+        {
+            Outcome = ReorderWorkItemOutcome.Moved,
+            Item = (await WithDetailsAsync(new[] { w }, ct))[0],
+            Renumbered = !fits,
+        };
+    }
+
+    /// <summary>An item's place in <see cref="InBoardOrder"/>.</summary>
+    private sealed record BoardKey(int InternalId, double Priority);
+
+    private Task<BoardKey?> BoardKeyOfAsync(string id, CancellationToken ct)
+        => _db.WorkItems.Where(x => x.Id == id)
+            .Select(x => new BoardKey(x.InternalId, x.Priority))
+            .FirstOrDefaultAsync(ct);
+
+    /// <summary>
+    /// Every item but the moved one gets twice its rank in <see cref="InBoardOrder"/>,
+    /// and the moved one the odd number directly after (<paramref name="side"/> 1)
+    /// or before (-1) its neighbour's: the same order with room between every
+    /// two items, written in one statement.
+    /// </summary>
+    private Task RenumberAsync(int moved, int neighbour, int side, CancellationToken ct)
+        => _db.Database.ExecuteSqlInterpolatedAsync($"""
+            WITH others AS (
+                SELECT "InternalId", 2 * (ROW_NUMBER() OVER (ORDER BY "Priority", "InternalId") - 1) AS "Value"
+                FROM "WorkItems"
+                WHERE "InternalId" <> {moved}),
+            placed AS (
+                SELECT "InternalId", "Value" FROM others
+                UNION ALL
+                SELECT {moved}, "Value" + {side} FROM others WHERE "InternalId" = {neighbour})
+            UPDATE "WorkItems" SET "Priority" = placed."Value"
+            FROM placed
+            WHERE "WorkItems"."InternalId" = placed."InternalId"
+            """, ct);
 
     public async Task<bool> AddDependencyAsync(string id, string dependencyId, CancellationToken ct = default)
     {

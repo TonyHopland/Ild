@@ -152,6 +152,7 @@ public class AgentController : ControllerBase
         [FromQuery] string? status = null,
         [FromQuery] string? repositoryId = null,
         [FromQuery] string? createdByLoopRunId = null,
+        [FromQuery] string? priority = null,
         [FromQuery] string[]? tags = null,
         [FromQuery] string? orderBy = null,
         [FromQuery] bool actionableOnly = false,
@@ -159,6 +160,9 @@ public class AgentController : ControllerBase
         [FromQuery] int skip = 0,
         [FromQuery] int take = 100)
     {
+        // Refused rather than ignored, so an old caller is not handed every item as if it had filtered them.
+        if (priority is not null)
+            return BadRequest(new { error = "The priority filter is gone: priority is now the item's place in the board order. Use orderBy=priority to list items in board order." });
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;

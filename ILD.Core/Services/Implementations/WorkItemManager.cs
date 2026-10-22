@@ -695,54 +695,64 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    public async Task<ReorderOutcome> ReorderAsync(WorkItemActor actor, string workItemId, string? aboveId, string? belowId)
+    public async Task<ReorderOutcome> ReorderAsync(
+        WorkItemActor actor, string workItemId, string? aboveId, string? belowId, RemoteWorkItemStatus? targetStatus = null)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
-        var board = (await _server.ListAsync(opts, status: null, tags: null)).Order(WorkItemOrder.Board).ToList();
-        var item = board.Find(w => w.Id == workItemId);
-        if (item is null) return ReorderOutcome.NotFound;
-        if (aboveId is null && belowId is null) return ReorderOutcome.InvalidNeighbour;
-
-        var rest = board.Where(w => w.Id != workItemId).ToList();
-        var above = aboveId is null ? -1 : rest.FindIndex(w => w.Id == aboveId);
-        var below = belowId is null ? -1 : rest.FindIndex(w => w.Id == belowId);
-        if ((aboveId is not null && above < 0) || (belowId is not null && below < 0))
-            return ReorderOutcome.InvalidNeighbour;
-
-        var slot = aboveId is not null ? above + 1 : below;
-        var prev = slot > 0 ? rest[slot - 1] : null;
-        var next = slot < rest.Count ? rest[slot] : null;
-        var priority = (prev, next) switch
+        var spot = new DropSpot(aboveId, belowId);
+        if (targetStatus is { } target && await _server.GetAsync(opts, workItemId) is { } current && current.Status != target)
         {
-            (not null, not null) => prev.Priority + (next.Priority - prev.Priority) / 2,
-            (not null, null) => prev.Priority + 1,
-            _ => next!.Priority - 1,
-        };
-        if ((prev is null || prev.Priority < priority) && (next is null || priority < next.Priority))
-            return await WritePriorityAsync(opts, actor, item.Id, priority) ? ReorderOutcome.Moved : ReorderOutcome.NotFound;
-
-        // The new numbers sit below every current one and are written from the top
-        // down, so at every step the items written so far lead the board in their
-        // new order and the rest follow in their old one: a renumber cut short
-        // leaves the board in order, and no card moves down a column on the way.
-        rest.Insert(slot, item);
-        var first = board[0].Priority - rest.Count;
-        var outcome = ReorderOutcome.Moved;
-        for (var i = 0; i < rest.Count; i++)
-        {
-            var written = await WritePriorityAsync(opts, actor, rest[i].Id, first + i);
-            if (!written && rest[i] == item) outcome = ReorderOutcome.NotFound;
+            // The move to another column runs the transition's own steps, some of
+            // which (ending a run on Done) come before the server's write, so a
+            // drop spot the server would refuse is refused before any of them.
+            if (!await IsDropSpotAsync(opts, workItemId, spot)) return ReorderOutcome.InvalidNeighbour;
+            var moved = await MoveCoreAsync(actor, workItemId, target, spot);
+            if (spot.Placed is { } placed && placed.Outcome != RemoteReorderOutcome.Moved) return OutcomeOf(placed.Outcome);
+            if (!moved) return ReorderOutcome.TransitionRefused;
         }
-        return outcome;
+        else
+        {
+            spot.Placed = await _server.ReorderAsync(opts, workItemId, new RemoteReorderWorkItemRequest
+            {
+                AboveId = aboveId,
+                BelowId = belowId,
+            }, actor);
+            if (spot.Placed.Item is not { } item) return OutcomeOf(spot.Placed.Outcome);
+            await _notifier.WorkItemStateChangedAsync(item.Id, item.Status, item.Status);
+        }
+
+        if (spot.Placed?.Renumbered == true) await _notifier.WorkItemBoardReorderedAsync(workItemId);
+        return ReorderOutcome.Moved;
     }
 
-    private async Task<bool> WritePriorityAsync(WorkItemServerOptions opts, WorkItemActor actor, string workItemId, double priority)
+    /// <summary>
+    /// Where a dropped card goes, and once the server has placed it, what came of
+    /// that. Handed down the transition path, whose server write it replaces.
+    /// </summary>
+    private sealed class DropSpot(string? aboveId, string? belowId)
     {
-        var updated = await _server.UpdateAsync(opts, workItemId, new RemoteUpdateWorkItemRequest { Priority = priority }, actor);
-        if (updated == null) return false;
-        await _notifier.WorkItemStateChangedAsync(updated.Id, updated.Status, updated.Status);
+        public string? AboveId { get; } = aboveId;
+        public string? BelowId { get; } = belowId;
+        public RemoteReorderWorkItemResponse? Placed { get; set; }
+    }
+
+    private async Task<bool> IsDropSpotAsync(WorkItemServerOptions opts, string workItemId, DropSpot spot)
+    {
+        if (spot.AboveId is null && spot.BelowId is null) return false;
+        foreach (var neighbour in new[] { spot.AboveId, spot.BelowId }.OfType<string>())
+        {
+            if (neighbour == workItemId || await _server.GetAsync(opts, neighbour) is null) return false;
+        }
         return true;
     }
+
+    private static ReorderOutcome OutcomeOf(RemoteReorderOutcome outcome) => outcome switch
+    {
+        RemoteReorderOutcome.Moved => ReorderOutcome.Moved,
+        RemoteReorderOutcome.NotFound => ReorderOutcome.NotFound,
+        RemoteReorderOutcome.InvalidNeighbour => ReorderOutcome.InvalidNeighbour,
+        _ => ReorderOutcome.TransitionRefused,
+    };
 
     // ──────────────────────────────────────────────────────────────────
     // Transitions
@@ -761,7 +771,10 @@ public class WorkItemManager : IWorkItemManager
     /// guards against. Stopping that run and resetting the item is
     /// <see cref="CleanupToBacklogAsync"/>, reached from the work-item modal.
     /// </summary>
-    public async Task<bool> TransitionToBacklogAsync(WorkItemActor actor, string workItemId)
+    public Task<bool> TransitionToBacklogAsync(WorkItemActor actor, string workItemId)
+        => TransitionToBacklogAsync(actor, workItemId, spot: null);
+
+    private async Task<bool> TransitionToBacklogAsync(WorkItemActor actor, string workItemId, DropSpot? spot)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
@@ -770,34 +783,45 @@ public class WorkItemManager : IWorkItemManager
             or RemoteWorkItemStatus.HumanFeedback))
             return false;
         if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) != null) return false;
-        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Backlog);
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Backlog, spot: spot);
     }
 
-    public async Task<bool> TransitionToWorkQueueAsync(WorkItemActor actor, string workItemId)
+    public Task<bool> TransitionToWorkQueueAsync(WorkItemActor actor, string workItemId)
+        => TransitionToWorkQueueAsync(actor, workItemId, spot: null);
+
+    private async Task<bool> TransitionToWorkQueueAsync(WorkItemActor actor, string workItemId, DropSpot? spot)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
         if (wi.Status != RemoteWorkItemStatus.Backlog && wi.Status != RemoteWorkItemStatus.HumanFeedback)
             return false;
 
-        await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.WorkQueue);
+        var queued = await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.WorkQueue, spot: spot);
+        // A drop the server could not place leaves the item where it was.
+        if (spot is not null && !queued) return false;
 
         if (await IsReadyAsync(workItemId))
             await TransitionToReadyAsync(actor, workItemId);
         return true;
     }
 
-    public async Task<bool> TransitionToReadyAsync(WorkItemActor actor, string workItemId)
+    public Task<bool> TransitionToReadyAsync(WorkItemActor actor, string workItemId)
+        => TransitionToReadyAsync(actor, workItemId, spot: null);
+
+    private async Task<bool> TransitionToReadyAsync(WorkItemActor actor, string workItemId, DropSpot? spot)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
         if (!await IsReadyAsync(workItemId)) return false;
         if (wi.Status != RemoteWorkItemStatus.WorkQueue && wi.Status != RemoteWorkItemStatus.Backlog)
             return false;
-        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Ready);
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Ready, spot: spot);
     }
 
-    public async Task<bool> TransitionToRunningAsync(WorkItemActor actor, string workItemId)
+    public Task<bool> TransitionToRunningAsync(WorkItemActor actor, string workItemId)
+        => TransitionToRunningAsync(actor, workItemId, spot: null);
+
+    private async Task<bool> TransitionToRunningAsync(WorkItemActor actor, string workItemId, DropSpot? spot)
     {
         var wi = await GetWorkItemAsync(workItemId);
         if (wi == null) return false;
@@ -807,7 +831,7 @@ public class WorkItemManager : IWorkItemManager
         // drive it, and the item would sit there until the server reclaimed it.
         if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) is null)
             return false;
-        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Running);
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Running, spot: spot);
     }
 
     /// <summary>
@@ -815,19 +839,25 @@ public class WorkItemManager : IWorkItemManager
     /// live run when there is one, and is the item's own status reason when
     /// there is not — never onto a run that has already ended.
     /// </summary>
-    public async Task<bool> TransitionToHumanFeedbackAsync(WorkItemActor actor, string workItemId, string reason)
+    public Task<bool> TransitionToHumanFeedbackAsync(WorkItemActor actor, string workItemId, string reason)
+        => TransitionToHumanFeedbackAsync(actor, workItemId, reason, spot: null);
+
+    private async Task<bool> TransitionToHumanFeedbackAsync(WorkItemActor actor, string workItemId, string reason, DropSpot? spot)
     {
         if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) is not { } active)
-            return await ParkWithoutRunAsync(actor, workItemId, reason);
+            return await ParkWithoutRunAsync(actor, workItemId, reason, spot);
 
         await TryRecordAsync(active.Id, EventType.RunParked, reason);
-        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.HumanFeedback, reason,
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.HumanFeedback, spot, reason,
             currentLoopRunId: active.Id);
     }
 
-    public async Task<bool> ParkWithoutRunAsync(WorkItemActor actor, string workItemId, string reason)
+    public Task<bool> ParkWithoutRunAsync(WorkItemActor actor, string workItemId, string reason)
+        => ParkWithoutRunAsync(actor, workItemId, reason, spot: null);
+
+    private async Task<bool> ParkWithoutRunAsync(WorkItemActor actor, string workItemId, string reason, DropSpot? spot)
     {
-        if (!await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.HumanFeedback, reason)) return false;
+        if (!await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.HumanFeedback, spot, reason)) return false;
         await _loopRunStore.SetWorkItemStatusReasonAsync(workItemId, reason);
         return true;
     }
@@ -845,19 +875,52 @@ public class WorkItemManager : IWorkItemManager
     /// The engine's own completion path is unaffected — it marks its run
     /// Completed and calls <see cref="TransitionAsync"/> directly.
     /// </summary>
-    public async Task<bool> TransitionToDoneAsync(WorkItemActor actor, string workItemId)
+    public Task<bool> TransitionToDoneAsync(WorkItemActor actor, string workItemId)
+        => TransitionToDoneAsync(actor, workItemId, spot: null);
+
+    private async Task<bool> TransitionToDoneAsync(WorkItemActor actor, string workItemId, DropSpot? spot)
     {
         const string reason = "Work item marked Done";
         var currentRun = await _loopRunStore.GetLatestByWorkItemAsync(workItemId);
         if (currentRun != null) await EndRunAsync(currentRun, reason);
-        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Done, reason,
+        return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.Done, spot, reason,
             currentLoopRunId: currentRun?.Id ?? Guid.Empty);
     }
 
-    public async Task<bool> TransitionAsync(
+    public Task<bool> MoveAsync(WorkItemActor actor, string workItemId, RemoteWorkItemStatus targetStatus)
+        => MoveCoreAsync(actor, workItemId, targetStatus, spot: null);
+
+    private Task<bool> MoveCoreAsync(WorkItemActor actor, string workItemId, RemoteWorkItemStatus targetStatus, DropSpot? spot)
+        => targetStatus switch
+        {
+            RemoteWorkItemStatus.Backlog => TransitionToBacklogAsync(actor, workItemId, spot),
+            RemoteWorkItemStatus.WorkQueue => TransitionToWorkQueueAsync(actor, workItemId, spot),
+            RemoteWorkItemStatus.Ready => TransitionToReadyAsync(actor, workItemId, spot),
+            RemoteWorkItemStatus.Running => TransitionToRunningAsync(actor, workItemId, spot),
+            RemoteWorkItemStatus.HumanFeedback => TransitionToHumanFeedbackAsync(actor, workItemId, "manual", spot),
+            RemoteWorkItemStatus.Done => TransitionToDoneAsync(actor, workItemId, spot),
+            _ => Task.FromResult(false),
+        };
+
+    public Task<bool> TransitionAsync(
         WorkItemActor actor,
         string workItemId,
         RemoteWorkItemStatus targetStatus,
+        string? reason = null,
+        string? actions = null,
+        Guid? currentLoopRunId = null,
+        string? humanFeedbackReason = null)
+        => TransitionAsync(actor, workItemId, targetStatus, spot: null, reason, actions, currentLoopRunId, humanFeedbackReason);
+
+    /// <summary>
+    /// Every status change goes through here. With a <paramref name="spot"/> the
+    /// server write also places the item there, in the same server transaction.
+    /// </summary>
+    private async Task<bool> TransitionAsync(
+        WorkItemActor actor,
+        string workItemId,
+        RemoteWorkItemStatus targetStatus,
+        DropSpot? spot,
         string? reason = null,
         string? actions = null,
         Guid? currentLoopRunId = null,
@@ -868,17 +931,31 @@ public class WorkItemManager : IWorkItemManager
 
         var prev = prevWi.Status;
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
-        var resp = await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
+        RemoteWorkItemStatus actual;
+        if (spot is null)
         {
-            TargetStatus = targetStatus,
-            Actions = actions,
-            Reason = reason,
-        }, actor);
-
-        if (!resp.Success)
-            return false;
-
-        var actual = resp.ActualStatus;
+            var resp = await _server.TransitionAsync(opts, workItemId, new RemoteTransitionRequest
+            {
+                TargetStatus = targetStatus,
+                Actions = actions,
+                Reason = reason,
+            }, actor);
+            if (!resp.Success) return false;
+            actual = resp.ActualStatus;
+        }
+        else
+        {
+            spot.Placed = await _server.ReorderAsync(opts, workItemId, new RemoteReorderWorkItemRequest
+            {
+                AboveId = spot.AboveId,
+                BelowId = spot.BelowId,
+                TargetStatus = targetStatus,
+                Actions = actions,
+                Reason = reason,
+            }, actor);
+            if (spot.Placed.Item is not { } placed) return false;
+            actual = placed.Status;
+        }
         // The item's own reason says why it waits on a person; once it does
         // not, the reason is history.
         if (actual != RemoteWorkItemStatus.HumanFeedback)

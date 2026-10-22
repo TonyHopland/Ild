@@ -69,6 +69,13 @@ public sealed class WorkItemsController : ControllerBase
         return Ok(resp);
     }
 
+    [HttpPost("{id}/reorder")]
+    public async Task<ActionResult<ReorderWorkItemResponse>> Reorder(string id, [FromBody] ReorderWorkItemRequest req, CancellationToken ct)
+    {
+        var resp = await _svc.ReorderAsync(id, req, ct);
+        return resp.Outcome == ReorderWorkItemOutcome.NotFound ? NotFound() : Ok(resp);
+    }
+
     [HttpGet("{id}/history")]
     public async Task<ActionResult<IReadOnlyList<WorkItemHistoryEntryDto>>> GetHistory(string id, CancellationToken ct)
     {
