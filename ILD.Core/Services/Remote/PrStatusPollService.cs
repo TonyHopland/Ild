@@ -132,8 +132,9 @@ public sealed class PrStatusPollService : IPrStatusPollService
 
         // Ahead of the edges, so on the tick the pull request may be merged one
         // that went true alongside (a green CI, an approval) cannot take the
-        // run off the PR node before ILD has merged. A merged PR fires nothing from this, the open snapshot: the
-        // next tick reads it closed and fires on_merged like any other merge.
+        // run off the PR node before ILD has merged. This snapshot still shows
+        // the PR open, so a merge fires nothing now: the next tick reads it
+        // merged and fires on_merged like any other merge.
         if (await TryAutoMergeAsync(run, snapshot, repoUrl, prNumber))
             return;
 
@@ -227,37 +228,24 @@ public sealed class PrStatusPollService : IPrStatusPollService
         }
         catch (Exception ex)
         {
-            failure = ex.Message;
+            failure = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
         }
 
         if (failure is not null)
         {
             await TrySetAutoMergeAsync(run.Id, PrAutoMerge.IldFailed, failure);
-            await TryRecordAsync(run.Id, EventType.PrMergeFailed,
-                $"AutoMerge: ILD could not merge this PR ({failure}). Please merge it manually.");
+            await _eventLog.TryAppendAsync(run.Id, EventType.PrMergeFailed,
+                $"AutoMerge: ILD could not merge this PR ({failure}). Please merge it manually.", _log);
             await _notifier.PrSnapshotChangedAsync(run.Id);
             return false;
         }
 
         await TrySetAutoMergeAsync(run.Id, PrAutoMerge.IldMerged, null);
-        await TryRecordAsync(run.Id, EventType.PrMerged, $"PR {run.PrUrl} merged by ILD (AutoMerge)");
+        await _eventLog.TryAppendAsync(run.Id, EventType.PrMerged, $"PR {run.PrUrl} merged by ILD (AutoMerge)", _log);
         await _notifier.PrSnapshotChangedAsync(run.Id);
 
-        // Best effort, as after a manual merge: a branch left behind never
-        // holds up the run.
         var branch = run.BranchName ?? workItem.BranchName ?? RunWorktreeNaming.BranchFor(workItem.Id, run.Id);
-        bool deleted;
-        try
-        {
-            deleted = await _remote.DeleteBranchAsync(repoUrl, branch);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "AutoMerge: could not delete branch {Branch} for run {RunId}", branch, run.Id);
-            deleted = false;
-        }
-        if (!deleted)
-            await TryRecordAsync(run.Id, EventType.BranchDeleteFailed, $"PR merged, but the branch '{branch}' could not be deleted.");
+        await MergedBranch.TryDeleteAsync(_remote, _eventLog, _log, run.Id, repoUrl, branch);
         return true;
     }
 
@@ -284,21 +272,6 @@ public sealed class PrStatusPollService : IPrStatusPollService
         catch (Exception ex)
         {
             _log.LogWarning(ex, "AutoMerge: could not record {Outcome} on run {RunId}", outcome, runId);
-        }
-    }
-
-    /// <summary>Best effort, as event writes are elsewhere: a log that is down must not stop the tick.</summary>
-    private async Task TryRecordAsync(Guid runId, EventType type, string message)
-    {
-        if (_eventLog is null)
-            return;
-        try
-        {
-            await _eventLog.AppendAsync(runId, type, message);
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Could not record {EventType} on run {RunId}", type, runId);
         }
     }
 

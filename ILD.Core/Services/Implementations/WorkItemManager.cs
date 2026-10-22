@@ -91,23 +91,9 @@ public class WorkItemManager : IWorkItemManager
         run.CompletedAt ??= DateTime.UtcNow;
         await _loopRunStore.UpdateRunAsync(run);
         if (endedHere)
-            await TryRecordAsync(run.Id, EventType.LoopRunCancelled, reason);
+            await _eventLog.TryAppendAsync(run.Id, EventType.LoopRunCancelled, reason, _logger);
     }
 
-    /// <summary>
-    /// Record an event about a lifecycle step this manager is taking anyway.
-    /// Best-effort, as event writes are in the engine: a write that fails must
-    /// not stop the step it describes. For a run-ending event, a
-    /// <see cref="RunClosedException"/> means the end is already on record.
-    /// </summary>
-    private async Task TryRecordAsync(Guid runId, EventType type, string text)
-    {
-        try { await _eventLog.AppendAsync(runId, type, text); }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not record {EventType} on run {RunId}", type, runId);
-        }
-    }
 
     private static bool IsAlive(LoopRunStatus status)
         => status is LoopRunStatus.Running or LoopRunStatus.WaitingHuman;
@@ -847,7 +833,7 @@ public class WorkItemManager : IWorkItemManager
         if (await _loopRunStore.GetActiveByWorkItemAsync(workItemId) is not { } active)
             return await ParkWithoutRunAsync(actor, workItemId, reason, spot);
 
-        await TryRecordAsync(active.Id, EventType.RunParked, reason);
+        await _eventLog.TryAppendAsync(active.Id, EventType.RunParked, reason, _logger);
         return await TransitionAsync(actor, workItemId, RemoteWorkItemStatus.HumanFeedback, spot, reason,
             currentLoopRunId: active.Id);
     }
@@ -1237,7 +1223,7 @@ public class WorkItemManager : IWorkItemManager
             currentRun.UpdatedAt = DateTime.UtcNow;
             await _loopRunStore.UpdateRunAsync(currentRun);
             if (endedHere)
-                await TryRecordAsync(currentRun.Id, EventType.LoopRunCompleted, reason);
+                await _eventLog.TryAppendAsync(currentRun.Id, EventType.LoopRunCompleted, reason, _logger);
         }
 
         return true;
@@ -1516,14 +1502,14 @@ public class WorkItemManager : IWorkItemManager
         var merged = await _remoteProvider.MergePullRequestAsync(repo.CloneUrl, prNumber);
         if (!merged)
         {
-            await TryRecordAsync(runId, EventType.PrMergeFailed, $"Merge of {wi.PrUrl} failed");
+            await _eventLog.TryAppendAsync(runId, EventType.PrMergeFailed, $"Merge of {wi.PrUrl} failed", _logger);
             // Leave the work item parked — do not advance the loop.
             return new MergePullRequestResult(false,
                 "Failed to merge the pull request. It may have conflicts or be blocked by branch protection.",
                 false, null);
         }
 
-        await TryRecordAsync(runId, EventType.PrMerged, $"PR {wi.PrUrl} merged by user");
+        await _eventLog.TryAppendAsync(runId, EventType.PrMerged, $"PR {wi.PrUrl} merged by user", _logger);
 
         // Branch deletion is best effort: a failure after a successful merge is
         // reported but never blocks loop continuation.
@@ -1532,12 +1518,8 @@ public class WorkItemManager : IWorkItemManager
         if (deleteBranch)
         {
             var branch = wi.BranchName ?? RunWorktreeNaming.BranchFor(wi.Id, runId);
-            branchDeleted = await _remoteProvider.DeleteBranchAsync(repo.CloneUrl, branch);
-            if (!branchDeleted)
-            {
-                branchWarning = $"PR merged, but the branch '{branch}' could not be deleted.";
-                await TryRecordAsync(runId, EventType.BranchDeleteFailed, branchWarning);
-            }
+            branchWarning = await MergedBranch.TryDeleteAsync(_remoteProvider, _eventLog, _logger, runId, repo.CloneUrl, branch);
+            branchDeleted = branchWarning is null;
         }
 
         // Continue along OnSuccess — identical continuation to the Approve action.
