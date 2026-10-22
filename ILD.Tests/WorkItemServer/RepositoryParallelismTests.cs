@@ -93,7 +93,7 @@ public sealed class RepositoryParallelismTests : IDisposable
         => (await _db.ServerClient.GetHistoryAsync(Opts, id, Ct))!.Count;
 
     private async Task<IReadOnlyList<string>> ServerReadyOrderAsync()
-        => (await _db.ServerClient.PollAsync(Opts, Array.Empty<string>(), TestActors.Instance, Ct)).ReadyItems.Select(w => w.Id).ToList();
+        => (await _db.ServerClient.PollAsync(Opts, Array.Empty<string>(), WorkItemActor.System(TestActors.Instance.Username, "scheduler"), Ct)).ReadyItems.Select(w => w.Id).ToList();
 
     private Task<PollCycleResult> PassAsync(int maxConcurrent = 10, bool claimReadyItems = true)
         => _sut.RunPollCycleAsync(Opts, maxConcurrent, claimReadyItems, Ct);
