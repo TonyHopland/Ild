@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The image ships npm 12.2.0 and Node 24.22.1; set NPM_VERSION to pick another npm or leave it empty to keep Node's.**
+
 ### Added
 
 - **A repository can limit how many of its work items run at once; the rest wait in Ready.**

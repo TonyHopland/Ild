@@ -693,8 +693,21 @@ in the background; the **AI Provider** page shows each agent's current/latest
 version, lets you trigger an install or update manually, and reports failures
 (e.g. the npm registry being unreachable).
 
-Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`, and
-`NODE_RUNTIME_VERSION`. With `WITH_DOTNET_SDK=1` the image is based on
+Toolchain versions are also configurable: `NODE_VERSION`, `DOTNET_VERSION`,
+`NODE_RUNTIME_VERSION` and `NPM_VERSION`. With `WITH_NODE=1` the image installs
+Node `NODE_RUNTIME_VERSION` (24.22.1 by default) and then npm `NPM_VERSION`
+(12.2.0 by default) in place of the npm that Node ships, so repositories that
+require a newer npm in `devEngines` can run npm and npx. `NPM_VERSION` takes an
+exact version, not a range or `latest`: the build checks that npm reports
+exactly that version for both the `ild` and `agent` users, and fails otherwise.
+An empty `NPM_VERSION` keeps the npm bundled with Node. Compose replaces an
+empty value in `.env` with the default, so with compose pass
+`--build-arg NPM_VERSION=` to `docker compose build` instead. pnpm in the image
+comes only from Node's corepack, so each repository's `packageManager` picks its
+version. Node 25 and later no longer ship corepack, so an image built with such
+a `NODE_RUNTIME_VERSION` (including `latest`) has no pnpm.
+
+With `WITH_DOTNET_SDK=1` the image is based on
 `mcr.microsoft.com/dotnet/sdk:$DOTNET_VERSION`, so the SDK available to agents
 tracks `DOTNET_VERSION` rather than a separate channel. It also carries the Azure
 Artifacts credential provider, pinned by `ARTIFACTS_CREDPROVIDER_VERSION`, which
@@ -813,7 +826,7 @@ into credentials only through Microsoft's Azure Artifacts credential provider;
 without it a restore from the feed fails with `NU1301 … 401 (Unauthorized)`
 however good the PAT is. The image carries it when it is built with
 `WITH_DOTNET_SDK=1`: the `Microsoft.Artifacts.CredentialProvider.NuGet.Tool`
-.NET tool (version `ARTIFACTS_CREDPROVIDER_VERSION`, 2.0.4 by default),
+.NET tool (version `ARTIFACTS_CREDPROVIDER_VERSION`, 2.0.5 by default),
 installed once under `/usr/local/share/artifacts-credprovider` and linked into
 `/usr/local/bin` as `nuget-plugin-microsoft-artifacts-credential-provider`.
 NuGet finds a `nuget-plugin-*` command on `PATH`, so it is found for every uid,
@@ -842,7 +855,7 @@ the usual state of a **local development** setup, or of an image built without
 the user the agent runs as:
 
 - with a .NET SDK 9.0.200 or later,
-  `dotnet tool install --global Microsoft.Artifacts.CredentialProvider.NuGet.Tool --version 2.0.4`,
+  `dotnet tool install --global Microsoft.Artifacts.CredentialProvider.NuGet.Tool --version 2.0.5`,
   with `~/.dotnet/tools` on that user's `PATH`;
 - with an older SDK, Microsoft's `installcredprovider.sh`, which puts the plugin
   in `~/.nuget/plugins`.

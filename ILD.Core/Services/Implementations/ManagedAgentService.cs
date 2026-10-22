@@ -158,6 +158,14 @@ public sealed partial class ManagedAgentService : IManagedAgentService
 
         try
         {
+            // npm 12 skips dependency install scripts unless the project's
+            // package.json approves them, and the agent CLIs need their own
+            // postinstall to work. Approve exactly the agent package, nothing
+            // it depends on.
+            File.WriteAllText(
+                Path.Combine(versionDir, "package.json"),
+                JsonSerializer.Serialize(new { allowScripts = new Dictionary<string, bool> { [agent.NpmPackage] = true } }));
+
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(InstallTimeout);
 
