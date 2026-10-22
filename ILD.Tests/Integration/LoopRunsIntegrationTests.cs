@@ -224,6 +224,30 @@ public class LoopRunsIntegrationTests
     /// read never fetches its content.
     /// </summary>
     [Fact]
+    public async Task GetById_says_why_ILD_could_not_merge_an_AutoMerge_pull_request()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ApiFactory();
+        var client = await factory.CreateAuthenticatedClientAsync();
+        var failed = SeedRun(factory, LoopRunStatus.WaitingHuman, branch: "feature/automerge-failed");
+        var plain = SeedRun(factory, LoopRunStatus.WaitingHuman, branch: "feature/not-automerge");
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            await db.LoopRuns.Where(r => r.Id == failed).ExecuteUpdateAsync(u => u
+                .SetProperty(r => r.PrAutoMerge, (PrAutoMerge?)PrAutoMerge.IldFailed)
+                .SetProperty(r => r.PrAutoMergeError, "At least 1 approving review is required"), ct);
+        }
+
+        using var detail = JsonDocument.Parse(await client.GetStringAsync($"/api/v1/loopruns/{failed}", ct));
+        Assert.Equal("IldFailed", detail.RootElement.GetProperty("prAutoMerge").GetString());
+        Assert.Equal("At least 1 approving review is required", detail.RootElement.GetProperty("prAutoMergeError").GetString());
+
+        using var none = JsonDocument.Parse(await client.GetStringAsync($"/api/v1/loopruns/{plain}", ct));
+        Assert.Equal(JsonValueKind.Null, none.RootElement.GetProperty("prAutoMerge").ValueKind);
+    }
+
+    [Fact]
     public async Task GetById_lists_sessions_without_reading_any_transcript_content()
     {
         var ct = TestContext.Current.CancellationToken;
