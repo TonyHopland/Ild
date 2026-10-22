@@ -114,6 +114,16 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
     protected virtual string NormalizeReviewState(string? state)
         => (state ?? string.Empty).ToUpperInvariant();
 
+    /// <summary>
+    /// Whether the provider says the pull request may not be merged yet for a
+    /// reason other than a conflict. GitHub reports it in
+    /// <c>mergeable_state</c>: <c>blocked</c> (a required review or check,
+    /// branch protection), <c>behind</c>, <c>draft</c>, and <c>unknown</c>
+    /// while it is still working mergeability out.
+    /// </summary>
+    protected virtual bool IsMergeBlocked(JsonElement pr)
+        => ReadString(pr, "mergeable_state")?.ToLowerInvariant() is "blocked" or "behind" or "draft" or "unknown";
+
     public virtual async Task<RemotePrSnapshot?> GetPullRequestSnapshotAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);
@@ -170,7 +180,11 @@ public abstract class RemoteGitProviderAdapterBase : IRemoteGitProviderAdapter
             approved,
             changesRequested,
             conversation,
-            DateTime.UtcNow);
+            DateTime.UtcNow)
+        {
+            Draft = pr.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True,
+            MergeBlocked = IsMergeBlocked(pr),
+        };
     }
 
     private async Task<(bool Approved, bool ChangesRequested, List<RemotePrConversationEntry> Reviews)> ReadReviewsAsync(

@@ -90,6 +90,15 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<LoopRun>()
             .Property(r => r.PrCommentLedger)
             .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
+        // Who merges an AutoMerge pull request is claimed the same way: the
+        // heartbeat takes its one merge attempt by compare-and-set, and a stale
+        // instance saved afterwards must not hand the attempt back.
+        modelBuilder.Entity<LoopRun>()
+            .Property(r => r.PrAutoMerge)
+            .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
+        modelBuilder.Entity<LoopRun>()
+            .Property(r => r.PrAutoMergeError)
+            .Metadata.SetAfterSaveBehavior(PropertySaveBehavior.Ignore);
     }
 
     /// <summary>
@@ -159,6 +168,10 @@ public class AppDbContext : DbContext
             .Property(r => r.RecoveryPolicy)
             .HasConversion<string>()
             .HasMaxLength(128);
+        modelBuilder.Entity<LoopRun>()
+            .Property(r => r.PrAutoMerge)
+            .HasConversion<string>()
+            .HasMaxLength(32);
         modelBuilder.Entity<NetworkPolicyEntry>()
             .Property(e => e.ListKind)
             .HasConversion<string>()

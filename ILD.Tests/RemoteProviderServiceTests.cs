@@ -126,6 +126,76 @@ public class RemoteProviderServiceTests
         Assert.Equal("review_comment", snapshot.Conversation[2].Kind);
     }
 
+    /// <summary>
+    /// Whether ILD's AutoMerge fallback may merge rests on these two: GitHub
+    /// says a missing required review or branch protection through
+    /// mergeable_state, and anything it has not called mergeable means wait.
+    /// A conflict is not a block — it has its own reading.
+    /// </summary>
+    [Theory]
+    [InlineData("false", "clean", false, false)]
+    [InlineData("true", "draft", true, true)]
+    [InlineData("false", "blocked", false, true)]
+    [InlineData("false", "BLOCKED", false, true)]
+    [InlineData("false", "behind", false, true)]
+    [InlineData("false", "unknown", false, true)]
+    [InlineData("false", "unstable", false, false)]
+    [InlineData("false", "dirty", false, false)]
+    public async Task GetPullRequestSnapshotAsync_github_reads_draft_and_whether_the_merge_is_blocked(
+        string draft, string mergeableState, bool expectedDraft, bool expectedBlocked)
+    {
+        using var db = new TestDb();
+        AddGitHub(db);
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/reviews") || u.Contains("/comments"), () => "[]")
+            .Map(u => u.Contains("/check-runs"), () => "{\"check_runs\":[{\"status\":\"completed\",\"conclusion\":\"success\"}]}")
+            .Map(u => u.Contains("/commits/abc/status"), () => "{\"state\":\"success\",\"statuses\":[]}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"draft\":" + draft + ",\"mergeable\":true,"
+                + "\"mergeable_state\":\"" + mergeableState + "\",\"head\":{\"sha\":\"abc\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://github.com/team/repo", "7");
+
+        Assert.Equal(expectedDraft, snapshot!.Draft);
+        Assert.Equal(expectedBlocked, snapshot.MergeBlocked);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_forgejo_reads_draft_and_never_reports_a_block()
+    {
+        // Forgejo/Gitea's PullRequest carries `draft` and no mergeable_state
+        // (modules/structs/pull.go). A required approval it is missing is not
+        // detected beforehand: Forgejo refusing the one merge attempt is the
+        // failed path (D12).
+        using var db = new TestDb();
+        db.Context.RemoteProviders.Add(new RemoteProvider
+        {
+            Id = Guid.NewGuid(),
+            Name = "forgejo",
+            Type = "Forgejo",
+            Url = "https://forge.example",
+            ApiKey = "k",
+        });
+        db.Context.SaveChanges();
+
+        var handler = new RoutingHandler()
+            .Map(u => u.Contains("/reviews") || u.Contains("/comments") || u.Contains("/check-runs"), () => "[]")
+            .Map(u => u.Contains("/branch_protections"), () =>
+                "[{\"branch_name\":\"main\",\"required_approvals\":2,\"block_on_rejected_reviews\":true}]")
+            .Map(u => u.Contains("/commits/abc/status"), () =>
+                "{\"state\":\"success\",\"statuses\":[{\"context\":\"ci/woodpecker\",\"status\":\"success\"}]}")
+            .Map(u => u.EndsWith("/pulls/7", StringComparison.Ordinal), () =>
+                "{\"state\":\"open\",\"merged\":false,\"draft\":true,\"mergeable\":true,\"head\":{\"sha\":\"abc\"},\"base\":{\"ref\":\"main\"}}");
+
+        var snapshot = await CreateService(db, handler)
+            .GetPullRequestSnapshotAsync("https://forge.example/team/repo", "7");
+
+        Assert.True(snapshot!.Draft);
+        Assert.False(snapshot.MergeBlocked);
+    }
+
     [Fact]
     public async Task GetPullRequestSnapshotAsync_keeps_approval_when_a_later_comment_review_follows()
     {
@@ -1013,6 +1083,72 @@ public class RemoteProviderServiceTests
         Assert.Equal("dirty", snapshot.MergeableState);
         Assert.True(snapshot.ChangesRequested);
         Assert.Equal(RemotePrCiStatus.None, snapshot.Ci);
+    }
+
+    private const string MinimumReviewersPolicyTypeId = "fa4e907d-c16b-4a4c-9dfa-4906e5d171dd";
+    private const string BuildPolicyTypeIdForTests = "0609b952-1397-4640-95ec-e00a01b2c241";
+
+    private static string Evaluation(string typeId, bool isBlocking, string status)
+        => "{\"status\":\"" + status + "\",\"configuration\":{\"isBlocking\":" + (isBlocking ? "true" : "false")
+            + ",\"isEnabled\":true,\"type\":{\"id\":\"" + typeId + "\"},\"settings\":{\"displayName\":\"p\"}}}";
+
+    /// <summary>
+    /// Azure DevOps says a missing required review through its branch policies:
+    /// a blocking policy that is not a build (CI decides those) and has not
+    /// approved blocks the merge, and so does a merge status rejected by policy.
+    /// </summary>
+    [Theory]
+    [InlineData("none", "succeeded", false)]
+    [InlineData("blocking reviewers rejected", "succeeded", true)]
+    [InlineData("blocking reviewers queued", "succeeded", true)]
+    [InlineData("optional reviewers rejected", "succeeded", false)]
+    [InlineData("blocking reviewers approved", "succeeded", false)]
+    [InlineData("blocking reviewers not applicable", "succeeded", false)]
+    [InlineData("blocking build rejected", "succeeded", false)]
+    [InlineData("none", "rejectedByPolicy", true)]
+    public async Task GetPullRequestSnapshotAsync_azure_devops_reports_a_merge_its_policies_block(
+        string policy, string mergeStatus, bool expectedBlocked)
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+        var evaluation = policy switch
+        {
+            "none" => null,
+            "blocking reviewers rejected" => Evaluation(MinimumReviewersPolicyTypeId, true, "rejected"),
+            "blocking reviewers queued" => Evaluation(MinimumReviewersPolicyTypeId, true, "queued"),
+            "optional reviewers rejected" => Evaluation(MinimumReviewersPolicyTypeId, false, "rejected"),
+            "blocking reviewers approved" => Evaluation(MinimumReviewersPolicyTypeId, true, "approved"),
+            "blocking reviewers not applicable" => Evaluation(MinimumReviewersPolicyTypeId, true, "notApplicable"),
+            "blocking build rejected" => Evaluation(BuildPolicyTypeIdForTests, true, "rejected"),
+            _ => throw new ArgumentOutOfRangeException(nameof(policy)),
+        };
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/threads") || u.Contains("/statuses"), "{\"value\":[]}")
+            .On(u => u.Contains("/_apis/policy/evaluations"), "{\"value\":[" + evaluation + "]}")
+            .On(u => u.Contains("/pullrequests/7?"), "{\"status\":\"active\",\"isDraft\":false,\"mergeStatus\":\"" + mergeStatus + "\","
+                + "\"repository\":{\"project\":{\"id\":\"proj-guid\"}},\"reviewers\":[]}");
+
+        var snapshot = await CreateService(db, handler).GetPullRequestSnapshotAsync(AzureRepoUrl, "7");
+
+        Assert.Equal(expectedBlocked, snapshot!.MergeBlocked);
+        Assert.False(snapshot.Draft);
+    }
+
+    [Fact]
+    public async Task GetPullRequestSnapshotAsync_azure_devops_reads_a_draft()
+    {
+        using var db = new TestDb();
+        AddAzureDevOps(db);
+
+        var handler = new AzureHandler()
+            .On(u => u.Contains("/threads") || u.Contains("/statuses") || u.Contains("/evaluations"), "{\"value\":[]}")
+            .On(u => u.Contains("/pullrequests/7?"), "{\"status\":\"active\",\"isDraft\":true,\"mergeStatus\":\"succeeded\"}");
+
+        var snapshot = await CreateService(db, handler).GetPullRequestSnapshotAsync(AzureRepoUrl, "7");
+
+        Assert.True(snapshot!.Draft);
+        Assert.False(snapshot.MergeBlocked);
     }
 
     [Fact]

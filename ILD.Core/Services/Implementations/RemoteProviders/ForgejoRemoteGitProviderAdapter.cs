@@ -43,6 +43,11 @@ public sealed class ForgejoRemoteGitProviderAdapter : RemoteGitProviderAdapterBa
         return normalized == "REQUEST_CHANGES" ? "CHANGES_REQUESTED" : normalized;
     }
 
+    // Forgejo/Gitea has no mergeable_state and reports no block of its own; a
+    // merge its branch protection refuses (a missing approval) is learned from
+    // the refusal itself.
+    protected override bool IsMergeBlocked(JsonElement pr) => false;
+
     public override async Task<bool> MergePullRequestAsync(HttpClient http, ResolvedRemoteRepository repo, string prNumber)
     {
         ApplyHeaders(http, repo.Provider);

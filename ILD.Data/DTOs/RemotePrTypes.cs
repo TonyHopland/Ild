@@ -112,7 +112,19 @@ public record RemotePrSnapshot(
     bool ChangesRequested,
     IReadOnlyList<RemotePrConversationEntry> Conversation,
     DateTime FetchedAt
-);
+)
+{
+    /// <summary>The pull request is a draft, which no merge may take.</summary>
+    public bool Draft { get; init; }
+
+    /// <summary>
+    /// The provider says the merge may not happen yet for a reason other than
+    /// a conflict: a required review or policy still outstanding, the branch
+    /// behind its protected base, or mergeability not yet worked out. False
+    /// where the provider does not report such a block.
+    /// </summary>
+    public bool MergeBlocked { get; init; }
+}
 
 /// <summary>
 /// The wire form of a <see cref="RemotePrSnapshot"/> persisted on

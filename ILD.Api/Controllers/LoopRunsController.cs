@@ -200,6 +200,8 @@ public class LoopRunsController : ControllerBase
                 line = q.Line,
                 queuedAt = q.QueuedAt,
             }),
+            prAutoMerge = run.PrAutoMerge?.ToString(),
+            prAutoMergeError = run.PrAutoMergeError,
             totalInputTokens = totals.TotalInputTokens,
             totalOutputTokens = totals.TotalOutputTokens,
             totalCostUsd = totals.TotalCostUsd,

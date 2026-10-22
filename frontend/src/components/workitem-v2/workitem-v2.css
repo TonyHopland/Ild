@@ -581,6 +581,13 @@
   border-radius: 999px;
 }
 
+.wiv2-pr-details-automerge-failed {
+  margin: 0;
+  padding: 0 0.8rem 0.5rem;
+  font-size: 0.8rem;
+  color: var(--danger-text);
+}
+
 .wiv2-pr-details-body {
   display: flex;
   flex-direction: column;

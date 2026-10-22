@@ -678,6 +678,13 @@ export interface LoopRun {
   prSnapshot?: RemotePrSnapshot | null;
   /** What this round intends to write on the PR but has not written yet. */
   prQueuedWrites?: PrQueuedWrite[] | null;
+  /**
+   * Who merges an AutoMerge PR: the provider (`Native`) or ILD, which makes one
+   * attempt once CI is green. Null when the work item was not tagged AutoMerge.
+   */
+  prAutoMerge?: "Native" | "IldPending" | "IldMerging" | "IldMerged" | "IldFailed" | null;
+  /** Why ILD could not merge an AutoMerge PR, while `prAutoMerge` is `IldFailed`. */
+  prAutoMergeError?: string | null;
 }
 
 /**

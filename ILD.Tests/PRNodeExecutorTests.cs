@@ -461,6 +461,108 @@ public class PRNodeExecutorTests
         remote.Verify(r => r.EnablePullRequestAutoMergeAsync(repo.CloneUrl, "7"), Times.Once);
     }
 
+    /// <summary>
+    /// The PR node for an AutoMerge item with a store to record on, and the
+    /// provider's answer to turning native auto-merge on.
+    /// </summary>
+    private static (IServiceProvider Sp, Mock<ILoopRunStore> Runs, Mock<IRemoteProvider> Remote) AutoMergeNode(
+        string[] tags, Action<Mock<IRemoteProvider>> nativeAutoMerge)
+    {
+        var repoId = Guid.NewGuid();
+        var workItem = new WorkItemView { Id = "WI-1", Title = "T", Description = "D", RepositoryId = repoId, Tags = tags };
+        var repo = new Repository { Id = repoId, Name = "r", CloneUrl = "https://example.com/o/r.git", DefaultBranch = "main", RemoteProviderId = Guid.NewGuid() };
+
+        var workItems = new Mock<IWorkItemManager>();
+        workItems.Setup(m => m.GetWorkItemAsync(It.IsAny<string>())).ReturnsAsync(workItem);
+        var providerStore = new Mock<IProviderStore>();
+        providerStore.Setup(s => s.GetRepositoryByIdAsync(repoId)).ReturnsAsync(repo);
+        providerStore.Setup(s => s.GetRemoteProviderByIdAsync(It.IsAny<Guid>())).ReturnsAsync((RemoteProvider?)null);
+
+        var remote = new Mock<IRemoteProvider>();
+        remote.Setup(r => r.CreatePullRequestAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new RemotePrResult(null, "https://example.com/o/r/pull/42", RemotePrStatus.Open, null));
+        nativeAutoMerge(remote);
+
+        var runs = new Mock<ILoopRunStore>();
+        runs.Setup(s => s.TrySetPrAutoMergeAsync(It.IsAny<Guid>(), It.IsAny<PrAutoMerge?>(), It.IsAny<PrAutoMerge>(), It.IsAny<string?>()))
+            .ReturnsAsync(true);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(workItems.Object);
+        services.AddSingleton(providerStore.Object);
+        services.AddSingleton(remote.Object);
+        services.AddSingleton(runs.Object);
+        services.AddSingleton(Mock.Of<IRepositoryManager>());
+        return (services.BuildServiceProvider(), runs, remote);
+    }
+
+    private static async Task<List<NodeOutcome>> RunPrNodeAsync(IServiceProvider sp, LoopRun run)
+    {
+        var node = new LoopNode { Id = Guid.NewGuid(), NodeType = NodeType.PR, Config = "{}" };
+        var outcomes = new List<NodeOutcome>();
+        await foreach (var o in new PRNodeExecutor().ExecuteAsync(new NodeExecutionContext(run, node, sp, CancellationToken.None)))
+            outcomes.Add(o);
+        return outcomes;
+    }
+
+    [Theory]
+    [InlineData("enabled", PrAutoMerge.Native)]
+    [InlineData("unsupported", PrAutoMerge.IldPending)]
+    [InlineData("throws", PrAutoMerge.IldPending)]
+    public async Task An_AutoMerge_PR_records_whether_the_provider_or_ILD_will_merge_it(string native, PrAutoMerge expected)
+    {
+        var (sp, runs, remote) = AutoMergeNode(new[] { "autoMERGE" }, r =>
+        {
+            var call = r.Setup(x => x.EnablePullRequestAutoMergeAsync("https://example.com/o/r.git", "42"));
+            if (native == "throws")
+                call.ThrowsAsync(new HttpRequestException("auto-merge is not allowed for this repository"));
+            else
+                call.ReturnsAsync(native == "enabled");
+        });
+        var run = new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1" };
+
+        var outcomes = await RunPrNodeAsync(sp, run);
+
+        // Native is still tried first, and a refusal of any kind never fails the node.
+        remote.Verify(r => r.EnablePullRequestAutoMergeAsync("https://example.com/o/r.git", "42"), Times.Once);
+        Assert.DoesNotContain(outcomes, o => o is NodeOutcome.Fail);
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
+        Assert.Equal(HumanFeedbackReasons.PrAwaitingMerge, outcomes.OfType<NodeOutcome.WaitingAction>().Single().Reason);
+        runs.Verify(s => s.TrySetPrAutoMergeAsync(run.Id, null, expected, It.IsAny<string?>()), Times.Once);
+        runs.Verify(s => s.TrySetPrAutoMergeAsync(It.IsAny<Guid>(), It.IsAny<PrAutoMerge?>(), It.IsAny<PrAutoMerge>(), It.IsAny<string?>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task A_PR_without_the_AutoMerge_tag_records_no_auto_merge_state()
+    {
+        var (sp, runs, _) = AutoMergeNode(new[] { "backend" }, _ => { });
+
+        var outcomes = await RunPrNodeAsync(sp, new LoopRun { Id = Guid.NewGuid(), WorkItemId = "WI-1" });
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.PrCreated);
+        runs.Verify(s => s.TrySetPrAutoMergeAsync(It.IsAny<Guid>(), It.IsAny<PrAutoMerge?>(), It.IsAny<PrAutoMerge>(), It.IsAny<string?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Revisiting_the_PR_node_of_an_AutoMerge_item_leaves_its_auto_merge_state_alone()
+    {
+        var (sp, runs, remote) = AutoMergeNode(new[] { "AutoMerge" }, r =>
+            r.Setup(x => x.EnablePullRequestAutoMergeAsync(It.IsAny<string>(), It.IsAny<string>())).ReturnsAsync(false));
+        var run = new LoopRun
+        {
+            Id = Guid.NewGuid(),
+            WorkItemId = "WI-1",
+            PrUrl = "https://example.com/o/r/pull/42",
+            PrAutoMerge = PrAutoMerge.IldFailed,
+        };
+
+        var outcomes = await RunPrNodeAsync(sp, run);
+
+        Assert.Contains(outcomes, o => o is NodeOutcome.WaitingAction);
+        runs.Verify(s => s.TrySetPrAutoMergeAsync(It.IsAny<Guid>(), It.IsAny<PrAutoMerge?>(), It.IsAny<PrAutoMerge>(), It.IsAny<string?>()), Times.Never);
+        remote.Verify(r => r.EnablePullRequestAutoMergeAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+    }
+
     [Fact]
     public async Task When_PR_exists_and_the_round_queued_nothing_the_node_just_parks()
     {
