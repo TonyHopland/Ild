@@ -5,6 +5,7 @@ using ILD.Data.DTOs;
 using ILD.Data.Entities;
 using ILD.Data.Enums;
 using ILD.Data.Stores;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -109,6 +110,25 @@ public class PrAutoMergeStateTests
         Assert.Equal(PrAutoMerge.IldFailed, reread.PrAutoMerge);
         Assert.Equal("Required review missing", reread.PrAutoMergeError);
         Assert.Equal(PrUrl, reread.PrUrl);
+    }
+
+    [Theory]
+    [InlineData(LoopRunStatus.Running, null)]
+    [InlineData(LoopRunStatus.Cancelled, HumanFeedbackReasons.PrAwaitingMerge)]
+    [InlineData(LoopRunStatus.WaitingHuman, HumanFeedbackReasons.NodeFailed)]
+    public async Task The_merge_attempt_is_not_claimed_on_a_run_that_has_stopped_waiting_on_the_merge(
+        LoopRunStatus status, string? reason)
+    {
+        using var db = new TestDb();
+        var seeded = await SeedParkedRunAsync(db, PrAutoMerge.IldPending);
+        // Moved on, stopped or re-parked elsewhere after the heartbeat loaded it.
+        await db.Context.LoopRuns.Where(r => r.Id == seeded.Run.Id).ExecuteUpdateAsync(u => u
+            .SetProperty(r => r.Status, status)
+            .SetProperty(r => r.HumanFeedbackReason, reason), TestContext.Current.CancellationToken);
+
+        Assert.False(await new LoopRunStore(db.Fresh())
+            .TrySetPrAutoMergeAsync(seeded.Run.Id, PrAutoMerge.IldPending, PrAutoMerge.IldMerging));
+        Assert.Equal(PrAutoMerge.IldPending, (await RereadAsync(db, seeded.Run.Id)).PrAutoMerge);
     }
 
     [Fact]

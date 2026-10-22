@@ -1049,6 +1049,22 @@ describe("PR details", () => {
     expect(panel.textContent).not.toContain("Please merge it manually");
   });
 
+  test("asks for no manual merge once the run has moved on from the pull request", async () => {
+    mockServices(
+      makeRun({
+        status: LoopRunStatus.Running,
+        prSnapshot: snapshot(),
+        prQueuedWrites: [],
+        prAutoMerge: "IldFailed",
+        prAutoMergeError: "At least 1 approving review is required",
+      }),
+    );
+    const panel = await openActionTab(makeWorkItem({ prUrl: "https://git.example/pr/1" }));
+
+    expect(within(panel).getByRole("button", { name: /PR details/ })).toBeTruthy();
+    expect(panel.textContent).not.toContain("Please merge it manually");
+  });
+
   test("links to the pull request once, from the panel rather than the feedback card", async () => {
     mockServices(makeRun({ prSnapshot: snapshot() }));
     const panel = await openActionTab(

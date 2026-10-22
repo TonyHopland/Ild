@@ -130,9 +130,9 @@ public sealed class PrStatusPollService : IPrStatusPollService
         if (review is { Seeding: true })
             await RecordHandoverAsync(run, review);
 
-        // Ahead of the edges, so one that went true on the same tick (a green
-        // CI, an approval) cannot take the run off the PR node before ILD has
-        // merged. A merged PR fires nothing from this, the open snapshot: the
+        // Ahead of the edges, so on the tick the pull request may be merged one
+        // that went true alongside (a green CI, an approval) cannot take the
+        // run off the PR node before ILD has merged. A merged PR fires nothing from this, the open snapshot: the
         // next tick reads it closed and fires on_merged like any other merge.
         if (await TryAutoMergeAsync(run, snapshot, repoUrl, prNumber))
             return;
@@ -223,7 +223,7 @@ public sealed class PrStatusPollService : IPrStatusPollService
         try
         {
             if (!await _remote.MergePullRequestAsync(repoUrl, prNumber))
-                failure = "The provider refused the merge; it may have conflicts or be blocked by branch protection";
+                failure = "the provider refused or could not complete the merge";
         }
         catch (Exception ex)
         {
@@ -241,10 +241,11 @@ public sealed class PrStatusPollService : IPrStatusPollService
 
         await TrySetAutoMergeAsync(run.Id, PrAutoMerge.IldMerged, null);
         await TryRecordAsync(run.Id, EventType.PrMerged, $"PR {run.PrUrl} merged by ILD (AutoMerge)");
+        await _notifier.PrSnapshotChangedAsync(run.Id);
 
         // Best effort, as after a manual merge: a branch left behind never
         // holds up the run.
-        var branch = workItem.BranchName ?? RunWorktreeNaming.BranchFor(workItem.Id, run.Id);
+        var branch = run.BranchName ?? workItem.BranchName ?? RunWorktreeNaming.BranchFor(workItem.Id, run.Id);
         bool deleted;
         try
         {
