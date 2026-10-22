@@ -74,7 +74,7 @@ const patchedFloors: {
   // vite GHSA-fx2h-pf6j-xcff and launch-editor NTLMv2 disclosure (patched 8.0.16).
   // Vite+ aliases vite to vite-plus-core, which bundles the Vite that runs, so the
   // floor is the first core whose package.json bundledVersions.vite is 8.0.16
-  // (0.1.24); every 1.x core bundles 8.3.1 or later.
+  // (0.1.24); every 1.x release bundles 8.3.1 or later.
   {
     name: "@voidzero-dev/vite-plus-core",
     floors: { 0: "0.1.24", 1: "1.0.0" },
@@ -135,6 +135,9 @@ describe("dependency security audit", () => {
     ["5.0.0-beta.2", "5.0.0-beta.10", false],
     ["5.0.0-beta", "5.0.0-beta.1", false],
     ["5.0.0-1", "5.0.0-alpha", false],
+    ["5.0.0-alpha", "5.0.0-1", true],
+    ["5.0.0-rc.1", "5.0.0-rc.1", true],
+    ["5.0.0-x-y.2", "5.0.0-x-y.10", false],
     ["5.0.1", "5.0.0", true],
     ["4.1.10", "4.1.11", false],
   ])("isAtLeast(%s, %s) is %s", (version, minimum, expected) => {
