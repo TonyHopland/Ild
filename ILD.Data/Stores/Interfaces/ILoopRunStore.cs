@@ -257,6 +257,15 @@ public interface ILoopRunStore
     Task<bool> TrySetPrCommentQueueAsync(Guid runId, string? expected, string? json);
 
     /// <summary>
+    /// Move the run's AutoMerge state to <paramref name="next"/>, recording
+    /// <paramref name="error"/> beside it, only if it still holds
+    /// <paramref name="expected"/>; reports whether it did. The heartbeat claims
+    /// its one merge attempt through this before calling the provider, so a
+    /// second pass, a restart or a stale full-row write can never make it twice.
+    /// </summary>
+    Task<bool> TrySetPrAutoMergeAsync(Guid runId, PrAutoMerge? expected, PrAutoMerge next, string? error = null);
+
+    /// <summary>
     /// Refresh a tracked <see cref="LoopRun"/> instance with the row's current
     /// column values, discarding unsaved in-memory changes. Used by the engine
     /// before persisting so a stale instance held across a long node execution

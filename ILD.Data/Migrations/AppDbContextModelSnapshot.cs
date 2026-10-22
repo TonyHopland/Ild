@@ -838,6 +838,14 @@ namespace ILD.Data.Migrations
                     b.Property<int>("NodeExecutionCount")
                         .HasColumnType("integer");
 
+                    b.Property<string>("PrAutoMerge")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("PrAutoMergeError")
+                        .HasMaxLength(1024)
+                        .HasColumnType("character varying(1024)");
+
                     b.Property<string>("PrCommentLedger")
                         .HasColumnType("text");
 

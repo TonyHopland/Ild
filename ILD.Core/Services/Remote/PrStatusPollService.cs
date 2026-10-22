@@ -29,6 +29,10 @@ public interface IPrStatusPollService
 /// <see cref="PrCommentDelivery"/>. This is the one place every throttle on it
 /// is applied, which is why the comment webhook only wakes this pass rather than
 /// firing an edge of its own.
+///
+/// It is also where ILD merges an AutoMerge pull request whose provider could
+/// not turn its own auto-merge on: once, on the first tick the pull request may
+/// be merged, ahead of every edge. See <see cref="TryAutoMergeAsync"/>.
 /// </summary>
 public sealed class PrStatusPollService : IPrStatusPollService
 {
@@ -37,19 +41,25 @@ public sealed class PrStatusPollService : IPrStatusPollService
     private readonly ILoopEngine _engine;
     private readonly IRunNotifier _notifier;
     private readonly ILogger<PrStatusPollService> _log;
+    private readonly IWorkItemManager? _workItems;
+    private readonly IEventLogService? _eventLog;
 
     public PrStatusPollService(
         ILoopRunStore runs,
         IRemoteProvider remote,
         ILoopEngine engine,
         IRunNotifier notifier,
-        ILogger<PrStatusPollService> log)
+        ILogger<PrStatusPollService> log,
+        IWorkItemManager? workItems = null,
+        IEventLogService? eventLog = null)
     {
         _runs = runs;
         _remote = remote;
         _engine = engine;
         _notifier = notifier;
         _log = log;
+        _workItems = workItems;
+        _eventLog = eventLog;
     }
 
     public async Task PollOnceAsync(CancellationToken ct = default)
@@ -120,6 +130,13 @@ public sealed class PrStatusPollService : IPrStatusPollService
         if (review is { Seeding: true })
             await RecordHandoverAsync(run, review);
 
+        // Ahead of the edges, so one that went true on the same tick (a green
+        // CI, an approval) cannot take the run off the PR node before ILD has
+        // merged. A merged PR fires nothing from this, the open snapshot: the
+        // next tick reads it closed and fires on_merged like any other merge.
+        if (await TryAutoMergeAsync(run, snapshot, repoUrl, prNumber))
+            return;
+
         var candidates = newlyTrue.Where(connected.Contains).ToHashSet(StringComparer.Ordinal);
         if (review is { Seeding: false } && review.Decision.Items.Count > 0)
             candidates.Add(LoopOutputs.OnComment);
@@ -166,6 +183,122 @@ public sealed class PrStatusPollService : IPrStatusPollService
         // {{PreviousNode.Output}} instead of guessing at red CI.
         await _engine.SignalNodeResultAsync(run.Id, runNode.Id,
             NodeSignal.Custom(edge, PrNodeEdges.Describe(edge, snapshot, detail, run.WorkItemId)));
+    }
+
+    /// <summary>
+    /// ILD's one merge attempt on an AutoMerge pull request the provider will
+    /// not merge by itself (<see cref="PrAutoMerge.IldPending"/>), made once the
+    /// pull request may be merged and its work item still carries the tag.
+    /// Reports whether it merged.
+    ///
+    /// The attempt is claimed on the row before the provider is called, so it
+    /// happens at most once whatever else runs or restarts. A failed attempt is
+    /// never repeated: the run stays parked where it is, and a human is asked to
+    /// merge by hand — which the heartbeat then sees as it sees any merge.
+    /// </summary>
+    private async Task<bool> TryAutoMergeAsync(LoopRun run, RemotePrSnapshot snapshot, string repoUrl, string prNumber)
+    {
+        if (run.PrAutoMerge != PrAutoMerge.IldPending || !MayMerge(snapshot) || _workItems is null)
+            return false;
+
+        WorkItemView? workItem;
+        try
+        {
+            workItem = await _workItems.GetWorkItemAsync(run.WorkItemId);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "AutoMerge: could not read work item {WorkItemId} for run {RunId}; trying again next tick",
+                run.WorkItemId, run.Id);
+            return false;
+        }
+        if (workItem is null
+            || !workItem.Tags.Any(t => string.Equals(t, PRNodeExecutor.AutoMergeTag, StringComparison.OrdinalIgnoreCase)))
+            return false;
+
+        if (!await _runs.TrySetPrAutoMergeAsync(run.Id, PrAutoMerge.IldPending, PrAutoMerge.IldMerging))
+            return false;
+
+        string? failure = null;
+        try
+        {
+            if (!await _remote.MergePullRequestAsync(repoUrl, prNumber))
+                failure = "The provider refused the merge; it may have conflicts or be blocked by branch protection.";
+        }
+        catch (Exception ex)
+        {
+            failure = ex.Message;
+        }
+
+        if (failure is not null)
+        {
+            await TrySetAutoMergeAsync(run.Id, PrAutoMerge.IldFailed, failure);
+            await TryRecordAsync(run.Id, EventType.PrMergeFailed,
+                $"AutoMerge: ILD could not merge this PR ({failure}). Please merge it manually.");
+            await _notifier.PrSnapshotChangedAsync(run.Id);
+            return false;
+        }
+
+        await TrySetAutoMergeAsync(run.Id, PrAutoMerge.IldMerged, null);
+        await TryRecordAsync(run.Id, EventType.PrMerged, $"PR {run.PrUrl} merged by ILD (AutoMerge)");
+
+        // Best effort, as after a manual merge: a branch left behind never
+        // holds up the run.
+        var branch = workItem.BranchName ?? RunWorktreeNaming.BranchFor(workItem.Id, run.Id);
+        bool deleted;
+        try
+        {
+            deleted = await _remote.DeleteBranchAsync(repoUrl, branch);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "AutoMerge: could not delete branch {Branch} for run {RunId}", branch, run.Id);
+            deleted = false;
+        }
+        if (!deleted)
+            await TryRecordAsync(run.Id, EventType.BranchDeleteFailed, $"PR merged, but the branch '{branch}' could not be deleted.");
+        return true;
+    }
+
+    /// <summary>
+    /// Open, green and free to merge: every check finished and none failed (and
+    /// at least one exists), no conflict, not a draft, and nothing the provider
+    /// reports as still standing in the way, such as a required review.
+    /// </summary>
+    private static bool MayMerge(RemotePrSnapshot snapshot)
+        => snapshot is { State: "open", Merged: false, Draft: false, Ci: RemotePrCiStatus.Passed, Mergeable: true, MergeBlocked: false }
+            && !string.Equals(snapshot.MergeableState, "dirty", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Settle the attempt this pass holds the claim on. Nothing else moves the
+    /// state off <see cref="PrAutoMerge.IldMerging"/>, so a write that does not
+    /// land leaves it there — never retried, which is the side to fail on.
+    /// </summary>
+    private async Task TrySetAutoMergeAsync(Guid runId, PrAutoMerge outcome, string? error)
+    {
+        try
+        {
+            await _runs.TrySetPrAutoMergeAsync(runId, PrAutoMerge.IldMerging, outcome, error);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "AutoMerge: could not record {Outcome} on run {RunId}", outcome, runId);
+        }
+    }
+
+    /// <summary>Best effort, as event writes are elsewhere: a log that is down must not stop the tick.</summary>
+    private async Task TryRecordAsync(Guid runId, EventType type, string message)
+    {
+        if (_eventLog is null)
+            return;
+        try
+        {
+            await _eventLog.AppendAsync(runId, type, message);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Could not record {EventType} on run {RunId}", type, runId);
+        }
     }
 
     /// <summary>Whether this tick is the run's first look at the pull request, and what it found.</summary>

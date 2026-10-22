@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **AutoMerge pull requests merge once CI is green even where the provider has no auto-merge; if Ild cannot merge one, it asks you to merge it by hand.**
+
 ## [0.20.0] - 2026-10-22
 
 ### Changed

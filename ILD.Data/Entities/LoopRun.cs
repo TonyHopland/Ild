@@ -248,6 +248,16 @@ public class LoopRun : IHasUpdatedAt
     // where a human can see what is about to be said and drop any of it.
     public string? PrCommentQueue { get; set; }
 
+    // Who merges this run's pull request when its work item is tagged
+    // AutoMerge (see PrAutoMerge). Null for any other pull request. Like the
+    // two columns above it changes only through a compare-and-set, so it
+    // survives restarts and is never reverted by a full-row write.
+    public PrAutoMerge? PrAutoMerge { get; set; }
+
+    // Why ILD's one AutoMerge attempt failed, shown to the human asked to merge.
+    [MaxLength(1024)]
+    public string? PrAutoMergeError { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }

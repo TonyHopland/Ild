@@ -147,6 +147,8 @@ function PrDetails({
   const snapshot = run?.prSnapshot ?? null;
   const pending = run?.prQueuedWrites?.length ?? 0;
   const open = chosen ?? pending > 0;
+  // A PR closed since, by hand or otherwise, needs no one to merge it.
+  const autoMergeFailed = run?.prAutoMerge === "IldFailed" && snapshot?.state !== "closed";
   if (!hasPrDetails(workItem, detail, runId)) return null;
   return (
     <section ref={panelRef} className="wiv2-pr-details">
@@ -172,6 +174,12 @@ function PrDetails({
           </a>
         )}
       </div>
+      {autoMergeFailed && (
+        <p className="wiv2-pr-details-automerge-failed" role="alert">
+          AutoMerge: ILD could not merge this PR ({run?.prAutoMergeError}). Please merge it
+          manually.
+        </p>
+      )}
       {open && (
         <div className="wiv2-pr-details-body">
           {snapshot ? (

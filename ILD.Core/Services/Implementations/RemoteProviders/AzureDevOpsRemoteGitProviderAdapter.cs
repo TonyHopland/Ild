@@ -466,7 +466,8 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
 
         var (approved, changesRequested, reviews) = ReadReviewers(pr);
         var conversation = await ReadConversationAsync(http, repo, prNumber, reviews);
-        var (ci, failedChecks) = await ReadCiStatusAsync(http, repo, pr, prNumber);
+        var evaluations = await ReadPolicyEvaluationsAsync(http, repo, pr, prNumber);
+        var (ci, failedChecks) = await ReadCiStatusAsync(http, repo, evaluations, prNumber);
 
         return new RemotePrSnapshot(
             ReadString(pr, "title"),
@@ -482,7 +483,41 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
             approved,
             changesRequested,
             conversation,
-            DateTime.UtcNow);
+            DateTime.UtcNow)
+        {
+            Draft = pr.TryGetProperty("isDraft", out var draft) && draft.ValueKind == JsonValueKind.True,
+            MergeBlocked = mergeStatus == "rejectedbypolicy" || evaluations.Any(BlocksMerge),
+        };
+    }
+
+    /// <summary>
+    /// A blocking branch policy that has not passed, other than a build — CI
+    /// decides those. This is where a required reviewer count, a linked work
+    /// item or a comment-resolution policy keeps the pull request from merging.
+    /// </summary>
+    private static bool BlocksMerge(JsonElement evaluation)
+    {
+        var configuration = Child(evaluation, "configuration");
+        if (Child(configuration, "isBlocking")?.ValueKind != JsonValueKind.True
+            || string.Equals(ReadString(Child(configuration, "type"), "id"), BuildPolicyTypeId, StringComparison.OrdinalIgnoreCase))
+            return false;
+        return (ReadString(evaluation, "status") ?? string.Empty).ToLowerInvariant() is not ("approved" or "notapplicable");
+    }
+
+    /// <summary>
+    /// The branch-policy evaluations on the pull request, or none when the
+    /// response does not name its project.
+    /// </summary>
+    private async Task<IReadOnlyList<JsonElement>> ReadPolicyEvaluationsAsync(
+        HttpClient http, ResolvedRemoteRepository repo, JsonElement pr, string prNumber)
+    {
+        var projectId = ReadString(Child(Child(pr, "repository"), "project"), "id");
+        if (projectId is null)
+            return Array.Empty<JsonElement>();
+
+        var artifactId = $"vstfs:///CodeReview/CodeReviewId/{projectId}/{prNumber}";
+        return await GetArrayAsync(http, Versioned(
+            $"{repo.ApiBase}/_apis/policy/evaluations", $"artifactId={Uri.EscapeDataString(artifactId)}"), CollectionProperty);
     }
 
     /// <summary>
@@ -844,42 +879,34 @@ public sealed class AzureDevOpsRemoteGitProviderAdapter : RemoteGitProviderAdapt
     /// CI and are left out of the verdict.
     /// </summary>
     private async Task<(RemotePrCiStatus Status, IReadOnlyList<RemotePrCheck> FailedChecks)> ReadCiStatusAsync(
-        HttpClient http, ResolvedRemoteRepository repo, JsonElement pr, string prNumber)
+        HttpClient http, ResolvedRemoteRepository repo, IReadOnlyList<JsonElement> evaluations, string prNumber)
     {
         var anyPresent = false;
         var anyPending = false;
         var failed = new List<RemotePrCheck>();
 
-        var projectId = ReadString(Child(Child(pr, "repository"), "project"), "id");
-        if (projectId is not null)
+        foreach (var evaluation in evaluations)
         {
-            var artifactId = $"vstfs:///CodeReview/CodeReviewId/{projectId}/{prNumber}";
-            var evaluations = await GetArrayAsync(http, Versioned(
-                $"{repo.ApiBase}/_apis/policy/evaluations", $"artifactId={Uri.EscapeDataString(artifactId)}"), CollectionProperty);
+            var configuration = Child(evaluation, "configuration");
+            if (!string.Equals(ReadString(Child(configuration, "type"), "id"), BuildPolicyTypeId, StringComparison.OrdinalIgnoreCase))
+                continue;
 
-            foreach (var evaluation in evaluations)
+            var status = (ReadString(evaluation, "status") ?? string.Empty).ToLowerInvariant();
+            if (status is "notapplicable")
+                continue;
+
+            anyPresent = true;
+            if (status is "queued" or "running")
+                anyPending = true;
+            else if (status is "rejected" or "broken")
             {
-                var configuration = Child(evaluation, "configuration");
-                if (!string.Equals(ReadString(Child(configuration, "type"), "id"), BuildPolicyTypeId, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var status = (ReadString(evaluation, "status") ?? string.Empty).ToLowerInvariant();
-                if (status is "notapplicable")
-                    continue;
-
-                anyPresent = true;
-                if (status is "queued" or "running")
-                    anyPending = true;
-                else if (status is "rejected" or "broken")
-                {
-                    var buildId = ReadScalar(Child(evaluation, "context"), "buildId");
-                    failed.Add(new RemotePrCheck(
-                        ReadString(Child(configuration, "settings"), "displayName") ?? "Build",
-                        status,
-                        buildId is null ? null : $"{repo.ApiBase}/_build/results?buildId={buildId}",
-                        null,
-                        buildId));
-                }
+                var buildId = ReadScalar(Child(evaluation, "context"), "buildId");
+                failed.Add(new RemotePrCheck(
+                    ReadString(Child(configuration, "settings"), "displayName") ?? "Build",
+                    status,
+                    buildId is null ? null : $"{repo.ApiBase}/_build/results?buildId={buildId}",
+                    null,
+                    buildId));
             }
         }
 

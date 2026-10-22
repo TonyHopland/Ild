@@ -12,11 +12,12 @@ namespace ILD.Core.Services.Implementations.Executors;
 public sealed class PRNodeExecutor : INodeExecutor
 {
     /// <summary>
-    /// Work-item tag that opts a run into turning on auto-merge for the PR this
-    /// node creates, when the repository supports it. Matched case-insensitively,
-    /// like Condition node tag checks.
+    /// Work-item tag that opts a run into having the PR this node creates merged
+    /// once its CI is green: by the provider's own auto-merge where it can be
+    /// turned on, otherwise by the PR heartbeat. Matched case-insensitively, like
+    /// Condition node tag checks.
     /// </summary>
-    private const string AutoMergeTag = "AutoMerge";
+    public const string AutoMergeTag = "AutoMerge";
 
     public NodeType NodeType => NodeType.PR;
 
@@ -186,14 +187,29 @@ public sealed class PRNodeExecutor : INodeExecutor
             }
 
             // Opt-in auto-merge: when the work item carries the AutoMerge tag, ask
-            // the provider to merge the PR once its checks pass. Best-effort — a
-            // repository that does not support auto-merge leaves the PR open for
-            // the heartbeat/human merge path, so a false result is not a failure.
+            // the provider to merge the PR once its checks pass. Where it cannot
+            // (the repository or plan lacks the feature, the call fails) the PR
+            // heartbeat takes over and makes ONE merge attempt of its own once
+            // every check is complete and green and the PR is mergeable. Neither
+            // outcome fails the node. Which of the two merges is recorded on the
+            // run, so ILD never races the provider's own merge; and an ILD
+            // attempt that fails leaves the run parked here for a human to merge.
             if (wi.Tags.Any(t => string.Equals(t, AutoMergeTag, StringComparison.OrdinalIgnoreCase)))
             {
                 var prNumber = RemotePrUrl.ExtractPrNumber(prUrl);
                 if (!string.IsNullOrEmpty(prNumber))
-                    await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber);
+                {
+                    var native = false;
+                    try { native = await remote.EnablePullRequestAutoMergeAsync(repo.CloneUrl, prNumber); }
+                    catch (Exception ex)
+                    {
+                        sp.GetService<ILogger<PRNodeExecutor>>()?.LogWarning(
+                            ex, "Could not turn on auto-merge for {PrUrl}; ILD will merge it", prUrl);
+                    }
+
+                    if (sp.GetService<ILoopRunStore>() is { } runs)
+                        await runs.TrySetPrAutoMergeAsync(ctx.Run.Id, null, native ? PrAutoMerge.Native : PrAutoMerge.IldPending);
+                }
             }
         }
         else if (await HasQueuedWritesAsync(ctx, sp))

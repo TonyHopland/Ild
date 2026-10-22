@@ -526,6 +526,21 @@ public class LoopRunStore : ILoopRunStore
         return rows > 0;
     }
 
+    public async Task<bool> TrySetPrAutoMergeAsync(Guid runId, PrAutoMerge? expected, PrAutoMerge next, string? error = null)
+    {
+        error = error is null ? null : AppDbContext.WithoutNul(error);
+        if (error is { Length: > 1024 })
+            error = error[..1024];
+        var rows = expected is null
+            ? await _db.LoopRuns
+                .Where(r => r.Id == runId && r.PrAutoMerge == null)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrAutoMerge, next).SetProperty(r => r.PrAutoMergeError, error))
+            : await _db.LoopRuns
+                .Where(r => r.Id == runId && r.PrAutoMerge == expected)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.PrAutoMerge, next).SetProperty(r => r.PrAutoMergeError, error));
+        return rows > 0;
+    }
+
     public async Task CreateRunNodeAsync(LoopRunNode runNode)
     {
         _db.LoopRunNodes.Add(runNode);
