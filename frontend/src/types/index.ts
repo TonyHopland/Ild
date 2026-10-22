@@ -395,7 +395,7 @@ export interface WorkItemPageQuery extends WorkItemListFilter {
   take: number;
 }
 
-/** A page of work items, newest first, and how many match its filter across every page. */
+/** A page of work items, in board order, and how many match its filter across every page. */
 export interface WorkItemPage {
   items: WorkItem[];
   total: number;
