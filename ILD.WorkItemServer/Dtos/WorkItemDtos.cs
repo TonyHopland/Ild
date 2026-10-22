@@ -11,7 +11,8 @@ public sealed class WorkItemDto
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
-    public WorkItemPriority Priority { get; set; }
+    /// <summary>The item's place in the board order: lower comes first, equal values in id order.</summary>
+    public double Priority { get; set; }
     public WorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
@@ -59,7 +60,6 @@ public sealed class CreateWorkItemRequest
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? CreatedBy { get; set; }
-    public WorkItemPriority Priority { get; set; } = WorkItemPriority.Medium;
     public IReadOnlyList<string>? Tags { get; set; }
     public IReadOnlyList<string>? Dependencies { get; set; }
     public WorkItemStatus? ForceStatus { get; set; }
@@ -85,6 +85,9 @@ public sealed class UpdateWorkItemRequest
     public string? Title { get; set; }
     public string? Description { get; set; }
     public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>Moves the item in the board order. Null leaves it where it is.</summary>
+    public double? Priority { get; set; }
 
     /// <summary>
     /// Replaces the item's custom branch name. Null leaves it untouched; an

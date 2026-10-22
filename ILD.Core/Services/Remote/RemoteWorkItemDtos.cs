@@ -18,14 +18,6 @@ public enum RemoteWorkItemStatus
     Done = 6,
 }
 
-public enum RemoteWorkItemPriority
-{
-    Low = 0,
-    Medium = 1,
-    High = 2,
-    Critical = 3,
-}
-
 /// <summary>
 /// Mirrors the WorkItem server's AiProviderOverrideMode. Kept independent so
 /// ILD.Core does not reference the server assembly (see <see cref="RemoteWorkItemStatus"/>).
@@ -88,7 +80,8 @@ public sealed class RemoteWorkItem
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
-    public RemoteWorkItemPriority Priority { get; set; }
+    /// <summary>The item's place in the board order: lower comes first, see <see cref="WorkItemOrder"/>.</summary>
+    public double Priority { get; set; }
     public RemoteWorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
@@ -128,7 +121,6 @@ public sealed class RemoteCreateWorkItemRequest
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? CreatedBy { get; set; }
-    public RemoteWorkItemPriority Priority { get; set; } = RemoteWorkItemPriority.Medium;
     public IReadOnlyList<string>? Tags { get; set; }
     public IReadOnlyList<string>? Dependencies { get; set; }
     public RemoteWorkItemStatus? ForceStatus { get; set; }
@@ -148,6 +140,9 @@ public sealed class RemoteUpdateWorkItemRequest
     public string? Title { get; set; }
     public string? Description { get; set; }
     public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>Moves the item in the board order; null leaves it where it is.</summary>
+    public double? Priority { get; set; }
 
     /// <summary>
     /// Replaces the item's custom branch name. Null leaves it untouched; blank

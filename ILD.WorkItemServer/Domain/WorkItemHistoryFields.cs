@@ -1,12 +1,14 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
 
 namespace ILD.WorkItemServer.Domain;
 
 /// <summary>
 /// The work item fields history tracks, by the names history rows carry, and the
-/// one way their values are written down: enums by name, Guids in lowercase "D"
-/// form, the JSON columns as stored, unset as null. The baseline seed in the
-/// migration that added history writes the same encoding in SQL.
+/// one way their values are written down: enums by name, numbers invariant and
+/// round-trippable, Guids in lowercase "D" form, the JSON columns as stored,
+/// unset as null. The baseline seed in the migration that added history writes
+/// the same encoding in SQL, from before the priority became a number.
 /// </summary>
 public static class WorkItemHistoryFields
 {
@@ -67,6 +69,7 @@ public static class WorkItemHistoryFields
         null => null,
         string s => s,
         Enum e => e.ToString(),
+        double d => d.ToString("R", CultureInfo.InvariantCulture),
         Guid g => g.ToString("D"),
         _ => throw new ArgumentException($"No history encoding for {value.GetType().Name}.", nameof(value)),
     };

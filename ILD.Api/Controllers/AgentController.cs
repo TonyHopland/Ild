@@ -152,7 +152,6 @@ public class AgentController : ControllerBase
         [FromQuery] string? status = null,
         [FromQuery] string? repositoryId = null,
         [FromQuery] string? createdByLoopRunId = null,
-        [FromQuery] string? priority = null,
         [FromQuery] string[]? tags = null,
         [FromQuery] string? orderBy = null,
         [FromQuery] bool actionableOnly = false,
@@ -167,9 +166,6 @@ public class AgentController : ControllerBase
         RemoteWorkItemStatus? statusFilter = null;
         if (!string.IsNullOrEmpty(status) && Enum.TryParse<RemoteWorkItemStatus>(status, true, out var s))
             statusFilter = s;
-        RemoteWorkItemPriority? priorityFilter = null;
-        if (!string.IsNullOrEmpty(priority) && Enum.TryParse<RemoteWorkItemPriority>(priority, true, out var p))
-            priorityFilter = p;
         Guid? repoFilter = null;
         if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
             repoFilter = repoGuid;
@@ -186,7 +182,6 @@ public class AgentController : ControllerBase
             var items = await _workItems.ListSummariesAsync(new WorkItemListQuery
             {
                 Status = statusFilter,
-                Priority = priorityFilter,
                 Tags = tagFilter is { Count: > 0 } ? tagFilter : null,
                 RepositoryId = repoFilter,
                 CreatedByLoopRunId = runFilter,
@@ -200,7 +195,7 @@ public class AgentController : ControllerBase
                 id = w.Id,
                 title = w.Title,
                 status = w.Status.ToString(),
-                priority = w.Priority.ToString(),
+                priority = w.Priority,
                 tags = w.Tags,
                 blockedBy = w.BlockedBy.Take(MaxBlockedByIds),
                 blockedByCount = w.BlockedBy.Count,
@@ -242,7 +237,6 @@ public class AgentController : ControllerBase
             {
                 total = summary.Total,
                 countsByStatus = summary.CountsByStatus,
-                countsByPriority = summary.CountsByPriority,
                 blocked = summary.Blocked,
                 actionable = summary.Actionable,
             });
@@ -297,7 +291,7 @@ public class AgentController : ControllerBase
             title = wi.Title,
             description = wi.Description,
             status = wi.Status.ToString(),
-            priority = wi.Priority.ToString(),
+            priority = wi.Priority,
             tags = wi.Tags,
             repositoryId = wi.RepositoryId == Guid.Empty ? null : (Guid?)wi.RepositoryId,
             // The repository the current run's worktree and branch belong to,

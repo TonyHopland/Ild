@@ -19,6 +19,17 @@ public interface IWorkItemManager
     Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 
     /// <summary>
+    /// Move a card to a drop spot on the board, given the cards directly above
+    /// and below it in its column. With a card above, the item lands directly
+    /// after it in the whole board's order (every status), the card below only
+    /// being checked to exist; otherwise directly before the card below. Only the
+    /// item is written, unless no number is left between its new neighbours:
+    /// then the whole board is renumbered in the same order, writing only the
+    /// items whose value changes. Every written item is announced.
+    /// </summary>
+    Task<ReorderOutcome> ReorderAsync(WorkItemActor actor, string workItemId, string? aboveId, string? belowId);
+
+    /// <summary>
     /// Server-authoritative listing. Queries the WorkItemServer and merges
     /// engine-only fields from LoopRun rows.
     /// </summary>
@@ -344,6 +355,17 @@ public enum PullBranchOutcome
 
     /// <summary>Everything else: no worktree, no repository, unresolvable branch, failed fetch.</summary>
     Failed,
+}
+
+public enum ReorderOutcome
+{
+    Moved,
+
+    /// <summary>The item to move does not exist.</summary>
+    NotFound,
+
+    /// <summary>No neighbour was given, or one is the item itself or does not exist.</summary>
+    InvalidNeighbour,
 }
 
 /// <summary>

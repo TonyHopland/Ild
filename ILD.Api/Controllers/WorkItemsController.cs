@@ -115,7 +115,7 @@ public class WorkItemsController : ControllerBase
 
     /// <summary>
     /// One taskboard column: a page of the items in <paramref name="status"/>
-    /// newest first, carrying every requested tag, with the total across pages.
+    /// in board order, carrying every requested tag, with the total across pages.
     /// A status or repository that does not parse is refused rather than
     /// widened to every item.
     /// </summary>
@@ -134,7 +134,7 @@ public class WorkItemsController : ControllerBase
         var query = filter with
         {
             Status = statusFilter,
-            OrderBy = WorkItemOrderBy.CreatedAt,
+            OrderBy = WorkItemOrderBy.Priority,
             Skip = skip,
             Take = take,
         };
@@ -326,6 +326,24 @@ public class WorkItemsController : ControllerBase
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
+    }
+
+    /// <summary>
+    /// Move a card to where it was dropped on the board, between the cards
+    /// directly above and below the drop spot in its column.
+    /// </summary>
+    [HttpPost("{id}/reorder")]
+    public async Task<IActionResult> Reorder(string id, [FromBody] WorkItemReorderRequest request)
+    {
+        if (SignedInUser is not { } user)
+            return Unauthorized();
+
+        return await _workItemManager.ReorderAsync(user, id, request.AboveId, request.BelowId) switch
+        {
+            ReorderOutcome.NotFound => NotFound(),
+            ReorderOutcome.InvalidNeighbour => BadRequest(new { error = "aboveId or belowId must name another work item." }),
+            _ => Ok(await _workItemManager.GetWorkItemAsync(id)),
+        };
     }
 
     /// <summary>

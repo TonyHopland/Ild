@@ -370,7 +370,6 @@ public class WorkItemManager : IWorkItemManager
         creatorOf ??= w => w.CreatedByLoopRunId;
         var filtered = items;
         if (query.Status.HasValue) filtered = filtered.Where(w => w.Status == query.Status.Value);
-        if (query.Priority.HasValue) filtered = filtered.Where(w => w.Priority == query.Priority.Value);
         if (query.RepositoryId.HasValue) filtered = filtered.Where(w => w.RepositoryId == query.RepositoryId.Value);
         if (query.CreatedByLoopRunId.HasValue) filtered = filtered.Where(w => creatorOf(w) == query.CreatedByLoopRunId.Value);
         var wanted = (query.Tags ?? Array.Empty<string>())
@@ -393,13 +392,12 @@ public class WorkItemManager : IWorkItemManager
         if (query.ActionableOnly)
             filtered = filtered.Where(w => IsActionable(w, statusById));
 
-        var ordered = query.OrderBy switch
+        return query.OrderBy switch
         {
-            WorkItemOrderBy.Priority => filtered.OrderByDescending(w => w.Priority).ThenByDescending(w => w.UpdatedAt),
-            WorkItemOrderBy.CreatedAt => filtered.OrderByDescending(w => w.CreatedAt),
-            _ => filtered.OrderByDescending(w => w.UpdatedAt),
+            WorkItemOrderBy.Priority => filtered.Order(WorkItemOrder.Board),
+            WorkItemOrderBy.CreatedAt => filtered.OrderByDescending(w => w.CreatedAt).ThenByDescending(w => w.Id, StringComparer.Ordinal),
+            _ => filtered.OrderByDescending(w => w.UpdatedAt).ThenByDescending(w => w.Id, StringComparer.Ordinal),
         };
-        return ordered.ThenByDescending(w => w.Id, StringComparer.Ordinal);
     }
 
     public async Task<BacklogSummary> GetBacklogSummaryAsync(Guid? repositoryId)
@@ -416,15 +414,11 @@ public class WorkItemManager : IWorkItemManager
         var byStatus = scoped
             .GroupBy(w => w.Status)
             .ToDictionary(g => g.Key.ToString(), g => g.Count());
-        var byPriority = scoped
-            .GroupBy(w => w.Priority)
-            .ToDictionary(g => g.Key.ToString(), g => g.Count());
         var actionable = scoped.Count(w => IsActionable(w, statusById));
 
         return new BacklogSummary(
             scoped.Count,
             byStatus,
-            byPriority,
             scoped.Count - actionable,
             actionable);
     }
@@ -698,6 +692,51 @@ public class WorkItemManager : IWorkItemManager
         // UI and agent/MCP alike — since both flow through here.
         await _notifier.WorkItemStateChangedAsync(updated.Id, updated.Status, updated.Status);
 
+        return true;
+    }
+
+    public async Task<ReorderOutcome> ReorderAsync(WorkItemActor actor, string workItemId, string? aboveId, string? belowId)
+    {
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
+        var board = (await _server.ListAsync(opts, status: null, tags: null)).Order(WorkItemOrder.Board).ToList();
+        var item = board.Find(w => w.Id == workItemId);
+        if (item is null) return ReorderOutcome.NotFound;
+        if (aboveId is null && belowId is null) return ReorderOutcome.InvalidNeighbour;
+
+        var rest = board.Where(w => w.Id != workItemId).ToList();
+        var above = aboveId is null ? -1 : rest.FindIndex(w => w.Id == aboveId);
+        var below = belowId is null ? -1 : rest.FindIndex(w => w.Id == belowId);
+        if ((aboveId is not null && above < 0) || (belowId is not null && below < 0))
+            return ReorderOutcome.InvalidNeighbour;
+
+        var slot = aboveId is not null ? above + 1 : below;
+        var prev = slot > 0 ? rest[slot - 1] : null;
+        var next = slot < rest.Count ? rest[slot] : null;
+        var priority = (prev, next) switch
+        {
+            (not null, not null) => prev.Priority + (next.Priority - prev.Priority) / 2,
+            (not null, null) => prev.Priority + 1,
+            _ => next!.Priority - 1,
+        };
+        if ((prev is null || prev.Priority < priority) && (next is null || priority < next.Priority))
+            return await WritePriorityAsync(opts, actor, item.Id, priority) ? ReorderOutcome.Moved : ReorderOutcome.NotFound;
+
+        rest.Insert(slot, item);
+        var outcome = ReorderOutcome.Moved;
+        for (var i = 0; i < rest.Count; i++)
+        {
+            if (rest[i].Priority == i) continue;
+            var written = await WritePriorityAsync(opts, actor, rest[i].Id, i);
+            if (!written && rest[i] == item) outcome = ReorderOutcome.NotFound;
+        }
+        return outcome;
+    }
+
+    private async Task<bool> WritePriorityAsync(WorkItemServerOptions opts, WorkItemActor actor, string workItemId, double priority)
+    {
+        var updated = await _server.UpdateAsync(opts, workItemId, new RemoteUpdateWorkItemRequest { Priority = priority }, actor);
+        if (updated == null) return false;
+        await _notifier.WorkItemStateChangedAsync(updated.Id, updated.Status, updated.Status);
         return true;
     }
 

@@ -12,9 +12,6 @@ public class WorkItemCreateRequest
 
     public string RepositoryId { get; set; } = string.Empty;
 
-    [StringLength(32)]
-    public string Priority { get; set; } = "Medium";
-
     /// <summary>
     /// Tags for loop-template matching and user categorisation. Sent to
     /// the WorkItemServer; the server is authoritative.

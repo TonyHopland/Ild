@@ -24,7 +24,7 @@ public sealed class ListingTools
     public ListingTools(IldClient ild) { _ild = ild; }
 
     [McpServerTool(Name = "list_workitems")]
-    [Description("List work items as lightweight, relationship-aware rows for triage — NO full bodies. Each row carries title, status, priority, tags, a short descriptionPreview, the dependency ids blocking it (blockedBy/blockedByCount), the reverse-edge count of items it blocks (blocksCount), and an actionable flag (true when all its dependencies are Done). Use get_backlog_summary first to orient, then this to shortlist, then get_workitem for the few you pick. Status is one of Backlog, WorkQueue, Ready, Running, HumanFeedback, Done. Use createdByLoopRunId to find items spawned by a specific loop run (useful for cleaning up after a rogue agent).")]
+    [Description("List work items as lightweight, relationship-aware rows for triage — NO full bodies. Each row carries title, status, priority (the item's place in the board order: lower comes first), tags, a short descriptionPreview, the dependency ids blocking it (blockedBy/blockedByCount), the reverse-edge count of items it blocks (blocksCount), and an actionable flag (true when all its dependencies are Done). Use get_backlog_summary first to orient, then this to shortlist, then get_workitem for the few you pick. Status is one of Backlog, WorkQueue, Ready, Running, HumanFeedback, Done. Use createdByLoopRunId to find items spawned by a specific loop run (useful for cleaning up after a rogue agent).")]
     public Task<string> ListWorkItems(
         [Description("Optional status filter: Backlog, WorkQueue, Ready, Running, HumanFeedback, Done.")]
         string? status = null,
@@ -32,11 +32,9 @@ public sealed class ListingTools
         string? repositoryId = null,
         [Description("Optional originating LoopRun GUID to filter by.")]
         string? createdByLoopRunId = null,
-        [Description("Optional priority filter: Low, Medium, High, Critical.")]
-        string? priority = null,
         [Description("Optional tags to filter by; an item matches if it carries any of them.")]
         string[]? tags = null,
-        [Description("Sort order: updatedAt (default), createdAt, or priority (highest first). Timestamp orders are most-recent first.")]
+        [Description("Sort order: updatedAt (default), createdAt, or priority (board order: the item the board shows first, and starts first when Ready, comes first). Timestamp orders are most-recent first.")]
         string? orderBy = null,
         [Description("When true, return only items whose dependencies are all Done (actionable now).")]
         bool actionableOnly = false,
@@ -47,7 +45,7 @@ public sealed class ListingTools
     {
         var qs = BuildQuery(("status", status), ("repositoryId", repositoryId),
                             ("createdByLoopRunId", createdByLoopRunId),
-                            ("priority", priority), ("orderBy", orderBy),
+                            ("orderBy", orderBy),
                             ("actionableOnly", actionableOnly ? "true" : null),
                             ("includeDescription", includeDescription ? "true" : null),
                             ("skip", skip.ToString()), ("take", take.ToString()));
@@ -56,7 +54,7 @@ public sealed class ListingTools
     }
 
     [McpServerTool(Name = "get_backlog_summary")]
-    [Description("Orient over a backlog without pulling any bodies: returns total count, counts by status, counts by priority, and how many items are blocked vs. actionable (dependencies all Done). Call this first when triaging a large backlog, then narrow with list_workitems.")]
+    [Description("Orient over a backlog without pulling any bodies: returns total count, counts by status, and how many items are blocked vs. actionable (dependencies all Done). Call this first when triaging a large backlog, then narrow with list_workitems.")]
     public Task<string> GetBacklogSummary(
         [Description("Optional repository GUID to scope the summary to.")] string? repositoryId = null)
     {

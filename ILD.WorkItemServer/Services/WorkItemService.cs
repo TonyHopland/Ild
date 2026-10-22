@@ -78,7 +78,6 @@ public sealed class WorkItemService : IWorkItemService
             CreatedBy = req.CreatedBy,
             CreatedAt = now,
             UpdatedAt = now,
-            Priority = req.Priority,
             Status = req.ForceStatus ?? WorkItemStatus.Backlog,
             CreatedByLoopRunId = req.CreatedByLoopRunId,
             CreatedByChatSessionId = req.CreatedByChatSessionId,
@@ -90,6 +89,8 @@ public sealed class WorkItemService : IWorkItemService
         WorkItemMapper.WriteDependencies(w, req.Dependencies ?? Array.Empty<string>());
 
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        var topmost = await _db.WorkItems.MinAsync(x => (double?)x.Priority, ct);
+        w.Priority = topmost - 1 ?? 0;
         _db.WorkItems.Add(w);
         await _db.SaveChangesAsync(ct);
         w.Id = w.InternalId.ToString(CultureInfo.InvariantCulture);
@@ -129,7 +130,7 @@ public sealed class WorkItemService : IWorkItemService
     {
         IQueryable<WorkItem> q = _db.WorkItems;
         if (status.HasValue) q = q.Where(w => w.Status == status.Value);
-        var items = await q.ToListAsync(ct);
+        var items = await InBoardOrder(q).ToListAsync(ct);
 
         if (tags is { Count: > 0 })
         {
@@ -144,6 +145,14 @@ public sealed class WorkItemService : IWorkItemService
         return await WithDetailsAsync(items, ct);
     }
 
+    /// <summary>
+    /// Lowest priority first, equal priorities in id order: an item's id is its
+    /// InternalId as text, so InternalId orders ids numerically. Every reader
+    /// sharing the board sees the same order.
+    /// </summary>
+    private static IQueryable<WorkItem> InBoardOrder(IQueryable<WorkItem> items)
+        => items.OrderBy(w => w.Priority).ThenBy(w => w.InternalId);
+
     public async Task<WorkItemDto?> UpdateAsync(string id, UpdateWorkItemRequest req, CancellationToken ct = default)
     {
         var w = await _db.WorkItems.FirstOrDefaultAsync(x => x.Id == id, ct);
@@ -152,6 +161,7 @@ public sealed class WorkItemService : IWorkItemService
         if (req.Title != null) w.Title = req.Title;
         if (req.Description != null) w.Description = req.Description;
         if (req.Tags != null) WorkItemMapper.WriteTags(w, req.Tags);
+        if (req.Priority != null) w.Priority = req.Priority.Value;
         // Mode and target travel as a unit: setting the mode also sets the
         // target (null clears it). None is a real, settable value — clearing an
         // override back to "no override" must persist, so this cannot key off a
@@ -516,8 +526,7 @@ public sealed class WorkItemService : IWorkItemService
         foreach (var w in active)
             w.LastHeartbeatAt = now;
 
-        var ready = await _db.WorkItems
-            .Where(w => w.Status == WorkItemStatus.Ready)
+        var ready = await InBoardOrder(_db.WorkItems.Where(w => w.Status == WorkItemStatus.Ready))
             .ToListAsync(ct);
 
         if (active.Count > 0)

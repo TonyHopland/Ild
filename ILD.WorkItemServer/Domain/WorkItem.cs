@@ -28,7 +28,7 @@ public class WorkItem
 
     public DateTime UpdatedAt { get; set; }
 
-    public WorkItemPriority Priority { get; set; } = WorkItemPriority.Medium;
+    public double Priority { get; set; }
 
     public WorkItemStatus Status { get; set; } = WorkItemStatus.Backlog;
 
