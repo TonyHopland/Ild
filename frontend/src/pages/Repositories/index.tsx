@@ -517,7 +517,9 @@ export default function Repositories() {
                   max={1000}
                   value={parallelism}
                   aria-describedby="repoParallelismHint"
-                  onChange={(e) => setParallelism(parseInt(e.target.value, 10) || 0)}
+                  onChange={(e) =>
+                    setParallelism(Math.min(1000, Math.max(0, parseInt(e.target.value, 10) || 0)))
+                  }
                 />
                 <span className="repo-hint" id="repoParallelismHint">
                   How many of this repository's work items run at once. The rest wait in Ready until

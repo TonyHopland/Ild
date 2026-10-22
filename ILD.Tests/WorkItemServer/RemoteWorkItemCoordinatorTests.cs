@@ -977,4 +977,68 @@ public sealed class RemoteWorkItemCoordinatorTests
 
         Assert.Single(result.Resumed);
     }
+
+    [Fact]
+    public async Task An_item_another_instance_claimed_first_takes_its_repository_slot()
+    {
+        var repository = new Repository { Id = Guid.NewGuid(), Name = "repo", CloneUrl = "https://example.com/repo.git", Parallelism = 1 };
+        var lost = Item("lost", RemoteWorkItemStatus.Ready, "build");
+        var next = Item("next", RemoteWorkItemStatus.Ready, "build");
+        lost.RepositoryId = next.RepositoryId = repository.Id;
+
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemotePollResponse { ReadyItems = new[] { lost, next } });
+        client.Setup(c => c.ListAsync(Opts, It.IsAny<RemoteWorkItemStatus?>(), null, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(Array.Empty<RemoteWorkItem>());
+        client.Setup(c => c.TransitionAsync(Opts, lost.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Running, Reason = "Already claimed" });
+        var providers = new Mock<IProviderStore>();
+        providers.Setup(p => p.GetRepositoryByIdAsync(repository.Id)).ReturnsAsync(repository);
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
+
+        var sut = new RemoteWorkItemCoordinator(client.Object, resolver.Object, new Mock<ILoopEngine>().Object, NoLiveRuns(),
+            TestActors.Instance, providerStore: providers.Object);
+        var result = await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Claimed);
+        Assert.Equal(new[] { next.Id }, result.HeldByRepositoryLimit.Select(w => w.Id));
+        client.Verify(c => c.TransitionAsync(Opts, next.Id, It.IsAny<RemoteTransitionRequest>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task A_held_item_that_left_ready_before_the_next_pass_is_not_announced_as_ready()
+    {
+        var repository = new Repository { Id = Guid.NewGuid(), Name = "repo", CloneUrl = "https://example.com/repo.git", Parallelism = 1 };
+        var busy = Item("busy", RemoteWorkItemStatus.Running, "build");
+        var held = Item("held", RemoteWorkItemStatus.Ready, "build");
+        var other = Item("other", RemoteWorkItemStatus.Ready, "build");
+        busy.RepositoryId = held.RepositoryId = other.RepositoryId = repository.Id;
+
+        var ready = new[] { held, other };
+        var client = new Mock<IWorkItemServerClient>();
+        client.Setup(c => c.PollAsync(Opts, It.IsAny<IReadOnlyList<string>>(), It.IsAny<WorkItemActor>(), It.IsAny<CancellationToken>()))
+              .ReturnsAsync(() => new RemotePollResponse { ReadyItems = ready });
+        client.Setup(c => c.ListAsync(Opts, RemoteWorkItemStatus.Running, null, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(new[] { busy });
+        client.Setup(c => c.ListAsync(Opts, It.Is<RemoteWorkItemStatus?>(s => s != RemoteWorkItemStatus.Running), null, It.IsAny<CancellationToken>()))
+              .ReturnsAsync(Array.Empty<RemoteWorkItem>());
+        var providers = new Mock<IProviderStore>();
+        providers.Setup(p => p.GetRepositoryByIdAsync(repository.Id)).ReturnsAsync(repository);
+        var notifier = new Mock<IWorkItemNotifier>();
+
+        var sut = new RemoteWorkItemCoordinator(client.Object, new Mock<ILoopTemplateResolver>().Object, new Mock<ILoopEngine>().Object,
+            NoLiveRuns(), TestActors.Instance, providerStore: providers.Object, workItemNotifier: notifier.Object,
+            repositoryHolds: new RepositoryParallelismHolds());
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(held.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Ready), Times.Once);
+
+        // Someone moved it out of Ready; that move announced itself.
+        ready = new[] { other };
+        await sut.RunPollCycleAsync(Opts, maxConcurrent: 5, ct: TestContext.Current.CancellationToken);
+
+        notifier.Verify(n => n.WorkItemStateChangedAsync(held.Id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Ready), Times.Once);
+    }
 }

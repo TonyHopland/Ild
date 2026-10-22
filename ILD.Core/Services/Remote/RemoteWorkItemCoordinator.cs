@@ -328,8 +328,13 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
                     }
                 }
             }
-            // Lost-claim race (another instance got there first) is silently
-            // skipped — the next poll will simply not see the item again.
+            else if (RepositorySlotStatuses.Contains(claim.ActualStatus))
+            {
+                // Lost-claim race: another instance got there first, so the
+                // item is in progress all the same and holds its repository
+                // slot. The next poll will simply not see it again.
+                SlotsOf(ready)?.Take();
+            }
         }
 
         // Counts only grow within a pass, so an item skipped above is still
@@ -340,9 +345,13 @@ public sealed class RemoteWorkItemCoordinator : IRemoteWorkItemCoordinator
             .ToList();
         var changed = _repositoryHolds.Replace(held.ToDictionary(
             w => w.Id, w => SlotsOf(w)!.ToHold(), StringComparer.Ordinal));
-        // Claimed and escalated items have had their own event this pass.
-        var movedOn = claimed.Concat(escalated).Select(w => w.Id).ToHashSet(StringComparer.Ordinal);
-        foreach (var id in changed.Where(id => !movedOn.Contains(id)))
+        // Only items still Ready: claimed and escalated ones have had their own
+        // event this pass, and one that left Ready since the last pass must not
+        // be announced as Ready.
+        var stillReady = poll.ReadyItems.Select(w => w.Id)
+            .Except(claimed.Concat(escalated).Select(w => w.Id), StringComparer.Ordinal)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var id in changed.Where(stillReady.Contains))
             await _workItemNotifier.WorkItemStateChangedAsync(id, RemoteWorkItemStatus.Ready, RemoteWorkItemStatus.Ready);
 
         return new PollCycleResult
