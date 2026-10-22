@@ -108,6 +108,7 @@ export default function Chat({ view = "chat" }: { view?: "chat" | "schedules" })
       covered={false}
       sidebarShown
       onActiveChatChange={schedules ? undefined : onActiveChatChange}
+      routesStartedChat
       onChatShown={schedules ? showStartForm : undefined}
       onOpenChat={openChat}
       sidebarExtras={

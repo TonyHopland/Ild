@@ -164,6 +164,7 @@ export default function ChatWorkspace({
   covered,
   sidebarShown,
   onActiveChatChange,
+  routesStartedChat = false,
   onChatShown,
   onOpenChat,
   sidebarExtras,
@@ -183,8 +184,16 @@ export default function ChatWorkspace({
   /** Whether the chat list fills the frame, so the chat behind it is not on screen. */
   covered: boolean;
   sidebarShown: boolean;
-  /** Told the chat this view has installed, or null when it has left for the start form. */
+  /**
+   * Told the chat this view has installed, or null when it has left for the start
+   * form. Told a chat it started without installing it when routesStartedChat.
+   */
   onActiveChatChange?: (chatSessionId: string | null) => void;
+  /**
+   * Whether the frame shows a chat started here by routing to it, so the start
+   * form leaves it to the view the route brings rather than opening it in place.
+   */
+  routesStartedChat?: boolean;
   /** A chat picked from the list, or the start form, has been put on screen. */
   onChatShown?: () => void;
   /** Opens a chat picked from the list in place of opening it here. */
@@ -579,6 +588,10 @@ export default function ChatWorkspace({
       // has nothing to mark read, so nothing else would put it in the list.
       void refreshHistory().catch((err) => console.error(err));
       if (visitRef.current !== visit) return;
+      if (routesStartedChat) {
+        onActiveChatChangeRef.current?.(created.id);
+        return;
+      }
       setSession(created);
       setMessages(created.messages);
       applyTurn(created.activeTurnId ?? null);

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed Start step, like any failed step, can be retried again once its cause is fixed, such as another preview that was still running.**
+
+- **Going Back right after starting a chat shows the start form, not the new chat.**
+
 ## [0.19.0] - 2026-10-21
 
 ### Changed
