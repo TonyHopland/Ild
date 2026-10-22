@@ -745,7 +745,7 @@ Everything the agent runs is pointed at the proxy through `HTTP_PROXY`,
 the agent's MCP server still reaches ILD's own API directly. Every launch also
 gets `NODE_USE_ENV_PROXY=1`: Node's built-in `fetch` (corepack's downloads
 included) ignores the proxy variables without it and would connect directly.
-Node older than v22.21.0 (or v24.0.0 on the 24 line) ignores the variable. A
+Node reads it from v24.0.0 and v22.21.0; older Node ignores it. A
 verification or test script that clears the proxy variables to run tests
 directly should clear `NODE_USE_ENV_PROXY` too. Two consequences:
 
