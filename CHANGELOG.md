@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The image ships npm 12.2.0 and Node 24.22.1; set NPM_VERSION to pick another npm or leave it empty to keep Node's.**
+- **The image ships npm 12.2.0, Node 24.22.1 and Azure Artifacts credential provider 2.0.5; set NPM_VERSION to pick another npm or leave it empty to keep Node's.** npm 12 skips dependencies' install scripts unless a repository approves them with `allowScripts` in its package.json.
 
 ### Added
 

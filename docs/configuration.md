@@ -700,7 +700,10 @@ Node `NODE_RUNTIME_VERSION` (24.22.1 by default) and then npm `NPM_VERSION`
 require a newer npm in `devEngines` can run npm and npx. `NPM_VERSION` takes an
 exact version, not a range or `latest`: the build checks that npm reports
 exactly that version for both the `ild` and `agent` users, and fails otherwise.
-An empty `NPM_VERSION` keeps the npm bundled with Node. Compose replaces an
+npm 12 skips the install scripts of a repository's dependencies unless its
+`package.json` approves them in `allowScripts`; the install still succeeds, so
+a dependency that needs its postinstall fails later. An empty `NPM_VERSION`
+keeps the npm bundled with Node. Compose replaces an
 empty value in `.env` with the default, so with compose pass
 `--build-arg NPM_VERSION=` to `docker compose build` instead. pnpm in the image
 comes only from Node's corepack, so each repository's `packageManager` picks its

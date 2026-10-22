@@ -196,6 +196,7 @@ RUN if [ "$WITH_NODE" = "1" ]; then \
     npm install -g --prefix /usr/local --cache /tmp/npm-install-cache --no-audit --no-fund "npm@$NPM_VERSION" && \
     rm -rf /tmp/npm-install-cache /root/.npm && \
     for ids in "${AGENT_UID}:${AGENT_GID}" "${APP_UID}:${APP_GID}"; do \
+      actual= && \
       smoke_home="$(mktemp -d)" && \
       chown "$ids" "$smoke_home" && \
       actual="$(gosu "$ids" env HOME="$smoke_home" sh -lc 'npm --version')"; \
