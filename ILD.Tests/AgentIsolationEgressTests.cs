@@ -74,6 +74,8 @@ public class AgentIsolationEgressTests
             Assert.Equal("http://127.0.0.1:3128", psi.Environment[key]);
         Assert.Equal(AgentIsolation.EgressNoProxy, psi.Environment["NO_PROXY"]);
         Assert.Equal(AgentIsolation.EgressNoProxy, psi.Environment["no_proxy"]);
+        // Node's fetch matches http://[::1]:port only against the bracketed entry.
+        Assert.Equal(["localhost", "127.0.0.1", "::1", "[::1]"], psi.Environment["NO_PROXY"]!.Split(','));
         // Node's built-in fetch ignores the variables above without it.
         Assert.Equal("1", psi.Environment["NODE_USE_ENV_PROXY"]);
         // The crossing itself is unchanged.
