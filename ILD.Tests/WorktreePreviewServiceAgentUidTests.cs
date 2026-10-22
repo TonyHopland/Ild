@@ -125,6 +125,20 @@ public class WorktreePreviewServiceAgentUidTests : IDisposable
     }
 
     [Fact]
+    public void A_preview_gets_the_build_server_defaults_and_its_own_env_overrides_them()
+    {
+        var step = new WorktreePreviewService.ResolvedStep(
+            "dotnet run",
+            _stateDirectory,
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["UseSharedCompilation"] = "true" });
+
+        var psi = BuildService().BuildPreviewProcess(step);
+
+        Assert.Equal("true", psi.Environment["UseSharedCompilation"]);
+        Assert.Equal("1", psi.Environment["MSBUILDDISABLENODEREUSE"]);
+    }
+
+    [Fact]
     public void The_npm_prefix_follows_the_agent_home()
     {
         // $HOME/.local is where `npm install -g` puts a global CLI, and the agent

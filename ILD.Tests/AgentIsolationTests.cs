@@ -169,6 +169,46 @@ public class AgentIsolationTests
         Assert.Equal(string.Empty, routed.Environment["ILD_WORKITEM_SERVER_API_KEY"]);
     }
 
+    private static readonly string[] BuildServerVariables =
+        ["MSBUILDDISABLENODEREUSE", "UseSharedCompilation", "DOTNET_CLI_USE_MSBUILD_SERVER"];
+
+    [Theory]
+    [InlineData("agent", "http://127.0.0.1:3128")]
+    [InlineData("agent", null)]
+    [InlineData(null, "http://127.0.0.1:3128")]
+    [InlineData(null, null)]
+    public void Route_keeps_build_servers_from_outliving_the_launch(string? agentUser, string? egressProxy)
+    {
+        // The test host's own environment is copied onto the psi; start from a
+        // launch that sets none of them, as the agent pod's does.
+        var psi = BuildPsi();
+        foreach (var name in BuildServerVariables)
+            psi.Environment.Remove(name);
+
+        AgentIsolation.Route(psi, agentUser, agentUser, agentUser is null ? null : "/home/agent", egressProxy);
+
+        Assert.Equal("1", psi.Environment["MSBUILDDISABLENODEREUSE"]);
+        Assert.Equal("false", psi.Environment["UseSharedCompilation"]);
+        Assert.Equal("0", psi.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"]);
+    }
+
+    [Theory]
+    [InlineData("agent")]
+    [InlineData(null)]
+    public void Route_leaves_a_build_server_setting_the_launch_already_has(string? agentUser)
+    {
+        var psi = BuildPsi();
+        psi.Environment["MSBUILDDISABLENODEREUSE"] = "0";
+        psi.Environment["UseSharedCompilation"] = "true";
+        psi.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"] = "1";
+
+        AgentIsolation.Route(psi, agentUser, agentUser, agentUser is null ? null : "/home/agent");
+
+        Assert.Equal("0", psi.Environment["MSBUILDDISABLENODEREUSE"]);
+        Assert.Equal("true", psi.Environment["UseSharedCompilation"]);
+        Assert.Equal("1", psi.Environment["DOTNET_CLI_USE_MSBUILD_SERVER"]);
+    }
+
     [Fact]
     public void ResolveSecretEnvironmentKeys_covers_the_known_secrets_and_the_extra_denylist()
     {

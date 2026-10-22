@@ -218,6 +218,41 @@ describe("useSignalR", () => {
     expect(onForEvent()).toBe(1);
     unmount();
   });
+
+  test("a handler added while the hub reconnects receives events once it is back", async () => {
+    localStorage.setItem("auth_token", "tok-1");
+    authService.setAuth({ id: "u1", username: "x", createdAt: "" }, "tok-1");
+
+    const { result, unmount } = renderHook(() => useSignalR("/hubs/work-item"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const onreconnecting = onreconnectingMock.mock.calls[0][0] as () => void;
+    const onreconnected = onreconnectedMock.mock.calls[0][0] as () => void;
+    connectionState = "Reconnecting";
+    act(() => onreconnecting());
+
+    const handler = vi.fn();
+    act(() => {
+      result.current.on("WorkItemRunProgressed", handler);
+    });
+    connectionState = "Connected";
+    await act(async () => {
+      onreconnected();
+      await Promise.resolve();
+    });
+
+    const dispatchers = onMock.mock.calls.filter(
+      ([eventType]) => eventType === "WorkItemRunProgressed",
+    );
+    expect(dispatchers).toHaveLength(1);
+    (dispatchers[0][1] as (payload: unknown) => void)({ workItemId: "a" });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "WorkItemRunProgressed", payload: { workItemId: "a" } }),
+    );
+    unmount();
+  });
 });
 
 describe("the connection object useSignalR returns", () => {

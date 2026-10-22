@@ -156,6 +156,22 @@ public class AuthIntegrationTests
     }
 
     [Fact]
+    public async Task An_authenticated_request_reads_its_session_once_and_keeps_its_name()
+    {
+        var sql = new SqlCapture();
+        await using var factory = new ApiFactory(configureServices: sql.Register);
+        var client = await factory.CreateAuthenticatedClientAsync();
+        int SessionReads() => sql.Commands.Count(c => c.Contains("FROM \"UserSessions\""));
+
+        var before = SessionReads();
+        var response = await client.GetAsync("/api/v1/auth/me", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("admin", (await response.Content.ReadFromJsonAsync<MeBody>(CaseInsensitive, TestContext.Current.CancellationToken))!.Username);
+        Assert.Equal(1, SessionReads() - before);
+    }
+
+    [Fact]
     public async Task Sessions_without_a_token_returns_401()
     {
         await using var factory = new ApiFactory();
@@ -172,4 +188,6 @@ public class AuthIntegrationTests
     private sealed record SessionBody(Guid Id, DateTime CreatedAt, DateTime LastSeenAt, string? UserAgent, bool IsCurrent);
 
     private sealed record RevokedBody(int Revoked);
+
+    private sealed record MeBody(string Username);
 }

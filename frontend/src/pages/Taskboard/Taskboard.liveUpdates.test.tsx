@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import Taskboard from "./index";
-import { mockTaskboardServer } from "../../test-support";
+import { fakeHub, mockTaskboardServer } from "../../test-support";
+import { WorkItemHubProvider } from "../../hooks/useWorkItemHub";
 import { WorkItemStatus, WorkItem, Repository } from "../../types";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
@@ -297,6 +298,34 @@ describe("Taskboard live updates", () => {
       [20, 20],
     ]);
     expect(backlogTitles()).toContain("b10, step 3");
+  });
+
+  test("inside the app's work-item hub provider the board listens on the shared connection and opens none of its own", async () => {
+    const { server } = mockBoard([makeItem("a", [])]);
+    const shared = fakeHub();
+    const unused = fakeHub();
+    // The provider asks for the hub by URL; a hook handed a connection asks for none.
+    const useSignalR = vi
+      .spyOn(signalRHook, "useSignalR")
+      .mockImplementation((url) => (url === null ? unused.connection : shared.connection));
+
+    render(
+      <MemoryRouter initialEntries={["/taskboard"]}>
+        <WorkItemHubProvider>
+          <Routes>
+            <Route path="/taskboard" element={<Taskboard />} />
+          </Routes>
+        </WorkItemHubProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(backlogTitles()).toEqual(["a"]));
+
+    server.items[0] = { ...server.items[0], title: "a, next step" };
+    await shared.emit("WorkItemRunProgressed", { workItemId: "a" });
+
+    await waitFor(() => expect(backlogTitles()).toEqual(["a, next step"]));
+    expect(Object.keys(unused.handlers)).toEqual([]);
+    expect(useSignalR.mock.calls.filter(([url]) => url !== null)).toEqual([["/hubs/work-item"]]);
   });
 });
 

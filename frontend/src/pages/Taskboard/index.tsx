@@ -12,6 +12,7 @@ import { useFoldedColumns } from "../../hooks/useFoldedColumns";
 import { PreferenceKeys, getPreference } from "../../utils/userPreferences";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
+import { useSharedWorkItemHub } from "../../hooks/useWorkItemHub";
 import { WORK_ITEM_STATUSES } from "../../utils/constants";
 import { WORK_ITEM_STATUS_ORDER, workItemStatusLabel } from "../../utils/labels";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
@@ -66,7 +67,9 @@ export default function Taskboard() {
     findItem,
     requestCountsRefresh,
   } = useTaskboardColumns({ ...filter, search: appliedSearch }, setErrorText);
-  const { on, off, connectionState } = useSignalR();
+  const sharedHub = useSharedWorkItemHub();
+  const ownHub = useSignalR(sharedHub ? null : "/hubs/work-item");
+  const { on, off, connectionState } = sharedHub ?? ownHub;
   // Highest getById request ordinal issued per work item. A newly created item
   // receives a burst of hub events (create → claim → run-progressed → human),
   // each firing a getById; an early fetch the server answered with an older

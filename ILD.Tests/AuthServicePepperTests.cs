@@ -29,10 +29,10 @@ public class AuthServicePepperTests
 
             var forged = await InsertUnkeyedSessionAsync(db, "attacker-chosen-token");
 
-            Assert.False(await svc.ValidateSessionAsync(forged));
-            Assert.Null(await svc.GetUsernameAsync(forged));
+            Assert.Null(await svc.AuthenticateSessionAsync(forged));
+            Assert.Null((await svc.AuthenticateSessionAsync(forged))?.Username);
             Assert.Empty(await svc.GetSessionsAsync(forged));
-            Assert.True(await svc.ValidateSessionAsync(minted));
+            Assert.NotNull(await svc.AuthenticateSessionAsync(minted));
         }
         finally { SessionTokenHasher.Configure(null); }
     }
@@ -47,8 +47,8 @@ public class AuthServicePepperTests
         SessionTokenHasher.Configure("a-strong-test-pepper");
         try
         {
-            Assert.False(await svc.ValidateSessionAsync(token));
-            Assert.True(await svc.ValidateSessionAsync(await LoginAsync(Make(db))));
+            Assert.Null(await svc.AuthenticateSessionAsync(token));
+            Assert.NotNull(await svc.AuthenticateSessionAsync(await LoginAsync(Make(db))));
         }
         finally { SessionTokenHasher.Configure(null); }
     }

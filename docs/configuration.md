@@ -8,8 +8,8 @@ Remote providers, the WorkItem Server connection, repositories, AI providers, an
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `ILD_PASSWORD`                               | Required bootstrap password; sets the password for the bootstrap user on first login                                       |
 | `ILD_USERNAME`                               | Bootstrap username (defaults to `admin`); used to seed and authenticate the first user                                     |
-| `ILD_DB_CONNECTION_STRING`                   | PostgreSQL connection string for ILD local state                                                                           |
-| `WORKITEM_DB_CONNECTION_STRING`              | PostgreSQL connection string for the WorkItem Server                                                                       |
+| `ILD_DB_CONNECTION_STRING`                   | PostgreSQL connection string for ILD local state; pool capped by default ([pools](#database-connection-pools))             |
+| `WORKITEM_DB_CONNECTION_STRING`              | PostgreSQL connection string for the WorkItem Server; pool capped by default ([pools](#database-connection-pools))         |
 | `POSTGRES_PASSWORD`                          | Compose only: superuser password for the `postgres` service. Required, no default                                          |
 | `ILD_DB_PASSWORD`                            | Compose only: password for the `ild_core` role, spliced into `ILD_DB_CONNECTION_STRING`. Required, no default              |
 | `WORKITEM_DB_PASSWORD`                       | Compose only: password for the `ild_workitems` role. Required, no default                                                  |
@@ -576,6 +576,53 @@ instance's work items. `HOME` remains the shared agent home, so an agent CLI
 inside the preview is already logged in against the same credential store —
 [ADR-0016](adr/0016-preview-runs-as-the-agent.md) records why that is deliberate.
 
+### Database connection pools
+
+Postgres refuses new connections once `max_connections` (100 by default, 3 of them
+reserved for superusers) are taken, and every request then fails. So each service
+caps its own connection pool on top of the `ILD_DB_CONNECTION_STRING` /
+`WORKITEM_DB_CONNECTION_STRING` it is given:
+
+| Service         | `Maximum Pool Size` | `Connection Idle Lifetime` | `Application Name`   |
+| --------------- | ------------------- | -------------------------- | -------------------- |
+| ILD API         | 15                  | 60 s                       | `ILD.Api`            |
+| WorkItem Server | 8                   | 60 s                       | `ILD.WorkItemServer` |
+
+These are defaults: a key you write in the connection string yourself wins, under
+any spelling Npgsql accepts (`MaxPoolSize=5`, `ApplicationName=mine`, …), and a
+`Minimum Pool Size` or `Connection Pruning Interval` you set above a default raises
+that default to match. No `Timeout` is added, so a pool at its cap makes a
+request wait for a free connection (Npgsql's 15 s) rather than fail at once.
+
+The budget against the 97 connections left for ordinary roles:
+
+| What shares the server               | Connections at most |
+| ------------------------------------ | ------------------- |
+| One ILD instance (API 15 + server 8) | 23                  |
+| ILD + one ILD-shaped preview         | 46                  |
+| ILD + two ILD-shaped previews        | 69                  |
+
+The budget only holds for previews whose branch already carries these defaults —
+a preview of an older branch runs binaries with Npgsql's own cap of 100 per pool.
+To give a preview smaller pools, set the keys in its `.env` connection strings,
+e.g. `ILD_DB_CONNECTION_STRING=Host=127.0.0.1;Port=15432;…;Maximum Pool Size=5`.
+Anything else using the same server (another application, another repository's
+previews) has to fit in what is left.
+
+To account for every connection, run as a superuser:
+
+```sql
+SELECT usename, datname, application_name, client_addr, state, count(*)
+FROM pg_stat_activity GROUP BY 1, 2, 3, 4, 5;
+```
+
+`application_name` names the service; `usename` and `datname` tell the main
+instance from a preview, which uses its own role and database.
+
+ILD keeps the settings it has read (the Settings page, the WorkItem Server
+connection) in memory until they are saved through ILD. A setting edited directly
+in the database takes effect only after ILD restarts.
+
 ## Build-time container options
 
 Set as build args (e.g. in `.env` consumed by `docker compose build`):
@@ -626,6 +673,14 @@ identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`) and any provider API key an adapter
 passes to the CLI are kept. The same denylist governs what a Worktree Preview's
 processes inherit — see
 [What a preview process runs as](#what-a-preview-process-runs-as).
+
+Every process ILD launches for an agent — the agent CLI, command and verification
+steps, preview services and their install steps — also gets
+`MSBUILDDISABLENODEREUSE=1`, `UseSharedCompilation=false` and
+`DOTNET_CLI_USE_MSBUILD_SERVER=0`, with isolation on or off, so a `dotnet build`
+leaves no MSBuild nodes or compiler server running after it returns. Builds are
+somewhat slower for it. A variable the launch already sets is kept, and a
+preview's own `env` overrides them.
 
 The coding agents (Pi, OpenCode, Claude Code, GitHub Copilot, Codex) are **not** baked into the image.
 They install on demand onto the persistent `/data` volume and are updated there

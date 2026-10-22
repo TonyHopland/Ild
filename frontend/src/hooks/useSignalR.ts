@@ -53,10 +53,10 @@ export function useSignalR(hubUrl: string | null = "/hubs/work-item") {
       handlers.add(handler as MessageHandler);
       handlersRef.current.set(eventType, handlers);
 
+      // Attached in any state: a reconnect keeps the dispatchers it had but adds
+      // none, so a handler added while reconnecting would otherwise never fire.
       const connection = connectionRef.current;
-      if (connection?.state === signalR.HubConnectionState.Connected) {
-        ensureDispatcher(connection, eventType);
-      }
+      if (connection) ensureDispatcher(connection, eventType);
     },
     [ensureDispatcher],
   );

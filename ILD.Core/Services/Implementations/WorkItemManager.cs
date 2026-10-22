@@ -1056,7 +1056,7 @@ public class WorkItemManager : IWorkItemManager
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         if (await _server.GetAsync(opts, dependsOnWorkItemId) == null)
             return $"Dependency not found: {dependsOnWorkItemId}";
-        if (await WouldCreateCycle(workItemId, dependsOnWorkItemId))
+        if (await WouldCreateCycle(opts, workItemId, dependsOnWorkItemId))
             return $"Making {workItemId} depend on {dependsOnWorkItemId} would create a cycle.";
         return null;
     }
@@ -1069,49 +1069,50 @@ public class WorkItemManager : IWorkItemManager
 
     public async Task<IReadOnlyList<WorkItemView>> GetDependenciesAsync(string workItemId)
     {
-        var ids = await GetServerDependencyIdsAsync(workItemId);
-        if (ids.Count == 0) return Array.Empty<WorkItemView>();
-
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
-        var views = new List<WorkItemView>();
+        var ids = await GetServerDependencyIdsAsync(opts, workItemId);
+        var dependencies = new List<RemoteWorkItem>();
         foreach (var id in ids)
         {
-            var remote = await _server.GetAsync(opts, id);
-            if (remote != null)
-            {
-                var runs = await _loopRunStore.GetAllByWorkItemAsync(id);
-                var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-                               ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).ThenByDescending(r => r.Id).FirstOrDefault();
-                views.Add(BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
-                    await _loopRunStore.GetWorkItemStatusReasonAsync(id)));
-            }
+            if (await _server.GetAsync(opts, id) is { } remote)
+                dependencies.Add(remote);
         }
-        return views;
+        return await RelatedViewsAsync(dependencies);
     }
 
     public async Task<IReadOnlyList<WorkItemView>> GetDependentsAsync(string workItemId)
     {
         var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var all = await _server.ListAsync(opts, status: null, tags: null);
-        var dependents = all.Where(w => w.Dependencies.Contains(workItemId)).ToList();
-        var views = new List<WorkItemView>();
-        foreach (var candidate in dependents)
+        return await RelatedViewsAsync(all.Where(w => w.Dependencies.Contains(workItemId)).ToList());
+    }
+
+    /// <summary>
+    /// Views of the items a dependency list shows, their runs and status reasons
+    /// read in one query each. Here the current run is the running one, else the latest.
+    /// </summary>
+    private async Task<IReadOnlyList<WorkItemView>> RelatedViewsAsync(IReadOnlyList<RemoteWorkItem> remotes)
+    {
+        if (remotes.Count == 0) return Array.Empty<WorkItemView>();
+
+        var ids = remotes.Select(w => w.Id).ToList();
+        var runsByWorkItem = await RunsByWorkItemAsync(ids);
+        var statusReasons = await _loopRunStore.GetWorkItemStatusReasonsAsync(ids);
+        return remotes.Select(remote =>
         {
-            var runs = await _loopRunStore.GetAllByWorkItemAsync(candidate.Id);
-            var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running)
-                           ?? runs.OrderByDescending(r => r.StartedAt ?? r.CreatedAt).ThenByDescending(r => r.Id).FirstOrDefault();
-            views.Add(BuildView(candidate, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
-                await _loopRunStore.GetWorkItemStatusReasonAsync(candidate.Id)));
-        }
-        return views;
+            var runs = runsByWorkItem.GetValueOrDefault(remote.Id) ?? [];
+            var currentRun = runs.FirstOrDefault(r => r.Status == LoopRunStatus.Running) ?? LatestRun(runs);
+            return BuildView(remote, currentRun, runs, _previewService.IsPreviewRunning(currentRun?.WorktreePath ?? string.Empty),
+                statusReasons.GetValueOrDefault(remote.Id));
+        }).ToList();
     }
 
     public async Task<bool> IsReadyAsync(string workItemId)
     {
-        var ids = await GetServerDependencyIdsAsync(workItemId);
+        var opts = await _options.ResolveForWorkItemAsync(workItemId);
+        var ids = await GetServerDependencyIdsAsync(opts, workItemId);
         if (ids.Count == 0) return true;
 
-        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         foreach (var depId in ids)
         {
             var dep = await _server.GetAsync(opts, depId);
@@ -1121,14 +1122,13 @@ public class WorkItemManager : IWorkItemManager
         return true;
     }
 
-    private async Task<IReadOnlyList<string>> GetServerDependencyIdsAsync(string workItemId)
+    private async Task<IReadOnlyList<string>> GetServerDependencyIdsAsync(WorkItemServerOptions opts, string workItemId)
     {
-        var opts = await _options.ResolveForWorkItemAsync(workItemId);
         var serverWi = await _server.GetAsync(opts, workItemId);
         return serverWi?.Dependencies?.ToList() ?? (IReadOnlyList<string>)Array.Empty<string>();
     }
 
-    private async Task<bool> WouldCreateCycle(string workItemId, string newDepId)
+    private async Task<bool> WouldCreateCycle(WorkItemServerOptions opts, string workItemId, string newDepId)
     {
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var stack = new Stack<string>();
@@ -1138,7 +1138,7 @@ public class WorkItemManager : IWorkItemManager
             var cur = stack.Pop();
             if (!visited.Add(cur)) continue;
             if (cur == workItemId) return true;
-            var nextDeps = await GetServerDependencyIdsAsync(cur);
+            var nextDeps = await GetServerDependencyIdsAsync(opts, cur);
             foreach (var n in nextDeps) stack.Push(n);
         }
         return false;

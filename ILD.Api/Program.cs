@@ -57,9 +57,10 @@ try
 
     if (connectionString != null && connectionString.Length > 0)
     {
+        var pooledConnectionString = NpgsqlPoolDefaults.Apply(connectionString, "ILD.Api", maxPoolSize: 15);
         builder.Services.AddDataLayer(options =>
         {
-            options.UseNpgsql(connectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public"));
+            options.UseNpgsql(pooledConnectionString, npg => npg.MigrationsHistoryTable("__EFMigrationsHistory", "public"));
         });
     }
     // When no connection string is set (e.g. integration tests), skip AddDataLayer

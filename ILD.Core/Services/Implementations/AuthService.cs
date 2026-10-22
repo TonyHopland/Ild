@@ -35,13 +35,6 @@ public class AuthService : IAuthService
     private readonly IAuthStore _authStore;
     private readonly IAppSettingStore _settings;
 
-    /// <summary>
-    /// Memoized for the lifetime of this (scoped, per-request) instance: the
-    /// authentication handler validates the session and then resolves its
-    /// username, and neither call should re-read the same setting row.
-    /// </summary>
-    private int? _idleDays;
-
     private readonly BootstrapCredentials _bootstrap;
 
     // Credentials stay env vars — they are secrets. Expiry lives in AppSettings
@@ -104,20 +97,17 @@ public class AuthService : IAuthService
         await _authStore.RevokeSessionAsync(session.UserId, session.Id, DateTime.UtcNow);
     }
 
-    public async Task<bool> ValidateSessionAsync(string sessionToken)
+    public async Task<SessionIdentity?> AuthenticateSessionAsync(string sessionToken)
     {
         var session = await GetLiveSessionAsync(sessionToken);
-        if (session == null) return false;
+        if (session == null) return null;
 
         var now = DateTime.UtcNow;
         if (now - session.LastSeenAt >= LastSeenWriteInterval)
             await _authStore.TouchSessionAsync(session.Id, now);
 
-        return true;
+        return new SessionIdentity(session.User?.Username);
     }
-
-    public async Task<string?> GetUsernameAsync(string sessionToken)
-        => (await GetLiveSessionAsync(sessionToken))?.User?.Username;
 
     public async Task<IReadOnlyList<UserSessionInfo>> GetSessionsAsync(string sessionToken)
     {
@@ -178,8 +168,8 @@ public class AuthService : IAuthService
         return true;
     }
 
-    private async Task<int> IdleDaysAsync()
-        => _idleDays ??= await ReadDaysAsync(AppSettingKeys.SessionIdleDays, AppSettingKeys.DefaultSessionIdleDays);
+    private Task<int> IdleDaysAsync()
+        => ReadDaysAsync(AppSettingKeys.SessionIdleDays, AppSettingKeys.DefaultSessionIdleDays);
 
     private async Task<int> ReadDaysAsync(string key, int fallback)
     {
