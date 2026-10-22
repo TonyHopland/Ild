@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import Taskboard from "./index";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import {
@@ -28,7 +28,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Backlog item",
     description: "",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

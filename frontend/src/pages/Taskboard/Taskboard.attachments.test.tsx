@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Routes, Route } from "react-router";
 import Taskboard from "./index";
-import { WorkItem, WorkItemAttachment, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemAttachment, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { mockTaskboardServer } from "../../test-support";
@@ -22,7 +22,7 @@ function makeItem(id: string, title: string, overrides: Partial<WorkItem> = {}):
     title,
     description: "",
     status: WorkItemStatus.Ready,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

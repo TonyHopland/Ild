@@ -76,8 +76,8 @@ namespace ILD.WorkItemServer.Migrations
                     b.Property<DateTime?>("LastHeartbeatAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<int>("Priority")
-                        .HasColumnType("integer");
+                    b.Property<double>("Priority")
+                        .HasColumnType("double precision");
 
                     b.Property<string>("PullRequestsJson")
                         .IsRequired()

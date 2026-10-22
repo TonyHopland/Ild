@@ -15,7 +15,7 @@ public sealed class WorkItemView
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
-    public RemoteWorkItemPriority Priority { get; set; }
+    public double Priority { get; set; }
     public RemoteWorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public string? HumanFeedbackActions { get; set; }

@@ -25,6 +25,9 @@ interface TaskboardColumnProps {
   // How many items the column holds on the server under the board filter.
   total: number;
   onWorkItemUpdate: (workItem: WorkItem) => void;
+  // A dropped card as read back from the server, with the card it now sits
+  // directly after; without it, the card goes to onWorkItemUpdate.
+  onWorkItemPlaced?: (workItem: WorkItem, placedAfter: string | undefined) => void;
   onWorkItemClick?: (workItem: WorkItem) => void;
   onError?: (message: string) => void;
   onMoveWorkItem?: (workItem: WorkItem, direction: "prev" | "next") => void;
@@ -51,6 +54,7 @@ export default function TaskboardColumn({
   workItems,
   total,
   onWorkItemUpdate,
+  onWorkItemPlaced,
   onWorkItemClick,
   onError,
   onMoveWorkItem,
@@ -63,6 +67,9 @@ export default function TaskboardColumn({
   onFoldChange,
 }: TaskboardColumnProps) {
   const [dragOver, setDragOver] = useState(false);
+  // Where a card dragged over the column would land: before the loaded card at
+  // this index, or after the last one at the end.
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
   // Any column folds to a strip and opens again from it. Until the user
   // chooses, Done and the empty columns other than Running start folded, so the
   // busy ones get the room. A folded column opens while a card is dragged over it.
@@ -75,32 +82,74 @@ export default function TaskboardColumn({
   const needsYou = status === WorkItemStatus.HumanFeedback && !empty;
   const hasMore = onLoadMore !== undefined && workItems.length < total;
 
+  // On a card's upper half the drop spot is above it, on its lower half below
+  // it; anywhere else in the column it is below the last loaded card.
+  const dropIndexAt = (e: React.DragEvent): number => {
+    const card = e.target instanceof Element ? e.target.closest("[data-work-item-id]") : null;
+    const index = card
+      ? workItems.findIndex((wi) => wi.id === card.getAttribute("data-work-item-id"))
+      : -1;
+    if (index < 0) return workItems.length;
+    const { top, height } = card!.getBoundingClientRect();
+    return e.clientY < top + height / 2 ? index : index + 1;
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(true);
+    setDropIndex(dropIndexAt(e));
   };
 
   const handleDragLeave = () => {
     setDragOver(false);
+    setDropIndex(null);
+  };
+
+  const report = (error: unknown, fallback: string) => {
+    const msg = errorMessage(error, fallback);
+    if (onError) onError(msg);
+    else console.error(fallback, error);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
+    const index = dropIndexAt(e);
     setDragOver(false);
+    setDropIndex(null);
 
     const workItemId = e.dataTransfer.getData("text/plain");
     if (!workItemId) return;
 
-    // Ignore drops into the same column — nothing to do
-    const existingItem = workItems.find((item) => item.id === workItemId);
-    if (existingItem?.status === status) return;
+    const fromThisColumn = workItems.some((wi) => wi.id === workItemId);
+    const others = workItems.filter((wi) => wi.id !== workItemId);
+    const position = workItems.slice(0, index).filter((wi) => wi.id !== workItemId).length;
+    if (fromThisColumn && workItems[position]?.id === workItemId) return;
 
+    // An empty column has no spot to name; any other drop is one request that
+    // places the card, moving it into this column when it came from another.
+    if (others.length === 0) {
+      try {
+        onWorkItemUpdate(await workItemService.moveTo(workItemId, status));
+      } catch (error) {
+        report(error, "Failed to update work item status.");
+      }
+      return;
+    }
+
+    const aboveId = others[position - 1]?.id;
     try {
-      onWorkItemUpdate(await workItemService.moveTo(workItemId, status));
+      const placed = await workItemService.reorder(workItemId, {
+        aboveId,
+        belowId: others[position]?.id,
+        ...(fromThisColumn ? {} : { targetStatus: status }),
+      });
+      if (onWorkItemPlaced) onWorkItemPlaced(placed, aboveId);
+      else onWorkItemUpdate(placed);
     } catch (error) {
-      const msg = errorMessage(error, "Failed to update work item status.");
-      if (onError) onError(msg);
-      else console.error("Failed to update work item status:", error);
+      report(
+        error,
+        fromThisColumn ? "Failed to reorder work item." : "Failed to update work item status.",
+      );
     }
   };
 
@@ -135,6 +184,7 @@ export default function TaskboardColumn({
       data-status={status}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
+      onDragEnd={handleDragLeave}
       onDrop={handleDrop}
     >
       {!alone && (
@@ -156,10 +206,17 @@ export default function TaskboardColumn({
       )}
       <div className="taskboard-column-body">
         {empty && <p className="taskboard-column-empty">{EMPTY_HINT[status]}</p>}
-        {workItems.map((item) => (
+        {workItems.map((item, i) => (
           <WorkItemCard
             key={item.id}
             workItem={item}
+            dropEdge={
+              dropIndex === i
+                ? "above"
+                : dropIndex === workItems.length && i === workItems.length - 1
+                  ? "below"
+                  : undefined
+            }
             onClick={onWorkItemClick}
             onMove={onMoveWorkItem}
             loopTemplateNames={loopTemplateNames}

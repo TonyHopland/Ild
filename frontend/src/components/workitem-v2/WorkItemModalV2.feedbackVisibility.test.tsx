@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, fireEvent, cleanup, act, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { NodeType, WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { NodeType, WorkItem, WorkItemStatus } from "../../types";
 import type { LoopRun } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -37,7 +37,7 @@ function makeParkedWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Work Item",
     description: "",
     status: WorkItemStatus.HumanFeedback,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

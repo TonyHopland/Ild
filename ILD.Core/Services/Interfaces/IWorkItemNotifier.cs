@@ -23,6 +23,13 @@ public interface IWorkItemNotifier
     Task RunProgressedAsync(string workItemId);
 
     /// <summary>
+    /// Signals that dropping a work item renumbered the whole board, keeping its
+    /// order, so a board re-reads the columns it shows instead of one announcement
+    /// per item. The dropped item itself is announced as a state change as well.
+    /// </summary>
+    Task WorkItemBoardReorderedAsync(string workItemId);
+
+    /// <summary>
     /// Signals that a work item's edit proposals changed — one was made,
     /// approved, rejected or went stale — so an open detail view and the board
     /// card re-read them. A hint only: listeners re-fetch.
@@ -52,6 +59,7 @@ public sealed class NoopWorkItemNotifier : IWorkItemNotifier
     public Task PreviewStateChangedAsync(string workItemId) => Task.CompletedTask;
     public Task SchedulerStateChangedAsync(bool isPaused, int maxConcurrent) => Task.CompletedTask;
     public Task RunProgressedAsync(string workItemId) => Task.CompletedTask;
+    public Task WorkItemBoardReorderedAsync(string workItemId) => Task.CompletedTask;
     public Task WorkItemEditProposalsChangedAsync(string workItemId) => Task.CompletedTask;
     public Task GlobalVariableProposalsChangedAsync(string name) => Task.CompletedTask;
     public Task LoopTemplateProposalsChangedAsync(Guid templateId) => Task.CompletedTask;

@@ -32,8 +32,6 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
 
     private static ILD.WorkItemServer.Domain.WorkItemStatus Map(RemoteWorkItemStatus s) => (ILD.WorkItemServer.Domain.WorkItemStatus)(int)s;
     private static RemoteWorkItemStatus MapBack(ILD.WorkItemServer.Domain.WorkItemStatus s) => (RemoteWorkItemStatus)(int)s;
-    private static ILD.WorkItemServer.Domain.WorkItemPriority MapPri(RemoteWorkItemPriority p) => (ILD.WorkItemServer.Domain.WorkItemPriority)(int)p;
-    private static RemoteWorkItemPriority MapPriBack(ILD.WorkItemServer.Domain.WorkItemPriority p) => (RemoteWorkItemPriority)(int)p;
 
     private void ActAs(WorkItemActor actor)
         => _db.HistoryActor = new ILD.WorkItemServer.Domain.WorkItemActor(
@@ -47,7 +45,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         CreatedBy = dto.CreatedBy,
         CreatedAt = dto.CreatedAt,
         UpdatedAt = dto.UpdatedAt,
-        Priority = MapPriBack(dto.Priority),
+        Priority = dto.Priority,
         Status = MapBack(dto.Status),
         Tags = dto.Tags,
         Dependencies = dto.Dependencies,
@@ -74,7 +72,6 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             Title = req.Title,
             Description = req.Description,
             CreatedBy = req.CreatedBy,
-            Priority = MapPri(req.Priority),
             Tags = req.Tags?.ToList() ?? new List<string>(),
             Dependencies = req.Dependencies?.ToList() ?? new List<string>(),
             ForceStatus = req.ForceStatus.HasValue ? Map(req.ForceStatus.Value) : null,
@@ -110,6 +107,7 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
             BranchNameOverride = req.BranchNameOverride,
             BaseBranchOverride = req.BaseBranchOverride,
             RepositoryId = req.RepositoryId,
+            Priority = req.Priority,
         }, ct);
         return dto == null ? null : ToRemote(dto);
     }
@@ -133,6 +131,26 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         {
             Success = resp.Success,
             ActualStatus = MapBack(resp.ActualStatus),
+            Reason = resp.Reason,
+        };
+    }
+
+    public async Task<RemoteReorderWorkItemResponse> ReorderAsync(WorkItemServerOptions opts, string id, RemoteReorderWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default)
+    {
+        ActAs(actor);
+        var resp = await _svc.ReorderAsync(id, new ReorderWorkItemRequest
+        {
+            AboveId = req.AboveId,
+            BelowId = req.BelowId,
+            TargetStatus = req.TargetStatus.HasValue ? Map(req.TargetStatus.Value) : null,
+            Actions = req.Actions,
+            Reason = req.Reason,
+        }, ct);
+        return new RemoteReorderWorkItemResponse
+        {
+            Outcome = (RemoteReorderOutcome)(int)resp.Outcome,
+            Item = resp.Item == null ? null : ToRemote(resp.Item),
+            Renumbered = resp.Renumbered,
             Reason = resp.Reason,
         };
     }

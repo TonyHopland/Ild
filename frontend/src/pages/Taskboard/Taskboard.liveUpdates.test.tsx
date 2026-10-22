@@ -3,7 +3,7 @@ import { render, screen, within, cleanup, waitFor, act, fireEvent } from "@testi
 import { MemoryRouter, Routes, Route } from "react-router";
 import Taskboard from "./index";
 import { mockTaskboardServer } from "../../test-support";
-import { WorkItemStatus, WorkItemPriority, WorkItem, Repository } from "../../types";
+import { WorkItemStatus, WorkItem, Repository } from "../../types";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
 
@@ -18,7 +18,7 @@ function makeItem(id: string, tags: string[]): WorkItem {
     title: id,
     description: "",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags,
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

@@ -59,7 +59,8 @@ public class WorkItemPageApiTests
             Guid? repositoryId = null,
             string? description = null,
             string? id = null,
-            Guid? createdByLoopRunId = null)
+            Guid? createdByLoopRunId = null,
+            double? priority = null)
         {
             var dto = await Server.Service.CreateAsync(new CreateWorkItemRequest
             {
@@ -75,6 +76,7 @@ public class WorkItemPageApiTests
             entity.CreatedAt = createdAt ?? Epoch;
             entity.UpdatedAt = createdAt ?? Epoch;
             if (id is not null) entity.Id = id;
+            if (priority is not null) entity.Priority = priority.Value;
             await Server.ServerDb.SaveChangesAsync(TestContext.Current.CancellationToken);
             EndSeedRequestLikeTheServersPerRequestContext();
             return entity.Id;
@@ -140,33 +142,97 @@ public class WorkItemPageApiTests
     }
 
     [Fact]
-    public async Task Paging_a_status_reaches_every_item_once_newest_first_with_ties_broken_by_id()
+    public async Task Paging_a_status_reaches_every_item_once_in_board_order_with_ties_broken_by_id()
     {
         await using var host = await StartHostAsync();
-        // More than the 100 the plain list returns, most of them older than a
-        // block of newer Done items, and three to a creation time so the
-        // tiebreak decides the order inside each group and across page edges.
-        var backlog = new List<(string Id, DateTime CreatedAt)>();
+        // More than the 100 the plain list returns, created oldest to newest so
+        // newest-first would read them backwards, fifteen to an order value so
+        // the id decides inside each group and across page edges: "2" before
+        // "12" before "102", where a string comparison would not.
+        var backlog = new List<(string Id, double Priority)>();
         for (var i = 0; i < 150; i++)
         {
-            var createdAt = Epoch.AddHours(i / 3);
-            backlog.Add((await host.SeedAsync($"backlog {i}", createdAt: createdAt), createdAt));
+            var priority = i % 10 - 4.5;
+            backlog.Add((await host.SeedAsync($"backlog {i}", createdAt: Epoch.AddHours(i), priority: priority), priority));
         }
         for (var i = 0; i < 30; i++)
-            await host.SeedAsync($"done {i}", WiStatus.Done, createdAt: Epoch.AddDays(30).AddHours(i));
+            await host.SeedAsync($"done {i}", WiStatus.Done, createdAt: Epoch.AddDays(30).AddHours(i), priority: -100 + i);
 
         var expected = backlog
-            .OrderByDescending(b => b.CreatedAt)
-            .ThenByDescending(b => b.Id, StringComparer.Ordinal)
+            .OrderBy(b => b.Priority)
+            .ThenBy(b => b.Id.Length)
+            .ThenBy(b => b.Id, StringComparer.Ordinal)
             .Select(b => b.Id)
             .ToList();
 
         var paged = await PageThroughAsync(host.Human, "status=Backlog", take: 7);
 
         Assert.Equal(expected, paged);
-        var (firstPage, total) = await GetPageAsync(host.Human, "status=Backlog&skip=0&take=7");
-        Assert.Equal(150, total);
-        Assert.Equal(expected.Take(7), firstPage);
+        var page = await GetJsonAsync(host.Human, "/api/v1/workitems/page?status=Backlog&skip=0&take=7");
+        Assert.Equal(150, page.GetProperty("total").GetInt32());
+        var first = page.GetProperty("items").EnumerateArray().ToList();
+        Assert.Equal(expected.Take(7), first.Select(i => i.GetProperty("id").GetString()));
+        Assert.All(first, i => Assert.Equal(-4.5, i.GetProperty("priority").GetDouble()));
+    }
+
+    private static Task<HttpResponseMessage> ReorderAsync(HttpClient client, string id, object body)
+        => client.PostAsync($"/api/v1/workitems/{id}/reorder", System.Net.Http.Json.JsonContent.Create(body), TestContext.Current.CancellationToken);
+
+    [Fact]
+    public async Task A_card_dropped_in_another_column_moves_and_lands_in_place_in_one_request()
+    {
+        await using var host = await StartHostAsync();
+        var a = await host.SeedAsync("a", WiStatus.Ready, priority: 0);
+        var b = await host.SeedAsync("b", WiStatus.Ready, priority: 1);
+        var x = await host.SeedAsync("x", priority: 5);
+        var y = await host.SeedAsync("y", priority: 6);
+
+        var resp = await ReorderAsync(host.Human, x, new { aboveId = a, belowId = b, targetStatus = "Ready" });
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var view = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
+        Assert.Equal("Ready", view.GetProperty("status").GetString());
+        Assert.Equal([a, x, b], (await GetPageAsync(host.Human, "status=Ready")).Ids);
+        Assert.Equal([y], (await GetPageAsync(host.Human, "status=Backlog")).Ids);
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await ReorderAsync(host.Human, y, new { aboveId = a, targetStatus = "Sideways" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await ReorderAsync(host.Human, y, new { aboveId = a, targetStatus = "Running" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await ReorderAsync(host.Human, y, new { aboveId = "999", targetStatus = "Ready" })).StatusCode);
+        Assert.Equal([a, x, b], (await GetPageAsync(host.Human, "status=Ready")).Ids);
+        Assert.Equal([y], (await GetPageAsync(host.Human, "status=Backlog")).Ids);
+    }
+
+    [Fact]
+    public async Task Reorder_places_the_card_between_its_drop_neighbours_and_refuses_what_it_cannot_place()
+    {
+        await using var host = await StartHostAsync();
+        var a = await host.SeedAsync("a", priority: 0);
+        var b = await host.SeedAsync("b", priority: 1);
+        var c = await host.SeedAsync("c", priority: 2);
+        await host.SeedAsync("done", WiStatus.Done, priority: 1.5);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await ReorderAsync(host.Factory.CreateClient(), c, new { aboveId = a, belowId = b })).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await ReorderAsync(host.Human, "999", new { aboveId = a })).StatusCode);
+        foreach (var refused in new object[]
+        {
+            new { },
+            new { aboveId = c },
+            new { belowId = c },
+            new { aboveId = "999" },
+            new { belowId = "999" },
+            new { aboveId = a, belowId = "999" },
+        })
+            Assert.Equal(HttpStatusCode.BadRequest, (await ReorderAsync(host.Human, c, refused)).StatusCode);
+        Assert.Equal([a, b, c], (await GetPageAsync(host.Human, "status=Backlog")).Ids);
+
+        var resp = await ReorderAsync(host.Human, c, new { aboveId = a, belowId = b });
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var view = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
+        Assert.Equal(c, view.GetProperty("id").GetString());
+        var priority = view.GetProperty("priority").GetDouble();
+        Assert.True(priority is > 0 and < 1, $"priority {priority}");
+        Assert.Equal([a, c, b], (await GetPageAsync(host.Human, "status=Backlog")).Ids);
     }
 
     [Fact]

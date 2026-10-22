@@ -1022,7 +1022,7 @@ export function PreviewPanel({ workItem, detail }: { workItem: WorkItem; detail:
 }
 
 /**
- * Metadata block: status, priority, repo, tags, PR, dependencies, dates.
+ * Metadata block: status, repo, tags, PR, dependencies, dates.
  * Used as the persistent sidebar in the split variant and as an overview
  * column in the tab/rail variants.
  */
@@ -1061,10 +1061,6 @@ export function MetaPanel({ workItem, detail }: { workItem: WorkItem; detail: Wo
 
   return (
     <div className="wiv2-meta">
-      <div className="wiv2-meta-row">
-        <span className="detail-label">Priority</span>
-        <span className="detail-value">{workItem.priority}</span>
-      </div>
       <div className="wiv2-meta-row">
         <span className="detail-label">Repository</span>
         <span

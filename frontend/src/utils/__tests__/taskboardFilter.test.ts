@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vite-plus/test";
-import { WorkItem, WorkItemPriority, WorkItemStatus } from "../../types";
+import { WorkItem, WorkItemStatus } from "../../types";
 import {
   EMPTY_TASKBOARD_FILTER,
   compareTags,
@@ -15,7 +15,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Item",
     description: "desc",
     status: WorkItemStatus.Ready,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     repositoryId: "repo-1",
     prUrl: null,

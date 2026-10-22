@@ -1,6 +1,5 @@
 import type { WorkItem, WorkItemStatus } from "../types";
 import { matchesTaskboardFilter, type TaskboardFilter } from "./taskboardFilter";
-import { compareCreatedAt } from "./createdAt";
 
 /** What the board holds for one status column. */
 export interface ColumnState {
@@ -16,14 +15,17 @@ export interface ColumnState {
 export type TaskboardColumns = Record<WorkItemStatus, ColumnState>;
 
 /**
- * The order the server pages a column in: newest first, then the id, highest
- * first by code unit, which is the server's ordinal comparison for these ids.
+ * The board order the server pages a column in: the lowest priority first,
+ * then the id, shorter first and then by code unit, which is the server's
+ * ordinal comparison for these ids. The WorkItem server's
+ * `WorkItemService.InBoardOrder` is the source of truth, and ILD's
+ * `WorkItemOrder` follows it too: change all three together.
  */
 export function compareServerOrder(a: WorkItem, b: WorkItem): number {
-  const newestFirst = compareCreatedAt(b.createdAt, a.createdAt);
-  if (newestFirst !== 0) return newestFirst;
+  if (a.priority !== b.priority) return a.priority < b.priority ? -1 : 1;
+  if (a.id.length !== b.id.length) return a.id.length - b.id.length;
   if (a.id === b.id) return 0;
-  return a.id < b.id ? 1 : -1;
+  return a.id < b.id ? -1 : 1;
 }
 
 /** The items with `item` in its place in server order, replacing any card with its id. */
@@ -39,12 +41,37 @@ function holderOf(board: TaskboardColumns, id: string): WorkItemStatus | undefin
   );
 }
 
+/** How a live copy of an item joins the board. */
+export interface ApplyOptions {
+  /** Count an item the board never held (a create). */
+  countAsNew: boolean;
+  /** The card the server just placed the item directly after, for a drop. */
+  placedAfter?: string;
+}
+
+/**
+ * The column's loaded cards with `item` in its place in server order, or without
+ * it when it sorts after the last loaded card of a column that has more on the
+ * server, where it would be out of order — unless the server placed it directly
+ * after that card.
+ */
+function placeInColumn(column: ColumnState, item: WorkItem, placedAfter?: string): WorkItem[] {
+  const last = column.items[column.items.length - 1];
+  const fits =
+    column.loaded &&
+    (column.items.length >= column.total ||
+      (last !== undefined && (compareServerOrder(item, last) <= 0 || last.id === placedAfter)));
+  return fits
+    ? insertInServerOrder(column.items, item)
+    : column.items.filter((wi) => wi.id !== item.id);
+}
+
 /**
  * The board with a live copy of an item applied. A card still in its column and
- * still matching the filter is replaced where it is; otherwise it leaves the
- * column that held it, and a matching item joins its status column in server
- * order — unless it sorts after the last loaded card of a column that has more
- * on the server, where it would be out of order, so it is only counted.
+ * still matching the filter moves to its place there in server order; otherwise
+ * it leaves the column that held it, and a matching item joins its status
+ * column in server order. Either way, one that sorts beyond a column's loaded
+ * cards (see `placeInColumn`) is only counted.
  * `countAsNew` counts an item the board never held (a create); anything else
  * the board did not hold is left for the server's counts to tally.
  */
@@ -52,18 +79,14 @@ export function applyItem(
   board: TaskboardColumns,
   item: WorkItem,
   filter: TaskboardFilter,
-  { countAsNew }: { countAsNew: boolean },
+  { countAsNew, placedAfter }: ApplyOptions,
 ): TaskboardColumns {
   const holder = holderOf(board, item.id);
   const matches = matchesTaskboardFilter(item, filter);
   if (holder === item.status && matches) {
-    const column = board[holder];
     return {
       ...board,
-      [holder]: {
-        ...column,
-        items: column.items.map((wi) => (wi.id === item.id ? item : wi)),
-      },
+      [holder]: { ...board[holder], items: placeInColumn(board[holder], item, placedAfter) },
     };
   }
 
@@ -79,14 +102,9 @@ export function applyItem(
   const target = next[item.status];
   if (!matches || !target) return holder ? next : board;
 
-  const last = target.items[target.items.length - 1];
-  const fits =
-    target.loaded &&
-    (target.items.length >= target.total ||
-      (last !== undefined && compareServerOrder(item, last) < 0));
   next[item.status] = {
     ...target,
-    items: fits ? insertInServerOrder(target.items, item) : target.items,
+    items: placeInColumn(target, item, placedAfter),
     total: holder || countAsNew ? target.total + 1 : target.total,
   };
   return next;

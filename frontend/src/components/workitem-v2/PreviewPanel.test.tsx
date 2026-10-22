@@ -1,13 +1,7 @@
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { render, cleanup, screen } from "@testing-library/react";
 import { PreviewPanel } from "./panels";
-import {
-  WorkItem,
-  WorkItemStatus,
-  WorkItemPriority,
-  Repository,
-  WorktreePreviewService,
-} from "../../types";
+import { WorkItem, WorkItemStatus, Repository, WorktreePreviewService } from "../../types";
 import type { WorkItemDetail } from "./useWorkItemDetail";
 
 afterEach(() => cleanup());
@@ -32,7 +26,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test",
     description: "",
     status: WorkItemStatus.HumanFeedback,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

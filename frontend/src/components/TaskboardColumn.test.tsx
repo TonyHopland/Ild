@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, createEvent, fireEvent, waitFor } from "@testing-library/react";
 import { useState, type ComponentProps } from "react";
 import BoardColumn from "./TaskboardColumn";
 
@@ -22,7 +22,7 @@ function TaskboardColumn(
   );
 }
 import WorkItemCard from "./WorkItemCard";
-import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
+import { WorkItem, WorkItemStatus } from "../types";
 import * as authServices from "../services/auth";
 
 afterEach(() => {
@@ -38,7 +38,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Item A",
     description: "desc",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "",
     loopTemplateVersion: "",
@@ -246,6 +246,250 @@ describe("TaskboardColumn", () => {
 
     // transition should NOT have been called
     expect(transitionSpy).not.toHaveBeenCalled();
+  });
+});
+
+const CARD_HEIGHT = 100;
+
+/**
+ * Lays the cards out one under the other, CARD_HEIGHT each, in the given order
+ * (jsdom has no layout). An element holding exactly one of the cards measures as
+ * that card; anything holding several, such as the column, spans them all and
+ * room below.
+ */
+function layOutCards(ids: string[]) {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const text = this.textContent ?? "";
+    const held = ids.filter((id) => text.includes(`#${id}`));
+    const top = held.length === 1 ? ids.indexOf(held[0]) * CARD_HEIGHT : 0;
+    const height = held.length === 1 ? CARD_HEIGHT : (ids.length + 2) * CARD_HEIGHT;
+    return {
+      x: 0,
+      y: top,
+      top,
+      left: 0,
+      right: 200,
+      bottom: top + height,
+      width: 200,
+      height,
+      toJSON: () => ({}),
+    } as DOMRect;
+  });
+}
+
+function card(id: string): HTMLElement {
+  return screen.getByRole("button", { name: new RegExp(`^Item ${id},`) });
+}
+
+/** Drags the work item with `draggedId` over `target` and drops it at height `clientY`. */
+function dropAt(target: Element, draggedId: string, clientY: number) {
+  const dataTransfer = { getData: () => draggedId, setData: () => {}, dropEffect: "move" };
+  for (const fire of [createEvent.dragEnter, createEvent.dragOver, createEvent.drop]) {
+    const event = fire(target, { dataTransfer });
+    Object.defineProperty(event, "clientY", { value: clientY });
+    Object.defineProperty(event, "pageY", { value: clientY });
+    fireEvent(target, event);
+  }
+}
+
+/** Lets the drop's requests and their callbacks run. */
+async function settle() {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+function itemsIn(status: WorkItemStatus, ids: string[]): WorkItem[] {
+  return ids.map((id) => makeItem({ id, title: `Item ${id}`, status }));
+}
+
+describe("TaskboardColumn drag and drop order", () => {
+  function renderColumn(status: WorkItemStatus, ids: string[]) {
+    const onWorkItemUpdate = vi.fn();
+    const onError = vi.fn();
+    render(
+      <TaskboardColumn
+        status={status}
+        label={status}
+        workItems={itemsIn(status, ids)}
+        total={ids.length}
+        onWorkItemUpdate={onWorkItemUpdate}
+        onError={onError}
+        foldChoice={false}
+      />,
+    );
+    layOutCards(ids);
+    return { onWorkItemUpdate, onError };
+  }
+
+  function spyRequests() {
+    const transition = vi
+      .spyOn(authServices.workItemService, "transition")
+      .mockResolvedValue(undefined as unknown as void);
+    vi.spyOn(authServices.workItemService, "getById").mockImplementation(async (id: string) =>
+      makeItem({ id, title: `Item ${id}`, status: WorkItemStatus.Ready }),
+    );
+    const reorder = vi
+      .spyOn(authServices.workItemService, "reorder")
+      .mockImplementation(async (id: string) =>
+        makeItem({ id, title: `Item ${id}`, status: WorkItemStatus.Backlog, priority: -42 }),
+      );
+    return { transition, reorder };
+  }
+
+  test("dropping on the upper half of a card places the dragged card directly above it", async () => {
+    const { transition, reorder } = spyRequests();
+    const { onWorkItemUpdate, onError } = renderColumn(WorkItemStatus.Backlog, [
+      "a",
+      "b",
+      "c",
+      "d",
+    ]);
+
+    dropAt(card("b"), "d", CARD_HEIGHT + 20);
+
+    await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+    expect(reorder.mock.calls[0][0]).toBe("d");
+    expect(reorder.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ aboveId: "a", belowId: "b" }),
+    );
+    expect(transition).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(onWorkItemUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: "d", priority: -42 }),
+      ),
+    );
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  test("dropping on the lower half of a card places the dragged card directly below it", async () => {
+    const { transition, reorder } = spyRequests();
+    renderColumn(WorkItemStatus.Backlog, ["a", "b", "c", "d"]);
+
+    dropAt(card("c"), "a", 2 * CARD_HEIGHT + 80);
+
+    await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+    expect(reorder.mock.calls[0][0]).toBe("a");
+    expect(reorder.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ aboveId: "c", belowId: "d" }),
+    );
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  test("dropping on the top card's upper half makes the dragged card the top one", async () => {
+    const { reorder } = spyRequests();
+    renderColumn(WorkItemStatus.Ready, ["a", "b", "c"]);
+
+    dropAt(card("a"), "c", 10);
+
+    await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+    expect(reorder.mock.calls[0][0]).toBe("c");
+    expect(reorder.mock.calls[0][1]).toEqual(expect.objectContaining({ belowId: "a" }));
+    expect(reorder.mock.calls[0][1]?.aboveId).toBeUndefined();
+  });
+
+  test("dropping in the column outside the cards places the dragged card below the last one", async () => {
+    const { reorder } = spyRequests();
+    renderColumn(WorkItemStatus.Backlog, ["a", "b", "c"]);
+
+    const column = screen.getByText(WorkItemStatus.Backlog).closest("div")!;
+    dropAt(column, "a", 3 * CARD_HEIGHT + 50);
+
+    await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+    expect(reorder.mock.calls[0][0]).toBe("a");
+    expect(reorder.mock.calls[0][1]).toEqual(expect.objectContaining({ aboveId: "c" }));
+    expect(reorder.mock.calls[0][1]?.belowId).toBeUndefined();
+  });
+
+  test.each([
+    ["the lower half of the card above it", "a", 80],
+    ["the upper half of the card below it", "c", 2 * CARD_HEIGHT + 20],
+    ["its own card", "b", CARD_HEIGHT + 50],
+  ])("dropping a card on %s sends nothing", async (_where, targetId, clientY) => {
+    const { transition, reorder } = spyRequests();
+    const { onWorkItemUpdate } = renderColumn(WorkItemStatus.Backlog, ["a", "b", "c"]);
+
+    dropAt(card(targetId), "b", clientY);
+    await settle();
+
+    expect(reorder).not.toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
+    expect(onWorkItemUpdate).not.toHaveBeenCalled();
+  });
+
+  test("dropping the last card below the last card sends nothing", async () => {
+    const { transition, reorder } = spyRequests();
+    renderColumn(WorkItemStatus.Backlog, ["a", "b", "c"]);
+
+    const column = screen.getByText(WorkItemStatus.Backlog).closest("div")!;
+    dropAt(column, "c", 3 * CARD_HEIGHT + 50);
+    await settle();
+
+    expect(reorder).not.toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  test("a card from another column is moved and placed exactly where it was dropped in one request", async () => {
+    const { transition, reorder } = spyRequests();
+    const { onWorkItemUpdate, onError } = renderColumn(WorkItemStatus.Ready, ["e", "f", "g"]);
+
+    dropAt(card("f"), "x", CARD_HEIGHT + 30);
+
+    await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+    expect(transition).not.toHaveBeenCalled();
+    expect(reorder.mock.calls[0][0]).toBe("x");
+    expect(reorder.mock.calls[0][1]).toEqual({
+      aboveId: "e",
+      belowId: "f",
+      targetStatus: WorkItemStatus.Ready,
+    });
+    await waitFor(() =>
+      expect(onWorkItemUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: "x", priority: -42 }),
+      ),
+    );
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  test("a card from another column dropped on the lower half of the last card lands at the bottom", async () => {
+    const { transition, reorder } = spyRequests();
+    renderColumn(WorkItemStatus.Ready, ["e", "f"]);
+
+    dropAt(card("f"), "x", CARD_HEIGHT + 70);
+
+    await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
+    expect(transition).not.toHaveBeenCalled();
+    expect(reorder.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ aboveId: "f", targetStatus: WorkItemStatus.Ready }),
+    );
+    expect(reorder.mock.calls[0][1]?.belowId).toBeUndefined();
+  });
+
+  test("a card dropped into an empty column is only moved", async () => {
+    const { transition, reorder } = spyRequests();
+    const { onWorkItemUpdate } = renderColumn(WorkItemStatus.Ready, []);
+
+    const column = screen.getByText(WorkItemStatus.Ready).closest("div")!;
+    dropAt(column, "x", 50);
+
+    await waitFor(() => expect(transition).toHaveBeenCalledWith("x", WorkItemStatus.Ready));
+    await waitFor(() => expect(onWorkItemUpdate).toHaveBeenCalled());
+    await settle();
+    expect(reorder).not.toHaveBeenCalled();
+  });
+
+  test("when a drop in a new column is refused the error is shown and the card stays where it was", async () => {
+    const { transition, reorder } = spyRequests();
+    reorder.mockRejectedValue(new Error("Refused by the server"));
+    const { onError, onWorkItemUpdate } = renderColumn(WorkItemStatus.Ready, ["e", "f"]);
+
+    dropAt(card("f"), "x", CARD_HEIGHT + 30);
+
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(onError.mock.calls[0][0]).toMatch(/Refused by the server/);
+    await settle();
+    expect(reorder).toHaveBeenCalledTimes(1);
+    expect(transition).not.toHaveBeenCalled();
+    expect(onWorkItemUpdate).not.toHaveBeenCalled();
   });
 });
 

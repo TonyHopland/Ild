@@ -7,7 +7,6 @@ import {
   LoopRunStatus,
   RunConversationMessage,
   WorkItem,
-  WorkItemPriority,
   WorkItemStatus,
 } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
@@ -26,7 +25,7 @@ const workItem: WorkItem = {
   title: "An item",
   description: "",
   status: WorkItemStatus.Done,
-  priority: WorkItemPriority.Medium,
+  priority: 0,
   tags: [],
   loopTemplateId: "tmpl-1",
   loopTemplateVersion: "v1",

@@ -565,7 +565,6 @@ export default function WorkItemModalV2({
                     {feedbackReasonLabel(workItem.humanFeedbackReason)}
                   </span>
                 )}
-                <span className={pillClass("muted")}>{workItem.priority} priority</span>
               </div>
             </div>
             <div className="wiv2-header-actions">

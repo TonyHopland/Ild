@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus } from "../../types";
 import { formatBytes } from "../../utils/attachments";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -21,7 +21,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Work Item",
     description: "",
     status: WorkItemStatus.Ready,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

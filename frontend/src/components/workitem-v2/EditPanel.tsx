@@ -1,11 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  WorkItem,
-  WorkItemStatus,
-  WorkItemPriority,
-  AiProviderOverrideMode,
-  BranchNameCheck,
-} from "../../types";
+import { WorkItem, WorkItemStatus, AiProviderOverrideMode, BranchNameCheck } from "../../types";
 import { workItemService } from "../../services/auth";
 import { parseTags } from "../../utils/workItemJson";
 import TagAutocomplete from "../TagAutocomplete";
@@ -45,7 +39,6 @@ export default function EditPanel({
   const baseTitle = workItem?.title ?? "";
   const baseDescription = workItem?.description ?? "";
   const baseStatus = workItem?.status ?? WorkItemStatus.Backlog;
-  const basePriority = workItem?.priority ?? WorkItemPriority.Medium;
   const baseTags = workItem ? parseTags(workItem).join(", ") : "";
   const baseRepositoryId = workItem?.repositoryId ?? "";
   const baseAiProviderOverride = workItem?.aiProviderOverride ?? AiProviderOverrideMode.None;
@@ -58,7 +51,6 @@ export default function EditPanel({
   const [title, setTitle] = useState(baseTitle);
   const [description, setDescription] = useState(baseDescription);
   const [status, setStatus] = useState<WorkItemStatus>(baseStatus);
-  const [priority, setPriority] = useState<WorkItemPriority>(basePriority);
   const [tags, setTags] = useState(baseTags);
   const [repositoryId, setRepositoryId] = useState(baseRepositoryId);
   const [aiProviderOverride, setAiProviderOverride] =
@@ -118,7 +110,6 @@ export default function EditPanel({
     title !== baseTitle ||
     description !== baseDescription ||
     status !== baseStatus ||
-    priority !== basePriority ||
     tags !== baseTags ||
     repositoryId !== baseRepositoryId ||
     aiProviderOverride !== baseAiProviderOverride ||
@@ -154,7 +145,6 @@ export default function EditPanel({
       title,
       description,
       status,
-      priority,
       tags: parsedTags,
       repositoryId,
       aiProviderOverride,
@@ -329,19 +319,6 @@ export default function EditPanel({
                 </option>
               ),
             )}
-          </select>
-        </div>
-        <div className="form-group">
-          <label htmlFor="wiv2-priority">Priority</label>
-          <select
-            id="wiv2-priority"
-            value={priority}
-            onChange={(e) => setPriority(e.target.value as WorkItemPriority)}
-          >
-            <option value={WorkItemPriority.Low}>Low</option>
-            <option value={WorkItemPriority.Medium}>Medium</option>
-            <option value={WorkItemPriority.High}>High</option>
-            <option value={WorkItemPriority.Critical}>Critical</option>
           </select>
         </div>
       </div>

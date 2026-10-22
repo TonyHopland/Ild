@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A repository can limit how many of its work items run at once; the rest wait in Ready.**
 
+- **Drag work items to reorder the board; Ild starts the top-most Ready item first.**
+
 ### Fixed
 
 - **A failed Start or Cleanup step can be retried like any other failed step.**

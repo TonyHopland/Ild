@@ -135,7 +135,7 @@ public class WorkItemHistoryApiTests
         var history = await HistoryAsync(host, id);
 
         var created = history.Where(e => Str(e, "kind") == "Created").ToList();
-        Assert.Equal(11, created.Count);
+        Assert.Equal(10, created.Count);
         Assert.All(created, e => AssertActor(e, host.Factory.AdminUsername, "Human", null, null));
         var title = Assert.Single(history, e => Str(e, "kind") == "Changed" && Str(e, "field") == "title");
         Assert.Equal(("Original title", "Renamed"), (Str(title, "oldValue"), Str(title, "newValue")));
@@ -175,7 +175,7 @@ public class WorkItemHistoryApiTests
         var id = await CreateAsAgentAsync(host, host.Agent(chatSessionId: chatId), "Raised in a chat");
 
         var created = (await HistoryAsync(host, id)).Where(e => Str(e, "kind") == "Created").ToList();
-        Assert.Equal(11, created.Count);
+        Assert.Equal(10, created.Count);
         Assert.All(created, e => AssertActor(e, "carol", "Chat", $"chat {chatId}", null));
     }
 
@@ -312,7 +312,7 @@ public class WorkItemHistoryApiTests
         Assert.False(off.TryGetProperty("history", out _));
         Assert.Equal("Renamed", Str(on, "title"));
         var history = on.GetProperty("history").EnumerateArray().ToArray();
-        Assert.Equal(11, history.Count(e => Str(e, "kind") == "Created"));
+        Assert.Equal(10, history.Count(e => Str(e, "kind") == "Created"));
         var title = history[0];
         Assert.Equal("title", Str(title, "field"));
         Assert.Equal(("Original title", "Renamed"), (Str(title, "oldValue"), Str(title, "newValue")));
@@ -335,7 +335,7 @@ public class WorkItemHistoryApiTests
         Assert.Equal("Deleted", Str(deleted, "kind"));
         Assert.Equal("Soon gone", Str(deleted, "newValue"));
         AssertActor(deleted, host.Factory.AdminUsername, "Human", null, null);
-        Assert.Equal(11, history.Count(e => Str(e, "kind") == "Created"));
+        Assert.Equal(10, history.Count(e => Str(e, "kind") == "Created"));
 
         var agent = host.Agent();
         var asked = await agent.GetAsync($"/api/v1/agent/workitems/{id}?includeHistory=true", Ct);

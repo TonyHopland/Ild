@@ -14,14 +14,16 @@ public class WorkItemServerBypassWriteGuardTests
 {
     // Each of these has been checked: the WorkItems writes among them (the Running
     // claim and the PR record in WorkItemService, the applied edit proposal in
-    // WorkItemEditProposalService) write their history explicitly; WorkItemRows'
-    // claim is a row lock that changes nothing; the rest touch other tables.
+    // WorkItemEditProposalService) write their history explicitly; the board
+    // renumber in WorkItemService writes only the priority, which history does not
+    // track; WorkItemRows' claim is a row lock that changes nothing; the rest touch
+    // other tables.
     private static readonly Dictionary<string, int> Pinned = new(StringComparer.Ordinal)
     {
         ["Services/WorkItemAttachmentService.cs"] = 1,
         ["Services/WorkItemEditProposalService.cs"] = 4,
         ["Services/WorkItemRows.cs"] = 1,
-        ["Services/WorkItemService.cs"] = 2,
+        ["Services/WorkItemService.cs"] = 3,
     };
 
     private static readonly Regex BulkWrite =

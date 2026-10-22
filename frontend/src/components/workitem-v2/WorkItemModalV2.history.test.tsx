@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus } from "../../types";
 import type { WorkItemHistoryEntry } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
@@ -21,7 +21,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Work Item",
     description: "",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     repositoryId: "repo-1",
     prUrl: null,
@@ -318,6 +318,35 @@ describe("WorkItemModalV2 History tab", () => {
     expect(all).toContain("High");
     expect(all).not.toMatch(/\b(null|undefined|unknown)\b/i);
     expect(panel.querySelector('a[href^="/taskboard/"]')).toBeNull();
+  });
+
+  test("priority changes recorded before the priority became the board order stay readable", async () => {
+    mockServices(async () => [
+      entry({
+        saveId: "save-2",
+        username: "carol",
+        field: "priority",
+        oldValue: "Medium",
+        newValue: "Critical",
+      }),
+      entry({
+        saveId: "save-1",
+        kind: "Baseline",
+        username: null,
+        field: "priority",
+        oldValue: null,
+        newValue: "Medium",
+      }),
+    ]);
+    await renderDialog(makeWorkItem());
+
+    const panel = await openHistory();
+    await waitFor(() => expect(panel.textContent).toContain("carol"));
+
+    const all = text(panel);
+    expect(all).toMatch(/changed priority/i);
+    expect(all).toContain("Critical");
+    expect(all).toMatch(/State at history start/i);
   });
 
   test("a created save is labelled as the item's creation", async () => {

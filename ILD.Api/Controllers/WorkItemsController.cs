@@ -115,7 +115,7 @@ public class WorkItemsController : ControllerBase
 
     /// <summary>
     /// One taskboard column: a page of the items in <paramref name="status"/>
-    /// newest first, carrying every requested tag, with the total across pages.
+    /// in board order, carrying every requested tag, with the total across pages.
     /// A status or repository that does not parse is refused rather than
     /// widened to every item.
     /// </summary>
@@ -134,7 +134,7 @@ public class WorkItemsController : ControllerBase
         var query = filter with
         {
             Status = statusFilter,
-            OrderBy = WorkItemOrderBy.CreatedAt,
+            OrderBy = WorkItemOrderBy.Priority,
             Skip = skip,
             Take = take,
         };
@@ -326,6 +326,33 @@ public class WorkItemsController : ControllerBase
         if (!ok) return NotFound();
         var wi = await _workItemManager.GetWorkItemAsync(id);
         return Ok(wi);
+    }
+
+    /// <summary>
+    /// Move a card to where it was dropped on the board, between the cards
+    /// directly above and below the drop spot in its column, and into that
+    /// column when it came from another: one request, as the transition rules allow.
+    /// </summary>
+    [HttpPost("{id}/reorder")]
+    public async Task<IActionResult> Reorder(string id, [FromBody] WorkItemReorderRequest request)
+    {
+        if (SignedInUser is not { } user)
+            return Unauthorized();
+        RemoteWorkItemStatus? target = null;
+        if (request.TargetStatus is not null)
+        {
+            if (ParseTargetStatus(request.TargetStatus) is not { } parsed)
+                return BadRequest(new { error = "Invalid target status" });
+            target = parsed;
+        }
+
+        return await _workItemManager.ReorderAsync(user, id, request.AboveId, request.BelowId, target) switch
+        {
+            ReorderOutcome.NotFound => NotFound(),
+            ReorderOutcome.InvalidNeighbour => BadRequest(new { error = "aboveId or belowId must name another work item." }),
+            ReorderOutcome.TransitionRefused => BadRequest(new { error = "Transition not allowed" }),
+            _ => await _workItemManager.GetWorkItemAsync(id) is { } moved ? Ok(moved) : NotFound(),
+        };
     }
 
     /// <summary>
@@ -912,23 +939,17 @@ public class WorkItemsController : ControllerBase
             await chatNotifier.EditProposalsChangedAsync(chat);
     }
 
+    private static RemoteWorkItemStatus? ParseTargetStatus(string? value)
+        => Enum.TryParse<WorkItemStatus>(value, true, out var parsed) ? (RemoteWorkItemStatus)(int)parsed : null;
+
     [HttpPost("{id}/transition")]
     public async Task<IActionResult> Transition(string id, [FromBody] WorkItemTransitionRequest request)
     {
-        if (!Enum.TryParse<WorkItemStatus>(request.TargetStatus, true, out var target))
+        if (ParseTargetStatus(request.TargetStatus) is not { } target)
             return BadRequest(new { error = "Invalid target status" });
         if (SignedInUser is not { } actor)
             return Unauthorized();
-        var ok = target switch
-        {
-            WorkItemStatus.Backlog => await _workItemManager.TransitionToBacklogAsync(actor, id),
-            WorkItemStatus.WorkQueue => await _workItemManager.TransitionToWorkQueueAsync(actor, id),
-            WorkItemStatus.Ready => await _workItemManager.TransitionToReadyAsync(actor, id),
-            WorkItemStatus.Running => await _workItemManager.TransitionToRunningAsync(actor, id),
-            WorkItemStatus.HumanFeedback => await _workItemManager.TransitionToHumanFeedbackAsync(actor, id, "manual"),
-            WorkItemStatus.Done => await _workItemManager.TransitionToDoneAsync(actor, id),
-            _ => false,
-        };
+        var ok = await _workItemManager.MoveAsync(actor, id, target);
         return ok ? Ok() : BadRequest(new { error = "Transition not allowed" });
     }
 

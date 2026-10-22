@@ -76,7 +76,6 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         {
             Title = "client-roundtrip",
             Tags = new[] { "alpha", "beta" },
-            Priority = RemoteWorkItemPriority.High,
         }, TestActors.Human, TestContext.Current.CancellationToken);
 
         Assert.Equal("client-roundtrip", created.Title);
@@ -85,6 +84,28 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
         var fetched = await _client.GetAsync(_opts, created.Id, TestContext.Current.CancellationToken);
         Assert.NotNull(fetched);
         Assert.Equal(RemoteWorkItemStatus.Backlog, fetched!.Status);
+    }
+
+    [Fact]
+    public async Task The_order_value_round_trips_through_create_and_update()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var older = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "older",
+        }, TestActors.Human, ct);
+        var newer = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "newer",
+        }, TestActors.Human, ct);
+        Assert.True(newer.Priority < older.Priority);
+
+        var moved = await _client.UpdateAsync(_opts, newer.Id, new RemoteUpdateWorkItemRequest { Priority = older.Priority + 0.5 }, TestActors.Human, ct);
+        Assert.Equal(older.Priority + 0.5, moved!.Priority);
+
+        var renamed = await _client.UpdateAsync(_opts, newer.Id, new RemoteUpdateWorkItemRequest { Title = "renamed" }, TestActors.Human, ct);
+        Assert.Equal(older.Priority + 0.5, renamed!.Priority);
+        Assert.Equal(older.Priority + 0.5, (await _client.GetAsync(_opts, newer.Id, ct))!.Priority);
     }
 
     [Fact]
@@ -133,6 +154,99 @@ public sealed class WorkItemServerClientTests : IAsyncLifetime
             BaseBranchOverride = "",
         }, TestActors.Human, TestContext.Current.CancellationToken);
         Assert.Null(cleared!.BaseBranchOverride);
+    }
+
+    private async Task<string> CreateAtAsync(string title, double priority, RemoteWorkItemStatus status = RemoteWorkItemStatus.Backlog)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var created = await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest { Title = title, ForceStatus = status }, TestActors.Human, ct);
+        await _client.UpdateAsync(_opts, created.Id, new RemoteUpdateWorkItemRequest { Priority = priority }, TestActors.Human, ct);
+        return created.Id;
+    }
+
+    [Fact]
+    public async Task A_reorder_within_a_column_round_trips_the_placed_item()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var a = await CreateAtAsync("a", 0);
+        var b = await CreateAtAsync("b", 1);
+        var c = await CreateAtAsync("c", 2);
+
+        var resp = await _client.ReorderAsync(_opts, c, new RemoteReorderWorkItemRequest { AboveId = a, BelowId = b }, TestActors.Human, ct);
+
+        Assert.Equal(RemoteReorderOutcome.Moved, resp.Outcome);
+        Assert.False(resp.Renumbered);
+        Assert.Equal(c, resp.Item!.Id);
+        Assert.Equal(RemoteWorkItemStatus.Backlog, resp.Item.Status);
+        Assert.Equal(0.5, resp.Item.Priority);
+        Assert.Equal(0.5, (await _client.GetAsync(_opts, c, ct))!.Priority);
+    }
+
+    [Fact]
+    public async Task A_reorder_into_another_status_round_trips_the_status_and_the_reason()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var a = await CreateAtAsync("a", 0, RemoteWorkItemStatus.Ready);
+        var x = await CreateAtAsync("x", 5);
+
+        var resp = await _client.ReorderAsync(_opts, x, new RemoteReorderWorkItemRequest
+        {
+            BelowId = a,
+            TargetStatus = RemoteWorkItemStatus.Ready,
+            Reason = "dropped on the board",
+        }, TestActors.Human, ct);
+
+        Assert.Equal(RemoteReorderOutcome.Moved, resp.Outcome);
+        Assert.Equal(RemoteWorkItemStatus.Ready, resp.Item!.Status);
+        Assert.True(resp.Item.Priority < 0);
+        var status = Assert.Single((await _client.GetHistoryAsync(_opts, x, ct))!, e => e.Field == "status" && e.NewValue == "Ready");
+        Assert.Equal("dropped on the board", status.Reason);
+    }
+
+    [Fact]
+    public async Task A_reorder_that_renumbers_says_so()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var a = await CreateAtAsync("a", 1);
+        var b = await CreateAtAsync("b", 1);
+        var c = await CreateAtAsync("c", 9);
+
+        var resp = await _client.ReorderAsync(_opts, c, new RemoteReorderWorkItemRequest { AboveId = a, BelowId = b }, TestActors.Human, ct);
+
+        Assert.Equal(RemoteReorderOutcome.Moved, resp.Outcome);
+        Assert.True(resp.Renumbered);
+        var order = (await _client.ListAsync(_opts, status: null, tags: null, ct)).Select(w => w.Id);
+        Assert.Equal(new[] { a, c, b }, order);
+    }
+
+    [Fact]
+    public async Task A_reorder_that_cannot_place_answers_its_outcome_and_a_refused_move_its_reason()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var dependency = await CreateAtAsync("dependency", 0);
+        var a = await CreateAtAsync("a", 1);
+        var blocked = (await _client.CreateAsync(_opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "blocked",
+            ForceStatus = RemoteWorkItemStatus.Ready,
+            Dependencies = new[] { dependency },
+        }, TestActors.Human, ct)).Id;
+
+        var missing = await _client.ReorderAsync(_opts, "999", new RemoteReorderWorkItemRequest { AboveId = a }, TestActors.Human, ct);
+        var nowhere = await _client.ReorderAsync(_opts, a, new RemoteReorderWorkItemRequest { AboveId = "999" }, TestActors.Human, ct);
+        var refused = await _client.ReorderAsync(_opts, blocked, new RemoteReorderWorkItemRequest
+        {
+            AboveId = a,
+            TargetStatus = RemoteWorkItemStatus.Running,
+        }, TestActors.Human, ct);
+
+        Assert.Equal(RemoteReorderOutcome.NotFound, missing.Outcome);
+        Assert.Equal(RemoteReorderOutcome.InvalidNeighbour, nowhere.Outcome);
+        Assert.Equal(RemoteReorderOutcome.TransitionRefused, refused.Outcome);
+        Assert.Equal("Dependencies not satisfied", refused.Reason);
+        Assert.Null(missing.Item);
+        Assert.Equal(1, (await _client.GetAsync(_opts, a, ct))!.Priority);
+        Assert.Equal(RemoteWorkItemStatus.Ready, (await _client.GetAsync(_opts, blocked, ct))!.Status);
     }
 
     [Fact]

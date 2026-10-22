@@ -18,6 +18,8 @@ interface WorkItemCardProps {
   /** Loop template names, used to mark tags that resolve to a loop. */
   loopTemplateNames?: string[];
   repositoryName?: string;
+  /** Marks the edge a card dragged over the column would be dropped at. */
+  dropEdge?: "above" | "below";
 }
 
 export default function WorkItemCard({
@@ -26,6 +28,7 @@ export default function WorkItemCard({
   onMove,
   loopTemplateNames = [],
   repositoryName,
+  dropEdge,
 }: WorkItemCardProps) {
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const handleDragStart = (e: React.DragEvent) => {
@@ -83,7 +86,8 @@ export default function WorkItemCard({
 
   return (
     <div
-      className="work-item-card"
+      className={`work-item-card${dropEdge ? ` work-item-card--drop-${dropEdge}` : ""}`}
+      data-work-item-id={workItem.id}
       draggable
       onDragStart={handleDragStart}
       onClick={handleClick}
@@ -192,6 +196,26 @@ export default function WorkItemCard({
 
         .work-item-card:active {
           cursor: grabbing;
+        }
+
+        .work-item-card--drop-above::before,
+        .work-item-card--drop-below::after {
+          content: "";
+          position: absolute;
+          left: 0;
+          right: 0;
+          height: 2px;
+          border-radius: 1px;
+          background-color: var(--accent);
+          pointer-events: none;
+        }
+
+        .work-item-card--drop-above::before {
+          top: calc(-0.25rem - 2px);
+        }
+
+        .work-item-card--drop-below::after {
+          bottom: calc(-0.25rem - 2px);
         }
 
         .work-item-title {

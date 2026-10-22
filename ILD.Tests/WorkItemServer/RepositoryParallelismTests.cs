@@ -152,6 +152,88 @@ public sealed class RepositoryParallelismTests : IDisposable
         Assert.Empty(third.HeldByRepositoryLimit);
     }
 
+    private async Task<double> PriorityOfAsync(string id)
+        => (await _db.ServerClient.GetAsync(Opts, id, Ct))!.Priority;
+
+    [Fact]
+    public async Task Three_ready_items_of_a_one_at_a_time_repository_are_claimed_in_board_order_and_a_reorder_picks_the_next()
+    {
+        var repo = AddRepo(parallelism: 1);
+        var a = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "A");
+        var b = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "B");
+        var c = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "C");
+        var manager = Manager();
+        await manager.ReorderAsync(TestActors.Human, a, aboveId: null, belowId: c);
+        await manager.ReorderAsync(TestActors.Human, b, aboveId: a, belowId: c);
+        Assert.Equal(new[] { a, b, c }, await ServerReadyOrderAsync());
+
+        Assert.Equal(new[] { a }, Ids((await PassAsync()).Claimed));
+        await MoveAsync(a, RemoteWorkItemStatus.Done);
+
+        await manager.ReorderAsync(TestActors.Human, c, aboveId: null, belowId: b);
+        Assert.Equal(new[] { c }, Ids((await PassAsync()).Claimed));
+        await MoveAsync(c, RemoteWorkItemStatus.Done);
+
+        Assert.Equal(new[] { b }, Ids((await PassAsync()).Claimed));
+    }
+
+    /// <summary>
+    /// The top Ready item waits for its repository, the next eligible item below
+    /// starts instead, and the held item keeps its place: once the slot frees up
+    /// it starts ahead of the item that was below it.
+    /// </summary>
+    [Fact]
+    public async Task A_top_item_held_by_its_repository_is_skipped_untouched_and_starts_first_once_it_can()
+    {
+        var repo = AddRepo(parallelism: 1);
+        var busy = await AddItemAsync(repo, RemoteWorkItemStatus.Running, "busy");
+        var free = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "free");
+        var below = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "below");
+        var top = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "top");
+        Assert.Equal(new[] { top, below, free }, await ServerReadyOrderAsync());
+        var priority = await PriorityOfAsync(top);
+        var history = await HistoryCountAsync(top);
+
+        Assert.Equal(new[] { free }, Ids((await PassAsync()).Claimed));
+        Assert.Equal(RemoteWorkItemStatus.Ready, await StatusOfAsync(top));
+        Assert.Equal(priority, await PriorityOfAsync(top));
+        Assert.Equal(history, await HistoryCountAsync(top));
+
+        await MoveAsync(busy, RemoteWorkItemStatus.Done);
+        Assert.Equal(new[] { top }, Ids((await PassAsync()).Claimed));
+        Assert.Equal(RemoteWorkItemStatus.Ready, await StatusOfAsync(below));
+    }
+
+    [Fact]
+    public async Task A_top_item_with_an_unfinished_dependency_is_skipped_untouched_and_starts_first_once_it_can()
+    {
+        var repo = AddRepo(parallelism: 1);
+        var dependency = await AddItemAsync(null, RemoteWorkItemStatus.Backlog, "dependency");
+        var last = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "last");
+        var next = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "next");
+        var top = (await _db.ServerClient.CreateAsync(Opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "top",
+            Tags = new[] { "build" },
+            ForceStatus = RemoteWorkItemStatus.Ready,
+            RepositoryId = repo,
+            Dependencies = new[] { dependency },
+        }, TestActors.Human, Ct)).Id;
+        Assert.Equal(new[] { top, next, last }, await ServerReadyOrderAsync());
+        var priority = await PriorityOfAsync(top);
+        var history = await HistoryCountAsync(top);
+
+        Assert.Equal(new[] { next }, Ids((await PassAsync()).Claimed));
+        Assert.Equal(RemoteWorkItemStatus.Ready, await StatusOfAsync(top));
+        Assert.Equal(priority, await PriorityOfAsync(top));
+        Assert.Equal(history, await HistoryCountAsync(top));
+
+        await MoveAsync(next, RemoteWorkItemStatus.Done);
+        await MoveAsync(dependency, RemoteWorkItemStatus.Done);
+        Assert.Equal(new[] { top }, Ids((await PassAsync()).Claimed));
+        Assert.Equal(RemoteWorkItemStatus.Ready, await StatusOfAsync(last));
+    }
+
     [Theory]
     [InlineData(RemoteWorkItemStatus.Running, true)]
     [InlineData(RemoteWorkItemStatus.HumanFeedback, true)]

@@ -596,14 +596,6 @@
         ],
         "default": null
       },
-      "priority": {
-        "description": "Optional priority filter: Low, Medium, High, Critical.",
-        "type": [
-          "string",
-          "null"
-        ],
-        "default": null
-      },
       "tags": {
         "description": "Optional tags to filter by; an item matches if it carries any of them.",
         "type": [
@@ -619,7 +611,7 @@
         "default": null
       },
       "orderBy": {
-        "description": "Sort order: updatedAt (default), createdAt, or priority (highest first). Timestamp orders are most-recent first.",
+        "description": "Sort order: updatedAt (default), createdAt, or priority (board order: the item the board shows first, and starts first when Ready, comes first). Timestamp orders are most-recent first.",
         "type": [
           "string",
           "null"

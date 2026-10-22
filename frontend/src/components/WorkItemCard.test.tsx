@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { render, screen, cleanup, act } from "@testing-library/react";
 import WorkItemCard from "./WorkItemCard";
-import { WorkItem, WorkItemPriority, WorkItemStatus } from "../types";
+import { WorkItem, WorkItemStatus } from "../types";
 
 afterEach(() => {
   cleanup();
@@ -14,7 +14,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Item A",
     description: "desc",
     status: WorkItemStatus.Running,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "",
     loopTemplateVersion: "",

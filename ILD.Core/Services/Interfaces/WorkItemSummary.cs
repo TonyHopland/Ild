@@ -15,7 +15,7 @@ public sealed record WorkItemSummary(
     string Title,
     string? Description,
     RemoteWorkItemStatus Status,
-    RemoteWorkItemPriority Priority,
+    double Priority,
     IReadOnlyList<string> Tags,
     IReadOnlyList<string> BlockedBy,
     int BlocksCount,
@@ -28,8 +28,8 @@ public sealed record WorkItemSummary(
 
 /// <summary>
 /// Field a <see cref="IWorkItemManager.ListSummariesAsync"/> result is ordered
-/// by. <see cref="Priority"/> sorts highest-first; the timestamp orderings sort
-/// most-recent-first.
+/// by. <see cref="Priority"/> is the board order (<see cref="WorkItemOrder"/>);
+/// the timestamp orderings sort most-recent-first.
 /// </summary>
 public enum WorkItemOrderBy
 {
@@ -60,7 +60,6 @@ public enum WorkItemTagMatch
 public sealed record WorkItemListQuery
 {
     public RemoteWorkItemStatus? Status { get; init; }
-    public RemoteWorkItemPriority? Priority { get; init; }
     public IReadOnlyList<string>? Tags { get; init; }
     public WorkItemTagMatch TagMatch { get; init; } = WorkItemTagMatch.Any;
     public string? Search { get; init; }
@@ -87,6 +86,5 @@ public sealed record WorkItemPage(IReadOnlyList<WorkItemView> Items, int Total);
 public sealed record BacklogSummary(
     int Total,
     IReadOnlyDictionary<string, int> CountsByStatus,
-    IReadOnlyDictionary<string, int> CountsByPriority,
     int Blocked,
     int Actionable);

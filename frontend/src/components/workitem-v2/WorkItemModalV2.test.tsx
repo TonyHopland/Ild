@@ -5,7 +5,6 @@ import WorkItemModalV2 from "./WorkItemModalV2";
 import { pressEscapeUntil } from "../../test-support";
 import {
   WorkItemStatus,
-  WorkItemPriority,
   WorkItem,
   LoopRun,
   LoopRunStatus,
@@ -57,7 +56,7 @@ function makeWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Work Item",
     description: "A **test** item",
     status: WorkItemStatus.Ready,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: ["build"],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
@@ -487,6 +486,14 @@ describe("WorkItemModalV2", () => {
     // Repository name resolves from the mocked repository service.
     expect(await screen.findByText("my-repo")).toBeTruthy();
     expect(screen.getByText("Dependencies")).toBeTruthy();
+  });
+
+  test("neither the header nor the overview shows the item's priority", async () => {
+    mockServices();
+    await renderDialog(makeWorkItem({ priority: 7 }));
+
+    expect(await screen.findByText("my-repo")).toBeTruthy();
+    expect(document.body.textContent).not.toMatch(/priority/i);
   });
 
   test("overview links each dependency to its work item page", async () => {
@@ -1966,6 +1973,7 @@ describe("WorkItemModalV2 creation", () => {
 
     // The repository options load from the mocked service before they can be picked.
     await screen.findByRole("option", { name: "my-repo" });
+    expect(screen.queryByLabelText(/priority/i)).toBeNull();
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Fresh item" } });
@@ -1983,9 +1991,9 @@ describe("WorkItemModalV2 creation", () => {
       title: "Fresh item",
       repositoryId: "repo-1",
       status: WorkItemStatus.Backlog,
-      priority: WorkItemPriority.Medium,
       tags: ["build", "deploy"],
     });
+    expect(createSpy.mock.calls[0][0]).not.toHaveProperty("priority");
     expect(onSave).toHaveBeenCalledWith(created);
     expect(onClose).toHaveBeenCalledTimes(1);
   });

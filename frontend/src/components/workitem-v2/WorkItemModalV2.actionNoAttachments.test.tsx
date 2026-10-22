@@ -3,7 +3,7 @@ import { render, screen, fireEvent, cleanup, act, waitFor } from "@testing-libra
 import { MemoryRouter } from "react-router";
 import WorkItemModalV2 from "./WorkItemModalV2";
 import { pressEscapeUntil } from "../../test-support";
-import { WorkItem, WorkItemStatus, WorkItemPriority } from "../../types";
+import { WorkItem, WorkItemStatus } from "../../types";
 import * as signalRHook from "../../hooks/useSignalR";
 import * as authServices from "../../services/auth";
 import { stageParkedNode } from "../../test-support.parkedNode";
@@ -22,7 +22,7 @@ function makeParkedWorkItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Work Item",
     description: "",
     status: WorkItemStatus.HumanFeedback,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",

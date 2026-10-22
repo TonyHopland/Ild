@@ -19,6 +19,20 @@ public interface IWorkItemManager
     Task<WorkItemView?> GetWorkItemAsync(string workItemId);
 
     /// <summary>
+    /// Move a card to a drop spot on the board, given the cards directly above
+    /// and below it in its column. With a card above, the item lands directly
+    /// after it in the whole board's order (every status), the card below only
+    /// being checked to exist; otherwise directly before the card below. The
+    /// WorkItem server places it in one transaction, renumbering the whole board
+    /// in the same order when no number is left between the neighbours.
+    /// A <paramref name="targetStatus"/> other than the item's own moves it there
+    /// as <see cref="MoveAsync"/> does, with the server's write placing it too, so
+    /// it lands in place in its new column or does not move. The item is announced
+    /// once; a renumber is announced once for the whole board.
+    /// </summary>
+    Task<ReorderOutcome> ReorderAsync(WorkItemActor actor, string workItemId, string? aboveId, string? belowId, RemoteWorkItemStatus? targetStatus = null);
+
+    /// <summary>
     /// Server-authoritative listing. Queries the WorkItemServer and merges
     /// engine-only fields from LoopRun rows.
     /// </summary>
@@ -75,6 +89,13 @@ public interface IWorkItemManager
     Task<bool> TransitionToRunningAsync(WorkItemActor actor, string workItemId);
     Task<bool> TransitionToHumanFeedbackAsync(WorkItemActor actor, string workItemId, string reason);
     Task<bool> TransitionToDoneAsync(WorkItemActor actor, string workItemId);
+
+    /// <summary>
+    /// A human moving the item to a column: a drag to it, the keyboard move or
+    /// the status menu. Dispatches to the TransitionTo* rule for that status;
+    /// false when the rule refuses it.
+    /// </summary>
+    Task<bool> MoveAsync(WorkItemActor actor, string workItemId, RemoteWorkItemStatus targetStatus);
 
     /// <summary>
     /// Generic transition entry point. Mirrors the remote server transition contract.
@@ -344,6 +365,20 @@ public enum PullBranchOutcome
 
     /// <summary>Everything else: no worktree, no repository, unresolvable branch, failed fetch.</summary>
     Failed,
+}
+
+public enum ReorderOutcome
+{
+    Moved,
+
+    /// <summary>The item to move does not exist.</summary>
+    NotFound,
+
+    /// <summary>No neighbour was given, or one is the item itself or does not exist.</summary>
+    InvalidNeighbour,
+
+    /// <summary>The move to the target status was refused by its rule.</summary>
+    TransitionRefused,
 }
 
 /// <summary>

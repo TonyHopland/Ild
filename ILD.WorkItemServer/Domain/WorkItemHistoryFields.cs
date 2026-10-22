@@ -6,14 +6,15 @@ namespace ILD.WorkItemServer.Domain;
 /// The work item fields history tracks, by the names history rows carry, and the
 /// one way their values are written down: enums by name, Guids in lowercase "D"
 /// form, the JSON columns as stored, unset as null. The baseline seed in the
-/// migration that added history writes the same encoding in SQL.
+/// migration that added history writes the same encoding in SQL. The priority,
+/// the item's place on the board, is not tracked; the `priority` rows from
+/// before it was one are kept.
 /// </summary>
 public static class WorkItemHistoryFields
 {
     public const string Title = "title";
     public const string Description = "description";
     public const string Status = "status";
-    public const string Priority = "priority";
     public const string Tags = "tags";
     public const string Dependencies = "dependencies";
     public const string Repository = "repository";
@@ -41,7 +42,6 @@ public static class WorkItemHistoryFields
         (Title, nameof(WorkItem.Title)),
         (Description, nameof(WorkItem.Description)),
         (Status, nameof(WorkItem.Status)),
-        (Priority, nameof(WorkItem.Priority)),
         (Tags, nameof(WorkItem.TagsJson)),
         (Dependencies, nameof(WorkItem.DependenciesJson)),
         (Repository, nameof(WorkItem.RepositoryId)),

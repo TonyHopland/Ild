@@ -69,6 +69,14 @@ public sealed class WorkItemsController : ControllerBase
         return Ok(resp);
     }
 
+    /// <summary>
+    /// Every outcome, an unknown item included, is a 200 carrying it, so a client
+    /// can tell "no such item" from a server that has no reorder endpoint.
+    /// </summary>
+    [HttpPost("{id}/reorder")]
+    public async Task<ActionResult<ReorderWorkItemResponse>> Reorder(string id, [FromBody] ReorderWorkItemRequest req, CancellationToken ct)
+        => Ok(await _svc.ReorderAsync(id, req, ct));
+
     [HttpGet("{id}/history")]
     public async Task<ActionResult<IReadOnlyList<WorkItemHistoryEntryDto>>> GetHistory(string id, CancellationToken ct)
     {

@@ -11,7 +11,8 @@ public sealed class WorkItemDto
     public string? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
-    public WorkItemPriority Priority { get; set; }
+    /// <summary>The item's place in the board order: lower comes first, equal values in id order.</summary>
+    public double Priority { get; set; }
     public WorkItemStatus Status { get; set; }
     public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
     public IReadOnlyList<string> Dependencies { get; set; } = Array.Empty<string>();
@@ -59,7 +60,6 @@ public sealed class CreateWorkItemRequest
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? CreatedBy { get; set; }
-    public WorkItemPriority Priority { get; set; } = WorkItemPriority.Medium;
     public IReadOnlyList<string>? Tags { get; set; }
     public IReadOnlyList<string>? Dependencies { get; set; }
     public WorkItemStatus? ForceStatus { get; set; }
@@ -85,6 +85,9 @@ public sealed class UpdateWorkItemRequest
     public string? Title { get; set; }
     public string? Description { get; set; }
     public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>Moves the item in the board order. Null leaves it where it is.</summary>
+    public double? Priority { get; set; }
 
     /// <summary>
     /// Replaces the item's custom branch name. Null leaves it untouched; an
@@ -136,6 +139,56 @@ public sealed class TransitionResponse
 {
     public bool Success { get; set; }
     public WorkItemStatus ActualStatus { get; set; }
+    public string? Reason { get; set; }
+}
+
+/// <summary>
+/// A card dropped on the board, named by the cards directly above and below the
+/// drop spot in its column: with <see cref="AboveId"/> the item lands directly
+/// after that item in the whole board's order, otherwise directly before
+/// <see cref="BelowId"/>. A <see cref="TargetStatus"/> other than the item's
+/// own moves it there too, by the rules of a transition and in the same
+/// transaction, so the item either lands in place in its new column or does not
+/// move at all.
+/// </summary>
+public sealed class ReorderWorkItemRequest
+{
+    public string? AboveId { get; set; }
+    public string? BelowId { get; set; }
+    public WorkItemStatus? TargetStatus { get; set; }
+
+    /// <summary>As on a transition: the feedback actions, and why the item moves.</summary>
+    public string? Actions { get; set; }
+    public string? Reason { get; set; }
+}
+
+public enum ReorderWorkItemOutcome
+{
+    Moved = 0,
+
+    /// <summary>The item to move does not exist.</summary>
+    NotFound = 1,
+
+    /// <summary>No neighbour was given, or one is the item itself or does not exist.</summary>
+    InvalidNeighbour = 2,
+
+    /// <summary>The move to the target status was refused; <see cref="ReorderWorkItemResponse.Reason"/> says why.</summary>
+    TransitionRefused = 3,
+}
+
+public sealed class ReorderWorkItemResponse
+{
+    public ReorderWorkItemOutcome Outcome { get; set; }
+
+    /// <summary>The item as it now is, when it moved.</summary>
+    public WorkItemDto? Item { get; set; }
+
+    /// <summary>
+    /// No number was left between the neighbours, so every item of the board was
+    /// given a new one, in the same order. Readers holding order values re-read them.
+    /// </summary>
+    public bool Renumbered { get; set; }
+
     public string? Reason { get; set; }
 }
 

@@ -20,6 +20,13 @@ public interface IWorkItemServerClient
     Task<bool> DeleteAsync(WorkItemServerOptions opts, string id, WorkItemActor actor, CancellationToken ct = default);
 
     Task<RemoteTransitionResponse> TransitionAsync(WorkItemServerOptions opts, string id, RemoteTransitionRequest req, WorkItemActor actor, CancellationToken ct = default);
+
+    /// <summary>
+    /// Place an item at a drop spot on the board, moving it to a target status
+    /// with it, in one server transaction.
+    /// </summary>
+    Task<RemoteReorderWorkItemResponse> ReorderAsync(WorkItemServerOptions opts, string id, RemoteReorderWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default);
+
     Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default);
     Task<bool> RemoveDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default);
 
@@ -198,6 +205,15 @@ public sealed class WorkItemServerClient : IWorkItemServerClient
             return new RemoteTransitionResponse { Success = false, ActualStatus = RemoteWorkItemStatus.Backlog, Reason = "Not found" };
         EnsureSuccess(resp, msg);
         return (await resp.Content.ReadFromJsonAsync<RemoteTransitionResponse>(JsonOpts, ct))!;
+    }
+
+    public async Task<RemoteReorderWorkItemResponse> ReorderAsync(WorkItemServerOptions opts, string id, RemoteReorderWorkItemRequest req, WorkItemActor actor, CancellationToken ct = default)
+    {
+        var msg = Build(opts, HttpMethod.Post, $"/workitems/{id}/reorder", actor);
+        msg.Content = JsonContent.Create(req, options: JsonOpts);
+        using var resp = await _http.SendAsync(msg, ct);
+        EnsureSuccess(resp, msg);
+        return (await resp.Content.ReadFromJsonAsync<RemoteReorderWorkItemResponse>(JsonOpts, ct))!;
     }
 
     public async Task<bool> AddDependencyAsync(WorkItemServerOptions opts, string id, string dependencyId, WorkItemActor actor, CancellationToken ct = default)

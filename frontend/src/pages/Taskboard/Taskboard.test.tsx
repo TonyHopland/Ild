@@ -11,14 +11,7 @@ import {
   setPreference,
 } from "../../utils/userPreferences";
 import { mockTaskboardServer, pressEscapeUntil } from "../../test-support";
-import {
-  NodeType,
-  WorkItemStatus,
-  WorkItemPriority,
-  WorkItem,
-  Repository,
-  LoopTemplate,
-} from "../../types";
+import { NodeType, WorkItemStatus, WorkItem, Repository, LoopTemplate } from "../../types";
 import { stageParkedNode } from "../../test-support.parkedNode";
 import * as authServices from "../../services/auth";
 import * as signalRHook from "../../hooks/useSignalR";
@@ -84,7 +77,7 @@ function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
     title: "Test Item",
     description: "desc",
     status: WorkItemStatus.Ready,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     loopTemplateId: "tmpl-1",
     loopTemplateVersion: "v1",
@@ -135,7 +128,7 @@ function makeRepo(overrides: Partial<Repository> = {}): Repository {
 
 const ALL_STATUSES = Object.values(WorkItemStatus) as string[];
 
-/** Item `id` created `n` hours into 2026; a higher `n` is newer. The title is the id. */
+/** Item `id` created `n` hours into 2026; a higher `n` is newer and higher on the board. The title is the id. */
 function boardItem(
   id: string,
   n: number,
@@ -146,6 +139,7 @@ function boardItem(
     id,
     title: id,
     status,
+    priority: -n,
     createdAt: new Date(Date.UTC(2026, 0, 1) + n * 3_600_000).toISOString(),
     ...overrides,
   });
@@ -1462,6 +1456,57 @@ describe("Taskboard live changes keep server order", () => {
     expect(cardTitles("Ready")).toEqual([]);
     await waitFor(() => expect(badge("Running")).toBe("3"));
     expect(badge("Ready")).toBe("0");
+  });
+
+  test("a reorder announced over SignalR moves the card to its new place in the same column", async () => {
+    const hub = mockHub();
+    const server = mockBoard([
+      boardItem("a", 9, WorkItemStatus.Ready),
+      boardItem("b", 5, WorkItemStatus.Ready),
+      boardItem("c", 2, WorkItemStatus.Ready),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Ready")).toEqual(["a", "b", "c"]));
+
+    server.items.find((wi) => wi.id === "c")!.priority = -100;
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "c",
+      oldStatus: "Ready",
+      newStatus: "Ready",
+    });
+    await waitFor(() => expect(cardTitles("Ready")).toEqual(["c", "a", "b"]));
+
+    server.items.find((wi) => wi.id === "a")!.priority = -3;
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "a",
+      oldStatus: "Ready",
+      newStatus: "Ready",
+    });
+    await waitFor(() => expect(cardTitles("Ready")).toEqual(["c", "b", "a"]));
+    await settle();
+    expect(badge("Ready")).toBe("3");
+  });
+
+  test("a renumber announced once for the whole board re-reads the columns in their new order", async () => {
+    const hub = mockHub();
+    const server = mockBoard([
+      boardItem("a", 9, WorkItemStatus.Ready),
+      boardItem("b", 5, WorkItemStatus.Ready),
+      boardItem("c", 2, WorkItemStatus.Backlog),
+      boardItem("d", 1, WorkItemStatus.Backlog),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Ready")).toEqual(["a", "b"]));
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["c", "d"]));
+
+    const renumbered: Record<string, number> = { b: 0, a: 2, d: 4, c: 6 };
+    for (const wi of server.items) wi.priority = renumbered[wi.id];
+    await hub.emit("WorkItemBoardReordered", { workItemId: "b" });
+
+    await waitFor(() => expect(cardTitles("Ready")).toEqual(["b", "a"]));
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["d", "c"]));
   });
 
   test("under a filter a card edited out of it leaves and a non-matching new item never shows", async () => {

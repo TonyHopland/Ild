@@ -26,7 +26,7 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
 {
     private static readonly string[] TrackedFields =
     {
-        "title", "description", "status", "priority", "tags", "dependencies", "repository",
+        "title", "description", "status", "tags", "dependencies", "repository",
         "aiProviderOverride", "aiProviderOverrideId", "branchNameOverride", "baseBranchOverride",
     };
 
@@ -155,7 +155,6 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         {
             Title = "Add a login page",
             Description = "Users sign in with a password.",
-            Priority = WorkItemPriority.High,
             ForceStatus = WorkItemStatus.Ready,
             Tags = new[] { "feature", "ui" },
             Dependencies = new[] { dep.Id },
@@ -170,7 +169,6 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         Assert.Equal("Add a login page", ValueOf(rows, "title"));
         Assert.Equal("Users sign in with a password.", ValueOf(rows, "description"));
         Assert.Equal("Ready", ValueOf(rows, "status"));
-        Assert.Equal("High", ValueOf(rows, "priority"));
         Assert.Equal(stored.TagsJson, ValueOf(rows, "tags"));
         Assert.Equal(stored.DependenciesJson, ValueOf(rows, "dependencies"));
         Assert.Equal(repository.ToString("D"), ValueOf(rows, "repository"));
@@ -218,6 +216,31 @@ public sealed class WorkItemHistoryCaptureTests : IAsyncLifetime
         _clock.Now = _clock.Now.AddMinutes(5);
         await _svc.UpdateAsync(dto.Id, new UpdateWorkItemRequest { Title = "New title", Tags = new[] { "feature" } }, Ct);
         Assert.Equal(created.Count + changed.Count, (await RowsAsync(dto.Id)).Count);
+    }
+
+    /// <summary>
+    /// The priority is the item's place on the board, not part of its history:
+    /// setting it, a reorder and a reorder that renumbers the whole board write
+    /// no rows, for the moved item or any other.
+    /// </summary>
+    [Fact]
+    public async Task Order_changes_write_no_history()
+    {
+        var a = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "a" }, Ct);
+        var b = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "b" }, Ct);
+        var c = await _svc.CreateAsync(new CreateWorkItemRequest { Title = "c" }, Ct);
+        var ids = new[] { a.Id, b.Id, c.Id };
+        var before = new Dictionary<string, int>();
+        foreach (var id in ids) before[id] = (await RowsAsync(id)).Count;
+
+        await _svc.UpdateAsync(c.Id, new UpdateWorkItemRequest { Priority = 7.5 }, Ct);
+        await _svc.ReorderAsync(c.Id, new ReorderWorkItemRequest { BelowId = b.Id }, Ct);
+        await _svc.UpdateAsync(a.Id, new UpdateWorkItemRequest { Priority = 3 }, Ct);
+        await _svc.UpdateAsync(b.Id, new UpdateWorkItemRequest { Priority = 3 }, Ct);
+        var renumbered = await _svc.ReorderAsync(c.Id, new ReorderWorkItemRequest { AboveId = a.Id }, Ct);
+
+        Assert.True(renumbered.Renumbered);
+        foreach (var id in ids) Assert.Equal(before[id], (await RowsAsync(id)).Count);
     }
 
     [Fact]

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { renderHook, waitFor } from "@testing-library/react";
 import { useWorkItemDetail } from "./useWorkItemDetail";
 import * as authServices from "../../services/auth";
-import { LoopTemplate, Repository, WorkItem, WorkItemPriority, WorkItemStatus } from "../../types";
+import { LoopTemplate, Repository, WorkItem, WorkItemStatus } from "../../types";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -14,7 +14,7 @@ function workItem(n: number): WorkItem {
     title: `Item ${n}`,
     description: "",
     status: WorkItemStatus.Backlog,
-    priority: WorkItemPriority.Medium,
+    priority: 0,
     tags: [],
     repositoryId: "repo-0",
     prUrl: null,
