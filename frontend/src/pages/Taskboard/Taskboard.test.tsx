@@ -1488,6 +1488,27 @@ describe("Taskboard live changes keep server order", () => {
     expect(badge("Ready")).toBe("3");
   });
 
+  test("a renumber announced once for the whole board re-reads the columns in their new order", async () => {
+    const hub = mockHub();
+    const server = mockBoard([
+      boardItem("a", 9, WorkItemStatus.Ready),
+      boardItem("b", 5, WorkItemStatus.Ready),
+      boardItem("c", 2, WorkItemStatus.Backlog),
+      boardItem("d", 1, WorkItemStatus.Backlog),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Ready")).toEqual(["a", "b"]));
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["c", "d"]));
+
+    const renumbered: Record<string, number> = { b: 0, a: 2, d: 4, c: 6 };
+    for (const wi of server.items) wi.priority = renumbered[wi.id];
+    await hub.emit("WorkItemBoardReordered", { workItemId: "b" });
+
+    await waitFor(() => expect(cardTitles("Ready")).toEqual(["b", "a"]));
+    await waitFor(() => expect(cardTitles("Backlog")).toEqual(["d", "c"]));
+  });
+
   test("under a filter a card edited out of it leaves and a non-matching new item never shows", async () => {
     const hub = mockHub();
     const server = mockBoard([

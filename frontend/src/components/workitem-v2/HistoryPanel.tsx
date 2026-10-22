@@ -10,6 +10,7 @@ const FIELD_LABELS: Record<string, string> = {
   title: "Title",
   description: "Description",
   status: "Status",
+  priority: "Priority",
   tags: "Tags",
   dependencies: "Dependencies",
   repository: "Repository",
@@ -272,8 +273,6 @@ export default function HistoryPanel({
     };
   }, [opened, workItem.id, workItem.updatedAt]);
 
-  // The priority is the item's place on the board, which the board itself shows.
-  const entries = state.entries?.filter((e) => e.field !== "priority") ?? null;
   const now = Date.now();
   return (
     <div className="wiv2-history" aria-busy={state.loading}>
@@ -282,17 +281,17 @@ export default function HistoryPanel({
           Could not load the history: {state.error}
         </p>
       )}
-      {entries === null ? (
+      {state.entries === null ? (
         state.loading && (
           <p role="status" className="wiv2-history-empty">
             Loading history…
           </p>
         )
-      ) : entries.length === 0 ? (
+      ) : state.entries.length === 0 ? (
         <p className="wiv2-history-empty">No history recorded for this item yet.</p>
       ) : (
         <ol className="wiv2-history-list">
-          {groupBySave(entries).map((save) => (
+          {groupBySave(state.entries).map((save) => (
             <SaveEvent key={save.saveId} save={save} now={now} repositoryName={repositoryName} />
           ))}
         </ol>

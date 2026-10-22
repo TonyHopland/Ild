@@ -184,6 +184,12 @@ export default function Taskboard() {
       syncWorkItem(message.payload.workItemId, { itemChanged: false });
     };
 
+    // A renumber changed every item's order value at once, keeping the order:
+    // re-read the columns as loaded rather than one card at a time.
+    const onBoardReordered = () => {
+      reloadAll({ windowed: true });
+    };
+
     const onEditProposalsChanged = (
       message: TypedSignalRMessage<"WorkItemEditProposalsChanged">,
     ) => {
@@ -194,6 +200,7 @@ export default function Taskboard() {
     on("WorkItemStateChanged", onWorkItemStateChanged);
     on("PreviewStateChanged", onPreviewStateChanged);
     on("WorkItemRunProgressed", onRunProgressed);
+    on("WorkItemBoardReordered", onBoardReordered);
     on("WorkItemEditProposalsChanged", onEditProposalsChanged);
 
     return () => {
@@ -201,6 +208,7 @@ export default function Taskboard() {
       off("WorkItemStateChanged", onWorkItemStateChanged);
       off("PreviewStateChanged", onPreviewStateChanged);
       off("WorkItemRunProgressed", onRunProgressed);
+      off("WorkItemBoardReordered", onBoardReordered);
       off("WorkItemEditProposalsChanged", onEditProposalsChanged);
       for (const t of delayedTimers) clearTimeout(t);
     };

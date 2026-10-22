@@ -125,14 +125,15 @@ export default function TaskboardColumn({
     const position = workItems.slice(0, index).filter((wi) => wi.id !== workItemId).length;
     if (fromThisColumn && workItems[position]?.id === workItemId) return;
 
-    if (!fromThisColumn) {
+    // An empty column has no spot to name; any other drop is one request that
+    // places the card, moving it into this column when it came from another.
+    if (others.length === 0) {
       try {
         onWorkItemUpdate(await workItemService.moveTo(workItemId, status));
       } catch (error) {
         report(error, "Failed to update work item status.");
-        return;
       }
-      if (others.length === 0) return;
+      return;
     }
 
     const aboveId = others[position - 1]?.id;
@@ -140,11 +141,15 @@ export default function TaskboardColumn({
       const placed = await workItemService.reorder(workItemId, {
         aboveId,
         belowId: others[position]?.id,
+        ...(fromThisColumn ? {} : { targetStatus: status }),
       });
       if (onWorkItemPlaced) onWorkItemPlaced(placed, aboveId);
       else onWorkItemUpdate(placed);
     } catch (error) {
-      report(error, "Failed to reorder work item.");
+      report(
+        error,
+        fromThisColumn ? "Failed to reorder work item." : "Failed to update work item status.",
+      );
     }
   };
 

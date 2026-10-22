@@ -1293,6 +1293,11 @@ export interface WorkItemRunProgressedPayload {
   workItemId: string;
 }
 
+/** Dropping `workItemId` renumbered every item of the board, in the same order. */
+export interface WorkItemBoardReorderedPayload {
+  workItemId: string;
+}
+
 export interface SchedulerStateChangedPayload {
   isPaused: boolean;
   maxConcurrent: number;

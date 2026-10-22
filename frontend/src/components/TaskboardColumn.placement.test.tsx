@@ -32,12 +32,6 @@ function item(id: string, status: WorkItemStatus): WorkItem {
 }
 
 test("a dropped card is handed back with the card the server placed it directly after", async () => {
-  vi.spyOn(authServices.workItemService, "transition").mockResolvedValue(
-    undefined as unknown as void,
-  );
-  vi.spyOn(authServices.workItemService, "getById").mockResolvedValue(
-    item("x", WorkItemStatus.Ready),
-  );
   const placed = { ...item("x", WorkItemStatus.Ready), priority: 9 };
   vi.spyOn(authServices.workItemService, "reorder").mockResolvedValue(placed);
   const onWorkItemUpdate = vi.fn();
@@ -60,6 +54,5 @@ test("a dropped card is handed back with the card the server placed it directly 
   } as unknown as DragEvent);
 
   await waitFor(() => expect(onWorkItemPlaced).toHaveBeenCalledWith(placed, "b"));
-  expect(onWorkItemUpdate).toHaveBeenCalledTimes(1);
-  expect(onWorkItemUpdate).toHaveBeenCalledWith(item("x", WorkItemStatus.Ready));
+  expect(onWorkItemUpdate).not.toHaveBeenCalled();
 });

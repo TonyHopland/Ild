@@ -428,21 +428,20 @@ describe("TaskboardColumn drag and drop order", () => {
     expect(transition).not.toHaveBeenCalled();
   });
 
-  test("a card from another column is moved first, then placed exactly where it was dropped", async () => {
+  test("a card from another column is moved and placed exactly where it was dropped in one request", async () => {
     const { transition, reorder } = spyRequests();
     const { onWorkItemUpdate, onError } = renderColumn(WorkItemStatus.Ready, ["e", "f", "g"]);
 
     dropAt(card("f"), "x", CARD_HEIGHT + 30);
 
     await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
-    expect(transition).toHaveBeenCalledWith("x", WorkItemStatus.Ready);
-    expect(transition.mock.invocationCallOrder[0]).toBeLessThan(
-      reorder.mock.invocationCallOrder[0],
-    );
+    expect(transition).not.toHaveBeenCalled();
     expect(reorder.mock.calls[0][0]).toBe("x");
-    expect(reorder.mock.calls[0][1]).toEqual(
-      expect.objectContaining({ aboveId: "e", belowId: "f" }),
-    );
+    expect(reorder.mock.calls[0][1]).toEqual({
+      aboveId: "e",
+      belowId: "f",
+      targetStatus: WorkItemStatus.Ready,
+    });
     await waitFor(() =>
       expect(onWorkItemUpdate).toHaveBeenLastCalledWith(
         expect.objectContaining({ id: "x", priority: -42 }),
@@ -458,8 +457,10 @@ describe("TaskboardColumn drag and drop order", () => {
     dropAt(card("f"), "x", CARD_HEIGHT + 70);
 
     await waitFor(() => expect(reorder).toHaveBeenCalledTimes(1));
-    expect(transition).toHaveBeenCalledWith("x", WorkItemStatus.Ready);
-    expect(reorder.mock.calls[0][1]).toEqual(expect.objectContaining({ aboveId: "f" }));
+    expect(transition).not.toHaveBeenCalled();
+    expect(reorder.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ aboveId: "f", targetStatus: WorkItemStatus.Ready }),
+    );
     expect(reorder.mock.calls[0][1]?.belowId).toBeUndefined();
   });
 
@@ -476,17 +477,19 @@ describe("TaskboardColumn drag and drop order", () => {
     expect(reorder).not.toHaveBeenCalled();
   });
 
-  test("when the move to the new column fails the error is shown and nothing is reordered", async () => {
+  test("when a drop in a new column is refused the error is shown and the card stays where it was", async () => {
     const { transition, reorder } = spyRequests();
-    transition.mockRejectedValue(new Error("Refused by the server"));
-    const { onError } = renderColumn(WorkItemStatus.Ready, ["e", "f"]);
+    reorder.mockRejectedValue(new Error("Refused by the server"));
+    const { onError, onWorkItemUpdate } = renderColumn(WorkItemStatus.Ready, ["e", "f"]);
 
     dropAt(card("f"), "x", CARD_HEIGHT + 30);
 
     await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
     expect(onError.mock.calls[0][0]).toMatch(/Refused by the server/);
     await settle();
-    expect(reorder).not.toHaveBeenCalled();
+    expect(reorder).toHaveBeenCalledTimes(1);
+    expect(transition).not.toHaveBeenCalled();
+    expect(onWorkItemUpdate).not.toHaveBeenCalled();
   });
 });
 

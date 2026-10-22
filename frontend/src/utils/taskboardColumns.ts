@@ -17,7 +17,9 @@ export type TaskboardColumns = Record<WorkItemStatus, ColumnState>;
 /**
  * The board order the server pages a column in: the lowest priority first,
  * then the id, shorter first and then by code unit, which is the server's
- * ordinal comparison for these ids.
+ * ordinal comparison for these ids. The WorkItem server's
+ * `WorkItemService.InBoardOrder` is the source of truth, and ILD's
+ * `WorkItemOrder` follows it too: change all three together.
  */
 export function compareServerOrder(a: WorkItem, b: WorkItem): number {
   if (a.priority !== b.priority) return a.priority < b.priority ? -1 : 1;
