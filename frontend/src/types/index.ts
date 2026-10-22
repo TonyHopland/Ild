@@ -137,6 +137,17 @@ export interface WorkItem {
   attachments?: WorkItemAttachment[] | null;
   /** Agent-proposed edits to this item still waiting for a human decision. */
   pendingEditProposalCount?: number;
+  /**
+   * Set on a Ready item the latest scheduler pass held back because its
+   * repository had reached its parallelism limit; null otherwise.
+   */
+  repositoryParallelismHold?: RepositoryParallelismHold | null;
+}
+
+/** A repository's slot count and limit as of the scheduler pass that held an item back. */
+export interface RepositoryParallelismHold {
+  inProgress: number;
+  limit: number;
 }
 
 export type WorkItemHistoryKind = "Created" | "Baseline" | "Changed" | "Deleted";
@@ -799,6 +810,8 @@ export interface Repository {
   packageFeeds?: RepositoryPackageFeed[];
   /** Previews share one folder per volume across every work item and run, one preview at a time. */
   keepPreviewData?: boolean;
+  /** How many of its work items run at once; 0 = unlimited. */
+  parallelism?: number;
   createdAt: string;
   updatedAt?: string | null;
 }
