@@ -75,4 +75,15 @@ public class NpgsqlPoolDefaultsTests
             Assert.Equal(applicationName, result.ApplicationName);
         }
     }
+    [Theory]
+    [MemberData(nameof(Copies))]
+    public void A_default_never_undercuts_a_minimum_or_pruning_interval_the_operator_set(string copy)
+    {
+        var result = Apply(copy, "Host=db.example.test;Database=ild;Minimum Pool Size=20;Connection Pruning Interval=120", "ILD.Api", 15);
+
+        using var dataSource = NpgsqlDataSource.Create(result);
+        var built = new NpgsqlConnectionStringBuilder(result);
+        Assert.Equal(20, built.MaxPoolSize);
+        Assert.Equal(120, built.ConnectionIdleLifetime);
+    }
 }

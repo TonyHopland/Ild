@@ -20,10 +20,12 @@ public static class NpgsqlPoolDefaults
         // ConnectionString lists only the keys that were set, under their canonical names.
         var set = new DbConnectionStringBuilder { ConnectionString = builder.ConnectionString };
 
+        // Npgsql refuses a maximum below the minimum and an idle lifetime shorter than
+        // the pruning interval, so a default never undercuts what the operator set.
         if (!set.ContainsKey("Maximum Pool Size"))
-            builder.MaxPoolSize = maxPoolSize;
+            builder.MaxPoolSize = Math.Max(maxPoolSize, builder.MinPoolSize);
         if (!set.ContainsKey("Connection Idle Lifetime"))
-            builder.ConnectionIdleLifetime = ConnectionIdleLifetimeSeconds;
+            builder.ConnectionIdleLifetime = Math.Max(ConnectionIdleLifetimeSeconds, builder.ConnectionPruningInterval);
         if (!set.ContainsKey("Application Name"))
             builder.ApplicationName = applicationName;
 

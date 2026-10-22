@@ -589,7 +589,9 @@ caps its own connection pool on top of the `ILD_DB_CONNECTION_STRING` /
 | WorkItem Server | 8                   | 60 s                       | `ILD.WorkItemServer` |
 
 These are defaults: a key you write in the connection string yourself wins, under
-any spelling Npgsql accepts (`MaxPoolSize=5`, `ApplicationName=mine`, …). No
+any spelling Npgsql accepts (`MaxPoolSize=5`, `ApplicationName=mine`, …), and a
+`Minimum Pool Size` or `Connection Pruning Interval` you set above a default raises
+that default to match. No
 `Timeout` is added, so a pool at its cap makes a request wait for a free
 connection (Npgsql's 15 s) rather than fail at once.
 
