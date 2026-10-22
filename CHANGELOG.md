@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A failed Start step, like any failed step, can be retried again once its cause is fixed, such as another preview that was still running.**
+- **A failed Start or Cleanup step can be retried like any other failed step.**
 
 - **Going Back right after starting a chat shows the start form, not the new chat.**
 
