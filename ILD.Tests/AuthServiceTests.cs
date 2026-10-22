@@ -50,7 +50,7 @@ public class AuthServiceTests
         var svc = Make(db);
         var token = await LoginAsync(svc);
 
-        Assert.True(await svc.ValidateSessionAsync(token));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(token));
     }
 
     [Fact]
@@ -75,8 +75,8 @@ public class AuthServiceTests
         var desktop = await LoginAsync(svc);
 
         Assert.NotEqual(phone, desktop);
-        Assert.True(await svc.ValidateSessionAsync(phone));
-        Assert.True(await svc.ValidateSessionAsync(desktop));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(phone));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(desktop));
     }
 
     [Fact]
@@ -89,8 +89,8 @@ public class AuthServiceTests
 
         await svc.LogoutAsync(phone);
 
-        Assert.False(await svc.ValidateSessionAsync(phone));
-        Assert.True(await svc.ValidateSessionAsync(desktop));
+        Assert.Null(await svc.AuthenticateSessionAsync(phone));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(desktop));
     }
 
     [Fact]
@@ -115,8 +115,8 @@ public class AuthServiceTests
 
         await ShiftSessionBackAsync(db, TimeSpan.FromDays(200));
 
-        Assert.False(await svc.ValidateSessionAsync(token));
-        Assert.Null(await svc.GetUsernameAsync(token));
+        Assert.Null(await svc.AuthenticateSessionAsync(token));
+        Assert.Null((await svc.AuthenticateSessionAsync(token))?.Username);
     }
 
     [Fact]
@@ -130,7 +130,7 @@ public class AuthServiceTests
         // window — idle expiry alone must kill it.
         await ShiftSessionBackAsync(db, TimeSpan.FromDays(45), keepExpiryInFuture: true);
 
-        Assert.False(await svc.ValidateSessionAsync(token));
+        Assert.Null(await svc.AuthenticateSessionAsync(token));
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class AuthServiceTests
 
         await ShiftSessionBackAsync(db, TimeSpan.FromDays(45), keepExpiryInFuture: true);
 
-        Assert.True(await svc.ValidateSessionAsync(token));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(token));
     }
 
     [Fact]
@@ -183,12 +183,12 @@ public class AuthServiceTests
         // Fresh: the bump is skipped, so the stale value survives a validate.
         var stale = DateTime.UtcNow.AddSeconds(-5);
         await SetLastSeenAsync(db, stale);
-        Assert.True(await svc.ValidateSessionAsync(token));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(token));
         Assert.True(Math.Abs(((await StoredSessionAsync(db)).LastSeenAt - stale).TotalSeconds) < 1);
 
         // Older than a minute: the bump lands.
         await SetLastSeenAsync(db, DateTime.UtcNow.AddMinutes(-5));
-        Assert.True(await svc.ValidateSessionAsync(token));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(token));
         Assert.True((await StoredSessionAsync(db)).LastSeenAt > DateTime.UtcNow.AddSeconds(-30));
     }
 
@@ -319,8 +319,8 @@ public class AuthServiceTests
         var desktopId = (await svc.GetSessionsAsync(phone)).Single(s => s.UserAgent == "Desktop").Id;
         Assert.True(await svc.RevokeSessionAsync(phone, desktopId));
 
-        Assert.False(await svc.ValidateSessionAsync(desktop));
-        Assert.True(await svc.ValidateSessionAsync(phone));
+        Assert.Null(await svc.AuthenticateSessionAsync(desktop));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(phone));
     }
 
     [Fact]
@@ -344,9 +344,9 @@ public class AuthServiceTests
 
         Assert.Equal(2, await svc.RevokeOtherSessionsAsync(phone));
 
-        Assert.True(await svc.ValidateSessionAsync(phone));
-        Assert.False(await svc.ValidateSessionAsync(desktop));
-        Assert.False(await svc.ValidateSessionAsync(tablet));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(phone));
+        Assert.Null(await svc.AuthenticateSessionAsync(desktop));
+        Assert.Null(await svc.AuthenticateSessionAsync(tablet));
     }
 
     [Fact]
@@ -357,8 +357,8 @@ public class AuthServiceTests
         var token = await LoginAsync(svc);
         await svc.LogoutAsync(token);
 
-        Assert.False(await svc.ValidateSessionAsync(token));
-        Assert.Null(await svc.GetUsernameAsync(token));
+        Assert.Null(await svc.AuthenticateSessionAsync(token));
+        Assert.Null((await svc.AuthenticateSessionAsync(token))?.Username);
         Assert.Empty(await svc.GetSessionsAsync(token));
         Assert.False(await svc.RevokeSessionAsync(token, Guid.NewGuid()));
         Assert.Equal(0, await svc.RevokeOtherSessionsAsync(token));
@@ -371,18 +371,18 @@ public class AuthServiceTests
         var svc = Make(db);
         await LoginAsync(svc);
 
-        Assert.False(await svc.ValidateSessionAsync("not-a-token"));
-        Assert.False(await svc.ValidateSessionAsync(string.Empty));
+        Assert.Null(await svc.AuthenticateSessionAsync("not-a-token"));
+        Assert.Null(await svc.AuthenticateSessionAsync(string.Empty));
     }
 
     [Fact]
-    public async Task GetUsername_resolves_the_owner_of_a_live_session()
+    public async Task A_live_session_names_its_owner()
     {
         using var db = new TestDb();
         var svc = Make(db);
         var token = await LoginAsync(svc);
 
-        Assert.Equal("admin", await svc.GetUsernameAsync(token));
+        Assert.Equal("admin", (await svc.AuthenticateSessionAsync(token))?.Username);
     }
 
     [Fact]
@@ -440,7 +440,7 @@ public class AuthServiceTests
 
         var forged = await InsertUnkeyedSessionAsync(db, "attacker-chosen-token");
 
-        Assert.True(await svc.ValidateSessionAsync(forged));
+        Assert.NotNull(await svc.AuthenticateSessionAsync(forged));
     }
 
     /// <summary>

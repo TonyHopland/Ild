@@ -109,12 +109,6 @@ public class AuthService : IAuthService
         return new SessionIdentity(session.User?.Username);
     }
 
-    public async Task<bool> ValidateSessionAsync(string sessionToken)
-        => await AuthenticateSessionAsync(sessionToken) != null;
-
-    public async Task<string?> GetUsernameAsync(string sessionToken)
-        => (await GetLiveSessionAsync(sessionToken))?.User?.Username;
-
     public async Task<IReadOnlyList<UserSessionInfo>> GetSessionsAsync(string sessionToken)
     {
         var current = await GetLiveSessionAsync(sessionToken);

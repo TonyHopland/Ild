@@ -21,9 +21,6 @@ public interface IAuthService
     /// </summary>
     Task<SessionIdentity?> AuthenticateSessionAsync(string sessionToken);
 
-    Task<bool> ValidateSessionAsync(string sessionToken);
-    Task<string?> GetUsernameAsync(string sessionToken);
-
     /// <summary>
     /// The caller's live sessions, newest activity first, with the caller's own
     /// marked <see cref="UserSessionInfo.IsCurrent"/>. Empty when the token is

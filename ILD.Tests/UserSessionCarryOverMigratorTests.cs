@@ -26,8 +26,8 @@ public class UserSessionCarryOverMigratorTests
         Assert.Equal(1, created);
 
         var svc = new AuthService(db.Auth, db.Settings, new BootstrapCredentials(BootstrapCredentials.DefaultUsername, "secret"));
-        Assert.True(await svc.ValidateSessionAsync("legacy-token-from-the-old-column"));
-        Assert.Equal(user.Username, await svc.GetUsernameAsync("legacy-token-from-the-old-column"));
+        Assert.NotNull(await svc.AuthenticateSessionAsync("legacy-token-from-the-old-column"));
+        Assert.Equal(user.Username, (await svc.AuthenticateSessionAsync("legacy-token-from-the-old-column"))?.Username);
     }
 
     [Fact]
