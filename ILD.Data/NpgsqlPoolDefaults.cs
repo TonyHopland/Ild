@@ -1,7 +1,12 @@
 using System.Data.Common;
 using Npgsql;
 
+// Also compiled into ILD.WorkItemServer, which does not reference ILD.Data.
+#if WORKITEM_SERVER
+namespace ILD.WorkItemServer;
+#else
 namespace ILD.Data;
+#endif
 
 /// <summary>
 /// Caps the connection pool of an operator-supplied Npgsql connection string so the

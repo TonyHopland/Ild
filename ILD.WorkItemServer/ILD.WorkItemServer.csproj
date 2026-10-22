@@ -7,6 +7,7 @@
     <ReadyToRunPublish>false</ReadyToRunPublish>
     <RootNamespace>ILD.WorkItemServer</RootNamespace>
     <StartupObject>ILD.WorkItemServer.WorkItemServerProgram</StartupObject>
+    <DefineConstants>$(DefineConstants);WORKITEM_SERVER</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,6 +28,7 @@
 
   <ItemGroup>
     <Compile Remove="data\runtime\**\*.cs" />
+    <Compile Include="..\ILD.Data\NpgsqlPoolDefaults.cs" Link="NpgsqlPoolDefaults.cs" />
     <Content Remove="data\runtime\**\*" />
     <None Remove="data\runtime\**\*" />
   </ItemGroup>
