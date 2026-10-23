@@ -60,7 +60,8 @@ public class WorkItemPageApiTests
             string? description = null,
             string? id = null,
             Guid? createdByLoopRunId = null,
-            double? priority = null)
+            double? priority = null,
+            string[]? dependencies = null)
         {
             var dto = await Server.Service.CreateAsync(new CreateWorkItemRequest
             {
@@ -70,6 +71,7 @@ public class WorkItemPageApiTests
                 ForceStatus = status,
                 RepositoryId = repositoryId,
                 CreatedByLoopRunId = createdByLoopRunId,
+                Dependencies = dependencies,
             }, TestContext.Current.CancellationToken);
 
             var entity = await Server.ServerDb.WorkItems.FirstAsync(w => w.Id == dto.Id, TestContext.Current.CancellationToken);
@@ -173,6 +175,90 @@ public class WorkItemPageApiTests
         var first = page.GetProperty("items").EnumerateArray().ToList();
         Assert.Equal(expected.Take(7), first.Select(i => i.GetProperty("id").GetString()));
         Assert.All(first, i => Assert.Equal(-4.5, i.GetProperty("priority").GetDouble()));
+    }
+
+    [Fact]
+    public async Task Paging_several_statuses_reaches_every_item_of_each_once_in_one_board_order()
+    {
+        await using var host = await StartHostAsync();
+        var queue = new List<(string Id, double Priority, WiStatus Status)>();
+        for (var i = 0; i < 40; i++)
+        {
+            var priority = i % 8 - 3.5;
+            var status = i % 3 == 0 ? WiStatus.Ready : WiStatus.WorkQueue;
+            queue.Add((await host.SeedAsync($"queued {i}", status, createdAt: Epoch.AddHours(i), priority: priority), priority, status));
+        }
+        await host.SeedAsync("backlog", priority: -10);
+        await host.SeedAsync("running", WiStatus.Running, priority: -10);
+        var ordered = queue
+            .OrderBy(q => q.Priority)
+            .ThenBy(q => q.Id.Length)
+            .ThenBy(q => q.Id, StringComparer.Ordinal)
+            .ToList();
+        var expected = ordered.Select(q => q.Id).ToList();
+
+        Assert.Equal(expected, await PageThroughAsync(host.Human, "status=WorkQueue&status=Ready", take: 7));
+        Assert.Equal(expected, await PageThroughAsync(host.Human, "status=ready&status=WorkQueue&status=Ready", take: 40));
+        Assert.Equal(40, (await GetPageAsync(host.Human, "status=Ready&status=WorkQueue&skip=0&take=5")).Total);
+
+        var (queuedOnly, queuedTotal) = await GetPageAsync(host.Human, "status=WorkQueue&take=100");
+        Assert.Equal(ordered.Where(q => q.Status == WiStatus.WorkQueue).Select(q => q.Id), queuedOnly);
+        Assert.Equal(26, queuedTotal);
+
+        foreach (var refused in new[] { "status=WorkQueue&status=NotAStatus", "status=NotAStatus&status=Ready", "status=Ready&status=99" })
+        {
+            var resp = await host.Human.GetAsync($"/api/v1/workitems/page?{refused}", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task A_card_reordered_between_neighbours_of_the_other_status_keeps_its_status_and_takes_its_place()
+    {
+        await using var host = await StartHostAsync();
+        var q1 = await host.SeedAsync("q1", WiStatus.WorkQueue, priority: 0);
+        var r1 = await host.SeedAsync("r1", WiStatus.Ready, priority: 1);
+        var q2 = await host.SeedAsync("q2", WiStatus.WorkQueue, priority: 2);
+        var r2 = await host.SeedAsync("r2", WiStatus.Ready, priority: 3);
+        const string column = "status=WorkQueue&status=Ready";
+
+        var ready = await ReorderAsync(host.Human, r2, new { aboveId = q1, belowId = r1 });
+
+        Assert.Equal(HttpStatusCode.OK, ready.StatusCode);
+        var readyView = JsonDocument.Parse(await ready.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
+        Assert.Equal("Ready", readyView.GetProperty("status").GetString());
+        Assert.Equal([q1, r2, r1, q2], (await GetPageAsync(host.Human, column)).Ids);
+
+        var queued = await ReorderAsync(host.Human, q2, new { aboveId = r2, belowId = r1 });
+
+        Assert.Equal(HttpStatusCode.OK, queued.StatusCode);
+        var queuedView = JsonDocument.Parse(await queued.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).RootElement;
+        Assert.Equal("WorkQueue", queuedView.GetProperty("status").GetString());
+        Assert.Equal([q1, r2, q2, r1], (await GetPageAsync(host.Human, column)).Ids);
+        Assert.Equal([q1, q2], (await GetPageAsync(host.Human, "status=WorkQueue")).Ids);
+        Assert.Equal([r2, r1], (await GetPageAsync(host.Human, "status=Ready")).Ids);
+    }
+
+    [Fact]
+    public async Task A_backlog_card_dropped_in_the_work_queue_column_is_queued_ready_or_waiting_at_its_drop_spot()
+    {
+        await using var host = await StartHostAsync();
+        var open = await host.SeedAsync("open dependency", WiStatus.Running, priority: -50);
+        var done = await host.SeedAsync("done dependency", WiStatus.Done, priority: -40);
+        var q = await host.SeedAsync("q", WiStatus.WorkQueue, priority: 0);
+        var r = await host.SeedAsync("r", WiStatus.Ready, priority: 1);
+        var free = await host.SeedAsync("free", priority: 5, dependencies: [done]);
+        var blocked = await host.SeedAsync("blocked", priority: 6, dependencies: [open]);
+
+        var freeDrop = await ReorderAsync(host.Human, free, new { aboveId = q, belowId = r, targetStatus = "WorkQueue" });
+        var blockedDrop = await ReorderAsync(host.Human, blocked, new { aboveId = free, belowId = r, targetStatus = "WorkQueue" });
+
+        Assert.Equal(HttpStatusCode.OK, freeDrop.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, blockedDrop.StatusCode);
+        Assert.Equal([q, free, blocked, r], (await GetPageAsync(host.Human, "status=WorkQueue&status=Ready")).Ids);
+        Assert.Equal([free, r], (await GetPageAsync(host.Human, "status=Ready")).Ids);
+        Assert.Equal([q, blocked], (await GetPageAsync(host.Human, "status=WorkQueue")).Ids);
+        Assert.Empty((await GetPageAsync(host.Human, "status=Backlog")).Ids);
     }
 
     private static Task<HttpResponseMessage> ReorderAsync(HttpClient client, string id, object body)

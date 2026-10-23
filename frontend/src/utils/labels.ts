@@ -7,6 +7,7 @@ import {
   LoopRunNodeStatus,
   LoopRunStatus,
   type RepositoryParallelismHold,
+  type WorkItem,
   WorkItemStatus,
 } from "../types";
 
@@ -23,7 +24,10 @@ const WORK_ITEM_STATUS: Record<WorkItemStatus, { label: string; tone: Tone }> = 
   [WorkItemStatus.Done]: { label: "Done", tone: "success" },
 };
 
-/** The statuses in the order a work item moves through them: the board's columns, left to right. */
+/**
+ * The statuses in the order a work item moves through them. The board's columns
+ * follow it, left to right, with Ready items in the Work queue column.
+ */
 export const WORK_ITEM_STATUS_ORDER: readonly WorkItemStatus[] = [
   WorkItemStatus.Backlog,
   WorkItemStatus.WorkQueue,
@@ -104,6 +108,33 @@ export function reviewStateLabel(state: string): string {
 /** Why a Ready item waits on its repository, on its card and in its dialog alike. */
 export function repositoryHoldLabel(hold: RepositoryParallelismHold): string {
   return `Waiting: repository parallelism limit (${hold.inProgress}/${hold.limit} in progress)`;
+}
+
+/**
+ * What a card in the Work queue column says about whether it can start, or null
+ * for an item in no other status. `held` marks a Ready item that cannot start
+ * yet. The repository's hold is named over a pause; a pause not yet read
+ * (`schedulerPaused` undefined) is not claimed.
+ */
+export function queueStatusPill(
+  item: Pick<WorkItem, "status" | "repositoryParallelismHold">,
+  schedulerPaused: boolean | undefined,
+): { label: string; tone: Tone; held: boolean } | null {
+  if (item.status === WorkItemStatus.WorkQueue)
+    return { label: "Waiting on dependencies", tone: "muted", held: false };
+  if (item.status !== WorkItemStatus.Ready) return null;
+  if (item.repositoryParallelismHold)
+    return {
+      label: repositoryHoldLabel(item.repositoryParallelismHold),
+      tone: "muted",
+      held: true,
+    };
+  if (schedulerPaused) return { label: "Scheduler paused", tone: "muted", held: true };
+  return {
+    label: workItemStatusLabel(WorkItemStatus.Ready),
+    tone: workItemStatusTone(WorkItemStatus.Ready),
+    held: false,
+  };
 }
 
 /** The class a pill of that tone takes. */

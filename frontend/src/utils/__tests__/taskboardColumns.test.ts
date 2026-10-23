@@ -6,6 +6,8 @@ import {
   compareServerOrder,
   insertInServerOrder,
   removeItem,
+  TASKBOARD_COLUMNS,
+  type TaskboardColumnKey,
 } from "../taskboardColumns";
 
 type Board = Parameters<typeof applyItem>[0];
@@ -48,17 +50,19 @@ function boardItem(id: string, priority: number, overrides: Partial<WorkItem> = 
 }
 
 /** A board whose columns hold the given items (already in board order) and totals. */
-function boardWith(columns: Partial<Record<WorkItemStatus, { items: WorkItem[]; total: number }>>) {
+function boardWith(
+  columns: Partial<Record<TaskboardColumnKey, { items: WorkItem[]; total: number }>>,
+) {
   const board: Record<string, unknown> = {};
-  for (const status of Object.values(WorkItemStatus)) {
-    const column = columns[status] ?? { items: [], total: 0 };
-    board[status] = { ...column, loaded: true, loadingMore: false };
+  for (const { key } of TASKBOARD_COLUMNS) {
+    const column = columns[key] ?? { items: [], total: 0 };
+    board[key] = { ...column, loaded: true, loadingMore: false };
   }
   return board as unknown as Board;
 }
 
-function ids(board: Board, status: WorkItemStatus): string[] {
-  return board[status].items.map((wi: WorkItem) => wi.id);
+function ids(board: Board, column: TaskboardColumnKey): string[] {
+  return board[column].items.map((wi: WorkItem) => wi.id);
 }
 
 describe("compareServerOrder", () => {
@@ -146,7 +150,7 @@ describe("applyItem", () => {
 
   test("a status change moves the card to its sorted place in the new column and updates both totals", () => {
     const board = boardWith({
-      Ready: { items: [boardItem("r5", 5, { status: WorkItemStatus.Ready })], total: 1 },
+      WorkQueue: { items: [boardItem("r5", 5, { status: WorkItemStatus.Ready })], total: 1 },
       Running: {
         items: [
           boardItem("u2", 2, { status: WorkItemStatus.Running }),
@@ -163,15 +167,15 @@ describe("applyItem", () => {
       { countAsNew: false },
     );
 
-    expect(ids(next, WorkItemStatus.Ready)).toEqual([]);
-    expect(next.Ready.total).toBe(0);
+    expect(ids(next, WorkItemStatus.WorkQueue)).toEqual([]);
+    expect(next.WorkQueue.total).toBe(0);
     expect(ids(next, WorkItemStatus.Running)).toEqual(["u2", "r5", "u8"]);
     expect(next.Running.total).toBe(3);
   });
 
   test("a card moved beyond the loaded page of its new column leaves the view but stays counted", () => {
     const board = boardWith({
-      Ready: { items: [boardItem("r9", 9, { status: WorkItemStatus.Ready })], total: 1 },
+      WorkQueue: { items: [boardItem("r9", 9, { status: WorkItemStatus.Ready })], total: 1 },
       Done: { items: [boardItem("d1", 1, { status: WorkItemStatus.Done })], total: 40 },
     });
 
@@ -182,10 +186,59 @@ describe("applyItem", () => {
       { countAsNew: false },
     );
 
-    expect(ids(next, WorkItemStatus.Ready)).toEqual([]);
-    expect(next.Ready.total).toBe(0);
+    expect(ids(next, WorkItemStatus.WorkQueue)).toEqual([]);
+    expect(next.WorkQueue.total).toBe(0);
     expect(ids(next, WorkItemStatus.Done)).toEqual(["d1"]);
     expect(next.Done.total).toBe(41);
+  });
+
+  test.each([
+    [WorkItemStatus.WorkQueue, WorkItemStatus.Ready],
+    [WorkItemStatus.Ready, WorkItemStatus.WorkQueue],
+  ])(
+    "a %s item turning %s stays in the Work queue column in its place, with the total unchanged",
+    (from, to) => {
+      const board = boardWith({
+        WorkQueue: {
+          items: [
+            boardItem("q1", 1, { status: WorkItemStatus.Ready }),
+            boardItem("q4", 4, { status: from }),
+            boardItem("q7", 7, { status: WorkItemStatus.WorkQueue }),
+          ],
+          total: 10,
+        },
+      });
+
+      const next = applyItem(board, boardItem("q4", 4, { status: to }), EMPTY_TASKBOARD_FILTER, {
+        countAsNew: false,
+      });
+
+      expect(ids(next, WorkItemStatus.WorkQueue)).toEqual(["q1", "q4", "q7"]);
+      expect(next.WorkQueue.items[1].status).toBe(to);
+      expect(next.WorkQueue.total).toBe(10);
+    },
+  );
+
+  test("a created Ready item joins the Work queue column in board order among Work queue items", () => {
+    const board = boardWith({
+      WorkQueue: {
+        items: [
+          boardItem("q1", 1, { status: WorkItemStatus.WorkQueue }),
+          boardItem("q7", 7, { status: WorkItemStatus.WorkQueue }),
+        ],
+        total: 2,
+      },
+    });
+
+    const next = applyItem(
+      board,
+      boardItem("r4", 4, { status: WorkItemStatus.Ready }),
+      EMPTY_TASKBOARD_FILTER,
+      { countAsNew: true },
+    );
+
+    expect(ids(next, WorkItemStatus.WorkQueue)).toEqual(["q1", "r4", "q7"]);
+    expect(next.WorkQueue.total).toBe(3);
   });
 
   test("an edit keeps the card in place when it still matches", () => {

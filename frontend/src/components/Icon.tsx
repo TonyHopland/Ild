@@ -32,6 +32,12 @@ const PATHS = {
       <path d="M12 9v4M12 17h.01" />
     </>
   ),
+  info: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M12 16v-4M12 8h.01" />
+    </>
+  ),
   user: (
     <>
       <circle cx="12" cy="8" r="4" />

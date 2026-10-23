@@ -126,7 +126,24 @@ function makeRepo(overrides: Partial<Repository> = {}): Repository {
   };
 }
 
-const ALL_STATUSES = Object.values(WorkItemStatus) as string[];
+const byText = (a: string, b: string) => a.localeCompare(b);
+
+/** The statuses each board column reads, one entry per column, sorted. */
+const COLUMN_STATUSES = [
+  [WorkItemStatus.Backlog],
+  [WorkItemStatus.WorkQueue, WorkItemStatus.Ready],
+  [WorkItemStatus.Running],
+  [WorkItemStatus.HumanFeedback],
+  [WorkItemStatus.WaitingForIld],
+  [WorkItemStatus.Done],
+]
+  .map((statuses) => [...statuses].sort(byText).join("+"))
+  .sort(byText);
+
+/** The statuses each of these page reads asked for, one entry per read, sorted. */
+function statusSets(queries: { statuses: string[] }[]): string[] {
+  return queries.map((q) => [...q.statuses].sort(byText).join("+")).sort(byText);
+}
 
 /** Item `id` created `n` hours into 2026; a higher `n` is newer and higher on the board. The title is the id. */
 function boardItem(
@@ -670,10 +687,10 @@ describe("Taskboard reconnect", () => {
     await waitFor(() => expect(cardTitles("Backlog")[0]).toBe("made-during-outage"));
     expect(badge("Backlog")).toBe("46");
     const reload = server.getPage.mock.calls.slice(pagesBefore).map(([q]) => q);
-    expect(reload.map((q) => q.status).sort()).toEqual([...ALL_STATUSES].sort());
+    expect(statusSets(reload)).toEqual(COLUMN_STATUSES);
     for (const q of reload) {
       expect(q.skip).toBe(0);
-      expect(q.take).toBe(q.status === WorkItemStatus.Backlog ? 40 : 20);
+      expect(q.take).toBe(q.statuses.includes(WorkItemStatus.Backlog) ? 40 : 20);
     }
     expect(server.getTags.mock.calls.length).toBeGreaterThan(tagsBefore);
     expect(server.getAll).not.toHaveBeenCalled();
@@ -711,9 +728,7 @@ describe("Taskboard reconnect", () => {
     // Still a single first page per column — the first arrival at "connected"
     // is not a recovery.
     await waitFor(() => {
-      expect(server.getPage.mock.calls.map(([q]) => q.status).sort()).toEqual(
-        [...ALL_STATUSES].sort(),
-      );
+      expect(statusSets(server.getPage.mock.calls.map(([q]) => q))).toEqual(COLUMN_STATUSES);
     });
   });
 });
@@ -1166,7 +1181,7 @@ describe("Taskboard server-paged columns", () => {
 
     await waitFor(() => expect(cardTitles("Backlog")).toHaveLength(20));
     const first = server.getPage.mock.calls.map(([q]) => q);
-    expect(first.map((q) => q.status).sort()).toEqual([...ALL_STATUSES].sort());
+    expect(statusSets(first)).toEqual(COLUMN_STATUSES);
     for (const q of first) {
       expect(q).toMatchObject({ skip: 0, take: 20 });
       expect(q.search ?? "").toBe("");
@@ -1175,7 +1190,7 @@ describe("Taskboard server-paged columns", () => {
     }
     expect(badge("Backlog")).toBe("45");
     expect(badge("Done")).toBe("3");
-    expect(badge("Ready")).toBe("0");
+    expect(badge("Work queue")).toBe("0");
     expect(cardTitles("Backlog")[0]).toBe("b44");
 
     const loadMore = () => within(columnEl("Backlog")).queryByRole("button", { name: "Load more" });
@@ -1189,7 +1204,7 @@ describe("Taskboard server-paged columns", () => {
     expect(cardTitles("Backlog")).toEqual(Array.from({ length: 45 }, (_, n) => `b${44 - n}`));
     const backlogSkips = server.getPage.mock.calls
       .map(([q]) => q)
-      .filter((q) => q.status === WorkItemStatus.Backlog)
+      .filter((q) => q.statuses.includes(WorkItemStatus.Backlog))
       .map((q) => q.skip);
     expect(backlogSkips).toEqual([0, 20, 40]);
     expect(badge("Backlog")).toBe("45");
@@ -1219,7 +1234,7 @@ describe("Taskboard server-paged columns", () => {
     expect(badge("Backlog")).toBe("1");
     expect(badge("Done")).toBe("1");
     const reload = server.getPage.mock.calls.slice(before).map(([q]) => q);
-    expect(reload.map((q) => q.status).sort()).toEqual([...ALL_STATUSES].sort());
+    expect(statusSets(reload)).toEqual(COLUMN_STATUSES);
     for (const q of reload) {
       expect(q.search).toBe("forgotten");
       expect(q.skip).toBe(0);
@@ -1310,7 +1325,7 @@ describe("Taskboard server-paged columns", () => {
     expect(badge("Backlog")).toBe("1");
     expect(badge("Done")).toBe("0");
     const tagged = server.getPage.mock.calls.slice(before).map(([q]) => q);
-    expect(tagged.map((q) => q.status).sort()).toEqual([...ALL_STATUSES].sort());
+    expect(statusSets(tagged)).toEqual(COLUMN_STATUSES);
     for (const q of tagged) {
       expect(q.repositoryId).toBe("repo-2");
       expect(q.tags).toEqual(["ancient"]);
@@ -1404,7 +1419,7 @@ describe("Taskboard live changes keep server order", () => {
     let holding = true;
     server.getPage.mockImplementation(async (q) => {
       const snapshot = server.page(q);
-      if (holding && q.status === WorkItemStatus.Backlog && q.repositoryId === "repo-1") {
+      if (holding && q.statuses.includes(WorkItemStatus.Backlog) && q.repositoryId === "repo-1") {
         holding = false;
         await held.promise;
       }
@@ -1453,9 +1468,9 @@ describe("Taskboard live changes keep server order", () => {
     });
 
     await waitFor(() => expect(cardTitles("Running")).toEqual(["u9", "r7", "u2"]));
-    expect(cardTitles("Ready")).toEqual([]);
+    expect(cardTitles("Work queue")).toEqual([]);
     await waitFor(() => expect(badge("Running")).toBe("3"));
-    expect(badge("Ready")).toBe("0");
+    expect(badge("Work queue")).toBe("0");
   });
 
   test("a reorder announced over SignalR moves the card to its new place in the same column", async () => {
@@ -1467,7 +1482,7 @@ describe("Taskboard live changes keep server order", () => {
     ]);
 
     renderTaskboard();
-    await waitFor(() => expect(cardTitles("Ready")).toEqual(["a", "b", "c"]));
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["a", "b", "c"]));
 
     server.items.find((wi) => wi.id === "c")!.priority = -100;
     await hub.emit("WorkItemStateChanged", {
@@ -1475,7 +1490,7 @@ describe("Taskboard live changes keep server order", () => {
       oldStatus: "Ready",
       newStatus: "Ready",
     });
-    await waitFor(() => expect(cardTitles("Ready")).toEqual(["c", "a", "b"]));
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["c", "a", "b"]));
 
     server.items.find((wi) => wi.id === "a")!.priority = -3;
     await hub.emit("WorkItemStateChanged", {
@@ -1483,9 +1498,9 @@ describe("Taskboard live changes keep server order", () => {
       oldStatus: "Ready",
       newStatus: "Ready",
     });
-    await waitFor(() => expect(cardTitles("Ready")).toEqual(["c", "b", "a"]));
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["c", "b", "a"]));
     await settle();
-    expect(badge("Ready")).toBe("3");
+    expect(badge("Work queue")).toBe("3");
   });
 
   test("a renumber announced once for the whole board re-reads the columns in their new order", async () => {
@@ -1498,14 +1513,14 @@ describe("Taskboard live changes keep server order", () => {
     ]);
 
     renderTaskboard();
-    await waitFor(() => expect(cardTitles("Ready")).toEqual(["a", "b"]));
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["a", "b"]));
     await waitFor(() => expect(cardTitles("Backlog")).toEqual(["c", "d"]));
 
     const renumbered: Record<string, number> = { b: 0, a: 2, d: 4, c: 6 };
     for (const wi of server.items) wi.priority = renumbered[wi.id];
     await hub.emit("WorkItemBoardReordered", { workItemId: "b" });
 
-    await waitFor(() => expect(cardTitles("Ready")).toEqual(["b", "a"]));
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["b", "a"]));
     await waitFor(() => expect(cardTitles("Backlog")).toEqual(["d", "c"]));
   });
 
@@ -1559,9 +1574,9 @@ describe("Taskboard live changes keep server order", () => {
     fireEvent.keyDown(card, { key: "ArrowRight" });
 
     await waitFor(() => expect(cardTitles("Running")).toEqual(["u9", "mover"]));
-    expect(cardTitles("Ready")).toEqual([]);
+    expect(cardTitles("Work queue")).toEqual([]);
     await waitFor(() => expect(badge("Running")).toBe("2"));
-    expect(badge("Ready")).toBe("0");
+    expect(badge("Work queue")).toBe("0");
   });
 
   test("totals reconcile from the server with one counts request in flight and one follow-up", async () => {
@@ -1721,6 +1736,32 @@ describe("Taskboard on a phone", () => {
     expect(screen.queryByText("Waiting on me")).toBeNull();
   });
 
+  test("the column picker offers the six board columns, with Work queue counting Ready items too", async () => {
+    mockTaskboardServer([
+      ...items,
+      makeItem({ id: "wi-3", title: "Queued", status: WorkItemStatus.WorkQueue }),
+      makeItem({ id: "wi-4", title: "Startable", status: WorkItemStatus.Ready }),
+    ]);
+    renderTaskboard();
+    await screen.findByText("Waiting on me");
+
+    const tabs = within(screen.getByRole("tablist", { name: "Columns" })).getAllByRole("tab");
+    await waitFor(() =>
+      expect(tabs.map((tab) => tab.textContent)).toEqual([
+        "Backlog1",
+        "Work queue2",
+        "Running0",
+        "Needs you1",
+        "Waiting for ILD0",
+        "Done0",
+      ]),
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: /Work queue/ }));
+    expect(await screen.findByText("Queued")).toBeTruthy();
+    expect(screen.getByText("Startable")).toBeTruthy();
+  });
+
   test("an empty column says what lands there instead of folding to a strip", async () => {
     mockTaskboardServer(items);
     renderTaskboard();
@@ -1791,4 +1832,206 @@ describe("Taskboard folded columns", () => {
     expect(screen.getByText("Loading taskboard...")).toBeTruthy();
     expect(screen.queryByText("Not started")).toBeNull();
   });
+});
+
+describe("Taskboard Work queue column", () => {
+  const COLUMN_TITLES = [
+    "Backlog",
+    "Work queue",
+    "Running",
+    "Needs you",
+    "Waiting for ILD",
+    "Done",
+  ];
+  const QUEUE_PILL =
+    /^(Waiting on dependencies|Waiting: repository parallelism limit \(\d+\/\d+ in progress\)|Scheduler paused|Ready)$/;
+
+  function cardEl(id: string): HTMLElement {
+    const card = document.querySelector<HTMLElement>(`.work-item-card[data-work-item-id="${id}"]`);
+    if (!card) throw new Error(`no card ${id}`);
+    return card;
+  }
+
+  /** The waiting reason pills a card shows. */
+  function queuePills(id: string): string[] {
+    return Array.from(cardEl(id).querySelectorAll("*"))
+      .filter((el) => el.children.length === 0 && QUEUE_PILL.test(el.textContent ?? ""))
+      .map((el) => el.textContent!);
+  }
+
+  function pausedReads(paused: boolean) {
+    vi.spyOn(authServices.settingsService, "get").mockResolvedValue({
+      key: "scheduler.isPaused",
+      value: paused ? "true" : "false",
+    });
+  }
+
+  test("one Work queue column holds Work queue and Ready items in board order, counts both and pages them as one", async () => {
+    mockHub();
+    const queued = Array.from({ length: 25 }, (_, n) =>
+      boardItem(`q${n}`, n, n % 2 ? WorkItemStatus.Ready : WorkItemStatus.WorkQueue),
+    );
+    const server = mockBoard([
+      ...queued,
+      boardItem("b0", 0),
+      boardItem("u0", 0, WorkItemStatus.Running),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Work queue")).toHaveLength(20));
+
+    const titles = Array.from(document.querySelectorAll(".taskboard-column-title")).map(
+      (title) => title.textContent,
+    );
+    expect(titles).toEqual(COLUMN_TITLES);
+    const inBoardOrder = Array.from({ length: 25 }, (_, n) => `q${24 - n}`);
+    expect(cardTitles("Work queue")).toEqual(inBoardOrder.slice(0, 20));
+    expect(badge("Work queue")).toBe("25");
+
+    fireEvent.click(within(columnEl("Work queue")).getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(cardTitles("Work queue")).toHaveLength(25));
+
+    expect(cardTitles("Work queue")).toEqual(inBoardOrder);
+    const columnReads = server.getPage.mock.calls
+      .map(([q]) => q)
+      .filter(
+        (q) =>
+          q.statuses.includes(WorkItemStatus.WorkQueue) ||
+          q.statuses.includes(WorkItemStatus.Ready),
+      );
+    expect(statusSets(columnReads)).toEqual(["Ready+WorkQueue", "Ready+WorkQueue"]);
+    expect(columnReads.map((q) => q.skip)).toEqual([0, 20]);
+    await settle();
+    expect(badge("Work queue")).toBe("25");
+  });
+
+  test("a Work queue card whose dependencies finish turns Ready in its place without a reload", async () => {
+    const hub = mockHub();
+    const server = mockBoard([
+      boardItem("first", 9, WorkItemStatus.Ready),
+      boardItem("waiting", 5, WorkItemStatus.WorkQueue),
+      boardItem("last", 2, WorkItemStatus.WorkQueue),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(cardTitles("Work queue")).toEqual(["first", "waiting", "last"]));
+    await waitFor(() => expect(queuePills("first")).toEqual(["Ready"]));
+    expect(queuePills("waiting")).toEqual(["Waiting on dependencies"]);
+    const reads = server.getPage.mock.calls.length;
+
+    server.items.find((wi) => wi.id === "waiting")!.status = WorkItemStatus.Ready;
+    await hub.emit("WorkItemStateChanged", {
+      workItemId: "waiting",
+      oldStatus: "WorkQueue",
+      newStatus: "Ready",
+    });
+
+    await waitFor(() => expect(queuePills("waiting")).toEqual(["Ready"]));
+    expect(cardTitles("Work queue")).toEqual(["first", "waiting", "last"]);
+    await settle();
+    expect(badge("Work queue")).toBe("3");
+    expect(server.getPage.mock.calls.length).toBe(reads);
+  });
+
+  test("each card shows why it waits, and the Ready ones follow the scheduler's pause and resume", async () => {
+    const hub = mockHub();
+    mockBoard([
+      boardItem("queued", 9, WorkItemStatus.WorkQueue),
+      boardItem("held", 7, WorkItemStatus.Ready, {
+        repositoryParallelismHold: { inProgress: 2, limit: 2 },
+      }),
+      boardItem("startable", 5, WorkItemStatus.Ready),
+      boardItem("going", 3, WorkItemStatus.Running),
+    ]);
+
+    renderTaskboard();
+    await waitFor(() => expect(queuePills("startable")).toEqual(["Ready"]));
+    expect(queuePills("queued")).toEqual(["Waiting on dependencies"]);
+    expect(queuePills("held")).toEqual(["Waiting: repository parallelism limit (2/2 in progress)"]);
+    expect(queuePills("going")).toEqual([]);
+    const runningClasses = Array.from(cardEl("startable").classList);
+
+    await hub.emit("SchedulerStateChanged", { isPaused: true });
+
+    await waitFor(() => expect(queuePills("startable")).toEqual(["Scheduler paused"]));
+    expect(queuePills("held")).toEqual(["Waiting: repository parallelism limit (2/2 in progress)"]);
+    expect(queuePills("queued")).toEqual(["Waiting on dependencies"]);
+    expect(queuePills("going")).toEqual([]);
+    const pausedClasses = Array.from(cardEl("startable").classList);
+    expect(pausedClasses.filter((c) => !runningClasses.includes(c))).not.toHaveLength(0);
+
+    await hub.emit("SchedulerStateChanged", { isPaused: false });
+
+    await waitFor(() => expect(queuePills("startable")).toEqual(["Ready"]));
+    expect(Array.from(cardEl("startable").classList)).toEqual(runningClasses);
+  });
+
+  test("a Ready card shows Scheduler paused on a board opened while the scheduler is paused", async () => {
+    mockHub();
+    mockBoard([boardItem("startable", 5, WorkItemStatus.Ready)]);
+    pausedReads(true);
+
+    renderTaskboard();
+
+    await waitFor(() => expect(queuePills("startable")).toEqual(["Scheduler paused"]));
+  });
+
+  test.each([
+    [WorkItemStatus.Backlog, "ArrowRight", WorkItemStatus.WorkQueue, "Work queue"],
+    [WorkItemStatus.WorkQueue, "ArrowRight", WorkItemStatus.Running, "Running"],
+    [WorkItemStatus.Ready, "ArrowRight", WorkItemStatus.Running, "Running"],
+    [WorkItemStatus.WorkQueue, "ArrowLeft", WorkItemStatus.Backlog, "Backlog"],
+    [WorkItemStatus.Ready, "ArrowLeft", WorkItemStatus.Backlog, "Backlog"],
+    [WorkItemStatus.Running, "ArrowLeft", WorkItemStatus.WorkQueue, "Work queue"],
+  ])("%s with %s moves to %s and says so", async (from, key, target, label) => {
+    mockHub();
+    mockBoard([boardItem("mover", 5, from)]);
+    const transition = vi.spyOn(authServices.workItemService, "transition");
+
+    renderTaskboard();
+    const card = await screen.findByRole("button", { name: /^mover,/ });
+    card.focus();
+    fireEvent.keyDown(card, { key });
+
+    await waitFor(() => expect(transition).toHaveBeenCalledWith("mover", target));
+    expect(transition).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toContain(label));
+  });
+
+  test.each([
+    ["with a dependency still open", WorkItemStatus.WorkQueue, "Waiting on dependencies"],
+    ["with every dependency Done", WorkItemStatus.Ready, "Ready"],
+  ])(
+    "a Backlog card dropped into the empty Work queue column %s is queued and shown there",
+    async (_deps, lands, pill) => {
+      seedPreferences({
+        [foldedColumnKey(WorkItemStatus.Done)]: "false",
+        [foldedColumnKey(WorkItemStatus.WorkQueue)]: "false",
+      });
+      mockHub();
+      const server = mockBoard([boardItem("planned", 5)]);
+      const transition = vi
+        .spyOn(authServices.workItemService, "transition")
+        .mockImplementation(async (id: string, status: string) => {
+          // The server queues the item and promotes it at once when nothing blocks it.
+          const found = server.items.find((wi) => wi.id === id)!;
+          found.status = status === WorkItemStatus.WorkQueue ? lands : (status as WorkItemStatus);
+        });
+
+      renderTaskboard();
+      await waitFor(() => expect(cardTitles("Backlog")).toEqual(["planned"]));
+
+      fireEvent.drop(columnEl("Work queue"), {
+        dataTransfer: { getData: () => "planned" },
+      } as unknown as DragEvent);
+
+      await waitFor(() => expect(cardTitles("Work queue")).toEqual(["planned"]));
+      expect(transition).toHaveBeenCalledWith("planned", WorkItemStatus.WorkQueue);
+      expect(cardTitles("Backlog")).toEqual([]);
+      await waitFor(() => expect(queuePills("planned")).toEqual([pill]));
+      await settle();
+      expect(badge("Work queue")).toBe("1");
+      expect(badge("Backlog")).toBe("0");
+    },
+  );
 });

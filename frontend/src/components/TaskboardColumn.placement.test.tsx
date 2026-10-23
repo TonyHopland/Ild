@@ -38,9 +38,9 @@ test("a dropped card is handed back with the card the server placed it directly 
   const onWorkItemPlaced = vi.fn();
   render(
     <TaskboardColumn
-      status={WorkItemStatus.Ready}
-      label="Ready"
-      workItems={[item("a", WorkItemStatus.Ready), item("b", WorkItemStatus.Ready)]}
+      status={WorkItemStatus.WorkQueue}
+      label="Work queue"
+      workItems={[item("a", WorkItemStatus.Ready), item("b", WorkItemStatus.WorkQueue)]}
       total={30}
       onWorkItemUpdate={onWorkItemUpdate}
       onWorkItemPlaced={onWorkItemPlaced}
@@ -49,7 +49,7 @@ test("a dropped card is handed back with the card the server placed it directly 
     />,
   );
 
-  fireEvent.drop(screen.getByText("Ready").closest("div")!, {
+  fireEvent.drop(screen.getByText("Work queue").closest("div")!, {
     dataTransfer: { getData: () => "x" },
   } as unknown as DragEvent);
 

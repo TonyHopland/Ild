@@ -4,6 +4,7 @@ import { useTaskboardColumns } from "./useTaskboardColumns";
 import { mockTaskboardServer } from "../../test-support";
 import { WorkItem, WorkItemPage, WorkItemStatus } from "../../types";
 import { EMPTY_TASKBOARD_FILTER } from "../../utils/taskboardFilter";
+import type { TaskboardColumnKey } from "../../utils/taskboardColumns";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -40,6 +41,8 @@ function itemIn(status: WorkItemStatus, n: number): WorkItem {
   };
 }
 
+const byText = (a: string, b: string) => a.localeCompare(b);
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -48,13 +51,13 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-/** Holds the next read of `status` until the returned release is called; the page is taken when asked. */
+/** Holds the next read of a column holding `status` until the returned release is called; the page is taken when asked. */
 function holdNextRead(server: ReturnType<typeof mockTaskboardServer>, status: WorkItemStatus) {
   const held = deferred<void>();
   const answer = server.getPage.getMockImplementation()!;
   let armed = true;
   server.getPage.mockImplementation(async (q) => {
-    if (!armed || q.status !== status) return answer(q);
+    if (!armed || !q.statuses.includes(status)) return answer(q);
     armed = false;
     const page: WorkItemPage = server.page(q);
     await held.promise;
@@ -72,8 +75,11 @@ function holdCounts(server: ReturnType<typeof mockTaskboardServer>) {
   return server.getCounts.mock.calls.length;
 }
 
-function ids(result: { current: ReturnType<typeof useTaskboardColumns> }, status: WorkItemStatus) {
-  return result.current.columns[status].items.map((item) => `${item.id}:${item.status}`);
+function ids(
+  result: { current: ReturnType<typeof useTaskboardColumns> },
+  column: TaskboardColumnKey,
+) {
+  return result.current.columns[column].items.map((item) => `${item.id}:${item.status}`);
 }
 
 function renderColumns() {
@@ -88,9 +94,13 @@ function running(result: { current: ReturnType<typeof useTaskboardColumns> }) {
   return result.current.columns[WorkItemStatus.Running];
 }
 
-/** How many reads of `status` the board has asked the server for so far. */
+/** How many reads of a column holding `status` the board has asked the server for so far. */
 function reads(server: ReturnType<typeof mockTaskboardServer>, status: WorkItemStatus) {
-  return server.getPage.mock.calls.filter(([q]) => q.status === status).length;
+  return server.getPage.mock.calls.filter(([q]) => q.statuses.includes(status)).length;
+}
+
+function workQueue(result: { current: ReturnType<typeof useTaskboardColumns> }) {
+  return result.current.columns[WorkItemStatus.WorkQueue];
 }
 
 /** A board showing three Running cards, with two more on the server it has not heard of. */
@@ -105,6 +115,91 @@ async function runningColumnBehindItsServer(onError: (message: string) => void =
 }
 
 describe("useTaskboardColumns", () => {
+  test("the Work queue column pages Work queue and Ready items together in board order, one read per page", async () => {
+    const queued = Array.from({ length: 25 }, (_, n) =>
+      itemIn(n % 3 === 0 ? WorkItemStatus.Ready : WorkItemStatus.WorkQueue, n),
+    );
+    const server = mockTaskboardServer([...queued, itemIn(WorkItemStatus.Backlog, 100)]);
+    const { result } = renderColumns();
+    await waitFor(() => expect(workQueue(result).items).toHaveLength(20));
+    const both = [WorkItemStatus.WorkQueue, WorkItemStatus.Ready];
+    const boardOrder = server.page({ statuses: both, skip: 0, take: 100 }).items.map((i) => i.id);
+    expect(workQueue(result).items.map((i) => i.id)).toEqual(boardOrder.slice(0, 20));
+    expect(workQueue(result).total).toBe(25);
+
+    await act(async () => result.current.loadMore(WorkItemStatus.WorkQueue));
+    await waitFor(() => expect(workQueue(result).items).toHaveLength(25));
+
+    expect(workQueue(result).items.map((i) => i.id)).toEqual(boardOrder);
+    const columnReads = server.getPage.mock.calls
+      .map(([q]) => q)
+      .filter((q) => q.statuses.some((s) => both.includes(s as WorkItemStatus)));
+    expect(columnReads.map((q) => [...q.statuses].sort(byText))).toEqual([
+      [...both].sort(byText),
+      [...both].sort(byText),
+    ]);
+    expect(columnReads.map((q) => [q.skip, q.take])).toEqual([
+      [0, 20],
+      [20, 20],
+    ]);
+  });
+
+  test("a counts refresh gives the Work queue column the Work queue and Ready totals together", async () => {
+    const server = mockTaskboardServer([
+      itemIn(WorkItemStatus.WorkQueue, 0),
+      itemIn(WorkItemStatus.Ready, 1),
+    ]);
+    const { result } = renderColumns();
+    await waitFor(() => expect(workQueue(result).items).toHaveLength(2));
+    // No column read lands from here on, so the total is the counts' alone.
+    server.getPage.mockImplementation(() => new Promise(() => {}));
+    server.items.push(
+      ...Array.from({ length: 30 }, (_, n) =>
+        itemIn(n % 2 ? WorkItemStatus.Ready : WorkItemStatus.WorkQueue, 10 + n),
+      ),
+    );
+
+    await act(async () => result.current.requestCountsRefresh());
+
+    await waitFor(() => expect(workQueue(result).total).toBe(32));
+  });
+
+  test("a Work queue card that turns Ready while its column is being read stays in the column when the read lands", async () => {
+    const server = mockTaskboardServer(
+      Array.from({ length: 3 }, (_, n) => itemIn(WorkItemStatus.WorkQueue, n)),
+    );
+    const { result } = renderColumns();
+    await waitFor(() => expect(workQueue(result).items).toHaveLength(3));
+    const before = ids(result, WorkItemStatus.WorkQueue);
+    // The next read of the column is held and answers when released; any read after it never lands.
+    const answer = server.getPage.getMockImplementation()!;
+    const held = deferred<void>();
+    let columnReads = 0;
+    server.getPage.mockImplementation(async (q) => {
+      if (!q.statuses.includes(WorkItemStatus.WorkQueue)) return answer(q);
+      columnReads += 1;
+      if (columnReads > 1) return new Promise<WorkItemPage>(() => {});
+      await held.promise;
+      return server.page(q);
+    });
+    holdCounts(server);
+
+    await act(async () => result.current.reloadAll({ windowed: true }));
+    const turned = { ...server.items[1], status: WorkItemStatus.Ready };
+    server.items[1] = turned;
+    act(() => result.current.applyItem(turned, { countAsNew: false }));
+    const added = itemIn(WorkItemStatus.WorkQueue, 50);
+    server.items.push(added);
+    await act(async () => held.resolve());
+
+    await waitFor(() => expect(workQueue(result).items[0]?.id).toBe(added.id));
+    expect(ids(result, WorkItemStatus.WorkQueue)).toEqual([
+      `${added.id}:WorkQueue`,
+      ...before.map((id) => (id.startsWith(turned.id) ? `${turned.id}:Ready` : id)),
+    ]);
+    expect(workQueue(result).total).toBe(4);
+  });
+
   test("a reload of more than one request's worth of cards keeps every loaded card", async () => {
     const server = mockTaskboardServer(Array.from({ length: 530 }, (_, n) => backlogItem(n)));
     const { result } = renderColumns();
@@ -122,7 +217,7 @@ describe("useTaskboardColumns", () => {
       expect(
         server.getPage.mock.calls
           .slice(before)
-          .filter(([q]) => q.status === WorkItemStatus.Backlog)
+          .filter(([q]) => q.statuses.includes(WorkItemStatus.Backlog))
           .map(([q]) => [q.skip, q.take]),
       ).toEqual([
         [0, 500],
@@ -132,7 +227,7 @@ describe("useTaskboardColumns", () => {
     await waitFor(() => expect(backlog(result).loaded).toBe(true));
     expect(backlog(result).items).toHaveLength(520);
     expect(backlog(result).items[519].id).toBe(
-      server.page({ status: "Backlog", skip: 519, take: 1 }).items[0].id,
+      server.page({ statuses: ["Backlog"], skip: 519, take: 1 }).items[0].id,
     );
   });
 
@@ -163,7 +258,7 @@ describe("useTaskboardColumns", () => {
     await waitFor(() =>
       expect(result.current.columns[WorkItemStatus.Running].items).toHaveLength(1),
     );
-    // Created elsewhere unheard, so only the reload about to be held brings it to Ready.
+    // Created elsewhere unheard, so only the reload about to be held brings it to the Work queue column.
     const moving = itemIn(WorkItemStatus.Ready, 1);
     server.items.unshift(moving);
     const release = holdNextRead(server, WorkItemStatus.Ready);
@@ -174,15 +269,15 @@ describe("useTaskboardColumns", () => {
     act(() => result.current.applyItem(server.items[0], { countAsNew: false }));
     await release();
 
-    await waitFor(() => expect(result.current.columns[WorkItemStatus.Ready].loaded).toBe(true));
+    await waitFor(() => expect(workQueue(result).loaded).toBe(true));
     await waitFor(() =>
       expect(ids(result, WorkItemStatus.Running)).toEqual([
         `${moving.id}:Running`,
         "Running-0000:Running",
       ]),
     );
-    expect(ids(result, WorkItemStatus.Ready)).toEqual([]);
-    expect(result.current.columns[WorkItemStatus.Ready].total).toBe(0);
+    expect(ids(result, WorkItemStatus.WorkQueue)).toEqual([]);
+    expect(workQueue(result).total).toBe(0);
     expect(server.getCounts.mock.calls.length).toBeGreaterThan(countsBefore);
   });
 
@@ -212,24 +307,22 @@ describe("useTaskboardColumns", () => {
       ...Array.from({ length: 25 }, (_, n) => itemIn(WorkItemStatus.Running, 100 + n)),
     ]);
     const { result } = renderColumns();
-    await waitFor(() =>
-      expect(result.current.columns[WorkItemStatus.Ready].items).toHaveLength(20),
-    );
+    await waitFor(() => expect(workQueue(result).items).toHaveLength(20));
     const moving = server.items[0];
     const release = holdNextRead(server, WorkItemStatus.Ready);
     const countsBefore = holdCounts(server);
 
-    act(() => result.current.loadMore(WorkItemStatus.Ready));
+    act(() => result.current.loadMore(WorkItemStatus.WorkQueue));
     server.items[0] = { ...moving, status: WorkItemStatus.Running };
     act(() => result.current.applyItem(server.items[0], { countAsNew: false }));
     await release();
 
-    await waitFor(() =>
-      expect(result.current.columns[WorkItemStatus.Ready].loadingMore).toBe(false),
+    await waitFor(() => expect(workQueue(result).loadingMore).toBe(false));
+    expect(ids(result, WorkItemStatus.WorkQueue)).toHaveLength(24);
+    expect(ids(result, WorkItemStatus.WorkQueue).some((id) => id.startsWith(moving.id))).toBe(
+      false,
     );
-    expect(ids(result, WorkItemStatus.Ready)).toHaveLength(24);
-    expect(ids(result, WorkItemStatus.Ready).some((id) => id.startsWith(moving.id))).toBe(false);
-    expect(result.current.columns[WorkItemStatus.Ready].total).toBe(24);
+    expect(workQueue(result).total).toBe(24);
     expect(server.getCounts.mock.calls.length).toBeGreaterThan(countsBefore);
     expect(ids(result, WorkItemStatus.Running)).toHaveLength(20);
   });
@@ -237,7 +330,7 @@ describe("useTaskboardColumns", () => {
   test("a card moved to a short column after that column's total arrived is shown there, not left behind Load more", async () => {
     const server = mockTaskboardServer([itemIn(WorkItemStatus.Ready, 0)]);
     const { result } = renderColumns();
-    await waitFor(() => expect(result.current.columns[WorkItemStatus.Ready].items).toHaveLength(1));
+    await waitFor(() => expect(workQueue(result).items).toHaveLength(1));
 
     server.items[0] = { ...server.items[0], status: WorkItemStatus.Running };
     await act(async () => result.current.requestCountsRefresh());
@@ -248,14 +341,14 @@ describe("useTaskboardColumns", () => {
       expect(ids(result, WorkItemStatus.Running)).toEqual(["Ready-0000:Running"]);
       expect(running(result).total).toBe(1);
     });
-    expect(ids(result, WorkItemStatus.Ready)).toEqual([]);
-    expect(result.current.columns[WorkItemStatus.Ready].total).toBe(0);
+    expect(ids(result, WorkItemStatus.WorkQueue)).toEqual([]);
+    expect(workQueue(result).total).toBe(0);
   });
 
   test("a card moved to a short column while that column is being re-read starts no second read and is shown when the read lands", async () => {
     const server = mockTaskboardServer([itemIn(WorkItemStatus.Ready, 0)]);
     const { result } = renderColumns();
-    await waitFor(() => expect(result.current.columns[WorkItemStatus.Ready].items).toHaveLength(1));
+    await waitFor(() => expect(workQueue(result).items).toHaveLength(1));
     await waitFor(() => expect(running(result).loaded).toBe(true));
     const readsBefore = reads(server, WorkItemStatus.Running);
     const release = holdNextRead(server, WorkItemStatus.Running);
@@ -272,8 +365,8 @@ describe("useTaskboardColumns", () => {
       expect(ids(result, WorkItemStatus.Running)).toEqual(["Ready-0000:Running"]);
       expect(running(result).total).toBe(1);
     });
-    expect(ids(result, WorkItemStatus.Ready)).toEqual([]);
-    expect(result.current.columns[WorkItemStatus.Ready].total).toBe(0);
+    expect(ids(result, WorkItemStatus.WorkQueue)).toEqual([]);
+    expect(workQueue(result).total).toBe(0);
   });
 
   test("a short column whose total grows by cards the board never held shows them without Load more", async () => {
@@ -284,7 +377,7 @@ describe("useTaskboardColumns", () => {
     await waitFor(() =>
       expect(ids(result, WorkItemStatus.Running)).toEqual(
         server
-          .page({ status: WorkItemStatus.Running, skip: 0, take: 20 })
+          .page({ statuses: [WorkItemStatus.Running], skip: 0, take: 20 })
           .items.map((item) => `${item.id}:Running`),
       ),
     );
@@ -306,7 +399,7 @@ describe("useTaskboardColumns", () => {
 
     await waitFor(() => expect(backlog(result).items).toHaveLength(20));
     expect(backlog(result).items.map((item) => item.id)).toEqual(
-      server.page({ status: "Backlog", skip: 0, take: 20 }).items.map((item) => item.id),
+      server.page({ statuses: ["Backlog"], skip: 0, take: 20 }).items.map((item) => item.id),
     );
     expect(backlog(result).total).toBe(24);
   });
@@ -327,9 +420,9 @@ describe("useTaskboardColumns", () => {
     await act(async () => result.current.requestCountsRefresh());
 
     await waitFor(() => expect(running(result).total).toBe(26));
-    expect(result.current.columns[WorkItemStatus.Ready].total).toBe(24);
+    expect(workQueue(result).total).toBe(24);
     expect(ids(result, WorkItemStatus.Running)).toEqual(shown);
-    expect(result.current.columns[WorkItemStatus.Ready].items).toHaveLength(20);
+    expect(workQueue(result).items).toHaveLength(20);
     expect(server.getPage.mock.calls.length).toBe(readsBefore);
   });
 
@@ -375,7 +468,7 @@ describe("useTaskboardColumns", () => {
     expect(backlog(result).items).toHaveLength(39);
     expect(backlog(result).total).toBe(44);
     expect(backlog(result).items.map((item) => item.id)).toEqual(
-      server.page({ status: WorkItemStatus.Backlog, skip: 0, take: 39 }).items.map((i) => i.id),
+      server.page({ statuses: [WorkItemStatus.Backlog], skip: 0, take: 39 }).items.map((i) => i.id),
     );
   });
 

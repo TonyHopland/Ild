@@ -388,9 +388,9 @@ export interface WorkItemListFilter {
   tags?: string[];
 }
 
-/** One status column's window of the board listing. */
+/** One column's window of the board listing: the items in any of its statuses, in one board order. */
 export interface WorkItemPageQuery extends WorkItemListFilter {
-  status: WorkItemStatus;
+  statuses: WorkItemStatus[];
   skip: number;
   take: number;
 }

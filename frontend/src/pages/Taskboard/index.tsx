@@ -13,8 +13,7 @@ import { PreferenceKeys, getPreference } from "../../utils/userPreferences";
 import ErrorBanner from "../../components/ErrorBanner";
 import { useSignalR } from "../../hooks/useSignalR";
 import { useSharedWorkItemHub } from "../../hooks/useWorkItemHub";
-import { WORK_ITEM_STATUSES } from "../../utils/constants";
-import { WORK_ITEM_STATUS_ORDER, workItemStatusLabel } from "../../utils/labels";
+import { useSchedulerState } from "../../hooks/useSchedulerState";
 import { normalizeWorkItemStatus } from "../../utils/workItemStatus";
 import { errorMessage } from "../../utils/errorMessage";
 import { makeLoopTagMatcher } from "../../utils/workItemJson";
@@ -25,7 +24,13 @@ import {
   sameTag,
   type TaskboardFilter,
 } from "../../utils/taskboardFilter";
-import { findLoadedItem, type ApplyOptions } from "../../utils/taskboardColumns";
+import {
+  columnOf,
+  findLoadedItem,
+  TASKBOARD_COLUMNS,
+  type ApplyOptions,
+  type TaskboardColumnKey,
+} from "../../utils/taskboardColumns";
 import { useTaskboardColumns } from "./useTaskboardColumns";
 import { repositoryName } from "../../utils/repositoryName";
 import "./Taskboard.css";
@@ -50,7 +55,9 @@ export default function Taskboard() {
   // A phone shows one column at a time, picked above the board; it opens on
   // Needs you, the column a person looks at the board for.
   const isMobile = useIsMobile();
-  const [mobileStatus, setMobileStatus] = useState<WorkItemStatus>(WorkItemStatus.HumanFeedback);
+  const [mobileColumn, setMobileColumn] = useState<TaskboardColumnKey>(
+    WorkItemStatus.HumanFeedback,
+  );
   const [filtersOpen, setFiltersOpen] = useState(false);
   const foldedColumns = useFoldedColumns();
   const closeFilters = useCallback(() => setFiltersOpen(false), []);
@@ -70,6 +77,8 @@ export default function Taskboard() {
   const sharedHub = useSharedWorkItemHub();
   const ownHub = useSignalR(sharedHub ? null : "/hubs/work-item");
   const { on, off, connectionState } = sharedHub ?? ownHub;
+  // Only a pause the server has reported shows on the cards.
+  const { running: schedulerRunning } = useSchedulerState();
   // Highest getById request ordinal issued per work item. A newly created item
   // receives a burst of hub events (create → claim → run-progressed → human),
   // each firing a getById; an early fetch the server answered with an older
@@ -346,15 +355,14 @@ export default function Taskboard() {
   const [announcement, setAnnouncement] = useState("");
 
   const handleMoveWorkItem = async (workItem: WorkItem, direction: "prev" | "next") => {
-    const order = WORK_ITEM_STATUS_ORDER;
-    const currentIndex = order.indexOf(workItem.status);
+    const currentIndex = TASKBOARD_COLUMNS.findIndex((c) => c.key === columnOf(workItem.status));
     if (currentIndex < 0) return;
     const nextIndex = direction === "next" ? currentIndex + 1 : currentIndex - 1;
-    if (nextIndex < 0 || nextIndex >= order.length) return;
-    const target = order[nextIndex];
+    if (nextIndex < 0 || nextIndex >= TASKBOARD_COLUMNS.length) return;
+    const target = TASKBOARD_COLUMNS[nextIndex];
     try {
-      handleWorkItemUpdate(await workItemService.moveTo(workItem.id, target));
-      setAnnouncement(`${workItem.title} moved to ${workItemStatusLabel(target)}`);
+      handleWorkItemUpdate(await workItemService.moveTo(workItem.id, target.key));
+      setAnnouncement(`${workItem.title} moved to ${target.label}`);
     } catch (error) {
       setErrorText(errorMessage(error, "Failed to move work item."));
     }
@@ -375,7 +383,7 @@ export default function Taskboard() {
     pickerRef.current
       ?.querySelector<HTMLElement>('[aria-selected="true"]')
       ?.scrollIntoView?.({ inline: "center", block: "nearest" });
-  }, [mobileStatus, isMobile, isInitialLoading, foldedColumns.loaded]);
+  }, [mobileColumn, isMobile, isInitialLoading, foldedColumns.loaded]);
 
   const repositoryOptions = [...repositories].sort((a, b) => a.name.localeCompare(b.name));
   const repositoryNameOf = (id: string) => repositoryName(id, repositories, repositoriesLoaded);
@@ -495,22 +503,21 @@ export default function Taskboard() {
       </div>
       {isMobile && (
         <div className="taskboard-picker" role="tablist" aria-label="Columns" ref={pickerRef}>
-          {WORK_ITEM_STATUSES.map((status) => {
-            const value = status.value;
-            const total = columns[value].total;
-            const picked = value === mobileStatus;
+          {TASKBOARD_COLUMNS.map(({ key, label }) => {
+            const total = columns[key].total;
+            const picked = key === mobileColumn;
             return (
               <button
-                key={value}
+                key={key}
                 type="button"
                 role="tab"
                 aria-selected={picked}
                 className={`taskboard-picker-tab${
-                  value === WorkItemStatus.HumanFeedback && total > 0 ? " is-needs" : ""
+                  key === WorkItemStatus.HumanFeedback && total > 0 ? " is-needs" : ""
                 }`}
-                onClick={() => setMobileStatus(value)}
+                onClick={() => setMobileColumn(key)}
               >
-                {status.label}
+                {label}
                 <span className="taskboard-picker-count">{total}</span>
               </button>
             );
@@ -518,14 +525,14 @@ export default function Taskboard() {
         </div>
       )}
       <div className={`taskboard${isMobile ? " taskboard--one" : ""}`}>
-        {WORK_ITEM_STATUSES.filter((status) => !isMobile || status.value === mobileStatus).map(
-          (status) => {
-            const column = columns[status.value];
+        {TASKBOARD_COLUMNS.filter(({ key }) => !isMobile || key === mobileColumn).map(
+          ({ key, label }) => {
+            const column = columns[key];
             return (
               <TaskboardColumn
-                key={status.value}
-                status={status.value}
-                label={status.label}
+                key={key}
+                status={key}
+                label={label}
                 workItems={column.items}
                 total={column.total}
                 onWorkItemUpdate={handleWorkItemUpdate}
@@ -535,11 +542,12 @@ export default function Taskboard() {
                 onMoveWorkItem={handleMoveWorkItem}
                 loopTemplateNames={loopTemplateNames}
                 repositoryName={repositoryNameOf}
-                onLoadMore={() => loadMore(status.value)}
+                onLoadMore={() => loadMore(key)}
                 loadingMore={column.loadingMore}
                 alone={isMobile}
-                foldChoice={foldedColumns.choices[status.value] ?? null}
-                onFoldChange={(folded) => foldedColumns.setFolded(status.value, folded)}
+                foldChoice={foldedColumns.choices[key] ?? null}
+                onFoldChange={(folded) => foldedColumns.setFolded(key, folded)}
+                schedulerPaused={schedulerRunning === null ? undefined : !schedulerRunning}
               />
             );
           },

@@ -166,9 +166,9 @@ public class AgentController : ControllerBase
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        RemoteWorkItemStatus? statusFilter = null;
+        RemoteWorkItemStatus[]? statusFilter = null;
         if (!string.IsNullOrEmpty(status) && Enum.TryParse<RemoteWorkItemStatus>(status, true, out var s))
-            statusFilter = s;
+            statusFilter = [s];
         Guid? repoFilter = null;
         if (!string.IsNullOrEmpty(repositoryId) && Guid.TryParse(repositoryId, out var repoGuid))
             repoFilter = repoGuid;
@@ -184,7 +184,7 @@ public class AgentController : ControllerBase
         {
             var items = await _workItems.ListSummariesAsync(new WorkItemListQuery
             {
-                Status = statusFilter,
+                Statuses = statusFilter,
                 Tags = tagFilter is { Count: > 0 } ? tagFilter : null,
                 RepositoryId = repoFilter,
                 CreatedByLoopRunId = runFilter,

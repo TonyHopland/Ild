@@ -8,7 +8,7 @@ import {
   feedbackReasonLabel,
   feedbackReasonTone,
   pillClass,
-  repositoryHoldLabel,
+  queueStatusPill,
   workItemStatusLabel,
 } from "../utils/labels";
 
@@ -21,6 +21,8 @@ interface WorkItemCardProps {
   repositoryName?: string;
   /** Marks the edge a card dragged over the column would be dropped at. */
   dropEdge?: "above" | "below";
+  /** Whether the scheduler is paused; undefined until it has been read. */
+  schedulerPaused?: boolean;
 }
 
 export default function WorkItemCard({
@@ -30,6 +32,7 @@ export default function WorkItemCard({
   loopTemplateNames = [],
   repositoryName,
   dropEdge,
+  schedulerPaused,
 }: WorkItemCardProps) {
   const isLoopTag = makeLoopTagMatcher(loopTemplateNames);
   const handleDragStart = (e: React.DragEvent) => {
@@ -84,10 +87,16 @@ export default function WorkItemCard({
   const prCount = workItem.pullRequests?.length ?? 0;
   const proposalCount = workItem.pendingEditProposalCount ?? 0;
   const proposalLabel = proposalCount === 1 ? "1 proposed edit" : `${proposalCount} proposed edits`;
+  const queuePill = queueStatusPill(workItem, schedulerPaused);
+  const statusLabel = workItemStatusLabel(workItem.status);
+  // The card's label replaces its content for a screen reader, so it names why the item waits.
+  const waiting = queuePill && queuePill.label !== statusLabel ? `, ${queuePill.label}` : "";
 
   return (
     <div
-      className={`work-item-card${dropEdge ? ` work-item-card--drop-${dropEdge}` : ""}`}
+      className={`work-item-card${queuePill?.held ? " work-item-card--held" : ""}${
+        dropEdge ? ` work-item-card--drop-${dropEdge}` : ""
+      }`}
       data-work-item-id={workItem.id}
       draggable
       onDragStart={handleDragStart}
@@ -95,7 +104,7 @@ export default function WorkItemCard({
       onKeyDown={handleKeyDown}
       role="button"
       tabIndex={0}
-      aria-label={`${workItem.title}, status ${workItemStatusLabel(workItem.status)}. Use left and right arrow keys to move between columns.`}
+      aria-label={`${workItem.title}, status ${statusLabel}${waiting}. Use left and right arrow keys to move between columns.`}
     >
       {workItem.isPreviewRunning && (
         <span className="qa-active-dot" aria-label="QA preview is active" />
@@ -120,9 +129,9 @@ export default function WorkItemCard({
           </span>
         </div>
       )}
-      {workItem.status === WorkItemStatus.Ready && workItem.repositoryParallelismHold && (
-        <div className="work-item-repository-hold">
-          {repositoryHoldLabel(workItem.repositoryParallelismHold)}
+      {queuePill && (
+        <div className="work-item-queue-status">
+          <span className={`${pillClass(queuePill.tone)} pill-dot`}>{queuePill.label}</span>
         </div>
       )}
       {prBadges.length > 0 && (
@@ -251,10 +260,24 @@ export default function WorkItemCard({
           margin-bottom: 0.375rem;
         }
 
-        .work-item-repository-hold {
-          font-size: var(--fs-xs);
-          color: var(--text-2);
+        .work-item-queue-status {
           margin-bottom: 0.375rem;
+        }
+
+        /* The repository hold's reason is long for a narrow column. */
+        .work-item-queue-status .pill {
+          white-space: normal;
+        }
+
+        /* A Ready item that cannot start yet steps back, so the ones about to start
+           stand out; its text keeps its contrast. */
+        .work-item-card--held {
+          background-color: var(--surface);
+          border-style: dashed;
+        }
+
+        .work-item-card--held .work-item-title {
+          color: var(--text-2);
         }
 
         .work-item-pr-badges {

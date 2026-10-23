@@ -1,13 +1,6 @@
 import type { IconName } from "../components/Icon";
-import { WORK_ITEM_STATUS_ORDER, workItemStatusLabel } from "./labels";
 
 export const APP_NAME = "ILD";
-
-// The board's columns, left to right, named as utils/labels.ts names each status.
-export const WORK_ITEM_STATUSES = WORK_ITEM_STATUS_ORDER.map((value) => ({
-  value,
-  label: workItemStatusLabel(value),
-}));
 
 // How many cards each Taskboard column fetches from the server per page.
 export const TASKBOARD_PAGE_SIZE = 20;

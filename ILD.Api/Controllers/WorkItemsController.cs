@@ -114,26 +114,27 @@ public class WorkItemsController : ControllerBase
     }
 
     /// <summary>
-    /// One taskboard column: a page of the items in <paramref name="status"/>
-    /// in board order, carrying every requested tag, with the total across pages.
+    /// One taskboard column: a page of the items in any of the given
+    /// <paramref name="status"/> values (every status when none is given) in
+    /// board order, carrying every requested tag, with the total across pages.
     /// A status or repository that does not parse is refused rather than
     /// widened to every item.
     /// </summary>
     [HttpGet("page")]
-    public async Task<IActionResult> GetPage([FromQuery] string? status = null, [FromQuery] string? repositoryId = null, [FromQuery] string? search = null, [FromQuery] string[]? tags = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
+    public async Task<IActionResult> GetPage([FromQuery] string[]? status = null, [FromQuery] string? repositoryId = null, [FromQuery] string? search = null, [FromQuery] string[]? tags = null, [FromQuery] int skip = 0, [FromQuery] int take = 100)
     {
         if (skip < 0) skip = 0;
         if (take <= 0) take = 100;
         if (take > 500) take = 500;
 
-        if (!TryParseBoardStatus(status, out var statusFilter))
+        if (!TryParseBoardStatuses(status, out var statusFilter))
             return BadRequest(new { error = $"status must be one of {string.Join(", ", Enum.GetNames<RemoteWorkItemStatus>())}." });
         if (!TryBoardQuery(repositoryId, search, tags, out var filter))
             return BadRequest(new { error = "repositoryId must be a GUID." });
 
         var query = filter with
         {
-            Status = statusFilter,
+            Statuses = statusFilter,
             OrderBy = WorkItemOrderBy.Priority,
             Skip = skip,
             Take = take,
@@ -182,14 +183,18 @@ public class WorkItemsController : ControllerBase
         return true;
     }
 
-    private static bool TryParseBoardStatus(string? value, out RemoteWorkItemStatus? status)
+    private static bool TryParseBoardStatuses(string[]? values, out IReadOnlyCollection<RemoteWorkItemStatus> statuses)
     {
-        status = null;
-        if (string.IsNullOrEmpty(value)) return true;
-        var name = Enum.GetNames<RemoteWorkItemStatus>()
-            .FirstOrDefault(n => string.Equals(n, value, StringComparison.OrdinalIgnoreCase));
-        if (name is null) return false;
-        status = Enum.Parse<RemoteWorkItemStatus>(name);
+        var parsed = new HashSet<RemoteWorkItemStatus>();
+        statuses = parsed;
+        foreach (var value in values ?? [])
+        {
+            if (string.IsNullOrEmpty(value)) continue;
+            var name = Enum.GetNames<RemoteWorkItemStatus>()
+                .FirstOrDefault(n => string.Equals(n, value, StringComparison.OrdinalIgnoreCase));
+            if (name is null) return false;
+            parsed.Add(Enum.Parse<RemoteWorkItemStatus>(name));
+        }
         return true;
     }
 

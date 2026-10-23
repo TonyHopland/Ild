@@ -235,6 +235,50 @@ public sealed class RepositoryParallelismTests : IDisposable
         Assert.Equal(RemoteWorkItemStatus.Ready, await StatusOfAsync(last));
     }
 
+    /// <summary>
+    /// The board's Work queue column holds Work queue and Ready items in one
+    /// order. That order is a preference, not a line: the top-most item that can
+    /// start starts, and the waiting items above it keep their place.
+    /// </summary>
+    [Fact]
+    public async Task The_top_most_item_of_the_work_queue_column_that_can_start_starts_and_the_waiting_ones_above_it_stay()
+    {
+        var repo = AddRepo(parallelism: 1);
+        await AddItemAsync(repo, RemoteWorkItemStatus.Running, "busy");
+        var dependency = await AddItemAsync(null, RemoteWorkItemStatus.Backlog, "dependency");
+        var queued = (await _db.ServerClient.CreateAsync(Opts, new RemoteCreateWorkItemRequest
+        {
+            Title = "queued",
+            Tags = new[] { "build" },
+            ForceStatus = RemoteWorkItemStatus.WorkQueue,
+            Dependencies = new[] { dependency },
+        }, TestActors.Human, Ct)).Id;
+        var held = await AddItemAsync(repo, RemoteWorkItemStatus.Ready, "held");
+        var startable = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "startable");
+        var manager = Manager();
+        await manager.ReorderAsync(TestActors.Human, queued, aboveId: null, belowId: startable);
+        await manager.ReorderAsync(TestActors.Human, held, aboveId: queued, belowId: startable);
+        var column = new WorkItemListQuery
+        {
+            Statuses = [RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready],
+            OrderBy = WorkItemOrderBy.Priority,
+        };
+        Assert.Equal(new[] { queued, held, startable }, (await manager.ListPageAsync(column)).Items.Select(v => v.Id));
+        Assert.Equal(RemoteWorkItemStatus.WorkQueue, await StatusOfAsync(queued));
+        var priorities = new Dictionary<string, double>
+        {
+            [queued] = await PriorityOfAsync(queued),
+            [held] = await PriorityOfAsync(held),
+        };
+
+        Assert.Equal(new[] { startable }, Ids((await PassAsync()).Claimed));
+
+        Assert.Equal(RemoteWorkItemStatus.WorkQueue, await StatusOfAsync(queued));
+        Assert.Equal(RemoteWorkItemStatus.Ready, await StatusOfAsync(held));
+        foreach (var (id, priority) in priorities) Assert.Equal(priority, await PriorityOfAsync(id));
+        Assert.Equal(new[] { queued, held }, (await manager.ListPageAsync(column)).Items.Select(v => v.Id));
+    }
+
     [Theory]
     [InlineData(RemoteWorkItemStatus.Running, true)]
     [InlineData(RemoteWorkItemStatus.HumanFeedback, true)]
@@ -435,7 +479,7 @@ public sealed class RepositoryParallelismTests : IDisposable
         Assert.Null((await mgr.GetWorkItemAsync(busy))!.RepositoryParallelismHold);
         Assert.Null((await mgr.GetWorkItemAsync(free))!.RepositoryParallelismHold);
 
-        var page = await mgr.ListPageAsync(new WorkItemListQuery { Status = RemoteWorkItemStatus.Ready });
+        var page = await mgr.ListPageAsync(new WorkItemListQuery { Statuses = [RemoteWorkItemStatus.Ready] });
         Assert.Equal(new RepositoryParallelismHold(1, 1), page.Items.Single(v => v.Id == held).RepositoryParallelismHold);
         Assert.Null(page.Items.Single(v => v.Id == free).RepositoryParallelismHold);
 

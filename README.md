@@ -34,7 +34,7 @@ See [docs/deployment.md](docs/deployment.md) for volumes, bind mounts, and first
 
 ## Screenshots
 
-**Taskboard** — every work item across the seven statuses, in one view. A running card carries the node it is on and how long it has been there; a parked one says why it stopped, down to the PR's CI and review verdicts. Tags that name a loop template are highlighted, because that is what decides which loop the item runs.
+**Taskboard** — every work item across the seven statuses, in one view. Work queue and Ready items share the Work queue column, each card saying why it waits; the order is a preference, not a line: Ild starts the top-most item that can start, and a waiting item doesn't hold up the ones below it. A running card carries the node it is on and how long it has been there; a parked one says why it stopped, down to the PR's CI and review verdicts. Tags that name a loop template are highlighted, because that is what decides which loop the item runs.
 
 ![Taskboard](docs/screenshots/TaskboardOverview.png)
 

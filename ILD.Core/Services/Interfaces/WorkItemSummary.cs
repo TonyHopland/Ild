@@ -59,7 +59,8 @@ public enum WorkItemTagMatch
 /// </summary>
 public sealed record WorkItemListQuery
 {
-    public RemoteWorkItemStatus? Status { get; init; }
+    /// <summary>Items in any of these statuses; null or empty means every status.</summary>
+    public IReadOnlyCollection<RemoteWorkItemStatus>? Statuses { get; init; }
     public IReadOnlyList<string>? Tags { get; init; }
     public WorkItemTagMatch TagMatch { get; init; } = WorkItemTagMatch.Any;
     public string? Search { get; init; }
