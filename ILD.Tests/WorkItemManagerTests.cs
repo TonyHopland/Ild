@@ -295,6 +295,38 @@ public class WorkItemManagerTests
     }
 
     [Fact]
+    public async Task A_dependency_going_Done_announces_the_Work_queue_items_it_made_Ready()
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object);
+
+        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repo.Id);
+        var otherDep = await mgr.CreateWorkItemAsync(TestActors.Human, "other dep", "", repo.Id);
+        var freed = await mgr.CreateWorkItemAsync(TestActors.Human, "freed", "", repo.Id);
+        var stillWaiting = await mgr.CreateWorkItemAsync(TestActors.Human, "still waiting", "", repo.Id);
+        await mgr.AddDependencyAsync(TestActors.Human, freed, dep);
+        await mgr.AddDependencyAsync(TestActors.Human, stillWaiting, dep);
+        await mgr.AddDependencyAsync(TestActors.Human, stillWaiting, otherDep);
+        await mgr.TransitionToWorkQueueAsync(TestActors.Human, freed);
+        await mgr.TransitionToWorkQueueAsync(TestActors.Human, stillWaiting);
+        await mgr.TransitionToHumanFeedbackAsync(TestActors.Human, dep, "Node Failed");
+        notifier.Invocations.Clear();
+
+        await mgr.CleanupToDoneAsync(TestActors.Human, dep);
+
+        Assert.Equal(RemoteWorkItemStatus.Ready, (await mgr.GetWorkItemAsync(freed))!.Status);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(freed, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready), Times.Once);
+        notifier.Verify(n => n.WorkItemStateChangedAsync(stillWaiting, It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
+    }
+
+    [Fact]
     public async Task IsReady_false_when_dependency_merged_but_not_done()
     {
         var (mgr, db, repoId, _, _) = Setup();

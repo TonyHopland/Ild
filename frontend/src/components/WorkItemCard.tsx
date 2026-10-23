@@ -88,6 +88,9 @@ export default function WorkItemCard({
   const proposalCount = workItem.pendingEditProposalCount ?? 0;
   const proposalLabel = proposalCount === 1 ? "1 proposed edit" : `${proposalCount} proposed edits`;
   const queuePill = queueStatusPill(workItem, schedulerPaused);
+  const statusLabel = workItemStatusLabel(workItem.status);
+  // The card's label replaces its content for a screen reader, so it names why the item waits.
+  const waiting = queuePill && queuePill.label !== statusLabel ? `, ${queuePill.label}` : "";
 
   return (
     <div
@@ -101,7 +104,7 @@ export default function WorkItemCard({
       onKeyDown={handleKeyDown}
       role="button"
       tabIndex={0}
-      aria-label={`${workItem.title}, status ${workItemStatusLabel(workItem.status)}. Use left and right arrow keys to move between columns.`}
+      aria-label={`${workItem.title}, status ${statusLabel}${waiting}. Use left and right arrow keys to move between columns.`}
     >
       {workItem.isPreviewRunning && (
         <span className="qa-active-dot" aria-label="QA preview is active" />
@@ -261,9 +264,20 @@ export default function WorkItemCard({
           margin-bottom: 0.375rem;
         }
 
-        /* A Ready item that cannot start yet steps back, so the ones about to start stand out. */
+        /* The repository hold's reason is long for a narrow column. */
+        .work-item-queue-status .pill {
+          white-space: normal;
+        }
+
+        /* A Ready item that cannot start yet steps back, so the ones about to start
+           stand out; its text keeps its contrast. */
         .work-item-card--held {
-          opacity: 0.6;
+          background-color: var(--surface);
+          border-style: dashed;
+        }
+
+        .work-item-card--held .work-item-title {
+          color: var(--text-2);
         }
 
         .work-item-pr-badges {

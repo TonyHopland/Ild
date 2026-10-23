@@ -141,6 +141,29 @@ public class WorkItemManager : IWorkItemManager
         catch { /* best effort — never block the Done transition */ }
     }
 
+    /// <summary>
+    /// The WorkItem Server promotes a Work Queue item to Ready within the Done
+    /// transition of its last open dependency, and announces nothing: say so
+    /// for each Ready dependent, so a board shows it Ready without a reload.
+    /// Best effort: the transition has already happened, and a failed read
+    /// leaves only the cards to catch up on the board's next reload.
+    /// </summary>
+    private async Task AnnouncePromotedDependentsAsync(WorkItemServerOptions opts, string workItemId)
+    {
+        IReadOnlyList<RemoteWorkItem> ready;
+        try
+        {
+            ready = await _server.ListAsync(opts, RemoteWorkItemStatus.Ready, tags: null);
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogWarning(ex, "Could not read the Ready dependents of {WorkItemId} to announce them", workItemId);
+            return;
+        }
+        foreach (var dependent in ready.Where(w => w.Dependencies.Contains(workItemId)))
+            await _notifier.WorkItemStateChangedAsync(dependent.Id, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready);
+    }
+
     // ──────────────────────────────────────────────────────────────────
     // Create / Read / Update
     // ──────────────────────────────────────────────────────────────────
@@ -986,7 +1009,10 @@ public class WorkItemManager : IWorkItemManager
         // single place that releases the preview's ports — once Done the user
         // can no longer reach the stop control.
         if (actual == RemoteWorkItemStatus.Done)
+        {
             await StopPreviewIfRunningAsync(workItemId, runWorktreePath);
+            await AnnouncePromotedDependentsAsync(opts, workItemId);
+        }
 
         // Wake the scheduler when a slot may have freed up (Done) or when a
         // run parked waiting for capacity might now be runnable.
