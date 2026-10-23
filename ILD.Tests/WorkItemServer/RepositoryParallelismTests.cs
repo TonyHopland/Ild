@@ -727,6 +727,36 @@ public sealed class RepositoryParallelismTests : IDisposable
         Assert.Equal(HandStartResult.AtConcurrencyLimit, await start);
         await AssertUntouchedAsync(byHand, history);
     }
+
+    [Fact]
+    public async Task A_start_anyway_that_waited_for_a_pass_while_shutdown_began_starts_nothing()
+    {
+        var gate = new ReadyClaimGate();
+        var shutdown = new ShutdownState();
+        var scheduler = CoordinatorSharing(gate);
+        var resolver = new Mock<ILoopTemplateResolver>();
+        resolver.Setup(r => r.Resolve(It.IsAny<IReadOnlyList<string>>()))
+                .Returns(new LoopTemplateResolution(LoopTemplateResolutionKind.Single, Guid.NewGuid(), Array.Empty<string>()));
+        var starter = new RemoteWorkItemCoordinator(_db.ServerClient, resolver.Object, _engine.Object, _db.LoopRuns,
+            TestActors.Instance, providerStore: _db.Providers, workItemNotifier: _notifier.Object,
+            repositoryHolds: _holds, claimGate: gate, shutdown: shutdown);
+        var claimedByPass = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "claimed by the pass");
+        var (reached, release) = BlockRunStart(claimedByPass);
+
+        var pass = scheduler.RunPollCycleAsync(Opts, maxConcurrent: 10, claimReadyItems: true, Ct);
+        await reached;
+        var byHand = await AddItemAsync(null, RemoteWorkItemStatus.Ready, "by hand");
+        var history = await HistoryCountAsync(byHand);
+        var start = starter.StartIgnoringRepositoryLimitAsync(Opts, byHand, 10, TestActors.Human, Ct);
+        Assert.False(start.IsCompleted);
+
+        shutdown.SignalStopping();
+        release.SetResult();
+        await pass;
+
+        Assert.Equal(HandStartResult.ShuttingDown, await start);
+        await AssertUntouchedAsync(byHand, history);
+    }
 }
 
 /// <summary>
