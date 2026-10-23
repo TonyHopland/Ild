@@ -326,6 +326,81 @@ public class WorkItemManagerTests
         notifier.Verify(n => n.WorkItemStateChangedAsync(stillWaiting, It.IsAny<RemoteWorkItemStatus>(), It.IsAny<RemoteWorkItemStatus>()), Times.Never);
     }
 
+    public static TheoryData<string> AnnouncementFailures => new() { "list read", "notifier" };
+
+    [Theory]
+    [MemberData(nameof(AnnouncementFailures))]
+    public async Task A_Done_transition_succeeds_and_pulses_the_scheduler_when_announcing_its_dependents_fails(string failing)
+    {
+        var db = new TestDb();
+        using var _ = db;
+        var remote = new RemoteProvider { Id = Guid.NewGuid(), Name = "r", Type = "Forgejo", Url = "https://example" };
+        var repo = new Repository { Id = Guid.NewGuid(), Name = "repo", RemoteProviderId = remote.Id, CloneUrl = "https://example/repo.git" };
+        db.Context.RemoteProviders.Add(remote);
+        db.Context.Repositories.Add(repo);
+        db.Context.SaveChanges();
+        var notifier = new Mock<IWorkItemNotifier>();
+        var scheduler = new Mock<IWorkItemScheduler>();
+        var mgr = new WorkItemManager(new Mock<IRepositoryManager>().Object, db.Providers, new Mock<IEventLogService>().Object, db.LoopRuns, db.ServerClient, db.ServerOptions, TestActors.Instance, notifier.Object, scheduler: scheduler.Object);
+
+        var dep = await mgr.CreateWorkItemAsync(TestActors.Human, "dep", "", repo.Id);
+        var freed = await mgr.CreateWorkItemAsync(TestActors.Human, "freed", "", repo.Id);
+        await mgr.AddDependencyAsync(TestActors.Human, freed, dep);
+        await mgr.TransitionToWorkQueueAsync(TestActors.Human, freed);
+        await mgr.TransitionToHumanFeedbackAsync(TestActors.Human, dep, "Node Failed");
+        if (failing == "list read")
+            ((FakeWorkItemServerClient)db.ServerClient).OnList = status =>
+            {
+                if (status == RemoteWorkItemStatus.Ready) throw new TaskCanceledException("The read timed out.");
+            };
+        else
+            notifier.Setup(n => n.WorkItemStateChangedAsync(freed, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready))
+                .ThrowsAsync(new TimeoutException("The hub did not answer."));
+        scheduler.Invocations.Clear();
+
+        Assert.True(await mgr.TransitionAsync(TestActors.Human, dep, RemoteWorkItemStatus.Done));
+
+        Assert.Equal(RemoteWorkItemStatus.Done, (await mgr.GetWorkItemAsync(dep))!.Status);
+        scheduler.Verify(s => s.Pulse(), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task A_page_of_several_statuses_reads_only_those_statuses_and_pages_them_in_one_board_order()
+    {
+        var (mgr, db, repoId, _, _) = Setup();
+        using var _ = db;
+        var blocker = await mgr.CreateWorkItemAsync(TestActors.Human, "blocker", "", repoId);
+        var waiting = await mgr.CreateWorkItemAsync(TestActors.Human, "waiting", "", repoId);
+        var readyOne = await mgr.CreateWorkItemAsync(TestActors.Human, "ready one", "", repoId);
+        var readyTwo = await mgr.CreateWorkItemAsync(TestActors.Human, "ready two", "", repoId);
+        await mgr.AddDependencyAsync(TestActors.Human, waiting, blocker);
+        foreach (var id in new[] { readyOne, waiting, readyTwo })
+            await mgr.TransitionToWorkQueueAsync(TestActors.Human, id);
+        await mgr.ReorderAsync(TestActors.Human, readyTwo, aboveId: readyOne, belowId: waiting);
+        var reads = new List<RemoteWorkItemStatus?>();
+        ((FakeWorkItemServerClient)db.ServerClient).OnList = reads.Add;
+
+        var page = await mgr.ListPageAsync(new WorkItemListQuery
+        {
+            Statuses = [RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready],
+            OrderBy = WorkItemOrderBy.Priority,
+            Take = 2,
+        });
+
+        Assert.Equal(new RemoteWorkItemStatus?[] { RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready }, reads.Order());
+        Assert.Equal(3, page.Total);
+        Assert.Equal(new[] { readyOne, readyTwo }, page.Items.Select(v => v.Id));
+        var rest = await mgr.ListPageAsync(new WorkItemListQuery
+        {
+            Statuses = [RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready],
+            OrderBy = WorkItemOrderBy.Priority,
+            Skip = 2,
+            Take = 2,
+        });
+        Assert.Equal(new[] { waiting }, rest.Items.Select(v => v.Id));
+        Assert.Equal(RemoteWorkItemStatus.WorkQueue, rest.Items.Single().Status);
+    }
+
     [Fact]
     public async Task IsReady_false_when_dependency_merged_but_not_done()
     {

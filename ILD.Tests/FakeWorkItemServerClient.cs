@@ -90,8 +90,16 @@ public sealed class FakeWorkItemServerClient : IWorkItemServerClient
         return dto == null ? null : ToRemote(dto);
     }
 
+    /// <summary>
+    /// Called with the status of every list read (null for the whole board)
+    /// before it is answered; a test records the reads with it, or throws
+    /// from it to fail one.
+    /// </summary>
+    public Action<RemoteWorkItemStatus?>? OnList { get; set; }
+
     public async Task<IReadOnlyList<RemoteWorkItem>> ListAsync(WorkItemServerOptions opts, RemoteWorkItemStatus? status, IReadOnlyList<string>? tags, CancellationToken ct = default)
     {
+        OnList?.Invoke(status);
         var list = await _svc.ListAsync(status.HasValue ? Map(status.Value) : null, tags, ct);
         return list.Select(ToRemote).ToList();
     }

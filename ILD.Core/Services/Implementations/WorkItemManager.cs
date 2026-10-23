@@ -145,23 +145,22 @@ public class WorkItemManager : IWorkItemManager
     /// The WorkItem Server promotes a Work Queue item to Ready within the Done
     /// transition of its last open dependency, and announces nothing: say so
     /// for each Ready dependent, so a board shows it Ready without a reload.
-    /// Best effort: the transition has already happened, and a failed read
-    /// leaves only the cards to catch up on the board's next reload.
+    /// Best effort, and it never throws: the transition has already happened,
+    /// and whatever fails here leaves only the cards to catch up on the
+    /// board's next reload.
     /// </summary>
     private async Task AnnouncePromotedDependentsAsync(WorkItemServerOptions opts, string workItemId)
     {
-        IReadOnlyList<RemoteWorkItem> ready;
         try
         {
-            ready = await _server.ListAsync(opts, RemoteWorkItemStatus.Ready, tags: null);
+            var ready = await _server.ListAsync(opts, RemoteWorkItemStatus.Ready, tags: null);
+            foreach (var dependent in ready.Where(w => w.Dependencies.Contains(workItemId)))
+                await _notifier.WorkItemStateChangedAsync(dependent.Id, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready);
         }
-        catch (HttpRequestException ex)
+        catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not read the Ready dependents of {WorkItemId} to announce them", workItemId);
-            return;
+            _logger.LogWarning(ex, "Could not announce the Ready dependents of {WorkItemId}", workItemId);
         }
-        foreach (var dependent in ready.Where(w => w.Dependencies.Contains(workItemId)))
-            await _notifier.WorkItemStateChangedAsync(dependent.Id, RemoteWorkItemStatus.WorkQueue, RemoteWorkItemStatus.Ready);
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -262,10 +261,7 @@ public class WorkItemManager : IWorkItemManager
     public async Task<WorkItemPage> ListPageAsync(WorkItemListQuery query)
     {
         var opts = await _options.ResolveForRepositoryAsync(query.RepositoryId);
-        // Actionability reads the status of every dependency, so only then is
-        // the whole list needed; otherwise the server narrows to a single status.
-        RemoteWorkItemStatus? serverStatus = !query.ActionableOnly && query.Statuses is { Count: 1 } one ? one.Single() : null;
-        var all = await _server.ListAsync(opts, serverStatus, tags: null);
+        var all = await ListCandidatesAsync(opts, query);
         if (all.Count == 0) return new WorkItemPage(Array.Empty<WorkItemView>(), 0);
 
         // A view's creator is its current run's, falling back to the item's own,
@@ -290,6 +286,23 @@ public class WorkItemManager : IWorkItemManager
             views.Add(await ViewOfAsync(opts, remote, runsByWorkItem.GetValueOrDefault(remote.Id) ?? [],
                 statusReasons.GetValueOrDefault(remote.Id)));
         return new WorkItemPage(views, matching.Count);
+    }
+
+    /// <summary>
+    /// The items a page can come from. Actionability reads the status of every
+    /// dependency, so only then, or with no status asked for, is the whole list
+    /// needed; otherwise the server is asked for each status on its own.
+    /// </summary>
+    private async Task<IReadOnlyList<RemoteWorkItem>> ListCandidatesAsync(WorkItemServerOptions opts, WorkItemListQuery query)
+    {
+        if (query.ActionableOnly || query.Statuses is not { Count: > 0 } statuses)
+            return await _server.ListAsync(opts, status: null, tags: null);
+
+        var items = new List<RemoteWorkItem>();
+        foreach (var status in statuses.Distinct())
+            items.AddRange(await _server.ListAsync(opts, status, tags: null));
+        // An item that changed status between two reads can be in both.
+        return items.DistinctBy(w => w.Id).ToList();
     }
 
     private async Task<IReadOnlyDictionary<string, List<LoopRun>>> RunsByWorkItemAsync(IReadOnlyCollection<string> workItemIds)
