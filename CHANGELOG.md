@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-23
+
 ### Changed
 
 - **A run's worktree, local branch and AI session data are removed as soon as it ends, and the run itself is kept for 14 days by default.** This replaces 0.19.0's default of 0: installs that never changed the retention setting move from 0 to 14 days.
